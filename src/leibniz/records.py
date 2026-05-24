@@ -1,4 +1,9 @@
-"""Validation for mapping-shaped protocol records."""
+"""Validation for mapping-shaped data objects.
+
+A record is a concrete object that claims to satisfy a declared structural
+contract. The contract supplies the protocol-facing rules; the record is the
+data being checked against those rules.
+"""
 
 from __future__ import annotations
 
@@ -29,7 +34,7 @@ _UNSET = object()
 
 
 class RecordValidationError(ValueError):
-    """Raised when record validation fails."""
+    """Raised when a data object does not satisfy a record specification."""
 
     def __init__(self, violations: Sequence[RecordViolation]) -> None:
         self.violations = tuple(violations)
@@ -39,7 +44,7 @@ class RecordValidationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class RecordViolation:
-    """A single record validation failure."""
+    """A single failure found while checking a data object."""
 
     path: tuple[str, ...]
     message: str
@@ -51,7 +56,7 @@ class RecordViolation:
 
 @dataclass(frozen=True, slots=True)
 class FieldSpec:
-    """Validation rule for a single record field."""
+    """Validation rule for one field in a mapping-shaped data object."""
 
     kind: FieldKind
     required: bool = True
@@ -62,14 +67,14 @@ class FieldSpec:
 
 @dataclass(frozen=True, slots=True)
 class RecordSpec:
-    """Validation rules for a mapping-shaped record."""
+    """A structural contract for a mapping-shaped data object."""
 
     fields: Mapping[str, FieldSpec]
     allow_unknown: bool = False
 
 
 def validate_record(record: Mapping[str, object], spec: RecordSpec) -> ValidatedRecord:
-    """Validate a record and return parsed field values."""
+    """Validate a data object against a record specification."""
 
     validated, violations = _validate_record(record=record, spec=spec, path=())
     if violations:
@@ -81,7 +86,7 @@ def collect_record_violations(
     record: Mapping[str, object],
     spec: RecordSpec,
 ) -> tuple[RecordViolation, ...]:
-    """Return validation failures without raising."""
+    """Return specification violations without raising."""
 
     _, violations = _validate_record(record=record, spec=spec, path=())
     return violations
