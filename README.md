@@ -4,10 +4,6 @@ Leibniz is a protocol for scientific work: a way to make identity, frame,
 statement, measurement, record, and program artifacts explicit, addressable,
 validated, and composable without a central authority.
 
-The repository is being built linearly. Each pull request should add one
-reviewable piece of the protocol or its reference implementation, with a clear
-purpose and a testable contract.
-
 ## Principles
 
 1. **Protocol, not platform.** Leibniz is defined by artifact formats,
