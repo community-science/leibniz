@@ -43,6 +43,7 @@ Run the local checks:
 python -m pytest
 python -m ruff check .
 python -m pyright
+python -m leibniz.repository_policy .
 python -m build
 ```
 
