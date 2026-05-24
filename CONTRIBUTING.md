@@ -30,10 +30,9 @@ Each nontrivial pull request should explain:
 - Design review: which design choices were considered, kept, changed, or
   rejected.
 
-## Maintainer Comprehension Check
+## Review Scope
 
-Before merge, the pull request author should interview the maintainer about the
-pull request. The maintainer should be able to explain:
+Pull requests should be small and explicit enough that reviewers can summarize:
 
 - what the pull request does,
 - why it exists,
@@ -41,9 +40,9 @@ pull request. The maintainer should be able to explain:
 - what main design choice it makes,
 - and what tests prove.
 
-If the maintainer cannot explain the pull request back, or expresses confusion,
-the pull request is too large or too unclear. Reduce the scope, split the work,
-or rewrite the explanation before merging.
+If a pull request cannot be summarized this way, it is too large or too
+unclear. Reduce the scope, split the work, or rewrite the explanation before
+merging.
 
 ## Scientific Rigor
 
