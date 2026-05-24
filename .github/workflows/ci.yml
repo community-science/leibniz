@@ -35,6 +35,9 @@ jobs:
       - name: Run type check
         run: python -m pyright
 
+      - name: Run repository policy checks
+        run: python -m leibniz.repository_policy .
+
   package:
     name: Build package
     runs-on: ubuntu-latest

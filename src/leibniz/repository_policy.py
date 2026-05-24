@@ -1,0 +1,111 @@
+"""Repository policy checks for tracked files."""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+
+_FORBIDDEN_NAMES = frozenset(
+    {
+        ".leibniz",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "venv",
+    }
+)
+_FORBIDDEN_SUFFIXES = (".pyc", ".pyo")
+_FORBIDDEN_ENV_FILES = frozenset({".env"})
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyViolation:
+    """A tracked path that violates a repository policy."""
+
+    path: PurePosixPath
+    message: str
+
+    def format(self) -> str:
+        return f"{self.path}: {self.message}"
+
+
+def validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]:
+    """Return policy violations for tracked repository-relative paths."""
+
+    violations: list[PolicyViolation] = []
+    for raw_path in paths:
+        path = PurePosixPath(raw_path)
+        if _has_forbidden_name(path):
+            violations.append(
+                PolicyViolation(
+                    path=path,
+                    message="tracked local, cache, or generated directory",
+                )
+            )
+            continue
+        if path.suffix in _FORBIDDEN_SUFFIXES:
+            violations.append(
+                PolicyViolation(
+                    path=path,
+                    message="tracked Python bytecode output",
+                )
+            )
+            continue
+        if path.name in _FORBIDDEN_ENV_FILES or path.name.startswith(".env."):
+            violations.append(
+                PolicyViolation(
+                    path=path,
+                    message="tracked local environment file",
+                )
+            )
+    return tuple(violations)
+
+
+def tracked_paths(root: Path) -> tuple[str, ...]:
+    """Return Git-tracked paths below root."""
+
+    result = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z"],
+        check=True,
+        capture_output=True,
+        text=False,
+    )
+    if not result.stdout:
+        return ()
+    return tuple(path.decode("utf-8") for path in result.stdout.rstrip(b"\0").split(b"\0"))
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Check tracked repository paths.")
+    parser.add_argument(
+        "root",
+        nargs="?",
+        default=".",
+        help="repository root to inspect",
+    )
+    args = parser.parse_args(argv)
+
+    root = Path(args.root).resolve()
+    violations = validate_tracked_paths(tracked_paths(root))
+    if not violations:
+        return 0
+
+    for violation in violations:
+        print(violation.format(), file=sys.stderr)
+    return 1
+
+
+def _has_forbidden_name(path: PurePosixPath) -> bool:
+    return any(part in _FORBIDDEN_NAMES for part in path.parts)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
