@@ -76,8 +76,8 @@ During this period:
 
 ## Tests And CI
 
-The required GitHub Actions gate should grow beyond plain `pytest` as the
-repository grows. Expected checks include:
+The required GitHub Actions gate should be chosen deliberately as public
+surfaces are introduced. Expected checks include:
 
 - unit and contract tests,
 - package build and import smoke tests,
