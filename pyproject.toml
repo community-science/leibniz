@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "leibniz"
+version = "0.0.0"
+description = "A protocol for scientific work."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "CC0-1.0" }
+authors = [{ name = "Leibniz contributors" }]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    "pyright>=1.1",
+    "pytest>=8.2",
+    "ruff>=0.8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/leibniz"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "-ra",
+    "--strict-config",
+    "--strict-markers",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "B",
+    "C4",
+    "E",
+    "F",
+    "I",
+    "SIM",
+    "UP",
+    "W",
+]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"

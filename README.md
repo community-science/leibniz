@@ -29,6 +29,23 @@ boundary, design choice, and tests before merge.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the working rules.
 
+## Development
+
+Install the package with development tools:
+
+```bash
+pip install -e ".[dev]"
+```
+
+Run the local checks:
+
+```bash
+python -m pytest
+python -m ruff check .
+python -m pyright
+python -m build
+```
+
 ## License
 
 This repository is dedicated to the public domain under CC0-1.0. See
