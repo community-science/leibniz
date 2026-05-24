@@ -20,23 +20,6 @@ validated, and composable without a central authority.
 5. **Field-agnostic core.** No core primitive should privilege one scientific
    domain when a generic typed artifact can express the same idea.
 
-## Artifact Kinds
-
-Every artifact in this repository should be one of four semantic kinds:
-
-- **Specification:** declarative, versioned descriptions of things the system
-  knows how to interpret.
-- **Implementation:** executable code that validates, interprets, renders,
-  trains, evaluates, or materializes specifications.
-- **Evidence:** tests, deterministic fixtures, reproducible generated artifacts,
-  and inspection aids.
-- **State:** mutable operator-owned outputs such as measurements, checkpoints,
-  caches, registries, and work queues.
-
-Specification, Implementation, and reproducible Evidence may belong in Git.
-State does not. Runtime state should live in ignored `.leibniz/` directories or
-external repositories.
-
 ## Contribution Model
 
 All changes enter through pull requests. Non-documentation changes must include

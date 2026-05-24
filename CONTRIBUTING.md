@@ -22,7 +22,6 @@ Each nontrivial pull request should explain:
 
 - Purpose: what protocol or implementation capability it adds.
 - Boundary: what is included and what is explicitly not included.
-- Artifact kind: Specification, Implementation, Evidence, or a combination.
 - Public surface: modules, schemas, commands, identifiers, or durable files.
 - Dependencies: earlier pull requests or design decisions it relies on.
 - Tests: what was tested and what contract those tests prove.
@@ -98,14 +97,14 @@ as PyTorch may be used later behind thin optional adapter layers, but they
 should not define the protocol's tensor, model, parameter, or probability
 measure concepts.
 
-## Runtime State
+## Generated And Local Files
 
-Do not commit runtime state. In particular, keep these out of Git:
+Do not commit local outputs unless they have deterministic producers and a clear
+review path. In particular, keep these out of Git:
 
 - `.leibniz/`
 - measurement records produced by local runs,
 - model checkpoints,
 - caches,
 - local registries,
-- work queues,
-- generated artifacts without deterministic producers and verification paths.
+- work queues.
