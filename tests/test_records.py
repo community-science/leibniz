@@ -136,6 +136,17 @@ def test_record_validation_parses_nested_records_and_sequences() -> None:
     }
 
 
+def test_record_validation_accepts_open_record_fields() -> None:
+    spec = RecordSpec(fields={"payload": required("record")})
+
+    record = validate_record({"payload": {"nested": {"value": 1}}}, spec)
+
+    assert record == {"payload": {"nested": {"value": 1}}}
+    assert collect_record_violations({"payload": "not a record"}, spec) == (
+        RecordViolation(path=("payload",), message="expected record"),
+    )
+
+
 def test_record_validation_supports_none_literal() -> None:
     spec = RecordSpec(fields={"empty": required("literal", literal=None)})
 
@@ -172,7 +183,7 @@ def test_record_validation_raises_structured_error() -> None:
     assert str(error) == "id: invalid protocol identifier: 'bad'"
 
 
-def test_field_specs_detect_missing_nested_configuration() -> None:
+def test_field_specs_detect_missing_sequence_configuration() -> None:
     violations = collect_record_violations(
         {"items": ["a"]},
         RecordSpec(fields={"items": required("sequence")}),
@@ -180,15 +191,6 @@ def test_field_specs_detect_missing_nested_configuration() -> None:
 
     assert violations == (
         RecordViolation(path=("items",), message="missing sequence item specification"),
-    )
-
-    violations = collect_record_violations(
-        {"nested": {}},
-        RecordSpec(fields={"nested": required("record")}),
-    )
-
-    assert violations == (
-        RecordViolation(path=("nested",), message="missing nested record specification"),
     )
 
 

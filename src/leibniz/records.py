@@ -257,10 +257,10 @@ def _parse_record(
     spec: FieldSpec,
     path: tuple[str, ...],
 ) -> tuple[RecordValue, tuple[RecordViolation, ...]]:
-    if spec.record is None:
-        return value, (RecordViolation(path=path, message="missing nested record specification"),)
     if not isinstance(value, Mapping):
         return value, (RecordViolation(path=path, message="expected record"),)
+    if spec.record is None:
+        return cast(Mapping[str, object], value), ()
     return _validate_record(record=cast(Mapping[str, object], value), spec=spec.record, path=path)
 
 
