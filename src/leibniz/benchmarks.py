@@ -34,13 +34,12 @@ _benchmark_declaration_record = RecordSpec(
         "evidence_bundle_id": required("identifier"),
     }
 )
-_benchmark_manifest_fields = frozenset({"id", "name", "declaration"})
-_benchmark_manifest_header_record = RecordSpec(
+_benchmark_manifest_record = RecordSpec(
     fields={
         "id": required("identifier"),
         "name": required("name"),
-    },
-    allow_unknown=True,
+        "declaration": required("record"),
+    }
 )
 
 
@@ -161,29 +160,16 @@ class BenchmarkManifest:
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> BenchmarkManifest:
-        unknown_fields = tuple(
-            sorted(field for field in record if field not in _benchmark_manifest_fields)
-        )
-        if unknown_fields:
-            raise BenchmarkManifestValidationError(f"{unknown_fields[0]}: unknown field")
-        missing_fields = tuple(
-            field for field in sorted(_benchmark_manifest_fields) if field not in record
-        )
-        if missing_fields:
-            raise BenchmarkManifestValidationError(
-                f"{missing_fields[0]}: missing required field"
-            )
-
         try:
-            header = validate_record(record, _benchmark_manifest_header_record)
+            validated = validate_record(record, _benchmark_manifest_record)
             declaration = BenchmarkDeclaration.from_record(
-                _manifest_mapping(record["declaration"], field="declaration")
+                _manifest_mapping(validated["declaration"], field="declaration")
             )
         except ValueError as error:
             raise BenchmarkManifestValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(header["id"], field="id"),
-            name=_as_name(header["name"], field="name"),
+            id=_as_identifier(validated["id"], field="id"),
+            name=_as_name(validated["name"], field="name"),
             declaration=declaration,
         )
 

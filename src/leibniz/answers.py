@@ -75,12 +75,12 @@ _raw_scoring_evidence_base_record = RecordSpec(
     },
     allow_unknown=True,
 )
-_finite_answer_scoring_bundle_fields = frozenset(
-    {
-        "answer_space",
-        "accepted_event",
-        "probability_measure",
-        "raw_scoring_evidence",
+_finite_answer_scoring_bundle_record = RecordSpec(
+    fields={
+        "answer_space": required("record"),
+        "accepted_event": required("record"),
+        "probability_measure": required("record"),
+        "raw_scoring_evidence": required("record"),
     }
 )
 
@@ -613,39 +613,25 @@ class FiniteAnswerScoringBundle:
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> FiniteAnswerScoringBundle:
-        unknown_fields = tuple(
-            sorted(field for field in record if field not in _finite_answer_scoring_bundle_fields)
-        )
-        if unknown_fields:
-            raise FiniteAnswerScoringBundleValidationError(
-                f"{unknown_fields[0]}: unknown field"
-            )
-        missing_fields = tuple(
-            field for field in sorted(_finite_answer_scoring_bundle_fields) if field not in record
-        )
-        if missing_fields:
-            raise FiniteAnswerScoringBundleValidationError(
-                f"{missing_fields[0]}: missing required field"
-            )
-
         try:
+            validated = validate_record(record, _finite_answer_scoring_bundle_record)
             answer_space = AnswerSpace.from_record(
-                _bundle_mapping(record["answer_space"], field="answer_space")
+                _bundle_mapping(validated["answer_space"], field="answer_space")
             )
             accepted_event = AcceptedEvent.from_record(
-                _bundle_mapping(record["accepted_event"], field="accepted_event"),
+                _bundle_mapping(validated["accepted_event"], field="accepted_event"),
                 answer_space=answer_space,
             )
             probability_measure = FiniteProbabilityMeasure.from_record(
                 _bundle_mapping(
-                    record["probability_measure"],
+                    validated["probability_measure"],
                     field="probability_measure",
                 ),
                 answer_space=answer_space,
             )
             raw_scoring_evidence = RawScoringEvidence.from_record(
                 _bundle_mapping(
-                    record["raw_scoring_evidence"],
+                    validated["raw_scoring_evidence"],
                     field="raw_scoring_evidence",
                 )
             )
