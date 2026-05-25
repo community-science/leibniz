@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
 from leibniz.answers import FiniteAnswerScoringBundle
+from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName, require_unreleased_identifier
 from leibniz.records import RecordSpec, RecordValidationError, required, validate_record
 
 __all__ = [
     "BenchmarkDeclaration",
     "BenchmarkDeclarationValidationError",
+    "BenchmarkManifestDocument",
     "BenchmarkManifest",
     "BenchmarkManifestValidationError",
 ]
@@ -185,6 +188,29 @@ class BenchmarkManifest:
             "name": str(self.name),
             "declaration": self.declaration.to_record(),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkManifestDocument:
+    """A loaded benchmark manifest and the digest of its canonical record."""
+
+    manifest: BenchmarkManifest
+    digest: ContentDigest
+
+    @classmethod
+    def from_json_bytes(cls, data: bytes) -> BenchmarkManifestDocument:
+        try:
+            value = json.loads(data.decode("utf-8"))
+        except UnicodeDecodeError as error:
+            raise BenchmarkManifestValidationError("manifest JSON must be UTF-8") from error
+        except json.JSONDecodeError as error:
+            raise BenchmarkManifestValidationError(f"invalid manifest JSON: {error.msg}") from error
+        if not isinstance(value, Mapping):
+            raise BenchmarkManifestValidationError("manifest JSON must be an object")
+
+        record = cast(Mapping[str, object], value)
+        manifest = BenchmarkManifest.from_record(record)
+        return cls(manifest=manifest, digest=ContentDigest.from_value(manifest.to_record()))
 
 
 def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
