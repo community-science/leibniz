@@ -5,6 +5,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+__all__ = [
+    "IdentifierSyntaxError",
+    "ProtocolIdentifier",
+    "ProtocolName",
+    "SemanticVersion",
+]
+
 _NUMERIC_IDENTIFIER = re.compile(r"0|[1-9][0-9]*")
 _SEMVER = re.compile(
     r"^(?P<major>0|[1-9][0-9]*)"

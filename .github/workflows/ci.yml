@@ -17,6 +17,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Cache conda packages
+        uses: actions/cache@v4
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml', 'pyproject.toml') }}
+
       - name: Set up Miniforge environment
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -24,6 +30,7 @@ jobs:
           activate-environment: leibniz-dev
           environment-file: environment.yml
           auto-activate-base: false
+          use-only-tar-bz2: true
 
       - name: Run tests
         run: python -m pytest
@@ -39,6 +46,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Cache conda packages
+        uses: actions/cache@v4
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml', 'pyproject.toml') }}
+
       - name: Set up Miniforge environment
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -46,6 +59,7 @@ jobs:
           activate-environment: leibniz-dev
           environment-file: environment.yml
           auto-activate-base: false
+          use-only-tar-bz2: true
 
       - name: Run lint
         run: python -m ruff check .
@@ -61,6 +75,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Cache conda packages
+        uses: actions/cache@v4
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml', 'pyproject.toml') }}
+
       - name: Set up Miniforge environment
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -68,6 +88,7 @@ jobs:
           activate-environment: leibniz-dev
           environment-file: environment.yml
           auto-activate-base: false
+          use-only-tar-bz2: true
 
       - name: Run type check
         run: python -m pyright
@@ -83,6 +104,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Cache conda packages
+        uses: actions/cache@v4
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml', 'pyproject.toml') }}
+
       - name: Set up Miniforge environment
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -90,6 +117,7 @@ jobs:
           activate-environment: leibniz-dev
           environment-file: environment.yml
           auto-activate-base: false
+          use-only-tar-bz2: true
 
       - name: Run repository policy checks
         run: python -m leibniz.repository_policy .
@@ -105,6 +133,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Cache conda packages
+        uses: actions/cache@v4
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml', 'pyproject.toml') }}
+
       - name: Set up Miniforge environment
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -112,6 +146,7 @@ jobs:
           activate-environment: leibniz-dev
           environment-file: environment.yml
           auto-activate-base: false
+          use-only-tar-bz2: true
 
       - name: Build wheel and source distribution
         run: python -m build --no-isolation
