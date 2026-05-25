@@ -116,17 +116,6 @@ class BenchmarkDeclaration:
             ),
         )
 
-    def validate_measurement_outcome_space(
-        self,
-        *,
-        outcome_space_id: ProtocolIdentifier,
-    ) -> None:
-        if outcome_space_id != self.outcome_space_id:
-            raise BenchmarkDeclarationValidationError(
-                f"measurement outcome_space_id {outcome_space_id} does not match "
-                f"{self.outcome_space_id}"
-            )
-
     def to_record(self) -> dict[str, object]:
         return {
             "id": str(self.id),
@@ -183,26 +172,6 @@ class BenchmarkManifest:
             declaration=declaration,
             observation_ids=_manifest_observation_ids(validated),
         )
-
-    def validate_measurement(
-        self,
-        *,
-        outcome_space_id: ProtocolIdentifier,
-        observation_id: str,
-    ) -> None:
-        try:
-            self.declaration.validate_measurement_outcome_space(
-                outcome_space_id=outcome_space_id
-            )
-        except BenchmarkDeclarationValidationError as error:
-            raise BenchmarkManifestValidationError(str(error)) from error
-        if (
-            self.observation_ids is not None
-            and observation_id not in self.observation_ids
-        ):
-            raise BenchmarkManifestValidationError(
-                f"observation_id {observation_id!r} is not declared by {self.id}"
-            )
 
     def to_record(self) -> dict[str, object]:
         record: dict[str, object] = {

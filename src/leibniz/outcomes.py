@@ -19,8 +19,6 @@ __all__ = [
     "Outcome",
     "OutcomeSpace",
     "OutcomeSpaceValidationError",
-    "FiniteOutcomeScoringGraph",
-    "FiniteOutcomeScoringGraphValidationError",
     "FiniteProbabilityMeasure",
     "ProbabilityMass",
     "ProbabilityMeasureValidationError",
@@ -78,29 +76,6 @@ _raw_scoring_evidence_base_record = RecordSpec(
     },
     allow_unknown=True,
 )
-_finite_outcome_scoring_graph_record = RecordSpec(
-    fields={
-        "id": FieldSpec(kind="identifier", required=False),
-        "observation_id": FieldSpec(kind="string", required=False),
-        "outcome_space": FieldSpec(kind="record"),
-        "accepted_event": FieldSpec(kind="record"),
-        "probability_measure": FieldSpec(kind="record"),
-        "raw_scoring_evidence": FieldSpec(kind="record", required=False),
-    },
-    allow_unknown=True,
-)
-_finite_outcome_scoring_graph_expected_fields = frozenset(
-    {
-        "id",
-        "observation_id",
-        "outcome_space",
-        "accepted_event",
-        "probability_measure",
-        "raw_scoring_evidence",
-    }
-)
-
-
 class OutcomeSpaceValidationError(ValueError):
     """Raised when an outcome or outcome space is invalid."""
 
@@ -119,10 +94,6 @@ class AcceptedMassScoreError(ValueError):
 
 class RawScoringEvidenceValidationError(ValueError):
     """Raised when raw finite-outcome scoring evidence is invalid."""
-
-
-class FiniteOutcomeScoringGraphValidationError(ValueError):
-    """Raised when a finite-outcome scoring graph is invalid."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -568,107 +539,6 @@ class RawScoringEvidence:
         }
 
 
-@dataclass(frozen=True, slots=True)
-class FiniteOutcomeScoringGraph:
-    """A finite-outcome scoring graph for one observation."""
-
-    outcome_space: OutcomeSpace
-    accepted_event: AcceptedEvent
-    probability_measure: FiniteProbabilityMeasure
-    raw_scoring_evidence: RawScoringEvidence
-
-    def __post_init__(self) -> None:
-        _require_matching_identifier(
-            field="accepted_event.outcome_space_id",
-            actual=self.accepted_event.outcome_space_id,
-            expected=self.outcome_space.id,
-        )
-        _require_matching_identifier(
-            field="probability_measure.outcome_space_id",
-            actual=self.probability_measure.outcome_space_id,
-            expected=self.outcome_space.id,
-        )
-        _require_matching_identifier(
-            field="raw_scoring_evidence.outcome_space_id",
-            actual=self.raw_scoring_evidence.outcome_space_id,
-            expected=self.outcome_space.id,
-        )
-        _require_matching_identifier(
-            field="raw_scoring_evidence.accepted_event_id",
-            actual=self.raw_scoring_evidence.accepted_event_id,
-            expected=self.accepted_event.id,
-        )
-        _require_matching_identifier(
-            field="raw_scoring_evidence.probability_measure_id",
-            actual=self.raw_scoring_evidence.probability_measure_id,
-            expected=self.probability_measure.id,
-        )
-
-        score = AcceptedMassScore.from_event_and_measure(
-            event=self.accepted_event,
-            measure=self.probability_measure,
-        )
-        if not math.isclose(
-            self.raw_scoring_evidence.accepted_mass,
-            score.accepted_mass,
-            rel_tol=1e-12,
-            abs_tol=1e-12,
-        ):
-            raise FiniteOutcomeScoringGraphValidationError(
-                "raw_scoring_evidence.accepted_mass must equal recomputed accepted mass"
-            )
-        if not math.isclose(
-            self.raw_scoring_evidence.negative_log_score,
-            score.negative_log_score,
-            rel_tol=1e-12,
-            abs_tol=1e-12,
-        ):
-            raise FiniteOutcomeScoringGraphValidationError(
-                "raw_scoring_evidence.negative_log_score must equal recomputed score"
-            )
-
-    @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> FiniteOutcomeScoringGraph:
-        try:
-            validated = _finite_outcome_scoring_graph_record.validate(record)
-            outcome_space = OutcomeSpace.from_record(
-                _graph_mapping(validated["outcome_space"], field="outcome_space")
-            )
-            accepted_event = AcceptedEvent.from_record(
-                _graph_mapping(validated["accepted_event"], field="accepted_event"),
-                outcome_space=outcome_space,
-            )
-            probability_measure = FiniteProbabilityMeasure.from_record(
-                _graph_mapping(
-                    validated["probability_measure"],
-                    field="probability_measure",
-                ),
-                outcome_space=outcome_space,
-            )
-            raw_scoring_evidence = _graph_raw_scoring_evidence(
-                record=record,
-                validated=validated,
-                accepted_event=accepted_event,
-                probability_measure=probability_measure,
-            )
-        except ValueError as error:
-            raise FiniteOutcomeScoringGraphValidationError(str(error)) from error
-        return cls(
-            outcome_space=outcome_space,
-            accepted_event=accepted_event,
-            probability_measure=probability_measure,
-            raw_scoring_evidence=raw_scoring_evidence,
-        )
-
-    def to_record(self) -> dict[str, object]:
-        return {
-            "outcome_space": self.outcome_space.to_record(),
-            "accepted_event": self.accepted_event.to_record(),
-            "probability_measure": self.probability_measure.to_record(),
-            "raw_scoring_evidence": self.raw_scoring_evidence.to_record(),
-        }
-
-
 def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise OutcomeSpaceValidationError(f"{field}: expected record")
@@ -686,75 +556,3 @@ def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
         raise OutcomeSpaceValidationError(f"{field}: expected parsed identifier")
     return value
 
-
-def _graph_raw_scoring_evidence(
-    *,
-    record: Mapping[str, object],
-    validated: Mapping[str, object],
-    accepted_event: AcceptedEvent,
-    probability_measure: FiniteProbabilityMeasure,
-) -> RawScoringEvidence:
-    unknown_fields = tuple(
-        sorted(
-            field
-            for field in record
-            if field not in _finite_outcome_scoring_graph_expected_fields
-        )
-    )
-    if unknown_fields:
-        raise FiniteOutcomeScoringGraphValidationError(f"{unknown_fields[0]}: unknown field")
-
-    raw_value = validated.get("raw_scoring_evidence")
-    explicit: RawScoringEvidence | None = None
-    if raw_value is not None:
-        explicit = RawScoringEvidence.from_record(
-            _graph_mapping(
-                raw_value,
-                field="raw_scoring_evidence",
-            )
-        )
-
-    evidence_id = validated.get("id")
-    observation_id = validated.get("observation_id")
-    if evidence_id is None:
-        if explicit is None:
-            raise FiniteOutcomeScoringGraphValidationError("id: missing required field")
-        evidence_id = explicit.id
-    if observation_id is None:
-        if explicit is None:
-            raise FiniteOutcomeScoringGraphValidationError(
-                "observation_id: missing required field"
-            )
-        observation_id = explicit.observation_id
-
-    derived = RawScoringEvidence.from_event_and_measure(
-        id=_as_identifier(evidence_id, field="id"),
-        observation_id=str(observation_id),
-        event=accepted_event,
-        measure=probability_measure,
-    )
-    if explicit is None:
-        return derived
-    if explicit != derived:
-        raise FiniteOutcomeScoringGraphValidationError(
-            "raw_scoring_evidence must equal derived scoring evidence"
-        )
-    return explicit
-
-
-def _graph_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise FiniteOutcomeScoringGraphValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _require_matching_identifier(
-    *,
-    field: str,
-    actual: ProtocolIdentifier,
-    expected: ProtocolIdentifier,
-) -> None:
-    if actual != expected:
-        raise FiniteOutcomeScoringGraphValidationError(
-            f"{field} {actual} does not match {expected}"
-        )

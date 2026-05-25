@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 
 from leibniz._documents import ContentEncodingError, load_object_document
-from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestValidationError
+from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.outcomes import (
     AcceptedEvent,
-    FiniteOutcomeScoringGraph,
+    AcceptedMassScore,
     FiniteProbabilityMeasure,
     OutcomeSpace,
     RawScoringEvidence,
@@ -45,6 +47,18 @@ _measurement_scoring_fields = frozenset(
         "raw_scoring_evidence",
     }
 )
+_finite_outcome_scoring_graph_record = RecordSpec(
+    fields={
+        "id": FieldSpec(kind="identifier", required=False),
+        "observation_id": FieldSpec(kind="string", required=False),
+        "outcome_space": FieldSpec(kind="record"),
+        "accepted_event": FieldSpec(kind="record"),
+        "probability_measure": FieldSpec(kind="record"),
+        "raw_scoring_evidence": FieldSpec(kind="record", required=False),
+    },
+    allow_unknown=True,
+)
+_finite_outcome_scoring_graph_expected_fields = frozenset(_measurement_scoring_fields)
 
 
 class MeasurementRecordValidationError(ValueError):
@@ -71,15 +85,20 @@ class MeasurementRecord:
     def from_record(cls, record: Mapping[str, object]) -> MeasurementRecord:
         try:
             validated = _measurement_record.validate(record)
-            scoring_graph = _measurement_scoring_graph(record)
+            (
+                outcome_space,
+                accepted_event,
+                probability_measure,
+                raw_scoring_evidence,
+            ) = _measurement_scoring_parts(record)
         except ValueError as error:
             raise MeasurementRecordValidationError(str(error)) from error
         return cls(
             benchmark_id=_as_identifier(validated["benchmark_id"], field="benchmark_id"),
-            outcome_space=scoring_graph.outcome_space,
-            accepted_event=scoring_graph.accepted_event,
-            probability_measure=scoring_graph.probability_measure,
-            raw_scoring_evidence=scoring_graph.raw_scoring_evidence,
+            outcome_space=outcome_space,
+            accepted_event=accepted_event,
+            probability_measure=probability_measure,
+            raw_scoring_evidence=raw_scoring_evidence,
         )
 
     @property
@@ -91,27 +110,29 @@ class MeasurementRecord:
             raise MeasurementRecordValidationError(
                 f"benchmark_id {self.benchmark_id} does not match manifest {manifest.id}"
             )
-        try:
-            manifest.validate_measurement(
-                outcome_space_id=self.outcome_space.id,
-                observation_id=self.raw_scoring_evidence.observation_id,
+        if self.outcome_space.id != manifest.declaration.outcome_space_id:
+            raise MeasurementRecordValidationError(
+                f"measurement outcome_space_id {self.outcome_space.id} does not match "
+                f"{manifest.declaration.outcome_space_id}"
             )
-        except BenchmarkManifestValidationError as error:
-            raise MeasurementRecordValidationError(str(error)) from error
+        if (
+            manifest.observation_ids is not None
+            and self.raw_scoring_evidence.observation_id not in manifest.observation_ids
+        ):
+            raise MeasurementRecordValidationError(
+                "observation_id "
+                f"{self.raw_scoring_evidence.observation_id!r} is not declared by "
+                f"{manifest.id}"
+            )
 
     def to_record(self) -> dict[str, object]:
         return {
             "benchmark_id": str(self.benchmark_id),
-            **self._scoring_graph().to_record(),
+            "outcome_space": self.outcome_space.to_record(),
+            "accepted_event": self.accepted_event.to_record(),
+            "probability_measure": self.probability_measure.to_record(),
+            "raw_scoring_evidence": self.raw_scoring_evidence.to_record(),
         }
-
-    def _scoring_graph(self) -> FiniteOutcomeScoringGraph:
-        return FiniteOutcomeScoringGraph(
-            outcome_space=self.outcome_space,
-            accepted_event=self.accepted_event,
-            probability_measure=self.probability_measure,
-            raw_scoring_evidence=self.raw_scoring_evidence,
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +158,9 @@ def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
     return value
 
 
-def _measurement_scoring_graph(record: Mapping[str, object]) -> FiniteOutcomeScoringGraph:
+def _measurement_scoring_parts(
+    record: Mapping[str, object],
+) -> tuple[OutcomeSpace, AcceptedEvent, FiniteProbabilityMeasure, RawScoringEvidence]:
     scoring_fields = {
         field: record[field]
         for field in _measurement_scoring_fields
@@ -145,4 +168,163 @@ def _measurement_scoring_graph(record: Mapping[str, object]) -> FiniteOutcomeSco
     }
     if not scoring_fields:
         raise MeasurementRecordValidationError("measurement scoring fields are missing")
-    return FiniteOutcomeScoringGraph.from_record(scoring_fields)
+    return _scoring_parts_from_record(scoring_fields)
+
+
+def _scoring_parts_from_record(
+    record: Mapping[str, object],
+) -> tuple[OutcomeSpace, AcceptedEvent, FiniteProbabilityMeasure, RawScoringEvidence]:
+    validated = _finite_outcome_scoring_graph_record.validate(record)
+    outcome_space = OutcomeSpace.from_record(
+        _scoring_mapping(validated["outcome_space"], field="outcome_space")
+    )
+    accepted_event = AcceptedEvent.from_record(
+        _scoring_mapping(validated["accepted_event"], field="accepted_event"),
+        outcome_space=outcome_space,
+    )
+    probability_measure = FiniteProbabilityMeasure.from_record(
+        _scoring_mapping(
+            validated["probability_measure"],
+            field="probability_measure",
+        ),
+        outcome_space=outcome_space,
+    )
+    raw_scoring_evidence = _raw_scoring_evidence(
+        record=record,
+        validated=validated,
+        accepted_event=accepted_event,
+        probability_measure=probability_measure,
+    )
+    _validate_scoring_parts(
+        outcome_space=outcome_space,
+        accepted_event=accepted_event,
+        probability_measure=probability_measure,
+        raw_scoring_evidence=raw_scoring_evidence,
+    )
+    return outcome_space, accepted_event, probability_measure, raw_scoring_evidence
+
+
+def _validate_scoring_parts(
+    *,
+    outcome_space: OutcomeSpace,
+    accepted_event: AcceptedEvent,
+    probability_measure: FiniteProbabilityMeasure,
+    raw_scoring_evidence: RawScoringEvidence,
+) -> None:
+    _require_matching_identifier(
+        field="accepted_event.outcome_space_id",
+        actual=accepted_event.outcome_space_id,
+        expected=outcome_space.id,
+    )
+    _require_matching_identifier(
+        field="probability_measure.outcome_space_id",
+        actual=probability_measure.outcome_space_id,
+        expected=outcome_space.id,
+    )
+    _require_matching_identifier(
+        field="raw_scoring_evidence.outcome_space_id",
+        actual=raw_scoring_evidence.outcome_space_id,
+        expected=outcome_space.id,
+    )
+    _require_matching_identifier(
+        field="raw_scoring_evidence.accepted_event_id",
+        actual=raw_scoring_evidence.accepted_event_id,
+        expected=accepted_event.id,
+    )
+    _require_matching_identifier(
+        field="raw_scoring_evidence.probability_measure_id",
+        actual=raw_scoring_evidence.probability_measure_id,
+        expected=probability_measure.id,
+    )
+
+    score = AcceptedMassScore.from_event_and_measure(
+        event=accepted_event,
+        measure=probability_measure,
+    )
+    if not math.isclose(
+        raw_scoring_evidence.accepted_mass,
+        score.accepted_mass,
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    ):
+        raise MeasurementRecordValidationError(
+            "raw_scoring_evidence.accepted_mass must equal recomputed accepted mass"
+        )
+    if not math.isclose(
+        raw_scoring_evidence.negative_log_score,
+        score.negative_log_score,
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    ):
+        raise MeasurementRecordValidationError(
+            "raw_scoring_evidence.negative_log_score must equal recomputed score"
+        )
+
+
+def _raw_scoring_evidence(
+    *,
+    record: Mapping[str, object],
+    validated: Mapping[str, object],
+    accepted_event: AcceptedEvent,
+    probability_measure: FiniteProbabilityMeasure,
+) -> RawScoringEvidence:
+    unknown_fields = tuple(
+        sorted(
+            field
+            for field in record
+            if field not in _finite_outcome_scoring_graph_expected_fields
+        )
+    )
+    if unknown_fields:
+        raise MeasurementRecordValidationError(f"{unknown_fields[0]}: unknown field")
+
+    raw_value = validated.get("raw_scoring_evidence")
+    explicit: RawScoringEvidence | None = None
+    if raw_value is not None:
+        explicit = RawScoringEvidence.from_record(
+            _scoring_mapping(
+                raw_value,
+                field="raw_scoring_evidence",
+            )
+        )
+
+    evidence_id = validated.get("id")
+    observation_id = validated.get("observation_id")
+    if evidence_id is None:
+        if explicit is None:
+            raise MeasurementRecordValidationError("id: missing required field")
+        evidence_id = explicit.id
+    if observation_id is None:
+        if explicit is None:
+            raise MeasurementRecordValidationError("observation_id: missing required field")
+        observation_id = explicit.observation_id
+
+    derived = RawScoringEvidence.from_event_and_measure(
+        id=_as_identifier(evidence_id, field="id"),
+        observation_id=str(observation_id),
+        event=accepted_event,
+        measure=probability_measure,
+    )
+    if explicit is None:
+        return derived
+    if explicit != derived:
+        raise MeasurementRecordValidationError(
+            "raw_scoring_evidence must equal derived scoring evidence"
+        )
+    return explicit
+
+
+def _scoring_mapping(value: object, *, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise MeasurementRecordValidationError(f"{field}: expected record")
+    return cast(Mapping[str, object], value)
+
+
+def _require_matching_identifier(
+    *,
+    field: str,
+    actual: ProtocolIdentifier,
+    expected: ProtocolIdentifier,
+) -> None:
+    if actual != expected:
+        raise MeasurementRecordValidationError(f"{field} {actual} does not match {expected}")

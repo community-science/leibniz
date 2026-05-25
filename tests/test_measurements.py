@@ -133,6 +133,33 @@ def test_measurement_record_rejects_malformed_records_and_state_paths() -> None:
     ) == "local_path: unknown field"
 
 
+def test_measurement_record_rejects_conflicting_raw_scoring_evidence() -> None:
+    record = _expanded_measurement_record()
+    raw_scoring_evidence = _raw_scoring_evidence_record()
+    raw_scoring_evidence["accepted_event_id"] = "core.other-accepted@0.1.0"
+    record["raw_scoring_evidence"] = raw_scoring_evidence
+
+    assert str(capture_measurement_error(lambda: MeasurementRecord.from_record(record))) == (
+        "raw_scoring_evidence must equal derived scoring evidence"
+    )
+
+
+def test_measurement_record_rejects_missing_minimal_evidence_identity() -> None:
+    record = _measurement_record()
+    del record["id"]
+
+    assert str(capture_measurement_error(lambda: MeasurementRecord.from_record(record))) == (
+        "id: missing required field"
+    )
+
+    record = _measurement_record()
+    del record["observation_id"]
+
+    assert str(capture_measurement_error(lambda: MeasurementRecord.from_record(record))) == (
+        "observation_id: missing required field"
+    )
+
+
 def test_measurement_document_loads_bytes_with_digest() -> None:
     document = MeasurementDocument.from_bytes(_json_bytes(_measurement_record()))
 
