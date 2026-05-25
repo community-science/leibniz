@@ -9,16 +9,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypeAlias, cast
 
-JsonScalar: TypeAlias = None | bool | int | float | str
-JsonValue: TypeAlias = JsonScalar | Mapping[str, "JsonValue"] | Sequence["JsonValue"]
+_JsonScalar: TypeAlias = None | bool | int | float | str
+_JsonValue: TypeAlias = _JsonScalar | Mapping[str, "_JsonValue"] | Sequence["_JsonValue"]
 
 __all__ = [
     "CanonicalJson",
     "CanonicalJsonError",
     "ContentDigest",
-    "JsonDocument",
-    "JsonScalar",
-    "JsonValue",
 ]
 
 
@@ -79,33 +76,7 @@ class ContentDigest:
         return cls(algorithm="sha256", hex=digest)
 
 
-@dataclass(frozen=True, slots=True)
-class JsonDocument:
-    """A loaded JSON object and the digest of its canonical value."""
-
-    value: Mapping[str, JsonValue]
-    digest: ContentDigest
-
-    @classmethod
-    def from_json_bytes(cls, data: bytes) -> JsonDocument:
-        try:
-            value = json.loads(data.decode("utf-8"))
-        except UnicodeDecodeError as error:
-            raise CanonicalJsonError("JSON document must be UTF-8") from error
-        except json.JSONDecodeError as error:
-            raise CanonicalJsonError(f"invalid JSON document: {error.msg}") from error
-        if not isinstance(value, Mapping):
-            raise CanonicalJsonError("JSON document must be an object")
-
-        mapping = cast(Mapping[str, object], value)
-        normalized = _normalize_json(mapping, path=())
-        if not isinstance(normalized, Mapping):
-            raise CanonicalJsonError("JSON document must be an object")
-        document = cast(Mapping[str, JsonValue], normalized)
-        return cls(value=document, digest=ContentDigest.from_value(document))
-
-
-def _normalize_json(value: object, *, path: tuple[str, ...]) -> JsonValue:
+def _normalize_json(value: object, *, path: tuple[str, ...]) -> _JsonValue:
     if value is None or isinstance(value, str | bool):
         return value
     if isinstance(value, int) and not isinstance(value, bool):
@@ -115,7 +86,7 @@ def _normalize_json(value: object, *, path: tuple[str, ...]) -> JsonValue:
             raise CanonicalJsonError(f"{_format_path(path)}: nonfinite number")
         return value
     if isinstance(value, Mapping):
-        normalized: dict[str, JsonValue] = {}
+        normalized: dict[str, _JsonValue] = {}
         mapping = cast(Mapping[object, object], value)
         for key, item in mapping.items():
             if not isinstance(key, str):
@@ -127,7 +98,7 @@ def _normalize_json(value: object, *, path: tuple[str, ...]) -> JsonValue:
     if isinstance(value, Sequence):
         return [
             _normalize_json(item, path=(*path, str(index)))
-            for index, item in enumerate(cast(Sequence[JsonValue], value))
+            for index, item in enumerate(cast(Sequence[_JsonValue], value))
         ]
     raise CanonicalJsonError(f"{_format_path(path)}: unsupported JSON value")
 

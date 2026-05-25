@@ -6,11 +6,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
+from leibniz._files import load_json_object_file
 from leibniz.answers import FiniteAnswerScoringBundle
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestValidationError
-from leibniz.content import CanonicalJsonError, ContentDigest, JsonDocument
-from leibniz.identifiers import ProtocolIdentifier, require_unreleased_identifier
-from leibniz.records import RecordSpec, required, validate_record
+from leibniz.content import CanonicalJsonError, ContentDigest
+from leibniz.identifiers import ProtocolIdentifier
+from leibniz.records import FieldSpec, RecordSpec
 
 __all__ = [
     "MeasurementDocument",
@@ -20,8 +21,8 @@ __all__ = [
 
 _measurement_record = RecordSpec(
     fields={
-        "benchmark_id": required("identifier"),
-        "scoring_bundle": required("record"),
+        "benchmark_id": FieldSpec(kind="identifier"),
+        "scoring_bundle": FieldSpec(kind="record"),
     }
 )
 
@@ -39,14 +40,14 @@ class MeasurementRecord:
 
     def __post_init__(self) -> None:
         try:
-            require_unreleased_identifier(self.benchmark_id)
+            self.benchmark_id.require_unreleased()
         except ValueError as error:
             raise MeasurementRecordValidationError(str(error)) from error
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> MeasurementRecord:
         try:
-            validated = validate_record(record, _measurement_record)
+            validated = _measurement_record.validate(record)
             scoring_bundle = FiniteAnswerScoringBundle.from_record(
                 _as_mapping(validated["scoring_bundle"], field="scoring_bundle")
             )
@@ -88,11 +89,11 @@ class MeasurementDocument:
     @classmethod
     def from_json_bytes(cls, data: bytes) -> MeasurementDocument:
         try:
-            document = JsonDocument.from_json_bytes(data)
+            record = load_json_object_file(data)
         except CanonicalJsonError as error:
-            message = str(error).replace("JSON document", "measurement JSON")
+            message = str(error).replace("JSON file", "measurement JSON file")
             raise MeasurementRecordValidationError(message) from error
-        measurement = MeasurementRecord.from_record(document.value)
+        measurement = MeasurementRecord.from_record(record)
         return cls(measurement=measurement, digest=measurement.digest)
 
 

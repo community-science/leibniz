@@ -6,10 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
+from leibniz._files import load_json_object_file
 from leibniz.answers import FiniteAnswerScoringBundle
-from leibniz.content import CanonicalJsonError, ContentDigest, JsonDocument
-from leibniz.identifiers import ProtocolIdentifier, ProtocolName, require_unreleased_identifier
-from leibniz.records import RecordSpec, RecordValidationError, optional, required, validate_record
+from leibniz.content import CanonicalJsonError, ContentDigest
+from leibniz.identifiers import ProtocolIdentifier, ProtocolName
+from leibniz.records import FieldSpec, RecordSpec, RecordValidationError
 
 __all__ = [
     "BenchmarkDeclaration",
@@ -28,20 +29,20 @@ _evidence_bundle_id = ProtocolIdentifier.parse("core.finite-answer-scoring-bundl
 
 _benchmark_declaration_record = RecordSpec(
     fields={
-        "id": required("identifier"),
-        "answer_space_id": required("identifier"),
-        "oracle_acceptance_id": optional("identifier"),
-        "prediction_interface_id": optional("identifier"),
-        "score_functional_id": optional("identifier"),
-        "evidence_bundle_id": optional("identifier"),
+        "id": FieldSpec(kind="identifier"),
+        "answer_space_id": FieldSpec(kind="identifier"),
+        "oracle_acceptance_id": FieldSpec(kind="identifier", required=False),
+        "prediction_interface_id": FieldSpec(kind="identifier", required=False),
+        "score_functional_id": FieldSpec(kind="identifier", required=False),
+        "evidence_bundle_id": FieldSpec(kind="identifier", required=False),
     }
 )
 _benchmark_manifest_record = RecordSpec(
     fields={
-        "id": required("identifier"),
-        "name": optional("name"),
-        "answer_space_id": optional("identifier"),
-        "declaration": optional("record"),
+        "id": FieldSpec(kind="identifier"),
+        "name": FieldSpec(kind="name", required=False),
+        "answer_space_id": FieldSpec(kind="identifier", required=False),
+        "declaration": FieldSpec(kind="record", required=False),
     }
 )
 
@@ -67,7 +68,7 @@ class BenchmarkDeclaration:
 
     def __post_init__(self) -> None:
         try:
-            require_unreleased_identifier(self.id)
+            self.id.require_unreleased()
         except ValueError as error:
             raise BenchmarkDeclarationValidationError(str(error)) from error
         _require_identifier(
@@ -94,7 +95,7 @@ class BenchmarkDeclaration:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> BenchmarkDeclaration:
         try:
-            validated = validate_record(record, _benchmark_declaration_record)
+            validated = _benchmark_declaration_record.validate(record)
         except RecordValidationError as error:
             raise BenchmarkDeclarationValidationError(str(error)) from error
         return cls(
@@ -153,7 +154,7 @@ class BenchmarkManifest:
 
     def __post_init__(self) -> None:
         try:
-            require_unreleased_identifier(self.id)
+            self.id.require_unreleased()
         except ValueError as error:
             raise BenchmarkManifestValidationError(str(error)) from error
         if self.id.name != self.name:
@@ -168,7 +169,7 @@ class BenchmarkManifest:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> BenchmarkManifest:
         try:
-            validated = validate_record(record, _benchmark_manifest_record)
+            validated = _benchmark_manifest_record.validate(record)
         except ValueError as error:
             raise BenchmarkManifestValidationError(str(error)) from error
         try:
@@ -205,11 +206,11 @@ class BenchmarkManifestDocument:
     @classmethod
     def from_json_bytes(cls, data: bytes) -> BenchmarkManifestDocument:
         try:
-            document = JsonDocument.from_json_bytes(data)
+            record = load_json_object_file(data)
         except CanonicalJsonError as error:
-            message = str(error).replace("JSON document", "manifest JSON")
+            message = str(error).replace("JSON file", "manifest JSON file")
             raise BenchmarkManifestValidationError(message) from error
-        manifest = BenchmarkManifest.from_record(document.value)
+        manifest = BenchmarkManifest.from_record(record)
         return cls(manifest=manifest, digest=ContentDigest.from_value(manifest.to_record()))
 
 

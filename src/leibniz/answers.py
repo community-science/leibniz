@@ -8,8 +8,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import cast
 
-from leibniz.identifiers import ProtocolIdentifier, require_unreleased_identifier
-from leibniz.records import RecordSpec, RecordValidationError, optional, required, validate_record
+from leibniz.identifiers import ProtocolIdentifier
+from leibniz.records import FieldSpec, RecordSpec, RecordValidationError
 
 __all__ = [
     "AcceptedEvent",
@@ -32,57 +32,60 @@ _element_id_pattern = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 
 _answer_element_record = RecordSpec(
     fields={
-        "id": required("string"),
+        "id": FieldSpec(kind="string"),
     }
 )
 _answer_space_record = RecordSpec(
     fields={
-        "id": required("identifier"),
-        "elements": required("sequence", item=required("record", record=_answer_element_record)),
+        "id": FieldSpec(kind="identifier"),
+        "elements": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="record", record=_answer_element_record),
+        ),
     }
 )
 _accepted_event_record = RecordSpec(
     fields={
-        "id": required("identifier"),
-        "answer_space_id": required("identifier"),
-        "elements": required("sequence", item=required("string")),
+        "id": FieldSpec(kind="identifier"),
+        "answer_space_id": FieldSpec(kind="identifier"),
+        "elements": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
     }
 )
 _probability_mass_record = RecordSpec(
     fields={
-        "element_id": required("string"),
-        "probability": required("number"),
+        "element_id": FieldSpec(kind="string"),
+        "probability": FieldSpec(kind="number"),
     }
 )
 _finite_probability_measure_record = RecordSpec(
     fields={
-        "id": required("identifier"),
-        "answer_space_id": required("identifier"),
-        "probabilities": required(
-            "sequence",
-            item=required("record", record=_probability_mass_record),
+        "id": FieldSpec(kind="identifier"),
+        "answer_space_id": FieldSpec(kind="identifier"),
+        "probabilities": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="record", record=_probability_mass_record),
         ),
     }
 )
 _raw_scoring_evidence_base_record = RecordSpec(
     fields={
-        "id": required("identifier"),
-        "observation_id": required("string"),
-        "answer_space_id": required("identifier"),
-        "accepted_event_id": required("identifier"),
-        "probability_measure_id": required("identifier"),
-        "accepted_mass": required("number"),
+        "id": FieldSpec(kind="identifier"),
+        "observation_id": FieldSpec(kind="string"),
+        "answer_space_id": FieldSpec(kind="identifier"),
+        "accepted_event_id": FieldSpec(kind="identifier"),
+        "probability_measure_id": FieldSpec(kind="identifier"),
+        "accepted_mass": FieldSpec(kind="number"),
     },
     allow_unknown=True,
 )
 _finite_answer_scoring_bundle_record = RecordSpec(
     fields={
-        "id": optional("identifier"),
-        "observation_id": optional("string"),
-        "answer_space": required("record"),
-        "accepted_event": required("record"),
-        "probability_measure": required("record"),
-        "raw_scoring_evidence": optional("record"),
+        "id": FieldSpec(kind="identifier", required=False),
+        "observation_id": FieldSpec(kind="string", required=False),
+        "answer_space": FieldSpec(kind="record"),
+        "accepted_event": FieldSpec(kind="record"),
+        "probability_measure": FieldSpec(kind="record"),
+        "raw_scoring_evidence": FieldSpec(kind="record", required=False),
     },
     allow_unknown=True,
 )
@@ -135,7 +138,7 @@ class AnswerElement:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> AnswerElement:
         try:
-            validated = validate_record(record, _answer_element_record)
+            validated = _answer_element_record.validate(record)
         except RecordValidationError as error:
             raise AnswerSpaceValidationError(str(error)) from error
         return cls(id=str(validated["id"]))
@@ -153,7 +156,7 @@ class AnswerSpace:
 
     def __post_init__(self) -> None:
         try:
-            require_unreleased_identifier(self.id)
+            self.id.require_unreleased()
         except ValueError as error:
             raise AnswerSpaceValidationError(str(error)) from error
         if not self.elements:
@@ -165,7 +168,7 @@ class AnswerSpace:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> AnswerSpace:
         try:
-            validated = validate_record(record, _answer_space_record)
+            validated = _answer_space_record.validate(record)
         except RecordValidationError as error:
             raise AnswerSpaceValidationError(str(error)) from error
         elements = tuple(
@@ -199,7 +202,7 @@ class AcceptedEvent:
 
     def __post_init__(self) -> None:
         try:
-            require_unreleased_identifier(self.id)
+            self.id.require_unreleased()
         except ValueError as error:
             raise AcceptedEventValidationError(str(error)) from error
         if not self.elements:
@@ -215,7 +218,7 @@ class AcceptedEvent:
         cls, record: Mapping[str, object], *, answer_space: AnswerSpace
     ) -> AcceptedEvent:
         try:
-            validated = validate_record(record, _accepted_event_record)
+            validated = _accepted_event_record.validate(record)
         except RecordValidationError as error:
             raise AcceptedEventValidationError(str(error)) from error
 
@@ -279,7 +282,7 @@ class ProbabilityMass:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ProbabilityMass:
         try:
-            validated = validate_record(record, _probability_mass_record)
+            validated = _probability_mass_record.validate(record)
         except RecordValidationError as error:
             raise ProbabilityMeasureValidationError(str(error)) from error
         return cls(
@@ -309,7 +312,7 @@ class FiniteProbabilityMeasure:
 
     def __post_init__(self) -> None:
         try:
-            require_unreleased_identifier(self.id)
+            self.id.require_unreleased()
         except ValueError as error:
             raise ProbabilityMeasureValidationError(str(error)) from error
         if not math.isfinite(self.normalization_tolerance) or self.normalization_tolerance < 0:
@@ -337,7 +340,7 @@ class FiniteProbabilityMeasure:
         normalization_tolerance: float = 1e-12,
     ) -> FiniteProbabilityMeasure:
         try:
-            validated = validate_record(record, _finite_probability_measure_record)
+            validated = _finite_probability_measure_record.validate(record)
         except RecordValidationError as error:
             raise ProbabilityMeasureValidationError(str(error)) from error
 
@@ -445,7 +448,7 @@ class RawScoringEvidence:
 
     def __post_init__(self) -> None:
         try:
-            require_unreleased_identifier(self.id)
+            self.id.require_unreleased()
         except ValueError as error:
             raise RawScoringEvidenceValidationError(str(error)) from error
         if not self.observation_id:
@@ -498,7 +501,7 @@ class RawScoringEvidence:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> RawScoringEvidence:
         try:
-            validated = validate_record(record, _raw_scoring_evidence_base_record)
+            validated = _raw_scoring_evidence_base_record.validate(record)
         except RecordValidationError as error:
             raise RawScoringEvidenceValidationError(str(error)) from error
         expected_fields = {
@@ -627,7 +630,7 @@ class FiniteAnswerScoringBundle:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> FiniteAnswerScoringBundle:
         try:
-            validated = validate_record(record, _finite_answer_scoring_bundle_record)
+            validated = _finite_answer_scoring_bundle_record.validate(record)
             answer_space = AnswerSpace.from_record(
                 _bundle_mapping(validated["answer_space"], field="answer_space")
             )

@@ -1,10 +1,10 @@
 from pathlib import PurePosixPath
 
-from leibniz.repository_policy import PolicyViolation, validate_tracked_paths
+from leibniz.repository_policy import PolicyViolation, RepositoryPolicy
 
 
 def test_repository_policy_accepts_source_and_configuration_paths() -> None:
-    violations = validate_tracked_paths(
+    violations = RepositoryPolicy.validate_tracked_paths(
         [
             ".github/workflows/ci.yml",
             ".gitignore",
@@ -20,7 +20,7 @@ def test_repository_policy_accepts_source_and_configuration_paths() -> None:
 
 
 def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
-    violations = validate_tracked_paths(
+    violations = RepositoryPolicy.validate_tracked_paths(
         [
             ".leibniz/measurements.json",
             ".pytest_cache/v/cache/nodeids",
