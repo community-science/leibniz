@@ -24,6 +24,17 @@ def test_benchmark_declaration_parses_finite_answer_scoring_contract() -> None:
     assert declaration.to_record() == _benchmark_declaration_record()
 
 
+def test_benchmark_declaration_defaults_finite_answer_protocol_bindings() -> None:
+    declaration = BenchmarkDeclaration.from_record(
+        {
+            "id": "core.boolean-benchmark@0.1.0",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+        }
+    )
+
+    assert declaration.to_record() == _benchmark_declaration_record()
+
+
 def test_benchmark_declaration_validates_matching_scoring_bundle() -> None:
     declaration = BenchmarkDeclaration.from_record(_benchmark_declaration_record())
     bundle = FiniteAnswerScoringBundle.from_record(_boolean_bundle_record())
@@ -121,6 +132,13 @@ def test_benchmark_manifest_parses_declaration_container() -> None:
     assert manifest.to_record() == _benchmark_manifest_record()
 
 
+def test_benchmark_manifest_parses_minimal_authoring_record() -> None:
+    manifest = BenchmarkManifest.from_record(_minimal_benchmark_manifest_record())
+
+    assert manifest == BenchmarkManifest.from_record(_benchmark_manifest_record())
+    assert manifest.to_record() == _benchmark_manifest_record()
+
+
 def test_benchmark_manifest_validates_matching_scoring_bundle() -> None:
     manifest = BenchmarkManifest.from_record(_benchmark_manifest_record())
     bundle = FiniteAnswerScoringBundle.from_record(_boolean_bundle_record())
@@ -179,6 +197,29 @@ def test_benchmark_manifest_rejects_malformed_records() -> None:
     assert str(error) == "summary: unknown field"
 
 
+def test_benchmark_manifest_rejects_missing_or_conflicting_declaration_inputs() -> None:
+    assert str(
+        capture_manifest_error(
+            lambda: BenchmarkManifest.from_record(
+                {
+                    "id": "core.boolean-benchmark@0.1.0",
+                    "name": "core.boolean-benchmark",
+                }
+            )
+        )
+    ) == "answer_space_id: missing required field"
+
+    record = _minimal_benchmark_manifest_record()
+    declaration = _benchmark_declaration_record()
+    declaration["answer_space_id"] = "core.other-answer@0.1.0"
+    record["declaration"] = declaration
+
+    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
+        "answer_space_id core.boolean-answer@0.1.0 does not match declaration "
+        "core.other-answer@0.1.0"
+    )
+
+
 def test_benchmark_manifest_digest_is_stable() -> None:
     record = _benchmark_manifest_record()
     reordered = {
@@ -204,6 +245,15 @@ def test_benchmark_manifest_document_loads_json_bytes_with_digest() -> None:
                 "evidence_bundle_id": "core.finite-answer-scoring-bundle@0.1.0"
             }
         }"""
+    )
+
+    assert document.manifest == BenchmarkManifest.from_record(_benchmark_manifest_record())
+    assert document.digest == ContentDigest.from_value(_benchmark_manifest_record())
+
+
+def test_benchmark_manifest_document_expands_minimal_authoring_record() -> None:
+    document = BenchmarkManifestDocument.from_json_bytes(
+        _json_bytes(_minimal_benchmark_manifest_record())
     )
 
     assert document.manifest == BenchmarkManifest.from_record(_benchmark_manifest_record())
@@ -236,13 +286,7 @@ def test_benchmark_manifest_document_rejects_invalid_manifest_record() -> None:
 def test_benchmark_manifest_document_digest_is_stable() -> None:
     left = BenchmarkManifestDocument.from_json_bytes(_json_bytes(_benchmark_manifest_record()))
     right = BenchmarkManifestDocument.from_json_bytes(
-        _json_bytes(
-            {
-                "declaration": _benchmark_declaration_record(),
-                "name": "core.boolean-benchmark",
-                "id": "core.boolean-benchmark@0.1.0",
-            }
-        )
+        _json_bytes(_minimal_benchmark_manifest_record())
     )
 
     assert left.digest == right.digest
@@ -284,6 +328,14 @@ def _benchmark_manifest_record() -> dict[str, object]:
         "id": "core.boolean-benchmark@0.1.0",
         "name": "core.boolean-benchmark",
         "declaration": _benchmark_declaration_record(),
+    }
+
+
+def _minimal_benchmark_manifest_record() -> dict[str, object]:
+    return {
+        "id": "core.boolean-benchmark@0.1.0",
+        "name": "core.boolean-benchmark",
+        "answer_space_id": "core.boolean-answer@0.1.0",
     }
 
 
