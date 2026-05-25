@@ -2,8 +2,6 @@ import math
 from collections.abc import Callable, Mapping
 
 from leibniz.benchmarks import (
-    BenchmarkDeclaration,
-    BenchmarkDeclarationValidationError,
     BenchmarkManifest,
     BenchmarkManifestDocument,
     BenchmarkManifestValidationError,
@@ -13,86 +11,13 @@ from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementRecord, MeasurementRecordValidationError
 
 
-def test_benchmark_declaration_parses_finite_outcome_scoring_contract() -> None:
-    declaration = BenchmarkDeclaration.from_record(_benchmark_declaration_record())
-
-    assert declaration == BenchmarkDeclaration(
-        id=ProtocolIdentifier.parse("core.boolean-benchmark@0.1.0"),
-        outcome_space_id=ProtocolIdentifier.parse("core.boolean-outcome@0.1.0"),
-    )
-    assert declaration.to_record() == _benchmark_declaration_record()
-
-
-def test_benchmark_declaration_defaults_finite_outcome_protocol_bindings() -> None:
-    declaration = BenchmarkDeclaration.from_record(
-        {
-            "id": "core.boolean-benchmark@0.1.0",
-            "outcome_space_id": "core.boolean-outcome@0.1.0",
-        }
-    )
-
-    assert declaration.to_record() == _benchmark_declaration_record()
-
-
-def test_benchmark_declaration_rejects_invalid_protocol_binding_identifiers() -> None:
-    record = _benchmark_declaration_record()
-    record["score_functional_id"] = "core.mean-accuracy@0.1.0"
-
-    error = capture_benchmark_error(lambda: BenchmarkDeclaration.from_record(record))
-
-    assert str(error) == (
-        "score_functional_id core.mean-accuracy@0.1.0 does not match "
-        "core.negative-log-accepted-mass@0.1.0"
-    )
-
-
-def test_benchmark_declaration_rejects_malformed_records() -> None:
-    assert str(
-        capture_benchmark_error(
-            lambda: BenchmarkDeclaration.from_record(
-                {
-                    "id": "core.boolean-benchmark@1.0.0",
-                    "outcome_space_id": "core.boolean-outcome@0.1.0",
-                    "oracle_acceptance_id": "core.finite-outcome-accepted-event@0.1.0",
-                    "prediction_interface_id": (
-                        "core.finite-probability-measure-prediction@0.1.0"
-                    ),
-                    "score_functional_id": "core.negative-log-accepted-mass@0.1.0",
-                }
-            )
-        )
-    ) == (
-        "identifier must use a pre-1.0.0 version before release policy exists: "
-        "core.boolean-benchmark@1.0.0"
-    )
-    record = _benchmark_declaration_record()
-    record["summary"] = "boolean finite-outcome benchmark"
-
-    error = capture_benchmark_error(lambda: BenchmarkDeclaration.from_record(record))
-
-    assert str(error) == "summary: unknown field"
-
-
-def test_benchmark_declaration_digest_is_stable() -> None:
-    record = _benchmark_declaration_record()
-    reordered = {
-        "score_functional_id": record["score_functional_id"],
-        "prediction_interface_id": record["prediction_interface_id"],
-        "oracle_acceptance_id": record["oracle_acceptance_id"],
-        "id": record["id"],
-        "outcome_space_id": record["outcome_space_id"],
-    }
-
-    assert ContentDigest.from_value(record) == ContentDigest.from_value(reordered)
-
-
-def test_benchmark_manifest_parses_declaration_container() -> None:
+def test_benchmark_manifest_parses_finite_outcome_contract() -> None:
     manifest = BenchmarkManifest.from_record(_benchmark_manifest_record())
 
     assert manifest == BenchmarkManifest(
         id=ProtocolIdentifier.parse("core.boolean-benchmark@0.1.0"),
         name=ProtocolIdentifier.parse("core.boolean-benchmark@0.1.0").name,
-        declaration=BenchmarkDeclaration.from_record(_benchmark_declaration_record()),
+        outcome_space_id=ProtocolIdentifier.parse("core.boolean-outcome@0.1.0"),
     )
     assert manifest.to_record() == _benchmark_manifest_record()
 
@@ -123,7 +48,7 @@ def test_benchmark_manifest_accepts_declared_observation_ids() -> None:
     assert manifest.to_record() == {
         "id": "core.boolean-benchmark@0.1.0",
         "name": "core.boolean-benchmark",
-        "declaration": _benchmark_declaration_record(),
+        "outcome_space_id": "core.boolean-outcome@0.1.0",
         "observation_ids": ["fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"],
     }
 
@@ -167,31 +92,13 @@ def test_benchmark_manifest_observation_ids_are_order_independent() -> None:
     )
 
 
-def test_benchmark_manifest_rejects_mismatched_name_and_declaration_id() -> None:
+def test_benchmark_manifest_rejects_mismatched_name() -> None:
     name_record = _benchmark_manifest_record()
     name_record["name"] = "core.other-benchmark"
 
     assert str(
         capture_manifest_error(lambda: BenchmarkManifest.from_record(name_record))
     ) == "name core.other-benchmark does not match id name core.boolean-benchmark"
-
-    declaration_record = _benchmark_declaration_record()
-    declaration_record["id"] = "core.other-benchmark@0.1.0"
-    declaration_record["outcome_space_id"] = "core.boolean-outcome@0.1.0"
-    declaration_record["oracle_acceptance_id"] = "core.finite-outcome-accepted-event@0.1.0"
-    declaration_record["prediction_interface_id"] = (
-        "core.finite-probability-measure-prediction@0.1.0"
-    )
-    declaration_record["score_functional_id"] = "core.negative-log-accepted-mass@0.1.0"
-    declaration_id_record = _benchmark_manifest_record()
-    declaration_id_record["declaration"] = declaration_record
-
-    assert str(
-        capture_manifest_error(lambda: BenchmarkManifest.from_record(declaration_id_record))
-    ) == (
-        "declaration id core.other-benchmark@0.1.0 does not match "
-        "core.boolean-benchmark@0.1.0"
-    )
 
 
 def test_benchmark_manifest_rejects_malformed_records() -> None:
@@ -201,7 +108,7 @@ def test_benchmark_manifest_rejects_malformed_records() -> None:
                 {
                     "id": "core.boolean-benchmark@1.0.0",
                     "name": "core.boolean-benchmark",
-                    "declaration": _benchmark_declaration_record(),
+                    "outcome_space_id": "core.boolean-outcome@0.1.0",
                 }
             )
         )
@@ -236,7 +143,7 @@ def test_benchmark_manifest_rejects_invalid_observation_ids() -> None:
     )
 
 
-def test_benchmark_manifest_rejects_missing_or_conflicting_declaration_inputs() -> None:
+def test_benchmark_manifest_rejects_missing_outcome_space() -> None:
     assert str(
         capture_manifest_error(
             lambda: BenchmarkManifest.from_record(
@@ -248,21 +155,11 @@ def test_benchmark_manifest_rejects_missing_or_conflicting_declaration_inputs() 
         )
     ) == "outcome_space_id: missing required field"
 
-    record = _minimal_benchmark_manifest_record()
-    declaration = _benchmark_declaration_record()
-    declaration["outcome_space_id"] = "core.other-outcome@0.1.0"
-    record["declaration"] = declaration
-
-    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
-        "outcome_space_id core.boolean-outcome@0.1.0 does not match declaration "
-        "core.other-outcome@0.1.0"
-    )
-
 
 def test_benchmark_manifest_digest_is_stable() -> None:
     record = _benchmark_manifest_record()
     reordered = {
-        "declaration": record["declaration"],
+        "outcome_space_id": record["outcome_space_id"],
         "name": record["name"],
         "id": record["id"],
     }
@@ -275,13 +172,7 @@ def test_benchmark_manifest_document_loads_bytes_with_digest() -> None:
         b"""{
             "name": "core.boolean-benchmark",
             "id": "core.boolean-benchmark@0.1.0",
-            "declaration": {
-                "id": "core.boolean-benchmark@0.1.0",
-                "outcome_space_id": "core.boolean-outcome@0.1.0",
-                "oracle_acceptance_id": "core.finite-outcome-accepted-event@0.1.0",
-                "prediction_interface_id": "core.finite-probability-measure-prediction@0.1.0",
-                "score_functional_id": "core.negative-log-accepted-mass@0.1.0"
-            }
+            "outcome_space_id": "core.boolean-outcome@0.1.0"
         }"""
     )
 
@@ -330,16 +221,6 @@ def test_benchmark_manifest_document_digest_is_stable() -> None:
     assert left.digest == right.digest
 
 
-def capture_benchmark_error(
-    call: Callable[[], object],
-) -> BenchmarkDeclarationValidationError:
-    try:
-        call()
-    except BenchmarkDeclarationValidationError as error:
-        return error
-    raise AssertionError("expected BenchmarkDeclarationValidationError")
-
-
 def capture_manifest_error(
     call: Callable[[], object],
 ) -> BenchmarkManifestValidationError:
@@ -360,21 +241,11 @@ def capture_measurement_error(
     raise AssertionError("expected MeasurementRecordValidationError")
 
 
-def _benchmark_declaration_record() -> dict[str, object]:
-    return {
-        "id": "core.boolean-benchmark@0.1.0",
-        "outcome_space_id": "core.boolean-outcome@0.1.0",
-        "oracle_acceptance_id": "core.finite-outcome-accepted-event@0.1.0",
-        "prediction_interface_id": "core.finite-probability-measure-prediction@0.1.0",
-        "score_functional_id": "core.negative-log-accepted-mass@0.1.0",
-    }
-
-
 def _benchmark_manifest_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
         "name": "core.boolean-benchmark",
-        "declaration": _benchmark_declaration_record(),
+        "outcome_space_id": "core.boolean-outcome@0.1.0",
     }
 
 
