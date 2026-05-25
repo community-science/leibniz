@@ -1,6 +1,19 @@
 {
   "id": "benchmarks.chess@0.1.0",
-  "outcome_space_id": "benchmarks.chess.uci-moves@0.1.0",
+  "outcome_space": {
+    "id": "benchmarks.chess.uci-moves@0.1.0",
+    "outcomes": [
+      {
+        "id": "g7f8"
+      },
+      {
+        "id": "g7g8"
+      },
+      {
+        "id": "g6f7"
+      }
+    ]
+  },
   "observation_ids": [
     "fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"
   ]
