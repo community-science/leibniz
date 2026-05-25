@@ -4,15 +4,15 @@ from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.content import ContentDigest
 from leibniz.measurements import MeasurementDocument
 
-_FIXTURES = Path(__file__).parent / "fixtures" / "finite_outcome"
+_fixtures = Path(__file__).parent / "fixtures" / "finite_outcome"
 
 
 def test_minimal_authoring_fixtures_load_and_validate() -> None:
     manifest_document = BenchmarkManifestDocument.from_bytes(
-        (_FIXTURES / "minimal_benchmark_manifest.json").read_bytes()
+        (_fixtures / "minimal_benchmark_manifest.json").read_bytes()
     )
     measurement_document = MeasurementDocument.from_bytes(
-        (_FIXTURES / "minimal_measurement.json").read_bytes()
+        (_fixtures / "minimal_measurement.json").read_bytes()
     )
 
     measurement_document.measurement.validate_manifest(manifest_document.manifest)

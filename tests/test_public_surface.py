@@ -9,6 +9,7 @@ import leibniz
 
 _camel_case = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 _answer_terminology = re.compile(r"answer|Answer")
+_module_scope_upper_snake = re.compile(r"_?[A-Z][A-Z0-9_]*$")
 
 
 def test_leibniz_modules_export_only_camel_case_public_names() -> None:
@@ -47,6 +48,19 @@ def test_leibniz_source_uses_outcome_terminology() -> None:
     assert offenders == ()
 
 
+def test_python_source_avoids_module_scope_upper_snake_names() -> None:
+    source_roots = (Path(leibniz.__file__).parent, Path(__file__).parent)
+    offenders = tuple(
+        f"{path.relative_to(root)}:{name}"
+        for root in source_roots
+        for path in sorted(root.rglob("*.py"))
+        for name in _module_scope_assignment_names(path)
+        if _module_scope_upper_snake.fullmatch(name)
+    )
+
+    assert offenders == ()
+
+
 def _leibniz_module_names() -> tuple[str, ...]:
     return tuple(
         module_info.name
@@ -79,12 +93,28 @@ def _defined_public_names(module: ModuleType) -> tuple[str, ...]:
     return tuple(names)
 
 
+def _module_scope_assignment_names(path: Path) -> tuple[str, ...]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.AnnAssign):
+            names.extend(_assignment_names(node.target))
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                names.extend(_assignment_names(target))
+    return tuple(names)
+
+
 def _public_assignment_names(target: ast.expr) -> tuple[str, ...]:
-    if isinstance(target, ast.Name) and not target.id.startswith("_"):
+    return tuple(name for name in _assignment_names(target) if not name.startswith("_"))
+
+
+def _assignment_names(target: ast.expr) -> tuple[str, ...]:
+    if isinstance(target, ast.Name):
         return (target.id,)
     if isinstance(target, ast.Tuple | ast.List):
         names: list[str] = []
         for item in target.elts:
-            names.extend(_public_assignment_names(item))
+            names.extend(_assignment_names(item))
         return tuple(names)
     return ()

@@ -16,10 +16,10 @@ from leibniz.outcomes import (
     RawScoringEvidence,
 )
 
-_SOURCE_ROOT = Path(__file__).parents[1] / "src" / "leibniz"
-_FORMAT_BOUNDARY_FILES = {
-    _SOURCE_ROOT / "_documents.py",
-    _SOURCE_ROOT / "_formats" / "_json.py",
+_source_root = Path(__file__).parents[1] / "src" / "leibniz"
+_format_boundary_files = {
+    _source_root / "_documents.py",
+    _source_root / "_formats" / "_json.py",
 }
 
 
@@ -115,9 +115,9 @@ def test_canonical_document_bytes_delegate_to_current_format() -> None:
 
 def test_source_mentions_json_only_at_document_format_boundary() -> None:
     offenders = tuple(
-        path.relative_to(_SOURCE_ROOT.parents[1])
-        for path in sorted(_SOURCE_ROOT.rglob("*.py"))
-        if path not in _FORMAT_BOUNDARY_FILES
+        path.relative_to(_source_root.parents[1])
+        for path in sorted(_source_root.rglob("*.py"))
+        if path not in _format_boundary_files
         and re.search(r"\bjson\b|\bJSON\b|_json", path.read_text(encoding="utf-8"))
     )
 

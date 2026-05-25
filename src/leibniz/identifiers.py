@@ -12,16 +12,16 @@ __all__ = [
     "SemanticVersion",
 ]
 
-_NUMERIC_IDENTIFIER = re.compile(r"0|[1-9][0-9]*")
-_SEMVER = re.compile(
+_numeric_identifier = re.compile(r"0|[1-9][0-9]*")
+_semver = re.compile(
     r"^(?P<major>0|[1-9][0-9]*)"
     r"\.(?P<minor>0|[1-9][0-9]*)"
     r"\.(?P<patch>0|[1-9][0-9]*)"
     r"(?:-(?P<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
     r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
 )
-_NAME_ATOM = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
-_IDENTIFIER_SEPARATOR = "@"
+_name_atom = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+_identifier_separator = "@"
 
 
 class IdentifierSyntaxError(ValueError):
@@ -47,7 +47,7 @@ class SemanticVersion:
 
     @classmethod
     def parse(cls, text: str) -> SemanticVersion:
-        match = _SEMVER.fullmatch(text)
+        match = _semver.fullmatch(text)
         if match is None:
             raise IdentifierSyntaxError(f"invalid semantic version: {text!r}")
 
@@ -104,7 +104,7 @@ class ProtocolName:
 
     def __post_init__(self) -> None:
         atoms = self.value.split(".")
-        if not atoms or any(not _NAME_ATOM.fullmatch(atom) for atom in atoms):
+        if not atoms or any(not _name_atom.fullmatch(atom) for atom in atoms):
             raise IdentifierSyntaxError(f"invalid protocol name: {self.value!r}")
 
     @classmethod
@@ -124,8 +124,8 @@ class ProtocolIdentifier:
 
     @classmethod
     def parse(cls, text: str) -> ProtocolIdentifier:
-        name_text, separator, version_text = text.partition(_IDENTIFIER_SEPARATOR)
-        if separator == "" or _IDENTIFIER_SEPARATOR in version_text:
+        name_text, separator, version_text = text.partition(_identifier_separator)
+        if separator == "" or _identifier_separator in version_text:
             raise IdentifierSyntaxError(f"invalid protocol identifier: {text!r}")
         return cls(name=ProtocolName.parse(name_text), version=SemanticVersion.parse(version_text))
 
@@ -141,7 +141,7 @@ class ProtocolIdentifier:
         return self
 
     def __str__(self) -> str:
-        return f"{self.name}{_IDENTIFIER_SEPARATOR}{self.version}"
+        return f"{self.name}{_identifier_separator}{self.version}"
 
 
 def _split_identifiers(text: str | None) -> tuple[str, ...]:
@@ -169,7 +169,7 @@ def _validate_identifiers(
         if (
             forbid_numeric_leading_zero
             and identifier.isdigit()
-            and _NUMERIC_IDENTIFIER.fullmatch(identifier) is None
+            and _numeric_identifier.fullmatch(identifier) is None
         ):
             raise IdentifierSyntaxError(
                 f"numeric {field} identifiers must not contain leading zeroes: {identifier!r}"

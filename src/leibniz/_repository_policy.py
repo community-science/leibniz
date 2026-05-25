@@ -9,7 +9,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-_FORBIDDEN_NAMES = frozenset(
+_forbidden_names = frozenset(
     {
         ".leibniz",
         ".mypy_cache",
@@ -22,8 +22,8 @@ _FORBIDDEN_NAMES = frozenset(
         "venv",
     }
 )
-_FORBIDDEN_SUFFIXES = (".pyc", ".pyo")
-_FORBIDDEN_ENV_FILES = frozenset({".env"})
+_forbidden_suffixes = (".pyc", ".pyo")
+_forbidden_env_files = frozenset({".env"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +57,7 @@ def _validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]
                 )
             )
             continue
-        if path.suffix in _FORBIDDEN_SUFFIXES:
+        if path.suffix in _forbidden_suffixes:
             violations.append(
                 PolicyViolation(
                     path=path,
@@ -65,7 +65,7 @@ def _validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]
                 )
             )
             continue
-        if path.name in _FORBIDDEN_ENV_FILES or path.name.startswith(".env."):
+        if path.name in _forbidden_env_files or path.name.startswith(".env."):
             violations.append(
                 PolicyViolation(
                     path=path,
@@ -108,7 +108,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
 
 
 def _has_forbidden_name(path: PurePosixPath) -> bool:
-    return any(part in _FORBIDDEN_NAMES for part in path.parts)
+    return any(part in _forbidden_names for part in path.parts)
 
 
 if __name__ == "__main__":
