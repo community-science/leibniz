@@ -152,7 +152,9 @@ def test_benchmark_manifest_accepts_declared_observation_ids() -> None:
 
     manifest = BenchmarkManifest.from_record(record)
 
-    assert manifest.observation_ids == ("fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1",)
+    assert manifest.observation_ids == frozenset(
+        {"fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"}
+    )
     assert manifest.to_record() == {
         "id": "core.boolean-benchmark@0.1.0",
         "name": "core.boolean-benchmark",
@@ -181,6 +183,22 @@ def test_benchmark_manifest_validates_declared_observation_ids() -> None:
 
     assert str(capture_manifest_error(lambda: manifest.validate_bundle(bundle))) == (
         "observation_id 'observation-1' is not declared by core.boolean-benchmark@0.1.0"
+    )
+
+
+def test_benchmark_manifest_observation_ids_are_order_independent() -> None:
+    left_record = _two_field_benchmark_manifest_record()
+    left_record["observation_ids"] = ["observation-2", "observation-1"]
+    right_record = _two_field_benchmark_manifest_record()
+    right_record["observation_ids"] = ["observation-1", "observation-2"]
+
+    left = BenchmarkManifest.from_record(left_record)
+    right = BenchmarkManifest.from_record(right_record)
+
+    assert left == right
+    assert left.to_record()["observation_ids"] == ["observation-1", "observation-2"]
+    assert ContentDigest.from_value(left.to_record()) == ContentDigest.from_value(
+        right.to_record()
     )
 
 

@@ -15,8 +15,8 @@ def test_chess_mate_in_one_manifest_loads() -> None:
     manifest_document = BenchmarkManifestDocument.from_bytes(_manifest_path.read_bytes())
 
     assert manifest_document.manifest.id == ProtocolIdentifier.parse("benchmarks.chess@0.1.0")
-    assert manifest_document.manifest.observation_ids == (
-        "fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1",
+    assert manifest_document.manifest.observation_ids == frozenset(
+        {"fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"}
     )
 
 
