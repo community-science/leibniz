@@ -238,7 +238,7 @@ def test_benchmark_manifest_digest_is_stable() -> None:
     assert ContentDigest.from_value(record) == ContentDigest.from_value(reordered)
 
 
-def test_benchmark_manifest_document_loads_json_bytes_with_digest() -> None:
+def test_benchmark_manifest_document_loads_bytes_with_digest() -> None:
     document = BenchmarkManifestDocument.from_bytes(
         b"""{
             "name": "core.boolean-benchmark",
@@ -267,16 +267,16 @@ def test_benchmark_manifest_document_expands_minimal_authoring_record() -> None:
     assert document.digest == ContentDigest.from_value(_benchmark_manifest_record())
 
 
-def test_benchmark_manifest_document_rejects_invalid_json() -> None:
+def test_benchmark_manifest_document_rejects_invalid_document_bytes() -> None:
     assert str(
         capture_manifest_error(lambda: BenchmarkManifestDocument.from_bytes(b"\xff"))
-    ) == "manifest JSON file must be UTF-8"
+    ) == "manifest document must be UTF-8"
     assert str(
         capture_manifest_error(lambda: BenchmarkManifestDocument.from_bytes(b"{"))
-    ) == "invalid manifest JSON file: Expecting property name enclosed in double quotes"
+    ) == "invalid manifest document: Expecting property name enclosed in double quotes"
     assert str(
         capture_manifest_error(lambda: BenchmarkManifestDocument.from_bytes(b"[]"))
-    ) == "manifest JSON file must contain an object"
+    ) == "manifest document must contain an object"
 
 
 def test_benchmark_manifest_document_rejects_invalid_manifest_record() -> None:
