@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable, Mapping
 from typing import cast
 
@@ -5,7 +6,11 @@ from leibniz.answers import FiniteAnswerScoringBundle
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.measurements import MeasurementRecord, MeasurementRecordValidationError
+from leibniz.measurements import (
+    MeasurementDocument,
+    MeasurementRecord,
+    MeasurementRecordValidationError,
+)
 
 
 def test_measurement_record_parses_finite_answer_scoring_evidence() -> None:
@@ -107,6 +112,33 @@ def test_measurement_record_rejects_malformed_records_and_state_paths() -> None:
     ) == "local_path: unknown field"
 
 
+def test_measurement_document_loads_json_bytes_with_digest() -> None:
+    document = MeasurementDocument.from_json_bytes(_json_bytes(_measurement_record()))
+
+    assert document.measurement.to_record() == _expanded_measurement_record()
+    assert document.digest == ContentDigest.from_value(_expanded_measurement_record())
+
+
+def test_measurement_document_digest_is_stable_for_minimal_and_expanded_records() -> None:
+    minimal = MeasurementDocument.from_json_bytes(_json_bytes(_measurement_record()))
+    expanded = MeasurementDocument.from_json_bytes(_json_bytes(_expanded_measurement_record()))
+
+    assert minimal.measurement.to_record() == expanded.measurement.to_record()
+    assert minimal.digest == expanded.digest
+
+
+def test_measurement_document_rejects_invalid_json_input() -> None:
+    assert (
+        str(capture_measurement_error(lambda: MeasurementDocument.from_json_bytes(b"[]")))
+        == "measurement JSON must be an object"
+    )
+    assert str(
+        capture_measurement_error(
+            lambda: MeasurementDocument.from_json_bytes(b'{"benchmark_id": false}')
+        )
+    ) == "benchmark_id: expected identifier string; scoring_bundle: missing required field"
+
+
 def _measurement_record() -> dict[str, object]:
     return {
         "benchmark_id": "core.boolean-benchmark@0.1.0",
@@ -171,6 +203,10 @@ def _expanded_boolean_bundle_record() -> dict[str, object]:
     del record["id"]
     del record["observation_id"]
     return record
+
+
+def _json_bytes(record: Mapping[str, object]) -> bytes:
+    return json.dumps(record).encode("utf-8")
 
 
 def capture_measurement_error(
