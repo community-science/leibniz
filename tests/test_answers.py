@@ -1,5 +1,6 @@
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from typing import cast
 
 from leibniz.answers import (
     AcceptedEvent,
@@ -9,12 +10,15 @@ from leibniz.answers import (
     AnswerElement,
     AnswerSpace,
     AnswerSpaceValidationError,
+    FiniteAnswerScoringBundle,
+    FiniteAnswerScoringBundleValidationError,
     FiniteProbabilityMeasure,
     ProbabilityMass,
     ProbabilityMeasureValidationError,
     RawScoringEvidence,
     RawScoringEvidenceValidationError,
 )
+from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
 
 
@@ -793,6 +797,73 @@ def test_raw_scoring_evidence_rejects_malformed_records() -> None:
     ) == "observation_id must be nonempty"
 
 
+def test_finite_answer_scoring_bundle_parses_complete_object_graph() -> None:
+    bundle = FiniteAnswerScoringBundle.from_record(_boolean_bundle_record())
+
+    assert bundle.answer_space.id == ProtocolIdentifier.parse("core.boolean-answer@0.1.0")
+    assert bundle.accepted_event.id == ProtocolIdentifier.parse("core.boolean-accepted@0.1.0")
+    assert bundle.probability_measure.id == ProtocolIdentifier.parse(
+        "core.boolean-prediction@0.1.0"
+    )
+    assert bundle.raw_scoring_evidence.id == ProtocolIdentifier.parse(
+        "core.boolean-evidence@0.1.0"
+    )
+    assert bundle.to_record() == _boolean_bundle_record()
+
+
+def test_finite_answer_scoring_bundle_rejects_dangling_references() -> None:
+    record = _boolean_bundle_record()
+    raw_scoring_evidence = dict(
+        cast(Mapping[str, object], record["raw_scoring_evidence"])
+    )
+    raw_scoring_evidence["accepted_event_id"] = "core.other-accepted@0.1.0"
+    record["raw_scoring_evidence"] = raw_scoring_evidence
+
+    error = capture_bundle_error(lambda: FiniteAnswerScoringBundle.from_record(record))
+
+    assert str(error) == (
+        "raw_scoring_evidence.accepted_event_id core.other-accepted@0.1.0 "
+        "does not match core.boolean-accepted@0.1.0"
+    )
+
+
+def test_finite_answer_scoring_bundle_recomputes_score_from_event_and_measure() -> None:
+    record = _boolean_bundle_record()
+    raw_scoring_evidence = dict(
+        cast(Mapping[str, object], record["raw_scoring_evidence"])
+    )
+    raw_scoring_evidence["accepted_mass"] = 0.25
+    raw_scoring_evidence["negative_log_score"] = -math.log(0.25)
+    record["raw_scoring_evidence"] = raw_scoring_evidence
+
+    error = capture_bundle_error(lambda: FiniteAnswerScoringBundle.from_record(record))
+
+    assert str(error) == (
+        "raw_scoring_evidence.accepted_mass must equal recomputed accepted mass"
+    )
+
+
+def test_finite_answer_scoring_bundle_digest_is_stable() -> None:
+    record = _boolean_bundle_record()
+    reordered = {
+        "raw_scoring_evidence": record["raw_scoring_evidence"],
+        "probability_measure": record["probability_measure"],
+        "accepted_event": record["accepted_event"],
+        "answer_space": record["answer_space"],
+    }
+
+    assert ContentDigest.from_value(record) == ContentDigest.from_value(reordered)
+
+
+def test_finite_answer_scoring_bundle_rejects_malformed_records() -> None:
+    record = _boolean_bundle_record()
+    record["summary"] = {"mean_score": 0.0}
+
+    error = capture_bundle_error(lambda: FiniteAnswerScoringBundle.from_record(record))
+
+    assert str(error) == "summary: unknown field"
+
+
 def capture_answer_error(call: Callable[[], object]) -> AnswerSpaceValidationError:
     try:
         call()
@@ -833,7 +904,48 @@ def capture_evidence_error(call: Callable[[], object]) -> RawScoringEvidenceVali
     raise AssertionError("expected RawScoringEvidenceValidationError")
 
 
+def capture_bundle_error(
+    call: Callable[[], object],
+) -> FiniteAnswerScoringBundleValidationError:
+    try:
+        call()
+    except FiniteAnswerScoringBundleValidationError as error:
+        return error
+    raise AssertionError("expected FiniteAnswerScoringBundleValidationError")
+
+
 def _boolean_space() -> AnswerSpace:
     return AnswerSpace.from_record(
         {"id": "core.boolean-answer@0.1.0", "elements": [{"id": "yes"}]}
     )
+
+
+def _boolean_bundle_record() -> dict[str, object]:
+    return {
+        "answer_space": {
+            "id": "core.boolean-answer@0.1.0",
+            "elements": [{"id": "yes"}, {"id": "no"}],
+        },
+        "accepted_event": {
+            "id": "core.boolean-accepted@0.1.0",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+            "elements": ["yes"],
+        },
+        "probability_measure": {
+            "id": "core.boolean-prediction@0.1.0",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+            "probabilities": [
+                {"element_id": "no", "probability": 0.25},
+                {"element_id": "yes", "probability": 0.75},
+            ],
+        },
+        "raw_scoring_evidence": {
+            "id": "core.boolean-evidence@0.1.0",
+            "observation_id": "observation-1",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+            "accepted_event_id": "core.boolean-accepted@0.1.0",
+            "probability_measure_id": "core.boolean-prediction@0.1.0",
+            "accepted_mass": 0.75,
+            "negative_log_score": -math.log(0.75),
+        },
+    }

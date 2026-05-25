@@ -19,6 +19,8 @@ __all__ = [
     "AnswerElement",
     "AnswerSpace",
     "AnswerSpaceValidationError",
+    "FiniteAnswerScoringBundle",
+    "FiniteAnswerScoringBundleValidationError",
     "FiniteProbabilityMeasure",
     "ProbabilityMass",
     "ProbabilityMeasureValidationError",
@@ -73,6 +75,14 @@ _raw_scoring_evidence_base_record = RecordSpec(
     },
     allow_unknown=True,
 )
+_finite_answer_scoring_bundle_fields = frozenset(
+    {
+        "answer_space",
+        "accepted_event",
+        "probability_measure",
+        "raw_scoring_evidence",
+    }
+)
 
 
 class AnswerSpaceValidationError(ValueError):
@@ -93,6 +103,10 @@ class AcceptedMassScoreError(ValueError):
 
 class RawScoringEvidenceValidationError(ValueError):
     """Raised when raw finite-answer scoring evidence is invalid."""
+
+
+class FiniteAnswerScoringBundleValidationError(ValueError):
+    """Raised when a finite-answer scoring bundle is invalid."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -538,6 +552,121 @@ class RawScoringEvidence:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class FiniteAnswerScoringBundle:
+    """A complete finite-answer scoring object graph for one observation."""
+
+    answer_space: AnswerSpace
+    accepted_event: AcceptedEvent
+    probability_measure: FiniteProbabilityMeasure
+    raw_scoring_evidence: RawScoringEvidence
+
+    def __post_init__(self) -> None:
+        _require_matching_identifier(
+            field="accepted_event.answer_space_id",
+            actual=self.accepted_event.answer_space_id,
+            expected=self.answer_space.id,
+        )
+        _require_matching_identifier(
+            field="probability_measure.answer_space_id",
+            actual=self.probability_measure.answer_space_id,
+            expected=self.answer_space.id,
+        )
+        _require_matching_identifier(
+            field="raw_scoring_evidence.answer_space_id",
+            actual=self.raw_scoring_evidence.answer_space_id,
+            expected=self.answer_space.id,
+        )
+        _require_matching_identifier(
+            field="raw_scoring_evidence.accepted_event_id",
+            actual=self.raw_scoring_evidence.accepted_event_id,
+            expected=self.accepted_event.id,
+        )
+        _require_matching_identifier(
+            field="raw_scoring_evidence.probability_measure_id",
+            actual=self.raw_scoring_evidence.probability_measure_id,
+            expected=self.probability_measure.id,
+        )
+
+        score = AcceptedMassScore.from_event_and_measure(
+            event=self.accepted_event,
+            measure=self.probability_measure,
+        )
+        if not math.isclose(
+            self.raw_scoring_evidence.accepted_mass,
+            score.accepted_mass,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            raise FiniteAnswerScoringBundleValidationError(
+                "raw_scoring_evidence.accepted_mass must equal recomputed accepted mass"
+            )
+        if not math.isclose(
+            self.raw_scoring_evidence.negative_log_score,
+            score.negative_log_score,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            raise FiniteAnswerScoringBundleValidationError(
+                "raw_scoring_evidence.negative_log_score must equal recomputed score"
+            )
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> FiniteAnswerScoringBundle:
+        unknown_fields = tuple(
+            sorted(field for field in record if field not in _finite_answer_scoring_bundle_fields)
+        )
+        if unknown_fields:
+            raise FiniteAnswerScoringBundleValidationError(
+                f"{unknown_fields[0]}: unknown field"
+            )
+        missing_fields = tuple(
+            field for field in sorted(_finite_answer_scoring_bundle_fields) if field not in record
+        )
+        if missing_fields:
+            raise FiniteAnswerScoringBundleValidationError(
+                f"{missing_fields[0]}: missing required field"
+            )
+
+        try:
+            answer_space = AnswerSpace.from_record(
+                _bundle_mapping(record["answer_space"], field="answer_space")
+            )
+            accepted_event = AcceptedEvent.from_record(
+                _bundle_mapping(record["accepted_event"], field="accepted_event"),
+                answer_space=answer_space,
+            )
+            probability_measure = FiniteProbabilityMeasure.from_record(
+                _bundle_mapping(
+                    record["probability_measure"],
+                    field="probability_measure",
+                ),
+                answer_space=answer_space,
+            )
+            raw_scoring_evidence = RawScoringEvidence.from_record(
+                _bundle_mapping(
+                    record["raw_scoring_evidence"],
+                    field="raw_scoring_evidence",
+                )
+            )
+        except ValueError as error:
+            raise FiniteAnswerScoringBundleValidationError(str(error)) from error
+        return cls(
+            answer_space=answer_space,
+            accepted_event=accepted_event,
+            probability_measure=probability_measure,
+            raw_scoring_evidence=raw_scoring_evidence,
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "answer_space": self.answer_space.to_record(),
+            "accepted_event": self.accepted_event.to_record(),
+            "probability_measure": self.probability_measure.to_record(),
+            "raw_scoring_evidence": self.raw_scoring_evidence.to_record(),
+        }
+
+
 def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise AnswerSpaceValidationError(f"{field}: expected record")
@@ -554,3 +683,21 @@ def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
     if not isinstance(value, ProtocolIdentifier):
         raise AnswerSpaceValidationError(f"{field}: expected parsed identifier")
     return value
+
+
+def _bundle_mapping(value: object, *, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise FiniteAnswerScoringBundleValidationError(f"{field}: expected record")
+    return cast(Mapping[str, object], value)
+
+
+def _require_matching_identifier(
+    *,
+    field: str,
+    actual: ProtocolIdentifier,
+    expected: ProtocolIdentifier,
+) -> None:
+    if actual != expected:
+        raise FiniteAnswerScoringBundleValidationError(
+            f"{field} {actual} does not match {expected}"
+        )
