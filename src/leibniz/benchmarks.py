@@ -9,6 +9,7 @@ from typing import cast
 from leibniz._documents import ContentEncodingError, load_object_document
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
+from leibniz.outcomes import OutcomeSpace
 from leibniz.records import FieldSpec, RecordSpec
 
 __all__ = [
@@ -21,7 +22,7 @@ _benchmark_manifest_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
         "name": FieldSpec(kind="name", required=False),
-        "outcome_space_id": FieldSpec(kind="identifier"),
+        "outcome_space": FieldSpec(kind="record"),
         "observation_ids": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="string"),
@@ -41,7 +42,7 @@ class BenchmarkManifest:
 
     id: ProtocolIdentifier
     name: ProtocolName
-    outcome_space_id: ProtocolIdentifier
+    outcome_space: OutcomeSpace
     observation_ids: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
@@ -65,15 +66,18 @@ class BenchmarkManifest:
     def from_record(cls, record: Mapping[str, object]) -> BenchmarkManifest:
         try:
             validated = _benchmark_manifest_record.validate(record)
+            outcome_space = OutcomeSpace.from_record(
+                _as_mapping(
+                    validated["outcome_space"],
+                    field="outcome_space",
+                )
+            )
         except ValueError as error:
             raise BenchmarkManifestValidationError(str(error)) from error
         return cls(
             id=_as_identifier(validated["id"], field="id"),
             name=_manifest_name(validated),
-            outcome_space_id=_as_identifier(
-                validated["outcome_space_id"],
-                field="outcome_space_id",
-            ),
+            outcome_space=outcome_space,
             observation_ids=_manifest_observation_ids(validated),
         )
 
@@ -81,7 +85,7 @@ class BenchmarkManifest:
         record: dict[str, object] = {
             "id": str(self.id),
             "name": str(self.name),
-            "outcome_space_id": str(self.outcome_space_id),
+            "outcome_space": self.outcome_space.to_record(),
         }
         if self.observation_ids is not None:
             record["observation_ids"] = sorted(self.observation_ids)
@@ -115,6 +119,12 @@ def _as_name(value: object, *, field: str) -> ProtocolName:
     if not isinstance(value, ProtocolName):
         raise BenchmarkManifestValidationError(f"{field}: expected parsed name")
     return value
+
+
+def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise BenchmarkManifestValidationError(f"{field}: expected record")
+    return cast(Mapping[str, object], value)
 
 
 def _manifest_name(validated: Mapping[str, object]) -> ProtocolName:

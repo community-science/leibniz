@@ -110,10 +110,10 @@ class MeasurementRecord:
             raise MeasurementRecordValidationError(
                 f"benchmark_id {self.benchmark_id} does not match manifest {manifest.id}"
             )
-        if self.outcome_space.id != manifest.outcome_space_id:
+        if self.outcome_space != manifest.outcome_space:
             raise MeasurementRecordValidationError(
-                f"measurement outcome_space_id {self.outcome_space.id} does not match "
-                f"{manifest.outcome_space_id}"
+                "measurement outcome_space does not match manifest outcome_space "
+                f"{manifest.outcome_space.id}"
             )
         if (
             manifest.observation_ids is not None

@@ -49,7 +49,6 @@ def test_measurement_record_rejects_mismatched_manifest() -> None:
     measurement = MeasurementRecord.from_record(_measurement_record())
     manifest_record = _benchmark_manifest_record()
     manifest_record["id"] = "core.other-benchmark@0.1.0"
-    manifest_record["outcome_space_id"] = "core.boolean-outcome@0.1.0"
     manifest = BenchmarkManifest.from_record(manifest_record)
 
     error = capture_measurement_error(lambda: measurement.validate_manifest(manifest))
@@ -72,7 +71,24 @@ def test_measurement_record_rejects_result_outside_manifest_outcome_space() -> N
     error = capture_measurement_error(lambda: measurement.validate_manifest(manifest))
 
     assert str(error) == (
-        "measurement outcome_space_id core.other-outcome@0.1.0 does not match "
+        "measurement outcome_space does not match manifest outcome_space "
+        "core.boolean-outcome@0.1.0"
+    )
+
+
+def test_measurement_record_rejects_same_outcome_space_id_with_different_outcomes() -> None:
+    measurement = MeasurementRecord.from_record(_measurement_record())
+    manifest_record = _benchmark_manifest_record()
+    manifest_record["outcome_space"] = {
+        "id": "core.boolean-outcome@0.1.0",
+        "outcomes": [{"id": "yes"}, {"id": "maybe"}],
+    }
+    manifest = BenchmarkManifest.from_record(manifest_record)
+
+    error = capture_measurement_error(lambda: measurement.validate_manifest(manifest))
+
+    assert str(error) == (
+        "measurement outcome_space does not match manifest outcome_space "
         "core.boolean-outcome@0.1.0"
     )
 
@@ -204,7 +220,7 @@ def _expanded_measurement_record() -> dict[str, object]:
 def _benchmark_manifest_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
-        "outcome_space_id": "core.boolean-outcome@0.1.0",
+        "outcome_space": _outcome_space_record(),
     }
 
 

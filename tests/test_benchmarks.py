@@ -9,6 +9,7 @@ from leibniz.benchmarks import (
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementRecord, MeasurementRecordValidationError
+from leibniz.outcomes import OutcomeSpace
 
 
 def test_benchmark_manifest_parses_finite_outcome_contract() -> None:
@@ -17,7 +18,7 @@ def test_benchmark_manifest_parses_finite_outcome_contract() -> None:
     assert manifest == BenchmarkManifest(
         id=ProtocolIdentifier.parse("core.boolean-benchmark@0.1.0"),
         name=ProtocolIdentifier.parse("core.boolean-benchmark@0.1.0").name,
-        outcome_space_id=ProtocolIdentifier.parse("core.boolean-outcome@0.1.0"),
+        outcome_space=OutcomeSpace.from_record(_outcome_space_record()),
     )
     assert manifest.to_record() == _benchmark_manifest_record()
 
@@ -48,7 +49,7 @@ def test_benchmark_manifest_accepts_declared_observation_ids() -> None:
     assert manifest.to_record() == {
         "id": "core.boolean-benchmark@0.1.0",
         "name": "core.boolean-benchmark",
-        "outcome_space_id": "core.boolean-outcome@0.1.0",
+        "outcome_space": _outcome_space_record(),
         "observation_ids": ["fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"],
     }
 
@@ -108,7 +109,7 @@ def test_benchmark_manifest_rejects_malformed_records() -> None:
                 {
                     "id": "core.boolean-benchmark@1.0.0",
                     "name": "core.boolean-benchmark",
-                    "outcome_space_id": "core.boolean-outcome@0.1.0",
+                    "outcome_space": _outcome_space_record(),
                 }
             )
         )
@@ -153,13 +154,13 @@ def test_benchmark_manifest_rejects_missing_outcome_space() -> None:
                 }
             )
         )
-    ) == "outcome_space_id: missing required field"
+    ) == "outcome_space: missing required field"
 
 
 def test_benchmark_manifest_digest_is_stable() -> None:
     record = _benchmark_manifest_record()
     reordered = {
-        "outcome_space_id": record["outcome_space_id"],
+        "outcome_space": record["outcome_space"],
         "name": record["name"],
         "id": record["id"],
     }
@@ -172,7 +173,10 @@ def test_benchmark_manifest_document_loads_bytes_with_digest() -> None:
         b"""{
             "name": "core.boolean-benchmark",
             "id": "core.boolean-benchmark@0.1.0",
-            "outcome_space_id": "core.boolean-outcome@0.1.0"
+            "outcome_space": {
+                "id": "core.boolean-outcome@0.1.0",
+                "outcomes": [{"id": "yes"}, {"id": "no"}]
+            }
         }"""
     )
 
@@ -245,7 +249,7 @@ def _benchmark_manifest_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
         "name": "core.boolean-benchmark",
-        "outcome_space_id": "core.boolean-outcome@0.1.0",
+        "outcome_space": _outcome_space_record(),
     }
 
 
@@ -253,14 +257,21 @@ def _minimal_benchmark_manifest_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
         "name": "core.boolean-benchmark",
-        "outcome_space_id": "core.boolean-outcome@0.1.0",
+        "outcome_space": _outcome_space_record(),
     }
 
 
 def _two_field_benchmark_manifest_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
-        "outcome_space_id": "core.boolean-outcome@0.1.0",
+        "outcome_space": _outcome_space_record(),
+    }
+
+
+def _outcome_space_record() -> dict[str, object]:
+    return {
+        "id": "core.boolean-outcome@0.1.0",
+        "outcomes": [{"id": "yes"}, {"id": "no"}],
     }
 
 
