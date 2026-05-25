@@ -1,10 +1,13 @@
 import json
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import (
+    MeasurementDataset,
+    MeasurementDatasetDocument,
     MeasurementDocument,
     MeasurementRecord,
     MeasurementRecordValidationError,
@@ -16,6 +19,8 @@ from leibniz.outcomes import (
     ProbabilityMass,
     RawScoringEvidence,
 )
+
+_fixtures_root = Path(__file__).parent / "fixtures"
 
 
 def test_measurement_record_parses_finite_outcome_scoring_evidence() -> None:
@@ -203,10 +208,129 @@ def test_measurement_document_rejects_invalid_document_bytes() -> None:
     ) == "benchmark_id: expected identifier string"
 
 
-def _measurement_record() -> dict[str, object]:
+def test_measurement_dataset_loads_records_with_stable_canonical_order() -> None:
+    first_record = _measurement_record()
+    second_record = _measurement_record(
+        evidence_id="core.second-evidence@0.1.0",
+        observation_id="observation-2",
+    )
+
+    dataset = MeasurementDataset.from_record(
+        {"measurements": [second_record, first_record]}
+    )
+
+    assert [str(measurement.raw_scoring_evidence.id) for measurement in dataset.measurements] == [
+        "core.boolean-evidence@0.1.0",
+        "core.second-evidence@0.1.0",
+    ]
+
+
+def test_measurement_dataset_document_digest_is_independent_of_authoring_order() -> None:
+    first_record = _measurement_record()
+    second_record = _measurement_record(
+        evidence_id="core.second-evidence@0.1.0",
+        observation_id="observation-2",
+    )
+
+    forward = MeasurementDatasetDocument.from_bytes(
+        _json_bytes({"measurements": [first_record, second_record]})
+    )
+    reverse = MeasurementDatasetDocument.from_bytes(
+        _json_bytes({"measurements": [second_record, first_record]})
+    )
+
+    assert forward.dataset == reverse.dataset
+    assert forward.digest == reverse.digest
+    assert forward.digest == ContentDigest.from_value(forward.dataset.to_record())
+
+
+def test_measurement_dataset_rejects_duplicate_measurement_ids() -> None:
+    duplicate_record = _measurement_record(observation_id="observation-2")
+
+    error = capture_measurement_error(
+        lambda: MeasurementDataset.from_record(
+            {"measurements": [_measurement_record(), duplicate_record]}
+        )
+    )
+
+    assert str(error) == "duplicate measurement id: core.boolean-evidence@0.1.0"
+
+
+def test_measurement_dataset_validates_every_measurement_against_manifest() -> None:
+    manifest = BenchmarkManifest.from_record(_benchmark_manifest_record())
+    dataset = MeasurementDataset.from_record(
+        {
+            "measurements": [
+                _measurement_record(),
+                _measurement_record(
+                    evidence_id="core.second-evidence@0.1.0",
+                    observation_id="observation-2",
+                ),
+            ]
+        }
+    )
+
+    dataset.validate_manifest(manifest)
+
+    invalid_dataset = MeasurementDataset.from_record(
+        {
+            "measurements": [
+                _measurement_record(),
+                _measurement_record(
+                    benchmark_id="core.other-benchmark@0.1.0",
+                    evidence_id="core.second-evidence@0.1.0",
+                    observation_id="observation-2",
+                ),
+            ]
+        }
+    )
+    error = capture_measurement_error(lambda: invalid_dataset.validate_manifest(manifest))
+
+    assert str(error) == (
+        "benchmark_id core.other-benchmark@0.1.0 does not match manifest "
+        "core.boolean-benchmark@0.1.0"
+    )
+
+
+def test_measurement_dataset_document_rejects_invalid_document_bytes() -> None:
+    assert (
+        str(capture_measurement_error(lambda: MeasurementDatasetDocument.from_bytes(b"[]")))
+        == "measurement dataset document must contain an object"
+    )
+    assert str(
+        capture_measurement_error(
+            lambda: MeasurementDatasetDocument.from_bytes(b'{"measurements": [{}]}')
+        )
+    ) == "benchmark_id: missing required field"
+
+
+def test_measurement_dataset_round_trips_one_record_fixture() -> None:
+    manifest = BenchmarkManifest.from_record(_benchmark_manifest_record())
+    measurement_bytes = (_fixtures_root / "finite_outcome" / "measurement.json").read_bytes()
+    single = MeasurementDocument.from_bytes(measurement_bytes)
+    document = MeasurementDatasetDocument.from_bytes(
+        _json_bytes({"measurements": [single.measurement.to_record()]})
+    )
+
+    assert document.dataset.to_record() == {
+        "measurements": [single.measurement.to_record()]
+    }
+    assert document.digest == ContentDigest.from_value(document.dataset.to_record())
+    document.dataset.validate_manifest(manifest)
+
+
+def _measurement_record(
+    *,
+    benchmark_id: str = "core.boolean-benchmark@0.1.0",
+    evidence_id: str = "core.boolean-evidence@0.1.0",
+    observation_id: str = "observation-1",
+) -> dict[str, object]:
     return {
-        "benchmark_id": "core.boolean-benchmark@0.1.0",
-        **_minimal_scoring_record(),
+        "benchmark_id": benchmark_id,
+        **_minimal_scoring_record(
+            evidence_id=evidence_id,
+            observation_id=observation_id,
+        ),
     }
 
 
@@ -224,10 +348,14 @@ def _benchmark_manifest_record() -> dict[str, object]:
     }
 
 
-def _minimal_scoring_record() -> dict[str, object]:
+def _minimal_scoring_record(
+    *,
+    evidence_id: str = "core.boolean-evidence@0.1.0",
+    observation_id: str = "observation-1",
+) -> dict[str, object]:
     return {
-        "id": "core.boolean-evidence@0.1.0",
-        "observation_id": "observation-1",
+        "id": evidence_id,
+        "observation_id": observation_id,
         "outcome_space": _outcome_space_record(),
         "accepted_event": _accepted_event_record(),
         "probability_measure": _probability_measure_record(),

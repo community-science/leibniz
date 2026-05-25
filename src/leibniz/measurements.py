@@ -21,6 +21,8 @@ from leibniz.outcomes import (
 from leibniz.records import FieldSpec, RecordSpec
 
 __all__ = [
+    "MeasurementDataset",
+    "MeasurementDatasetDocument",
     "MeasurementDocument",
     "MeasurementRecord",
     "MeasurementRecordValidationError",
@@ -59,6 +61,14 @@ _finite_outcome_scoring_graph_record = RecordSpec(
     allow_unknown=True,
 )
 _finite_outcome_scoring_graph_expected_fields = frozenset(_measurement_scoring_fields)
+_measurement_dataset_record = RecordSpec(
+    fields={
+        "measurements": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="record"),
+        ),
+    }
+)
 
 
 class MeasurementRecordValidationError(ValueError):
@@ -150,6 +160,73 @@ class MeasurementDocument:
             raise MeasurementRecordValidationError(str(error)) from error
         measurement = MeasurementRecord.from_record(record)
         return cls(measurement=measurement, digest=measurement.digest)
+
+
+@dataclass(frozen=True, slots=True)
+class MeasurementDataset:
+    """A canonical collection of finite-outcome measurements."""
+
+    measurements: tuple[MeasurementRecord, ...]
+
+    def __post_init__(self) -> None:
+        measurement_ids = tuple(_measurement_id(measurement) for measurement in self.measurements)
+        duplicate_id = _first_duplicate(measurement_ids)
+        if duplicate_id is not None:
+            raise MeasurementRecordValidationError(f"duplicate measurement id: {duplicate_id}")
+
+        ordered = tuple(
+            sorted(self.measurements, key=lambda measurement: str(_measurement_id(measurement)))
+        )
+        object.__setattr__(self, "measurements", ordered)
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> MeasurementDataset:
+        try:
+            validated = _measurement_dataset_record.validate(record)
+            measurement_records = _as_sequence(
+                validated["measurements"],
+                field="measurements",
+            )
+            measurements = tuple(
+                MeasurementRecord.from_record(_scoring_mapping(item, field="measurements"))
+                for item in measurement_records
+            )
+        except ValueError as error:
+            raise MeasurementRecordValidationError(str(error)) from error
+        return cls(measurements=measurements)
+
+    @property
+    def digest(self) -> ContentDigest:
+        return ContentDigest.from_value(self.to_record())
+
+    def validate_manifest(self, manifest: BenchmarkManifest) -> None:
+        for measurement in self.measurements:
+            measurement.validate_manifest(manifest)
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "measurements": [
+                measurement.to_record()
+                for measurement in self.measurements
+            ]
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MeasurementDatasetDocument:
+    """A loaded measurement dataset and the digest of its canonical record."""
+
+    dataset: MeasurementDataset
+    digest: ContentDigest
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> MeasurementDatasetDocument:
+        try:
+            record = load_object_document(data, description="measurement dataset document")
+        except ContentEncodingError as error:
+            raise MeasurementRecordValidationError(str(error)) from error
+        dataset = MeasurementDataset.from_record(record)
+        return cls(dataset=dataset, digest=dataset.digest)
 
 
 def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
@@ -318,6 +395,25 @@ def _scoring_mapping(value: object, *, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise MeasurementRecordValidationError(f"{field}: expected record")
     return cast(Mapping[str, object], value)
+
+
+def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
+    if not isinstance(value, tuple):
+        raise MeasurementRecordValidationError(f"{field}: expected parsed sequence")
+    return cast(tuple[object, ...], value)
+
+
+def _measurement_id(measurement: MeasurementRecord) -> ProtocolIdentifier:
+    return measurement.raw_scoring_evidence.id
+
+
+def _first_duplicate(values: tuple[ProtocolIdentifier, ...]) -> ProtocolIdentifier | None:
+    seen: set[ProtocolIdentifier] = set()
+    for value in values:
+        if value in seen:
+            return value
+        seen.add(value)
+    return None
 
 
 def _require_matching_identifier(
