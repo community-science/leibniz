@@ -31,10 +31,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the working rules.
 
 ## Development
 
-Install the package with development tools:
+Use the repository-local Miniforge environment for local development:
 
 ```bash
-pip install -e ".[dev]"
+bash scripts/setup_environment.sh
+source scripts/activate_environment.sh
 ```
 
 Run the local checks:
@@ -44,7 +45,7 @@ python -m pytest
 python -m ruff check .
 python -m pyright
 python -m leibniz.repository_policy .
-python -m build
+python -m build --no-isolation
 ```
 
 ## License
