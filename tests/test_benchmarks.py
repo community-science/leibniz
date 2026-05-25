@@ -1,6 +1,5 @@
 import math
 from collections.abc import Callable, Mapping
-from typing import cast
 
 from leibniz.benchmarks import (
     BenchmarkDeclaration,
@@ -11,7 +10,7 @@ from leibniz.benchmarks import (
 )
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.outcomes import FiniteOutcomeScoringBundle
+from leibniz.measurements import MeasurementRecord, MeasurementRecordValidationError
 
 
 def test_benchmark_declaration_parses_finite_outcome_scoring_contract() -> None:
@@ -33,38 +32,6 @@ def test_benchmark_declaration_defaults_finite_outcome_protocol_bindings() -> No
     )
 
     assert declaration.to_record() == _benchmark_declaration_record()
-
-
-def test_benchmark_declaration_validates_matching_scoring_bundle() -> None:
-    declaration = BenchmarkDeclaration.from_record(_benchmark_declaration_record())
-    bundle = FiniteOutcomeScoringBundle.from_record(_boolean_bundle_record())
-
-    declaration.validate_bundle(bundle)
-
-
-def test_benchmark_declaration_rejects_mismatched_bundle_outcome_space() -> None:
-    declaration = BenchmarkDeclaration.from_record(_benchmark_declaration_record())
-    record = _boolean_bundle_record()
-    outcome_space = dict(cast(Mapping[str, object], record["outcome_space"]))
-    outcome_space["id"] = "core.other-outcome@0.1.0"
-    event = dict(cast(Mapping[str, object], record["accepted_event"]))
-    event["outcome_space_id"] = "core.other-outcome@0.1.0"
-    measure = dict(cast(Mapping[str, object], record["probability_measure"]))
-    measure["outcome_space_id"] = "core.other-outcome@0.1.0"
-    evidence = dict(cast(Mapping[str, object], record["raw_scoring_evidence"]))
-    evidence["outcome_space_id"] = "core.other-outcome@0.1.0"
-    record["outcome_space"] = outcome_space
-    record["accepted_event"] = event
-    record["probability_measure"] = measure
-    record["raw_scoring_evidence"] = evidence
-    bundle = FiniteOutcomeScoringBundle.from_record(record)
-
-    error = capture_benchmark_error(lambda: declaration.validate_bundle(bundle))
-
-    assert str(error) == (
-        "bundle outcome_space_id core.other-outcome@0.1.0 does not match "
-        "core.boolean-outcome@0.1.0"
-    )
 
 
 def test_benchmark_declaration_rejects_invalid_protocol_binding_identifiers() -> None:
@@ -91,7 +58,6 @@ def test_benchmark_declaration_rejects_malformed_records() -> None:
                         "core.finite-probability-measure-prediction@0.1.0"
                     ),
                     "score_functional_id": "core.negative-log-accepted-mass@0.1.0",
-                    "evidence_bundle_id": "core.finite-outcome-scoring-bundle@0.1.0",
                 }
             )
         )
@@ -114,7 +80,6 @@ def test_benchmark_declaration_digest_is_stable() -> None:
         "prediction_interface_id": record["prediction_interface_id"],
         "oracle_acceptance_id": record["oracle_acceptance_id"],
         "id": record["id"],
-        "evidence_bundle_id": record["evidence_bundle_id"],
         "outcome_space_id": record["outcome_space_id"],
     }
 
@@ -163,25 +128,25 @@ def test_benchmark_manifest_accepts_declared_observation_ids() -> None:
     }
 
 
-def test_benchmark_manifest_validates_matching_scoring_bundle() -> None:
+def test_benchmark_manifest_validates_matching_measurement() -> None:
     manifest = BenchmarkManifest.from_record(_benchmark_manifest_record())
-    bundle = FiniteOutcomeScoringBundle.from_record(_boolean_bundle_record())
+    measurement = MeasurementRecord.from_record(_measurement_record())
 
-    manifest.validate_bundle(bundle)
+    measurement.validate_manifest(manifest)
 
 
 def test_benchmark_manifest_validates_declared_observation_ids() -> None:
     record = _two_field_benchmark_manifest_record()
     record["observation_ids"] = ["observation-1"]
     manifest = BenchmarkManifest.from_record(record)
-    bundle = FiniteOutcomeScoringBundle.from_record(_boolean_bundle_record())
+    measurement = MeasurementRecord.from_record(_measurement_record())
 
-    manifest.validate_bundle(bundle)
+    measurement.validate_manifest(manifest)
 
     record["observation_ids"] = ["observation-2"]
     manifest = BenchmarkManifest.from_record(record)
 
-    assert str(capture_manifest_error(lambda: manifest.validate_bundle(bundle))) == (
+    assert str(capture_measurement_error(lambda: measurement.validate_manifest(manifest))) == (
         "observation_id 'observation-1' is not declared by core.boolean-benchmark@0.1.0"
     )
 
@@ -218,7 +183,6 @@ def test_benchmark_manifest_rejects_mismatched_name_and_declaration_id() -> None
         "core.finite-probability-measure-prediction@0.1.0"
     )
     declaration_record["score_functional_id"] = "core.negative-log-accepted-mass@0.1.0"
-    declaration_record["evidence_bundle_id"] = "core.finite-outcome-scoring-bundle@0.1.0"
     declaration_id_record = _benchmark_manifest_record()
     declaration_id_record["declaration"] = declaration_record
 
@@ -316,8 +280,7 @@ def test_benchmark_manifest_document_loads_bytes_with_digest() -> None:
                 "outcome_space_id": "core.boolean-outcome@0.1.0",
                 "oracle_acceptance_id": "core.finite-outcome-accepted-event@0.1.0",
                 "prediction_interface_id": "core.finite-probability-measure-prediction@0.1.0",
-                "score_functional_id": "core.negative-log-accepted-mass@0.1.0",
-                "evidence_bundle_id": "core.finite-outcome-scoring-bundle@0.1.0"
+                "score_functional_id": "core.negative-log-accepted-mass@0.1.0"
             }
         }"""
     )
@@ -387,6 +350,16 @@ def capture_manifest_error(
     raise AssertionError("expected BenchmarkManifestValidationError")
 
 
+def capture_measurement_error(
+    call: Callable[[], object],
+) -> MeasurementRecordValidationError:
+    try:
+        call()
+    except MeasurementRecordValidationError as error:
+        return error
+    raise AssertionError("expected MeasurementRecordValidationError")
+
+
 def _benchmark_declaration_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
@@ -394,7 +367,6 @@ def _benchmark_declaration_record() -> dict[str, object]:
         "oracle_acceptance_id": "core.finite-outcome-accepted-event@0.1.0",
         "prediction_interface_id": "core.finite-probability-measure-prediction@0.1.0",
         "score_functional_id": "core.negative-log-accepted-mass@0.1.0",
-        "evidence_bundle_id": "core.finite-outcome-scoring-bundle@0.1.0",
     }
 
 
@@ -427,8 +399,9 @@ def _json_bytes(record: Mapping[str, object]) -> bytes:
     return json.dumps(record).encode("utf-8")
 
 
-def _boolean_bundle_record() -> dict[str, object]:
+def _measurement_record() -> dict[str, object]:
     return {
+        "benchmark_id": "core.boolean-benchmark@0.1.0",
         "outcome_space": {
             "id": "core.boolean-outcome@0.1.0",
             "outcomes": [{"id": "yes"}, {"id": "no"}],

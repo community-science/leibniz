@@ -42,4 +42,4 @@ def test_authoring_fixture_pair_loads_and_validates(fixture: Path) -> None:
     assert measurement_document.digest == ContentDigest.from_value(
         measurement_document.measurement.to_record()
     )
-    assert measurement_document.measurement.scoring_bundle.raw_scoring_evidence.to_record()
+    assert measurement_document.measurement.raw_scoring_evidence.to_record()

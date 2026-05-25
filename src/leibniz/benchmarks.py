@@ -9,7 +9,6 @@ from typing import cast
 from leibniz._documents import ContentEncodingError, load_object_document
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
-from leibniz.outcomes import FiniteOutcomeScoringBundle
 from leibniz.records import FieldSpec, RecordSpec, RecordValidationError
 
 __all__ = [
@@ -25,8 +24,6 @@ _prediction_interface_id = ProtocolIdentifier.parse(
     "core.finite-probability-measure-prediction@0.1.0"
 )
 _score_functional_id = ProtocolIdentifier.parse("core.negative-log-accepted-mass@0.1.0")
-_evidence_bundle_id = ProtocolIdentifier.parse("core.finite-outcome-scoring-bundle@0.1.0")
-
 _benchmark_declaration_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
@@ -34,7 +31,6 @@ _benchmark_declaration_record = RecordSpec(
         "oracle_acceptance_id": FieldSpec(kind="identifier", required=False),
         "prediction_interface_id": FieldSpec(kind="identifier", required=False),
         "score_functional_id": FieldSpec(kind="identifier", required=False),
-        "evidence_bundle_id": FieldSpec(kind="identifier", required=False),
     }
 )
 _benchmark_manifest_record = RecordSpec(
@@ -69,7 +65,6 @@ class BenchmarkDeclaration:
     oracle_acceptance_id: ProtocolIdentifier = _oracle_acceptance_id
     prediction_interface_id: ProtocolIdentifier = _prediction_interface_id
     score_functional_id: ProtocolIdentifier = _score_functional_id
-    evidence_bundle_id: ProtocolIdentifier = _evidence_bundle_id
 
     def __post_init__(self) -> None:
         try:
@@ -90,11 +85,6 @@ class BenchmarkDeclaration:
             field="score_functional_id",
             actual=self.score_functional_id,
             expected=_score_functional_id,
-        )
-        _require_identifier(
-            field="evidence_bundle_id",
-            actual=self.evidence_bundle_id,
-            expected=_evidence_bundle_id,
         )
 
     @classmethod
@@ -124,17 +114,16 @@ class BenchmarkDeclaration:
                 field="score_functional_id",
                 default=_score_functional_id,
             ),
-            evidence_bundle_id=_as_identifier_or_default(
-                validated.get("evidence_bundle_id"),
-                field="evidence_bundle_id",
-                default=_evidence_bundle_id,
-            ),
         )
 
-    def validate_bundle(self, bundle: FiniteOutcomeScoringBundle) -> None:
-        if bundle.outcome_space.id != self.outcome_space_id:
+    def validate_measurement_outcome_space(
+        self,
+        *,
+        outcome_space_id: ProtocolIdentifier,
+    ) -> None:
+        if outcome_space_id != self.outcome_space_id:
             raise BenchmarkDeclarationValidationError(
-                f"bundle outcome_space_id {bundle.outcome_space.id} does not match "
+                f"measurement outcome_space_id {outcome_space_id} does not match "
                 f"{self.outcome_space_id}"
             )
 
@@ -145,7 +134,6 @@ class BenchmarkDeclaration:
             "oracle_acceptance_id": str(self.oracle_acceptance_id),
             "prediction_interface_id": str(self.prediction_interface_id),
             "score_functional_id": str(self.score_functional_id),
-            "evidence_bundle_id": str(self.evidence_bundle_id),
         }
 
 
@@ -196,19 +184,24 @@ class BenchmarkManifest:
             observation_ids=_manifest_observation_ids(validated),
         )
 
-    def validate_bundle(self, bundle: FiniteOutcomeScoringBundle) -> None:
+    def validate_measurement(
+        self,
+        *,
+        outcome_space_id: ProtocolIdentifier,
+        observation_id: str,
+    ) -> None:
         try:
-            self.declaration.validate_bundle(bundle)
+            self.declaration.validate_measurement_outcome_space(
+                outcome_space_id=outcome_space_id
+            )
         except BenchmarkDeclarationValidationError as error:
             raise BenchmarkManifestValidationError(str(error)) from error
         if (
             self.observation_ids is not None
-            and bundle.raw_scoring_evidence.observation_id not in self.observation_ids
+            and observation_id not in self.observation_ids
         ):
             raise BenchmarkManifestValidationError(
-                "observation_id "
-                f"{bundle.raw_scoring_evidence.observation_id!r} is not declared by "
-                f"{self.id}"
+                f"observation_id {observation_id!r} is not declared by {self.id}"
             )
 
     def to_record(self) -> dict[str, object]:

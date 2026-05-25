@@ -1,6 +1,5 @@
 import json
 from collections.abc import Callable, Mapping
-from typing import cast
 
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
@@ -10,7 +9,13 @@ from leibniz.measurements import (
     MeasurementRecord,
     MeasurementRecordValidationError,
 )
-from leibniz.outcomes import FiniteOutcomeScoringBundle
+from leibniz.outcomes import (
+    AcceptedEvent,
+    FiniteProbabilityMeasure,
+    OutcomeSpace,
+    ProbabilityMass,
+    RawScoringEvidence,
+)
 
 
 def test_measurement_record_parses_finite_outcome_scoring_evidence() -> None:
@@ -18,17 +23,19 @@ def test_measurement_record_parses_finite_outcome_scoring_evidence() -> None:
 
     assert measurement == MeasurementRecord(
         benchmark_id=ProtocolIdentifier.parse("core.boolean-benchmark@0.1.0"),
-        scoring_bundle=FiniteOutcomeScoringBundle.from_record(_boolean_bundle_record()),
+        outcome_space=OutcomeSpace.from_record(_outcome_space_record()),
+        accepted_event=AcceptedEvent.from_record(
+            _accepted_event_record(),
+            outcome_space=OutcomeSpace.from_record(_outcome_space_record()),
+        ),
+        probability_measure=FiniteProbabilityMeasure(
+            id=ProtocolIdentifier.parse("core.boolean-prediction@0.1.0"),
+            outcome_space_id=ProtocolIdentifier.parse("core.boolean-outcome@0.1.0"),
+            probabilities=(ProbabilityMass("no", 0.75), ProbabilityMass("yes", 0.25)),
+        ),
+        raw_scoring_evidence=RawScoringEvidence.from_record(_raw_scoring_evidence_record()),
     )
     assert measurement.to_record() == _expanded_measurement_record()
-
-
-def test_measurement_record_accepts_canonical_scoring_bundle_record() -> None:
-    minimal = MeasurementRecord.from_record(_measurement_record())
-    canonical = MeasurementRecord.from_record(_canonical_measurement_record())
-
-    assert minimal == canonical
-    assert canonical.to_record() == _expanded_measurement_record()
 
 
 def test_measurement_record_validates_against_matching_manifest() -> None:
@@ -53,26 +60,19 @@ def test_measurement_record_rejects_mismatched_manifest() -> None:
     )
 
 
-def test_measurement_record_rejects_bundle_outside_manifest_outcome_space() -> None:
-    measurement_record = _canonical_measurement_record()
-    bundle_record = dict(cast(Mapping[str, object], measurement_record["scoring_bundle"]))
-    outcome_space = dict(cast(Mapping[str, object], bundle_record["outcome_space"]))
-    outcome_space["id"] = "core.other-outcome@0.1.0"
-    accepted_event = dict(cast(Mapping[str, object], bundle_record["accepted_event"]))
-    accepted_event["outcome_space_id"] = "core.other-outcome@0.1.0"
-    probability_measure = dict(cast(Mapping[str, object], bundle_record["probability_measure"]))
-    probability_measure["outcome_space_id"] = "core.other-outcome@0.1.0"
-    bundle_record["outcome_space"] = outcome_space
-    bundle_record["accepted_event"] = accepted_event
-    bundle_record["probability_measure"] = probability_measure
-    measurement_record["scoring_bundle"] = bundle_record
+def test_measurement_record_rejects_result_outside_manifest_outcome_space() -> None:
+    measurement_record = _measurement_record()
+    measurement_record["outcome_space"] = _other_outcome_space_record()
+    measurement_record["accepted_event"] = _other_accepted_event_record()
+    measurement_record["probability_measure"] = _other_probability_measure_record()
+    measurement_record["raw_scoring_evidence"] = _other_raw_scoring_evidence_record()
     measurement = MeasurementRecord.from_record(measurement_record)
     manifest = BenchmarkManifest.from_record(_benchmark_manifest_record())
 
     error = capture_measurement_error(lambda: measurement.validate_manifest(manifest))
 
     assert str(error) == (
-        "bundle outcome_space_id core.other-outcome@0.1.0 does not match "
+        "measurement outcome_space_id core.other-outcome@0.1.0 does not match "
         "core.boolean-outcome@0.1.0"
     )
 
@@ -90,7 +90,13 @@ def test_measurement_record_rejects_malformed_records_and_state_paths() -> None:
     assert str(
         capture_measurement_error(
             lambda: MeasurementRecord.from_record(
-                {"scoring_bundle": _boolean_bundle_record()}
+                {
+                    "id": "core.boolean-evidence@0.1.0",
+                    "observation_id": "observation-1",
+                    "outcome_space": _outcome_space_record(),
+                    "accepted_event": _accepted_event_record(),
+                    "probability_measure": _probability_measure_record(),
+                }
             )
         )
     ) == "benchmark_id: missing required field"
@@ -99,7 +105,7 @@ def test_measurement_record_rejects_malformed_records_and_state_paths() -> None:
             lambda: MeasurementRecord.from_record(
                 {
                     "benchmark_id": "core.boolean-benchmark@1.0.0",
-                    "scoring_bundle": _boolean_bundle_record(),
+                    **_minimal_scoring_record(),
                 }
             )
         )
@@ -119,17 +125,12 @@ def test_measurement_record_rejects_malformed_records_and_state_paths() -> None:
             lambda: MeasurementRecord.from_record(
                 {
                     "benchmark_id": "core.boolean-benchmark@0.1.0",
-                    "scoring_bundle": _boolean_bundle_record(),
+                    **_minimal_scoring_record(),
                     "local_path": ".leibniz/measurement_records/boolean.json",
                 }
             )
         )
     ) == "local_path: unknown field"
-    mixed = _measurement_record()
-    mixed["scoring_bundle"] = _minimal_boolean_bundle_record()
-    assert str(capture_measurement_error(lambda: MeasurementRecord.from_record(mixed))) == (
-        "scoring_bundle cannot be combined with top-level scoring fields"
-    )
 
 
 def test_measurement_document_loads_bytes_with_digest() -> None:
@@ -162,21 +163,14 @@ def test_measurement_document_rejects_invalid_document_bytes() -> None:
 def _measurement_record() -> dict[str, object]:
     return {
         "benchmark_id": "core.boolean-benchmark@0.1.0",
-        **_minimal_boolean_bundle_record(),
-    }
-
-
-def _canonical_measurement_record() -> dict[str, object]:
-    return {
-        "benchmark_id": "core.boolean-benchmark@0.1.0",
-        "scoring_bundle": _minimal_boolean_bundle_record(),
+        **_minimal_scoring_record(),
     }
 
 
 def _expanded_measurement_record() -> dict[str, object]:
     return {
         "benchmark_id": "core.boolean-benchmark@0.1.0",
-        "scoring_bundle": _expanded_boolean_bundle_record(),
+        **_expanded_scoring_record(),
     }
 
 
@@ -187,32 +181,20 @@ def _benchmark_manifest_record() -> dict[str, object]:
     }
 
 
-def _minimal_boolean_bundle_record() -> dict[str, object]:
+def _minimal_scoring_record() -> dict[str, object]:
     return {
         "id": "core.boolean-evidence@0.1.0",
         "observation_id": "observation-1",
-        "outcome_space": {
-            "id": "core.boolean-outcome@0.1.0",
-            "outcomes": [{"id": "yes"}, {"id": "no"}],
-        },
-        "accepted_event": {
-            "id": "core.boolean-accepted@0.1.0",
-            "outcome_space_id": "core.boolean-outcome@0.1.0",
-            "outcomes": ["yes"],
-        },
-        "probability_measure": {
-            "id": "core.boolean-prediction@0.1.0",
-            "outcome_space_id": "core.boolean-outcome@0.1.0",
-            "probabilities": [
-                {"outcome_id": "no", "probability": 0.75},
-                {"outcome_id": "yes", "probability": 0.25},
-            ],
-        },
+        "outcome_space": _outcome_space_record(),
+        "accepted_event": _accepted_event_record(),
+        "probability_measure": _probability_measure_record(),
     }
 
 
-def _boolean_bundle_record() -> dict[str, object]:
-    record = _minimal_boolean_bundle_record()
+def _expanded_scoring_record() -> dict[str, object]:
+    record = _minimal_scoring_record()
+    del record["id"]
+    del record["observation_id"]
     record["raw_scoring_evidence"] = {
         "id": "core.boolean-evidence@0.1.0",
         "observation_id": "observation-1",
@@ -225,10 +207,73 @@ def _boolean_bundle_record() -> dict[str, object]:
     return record
 
 
-def _expanded_boolean_bundle_record() -> dict[str, object]:
-    record = _boolean_bundle_record()
-    del record["id"]
-    del record["observation_id"]
+def _raw_scoring_evidence_record() -> dict[str, object]:
+    return {
+        "id": "core.boolean-evidence@0.1.0",
+        "observation_id": "observation-1",
+        "outcome_space_id": "core.boolean-outcome@0.1.0",
+        "accepted_event_id": "core.boolean-accepted@0.1.0",
+        "probability_measure_id": "core.boolean-prediction@0.1.0",
+        "accepted_mass": 0.25,
+        "negative_log_score": 1.3862943611198906,
+    }
+
+
+def _outcome_space_record() -> dict[str, object]:
+    return {
+        "id": "core.boolean-outcome@0.1.0",
+        "outcomes": [{"id": "yes"}, {"id": "no"}],
+    }
+
+
+def _accepted_event_record() -> dict[str, object]:
+    return {
+        "id": "core.boolean-accepted@0.1.0",
+        "outcome_space_id": "core.boolean-outcome@0.1.0",
+        "outcomes": ["yes"],
+    }
+
+
+def _probability_measure_record() -> dict[str, object]:
+    return {
+        "id": "core.boolean-prediction@0.1.0",
+        "outcome_space_id": "core.boolean-outcome@0.1.0",
+        "probabilities": [
+            {"outcome_id": "no", "probability": 0.75},
+            {"outcome_id": "yes", "probability": 0.25},
+        ],
+    }
+
+
+def _other_outcome_space_record() -> dict[str, object]:
+    return {
+        "id": "core.other-outcome@0.1.0",
+        "outcomes": [{"id": "yes"}, {"id": "no"}],
+    }
+
+
+def _other_accepted_event_record() -> dict[str, object]:
+    return {
+        "id": "core.boolean-accepted@0.1.0",
+        "outcome_space_id": "core.other-outcome@0.1.0",
+        "outcomes": ["yes"],
+    }
+
+
+def _other_probability_measure_record() -> dict[str, object]:
+    return {
+        "id": "core.boolean-prediction@0.1.0",
+        "outcome_space_id": "core.other-outcome@0.1.0",
+        "probabilities": [
+            {"outcome_id": "no", "probability": 0.75},
+            {"outcome_id": "yes", "probability": 0.25},
+        ],
+    }
+
+
+def _other_raw_scoring_evidence_record() -> dict[str, object]:
+    record = _raw_scoring_evidence_record()
+    record["outcome_space_id"] = "core.other-outcome@0.1.0"
     return record
 
 
