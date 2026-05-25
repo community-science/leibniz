@@ -23,6 +23,14 @@ def test_measurement_record_parses_finite_outcome_scoring_evidence() -> None:
     assert measurement.to_record() == _expanded_measurement_record()
 
 
+def test_measurement_record_accepts_canonical_scoring_bundle_record() -> None:
+    minimal = MeasurementRecord.from_record(_measurement_record())
+    canonical = MeasurementRecord.from_record(_canonical_measurement_record())
+
+    assert minimal == canonical
+    assert canonical.to_record() == _expanded_measurement_record()
+
+
 def test_measurement_record_validates_against_matching_manifest() -> None:
     measurement = MeasurementRecord.from_record(_measurement_record())
     manifest = BenchmarkManifest.from_record(_benchmark_manifest_record())
@@ -46,7 +54,7 @@ def test_measurement_record_rejects_mismatched_manifest() -> None:
 
 
 def test_measurement_record_rejects_bundle_outside_manifest_outcome_space() -> None:
-    measurement_record = _measurement_record()
+    measurement_record = _canonical_measurement_record()
     bundle_record = dict(cast(Mapping[str, object], measurement_record["scoring_bundle"]))
     outcome_space = dict(cast(Mapping[str, object], bundle_record["outcome_space"]))
     outcome_space["id"] = "core.other-outcome@0.1.0"
@@ -102,6 +110,13 @@ def test_measurement_record_rejects_malformed_records_and_state_paths() -> None:
     assert str(
         capture_measurement_error(
             lambda: MeasurementRecord.from_record(
+                {"benchmark_id": "core.boolean-benchmark@0.1.0"}
+            )
+        )
+    ) == "measurement scoring fields are missing"
+    assert str(
+        capture_measurement_error(
+            lambda: MeasurementRecord.from_record(
                 {
                     "benchmark_id": "core.boolean-benchmark@0.1.0",
                     "scoring_bundle": _boolean_bundle_record(),
@@ -110,6 +125,11 @@ def test_measurement_record_rejects_malformed_records_and_state_paths() -> None:
             )
         )
     ) == "local_path: unknown field"
+    mixed = _measurement_record()
+    mixed["scoring_bundle"] = _minimal_boolean_bundle_record()
+    assert str(capture_measurement_error(lambda: MeasurementRecord.from_record(mixed))) == (
+        "scoring_bundle cannot be combined with top-level scoring fields"
+    )
 
 
 def test_measurement_document_loads_bytes_with_digest() -> None:
@@ -136,10 +156,17 @@ def test_measurement_document_rejects_invalid_document_bytes() -> None:
         capture_measurement_error(
             lambda: MeasurementDocument.from_bytes(b'{"benchmark_id": false}')
         )
-    ) == "benchmark_id: expected identifier string; scoring_bundle: missing required field"
+    ) == "benchmark_id: expected identifier string"
 
 
 def _measurement_record() -> dict[str, object]:
+    return {
+        "benchmark_id": "core.boolean-benchmark@0.1.0",
+        **_minimal_boolean_bundle_record(),
+    }
+
+
+def _canonical_measurement_record() -> dict[str, object]:
     return {
         "benchmark_id": "core.boolean-benchmark@0.1.0",
         "scoring_bundle": _minimal_boolean_bundle_record(),
