@@ -8,7 +8,7 @@ from leibniz.answers import (
     ProbabilityMass,
     RawScoringEvidence,
 )
-from leibniz.content import CanonicalJson, CanonicalJsonError, ContentDigest
+from leibniz.content import CanonicalJson, CanonicalJsonError, ContentDigest, JsonDocument
 from leibniz.identifiers import ProtocolIdentifier
 
 
@@ -37,6 +37,33 @@ def test_canonical_json_rejects_values_that_json_cannot_represent() -> None:
     assert_error(
         lambda: CanonicalJson.from_value({"items": (object(),)}),
         "items.0: unsupported JSON value",
+    )
+
+
+def test_json_document_loads_object_with_canonical_digest() -> None:
+    document = JsonDocument.from_json_bytes(b'{"b":2,"a":{"z":3}}')
+
+    assert document.value == {"a": {"z": 3}, "b": 2}
+    assert document.digest == ContentDigest.from_value({"a": {"z": 3}, "b": 2})
+
+
+def test_json_document_digest_is_stable_for_mapping_order() -> None:
+    left = JsonDocument.from_json_bytes(b'{"b":2,"a":1}')
+    right = JsonDocument.from_json_bytes(b'{"a":1,"b":2}')
+
+    assert left.digest == right.digest
+
+
+def test_json_document_rejects_invalid_input() -> None:
+    assert_error(lambda: JsonDocument.from_json_bytes(b"\xff"), "JSON document must be UTF-8")
+    assert_error(
+        lambda: JsonDocument.from_json_bytes(b"{"),
+        "invalid JSON document: Expecting property name enclosed in double quotes",
+    )
+    assert_error(lambda: JsonDocument.from_json_bytes(b"[]"), "JSON document must be an object")
+    assert_error(
+        lambda: JsonDocument.from_json_bytes(b'{"score": Infinity}'),
+        "score: nonfinite number",
     )
 
 
