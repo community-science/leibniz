@@ -6,9 +6,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
-from leibniz._files import load_json_object_file
+from leibniz._json import load_json_object_file
 from leibniz.answers import FiniteAnswerScoringBundle
-from leibniz.content import CanonicalJsonError, ContentDigest
+from leibniz.content import ContentDigest, ContentEncodingError
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.records import FieldSpec, RecordSpec, RecordValidationError
 
@@ -204,10 +204,10 @@ class BenchmarkManifestDocument:
     digest: ContentDigest
 
     @classmethod
-    def from_json_bytes(cls, data: bytes) -> BenchmarkManifestDocument:
+    def from_bytes(cls, data: bytes) -> BenchmarkManifestDocument:
         try:
             record = load_json_object_file(data)
-        except CanonicalJsonError as error:
+        except ContentEncodingError as error:
             message = str(error).replace("JSON file", "manifest JSON file")
             raise BenchmarkManifestValidationError(message) from error
         manifest = BenchmarkManifest.from_record(record)
