@@ -7,7 +7,8 @@ from types import ModuleType
 
 import leibniz
 
-CAMEL_CASE = re.compile(r"^[A-Z][A-Za-z0-9]*$")
+_camel_case = re.compile(r"^[A-Z][A-Za-z0-9]*$")
+_answer_terminology = re.compile(r"answer|Answer")
 
 
 def test_leibniz_modules_export_only_camel_case_public_names() -> None:
@@ -15,7 +16,7 @@ def test_leibniz_modules_export_only_camel_case_public_names() -> None:
         module = importlib.import_module(module_name)
         public_names = _public_names(module)
         non_camel_names = tuple(
-            name for name in public_names if CAMEL_CASE.fullmatch(name) is None
+            name for name in public_names if _camel_case.fullmatch(name) is None
         )
 
         assert public_names, f"{module_name} must declare at least one public name"
@@ -33,6 +34,17 @@ def test_leibniz_public_module_definitions_are_explicitly_exported() -> None:
         assert missing == (), (
             f"{module_name} defines public names not listed in __all__: {missing}"
         )
+
+
+def test_leibniz_source_uses_outcome_terminology() -> None:
+    source_root = Path(leibniz.__file__).parent
+    offenders = tuple(
+        path.relative_to(source_root)
+        for path in sorted(source_root.rglob("*.py"))
+        if _answer_terminology.search(path.read_text(encoding="utf-8"))
+    )
+
+    assert offenders == ()
 
 
 def _leibniz_module_names() -> tuple[str, ...]:

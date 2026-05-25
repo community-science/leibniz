@@ -1,11 +1,11 @@
 import tomllib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+_root = Path(__file__).resolve().parents[1]
 
 
 def test_miniforge_environment_declares_development_toolchain() -> None:
-    lines = (ROOT / "environment.yml").read_text(encoding="utf-8").splitlines()
+    lines = (_root / "environment.yml").read_text(encoding="utf-8").splitlines()
 
     assert "name: leibniz-dev" in lines
     assert "  - conda-forge" in lines
@@ -15,8 +15,8 @@ def test_miniforge_environment_declares_development_toolchain() -> None:
 
 
 def test_environment_scripts_use_repo_local_miniforge() -> None:
-    setup_script = (ROOT / "scripts" / "setup_environment.sh").read_text(encoding="utf-8")
-    activate_script = (ROOT / "scripts" / "activate_environment.sh").read_text(
+    setup_script = (_root / "scripts" / "setup_environment.sh").read_text(encoding="utf-8")
+    activate_script = (_root / "scripts" / "activate_environment.sh").read_text(
         encoding="utf-8"
     )
 
@@ -30,7 +30,7 @@ def test_environment_scripts_use_repo_local_miniforge() -> None:
 
 
 def test_ci_uses_miniforge_environment_file() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    workflow = (_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     assert "conda-incubator/setup-miniconda@v3" in workflow
     assert "miniforge-version: latest" in workflow
@@ -46,7 +46,7 @@ def test_ci_uses_miniforge_environment_file() -> None:
 
 
 def test_development_extra_contains_no_isolation_build_backend() -> None:
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    pyproject = tomllib.loads((_root / "pyproject.toml").read_text(encoding="utf-8"))
 
     dev_dependencies = pyproject["project"]["optional-dependencies"]["dev"]
 

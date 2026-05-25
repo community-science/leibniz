@@ -2,7 +2,6 @@ import math
 from collections.abc import Callable, Mapping
 from typing import cast
 
-from leibniz.answers import FiniteAnswerScoringBundle
 from leibniz.benchmarks import (
     BenchmarkDeclaration,
     BenchmarkDeclarationValidationError,
@@ -12,23 +11,24 @@ from leibniz.benchmarks import (
 )
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
+from leibniz.outcomes import FiniteOutcomeScoringBundle
 
 
-def test_benchmark_declaration_parses_finite_answer_scoring_contract() -> None:
+def test_benchmark_declaration_parses_finite_outcome_scoring_contract() -> None:
     declaration = BenchmarkDeclaration.from_record(_benchmark_declaration_record())
 
     assert declaration == BenchmarkDeclaration(
         id=ProtocolIdentifier.parse("core.boolean-benchmark@0.1.0"),
-        answer_space_id=ProtocolIdentifier.parse("core.boolean-answer@0.1.0"),
+        outcome_space_id=ProtocolIdentifier.parse("core.boolean-outcome@0.1.0"),
     )
     assert declaration.to_record() == _benchmark_declaration_record()
 
 
-def test_benchmark_declaration_defaults_finite_answer_protocol_bindings() -> None:
+def test_benchmark_declaration_defaults_finite_outcome_protocol_bindings() -> None:
     declaration = BenchmarkDeclaration.from_record(
         {
             "id": "core.boolean-benchmark@0.1.0",
-            "answer_space_id": "core.boolean-answer@0.1.0",
+            "outcome_space_id": "core.boolean-outcome@0.1.0",
         }
     )
 
@@ -37,33 +37,33 @@ def test_benchmark_declaration_defaults_finite_answer_protocol_bindings() -> Non
 
 def test_benchmark_declaration_validates_matching_scoring_bundle() -> None:
     declaration = BenchmarkDeclaration.from_record(_benchmark_declaration_record())
-    bundle = FiniteAnswerScoringBundle.from_record(_boolean_bundle_record())
+    bundle = FiniteOutcomeScoringBundle.from_record(_boolean_bundle_record())
 
     declaration.validate_bundle(bundle)
 
 
-def test_benchmark_declaration_rejects_mismatched_bundle_answer_space() -> None:
+def test_benchmark_declaration_rejects_mismatched_bundle_outcome_space() -> None:
     declaration = BenchmarkDeclaration.from_record(_benchmark_declaration_record())
     record = _boolean_bundle_record()
-    answer_space = dict(cast(Mapping[str, object], record["answer_space"]))
-    answer_space["id"] = "core.other-answer@0.1.0"
+    outcome_space = dict(cast(Mapping[str, object], record["outcome_space"]))
+    outcome_space["id"] = "core.other-outcome@0.1.0"
     event = dict(cast(Mapping[str, object], record["accepted_event"]))
-    event["answer_space_id"] = "core.other-answer@0.1.0"
+    event["outcome_space_id"] = "core.other-outcome@0.1.0"
     measure = dict(cast(Mapping[str, object], record["probability_measure"]))
-    measure["answer_space_id"] = "core.other-answer@0.1.0"
+    measure["outcome_space_id"] = "core.other-outcome@0.1.0"
     evidence = dict(cast(Mapping[str, object], record["raw_scoring_evidence"]))
-    evidence["answer_space_id"] = "core.other-answer@0.1.0"
-    record["answer_space"] = answer_space
+    evidence["outcome_space_id"] = "core.other-outcome@0.1.0"
+    record["outcome_space"] = outcome_space
     record["accepted_event"] = event
     record["probability_measure"] = measure
     record["raw_scoring_evidence"] = evidence
-    bundle = FiniteAnswerScoringBundle.from_record(record)
+    bundle = FiniteOutcomeScoringBundle.from_record(record)
 
     error = capture_benchmark_error(lambda: declaration.validate_bundle(bundle))
 
     assert str(error) == (
-        "bundle answer_space_id core.other-answer@0.1.0 does not match "
-        "core.boolean-answer@0.1.0"
+        "bundle outcome_space_id core.other-outcome@0.1.0 does not match "
+        "core.boolean-outcome@0.1.0"
     )
 
 
@@ -85,13 +85,13 @@ def test_benchmark_declaration_rejects_malformed_records() -> None:
             lambda: BenchmarkDeclaration.from_record(
                 {
                     "id": "core.boolean-benchmark@1.0.0",
-                    "answer_space_id": "core.boolean-answer@0.1.0",
-                    "oracle_acceptance_id": "core.finite-answer-accepted-event@0.1.0",
+                    "outcome_space_id": "core.boolean-outcome@0.1.0",
+                    "oracle_acceptance_id": "core.finite-outcome-accepted-event@0.1.0",
                     "prediction_interface_id": (
                         "core.finite-probability-measure-prediction@0.1.0"
                     ),
                     "score_functional_id": "core.negative-log-accepted-mass@0.1.0",
-                    "evidence_bundle_id": "core.finite-answer-scoring-bundle@0.1.0",
+                    "evidence_bundle_id": "core.finite-outcome-scoring-bundle@0.1.0",
                 }
             )
         )
@@ -100,7 +100,7 @@ def test_benchmark_declaration_rejects_malformed_records() -> None:
         "core.boolean-benchmark@1.0.0"
     )
     record = _benchmark_declaration_record()
-    record["summary"] = "boolean finite-answer benchmark"
+    record["summary"] = "boolean finite-outcome benchmark"
 
     error = capture_benchmark_error(lambda: BenchmarkDeclaration.from_record(record))
 
@@ -115,7 +115,7 @@ def test_benchmark_declaration_digest_is_stable() -> None:
         "oracle_acceptance_id": record["oracle_acceptance_id"],
         "id": record["id"],
         "evidence_bundle_id": record["evidence_bundle_id"],
-        "answer_space_id": record["answer_space_id"],
+        "outcome_space_id": record["outcome_space_id"],
     }
 
     assert ContentDigest.from_value(record) == ContentDigest.from_value(reordered)
@@ -148,7 +148,7 @@ def test_benchmark_manifest_defaults_name_from_id() -> None:
 
 def test_benchmark_manifest_validates_matching_scoring_bundle() -> None:
     manifest = BenchmarkManifest.from_record(_benchmark_manifest_record())
-    bundle = FiniteAnswerScoringBundle.from_record(_boolean_bundle_record())
+    bundle = FiniteOutcomeScoringBundle.from_record(_boolean_bundle_record())
 
     manifest.validate_bundle(bundle)
 
@@ -163,13 +163,13 @@ def test_benchmark_manifest_rejects_mismatched_name_and_declaration_id() -> None
 
     declaration_record = _benchmark_declaration_record()
     declaration_record["id"] = "core.other-benchmark@0.1.0"
-    declaration_record["answer_space_id"] = "core.boolean-answer@0.1.0"
-    declaration_record["oracle_acceptance_id"] = "core.finite-answer-accepted-event@0.1.0"
+    declaration_record["outcome_space_id"] = "core.boolean-outcome@0.1.0"
+    declaration_record["oracle_acceptance_id"] = "core.finite-outcome-accepted-event@0.1.0"
     declaration_record["prediction_interface_id"] = (
         "core.finite-probability-measure-prediction@0.1.0"
     )
     declaration_record["score_functional_id"] = "core.negative-log-accepted-mass@0.1.0"
-    declaration_record["evidence_bundle_id"] = "core.finite-answer-scoring-bundle@0.1.0"
+    declaration_record["evidence_bundle_id"] = "core.finite-outcome-scoring-bundle@0.1.0"
     declaration_id_record = _benchmark_manifest_record()
     declaration_id_record["declaration"] = declaration_record
 
@@ -197,7 +197,7 @@ def test_benchmark_manifest_rejects_malformed_records() -> None:
         "core.boolean-benchmark@1.0.0"
     )
     record = _benchmark_manifest_record()
-    record["summary"] = "boolean finite-answer benchmark"
+    record["summary"] = "boolean finite-outcome benchmark"
 
     error = capture_manifest_error(lambda: BenchmarkManifest.from_record(record))
 
@@ -214,16 +214,16 @@ def test_benchmark_manifest_rejects_missing_or_conflicting_declaration_inputs() 
                 }
             )
         )
-    ) == "answer_space_id: missing required field"
+    ) == "outcome_space_id: missing required field"
 
     record = _minimal_benchmark_manifest_record()
     declaration = _benchmark_declaration_record()
-    declaration["answer_space_id"] = "core.other-answer@0.1.0"
+    declaration["outcome_space_id"] = "core.other-outcome@0.1.0"
     record["declaration"] = declaration
 
     assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
-        "answer_space_id core.boolean-answer@0.1.0 does not match declaration "
-        "core.other-answer@0.1.0"
+        "outcome_space_id core.boolean-outcome@0.1.0 does not match declaration "
+        "core.other-outcome@0.1.0"
     )
 
 
@@ -245,11 +245,11 @@ def test_benchmark_manifest_document_loads_bytes_with_digest() -> None:
             "id": "core.boolean-benchmark@0.1.0",
             "declaration": {
                 "id": "core.boolean-benchmark@0.1.0",
-                "answer_space_id": "core.boolean-answer@0.1.0",
-                "oracle_acceptance_id": "core.finite-answer-accepted-event@0.1.0",
+                "outcome_space_id": "core.boolean-outcome@0.1.0",
+                "oracle_acceptance_id": "core.finite-outcome-accepted-event@0.1.0",
                 "prediction_interface_id": "core.finite-probability-measure-prediction@0.1.0",
                 "score_functional_id": "core.negative-log-accepted-mass@0.1.0",
-                "evidence_bundle_id": "core.finite-answer-scoring-bundle@0.1.0"
+                "evidence_bundle_id": "core.finite-outcome-scoring-bundle@0.1.0"
             }
         }"""
     )
@@ -322,11 +322,11 @@ def capture_manifest_error(
 def _benchmark_declaration_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
-        "answer_space_id": "core.boolean-answer@0.1.0",
-        "oracle_acceptance_id": "core.finite-answer-accepted-event@0.1.0",
+        "outcome_space_id": "core.boolean-outcome@0.1.0",
+        "oracle_acceptance_id": "core.finite-outcome-accepted-event@0.1.0",
         "prediction_interface_id": "core.finite-probability-measure-prediction@0.1.0",
         "score_functional_id": "core.negative-log-accepted-mass@0.1.0",
-        "evidence_bundle_id": "core.finite-answer-scoring-bundle@0.1.0",
+        "evidence_bundle_id": "core.finite-outcome-scoring-bundle@0.1.0",
     }
 
 
@@ -342,14 +342,14 @@ def _minimal_benchmark_manifest_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
         "name": "core.boolean-benchmark",
-        "answer_space_id": "core.boolean-answer@0.1.0",
+        "outcome_space_id": "core.boolean-outcome@0.1.0",
     }
 
 
 def _two_field_benchmark_manifest_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
-        "answer_space_id": "core.boolean-answer@0.1.0",
+        "outcome_space_id": "core.boolean-outcome@0.1.0",
     }
 
 
@@ -361,27 +361,27 @@ def _json_bytes(record: Mapping[str, object]) -> bytes:
 
 def _boolean_bundle_record() -> dict[str, object]:
     return {
-        "answer_space": {
-            "id": "core.boolean-answer@0.1.0",
-            "elements": [{"id": "yes"}, {"id": "no"}],
+        "outcome_space": {
+            "id": "core.boolean-outcome@0.1.0",
+            "outcomes": [{"id": "yes"}, {"id": "no"}],
         },
         "accepted_event": {
             "id": "core.boolean-accepted@0.1.0",
-            "answer_space_id": "core.boolean-answer@0.1.0",
-            "elements": ["yes"],
+            "outcome_space_id": "core.boolean-outcome@0.1.0",
+            "outcomes": ["yes"],
         },
         "probability_measure": {
             "id": "core.boolean-prediction@0.1.0",
-            "answer_space_id": "core.boolean-answer@0.1.0",
+            "outcome_space_id": "core.boolean-outcome@0.1.0",
             "probabilities": [
-                {"element_id": "no", "probability": 0.25},
-                {"element_id": "yes", "probability": 0.75},
+                {"outcome_id": "no", "probability": 0.25},
+                {"outcome_id": "yes", "probability": 0.75},
             ],
         },
         "raw_scoring_evidence": {
             "id": "core.boolean-evidence@0.1.0",
             "observation_id": "observation-1",
-            "answer_space_id": "core.boolean-answer@0.1.0",
+            "outcome_space_id": "core.boolean-outcome@0.1.0",
             "accepted_event_id": "core.boolean-accepted@0.1.0",
             "probability_measure_id": "core.boolean-prediction@0.1.0",
             "accepted_mass": 0.75,
