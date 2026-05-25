@@ -89,10 +89,9 @@ class MeasurementDocument:
     @classmethod
     def from_bytes(cls, data: bytes) -> MeasurementDocument:
         try:
-            record = load_json_object_file(data)
+            record = load_json_object_file(data, description="measurement JSON file")
         except ContentEncodingError as error:
-            message = str(error).replace("JSON file", "measurement JSON file")
-            raise MeasurementRecordValidationError(message) from error
+            raise MeasurementRecordValidationError(str(error)) from error
         measurement = MeasurementRecord.from_record(record)
         return cls(measurement=measurement, digest=measurement.digest)
 
