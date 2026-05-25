@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
 from leibniz.answers import FiniteAnswerScoringBundle
-from leibniz.content import ContentDigest
+from leibniz.content import CanonicalJsonError, ContentDigest, JsonDocument
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName, require_unreleased_identifier
 from leibniz.records import RecordSpec, RecordValidationError, optional, required, validate_record
 
@@ -206,16 +205,11 @@ class BenchmarkManifestDocument:
     @classmethod
     def from_json_bytes(cls, data: bytes) -> BenchmarkManifestDocument:
         try:
-            value = json.loads(data.decode("utf-8"))
-        except UnicodeDecodeError as error:
-            raise BenchmarkManifestValidationError("manifest JSON must be UTF-8") from error
-        except json.JSONDecodeError as error:
-            raise BenchmarkManifestValidationError(f"invalid manifest JSON: {error.msg}") from error
-        if not isinstance(value, Mapping):
-            raise BenchmarkManifestValidationError("manifest JSON must be an object")
-
-        record = cast(Mapping[str, object], value)
-        manifest = BenchmarkManifest.from_record(record)
+            document = JsonDocument.from_json_bytes(data)
+        except CanonicalJsonError as error:
+            message = str(error).replace("JSON document", "manifest JSON")
+            raise BenchmarkManifestValidationError(message) from error
+        manifest = BenchmarkManifest.from_record(document.value)
         return cls(manifest=manifest, digest=ContentDigest.from_value(manifest.to_record()))
 
 

@@ -16,6 +16,7 @@ __all__ = [
     "CanonicalJson",
     "CanonicalJsonError",
     "ContentDigest",
+    "JsonDocument",
     "JsonScalar",
     "JsonValue",
 ]
@@ -76,6 +77,32 @@ class ContentDigest:
     def from_canonical_json(cls, canonical_json: CanonicalJson) -> ContentDigest:
         digest = hashlib.sha256(canonical_json.data).hexdigest()
         return cls(algorithm="sha256", hex=digest)
+
+
+@dataclass(frozen=True, slots=True)
+class JsonDocument:
+    """A loaded JSON object and the digest of its canonical value."""
+
+    value: Mapping[str, JsonValue]
+    digest: ContentDigest
+
+    @classmethod
+    def from_json_bytes(cls, data: bytes) -> JsonDocument:
+        try:
+            value = json.loads(data.decode("utf-8"))
+        except UnicodeDecodeError as error:
+            raise CanonicalJsonError("JSON document must be UTF-8") from error
+        except json.JSONDecodeError as error:
+            raise CanonicalJsonError(f"invalid JSON document: {error.msg}") from error
+        if not isinstance(value, Mapping):
+            raise CanonicalJsonError("JSON document must be an object")
+
+        mapping = cast(Mapping[str, object], value)
+        normalized = _normalize_json(mapping, path=())
+        if not isinstance(normalized, Mapping):
+            raise CanonicalJsonError("JSON document must be an object")
+        document = cast(Mapping[str, JsonValue], normalized)
+        return cls(value=document, digest=ContentDigest.from_value(document))
 
 
 def _normalize_json(value: object, *, path: tuple[str, ...]) -> JsonValue:
