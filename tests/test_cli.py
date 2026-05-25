@@ -1,9 +1,11 @@
-import json
 from pathlib import Path
 
 import pytest
 
+from leibniz._documents import canonical_document_bytes
+from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
+from leibniz.measurements import MeasurementDocument
 
 _fixtures_root = Path(__file__).parent / "fixtures"
 _finite_fixture = _fixtures_root / "finite_outcome"
@@ -109,10 +111,13 @@ def test_cli_reports_incompatible_manifest_pair(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    manifest = json.loads((_finite_fixture / "manifest.json").read_text(encoding="utf-8"))
+    manifest = BenchmarkManifestDocument.from_bytes(
+        (_finite_fixture / "manifest.json").read_bytes()
+    ).manifest.to_record()
     manifest["id"] = "core.other-benchmark@0.1.0"
+    manifest["name"] = "core.other-benchmark"
     manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    manifest_path.write_bytes(canonical_document_bytes(manifest))
 
     exit_code = main(
         [
@@ -134,10 +139,9 @@ def test_cli_reports_incompatible_manifest_pair(
 
 
 def _dataset_path(tmp_path: Path) -> Path:
-    measurement = json.loads((_finite_fixture / "measurement.json").read_text(encoding="utf-8"))
+    measurement = MeasurementDocument.from_bytes(
+        (_finite_fixture / "measurement.json").read_bytes()
+    ).measurement.to_record()
     dataset_path = tmp_path / "measurements.json"
-    dataset_path.write_text(
-        json.dumps({"measurements": [measurement]}),
-        encoding="utf-8",
-    )
+    dataset_path.write_bytes(canonical_document_bytes({"measurements": [measurement]}))
     return dataset_path

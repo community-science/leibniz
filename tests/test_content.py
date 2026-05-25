@@ -17,9 +17,13 @@ from leibniz.outcomes import (
 )
 
 _source_root = Path(__file__).parents[1] / "src" / "leibniz"
+_tests_root = Path(__file__).parents[1] / "tests"
 _format_boundary_files = {
     _source_root / "_documents.py",
     _source_root / "_formats" / "_json.py",
+}
+_json_test_boundary_files = {
+    _tests_root / "test_content.py",
 }
 
 
@@ -119,6 +123,17 @@ def test_source_mentions_json_only_at_document_format_boundary() -> None:
         for path in sorted(_source_root.rglob("*.py"))
         if path not in _format_boundary_files
         and re.search(r"\bjson\b|\bJSON\b|_json", path.read_text(encoding="utf-8"))
+    )
+
+    assert offenders == ()
+
+
+def test_tests_import_json_only_at_document_format_boundary() -> None:
+    offenders = tuple(
+        path.relative_to(_tests_root)
+        for path in sorted(_tests_root.rglob("*.py"))
+        if path not in _json_test_boundary_files
+        and re.search(r"^\s*import json\b|^\s*from json\b", path.read_text(encoding="utf-8"), re.M)
     )
 
     assert offenders == ()
