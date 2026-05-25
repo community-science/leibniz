@@ -156,7 +156,7 @@ class BenchmarkManifest:
     id: ProtocolIdentifier
     name: ProtocolName
     declaration: BenchmarkDeclaration
-    observation_ids: tuple[str, ...] | None = None
+    observation_ids: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -176,8 +176,6 @@ class BenchmarkManifest:
                 raise BenchmarkManifestValidationError(
                     "observation_ids must contain at least one observation id"
                 )
-            if len(set(self.observation_ids)) != len(self.observation_ids):
-                raise BenchmarkManifestValidationError("observation_ids must be unique")
             if any(not observation_id for observation_id in self.observation_ids):
                 raise BenchmarkManifestValidationError("observation_ids must be nonempty")
 
@@ -220,7 +218,7 @@ class BenchmarkManifest:
             "declaration": self.declaration.to_record(),
         }
         if self.observation_ids is not None:
-            record["observation_ids"] = list(self.observation_ids)
+            record["observation_ids"] = sorted(self.observation_ids)
         return record
 
 
@@ -302,13 +300,18 @@ def _manifest_declaration(validated: Mapping[str, object]) -> BenchmarkDeclarati
     return declaration
 
 
-def _manifest_observation_ids(validated: Mapping[str, object]) -> tuple[str, ...] | None:
+def _manifest_observation_ids(validated: Mapping[str, object]) -> frozenset[str] | None:
     value = validated.get("observation_ids")
     if value is None:
         return None
     if not isinstance(value, tuple):
         raise BenchmarkManifestValidationError("observation_ids: expected parsed sequence")
-    return tuple(str(observation_id) for observation_id in cast(tuple[object, ...], value))
+    observation_ids = tuple(
+        str(observation_id) for observation_id in cast(tuple[object, ...], value)
+    )
+    if len(set(observation_ids)) != len(observation_ids):
+        raise BenchmarkManifestValidationError("observation_ids must be unique")
+    return frozenset(observation_ids)
 
 
 def _manifest_mapping(value: object, *, field: str) -> Mapping[str, object]:
