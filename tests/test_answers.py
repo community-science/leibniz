@@ -12,6 +12,8 @@ from leibniz.answers import (
     FiniteProbabilityMeasure,
     ProbabilityMass,
     ProbabilityMeasureValidationError,
+    RawScoringEvidence,
+    RawScoringEvidenceValidationError,
 )
 from leibniz.identifiers import ProtocolIdentifier
 
@@ -594,6 +596,203 @@ def test_accepted_mass_score_rejects_mismatched_answer_space() -> None:
     )
 
 
+def test_accepted_mass_score_clamps_tolerance_sized_roundoff_above_one() -> None:
+    event = AcceptedEvent(
+        id=ProtocolIdentifier.parse("core.boolean-accepted@0.1.0"),
+        answer_space_id=ProtocolIdentifier.parse("core.boolean-answer@0.1.0"),
+        elements=frozenset({"yes", "no"}),
+    )
+    measure = FiniteProbabilityMeasure(
+        id=ProtocolIdentifier.parse("core.boolean-prediction@0.1.0"),
+        answer_space_id=ProtocolIdentifier.parse("core.boolean-answer@0.1.0"),
+        probabilities=(
+            ProbabilityMass("yes", 0.5),
+            ProbabilityMass("no", 0.5000000000001),
+        ),
+        normalization_tolerance=1e-12,
+    )
+
+    score = AcceptedMassScore.from_event_and_measure(event=event, measure=measure)
+
+    assert score == AcceptedMassScore(accepted_mass=1.0, negative_log_score=-0.0)
+
+
+def test_raw_scoring_evidence_recomputes_score_from_event_and_measure() -> None:
+    space = AnswerSpace.from_record(
+        {
+            "id": "core.boolean-answer@0.1.0",
+            "elements": [{"id": "yes"}, {"id": "no"}],
+        }
+    )
+    event = AcceptedEvent.from_record(
+        {
+            "id": "core.boolean-accepted@0.1.0",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+            "elements": ["yes"],
+        },
+        answer_space=space,
+    )
+    measure = FiniteProbabilityMeasure.from_record(
+        {
+            "id": "core.boolean-prediction@0.1.0",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+            "probabilities": [
+                {"element_id": "yes", "probability": 0.25},
+                {"element_id": "no", "probability": 0.75},
+            ],
+        },
+        answer_space=space,
+    )
+
+    evidence = RawScoringEvidence.from_event_and_measure(
+        id=ProtocolIdentifier.parse("core.boolean-evidence@0.1.0"),
+        observation_id="observation-1",
+        event=event,
+        measure=measure,
+    )
+
+    assert evidence == RawScoringEvidence(
+        id=ProtocolIdentifier.parse("core.boolean-evidence@0.1.0"),
+        observation_id="observation-1",
+        answer_space_id=ProtocolIdentifier.parse("core.boolean-answer@0.1.0"),
+        accepted_event_id=ProtocolIdentifier.parse("core.boolean-accepted@0.1.0"),
+        probability_measure_id=ProtocolIdentifier.parse("core.boolean-prediction@0.1.0"),
+        accepted_mass=0.25,
+        negative_log_score=-math.log(0.25),
+    )
+    assert evidence.to_record() == {
+        "id": "core.boolean-evidence@0.1.0",
+        "observation_id": "observation-1",
+        "answer_space_id": "core.boolean-answer@0.1.0",
+        "accepted_event_id": "core.boolean-accepted@0.1.0",
+        "probability_measure_id": "core.boolean-prediction@0.1.0",
+        "accepted_mass": 0.25,
+        "negative_log_score": -math.log(0.25),
+    }
+
+
+def test_raw_scoring_evidence_parses_infinite_zero_mass_score() -> None:
+    evidence = RawScoringEvidence.from_record(
+        {
+            "id": "core.boolean-evidence@0.1.0",
+            "observation_id": "observation-1",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+            "accepted_event_id": "core.boolean-accepted@0.1.0",
+            "probability_measure_id": "core.boolean-prediction@0.1.0",
+            "accepted_mass": 0.0,
+            "negative_log_score": "infinity",
+        }
+    )
+
+    assert evidence.negative_log_score == math.inf
+    assert evidence.to_record()["negative_log_score"] == "infinity"
+
+
+def test_raw_scoring_evidence_rejects_aggregate_summary_fields() -> None:
+    error = capture_evidence_error(
+        lambda: RawScoringEvidence.from_record(
+            {
+                "id": "core.boolean-evidence@0.1.0",
+                "observation_id": "observation-1",
+                "answer_space_id": "core.boolean-answer@0.1.0",
+                "accepted_event_id": "core.boolean-accepted@0.1.0",
+                "probability_measure_id": "core.boolean-prediction@0.1.0",
+                "accepted_mass": 0.25,
+                "negative_log_score": -math.log(0.25),
+                "mean_score": 0.25,
+            }
+        )
+    )
+
+    assert str(error) == "mean_score: unknown field"
+
+
+def test_raw_scoring_evidence_rejects_inconsistent_zero_mass_score() -> None:
+    error = capture_evidence_error(
+        lambda: RawScoringEvidence.from_record(
+            {
+                "id": "core.boolean-evidence@0.1.0",
+                "observation_id": "observation-1",
+                "answer_space_id": "core.boolean-answer@0.1.0",
+                "accepted_event_id": "core.boolean-accepted@0.1.0",
+                "probability_measure_id": "core.boolean-prediction@0.1.0",
+                "accepted_mass": 0.0,
+                "negative_log_score": 1.0,
+            }
+        )
+    )
+
+    assert str(error) == "zero accepted_mass requires infinite negative_log_score"
+
+
+def test_raw_scoring_evidence_rejects_inconsistent_finite_score() -> None:
+    error = capture_evidence_error(
+        lambda: RawScoringEvidence.from_record(
+            {
+                "id": "core.boolean-evidence@0.1.0",
+                "observation_id": "observation-1",
+                "answer_space_id": "core.boolean-answer@0.1.0",
+                "accepted_event_id": "core.boolean-accepted@0.1.0",
+                "probability_measure_id": "core.boolean-prediction@0.1.0",
+                "accepted_mass": 0.25,
+                "negative_log_score": 1.0,
+            }
+        )
+    )
+
+    assert str(error) == "negative_log_score must equal -log(accepted_mass)"
+
+
+def test_raw_scoring_evidence_rejects_malformed_records() -> None:
+    assert str(
+        capture_evidence_error(
+            lambda: RawScoringEvidence.from_record(
+                {
+                    "id": "core.boolean-evidence@1.0.0",
+                    "observation_id": "observation-1",
+                    "answer_space_id": "core.boolean-answer@0.1.0",
+                    "accepted_event_id": "core.boolean-accepted@0.1.0",
+                    "probability_measure_id": "core.boolean-prediction@0.1.0",
+                    "accepted_mass": 0.25,
+                    "negative_log_score": -math.log(0.25),
+                }
+            )
+        )
+    ) == (
+        "identifier must use a pre-1.0.0 version before release policy exists: "
+        "core.boolean-evidence@1.0.0"
+    )
+    assert str(
+        capture_evidence_error(
+            lambda: RawScoringEvidence.from_record(
+                {
+                    "id": "core.boolean-evidence@0.1.0",
+                    "observation_id": "observation-1",
+                    "answer_space_id": "core.boolean-answer@0.1.0",
+                    "accepted_event_id": "core.boolean-accepted@0.1.0",
+                    "probability_measure_id": "core.boolean-prediction@0.1.0",
+                    "accepted_mass": 0.25,
+                }
+            )
+        )
+    ) == "negative_log_score: missing required field"
+    assert str(
+        capture_evidence_error(
+            lambda: RawScoringEvidence.from_record(
+                {
+                    "id": "core.boolean-evidence@0.1.0",
+                    "observation_id": "",
+                    "answer_space_id": "core.boolean-answer@0.1.0",
+                    "accepted_event_id": "core.boolean-accepted@0.1.0",
+                    "probability_measure_id": "core.boolean-prediction@0.1.0",
+                    "accepted_mass": 1.25,
+                    "negative_log_score": -math.log(0.25),
+                }
+            )
+        )
+    ) == "observation_id must be nonempty"
+
+
 def capture_answer_error(call: Callable[[], object]) -> AnswerSpaceValidationError:
     try:
         call()
@@ -624,6 +823,14 @@ def capture_score_error(call: Callable[[], object]) -> AcceptedMassScoreError:
     except AcceptedMassScoreError as error:
         return error
     raise AssertionError("expected AcceptedMassScoreError")
+
+
+def capture_evidence_error(call: Callable[[], object]) -> RawScoringEvidenceValidationError:
+    try:
+        call()
+    except RawScoringEvidenceValidationError as error:
+        return error
+    raise AssertionError("expected RawScoringEvidenceValidationError")
 
 
 def _boolean_space() -> AnswerSpace:
