@@ -23,10 +23,21 @@ _ANSWER_SPACE_RECORD = RecordSpec(
         "elements": required("sequence", item=required("record", record=_ANSWER_ELEMENT_RECORD)),
     }
 )
+_ACCEPTED_EVENT_RECORD = RecordSpec(
+    fields={
+        "id": required("identifier"),
+        "answer_space_id": required("identifier"),
+        "elements": required("sequence", item=required("string")),
+    }
+)
 
 
 class AnswerSpaceValidationError(ValueError):
     """Raised when an answer element or answer space is invalid."""
+
+
+class AcceptedEventValidationError(ValueError):
+    """Raised when an accepted event is invalid."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +113,80 @@ def answer_element(record: Mapping[str, object]) -> AnswerElement:
 
 def answer_space(record: Mapping[str, object]) -> AnswerSpace:
     return AnswerSpace.from_record(record)
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptedEvent:
+    """A nonempty subset of a finite answer space."""
+
+    id: ProtocolIdentifier
+    answer_space_id: ProtocolIdentifier
+    elements: frozenset[str]
+
+    def __post_init__(self) -> None:
+        try:
+            require_unreleased_identifier(self.id)
+        except ValueError as error:
+            raise AcceptedEventValidationError(str(error)) from error
+        if not self.elements:
+            raise AcceptedEventValidationError("accepted event must contain at least one element")
+        for element_id in self.elements:
+            if _ELEMENT_ID.fullmatch(element_id) is None:
+                raise AcceptedEventValidationError(
+                    f"invalid accepted element id: {element_id!r}"
+                )
+
+    @classmethod
+    def from_record(
+        cls, record: Mapping[str, object], *, answer_space: AnswerSpace
+    ) -> AcceptedEvent:
+        try:
+            validated = validate_record(record, _ACCEPTED_EVENT_RECORD)
+        except RecordValidationError as error:
+            raise AcceptedEventValidationError(str(error)) from error
+
+        identifier = _as_identifier(validated["id"], field="id")
+        answer_space_id = _as_identifier(validated["answer_space_id"], field="answer_space_id")
+        if answer_space_id != answer_space.id:
+            raise AcceptedEventValidationError(
+                f"answer_space_id {answer_space_id} does not match {answer_space.id}"
+            )
+
+        element_ids = tuple(
+            str(element) for element in _as_tuple(validated["elements"], field="elements")
+        )
+        if len(set(element_ids)) != len(element_ids):
+            raise AcceptedEventValidationError("accepted element ids must be unique")
+
+        event = cls(
+            id=identifier,
+            answer_space_id=answer_space_id,
+            elements=frozenset(element_ids),
+        )
+        unknown = tuple(
+            element_id
+            for element_id in sorted(event.elements)
+            if not answer_space.contains(element_id)
+        )
+        if unknown:
+            raise AcceptedEventValidationError(
+                f"accepted elements are not in answer space: {', '.join(unknown)}"
+            )
+        return event
+
+    def accepts(self, element_id: str) -> bool:
+        return element_id in self.elements
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "answer_space_id": str(self.answer_space_id),
+            "elements": sorted(self.elements),
+        }
+
+
+def accepted_event(record: Mapping[str, object], *, answer_space: AnswerSpace) -> AcceptedEvent:
+    return AcceptedEvent.from_record(record, answer_space=answer_space)
 
 
 def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
