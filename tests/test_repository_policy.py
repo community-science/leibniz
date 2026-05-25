@@ -1,6 +1,6 @@
 from pathlib import PurePosixPath
 
-from leibniz.repository_policy import PolicyViolation, RepositoryPolicy
+from leibniz._repository_policy import PolicyViolation, RepositoryPolicy
 
 
 def test_repository_policy_accepts_source_and_configuration_paths() -> None:

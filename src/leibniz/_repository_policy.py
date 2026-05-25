@@ -9,8 +9,6 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-__all__ = ["PolicyViolation", "RepositoryPolicy"]
-
 _FORBIDDEN_NAMES = frozenset(
     {
         ".leibniz",
@@ -48,8 +46,6 @@ class RepositoryPolicy:
 
 
 def _validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]:
-    """Return policy violations for tracked repository-relative paths."""
-
     violations: list[PolicyViolation] = []
     for raw_path in paths:
         path = PurePosixPath(raw_path)
@@ -80,8 +76,6 @@ def _validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]
 
 
 def _tracked_paths(root: Path) -> tuple[str, ...]:
-    """Return Git-tracked paths below root."""
-
     result = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-z"],
         check=True,
