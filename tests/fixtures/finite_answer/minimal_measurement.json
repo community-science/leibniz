@@ -1,0 +1,39 @@
+{
+  "benchmark_id": "core.boolean-benchmark@0.1.0",
+  "scoring_bundle": {
+    "id": "core.boolean-evidence@0.1.0",
+    "observation_id": "observation-1",
+    "answer_space": {
+      "id": "core.boolean-answer@0.1.0",
+      "elements": [
+        {
+          "id": "yes"
+        },
+        {
+          "id": "no"
+        }
+      ]
+    },
+    "accepted_event": {
+      "id": "core.boolean-accepted@0.1.0",
+      "answer_space_id": "core.boolean-answer@0.1.0",
+      "elements": [
+        "yes"
+      ]
+    },
+    "probability_measure": {
+      "id": "core.boolean-prediction@0.1.0",
+      "answer_space_id": "core.boolean-answer@0.1.0",
+      "probabilities": [
+        {
+          "element_id": "yes",
+          "probability": 0.25
+        },
+        {
+          "element_id": "no",
+          "probability": 0.75
+        }
+      ]
+    }
+  }
+}
