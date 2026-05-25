@@ -10,7 +10,7 @@ from typing import cast
 from leibniz.answers import FiniteAnswerScoringBundle
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName, require_unreleased_identifier
-from leibniz.records import RecordSpec, RecordValidationError, required, validate_record
+from leibniz.records import RecordSpec, RecordValidationError, optional, required, validate_record
 
 __all__ = [
     "BenchmarkDeclaration",
@@ -31,17 +31,18 @@ _benchmark_declaration_record = RecordSpec(
     fields={
         "id": required("identifier"),
         "answer_space_id": required("identifier"),
-        "oracle_acceptance_id": required("identifier"),
-        "prediction_interface_id": required("identifier"),
-        "score_functional_id": required("identifier"),
-        "evidence_bundle_id": required("identifier"),
+        "oracle_acceptance_id": optional("identifier"),
+        "prediction_interface_id": optional("identifier"),
+        "score_functional_id": optional("identifier"),
+        "evidence_bundle_id": optional("identifier"),
     }
 )
 _benchmark_manifest_record = RecordSpec(
     fields={
         "id": required("identifier"),
         "name": required("name"),
-        "declaration": required("record"),
+        "answer_space_id": optional("identifier"),
+        "declaration": optional("record"),
     }
 )
 
@@ -103,21 +104,25 @@ class BenchmarkDeclaration:
                 validated["answer_space_id"],
                 field="answer_space_id",
             ),
-            oracle_acceptance_id=_as_identifier(
-                validated["oracle_acceptance_id"],
+            oracle_acceptance_id=_as_identifier_or_default(
+                validated.get("oracle_acceptance_id"),
                 field="oracle_acceptance_id",
+                default=_oracle_acceptance_id,
             ),
-            prediction_interface_id=_as_identifier(
-                validated["prediction_interface_id"],
+            prediction_interface_id=_as_identifier_or_default(
+                validated.get("prediction_interface_id"),
                 field="prediction_interface_id",
+                default=_prediction_interface_id,
             ),
-            score_functional_id=_as_identifier(
-                validated["score_functional_id"],
+            score_functional_id=_as_identifier_or_default(
+                validated.get("score_functional_id"),
                 field="score_functional_id",
+                default=_score_functional_id,
             ),
-            evidence_bundle_id=_as_identifier(
-                validated["evidence_bundle_id"],
+            evidence_bundle_id=_as_identifier_or_default(
+                validated.get("evidence_bundle_id"),
                 field="evidence_bundle_id",
+                default=_evidence_bundle_id,
             ),
         )
 
@@ -165,9 +170,10 @@ class BenchmarkManifest:
     def from_record(cls, record: Mapping[str, object]) -> BenchmarkManifest:
         try:
             validated = validate_record(record, _benchmark_manifest_record)
-            declaration = BenchmarkDeclaration.from_record(
-                _manifest_mapping(validated["declaration"], field="declaration")
-            )
+        except ValueError as error:
+            raise BenchmarkManifestValidationError(str(error)) from error
+        try:
+            declaration = _manifest_declaration(validated)
         except ValueError as error:
             raise BenchmarkManifestValidationError(str(error)) from error
         return cls(
@@ -219,10 +225,51 @@ def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
     return value
 
 
+def _as_identifier_or_default(
+    value: object,
+    *,
+    field: str,
+    default: ProtocolIdentifier,
+) -> ProtocolIdentifier:
+    if value is None:
+        return default
+    return _as_identifier(value, field=field)
+
+
 def _as_name(value: object, *, field: str) -> ProtocolName:
     if not isinstance(value, ProtocolName):
         raise BenchmarkManifestValidationError(f"{field}: expected parsed name")
     return value
+
+
+def _manifest_declaration(validated: Mapping[str, object]) -> BenchmarkDeclaration:
+    declaration_value = validated.get("declaration")
+    answer_space_id_value = validated.get("answer_space_id")
+    if declaration_value is None and answer_space_id_value is None:
+        raise BenchmarkManifestValidationError("answer_space_id: missing required field")
+
+    declaration: BenchmarkDeclaration | None = None
+    if declaration_value is not None:
+        declaration = BenchmarkDeclaration.from_record(
+            _manifest_mapping(declaration_value, field="declaration")
+        )
+    if answer_space_id_value is None:
+        if declaration is None:
+            raise BenchmarkManifestValidationError("declaration: expected record")
+        return declaration
+
+    answer_space_id = _as_identifier(answer_space_id_value, field="answer_space_id")
+    if declaration is None:
+        return BenchmarkDeclaration(
+            id=_as_identifier(validated["id"], field="id"),
+            answer_space_id=answer_space_id,
+        )
+    if declaration.answer_space_id != answer_space_id:
+        raise BenchmarkManifestValidationError(
+            f"answer_space_id {answer_space_id} does not match declaration "
+            f"{declaration.answer_space_id}"
+        )
+    return declaration
 
 
 def _manifest_mapping(value: object, *, field: str) -> Mapping[str, object]:
