@@ -1,5 +1,6 @@
 import ast
 import importlib
+import inspect
 import pkgutil
 import re
 from pathlib import Path
@@ -7,22 +8,31 @@ from types import ModuleType
 
 import leibniz
 
-_camel_case = re.compile(r"^[A-Z][A-Za-z0-9]*$")
+_pascal_case = re.compile(r"^[A-Z][A-Za-z0-9]*$")
+_snake_case = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 _answer_terminology = re.compile(r"answer|Answer")
 _module_scope_upper_snake = re.compile(r"_?[A-Z][A-Z0-9_]*$")
 
 
-def test_leibniz_modules_export_only_camel_case_public_names() -> None:
+def test_leibniz_modules_export_pythonic_public_names() -> None:
     for module_name in _leibniz_module_names():
         module = importlib.import_module(module_name)
-        public_names = _public_names(module)
-        non_camel_names = tuple(
-            name for name in public_names if _camel_case.fullmatch(name) is None
+        exported_names = _public_names(module)
+        offenders = tuple(_non_pythonic_exported_names(module, exported_names))
+
+        assert exported_names, f"{module_name} must declare at least one public name"
+        assert offenders == (), (
+            f"{module_name} exports non-pythonic public names: {offenders}"
         )
 
-        assert public_names, f"{module_name} must declare at least one public name"
-        assert non_camel_names == (), (
-            f"{module_name} exports non-CamelCase public names: {non_camel_names}"
+
+def test_leibniz_public_class_methods_use_snake_case() -> None:
+    for module_name in _leibniz_module_names():
+        module = importlib.import_module(module_name)
+        offenders = _non_snake_case_public_methods(module)
+
+        assert offenders == (), (
+            f"{module_name} defines non-snake-case public methods: {offenders}"
         )
 
 
@@ -73,6 +83,41 @@ def _public_names(module: ModuleType) -> tuple[str, ...]:
     exported = getattr(module, "__all__", None)
     assert exported is not None, f"{module.__name__} must declare __all__"
     return tuple(str(name) for name in exported)
+
+
+def _non_pythonic_exported_names(
+    module: ModuleType,
+    exported_names: tuple[str, ...],
+) -> tuple[str, ...]:
+    offenders: list[str] = []
+    for name in exported_names:
+        value = getattr(module, name)
+        if inspect.isfunction(value):
+            if _snake_case.fullmatch(name) is None:
+                offenders.append(name)
+            continue
+        if _pascal_case.fullmatch(name) is None:
+            offenders.append(name)
+    return tuple(offenders)
+
+
+def _non_snake_case_public_methods(module: ModuleType) -> tuple[str, ...]:
+    source_path = getattr(module, "__file__", None)
+    assert source_path is not None, f"{module.__name__} must have a source file"
+    tree = ast.parse(Path(source_path).read_text(encoding="utf-8"))
+
+    offenders: list[str] = []
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name.startswith("_"):
+            continue
+        for item in node.body:
+            if (
+                isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
+                and not item.name.startswith("_")
+                and _snake_case.fullmatch(item.name) is None
+            ):
+                offenders.append(f"{node.name}.{item.name}")
+    return tuple(offenders)
 
 
 def _defined_public_names(module: ModuleType) -> tuple[str, ...]:
