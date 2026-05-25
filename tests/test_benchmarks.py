@@ -139,6 +139,13 @@ def test_benchmark_manifest_parses_minimal_authoring_record() -> None:
     assert manifest.to_record() == _benchmark_manifest_record()
 
 
+def test_benchmark_manifest_defaults_name_from_id() -> None:
+    manifest = BenchmarkManifest.from_record(_two_field_benchmark_manifest_record())
+
+    assert manifest == BenchmarkManifest.from_record(_benchmark_manifest_record())
+    assert manifest.to_record() == _benchmark_manifest_record()
+
+
 def test_benchmark_manifest_validates_matching_scoring_bundle() -> None:
     manifest = BenchmarkManifest.from_record(_benchmark_manifest_record())
     bundle = FiniteAnswerScoringBundle.from_record(_boolean_bundle_record())
@@ -253,7 +260,7 @@ def test_benchmark_manifest_document_loads_json_bytes_with_digest() -> None:
 
 def test_benchmark_manifest_document_expands_minimal_authoring_record() -> None:
     document = BenchmarkManifestDocument.from_json_bytes(
-        _json_bytes(_minimal_benchmark_manifest_record())
+        _json_bytes(_two_field_benchmark_manifest_record())
     )
 
     assert document.manifest == BenchmarkManifest.from_record(_benchmark_manifest_record())
@@ -286,7 +293,7 @@ def test_benchmark_manifest_document_rejects_invalid_manifest_record() -> None:
 def test_benchmark_manifest_document_digest_is_stable() -> None:
     left = BenchmarkManifestDocument.from_json_bytes(_json_bytes(_benchmark_manifest_record()))
     right = BenchmarkManifestDocument.from_json_bytes(
-        _json_bytes(_minimal_benchmark_manifest_record())
+        _json_bytes(_two_field_benchmark_manifest_record())
     )
 
     assert left.digest == right.digest
@@ -335,6 +342,13 @@ def _minimal_benchmark_manifest_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
         "name": "core.boolean-benchmark",
+        "answer_space_id": "core.boolean-answer@0.1.0",
+    }
+
+
+def _two_field_benchmark_manifest_record() -> dict[str, object]:
+    return {
+        "id": "core.boolean-benchmark@0.1.0",
         "answer_space_id": "core.boolean-answer@0.1.0",
     }
 

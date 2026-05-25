@@ -40,7 +40,7 @@ _benchmark_declaration_record = RecordSpec(
 _benchmark_manifest_record = RecordSpec(
     fields={
         "id": required("identifier"),
-        "name": required("name"),
+        "name": optional("name"),
         "answer_space_id": optional("identifier"),
         "declaration": optional("record"),
     }
@@ -178,7 +178,7 @@ class BenchmarkManifest:
             raise BenchmarkManifestValidationError(str(error)) from error
         return cls(
             id=_as_identifier(validated["id"], field="id"),
-            name=_as_name(validated["name"], field="name"),
+            name=_manifest_name(validated),
             declaration=declaration,
         )
 
@@ -240,6 +240,14 @@ def _as_name(value: object, *, field: str) -> ProtocolName:
     if not isinstance(value, ProtocolName):
         raise BenchmarkManifestValidationError(f"{field}: expected parsed name")
     return value
+
+
+def _manifest_name(validated: Mapping[str, object]) -> ProtocolName:
+    identifier = _as_identifier(validated["id"], field="id")
+    value = validated.get("name")
+    if value is None:
+        return identifier.name
+    return _as_name(value, field="name")
 
 
 def _manifest_declaration(validated: Mapping[str, object]) -> BenchmarkDeclaration:
