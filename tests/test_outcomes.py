@@ -1,16 +1,12 @@
 import math
-from collections.abc import Callable, Mapping
-from typing import cast
+from collections.abc import Callable
 
-from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.outcomes import (
     AcceptedEvent,
     AcceptedEventValidationError,
     AcceptedMassScore,
     AcceptedMassScoreError,
-    FiniteOutcomeScoringGraph,
-    FiniteOutcomeScoringGraphValidationError,
     FiniteProbabilityMeasure,
     Outcome,
     OutcomeSpace,
@@ -797,108 +793,6 @@ def test_raw_scoring_evidence_rejects_malformed_records() -> None:
     ) == "observation_id must be nonempty"
 
 
-def test_finite_outcome_scoring_graph_parses_complete_object_graph() -> None:
-    graph = FiniteOutcomeScoringGraph.from_record(_boolean_graph_record())
-
-    assert graph.outcome_space.id == ProtocolIdentifier.parse("core.boolean-outcome@0.1.0")
-    assert graph.accepted_event.id == ProtocolIdentifier.parse("core.boolean-accepted@0.1.0")
-    assert graph.probability_measure.id == ProtocolIdentifier.parse(
-        "core.boolean-prediction@0.1.0"
-    )
-    assert graph.raw_scoring_evidence.id == ProtocolIdentifier.parse(
-        "core.boolean-evidence@0.1.0"
-    )
-    assert graph.to_record() == _boolean_graph_record()
-
-
-def test_finite_outcome_scoring_graph_derives_raw_evidence_from_minimal_record() -> None:
-    graph = FiniteOutcomeScoringGraph.from_record(_minimal_boolean_graph_record())
-
-    assert graph == FiniteOutcomeScoringGraph.from_record(_boolean_graph_record())
-    assert graph.to_record() == _boolean_graph_record()
-
-
-def test_finite_outcome_scoring_graph_rejects_dangling_references() -> None:
-    record = _boolean_graph_record()
-    raw_scoring_evidence = dict(
-        cast(Mapping[str, object], record["raw_scoring_evidence"])
-    )
-    raw_scoring_evidence["accepted_event_id"] = "core.other-accepted@0.1.0"
-    record["raw_scoring_evidence"] = raw_scoring_evidence
-
-    error = capture_graph_error(lambda: FiniteOutcomeScoringGraph.from_record(record))
-
-    assert str(error) == "raw_scoring_evidence must equal derived scoring evidence"
-
-
-def test_finite_outcome_scoring_graph_recomputes_score_from_event_and_measure() -> None:
-    record = _boolean_graph_record()
-    raw_scoring_evidence = dict(
-        cast(Mapping[str, object], record["raw_scoring_evidence"])
-    )
-    raw_scoring_evidence["accepted_mass"] = 0.25
-    raw_scoring_evidence["negative_log_score"] = -math.log(0.25)
-    record["raw_scoring_evidence"] = raw_scoring_evidence
-
-    error = capture_graph_error(lambda: FiniteOutcomeScoringGraph.from_record(record))
-
-    assert str(error) == "raw_scoring_evidence must equal derived scoring evidence"
-
-
-def test_finite_outcome_scoring_graph_rejects_conflicting_minimal_and_raw_evidence() -> None:
-    record = _minimal_boolean_graph_record()
-    record["raw_scoring_evidence"] = {
-        "id": "core.other-evidence@0.1.0",
-        "observation_id": "observation-1",
-        "outcome_space_id": "core.boolean-outcome@0.1.0",
-        "accepted_event_id": "core.boolean-accepted@0.1.0",
-        "probability_measure_id": "core.boolean-prediction@0.1.0",
-        "accepted_mass": 0.75,
-        "negative_log_score": -math.log(0.75),
-    }
-
-    error = capture_graph_error(lambda: FiniteOutcomeScoringGraph.from_record(record))
-
-    assert str(error) == "raw_scoring_evidence must equal derived scoring evidence"
-
-
-def test_finite_outcome_scoring_graph_digest_is_stable() -> None:
-    record = _boolean_graph_record()
-    reordered = {
-        "raw_scoring_evidence": record["raw_scoring_evidence"],
-        "probability_measure": record["probability_measure"],
-        "accepted_event": record["accepted_event"],
-        "outcome_space": record["outcome_space"],
-    }
-
-    assert ContentDigest.from_value(record) == ContentDigest.from_value(reordered)
-
-
-def test_finite_outcome_scoring_graph_rejects_malformed_records() -> None:
-    record = _boolean_graph_record()
-    record["summary"] = {"mean_score": 0.0}
-
-    error = capture_graph_error(lambda: FiniteOutcomeScoringGraph.from_record(record))
-
-    assert str(error) == "summary: unknown field"
-
-
-def test_finite_outcome_scoring_graph_rejects_missing_evidence_identity() -> None:
-    record = _minimal_boolean_graph_record()
-    del record["id"]
-
-    assert str(
-        capture_graph_error(lambda: FiniteOutcomeScoringGraph.from_record(record))
-    ) == "id: missing required field"
-
-    record = _minimal_boolean_graph_record()
-    del record["observation_id"]
-
-    assert str(
-        capture_graph_error(lambda: FiniteOutcomeScoringGraph.from_record(record))
-    ) == "observation_id: missing required field"
-
-
 def capture_outcome_error(call: Callable[[], object]) -> OutcomeSpaceValidationError:
     try:
         call()
@@ -939,56 +833,7 @@ def capture_evidence_error(call: Callable[[], object]) -> RawScoringEvidenceVali
     raise AssertionError("expected RawScoringEvidenceValidationError")
 
 
-def capture_graph_error(
-    call: Callable[[], object],
-) -> FiniteOutcomeScoringGraphValidationError:
-    try:
-        call()
-    except FiniteOutcomeScoringGraphValidationError as error:
-        return error
-    raise AssertionError("expected FiniteOutcomeScoringGraphValidationError")
-
-
 def _boolean_space() -> OutcomeSpace:
     return OutcomeSpace.from_record(
         {"id": "core.boolean-outcome@0.1.0", "outcomes": [{"id": "yes"}]}
     )
-
-
-def _boolean_graph_record() -> dict[str, object]:
-    return {
-        "outcome_space": {
-            "id": "core.boolean-outcome@0.1.0",
-            "outcomes": [{"id": "yes"}, {"id": "no"}],
-        },
-        "accepted_event": {
-            "id": "core.boolean-accepted@0.1.0",
-            "outcome_space_id": "core.boolean-outcome@0.1.0",
-            "outcomes": ["yes"],
-        },
-        "probability_measure": {
-            "id": "core.boolean-prediction@0.1.0",
-            "outcome_space_id": "core.boolean-outcome@0.1.0",
-            "probabilities": [
-                {"outcome_id": "no", "probability": 0.25},
-                {"outcome_id": "yes", "probability": 0.75},
-            ],
-        },
-        "raw_scoring_evidence": {
-            "id": "core.boolean-evidence@0.1.0",
-            "observation_id": "observation-1",
-            "outcome_space_id": "core.boolean-outcome@0.1.0",
-            "accepted_event_id": "core.boolean-accepted@0.1.0",
-            "probability_measure_id": "core.boolean-prediction@0.1.0",
-            "accepted_mass": 0.75,
-            "negative_log_score": -math.log(0.75),
-        },
-    }
-
-
-def _minimal_boolean_graph_record() -> dict[str, object]:
-    record = _boolean_graph_record()
-    raw_scoring_evidence = cast(Mapping[str, object], record.pop("raw_scoring_evidence"))
-    record["id"] = raw_scoring_evidence["id"]
-    record["observation_id"] = raw_scoring_evidence["observation_id"]
-    return record
