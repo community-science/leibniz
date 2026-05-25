@@ -146,11 +146,42 @@ def test_benchmark_manifest_defaults_name_from_id() -> None:
     assert manifest.to_record() == _benchmark_manifest_record()
 
 
+def test_benchmark_manifest_accepts_declared_observation_ids() -> None:
+    record = _two_field_benchmark_manifest_record()
+    record["observation_ids"] = ["fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"]
+
+    manifest = BenchmarkManifest.from_record(record)
+
+    assert manifest.observation_ids == ("fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1",)
+    assert manifest.to_record() == {
+        "id": "core.boolean-benchmark@0.1.0",
+        "name": "core.boolean-benchmark",
+        "declaration": _benchmark_declaration_record(),
+        "observation_ids": ["fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"],
+    }
+
+
 def test_benchmark_manifest_validates_matching_scoring_bundle() -> None:
     manifest = BenchmarkManifest.from_record(_benchmark_manifest_record())
     bundle = FiniteOutcomeScoringBundle.from_record(_boolean_bundle_record())
 
     manifest.validate_bundle(bundle)
+
+
+def test_benchmark_manifest_validates_declared_observation_ids() -> None:
+    record = _two_field_benchmark_manifest_record()
+    record["observation_ids"] = ["observation-1"]
+    manifest = BenchmarkManifest.from_record(record)
+    bundle = FiniteOutcomeScoringBundle.from_record(_boolean_bundle_record())
+
+    manifest.validate_bundle(bundle)
+
+    record["observation_ids"] = ["observation-2"]
+    manifest = BenchmarkManifest.from_record(record)
+
+    assert str(capture_manifest_error(lambda: manifest.validate_bundle(bundle))) == (
+        "observation_id 'observation-1' is not declared by core.boolean-benchmark@0.1.0"
+    )
 
 
 def test_benchmark_manifest_rejects_mismatched_name_and_declaration_id() -> None:
@@ -202,6 +233,25 @@ def test_benchmark_manifest_rejects_malformed_records() -> None:
     error = capture_manifest_error(lambda: BenchmarkManifest.from_record(record))
 
     assert str(error) == "summary: unknown field"
+
+
+def test_benchmark_manifest_rejects_invalid_observation_ids() -> None:
+    record = _two_field_benchmark_manifest_record()
+    record["observation_ids"] = []
+
+    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
+        "observation_ids must contain at least one observation id"
+    )
+
+    record["observation_ids"] = ["observation-1", "observation-1"]
+    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
+        "observation_ids must be unique"
+    )
+
+    record["observation_ids"] = [""]
+    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
+        "observation_ids must be nonempty"
+    )
 
 
 def test_benchmark_manifest_rejects_missing_or_conflicting_declaration_inputs() -> None:

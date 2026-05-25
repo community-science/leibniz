@@ -42,6 +42,11 @@ _benchmark_manifest_record = RecordSpec(
         "id": FieldSpec(kind="identifier"),
         "name": FieldSpec(kind="name", required=False),
         "outcome_space_id": FieldSpec(kind="identifier", required=False),
+        "observation_ids": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="string"),
+            required=False,
+        ),
         "declaration": FieldSpec(kind="record", required=False),
     }
 )
@@ -151,6 +156,7 @@ class BenchmarkManifest:
     id: ProtocolIdentifier
     name: ProtocolName
     declaration: BenchmarkDeclaration
+    observation_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -165,6 +171,15 @@ class BenchmarkManifest:
             raise BenchmarkManifestValidationError(
                 f"declaration id {self.declaration.id} does not match {self.id}"
             )
+        if self.observation_ids is not None:
+            if not self.observation_ids:
+                raise BenchmarkManifestValidationError(
+                    "observation_ids must contain at least one observation id"
+                )
+            if len(set(self.observation_ids)) != len(self.observation_ids):
+                raise BenchmarkManifestValidationError("observation_ids must be unique")
+            if any(not observation_id for observation_id in self.observation_ids):
+                raise BenchmarkManifestValidationError("observation_ids must be nonempty")
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> BenchmarkManifest:
@@ -180,6 +195,7 @@ class BenchmarkManifest:
             id=_as_identifier(validated["id"], field="id"),
             name=_manifest_name(validated),
             declaration=declaration,
+            observation_ids=_manifest_observation_ids(validated),
         )
 
     def validate_bundle(self, bundle: FiniteOutcomeScoringBundle) -> None:
@@ -187,13 +203,25 @@ class BenchmarkManifest:
             self.declaration.validate_bundle(bundle)
         except BenchmarkDeclarationValidationError as error:
             raise BenchmarkManifestValidationError(str(error)) from error
+        if (
+            self.observation_ids is not None
+            and bundle.raw_scoring_evidence.observation_id not in self.observation_ids
+        ):
+            raise BenchmarkManifestValidationError(
+                "observation_id "
+                f"{bundle.raw_scoring_evidence.observation_id!r} is not declared by "
+                f"{self.id}"
+            )
 
     def to_record(self) -> dict[str, object]:
-        return {
+        record: dict[str, object] = {
             "id": str(self.id),
             "name": str(self.name),
             "declaration": self.declaration.to_record(),
         }
+        if self.observation_ids is not None:
+            record["observation_ids"] = list(self.observation_ids)
+        return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +300,15 @@ def _manifest_declaration(validated: Mapping[str, object]) -> BenchmarkDeclarati
             f"{declaration.outcome_space_id}"
         )
     return declaration
+
+
+def _manifest_observation_ids(validated: Mapping[str, object]) -> tuple[str, ...] | None:
+    value = validated.get("observation_ids")
+    if value is None:
+        return None
+    if not isinstance(value, tuple):
+        raise BenchmarkManifestValidationError("observation_ids: expected parsed sequence")
+    return tuple(str(observation_id) for observation_id in cast(tuple[object, ...], value))
 
 
 def _manifest_mapping(value: object, *, field: str) -> Mapping[str, object]:
