@@ -206,10 +206,9 @@ class BenchmarkManifestDocument:
     @classmethod
     def from_bytes(cls, data: bytes) -> BenchmarkManifestDocument:
         try:
-            record = load_json_object_file(data)
+            record = load_json_object_file(data, description="manifest JSON file")
         except ContentEncodingError as error:
-            message = str(error).replace("JSON file", "manifest JSON file")
-            raise BenchmarkManifestValidationError(message) from error
+            raise BenchmarkManifestValidationError(str(error)) from error
         manifest = BenchmarkManifest.from_record(record)
         return cls(manifest=manifest, digest=ContentDigest.from_value(manifest.to_record()))
 

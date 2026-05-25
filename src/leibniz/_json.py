@@ -27,19 +27,19 @@ def canonical_json_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def load_json_object_file(data: bytes) -> _JsonObject:
+def load_json_object_file(data: bytes, *, description: str = "JSON file") -> _JsonObject:
     try:
         value = json.loads(data.decode("utf-8"))
     except UnicodeDecodeError as error:
-        raise ContentEncodingError("JSON file must be UTF-8") from error
+        raise ContentEncodingError(f"{description} must be UTF-8") from error
     except json.JSONDecodeError as error:
-        raise ContentEncodingError(f"invalid JSON file: {error.msg}") from error
+        raise ContentEncodingError(f"invalid {description}: {error.msg}") from error
     if not isinstance(value, Mapping):
-        raise ContentEncodingError("JSON file must contain an object")
+        raise ContentEncodingError(f"{description} must contain an object")
 
     normalized = _normalize_json(cast(Mapping[str, object], value), path=())
     if not isinstance(normalized, Mapping):
-        raise ContentEncodingError("JSON file must contain an object")
+        raise ContentEncodingError(f"{description} must contain an object")
     return cast(_JsonObject, normalized)
 
 

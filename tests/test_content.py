@@ -70,6 +70,21 @@ def test_json_object_file_loader_rejects_invalid_input() -> None:
     )
 
 
+def test_json_object_file_loader_uses_document_description() -> None:
+    assert_error(
+        lambda: load_json_object_file(b"\xff", description="manifest JSON file"),
+        "manifest JSON file must be UTF-8",
+    )
+    assert_error(
+        lambda: load_json_object_file(b"{", description="manifest JSON file"),
+        "invalid manifest JSON file: Expecting property name enclosed in double quotes",
+    )
+    assert_error(
+        lambda: load_json_object_file(b"[]", description="manifest JSON file"),
+        "manifest JSON file must contain an object",
+    )
+
+
 def test_canonical_json_and_digests_cover_finite_answer_records() -> None:
     space = AnswerSpace.from_record(
         {
