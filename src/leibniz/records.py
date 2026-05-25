@@ -83,44 +83,19 @@ class RecordSpec:
     fields: Mapping[str, FieldSpec]
     allow_unknown: bool = False
 
+    def validate(self, record: Mapping[str, object]) -> ValidatedRecord:
+        """Validate a data object against this record specification."""
 
-def validate_record(record: Mapping[str, object], spec: RecordSpec) -> ValidatedRecord:
-    """Validate a data object against a record specification."""
+        validated, violations = _validate_record(record=record, spec=self, path=())
+        if violations:
+            raise RecordValidationError(violations)
+        return validated
 
-    validated, violations = _validate_record(record=record, spec=spec, path=())
-    if violations:
-        raise RecordValidationError(violations)
-    return validated
+    def collect_violations(self, record: Mapping[str, object]) -> tuple[RecordViolation, ...]:
+        """Return specification violations without raising."""
 
-
-def collect_record_violations(
-    record: Mapping[str, object],
-    spec: RecordSpec,
-) -> tuple[RecordViolation, ...]:
-    """Return specification violations without raising."""
-
-    _, violations = _validate_record(record=record, spec=spec, path=())
-    return violations
-
-
-def required(
-    kind: FieldKind,
-    *,
-    literal: object = _UNSET,
-    item: FieldSpec | None = None,
-    record: RecordSpec | None = None,
-) -> FieldSpec:
-    return FieldSpec(kind=kind, required=True, literal=literal, item=item, record=record)
-
-
-def optional(
-    kind: FieldKind,
-    *,
-    literal: object = _UNSET,
-    item: FieldSpec | None = None,
-    record: RecordSpec | None = None,
-) -> FieldSpec:
-    return FieldSpec(kind=kind, required=False, literal=literal, item=item, record=record)
+        _, violations = _validate_record(record=record, spec=self, path=())
+        return violations
 
 
 def _validate_record(

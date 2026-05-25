@@ -270,13 +270,13 @@ def test_benchmark_manifest_document_expands_minimal_authoring_record() -> None:
 def test_benchmark_manifest_document_rejects_invalid_json() -> None:
     assert str(
         capture_manifest_error(lambda: BenchmarkManifestDocument.from_json_bytes(b"\xff"))
-    ) == "manifest JSON must be UTF-8"
+    ) == "manifest JSON file must be UTF-8"
     assert str(
         capture_manifest_error(lambda: BenchmarkManifestDocument.from_json_bytes(b"{"))
-    ) == "invalid manifest JSON: Expecting property name enclosed in double quotes"
+    ) == "invalid manifest JSON file: Expecting property name enclosed in double quotes"
     assert str(
         capture_manifest_error(lambda: BenchmarkManifestDocument.from_json_bytes(b"[]"))
-    ) == "manifest JSON must be an object"
+    ) == "manifest JSON file must contain an object"
 
 
 def test_benchmark_manifest_document_rejects_invalid_manifest_record() -> None:

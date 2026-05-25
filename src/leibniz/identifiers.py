@@ -144,18 +144,6 @@ class ProtocolIdentifier:
         return f"{self.name}{_IDENTIFIER_SEPARATOR}{self.version}"
 
 
-def parse_semantic_version(text: str) -> SemanticVersion:
-    return SemanticVersion.parse(text)
-
-
-def parse_protocol_identifier(text: str) -> ProtocolIdentifier:
-    return ProtocolIdentifier.parse(text)
-
-
-def require_unreleased_identifier(identifier: ProtocolIdentifier) -> ProtocolIdentifier:
-    return identifier.require_unreleased()
-
-
 def _split_identifiers(text: str | None) -> tuple[str, ...]:
     if text is None:
         return ()

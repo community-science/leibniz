@@ -130,7 +130,7 @@ def test_measurement_document_digest_is_stable_for_minimal_and_expanded_records(
 def test_measurement_document_rejects_invalid_json_input() -> None:
     assert (
         str(capture_measurement_error(lambda: MeasurementDocument.from_json_bytes(b"[]")))
-        == "measurement JSON must be an object"
+        == "measurement JSON file must contain an object"
     )
     assert str(
         capture_measurement_error(

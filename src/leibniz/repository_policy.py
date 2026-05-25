@@ -9,7 +9,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-__all__ = ["PolicyViolation"]
+__all__ = ["PolicyViolation", "RepositoryPolicy"]
 
 _FORBIDDEN_NAMES = frozenset(
     {
@@ -39,7 +39,15 @@ class PolicyViolation:
         return f"{self.path}: {self.message}"
 
 
-def validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]:
+class RepositoryPolicy:
+    """Repository-level checks for tracked paths."""
+
+    @staticmethod
+    def validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]:
+        return _validate_tracked_paths(paths)
+
+
+def _validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]:
     """Return policy violations for tracked repository-relative paths."""
 
     violations: list[PolicyViolation] = []
@@ -71,7 +79,7 @@ def validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]:
     return tuple(violations)
 
 
-def tracked_paths(root: Path) -> tuple[str, ...]:
+def _tracked_paths(root: Path) -> tuple[str, ...]:
     """Return Git-tracked paths below root."""
 
     result = subprocess.run(
@@ -85,7 +93,7 @@ def tracked_paths(root: Path) -> tuple[str, ...]:
     return tuple(path.decode("utf-8") for path in result.stdout.rstrip(b"\0").split(b"\0"))
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check tracked repository paths.")
     parser.add_argument(
         "root",
@@ -96,7 +104,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
-    violations = validate_tracked_paths(tracked_paths(root))
+    violations = _validate_tracked_paths(_tracked_paths(root))
     if not violations:
         return 0
 
@@ -110,4 +118,4 @@ def _has_forbidden_name(path: PurePosixPath) -> bool:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_main())
