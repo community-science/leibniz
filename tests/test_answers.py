@@ -1,8 +1,11 @@
+import math
 from collections.abc import Callable
 
 from leibniz.answers import (
     AcceptedEvent,
     AcceptedEventValidationError,
+    AcceptedMassScore,
+    AcceptedMassScoreError,
     AnswerElement,
     AnswerSpace,
     AnswerSpaceValidationError,
@@ -469,6 +472,128 @@ def test_probability_measure_rejects_malformed_records_and_tolerance() -> None:
     ) == "normalization tolerance must be finite and nonnegative"
 
 
+def test_accepted_mass_score_sums_event_probability_mass() -> None:
+    space = AnswerSpace.from_record(
+        {
+            "id": "core.boolean-answer@0.1.0",
+            "elements": [{"id": "yes"}, {"id": "no"}, {"id": "maybe"}],
+        }
+    )
+    event = AcceptedEvent.from_record(
+        {
+            "id": "core.boolean-accepted@0.1.0",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+            "elements": ["yes", "maybe"],
+        },
+        answer_space=space,
+    )
+    measure = FiniteProbabilityMeasure.from_record(
+        {
+            "id": "core.boolean-prediction@0.1.0",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+            "probabilities": [
+                {"element_id": "yes", "probability": 0.25},
+                {"element_id": "no", "probability": 0.5},
+                {"element_id": "maybe", "probability": 0.25},
+            ],
+        },
+        answer_space=space,
+    )
+
+    score = AcceptedMassScore.from_event_and_measure(event=event, measure=measure)
+
+    assert score == AcceptedMassScore(
+        accepted_mass=0.5,
+        negative_log_score=-math.log(0.5),
+    )
+
+
+def test_accepted_mass_score_handles_single_accepted_element() -> None:
+    space = AnswerSpace.from_record(
+        {
+            "id": "core.boolean-answer@0.1.0",
+            "elements": [{"id": "yes"}, {"id": "no"}],
+        }
+    )
+    event = AcceptedEvent.from_record(
+        {
+            "id": "core.boolean-accepted@0.1.0",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+            "elements": ["yes"],
+        },
+        answer_space=space,
+    )
+    measure = FiniteProbabilityMeasure.from_record(
+        {
+            "id": "core.boolean-prediction@0.1.0",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+            "probabilities": [
+                {"element_id": "yes", "probability": 0.8},
+                {"element_id": "no", "probability": 0.2},
+            ],
+        },
+        answer_space=space,
+    )
+
+    score = AcceptedMassScore.from_event_and_measure(event=event, measure=measure)
+
+    assert score == AcceptedMassScore(
+        accepted_mass=0.8,
+        negative_log_score=-math.log(0.8),
+    )
+
+
+def test_accepted_mass_score_treats_omitted_accepted_elements_as_zero_mass() -> None:
+    space = AnswerSpace.from_record(
+        {
+            "id": "core.boolean-answer@0.1.0",
+            "elements": [{"id": "yes"}, {"id": "no"}],
+        }
+    )
+    event = AcceptedEvent.from_record(
+        {
+            "id": "core.boolean-accepted@0.1.0",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+            "elements": ["yes"],
+        },
+        answer_space=space,
+    )
+    measure = FiniteProbabilityMeasure.from_record(
+        {
+            "id": "core.boolean-prediction@0.1.0",
+            "answer_space_id": "core.boolean-answer@0.1.0",
+            "probabilities": [{"element_id": "no", "probability": 1.0}],
+        },
+        answer_space=space,
+    )
+
+    score = AcceptedMassScore.from_event_and_measure(event=event, measure=measure)
+
+    assert score == AcceptedMassScore(accepted_mass=0.0, negative_log_score=math.inf)
+
+
+def test_accepted_mass_score_rejects_mismatched_answer_space() -> None:
+    event = AcceptedEvent(
+        id=ProtocolIdentifier.parse("core.boolean-accepted@0.1.0"),
+        answer_space_id=ProtocolIdentifier.parse("core.boolean-answer@0.1.0"),
+        elements=frozenset({"yes"}),
+    )
+    measure = FiniteProbabilityMeasure(
+        id=ProtocolIdentifier.parse("core.other-prediction@0.1.0"),
+        answer_space_id=ProtocolIdentifier.parse("core.other-answer@0.1.0"),
+        probabilities=(ProbabilityMass("yes", 1.0),),
+    )
+
+    error = capture_score_error(
+        lambda: AcceptedMassScore.from_event_and_measure(event=event, measure=measure)
+    )
+
+    assert str(error) == (
+        "accepted event answer_space_id core.boolean-answer@0.1.0 does not match "
+        "probability measure core.other-answer@0.1.0"
+    )
+
+
 def capture_answer_error(call: Callable[[], object]) -> AnswerSpaceValidationError:
     try:
         call()
@@ -491,6 +616,14 @@ def capture_measure_error(call: Callable[[], object]) -> ProbabilityMeasureValid
     except ProbabilityMeasureValidationError as error:
         return error
     raise AssertionError("expected ProbabilityMeasureValidationError")
+
+
+def capture_score_error(call: Callable[[], object]) -> AcceptedMassScoreError:
+    try:
+        call()
+    except AcceptedMassScoreError as error:
+        return error
+    raise AssertionError("expected AcceptedMassScoreError")
 
 
 def _boolean_space() -> AnswerSpace:

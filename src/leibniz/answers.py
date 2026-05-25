@@ -61,6 +61,10 @@ class ProbabilityMeasureValidationError(ValueError):
     """Raised when a finite probability measure is invalid."""
 
 
+class AcceptedMassScoreError(ValueError):
+    """Raised when accepted-mass scoring inputs are invalid."""
+
+
 @dataclass(frozen=True, slots=True)
 class AnswerElement:
     """One possible answer inside a finite answer space."""
@@ -326,6 +330,41 @@ class FiniteProbabilityMeasure:
                 for mass in sorted(self.probabilities, key=lambda item: item.element_id)
             ],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptedMassScore:
+    """Accepted probability mass and negative-log score for one event."""
+
+    accepted_mass: float
+    negative_log_score: float
+
+    @classmethod
+    def from_event_and_measure(
+        cls,
+        *,
+        event: AcceptedEvent,
+        measure: FiniteProbabilityMeasure,
+    ) -> AcceptedMassScore:
+        if event.answer_space_id != measure.answer_space_id:
+            raise AcceptedMassScoreError(
+                "accepted event answer_space_id "
+                f"{event.answer_space_id} does not match probability measure "
+                f"{measure.answer_space_id}"
+            )
+
+        accepted_mass = math.fsum(
+            measure.probability_of(element_id) for element_id in event.elements
+        )
+        if accepted_mass < 0:
+            raise AcceptedMassScoreError("accepted mass must be nonnegative")
+        if accepted_mass > 1.0 + measure.normalization_tolerance:
+            raise AcceptedMassScoreError(
+                "accepted mass must not exceed 1 within measure normalization tolerance"
+            )
+        if accepted_mass == 0.0:
+            return cls(accepted_mass=0.0, negative_log_score=math.inf)
+        return cls(accepted_mass=accepted_mass, negative_log_score=-math.log(accepted_mass))
 
 
 def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
