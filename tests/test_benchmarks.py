@@ -239,7 +239,7 @@ def test_benchmark_manifest_digest_is_stable() -> None:
 
 
 def test_benchmark_manifest_document_loads_json_bytes_with_digest() -> None:
-    document = BenchmarkManifestDocument.from_json_bytes(
+    document = BenchmarkManifestDocument.from_bytes(
         b"""{
             "name": "core.boolean-benchmark",
             "id": "core.boolean-benchmark@0.1.0",
@@ -259,7 +259,7 @@ def test_benchmark_manifest_document_loads_json_bytes_with_digest() -> None:
 
 
 def test_benchmark_manifest_document_expands_minimal_authoring_record() -> None:
-    document = BenchmarkManifestDocument.from_json_bytes(
+    document = BenchmarkManifestDocument.from_bytes(
         _json_bytes(_two_field_benchmark_manifest_record())
     )
 
@@ -269,13 +269,13 @@ def test_benchmark_manifest_document_expands_minimal_authoring_record() -> None:
 
 def test_benchmark_manifest_document_rejects_invalid_json() -> None:
     assert str(
-        capture_manifest_error(lambda: BenchmarkManifestDocument.from_json_bytes(b"\xff"))
+        capture_manifest_error(lambda: BenchmarkManifestDocument.from_bytes(b"\xff"))
     ) == "manifest JSON file must be UTF-8"
     assert str(
-        capture_manifest_error(lambda: BenchmarkManifestDocument.from_json_bytes(b"{"))
+        capture_manifest_error(lambda: BenchmarkManifestDocument.from_bytes(b"{"))
     ) == "invalid manifest JSON file: Expecting property name enclosed in double quotes"
     assert str(
-        capture_manifest_error(lambda: BenchmarkManifestDocument.from_json_bytes(b"[]"))
+        capture_manifest_error(lambda: BenchmarkManifestDocument.from_bytes(b"[]"))
     ) == "manifest JSON file must contain an object"
 
 
@@ -284,15 +284,15 @@ def test_benchmark_manifest_document_rejects_invalid_manifest_record() -> None:
     record["name"] = "core.other-benchmark"
 
     error = capture_manifest_error(
-        lambda: BenchmarkManifestDocument.from_json_bytes(_json_bytes(record))
+        lambda: BenchmarkManifestDocument.from_bytes(_json_bytes(record))
     )
 
     assert str(error) == "name core.other-benchmark does not match id name core.boolean-benchmark"
 
 
 def test_benchmark_manifest_document_digest_is_stable() -> None:
-    left = BenchmarkManifestDocument.from_json_bytes(_json_bytes(_benchmark_manifest_record()))
-    right = BenchmarkManifestDocument.from_json_bytes(
+    left = BenchmarkManifestDocument.from_bytes(_json_bytes(_benchmark_manifest_record()))
+    right = BenchmarkManifestDocument.from_bytes(
         _json_bytes(_two_field_benchmark_manifest_record())
     )
 

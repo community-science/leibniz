@@ -113,15 +113,15 @@ def test_measurement_record_rejects_malformed_records_and_state_paths() -> None:
 
 
 def test_measurement_document_loads_json_bytes_with_digest() -> None:
-    document = MeasurementDocument.from_json_bytes(_json_bytes(_measurement_record()))
+    document = MeasurementDocument.from_bytes(_json_bytes(_measurement_record()))
 
     assert document.measurement.to_record() == _expanded_measurement_record()
     assert document.digest == ContentDigest.from_value(_expanded_measurement_record())
 
 
 def test_measurement_document_digest_is_stable_for_minimal_and_expanded_records() -> None:
-    minimal = MeasurementDocument.from_json_bytes(_json_bytes(_measurement_record()))
-    expanded = MeasurementDocument.from_json_bytes(_json_bytes(_expanded_measurement_record()))
+    minimal = MeasurementDocument.from_bytes(_json_bytes(_measurement_record()))
+    expanded = MeasurementDocument.from_bytes(_json_bytes(_expanded_measurement_record()))
 
     assert minimal.measurement.to_record() == expanded.measurement.to_record()
     assert minimal.digest == expanded.digest
@@ -129,12 +129,12 @@ def test_measurement_document_digest_is_stable_for_minimal_and_expanded_records(
 
 def test_measurement_document_rejects_invalid_json_input() -> None:
     assert (
-        str(capture_measurement_error(lambda: MeasurementDocument.from_json_bytes(b"[]")))
+        str(capture_measurement_error(lambda: MeasurementDocument.from_bytes(b"[]")))
         == "measurement JSON file must contain an object"
     )
     assert str(
         capture_measurement_error(
-            lambda: MeasurementDocument.from_json_bytes(b'{"benchmark_id": false}')
+            lambda: MeasurementDocument.from_bytes(b'{"benchmark_id": false}')
         )
     ) == "benchmark_id: expected identifier string; scoring_bundle: missing required field"
 

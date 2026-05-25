@@ -6,10 +6,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
-from leibniz._files import load_json_object_file
+from leibniz._json import load_json_object_file
 from leibniz.answers import FiniteAnswerScoringBundle
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestValidationError
-from leibniz.content import CanonicalJsonError, ContentDigest
+from leibniz.content import ContentDigest, ContentEncodingError
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.records import FieldSpec, RecordSpec
 
@@ -87,10 +87,10 @@ class MeasurementDocument:
     digest: ContentDigest
 
     @classmethod
-    def from_json_bytes(cls, data: bytes) -> MeasurementDocument:
+    def from_bytes(cls, data: bytes) -> MeasurementDocument:
         try:
             record = load_json_object_file(data)
-        except CanonicalJsonError as error:
+        except ContentEncodingError as error:
             message = str(error).replace("JSON file", "measurement JSON file")
             raise MeasurementRecordValidationError(message) from error
         measurement = MeasurementRecord.from_record(record)

@@ -2,7 +2,7 @@ import math
 from collections.abc import Callable
 
 import leibniz.content as content
-from leibniz._files import load_json_object_file
+from leibniz._json import canonical_json_bytes, load_json_object_file
 from leibniz.answers import (
     AcceptedEvent,
     AnswerSpace,
@@ -10,16 +10,15 @@ from leibniz.answers import (
     ProbabilityMass,
     RawScoringEvidence,
 )
-from leibniz.content import CanonicalJson, CanonicalJsonError, ContentDigest
+from leibniz.content import ContentDigest, ContentEncodingError
 from leibniz.identifiers import ProtocolIdentifier
 
 
-def test_canonical_json_is_stable_for_mapping_order() -> None:
+def test_content_digest_is_stable_for_mapping_order() -> None:
     left = {"b": 2, "a": [{"z": "last", "m": "middle"}]}
     right = {"a": [{"m": "middle", "z": "last"}], "b": 2}
 
-    assert bytes(CanonicalJson.from_value(left)) == b'{"a":[{"m":"middle","z":"last"}],"b":2}'
-    assert CanonicalJson.from_value(left) == CanonicalJson.from_value(right)
+    assert canonical_json_bytes(left) == b'{"a":[{"m":"middle","z":"last"}],"b":2}'
     assert ContentDigest.from_value(left) == ContentDigest.from_value(right)
 
 
@@ -28,21 +27,22 @@ def test_content_digest_formats_sha256_digest() -> None:
 
     assert digest == ContentDigest(algorithm="sha256", hex=digest.hex)
     assert str(digest) == f"sha256:{digest.hex}"
-    assert CanonicalJson.from_value({"id": "core.example@0.1.0"}).digest() == digest
 
 
-def test_canonical_json_rejects_values_that_json_cannot_represent() -> None:
-    assert_error(lambda: CanonicalJson.from_value({"score": math.inf}), "score: nonfinite number")
+def test_content_digest_rejects_values_that_cannot_be_encoded() -> None:
+    assert_error(lambda: ContentDigest.from_value({"score": math.inf}), "score: nonfinite number")
     assert_error(
-        lambda: CanonicalJson.from_value({1: "one"}), "<value>: object key must be string"
+        lambda: ContentDigest.from_value({1: "one"}), "<value>: object key must be string"
     )
     assert_error(
-        lambda: CanonicalJson.from_value({"items": (object(),)}),
+        lambda: ContentDigest.from_value({"items": (object(),)}),
         "items.0: unsupported JSON value",
     )
 
 
 def test_json_object_file_loading_is_internal() -> None:
+    assert "CanonicalJson" not in content.__all__
+    assert "CanonicalJsonError" not in content.__all__
     assert "JsonDocument" not in content.__all__
     assert "JsonObject" not in content.__all__
     assert "JsonScalar" not in content.__all__
@@ -108,7 +108,6 @@ def test_canonical_json_and_digests_cover_finite_answer_records() -> None:
     ]
 
     for record in records:
-        assert CanonicalJson.from_value(record).data
         assert str(ContentDigest.from_value(record)).startswith("sha256:")
 
     reordered_space_record = {
@@ -123,7 +122,7 @@ def test_canonical_json_and_digests_cover_finite_answer_records() -> None:
 def assert_error(call: Callable[[], object], message: str) -> None:
     try:
         call()
-    except CanonicalJsonError as error:
+    except ContentEncodingError as error:
         assert str(error) == message
         return
-    raise AssertionError("expected CanonicalJsonError")
+    raise AssertionError("expected ContentEncodingError")
