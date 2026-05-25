@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import cast
 
 from leibniz.identifiers import ProtocolIdentifier, require_unreleased_identifier
-from leibniz.records import RecordSpec, RecordValidationError, required, validate_record
+from leibniz.records import RecordSpec, RecordValidationError, optional, required, validate_record
 
 __all__ = [
     "AcceptedEvent",
@@ -77,10 +77,23 @@ _raw_scoring_evidence_base_record = RecordSpec(
 )
 _finite_answer_scoring_bundle_record = RecordSpec(
     fields={
+        "id": optional("identifier"),
+        "observation_id": optional("string"),
         "answer_space": required("record"),
         "accepted_event": required("record"),
         "probability_measure": required("record"),
-        "raw_scoring_evidence": required("record"),
+        "raw_scoring_evidence": optional("record"),
+    },
+    allow_unknown=True,
+)
+_finite_answer_scoring_bundle_expected_fields = frozenset(
+    {
+        "id",
+        "observation_id",
+        "answer_space",
+        "accepted_event",
+        "probability_measure",
+        "raw_scoring_evidence",
     }
 )
 
@@ -629,11 +642,11 @@ class FiniteAnswerScoringBundle:
                 ),
                 answer_space=answer_space,
             )
-            raw_scoring_evidence = RawScoringEvidence.from_record(
-                _bundle_mapping(
-                    validated["raw_scoring_evidence"],
-                    field="raw_scoring_evidence",
-                )
+            raw_scoring_evidence = _bundle_raw_scoring_evidence(
+                record=record,
+                validated=validated,
+                accepted_event=accepted_event,
+                probability_measure=probability_measure,
             )
         except ValueError as error:
             raise FiniteAnswerScoringBundleValidationError(str(error)) from error
@@ -669,6 +682,61 @@ def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
     if not isinstance(value, ProtocolIdentifier):
         raise AnswerSpaceValidationError(f"{field}: expected parsed identifier")
     return value
+
+
+def _bundle_raw_scoring_evidence(
+    *,
+    record: Mapping[str, object],
+    validated: Mapping[str, object],
+    accepted_event: AcceptedEvent,
+    probability_measure: FiniteProbabilityMeasure,
+) -> RawScoringEvidence:
+    unknown_fields = tuple(
+        sorted(
+            field
+            for field in record
+            if field not in _finite_answer_scoring_bundle_expected_fields
+        )
+    )
+    if unknown_fields:
+        raise FiniteAnswerScoringBundleValidationError(f"{unknown_fields[0]}: unknown field")
+
+    raw_value = validated.get("raw_scoring_evidence")
+    explicit: RawScoringEvidence | None = None
+    if raw_value is not None:
+        explicit = RawScoringEvidence.from_record(
+            _bundle_mapping(
+                raw_value,
+                field="raw_scoring_evidence",
+            )
+        )
+
+    evidence_id = validated.get("id")
+    observation_id = validated.get("observation_id")
+    if evidence_id is None:
+        if explicit is None:
+            raise FiniteAnswerScoringBundleValidationError("id: missing required field")
+        evidence_id = explicit.id
+    if observation_id is None:
+        if explicit is None:
+            raise FiniteAnswerScoringBundleValidationError(
+                "observation_id: missing required field"
+            )
+        observation_id = explicit.observation_id
+
+    derived = RawScoringEvidence.from_event_and_measure(
+        id=_as_identifier(evidence_id, field="id"),
+        observation_id=str(observation_id),
+        event=accepted_event,
+        measure=probability_measure,
+    )
+    if explicit is None:
+        return derived
+    if explicit != derived:
+        raise FiniteAnswerScoringBundleValidationError(
+            "raw_scoring_evidence must equal derived scoring evidence"
+        )
+    return explicit
 
 
 def _bundle_mapping(value: object, *, field: str) -> Mapping[str, object]:

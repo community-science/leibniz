@@ -811,6 +811,13 @@ def test_finite_answer_scoring_bundle_parses_complete_object_graph() -> None:
     assert bundle.to_record() == _boolean_bundle_record()
 
 
+def test_finite_answer_scoring_bundle_derives_raw_evidence_from_minimal_record() -> None:
+    bundle = FiniteAnswerScoringBundle.from_record(_minimal_boolean_bundle_record())
+
+    assert bundle == FiniteAnswerScoringBundle.from_record(_boolean_bundle_record())
+    assert bundle.to_record() == _boolean_bundle_record()
+
+
 def test_finite_answer_scoring_bundle_rejects_dangling_references() -> None:
     record = _boolean_bundle_record()
     raw_scoring_evidence = dict(
@@ -821,10 +828,7 @@ def test_finite_answer_scoring_bundle_rejects_dangling_references() -> None:
 
     error = capture_bundle_error(lambda: FiniteAnswerScoringBundle.from_record(record))
 
-    assert str(error) == (
-        "raw_scoring_evidence.accepted_event_id core.other-accepted@0.1.0 "
-        "does not match core.boolean-accepted@0.1.0"
-    )
+    assert str(error) == "raw_scoring_evidence must equal derived scoring evidence"
 
 
 def test_finite_answer_scoring_bundle_recomputes_score_from_event_and_measure() -> None:
@@ -838,9 +842,24 @@ def test_finite_answer_scoring_bundle_recomputes_score_from_event_and_measure() 
 
     error = capture_bundle_error(lambda: FiniteAnswerScoringBundle.from_record(record))
 
-    assert str(error) == (
-        "raw_scoring_evidence.accepted_mass must equal recomputed accepted mass"
-    )
+    assert str(error) == "raw_scoring_evidence must equal derived scoring evidence"
+
+
+def test_finite_answer_scoring_bundle_rejects_conflicting_minimal_and_raw_evidence() -> None:
+    record = _minimal_boolean_bundle_record()
+    record["raw_scoring_evidence"] = {
+        "id": "core.other-evidence@0.1.0",
+        "observation_id": "observation-1",
+        "answer_space_id": "core.boolean-answer@0.1.0",
+        "accepted_event_id": "core.boolean-accepted@0.1.0",
+        "probability_measure_id": "core.boolean-prediction@0.1.0",
+        "accepted_mass": 0.75,
+        "negative_log_score": -math.log(0.75),
+    }
+
+    error = capture_bundle_error(lambda: FiniteAnswerScoringBundle.from_record(record))
+
+    assert str(error) == "raw_scoring_evidence must equal derived scoring evidence"
 
 
 def test_finite_answer_scoring_bundle_digest_is_stable() -> None:
@@ -862,6 +881,22 @@ def test_finite_answer_scoring_bundle_rejects_malformed_records() -> None:
     error = capture_bundle_error(lambda: FiniteAnswerScoringBundle.from_record(record))
 
     assert str(error) == "summary: unknown field"
+
+
+def test_finite_answer_scoring_bundle_rejects_missing_evidence_identity() -> None:
+    record = _minimal_boolean_bundle_record()
+    del record["id"]
+
+    assert str(
+        capture_bundle_error(lambda: FiniteAnswerScoringBundle.from_record(record))
+    ) == "id: missing required field"
+
+    record = _minimal_boolean_bundle_record()
+    del record["observation_id"]
+
+    assert str(
+        capture_bundle_error(lambda: FiniteAnswerScoringBundle.from_record(record))
+    ) == "observation_id: missing required field"
 
 
 def capture_answer_error(call: Callable[[], object]) -> AnswerSpaceValidationError:
@@ -949,3 +984,11 @@ def _boolean_bundle_record() -> dict[str, object]:
             "negative_log_score": -math.log(0.75),
         },
     }
+
+
+def _minimal_boolean_bundle_record() -> dict[str, object]:
+    record = _boolean_bundle_record()
+    raw_scoring_evidence = cast(Mapping[str, object], record.pop("raw_scoring_evidence"))
+    record["id"] = raw_scoring_evidence["id"]
+    record["observation_id"] = raw_scoring_evidence["observation_id"]
+    return record
