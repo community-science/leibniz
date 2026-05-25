@@ -21,7 +21,7 @@ protocol with clear artifacts and rigorous design boundaries.
 Each nontrivial pull request should explain:
 
 - Purpose: what protocol or implementation capability it adds.
-- Boundary: what is included and what is explicitly not included.
+- Boundary: what contract the change establishes.
 - Public surface: modules, schemas, commands, identifiers, or durable files.
 - Dependencies: earlier pull requests or design decisions it relies on.
 - Tests: what was tested and what contract those tests prove.

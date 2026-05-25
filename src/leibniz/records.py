@@ -41,7 +41,7 @@ FieldKind: TypeAlias = ScalarKind | Literal[
 ]
 RecordValue: TypeAlias = object
 ValidatedRecord: TypeAlias = Mapping[str, RecordValue]
-_UNSET = object()
+_unset = object()
 
 
 class RecordValidationError(ValueError):
@@ -71,7 +71,7 @@ class FieldSpec:
 
     kind: FieldKind
     required: bool = True
-    literal: object = _UNSET
+    literal: object = _unset
     item: FieldSpec | None = None
     record: RecordSpec | None = None
 
@@ -141,7 +141,7 @@ def _validate_value(
     path: tuple[str, ...],
 ) -> tuple[RecordValue, tuple[RecordViolation, ...]]:
     if spec.kind == "literal":
-        if spec.literal is _UNSET:
+        if spec.literal is _unset:
             return value, (RecordViolation(path=path, message="missing literal value"),)
         if value == spec.literal:
             return value, ()
