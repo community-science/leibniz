@@ -1,8 +1,11 @@
 import math
+import re
 from collections.abc import Callable
+from pathlib import Path
 
 import leibniz.content as content
-from leibniz._json import canonical_json_bytes, load_json_object_file
+from leibniz._documents import canonical_document_bytes, load_object_document
+from leibniz._formats._json import canonical_json_bytes, load_json_object_file
 from leibniz.answers import (
     AcceptedEvent,
     AnswerSpace,
@@ -12,6 +15,12 @@ from leibniz.answers import (
 )
 from leibniz.content import ContentDigest, ContentEncodingError
 from leibniz.identifiers import ProtocolIdentifier
+
+_SOURCE_ROOT = Path(__file__).parents[1] / "src" / "leibniz"
+_FORMAT_BOUNDARY_FILES = {
+    _SOURCE_ROOT / "_documents.py",
+    _SOURCE_ROOT / "_formats" / "_json.py",
+}
 
 
 def test_content_digest_is_stable_for_mapping_order() -> None:
@@ -48,6 +57,7 @@ def test_json_object_file_loading_is_internal() -> None:
     assert "JsonScalar" not in content.__all__
     assert "JsonValue" not in content.__all__
     assert "load_json_object_file" not in content.__all__
+    assert "load_object_document" not in content.__all__
 
 
 def test_json_object_file_loader_decodes_objects() -> None:
@@ -83,6 +93,35 @@ def test_json_object_file_loader_uses_document_description() -> None:
         lambda: load_json_object_file(b"[]", description="manifest JSON file"),
         "manifest JSON file must contain an object",
     )
+
+
+def test_object_document_loader_delegates_to_current_format() -> None:
+    assert load_object_document(
+        b'{"b":2,"a":{"z":3}}',
+        description="manifest document",
+    ) == {
+        "a": {"z": 3},
+        "b": 2,
+    }
+    assert_error(
+        lambda: load_object_document(b"[]", description="manifest document"),
+        "manifest document must contain an object",
+    )
+
+
+def test_canonical_document_bytes_delegate_to_current_format() -> None:
+    assert canonical_document_bytes({"b": 2, "a": 1}) == b'{"a":1,"b":2}'
+
+
+def test_source_mentions_json_only_at_document_format_boundary() -> None:
+    offenders = tuple(
+        path.relative_to(_SOURCE_ROOT.parents[1])
+        for path in sorted(_SOURCE_ROOT.rglob("*.py"))
+        if path not in _FORMAT_BOUNDARY_FILES
+        and re.search(r"\bjson\b|\bJSON\b|_json", path.read_text(encoding="utf-8"))
+    )
+
+    assert offenders == ()
 
 
 def test_canonical_json_and_digests_cover_finite_answer_records() -> None:

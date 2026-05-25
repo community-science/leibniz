@@ -112,7 +112,7 @@ def test_measurement_record_rejects_malformed_records_and_state_paths() -> None:
     ) == "local_path: unknown field"
 
 
-def test_measurement_document_loads_json_bytes_with_digest() -> None:
+def test_measurement_document_loads_bytes_with_digest() -> None:
     document = MeasurementDocument.from_bytes(_json_bytes(_measurement_record()))
 
     assert document.measurement.to_record() == _expanded_measurement_record()
@@ -127,10 +127,10 @@ def test_measurement_document_digest_is_stable_for_minimal_and_expanded_records(
     assert minimal.digest == expanded.digest
 
 
-def test_measurement_document_rejects_invalid_json_input() -> None:
+def test_measurement_document_rejects_invalid_document_bytes() -> None:
     assert (
         str(capture_measurement_error(lambda: MeasurementDocument.from_bytes(b"[]")))
-        == "measurement JSON file must contain an object"
+        == "measurement document must contain an object"
     )
     assert str(
         capture_measurement_error(

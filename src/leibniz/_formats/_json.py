@@ -7,13 +7,11 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias, cast
 
+from leibniz._documents import ContentEncodingError
+
 _JsonScalar: TypeAlias = None | bool | int | float | str
 _JsonValue: TypeAlias = _JsonScalar | Mapping[str, "_JsonValue"] | Sequence["_JsonValue"]
 _JsonObject: TypeAlias = Mapping[str, _JsonValue]
-
-
-class ContentEncodingError(ValueError):
-    """Raised when a value cannot be encoded for stable content identity."""
 
 
 def canonical_json_bytes(value: object) -> bytes:

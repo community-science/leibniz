@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from leibniz._json import ContentEncodingError, canonical_json_bytes
+from leibniz._documents import ContentEncodingError, canonical_document_bytes
 
 __all__ = [
     "ContentEncodingError",
@@ -33,5 +33,5 @@ class ContentDigest:
 
     @classmethod
     def from_value(cls, value: object) -> ContentDigest:
-        digest = hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+        digest = hashlib.sha256(canonical_document_bytes(value)).hexdigest()
         return cls(algorithm="sha256", hex=digest)
