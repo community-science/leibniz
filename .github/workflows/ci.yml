@@ -120,7 +120,7 @@ jobs:
           use-only-tar-bz2: true
 
       - name: Run repository policy checks
-        run: python -m leibniz.repository_policy .
+        run: python -m leibniz._repository_policy .
 
   package:
     name: Build and import package
