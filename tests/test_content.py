@@ -6,15 +6,15 @@ from pathlib import Path
 import leibniz.content as content
 from leibniz._documents import canonical_document_bytes, load_object_document
 from leibniz._formats._json import canonical_json_bytes, load_json_object_file
-from leibniz.answers import (
+from leibniz.content import ContentDigest, ContentEncodingError
+from leibniz.identifiers import ProtocolIdentifier
+from leibniz.outcomes import (
     AcceptedEvent,
-    AnswerSpace,
     FiniteProbabilityMeasure,
+    OutcomeSpace,
     ProbabilityMass,
     RawScoringEvidence,
 )
-from leibniz.content import ContentDigest, ContentEncodingError
-from leibniz.identifiers import ProtocolIdentifier
 
 _SOURCE_ROOT = Path(__file__).parents[1] / "src" / "leibniz"
 _FORMAT_BOUNDARY_FILES = {
@@ -124,30 +124,30 @@ def test_source_mentions_json_only_at_document_format_boundary() -> None:
     assert offenders == ()
 
 
-def test_canonical_json_and_digests_cover_finite_answer_records() -> None:
-    space = AnswerSpace.from_record(
+def test_canonical_json_and_digests_cover_finite_outcome_records() -> None:
+    space = OutcomeSpace.from_record(
         {
-            "elements": [{"id": "yes"}, {"id": "no"}],
-            "id": "core.boolean-answer@0.1.0",
+            "outcomes": [{"id": "yes"}, {"id": "no"}],
+            "id": "core.boolean-outcome@0.1.0",
         }
     )
     event = AcceptedEvent.from_record(
         {
-            "elements": ["yes"],
-            "answer_space_id": "core.boolean-answer@0.1.0",
+            "outcomes": ["yes"],
+            "outcome_space_id": "core.boolean-outcome@0.1.0",
             "id": "core.boolean-accepted@0.1.0",
         },
-        answer_space=space,
+        outcome_space=space,
     )
     measure = FiniteProbabilityMeasure(
         id=ProtocolIdentifier.parse("core.boolean-prediction@0.1.0"),
-        answer_space_id=ProtocolIdentifier.parse("core.boolean-answer@0.1.0"),
+        outcome_space_id=ProtocolIdentifier.parse("core.boolean-outcome@0.1.0"),
         probabilities=(ProbabilityMass("no", 0.25), ProbabilityMass("yes", 0.75)),
     )
     evidence = RawScoringEvidence(
         id=ProtocolIdentifier.parse("core.boolean-evidence@0.1.0"),
         observation_id="observation-1",
-        answer_space_id=ProtocolIdentifier.parse("core.boolean-answer@0.1.0"),
+        outcome_space_id=ProtocolIdentifier.parse("core.boolean-outcome@0.1.0"),
         accepted_event_id=ProtocolIdentifier.parse("core.boolean-accepted@0.1.0"),
         probability_measure_id=ProtocolIdentifier.parse("core.boolean-prediction@0.1.0"),
         accepted_mass=0.75,
@@ -165,8 +165,8 @@ def test_canonical_json_and_digests_cover_finite_answer_records() -> None:
         assert str(ContentDigest.from_value(record)).startswith("sha256:")
 
     reordered_space_record = {
-        "elements": [{"id": "yes"}, {"id": "no"}],
-        "id": "core.boolean-answer@0.1.0",
+        "outcomes": [{"id": "yes"}, {"id": "no"}],
+        "id": "core.boolean-outcome@0.1.0",
     }
     assert ContentDigest.from_value(space.to_record()) == ContentDigest.from_value(
         reordered_space_record

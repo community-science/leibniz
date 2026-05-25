@@ -1,4 +1,4 @@
-"""Measurement records for finite-answer scoring evidence."""
+"""Measurement records for finite-outcome scoring evidence."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from typing import cast
 
 from leibniz._documents import ContentEncodingError, load_object_document
-from leibniz.answers import FiniteAnswerScoringBundle
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestValidationError
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
+from leibniz.outcomes import FiniteOutcomeScoringBundle
 from leibniz.records import FieldSpec, RecordSpec
 
 __all__ = [
@@ -33,10 +33,10 @@ class MeasurementRecordValidationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class MeasurementRecord:
-    """A durable finite-answer measurement for one benchmark observation."""
+    """A durable finite-outcome measurement for one benchmark observation."""
 
     benchmark_id: ProtocolIdentifier
-    scoring_bundle: FiniteAnswerScoringBundle
+    scoring_bundle: FiniteOutcomeScoringBundle
 
     def __post_init__(self) -> None:
         try:
@@ -48,7 +48,7 @@ class MeasurementRecord:
     def from_record(cls, record: Mapping[str, object]) -> MeasurementRecord:
         try:
             validated = _measurement_record.validate(record)
-            scoring_bundle = FiniteAnswerScoringBundle.from_record(
+            scoring_bundle = FiniteOutcomeScoringBundle.from_record(
                 _as_mapping(validated["scoring_bundle"], field="scoring_bundle")
             )
         except ValueError as error:

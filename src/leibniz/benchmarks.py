@@ -1,4 +1,4 @@
-"""Benchmark declarations for finite-answer scoring."""
+"""Benchmark declarations for finite-outcome scoring."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from typing import cast
 
 from leibniz._documents import ContentEncodingError, load_object_document
-from leibniz.answers import FiniteAnswerScoringBundle
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
+from leibniz.outcomes import FiniteOutcomeScoringBundle
 from leibniz.records import FieldSpec, RecordSpec, RecordValidationError
 
 __all__ = [
@@ -20,17 +20,17 @@ __all__ = [
     "BenchmarkManifestValidationError",
 ]
 
-_oracle_acceptance_id = ProtocolIdentifier.parse("core.finite-answer-accepted-event@0.1.0")
+_oracle_acceptance_id = ProtocolIdentifier.parse("core.finite-outcome-accepted-event@0.1.0")
 _prediction_interface_id = ProtocolIdentifier.parse(
     "core.finite-probability-measure-prediction@0.1.0"
 )
 _score_functional_id = ProtocolIdentifier.parse("core.negative-log-accepted-mass@0.1.0")
-_evidence_bundle_id = ProtocolIdentifier.parse("core.finite-answer-scoring-bundle@0.1.0")
+_evidence_bundle_id = ProtocolIdentifier.parse("core.finite-outcome-scoring-bundle@0.1.0")
 
 _benchmark_declaration_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
-        "answer_space_id": FieldSpec(kind="identifier"),
+        "outcome_space_id": FieldSpec(kind="identifier"),
         "oracle_acceptance_id": FieldSpec(kind="identifier", required=False),
         "prediction_interface_id": FieldSpec(kind="identifier", required=False),
         "score_functional_id": FieldSpec(kind="identifier", required=False),
@@ -41,7 +41,7 @@ _benchmark_manifest_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
         "name": FieldSpec(kind="name", required=False),
-        "answer_space_id": FieldSpec(kind="identifier", required=False),
+        "outcome_space_id": FieldSpec(kind="identifier", required=False),
         "declaration": FieldSpec(kind="record", required=False),
     }
 )
@@ -57,10 +57,10 @@ class BenchmarkManifestValidationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkDeclaration:
-    """A finite-answer benchmark scoring declaration."""
+    """A finite-outcome benchmark scoring declaration."""
 
     id: ProtocolIdentifier
-    answer_space_id: ProtocolIdentifier
+    outcome_space_id: ProtocolIdentifier
     oracle_acceptance_id: ProtocolIdentifier = _oracle_acceptance_id
     prediction_interface_id: ProtocolIdentifier = _prediction_interface_id
     score_functional_id: ProtocolIdentifier = _score_functional_id
@@ -100,9 +100,9 @@ class BenchmarkDeclaration:
             raise BenchmarkDeclarationValidationError(str(error)) from error
         return cls(
             id=_as_identifier(validated["id"], field="id"),
-            answer_space_id=_as_identifier(
-                validated["answer_space_id"],
-                field="answer_space_id",
+            outcome_space_id=_as_identifier(
+                validated["outcome_space_id"],
+                field="outcome_space_id",
             ),
             oracle_acceptance_id=_as_identifier_or_default(
                 validated.get("oracle_acceptance_id"),
@@ -126,17 +126,17 @@ class BenchmarkDeclaration:
             ),
         )
 
-    def validate_bundle(self, bundle: FiniteAnswerScoringBundle) -> None:
-        if bundle.answer_space.id != self.answer_space_id:
+    def validate_bundle(self, bundle: FiniteOutcomeScoringBundle) -> None:
+        if bundle.outcome_space.id != self.outcome_space_id:
             raise BenchmarkDeclarationValidationError(
-                f"bundle answer_space_id {bundle.answer_space.id} does not match "
-                f"{self.answer_space_id}"
+                f"bundle outcome_space_id {bundle.outcome_space.id} does not match "
+                f"{self.outcome_space_id}"
             )
 
     def to_record(self) -> dict[str, object]:
         return {
             "id": str(self.id),
-            "answer_space_id": str(self.answer_space_id),
+            "outcome_space_id": str(self.outcome_space_id),
             "oracle_acceptance_id": str(self.oracle_acceptance_id),
             "prediction_interface_id": str(self.prediction_interface_id),
             "score_functional_id": str(self.score_functional_id),
@@ -182,7 +182,7 @@ class BenchmarkManifest:
             declaration=declaration,
         )
 
-    def validate_bundle(self, bundle: FiniteAnswerScoringBundle) -> None:
+    def validate_bundle(self, bundle: FiniteOutcomeScoringBundle) -> None:
         try:
             self.declaration.validate_bundle(bundle)
         except BenchmarkDeclarationValidationError as error:
@@ -246,30 +246,30 @@ def _manifest_name(validated: Mapping[str, object]) -> ProtocolName:
 
 def _manifest_declaration(validated: Mapping[str, object]) -> BenchmarkDeclaration:
     declaration_value = validated.get("declaration")
-    answer_space_id_value = validated.get("answer_space_id")
-    if declaration_value is None and answer_space_id_value is None:
-        raise BenchmarkManifestValidationError("answer_space_id: missing required field")
+    outcome_space_id_value = validated.get("outcome_space_id")
+    if declaration_value is None and outcome_space_id_value is None:
+        raise BenchmarkManifestValidationError("outcome_space_id: missing required field")
 
     declaration: BenchmarkDeclaration | None = None
     if declaration_value is not None:
         declaration = BenchmarkDeclaration.from_record(
             _manifest_mapping(declaration_value, field="declaration")
         )
-    if answer_space_id_value is None:
+    if outcome_space_id_value is None:
         if declaration is None:
             raise BenchmarkManifestValidationError("declaration: expected record")
         return declaration
 
-    answer_space_id = _as_identifier(answer_space_id_value, field="answer_space_id")
+    outcome_space_id = _as_identifier(outcome_space_id_value, field="outcome_space_id")
     if declaration is None:
         return BenchmarkDeclaration(
             id=_as_identifier(validated["id"], field="id"),
-            answer_space_id=answer_space_id,
+            outcome_space_id=outcome_space_id,
         )
-    if declaration.answer_space_id != answer_space_id:
+    if declaration.outcome_space_id != outcome_space_id:
         raise BenchmarkManifestValidationError(
-            f"answer_space_id {answer_space_id} does not match declaration "
-            f"{declaration.answer_space_id}"
+            f"outcome_space_id {outcome_space_id} does not match declaration "
+            f"{declaration.outcome_space_id}"
         )
     return declaration
 

@@ -1,4 +1,4 @@
-"""Finite answer-space declarations."""
+"""Finite outcome-space declarations."""
 
 from __future__ import annotations
 
@@ -16,11 +16,11 @@ __all__ = [
     "AcceptedEventValidationError",
     "AcceptedMassScore",
     "AcceptedMassScoreError",
-    "AnswerElement",
-    "AnswerSpace",
-    "AnswerSpaceValidationError",
-    "FiniteAnswerScoringBundle",
-    "FiniteAnswerScoringBundleValidationError",
+    "Outcome",
+    "OutcomeSpace",
+    "OutcomeSpaceValidationError",
+    "FiniteOutcomeScoringBundle",
+    "FiniteOutcomeScoringBundleValidationError",
     "FiniteProbabilityMeasure",
     "ProbabilityMass",
     "ProbabilityMeasureValidationError",
@@ -28,39 +28,39 @@ __all__ = [
     "RawScoringEvidenceValidationError",
 ]
 
-_element_id_pattern = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+_outcome_id_pattern = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 
-_answer_element_record = RecordSpec(
+_outcome_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="string"),
     }
 )
-_answer_space_record = RecordSpec(
+_outcome_space_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
-        "elements": FieldSpec(
+        "outcomes": FieldSpec(
             kind="sequence",
-            item=FieldSpec(kind="record", record=_answer_element_record),
+            item=FieldSpec(kind="record", record=_outcome_record),
         ),
     }
 )
 _accepted_event_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
-        "answer_space_id": FieldSpec(kind="identifier"),
-        "elements": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
+        "outcome_space_id": FieldSpec(kind="identifier"),
+        "outcomes": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
     }
 )
 _probability_mass_record = RecordSpec(
     fields={
-        "element_id": FieldSpec(kind="string"),
+        "outcome_id": FieldSpec(kind="string"),
         "probability": FieldSpec(kind="number"),
     }
 )
 _finite_probability_measure_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
-        "answer_space_id": FieldSpec(kind="identifier"),
+        "outcome_space_id": FieldSpec(kind="identifier"),
         "probabilities": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="record", record=_probability_mass_record),
@@ -71,29 +71,29 @@ _raw_scoring_evidence_base_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
         "observation_id": FieldSpec(kind="string"),
-        "answer_space_id": FieldSpec(kind="identifier"),
+        "outcome_space_id": FieldSpec(kind="identifier"),
         "accepted_event_id": FieldSpec(kind="identifier"),
         "probability_measure_id": FieldSpec(kind="identifier"),
         "accepted_mass": FieldSpec(kind="number"),
     },
     allow_unknown=True,
 )
-_finite_answer_scoring_bundle_record = RecordSpec(
+_finite_outcome_scoring_bundle_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier", required=False),
         "observation_id": FieldSpec(kind="string", required=False),
-        "answer_space": FieldSpec(kind="record"),
+        "outcome_space": FieldSpec(kind="record"),
         "accepted_event": FieldSpec(kind="record"),
         "probability_measure": FieldSpec(kind="record"),
         "raw_scoring_evidence": FieldSpec(kind="record", required=False),
     },
     allow_unknown=True,
 )
-_finite_answer_scoring_bundle_expected_fields = frozenset(
+_finite_outcome_scoring_bundle_expected_fields = frozenset(
     {
         "id",
         "observation_id",
-        "answer_space",
+        "outcome_space",
         "accepted_event",
         "probability_measure",
         "raw_scoring_evidence",
@@ -101,8 +101,8 @@ _finite_answer_scoring_bundle_expected_fields = frozenset(
 )
 
 
-class AnswerSpaceValidationError(ValueError):
-    """Raised when an answer element or answer space is invalid."""
+class OutcomeSpaceValidationError(ValueError):
+    """Raised when an outcome or outcome space is invalid."""
 
 
 class AcceptedEventValidationError(ValueError):
@@ -118,29 +118,29 @@ class AcceptedMassScoreError(ValueError):
 
 
 class RawScoringEvidenceValidationError(ValueError):
-    """Raised when raw finite-answer scoring evidence is invalid."""
+    """Raised when raw finite-outcome scoring evidence is invalid."""
 
 
-class FiniteAnswerScoringBundleValidationError(ValueError):
-    """Raised when a finite-answer scoring bundle is invalid."""
+class FiniteOutcomeScoringBundleValidationError(ValueError):
+    """Raised when a finite-outcome scoring bundle is invalid."""
 
 
 @dataclass(frozen=True, slots=True)
-class AnswerElement:
-    """One possible answer inside a finite answer space."""
+class Outcome:
+    """One possible outcome inside a finite outcome space."""
 
     id: str
 
     def __post_init__(self) -> None:
-        if _element_id_pattern.fullmatch(self.id) is None:
-            raise AnswerSpaceValidationError(f"invalid answer element id: {self.id!r}")
+        if _outcome_id_pattern.fullmatch(self.id) is None:
+            raise OutcomeSpaceValidationError(f"invalid outcome id: {self.id!r}")
 
     @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> AnswerElement:
+    def from_record(cls, record: Mapping[str, object]) -> Outcome:
         try:
-            validated = _answer_element_record.validate(record)
+            validated = _outcome_record.validate(record)
         except RecordValidationError as error:
-            raise AnswerSpaceValidationError(str(error)) from error
+            raise OutcomeSpaceValidationError(str(error)) from error
         return cls(id=str(validated["id"]))
 
     def to_record(self) -> dict[str, object]:
@@ -148,74 +148,74 @@ class AnswerElement:
 
 
 @dataclass(frozen=True, slots=True)
-class AnswerSpace:
-    """A finite set of possible answers."""
+class OutcomeSpace:
+    """A finite set of possible outcomes."""
 
     id: ProtocolIdentifier
-    elements: tuple[AnswerElement, ...]
+    outcomes: tuple[Outcome, ...]
 
     def __post_init__(self) -> None:
         try:
             self.id.require_unreleased()
         except ValueError as error:
-            raise AnswerSpaceValidationError(str(error)) from error
-        if not self.elements:
-            raise AnswerSpaceValidationError("answer space must contain at least one element")
-        element_ids = tuple(element.id for element in self.elements)
-        if len(set(element_ids)) != len(element_ids):
-            raise AnswerSpaceValidationError("answer element ids must be unique")
+            raise OutcomeSpaceValidationError(str(error)) from error
+        if not self.outcomes:
+            raise OutcomeSpaceValidationError("outcome space must contain at least one outcome")
+        outcome_ids = tuple(outcome.id for outcome in self.outcomes)
+        if len(set(outcome_ids)) != len(outcome_ids):
+            raise OutcomeSpaceValidationError("outcome ids must be unique")
 
     @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> AnswerSpace:
+    def from_record(cls, record: Mapping[str, object]) -> OutcomeSpace:
         try:
-            validated = _answer_space_record.validate(record)
+            validated = _outcome_space_record.validate(record)
         except RecordValidationError as error:
-            raise AnswerSpaceValidationError(str(error)) from error
-        elements = tuple(
-            AnswerElement.from_record(_as_mapping(element, field="elements"))
-            for element in _as_tuple(validated["elements"], field="elements")
+            raise OutcomeSpaceValidationError(str(error)) from error
+        outcomes = tuple(
+            Outcome.from_record(_as_mapping(outcome, field="outcomes"))
+            for outcome in _as_tuple(validated["outcomes"], field="outcomes")
         )
         identifier = _as_identifier(validated["id"], field="id")
-        return cls(id=identifier, elements=elements)
+        return cls(id=identifier, outcomes=outcomes)
 
     @property
-    def element_ids(self) -> frozenset[str]:
-        return frozenset(element.id for element in self.elements)
+    def outcome_ids(self) -> frozenset[str]:
+        return frozenset(outcome.id for outcome in self.outcomes)
 
-    def contains(self, element_id: str) -> bool:
-        return element_id in self.element_ids
+    def contains(self, outcome_id: str) -> bool:
+        return outcome_id in self.outcome_ids
 
     def to_record(self) -> dict[str, object]:
         return {
             "id": str(self.id),
-            "elements": [element.to_record() for element in self.elements],
+            "outcomes": [outcome.to_record() for outcome in self.outcomes],
         }
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptedEvent:
-    """A nonempty subset of a finite answer space."""
+    """A nonempty subset of a finite outcome space."""
 
     id: ProtocolIdentifier
-    answer_space_id: ProtocolIdentifier
-    elements: frozenset[str]
+    outcome_space_id: ProtocolIdentifier
+    outcomes: frozenset[str]
 
     def __post_init__(self) -> None:
         try:
             self.id.require_unreleased()
         except ValueError as error:
             raise AcceptedEventValidationError(str(error)) from error
-        if not self.elements:
-            raise AcceptedEventValidationError("accepted event must contain at least one element")
-        for element_id in self.elements:
-            if _element_id_pattern.fullmatch(element_id) is None:
+        if not self.outcomes:
+            raise AcceptedEventValidationError("accepted event must contain at least one outcome")
+        for outcome_id in self.outcomes:
+            if _outcome_id_pattern.fullmatch(outcome_id) is None:
                 raise AcceptedEventValidationError(
-                    f"invalid accepted element id: {element_id!r}"
+                    f"invalid accepted outcome id: {outcome_id!r}"
                 )
 
     @classmethod
     def from_record(
-        cls, record: Mapping[str, object], *, answer_space: AnswerSpace
+        cls, record: Mapping[str, object], *, outcome_space: OutcomeSpace
     ) -> AcceptedEvent:
         try:
             validated = _accepted_event_record.validate(record)
@@ -223,56 +223,56 @@ class AcceptedEvent:
             raise AcceptedEventValidationError(str(error)) from error
 
         identifier = _as_identifier(validated["id"], field="id")
-        answer_space_id = _as_identifier(validated["answer_space_id"], field="answer_space_id")
-        if answer_space_id != answer_space.id:
+        outcome_space_id = _as_identifier(validated["outcome_space_id"], field="outcome_space_id")
+        if outcome_space_id != outcome_space.id:
             raise AcceptedEventValidationError(
-                f"answer_space_id {answer_space_id} does not match {answer_space.id}"
+                f"outcome_space_id {outcome_space_id} does not match {outcome_space.id}"
             )
 
-        element_ids = tuple(
-            str(element) for element in _as_tuple(validated["elements"], field="elements")
+        outcome_ids = tuple(
+            str(outcome) for outcome in _as_tuple(validated["outcomes"], field="outcomes")
         )
-        if len(set(element_ids)) != len(element_ids):
-            raise AcceptedEventValidationError("accepted element ids must be unique")
+        if len(set(outcome_ids)) != len(outcome_ids):
+            raise AcceptedEventValidationError("accepted outcome ids must be unique")
 
         event = cls(
             id=identifier,
-            answer_space_id=answer_space_id,
-            elements=frozenset(element_ids),
+            outcome_space_id=outcome_space_id,
+            outcomes=frozenset(outcome_ids),
         )
         unknown = tuple(
-            element_id
-            for element_id in sorted(event.elements)
-            if not answer_space.contains(element_id)
+            outcome_id
+            for outcome_id in sorted(event.outcomes)
+            if not outcome_space.contains(outcome_id)
         )
         if unknown:
             raise AcceptedEventValidationError(
-                f"accepted elements are not in answer space: {', '.join(unknown)}"
+                f"accepted outcomes are not in outcome space: {', '.join(unknown)}"
             )
         return event
 
-    def accepts(self, element_id: str) -> bool:
-        return element_id in self.elements
+    def accepts(self, outcome_id: str) -> bool:
+        return outcome_id in self.outcomes
 
     def to_record(self) -> dict[str, object]:
         return {
             "id": str(self.id),
-            "answer_space_id": str(self.answer_space_id),
-            "elements": sorted(self.elements),
+            "outcome_space_id": str(self.outcome_space_id),
+            "outcomes": sorted(self.outcomes),
         }
 
 
 @dataclass(frozen=True, slots=True)
 class ProbabilityMass:
-    """Probability assigned to one answer element."""
+    """Probability assigned to one outcome."""
 
-    element_id: str
+    outcome_id: str
     probability: float
 
     def __post_init__(self) -> None:
-        if _element_id_pattern.fullmatch(self.element_id) is None:
+        if _outcome_id_pattern.fullmatch(self.outcome_id) is None:
             raise ProbabilityMeasureValidationError(
-                f"invalid probability element id: {self.element_id!r}"
+                f"invalid probability outcome id: {self.outcome_id!r}"
             )
         if not math.isfinite(self.probability):
             raise ProbabilityMeasureValidationError("probability must be finite")
@@ -286,23 +286,23 @@ class ProbabilityMass:
         except RecordValidationError as error:
             raise ProbabilityMeasureValidationError(str(error)) from error
         return cls(
-            element_id=str(validated["element_id"]),
+            outcome_id=str(validated["outcome_id"]),
             probability=float(cast(float | int, validated["probability"])),
         )
 
     def to_record(self) -> dict[str, object]:
-        return {"element_id": self.element_id, "probability": self.probability}
+        return {"outcome_id": self.outcome_id, "probability": self.probability}
 
 
 @dataclass(frozen=True, slots=True)
 class FiniteProbabilityMeasure:
-    """A normalized finite probability measure over an answer space.
+    """A normalized finite probability measure over an outcome space.
 
-    Elements omitted from ``probabilities`` have zero probability mass.
+    Outcomes omitted from ``probabilities`` have zero probability mass.
     """
 
     id: ProtocolIdentifier
-    answer_space_id: ProtocolIdentifier
+    outcome_space_id: ProtocolIdentifier
     probabilities: tuple[ProbabilityMass, ...]
     normalization_tolerance: float = field(
         default=1e-12,
@@ -320,9 +320,9 @@ class FiniteProbabilityMeasure:
                 "normalization tolerance must be finite and nonnegative"
             )
 
-        element_ids = tuple(mass.element_id for mass in self.probabilities)
-        if len(set(element_ids)) != len(element_ids):
-            raise ProbabilityMeasureValidationError("probability element ids must be unique")
+        outcome_ids = tuple(mass.outcome_id for mass in self.probabilities)
+        if len(set(outcome_ids)) != len(outcome_ids):
+            raise ProbabilityMeasureValidationError("probability outcome ids must be unique")
 
         total = self.total_probability
         if abs(total - 1.0) > self.normalization_tolerance:
@@ -336,7 +336,7 @@ class FiniteProbabilityMeasure:
         cls,
         record: Mapping[str, object],
         *,
-        answer_space: AnswerSpace,
+        outcome_space: OutcomeSpace,
         normalization_tolerance: float = 1e-12,
     ) -> FiniteProbabilityMeasure:
         try:
@@ -345,10 +345,10 @@ class FiniteProbabilityMeasure:
             raise ProbabilityMeasureValidationError(str(error)) from error
 
         identifier = _as_identifier(validated["id"], field="id")
-        answer_space_id = _as_identifier(validated["answer_space_id"], field="answer_space_id")
-        if answer_space_id != answer_space.id:
+        outcome_space_id = _as_identifier(validated["outcome_space_id"], field="outcome_space_id")
+        if outcome_space_id != outcome_space.id:
             raise ProbabilityMeasureValidationError(
-                f"answer_space_id {answer_space_id} does not match {answer_space.id}"
+                f"outcome_space_id {outcome_space_id} does not match {outcome_space.id}"
             )
 
         probabilities = tuple(
@@ -356,17 +356,17 @@ class FiniteProbabilityMeasure:
             for probability in _as_tuple(validated["probabilities"], field="probabilities")
         )
         unknown = tuple(
-            element_id
-            for element_id in sorted({mass.element_id for mass in probabilities})
-            if not answer_space.contains(element_id)
+            outcome_id
+            for outcome_id in sorted({mass.outcome_id for mass in probabilities})
+            if not outcome_space.contains(outcome_id)
         )
         if unknown:
             raise ProbabilityMeasureValidationError(
-                f"probability elements are not in answer space: {', '.join(unknown)}"
+                f"probability outcomes are not in outcome space: {', '.join(unknown)}"
             )
         return cls(
             id=identifier,
-            answer_space_id=answer_space_id,
+            outcome_space_id=outcome_space_id,
             probabilities=probabilities,
             normalization_tolerance=normalization_tolerance,
         )
@@ -375,19 +375,19 @@ class FiniteProbabilityMeasure:
     def total_probability(self) -> float:
         return math.fsum(mass.probability for mass in self.probabilities)
 
-    def probability_of(self, element_id: str) -> float:
+    def probability_of(self, outcome_id: str) -> float:
         for mass in self.probabilities:
-            if mass.element_id == element_id:
+            if mass.outcome_id == outcome_id:
                 return mass.probability
         return 0.0
 
     def to_record(self) -> dict[str, object]:
         return {
             "id": str(self.id),
-            "answer_space_id": str(self.answer_space_id),
+            "outcome_space_id": str(self.outcome_space_id),
             "probabilities": [
                 mass.to_record()
-                for mass in sorted(self.probabilities, key=lambda item: item.element_id)
+                for mass in sorted(self.probabilities, key=lambda item: item.outcome_id)
             ],
         }
 
@@ -406,15 +406,15 @@ class AcceptedMassScore:
         event: AcceptedEvent,
         measure: FiniteProbabilityMeasure,
     ) -> AcceptedMassScore:
-        if event.answer_space_id != measure.answer_space_id:
+        if event.outcome_space_id != measure.outcome_space_id:
             raise AcceptedMassScoreError(
-                "accepted event answer_space_id "
-                f"{event.answer_space_id} does not match probability measure "
-                f"{measure.answer_space_id}"
+                "accepted event outcome_space_id "
+                f"{event.outcome_space_id} does not match probability measure "
+                f"{measure.outcome_space_id}"
             )
 
         accepted_mass = math.fsum(
-            measure.probability_of(element_id) for element_id in event.elements
+            measure.probability_of(outcome_id) for outcome_id in event.outcomes
         )
         if accepted_mass < 0:
             raise AcceptedMassScoreError("accepted mass must be nonnegative")
@@ -436,11 +436,11 @@ class AcceptedMassScore:
 
 @dataclass(frozen=True, slots=True)
 class RawScoringEvidence:
-    """Per-observation evidence for one finite-answer score."""
+    """Per-observation evidence for one finite-outcome score."""
 
     id: ProtocolIdentifier
     observation_id: str
-    answer_space_id: ProtocolIdentifier
+    outcome_space_id: ProtocolIdentifier
     accepted_event_id: ProtocolIdentifier
     probability_measure_id: ProtocolIdentifier
     accepted_mass: float
@@ -491,7 +491,7 @@ class RawScoringEvidence:
         return cls(
             id=id,
             observation_id=observation_id,
-            answer_space_id=event.answer_space_id,
+            outcome_space_id=event.outcome_space_id,
             accepted_event_id=event.id,
             probability_measure_id=measure.id,
             accepted_mass=score.accepted_mass,
@@ -507,7 +507,7 @@ class RawScoringEvidence:
         expected_fields = {
             "id",
             "observation_id",
-            "answer_space_id",
+            "outcome_space_id",
             "accepted_event_id",
             "probability_measure_id",
             "accepted_mass",
@@ -538,8 +538,8 @@ class RawScoringEvidence:
         return cls(
             id=_as_identifier(validated["id"], field="id"),
             observation_id=str(validated["observation_id"]),
-            answer_space_id=_as_identifier(
-                validated["answer_space_id"], field="answer_space_id"
+            outcome_space_id=_as_identifier(
+                validated["outcome_space_id"], field="outcome_space_id"
             ),
             accepted_event_id=_as_identifier(
                 validated["accepted_event_id"], field="accepted_event_id"
@@ -560,7 +560,7 @@ class RawScoringEvidence:
         return {
             "id": str(self.id),
             "observation_id": self.observation_id,
-            "answer_space_id": str(self.answer_space_id),
+            "outcome_space_id": str(self.outcome_space_id),
             "accepted_event_id": str(self.accepted_event_id),
             "probability_measure_id": str(self.probability_measure_id),
             "accepted_mass": self.accepted_mass,
@@ -569,29 +569,29 @@ class RawScoringEvidence:
 
 
 @dataclass(frozen=True, slots=True)
-class FiniteAnswerScoringBundle:
-    """A complete finite-answer scoring object graph for one observation."""
+class FiniteOutcomeScoringBundle:
+    """A complete finite-outcome scoring object graph for one observation."""
 
-    answer_space: AnswerSpace
+    outcome_space: OutcomeSpace
     accepted_event: AcceptedEvent
     probability_measure: FiniteProbabilityMeasure
     raw_scoring_evidence: RawScoringEvidence
 
     def __post_init__(self) -> None:
         _require_matching_identifier(
-            field="accepted_event.answer_space_id",
-            actual=self.accepted_event.answer_space_id,
-            expected=self.answer_space.id,
+            field="accepted_event.outcome_space_id",
+            actual=self.accepted_event.outcome_space_id,
+            expected=self.outcome_space.id,
         )
         _require_matching_identifier(
-            field="probability_measure.answer_space_id",
-            actual=self.probability_measure.answer_space_id,
-            expected=self.answer_space.id,
+            field="probability_measure.outcome_space_id",
+            actual=self.probability_measure.outcome_space_id,
+            expected=self.outcome_space.id,
         )
         _require_matching_identifier(
-            field="raw_scoring_evidence.answer_space_id",
-            actual=self.raw_scoring_evidence.answer_space_id,
-            expected=self.answer_space.id,
+            field="raw_scoring_evidence.outcome_space_id",
+            actual=self.raw_scoring_evidence.outcome_space_id,
+            expected=self.outcome_space.id,
         )
         _require_matching_identifier(
             field="raw_scoring_evidence.accepted_event_id",
@@ -614,7 +614,7 @@ class FiniteAnswerScoringBundle:
             rel_tol=1e-12,
             abs_tol=1e-12,
         ):
-            raise FiniteAnswerScoringBundleValidationError(
+            raise FiniteOutcomeScoringBundleValidationError(
                 "raw_scoring_evidence.accepted_mass must equal recomputed accepted mass"
             )
         if not math.isclose(
@@ -623,27 +623,27 @@ class FiniteAnswerScoringBundle:
             rel_tol=1e-12,
             abs_tol=1e-12,
         ):
-            raise FiniteAnswerScoringBundleValidationError(
+            raise FiniteOutcomeScoringBundleValidationError(
                 "raw_scoring_evidence.negative_log_score must equal recomputed score"
             )
 
     @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> FiniteAnswerScoringBundle:
+    def from_record(cls, record: Mapping[str, object]) -> FiniteOutcomeScoringBundle:
         try:
-            validated = _finite_answer_scoring_bundle_record.validate(record)
-            answer_space = AnswerSpace.from_record(
-                _bundle_mapping(validated["answer_space"], field="answer_space")
+            validated = _finite_outcome_scoring_bundle_record.validate(record)
+            outcome_space = OutcomeSpace.from_record(
+                _bundle_mapping(validated["outcome_space"], field="outcome_space")
             )
             accepted_event = AcceptedEvent.from_record(
                 _bundle_mapping(validated["accepted_event"], field="accepted_event"),
-                answer_space=answer_space,
+                outcome_space=outcome_space,
             )
             probability_measure = FiniteProbabilityMeasure.from_record(
                 _bundle_mapping(
                     validated["probability_measure"],
                     field="probability_measure",
                 ),
-                answer_space=answer_space,
+                outcome_space=outcome_space,
             )
             raw_scoring_evidence = _bundle_raw_scoring_evidence(
                 record=record,
@@ -652,9 +652,9 @@ class FiniteAnswerScoringBundle:
                 probability_measure=probability_measure,
             )
         except ValueError as error:
-            raise FiniteAnswerScoringBundleValidationError(str(error)) from error
+            raise FiniteOutcomeScoringBundleValidationError(str(error)) from error
         return cls(
-            answer_space=answer_space,
+            outcome_space=outcome_space,
             accepted_event=accepted_event,
             probability_measure=probability_measure,
             raw_scoring_evidence=raw_scoring_evidence,
@@ -662,7 +662,7 @@ class FiniteAnswerScoringBundle:
 
     def to_record(self) -> dict[str, object]:
         return {
-            "answer_space": self.answer_space.to_record(),
+            "outcome_space": self.outcome_space.to_record(),
             "accepted_event": self.accepted_event.to_record(),
             "probability_measure": self.probability_measure.to_record(),
             "raw_scoring_evidence": self.raw_scoring_evidence.to_record(),
@@ -671,19 +671,19 @@ class FiniteAnswerScoringBundle:
 
 def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
-        raise AnswerSpaceValidationError(f"{field}: expected record")
+        raise OutcomeSpaceValidationError(f"{field}: expected record")
     return cast(Mapping[str, object], value)
 
 
 def _as_tuple(value: object, *, field: str) -> tuple[object, ...]:
     if not isinstance(value, tuple):
-        raise AnswerSpaceValidationError(f"{field}: expected parsed sequence")
+        raise OutcomeSpaceValidationError(f"{field}: expected parsed sequence")
     return cast(tuple[object, ...], value)
 
 
 def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
     if not isinstance(value, ProtocolIdentifier):
-        raise AnswerSpaceValidationError(f"{field}: expected parsed identifier")
+        raise OutcomeSpaceValidationError(f"{field}: expected parsed identifier")
     return value
 
 
@@ -698,11 +698,11 @@ def _bundle_raw_scoring_evidence(
         sorted(
             field
             for field in record
-            if field not in _finite_answer_scoring_bundle_expected_fields
+            if field not in _finite_outcome_scoring_bundle_expected_fields
         )
     )
     if unknown_fields:
-        raise FiniteAnswerScoringBundleValidationError(f"{unknown_fields[0]}: unknown field")
+        raise FiniteOutcomeScoringBundleValidationError(f"{unknown_fields[0]}: unknown field")
 
     raw_value = validated.get("raw_scoring_evidence")
     explicit: RawScoringEvidence | None = None
@@ -718,11 +718,11 @@ def _bundle_raw_scoring_evidence(
     observation_id = validated.get("observation_id")
     if evidence_id is None:
         if explicit is None:
-            raise FiniteAnswerScoringBundleValidationError("id: missing required field")
+            raise FiniteOutcomeScoringBundleValidationError("id: missing required field")
         evidence_id = explicit.id
     if observation_id is None:
         if explicit is None:
-            raise FiniteAnswerScoringBundleValidationError(
+            raise FiniteOutcomeScoringBundleValidationError(
                 "observation_id: missing required field"
             )
         observation_id = explicit.observation_id
@@ -736,7 +736,7 @@ def _bundle_raw_scoring_evidence(
     if explicit is None:
         return derived
     if explicit != derived:
-        raise FiniteAnswerScoringBundleValidationError(
+        raise FiniteOutcomeScoringBundleValidationError(
             "raw_scoring_evidence must equal derived scoring evidence"
         )
     return explicit
@@ -744,7 +744,7 @@ def _bundle_raw_scoring_evidence(
 
 def _bundle_mapping(value: object, *, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
-        raise FiniteAnswerScoringBundleValidationError(f"{field}: expected record")
+        raise FiniteOutcomeScoringBundleValidationError(f"{field}: expected record")
     return cast(Mapping[str, object], value)
 
 
@@ -755,6 +755,6 @@ def _require_matching_identifier(
     expected: ProtocolIdentifier,
 ) -> None:
     if actual != expected:
-        raise FiniteAnswerScoringBundleValidationError(
+        raise FiniteOutcomeScoringBundleValidationError(
             f"{field} {actual} does not match {expected}"
         )

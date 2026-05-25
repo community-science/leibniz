@@ -4,7 +4,7 @@ from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.content import ContentDigest
 from leibniz.measurements import MeasurementDocument
 
-_FIXTURES = Path(__file__).parent / "fixtures" / "finite_answer"
+_FIXTURES = Path(__file__).parent / "fixtures" / "finite_outcome"
 
 
 def test_minimal_authoring_fixtures_load_and_validate() -> None:
@@ -25,7 +25,7 @@ def test_minimal_authoring_fixtures_load_and_validate() -> None:
     assert measurement_document.measurement.scoring_bundle.raw_scoring_evidence.to_record() == {
         "id": "core.boolean-evidence@0.1.0",
         "observation_id": "observation-1",
-        "answer_space_id": "core.boolean-answer@0.1.0",
+        "outcome_space_id": "core.boolean-outcome@0.1.0",
         "accepted_event_id": "core.boolean-accepted@0.1.0",
         "probability_measure_id": "core.boolean-prediction@0.1.0",
         "accepted_mass": 0.25,
