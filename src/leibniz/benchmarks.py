@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 
 from leibniz.answers import FiniteAnswerScoringBundle
-from leibniz.identifiers import ProtocolIdentifier, require_unreleased_identifier
+from leibniz.identifiers import ProtocolIdentifier, ProtocolName, require_unreleased_identifier
 from leibniz.records import RecordSpec, RecordValidationError, required, validate_record
 
 __all__ = [
     "BenchmarkDeclaration",
     "BenchmarkDeclarationValidationError",
+    "BenchmarkManifest",
+    "BenchmarkManifestValidationError",
 ]
 
 _oracle_acceptance_id = ProtocolIdentifier.parse("core.finite-answer-accepted-event@0.1.0")
@@ -31,10 +34,22 @@ _benchmark_declaration_record = RecordSpec(
         "evidence_bundle_id": required("identifier"),
     }
 )
+_benchmark_manifest_fields = frozenset({"id", "name", "declaration"})
+_benchmark_manifest_header_record = RecordSpec(
+    fields={
+        "id": required("identifier"),
+        "name": required("name"),
+    },
+    allow_unknown=True,
+)
 
 
 class BenchmarkDeclarationValidationError(ValueError):
     """Raised when a benchmark declaration is invalid."""
+
+
+class BenchmarkManifestValidationError(ValueError):
+    """Raised when a benchmark manifest is invalid."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,10 +137,86 @@ class BenchmarkDeclaration:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class BenchmarkManifest:
+    """A benchmark manifest with identity metadata and one declaration."""
+
+    id: ProtocolIdentifier
+    name: ProtocolName
+    declaration: BenchmarkDeclaration
+
+    def __post_init__(self) -> None:
+        try:
+            require_unreleased_identifier(self.id)
+        except ValueError as error:
+            raise BenchmarkManifestValidationError(str(error)) from error
+        if self.id.name != self.name:
+            raise BenchmarkManifestValidationError(
+                f"name {self.name} does not match id name {self.id.name}"
+            )
+        if self.declaration.id != self.id:
+            raise BenchmarkManifestValidationError(
+                f"declaration id {self.declaration.id} does not match {self.id}"
+            )
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> BenchmarkManifest:
+        unknown_fields = tuple(
+            sorted(field for field in record if field not in _benchmark_manifest_fields)
+        )
+        if unknown_fields:
+            raise BenchmarkManifestValidationError(f"{unknown_fields[0]}: unknown field")
+        missing_fields = tuple(
+            field for field in sorted(_benchmark_manifest_fields) if field not in record
+        )
+        if missing_fields:
+            raise BenchmarkManifestValidationError(
+                f"{missing_fields[0]}: missing required field"
+            )
+
+        try:
+            header = validate_record(record, _benchmark_manifest_header_record)
+            declaration = BenchmarkDeclaration.from_record(
+                _manifest_mapping(record["declaration"], field="declaration")
+            )
+        except ValueError as error:
+            raise BenchmarkManifestValidationError(str(error)) from error
+        return cls(
+            id=_as_identifier(header["id"], field="id"),
+            name=_as_name(header["name"], field="name"),
+            declaration=declaration,
+        )
+
+    def validate_bundle(self, bundle: FiniteAnswerScoringBundle) -> None:
+        try:
+            self.declaration.validate_bundle(bundle)
+        except BenchmarkDeclarationValidationError as error:
+            raise BenchmarkManifestValidationError(str(error)) from error
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "name": str(self.name),
+            "declaration": self.declaration.to_record(),
+        }
+
+
 def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
     if not isinstance(value, ProtocolIdentifier):
         raise BenchmarkDeclarationValidationError(f"{field}: expected parsed identifier")
     return value
+
+
+def _as_name(value: object, *, field: str) -> ProtocolName:
+    if not isinstance(value, ProtocolName):
+        raise BenchmarkManifestValidationError(f"{field}: expected parsed name")
+    return value
+
+
+def _manifest_mapping(value: object, *, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise BenchmarkManifestValidationError(f"{field}: expected record")
+    return cast(Mapping[str, object], value)
 
 
 def _require_identifier(

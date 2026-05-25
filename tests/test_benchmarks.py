@@ -3,7 +3,12 @@ from collections.abc import Callable, Mapping
 from typing import cast
 
 from leibniz.answers import FiniteAnswerScoringBundle
-from leibniz.benchmarks import BenchmarkDeclaration, BenchmarkDeclarationValidationError
+from leibniz.benchmarks import (
+    BenchmarkDeclaration,
+    BenchmarkDeclarationValidationError,
+    BenchmarkManifest,
+    BenchmarkManifestValidationError,
+)
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
 
@@ -104,6 +109,86 @@ def test_benchmark_declaration_digest_is_stable() -> None:
     assert ContentDigest.from_value(record) == ContentDigest.from_value(reordered)
 
 
+def test_benchmark_manifest_parses_declaration_container() -> None:
+    manifest = BenchmarkManifest.from_record(_benchmark_manifest_record())
+
+    assert manifest == BenchmarkManifest(
+        id=ProtocolIdentifier.parse("core.boolean-benchmark@0.1.0"),
+        name=ProtocolIdentifier.parse("core.boolean-benchmark@0.1.0").name,
+        declaration=BenchmarkDeclaration.from_record(_benchmark_declaration_record()),
+    )
+    assert manifest.to_record() == _benchmark_manifest_record()
+
+
+def test_benchmark_manifest_validates_matching_scoring_bundle() -> None:
+    manifest = BenchmarkManifest.from_record(_benchmark_manifest_record())
+    bundle = FiniteAnswerScoringBundle.from_record(_boolean_bundle_record())
+
+    manifest.validate_bundle(bundle)
+
+
+def test_benchmark_manifest_rejects_mismatched_name_and_declaration_id() -> None:
+    name_record = _benchmark_manifest_record()
+    name_record["name"] = "core.other-benchmark"
+
+    assert str(
+        capture_manifest_error(lambda: BenchmarkManifest.from_record(name_record))
+    ) == "name core.other-benchmark does not match id name core.boolean-benchmark"
+
+    declaration_record = _benchmark_declaration_record()
+    declaration_record["id"] = "core.other-benchmark@0.1.0"
+    declaration_record["answer_space_id"] = "core.boolean-answer@0.1.0"
+    declaration_record["oracle_acceptance_id"] = "core.finite-answer-accepted-event@0.1.0"
+    declaration_record["prediction_interface_id"] = (
+        "core.finite-probability-measure-prediction@0.1.0"
+    )
+    declaration_record["score_functional_id"] = "core.negative-log-accepted-mass@0.1.0"
+    declaration_record["evidence_bundle_id"] = "core.finite-answer-scoring-bundle@0.1.0"
+    declaration_id_record = _benchmark_manifest_record()
+    declaration_id_record["declaration"] = declaration_record
+
+    assert str(
+        capture_manifest_error(lambda: BenchmarkManifest.from_record(declaration_id_record))
+    ) == (
+        "declaration id core.other-benchmark@0.1.0 does not match "
+        "core.boolean-benchmark@0.1.0"
+    )
+
+
+def test_benchmark_manifest_rejects_malformed_records() -> None:
+    assert str(
+        capture_manifest_error(
+            lambda: BenchmarkManifest.from_record(
+                {
+                    "id": "core.boolean-benchmark@1.0.0",
+                    "name": "core.boolean-benchmark",
+                    "declaration": _benchmark_declaration_record(),
+                }
+            )
+        )
+    ) == (
+        "identifier must use a pre-1.0.0 version before release policy exists: "
+        "core.boolean-benchmark@1.0.0"
+    )
+    record = _benchmark_manifest_record()
+    record["summary"] = "boolean finite-answer benchmark"
+
+    error = capture_manifest_error(lambda: BenchmarkManifest.from_record(record))
+
+    assert str(error) == "summary: unknown field"
+
+
+def test_benchmark_manifest_digest_is_stable() -> None:
+    record = _benchmark_manifest_record()
+    reordered = {
+        "declaration": record["declaration"],
+        "name": record["name"],
+        "id": record["id"],
+    }
+
+    assert ContentDigest.from_value(record) == ContentDigest.from_value(reordered)
+
+
 def capture_benchmark_error(
     call: Callable[[], object],
 ) -> BenchmarkDeclarationValidationError:
@@ -114,6 +199,16 @@ def capture_benchmark_error(
     raise AssertionError("expected BenchmarkDeclarationValidationError")
 
 
+def capture_manifest_error(
+    call: Callable[[], object],
+) -> BenchmarkManifestValidationError:
+    try:
+        call()
+    except BenchmarkManifestValidationError as error:
+        return error
+    raise AssertionError("expected BenchmarkManifestValidationError")
+
+
 def _benchmark_declaration_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
@@ -122,6 +217,14 @@ def _benchmark_declaration_record() -> dict[str, object]:
         "prediction_interface_id": "core.finite-probability-measure-prediction@0.1.0",
         "score_functional_id": "core.negative-log-accepted-mass@0.1.0",
         "evidence_bundle_id": "core.finite-answer-scoring-bundle@0.1.0",
+    }
+
+
+def _benchmark_manifest_record() -> dict[str, object]:
+    return {
+        "id": "core.boolean-benchmark@0.1.0",
+        "name": "core.boolean-benchmark",
+        "declaration": _benchmark_declaration_record(),
     }
 
 
