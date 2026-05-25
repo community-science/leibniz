@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from leibniz._documents import ContentEncodingError, load_object_document
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestValidationError
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.outcomes import FiniteOutcomeScoringBundle
+from leibniz.outcomes import (
+    AcceptedEvent,
+    FiniteOutcomeScoringGraph,
+    FiniteProbabilityMeasure,
+    OutcomeSpace,
+    RawScoringEvidence,
+)
 from leibniz.records import FieldSpec, RecordSpec
 
 __all__ = [
@@ -22,7 +27,6 @@ __all__ = [
 _measurement_record = RecordSpec(
     fields={
         "benchmark_id": FieldSpec(kind="identifier"),
-        "scoring_bundle": FieldSpec(kind="record", required=False),
         "id": FieldSpec(kind="identifier", required=False),
         "observation_id": FieldSpec(kind="string", required=False),
         "outcome_space": FieldSpec(kind="record", required=False),
@@ -31,7 +35,7 @@ _measurement_record = RecordSpec(
         "raw_scoring_evidence": FieldSpec(kind="record", required=False),
     }
 )
-_top_level_scoring_fields = frozenset(
+_measurement_scoring_fields = frozenset(
     {
         "id",
         "observation_id",
@@ -52,7 +56,10 @@ class MeasurementRecord:
     """A durable finite-outcome measurement for one benchmark observation."""
 
     benchmark_id: ProtocolIdentifier
-    scoring_bundle: FiniteOutcomeScoringBundle
+    outcome_space: OutcomeSpace
+    accepted_event: AcceptedEvent
+    probability_measure: FiniteProbabilityMeasure
+    raw_scoring_evidence: RawScoringEvidence
 
     def __post_init__(self) -> None:
         try:
@@ -64,12 +71,15 @@ class MeasurementRecord:
     def from_record(cls, record: Mapping[str, object]) -> MeasurementRecord:
         try:
             validated = _measurement_record.validate(record)
-            scoring_bundle = _measurement_scoring_bundle(record, validated=validated)
+            scoring_graph = _measurement_scoring_graph(record)
         except ValueError as error:
             raise MeasurementRecordValidationError(str(error)) from error
         return cls(
             benchmark_id=_as_identifier(validated["benchmark_id"], field="benchmark_id"),
-            scoring_bundle=scoring_bundle,
+            outcome_space=scoring_graph.outcome_space,
+            accepted_event=scoring_graph.accepted_event,
+            probability_measure=scoring_graph.probability_measure,
+            raw_scoring_evidence=scoring_graph.raw_scoring_evidence,
         )
 
     @property
@@ -82,15 +92,26 @@ class MeasurementRecord:
                 f"benchmark_id {self.benchmark_id} does not match manifest {manifest.id}"
             )
         try:
-            manifest.validate_bundle(self.scoring_bundle)
+            manifest.validate_measurement(
+                outcome_space_id=self.outcome_space.id,
+                observation_id=self.raw_scoring_evidence.observation_id,
+            )
         except BenchmarkManifestValidationError as error:
             raise MeasurementRecordValidationError(str(error)) from error
 
     def to_record(self) -> dict[str, object]:
         return {
             "benchmark_id": str(self.benchmark_id),
-            "scoring_bundle": self.scoring_bundle.to_record(),
+            **self._scoring_graph().to_record(),
         }
+
+    def _scoring_graph(self) -> FiniteOutcomeScoringGraph:
+        return FiniteOutcomeScoringGraph(
+            outcome_space=self.outcome_space,
+            accepted_event=self.accepted_event,
+            probability_measure=self.probability_measure,
+            raw_scoring_evidence=self.raw_scoring_evidence,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,31 +137,12 @@ def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
     return value
 
 
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise MeasurementRecordValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _measurement_scoring_bundle(
-    record: Mapping[str, object],
-    *,
-    validated: Mapping[str, object],
-) -> FiniteOutcomeScoringBundle:
-    scoring_bundle = validated.get("scoring_bundle")
-    top_level = {
+def _measurement_scoring_graph(record: Mapping[str, object]) -> FiniteOutcomeScoringGraph:
+    scoring_fields = {
         field: record[field]
-        for field in _top_level_scoring_fields
+        for field in _measurement_scoring_fields
         if field in record
     }
-    if scoring_bundle is not None:
-        if top_level:
-            raise MeasurementRecordValidationError(
-                "scoring_bundle cannot be combined with top-level scoring fields"
-            )
-        return FiniteOutcomeScoringBundle.from_record(
-            _as_mapping(scoring_bundle, field="scoring_bundle")
-        )
-    if not top_level:
+    if not scoring_fields:
         raise MeasurementRecordValidationError("measurement scoring fields are missing")
-    return FiniteOutcomeScoringBundle.from_record(top_level)
+    return FiniteOutcomeScoringGraph.from_record(scoring_fields)

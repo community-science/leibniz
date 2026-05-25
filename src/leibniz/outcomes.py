@@ -19,8 +19,8 @@ __all__ = [
     "Outcome",
     "OutcomeSpace",
     "OutcomeSpaceValidationError",
-    "FiniteOutcomeScoringBundle",
-    "FiniteOutcomeScoringBundleValidationError",
+    "FiniteOutcomeScoringGraph",
+    "FiniteOutcomeScoringGraphValidationError",
     "FiniteProbabilityMeasure",
     "ProbabilityMass",
     "ProbabilityMeasureValidationError",
@@ -78,7 +78,7 @@ _raw_scoring_evidence_base_record = RecordSpec(
     },
     allow_unknown=True,
 )
-_finite_outcome_scoring_bundle_record = RecordSpec(
+_finite_outcome_scoring_graph_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier", required=False),
         "observation_id": FieldSpec(kind="string", required=False),
@@ -89,7 +89,7 @@ _finite_outcome_scoring_bundle_record = RecordSpec(
     },
     allow_unknown=True,
 )
-_finite_outcome_scoring_bundle_expected_fields = frozenset(
+_finite_outcome_scoring_graph_expected_fields = frozenset(
     {
         "id",
         "observation_id",
@@ -121,8 +121,8 @@ class RawScoringEvidenceValidationError(ValueError):
     """Raised when raw finite-outcome scoring evidence is invalid."""
 
 
-class FiniteOutcomeScoringBundleValidationError(ValueError):
-    """Raised when a finite-outcome scoring bundle is invalid."""
+class FiniteOutcomeScoringGraphValidationError(ValueError):
+    """Raised when a finite-outcome scoring graph is invalid."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -569,8 +569,8 @@ class RawScoringEvidence:
 
 
 @dataclass(frozen=True, slots=True)
-class FiniteOutcomeScoringBundle:
-    """A complete finite-outcome scoring object graph for one observation."""
+class FiniteOutcomeScoringGraph:
+    """A finite-outcome scoring graph for one observation."""
 
     outcome_space: OutcomeSpace
     accepted_event: AcceptedEvent
@@ -614,7 +614,7 @@ class FiniteOutcomeScoringBundle:
             rel_tol=1e-12,
             abs_tol=1e-12,
         ):
-            raise FiniteOutcomeScoringBundleValidationError(
+            raise FiniteOutcomeScoringGraphValidationError(
                 "raw_scoring_evidence.accepted_mass must equal recomputed accepted mass"
             )
         if not math.isclose(
@@ -623,36 +623,36 @@ class FiniteOutcomeScoringBundle:
             rel_tol=1e-12,
             abs_tol=1e-12,
         ):
-            raise FiniteOutcomeScoringBundleValidationError(
+            raise FiniteOutcomeScoringGraphValidationError(
                 "raw_scoring_evidence.negative_log_score must equal recomputed score"
             )
 
     @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> FiniteOutcomeScoringBundle:
+    def from_record(cls, record: Mapping[str, object]) -> FiniteOutcomeScoringGraph:
         try:
-            validated = _finite_outcome_scoring_bundle_record.validate(record)
+            validated = _finite_outcome_scoring_graph_record.validate(record)
             outcome_space = OutcomeSpace.from_record(
-                _bundle_mapping(validated["outcome_space"], field="outcome_space")
+                _graph_mapping(validated["outcome_space"], field="outcome_space")
             )
             accepted_event = AcceptedEvent.from_record(
-                _bundle_mapping(validated["accepted_event"], field="accepted_event"),
+                _graph_mapping(validated["accepted_event"], field="accepted_event"),
                 outcome_space=outcome_space,
             )
             probability_measure = FiniteProbabilityMeasure.from_record(
-                _bundle_mapping(
+                _graph_mapping(
                     validated["probability_measure"],
                     field="probability_measure",
                 ),
                 outcome_space=outcome_space,
             )
-            raw_scoring_evidence = _bundle_raw_scoring_evidence(
+            raw_scoring_evidence = _graph_raw_scoring_evidence(
                 record=record,
                 validated=validated,
                 accepted_event=accepted_event,
                 probability_measure=probability_measure,
             )
         except ValueError as error:
-            raise FiniteOutcomeScoringBundleValidationError(str(error)) from error
+            raise FiniteOutcomeScoringGraphValidationError(str(error)) from error
         return cls(
             outcome_space=outcome_space,
             accepted_event=accepted_event,
@@ -687,7 +687,7 @@ def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
     return value
 
 
-def _bundle_raw_scoring_evidence(
+def _graph_raw_scoring_evidence(
     *,
     record: Mapping[str, object],
     validated: Mapping[str, object],
@@ -698,17 +698,17 @@ def _bundle_raw_scoring_evidence(
         sorted(
             field
             for field in record
-            if field not in _finite_outcome_scoring_bundle_expected_fields
+            if field not in _finite_outcome_scoring_graph_expected_fields
         )
     )
     if unknown_fields:
-        raise FiniteOutcomeScoringBundleValidationError(f"{unknown_fields[0]}: unknown field")
+        raise FiniteOutcomeScoringGraphValidationError(f"{unknown_fields[0]}: unknown field")
 
     raw_value = validated.get("raw_scoring_evidence")
     explicit: RawScoringEvidence | None = None
     if raw_value is not None:
         explicit = RawScoringEvidence.from_record(
-            _bundle_mapping(
+            _graph_mapping(
                 raw_value,
                 field="raw_scoring_evidence",
             )
@@ -718,11 +718,11 @@ def _bundle_raw_scoring_evidence(
     observation_id = validated.get("observation_id")
     if evidence_id is None:
         if explicit is None:
-            raise FiniteOutcomeScoringBundleValidationError("id: missing required field")
+            raise FiniteOutcomeScoringGraphValidationError("id: missing required field")
         evidence_id = explicit.id
     if observation_id is None:
         if explicit is None:
-            raise FiniteOutcomeScoringBundleValidationError(
+            raise FiniteOutcomeScoringGraphValidationError(
                 "observation_id: missing required field"
             )
         observation_id = explicit.observation_id
@@ -736,15 +736,15 @@ def _bundle_raw_scoring_evidence(
     if explicit is None:
         return derived
     if explicit != derived:
-        raise FiniteOutcomeScoringBundleValidationError(
+        raise FiniteOutcomeScoringGraphValidationError(
             "raw_scoring_evidence must equal derived scoring evidence"
         )
     return explicit
 
 
-def _bundle_mapping(value: object, *, field: str) -> Mapping[str, object]:
+def _graph_mapping(value: object, *, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
-        raise FiniteOutcomeScoringBundleValidationError(f"{field}: expected record")
+        raise FiniteOutcomeScoringGraphValidationError(f"{field}: expected record")
     return cast(Mapping[str, object], value)
 
 
@@ -755,6 +755,6 @@ def _require_matching_identifier(
     expected: ProtocolIdentifier,
 ) -> None:
     if actual != expected:
-        raise FiniteOutcomeScoringBundleValidationError(
+        raise FiniteOutcomeScoringGraphValidationError(
             f"{field} {actual} does not match {expected}"
         )

@@ -9,8 +9,8 @@ from leibniz.outcomes import (
     AcceptedEventValidationError,
     AcceptedMassScore,
     AcceptedMassScoreError,
-    FiniteOutcomeScoringBundle,
-    FiniteOutcomeScoringBundleValidationError,
+    FiniteOutcomeScoringGraph,
+    FiniteOutcomeScoringGraphValidationError,
     FiniteProbabilityMeasure,
     Outcome,
     OutcomeSpace,
@@ -797,42 +797,42 @@ def test_raw_scoring_evidence_rejects_malformed_records() -> None:
     ) == "observation_id must be nonempty"
 
 
-def test_finite_outcome_scoring_bundle_parses_complete_object_graph() -> None:
-    bundle = FiniteOutcomeScoringBundle.from_record(_boolean_bundle_record())
+def test_finite_outcome_scoring_graph_parses_complete_object_graph() -> None:
+    graph = FiniteOutcomeScoringGraph.from_record(_boolean_graph_record())
 
-    assert bundle.outcome_space.id == ProtocolIdentifier.parse("core.boolean-outcome@0.1.0")
-    assert bundle.accepted_event.id == ProtocolIdentifier.parse("core.boolean-accepted@0.1.0")
-    assert bundle.probability_measure.id == ProtocolIdentifier.parse(
+    assert graph.outcome_space.id == ProtocolIdentifier.parse("core.boolean-outcome@0.1.0")
+    assert graph.accepted_event.id == ProtocolIdentifier.parse("core.boolean-accepted@0.1.0")
+    assert graph.probability_measure.id == ProtocolIdentifier.parse(
         "core.boolean-prediction@0.1.0"
     )
-    assert bundle.raw_scoring_evidence.id == ProtocolIdentifier.parse(
+    assert graph.raw_scoring_evidence.id == ProtocolIdentifier.parse(
         "core.boolean-evidence@0.1.0"
     )
-    assert bundle.to_record() == _boolean_bundle_record()
+    assert graph.to_record() == _boolean_graph_record()
 
 
-def test_finite_outcome_scoring_bundle_derives_raw_evidence_from_minimal_record() -> None:
-    bundle = FiniteOutcomeScoringBundle.from_record(_minimal_boolean_bundle_record())
+def test_finite_outcome_scoring_graph_derives_raw_evidence_from_minimal_record() -> None:
+    graph = FiniteOutcomeScoringGraph.from_record(_minimal_boolean_graph_record())
 
-    assert bundle == FiniteOutcomeScoringBundle.from_record(_boolean_bundle_record())
-    assert bundle.to_record() == _boolean_bundle_record()
+    assert graph == FiniteOutcomeScoringGraph.from_record(_boolean_graph_record())
+    assert graph.to_record() == _boolean_graph_record()
 
 
-def test_finite_outcome_scoring_bundle_rejects_dangling_references() -> None:
-    record = _boolean_bundle_record()
+def test_finite_outcome_scoring_graph_rejects_dangling_references() -> None:
+    record = _boolean_graph_record()
     raw_scoring_evidence = dict(
         cast(Mapping[str, object], record["raw_scoring_evidence"])
     )
     raw_scoring_evidence["accepted_event_id"] = "core.other-accepted@0.1.0"
     record["raw_scoring_evidence"] = raw_scoring_evidence
 
-    error = capture_bundle_error(lambda: FiniteOutcomeScoringBundle.from_record(record))
+    error = capture_graph_error(lambda: FiniteOutcomeScoringGraph.from_record(record))
 
     assert str(error) == "raw_scoring_evidence must equal derived scoring evidence"
 
 
-def test_finite_outcome_scoring_bundle_recomputes_score_from_event_and_measure() -> None:
-    record = _boolean_bundle_record()
+def test_finite_outcome_scoring_graph_recomputes_score_from_event_and_measure() -> None:
+    record = _boolean_graph_record()
     raw_scoring_evidence = dict(
         cast(Mapping[str, object], record["raw_scoring_evidence"])
     )
@@ -840,13 +840,13 @@ def test_finite_outcome_scoring_bundle_recomputes_score_from_event_and_measure()
     raw_scoring_evidence["negative_log_score"] = -math.log(0.25)
     record["raw_scoring_evidence"] = raw_scoring_evidence
 
-    error = capture_bundle_error(lambda: FiniteOutcomeScoringBundle.from_record(record))
+    error = capture_graph_error(lambda: FiniteOutcomeScoringGraph.from_record(record))
 
     assert str(error) == "raw_scoring_evidence must equal derived scoring evidence"
 
 
-def test_finite_outcome_scoring_bundle_rejects_conflicting_minimal_and_raw_evidence() -> None:
-    record = _minimal_boolean_bundle_record()
+def test_finite_outcome_scoring_graph_rejects_conflicting_minimal_and_raw_evidence() -> None:
+    record = _minimal_boolean_graph_record()
     record["raw_scoring_evidence"] = {
         "id": "core.other-evidence@0.1.0",
         "observation_id": "observation-1",
@@ -857,13 +857,13 @@ def test_finite_outcome_scoring_bundle_rejects_conflicting_minimal_and_raw_evide
         "negative_log_score": -math.log(0.75),
     }
 
-    error = capture_bundle_error(lambda: FiniteOutcomeScoringBundle.from_record(record))
+    error = capture_graph_error(lambda: FiniteOutcomeScoringGraph.from_record(record))
 
     assert str(error) == "raw_scoring_evidence must equal derived scoring evidence"
 
 
-def test_finite_outcome_scoring_bundle_digest_is_stable() -> None:
-    record = _boolean_bundle_record()
+def test_finite_outcome_scoring_graph_digest_is_stable() -> None:
+    record = _boolean_graph_record()
     reordered = {
         "raw_scoring_evidence": record["raw_scoring_evidence"],
         "probability_measure": record["probability_measure"],
@@ -874,28 +874,28 @@ def test_finite_outcome_scoring_bundle_digest_is_stable() -> None:
     assert ContentDigest.from_value(record) == ContentDigest.from_value(reordered)
 
 
-def test_finite_outcome_scoring_bundle_rejects_malformed_records() -> None:
-    record = _boolean_bundle_record()
+def test_finite_outcome_scoring_graph_rejects_malformed_records() -> None:
+    record = _boolean_graph_record()
     record["summary"] = {"mean_score": 0.0}
 
-    error = capture_bundle_error(lambda: FiniteOutcomeScoringBundle.from_record(record))
+    error = capture_graph_error(lambda: FiniteOutcomeScoringGraph.from_record(record))
 
     assert str(error) == "summary: unknown field"
 
 
-def test_finite_outcome_scoring_bundle_rejects_missing_evidence_identity() -> None:
-    record = _minimal_boolean_bundle_record()
+def test_finite_outcome_scoring_graph_rejects_missing_evidence_identity() -> None:
+    record = _minimal_boolean_graph_record()
     del record["id"]
 
     assert str(
-        capture_bundle_error(lambda: FiniteOutcomeScoringBundle.from_record(record))
+        capture_graph_error(lambda: FiniteOutcomeScoringGraph.from_record(record))
     ) == "id: missing required field"
 
-    record = _minimal_boolean_bundle_record()
+    record = _minimal_boolean_graph_record()
     del record["observation_id"]
 
     assert str(
-        capture_bundle_error(lambda: FiniteOutcomeScoringBundle.from_record(record))
+        capture_graph_error(lambda: FiniteOutcomeScoringGraph.from_record(record))
     ) == "observation_id: missing required field"
 
 
@@ -939,14 +939,14 @@ def capture_evidence_error(call: Callable[[], object]) -> RawScoringEvidenceVali
     raise AssertionError("expected RawScoringEvidenceValidationError")
 
 
-def capture_bundle_error(
+def capture_graph_error(
     call: Callable[[], object],
-) -> FiniteOutcomeScoringBundleValidationError:
+) -> FiniteOutcomeScoringGraphValidationError:
     try:
         call()
-    except FiniteOutcomeScoringBundleValidationError as error:
+    except FiniteOutcomeScoringGraphValidationError as error:
         return error
-    raise AssertionError("expected FiniteOutcomeScoringBundleValidationError")
+    raise AssertionError("expected FiniteOutcomeScoringGraphValidationError")
 
 
 def _boolean_space() -> OutcomeSpace:
@@ -955,7 +955,7 @@ def _boolean_space() -> OutcomeSpace:
     )
 
 
-def _boolean_bundle_record() -> dict[str, object]:
+def _boolean_graph_record() -> dict[str, object]:
     return {
         "outcome_space": {
             "id": "core.boolean-outcome@0.1.0",
@@ -986,8 +986,8 @@ def _boolean_bundle_record() -> dict[str, object]:
     }
 
 
-def _minimal_boolean_bundle_record() -> dict[str, object]:
-    record = _boolean_bundle_record()
+def _minimal_boolean_graph_record() -> dict[str, object]:
+    record = _boolean_graph_record()
     raw_scoring_evidence = cast(Mapping[str, object], record.pop("raw_scoring_evidence"))
     record["id"] = raw_scoring_evidence["id"]
     record["observation_id"] = raw_scoring_evidence["observation_id"]
