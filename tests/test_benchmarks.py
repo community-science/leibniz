@@ -7,6 +7,7 @@ from leibniz.benchmarks import (
     BenchmarkDeclaration,
     BenchmarkDeclarationValidationError,
     BenchmarkManifest,
+    BenchmarkManifestDocument,
     BenchmarkManifestValidationError,
 )
 from leibniz.content import ContentDigest
@@ -189,6 +190,64 @@ def test_benchmark_manifest_digest_is_stable() -> None:
     assert ContentDigest.from_value(record) == ContentDigest.from_value(reordered)
 
 
+def test_benchmark_manifest_document_loads_json_bytes_with_digest() -> None:
+    document = BenchmarkManifestDocument.from_json_bytes(
+        b"""{
+            "name": "core.boolean-benchmark",
+            "id": "core.boolean-benchmark@0.1.0",
+            "declaration": {
+                "id": "core.boolean-benchmark@0.1.0",
+                "answer_space_id": "core.boolean-answer@0.1.0",
+                "oracle_acceptance_id": "core.finite-answer-accepted-event@0.1.0",
+                "prediction_interface_id": "core.finite-probability-measure-prediction@0.1.0",
+                "score_functional_id": "core.negative-log-accepted-mass@0.1.0",
+                "evidence_bundle_id": "core.finite-answer-scoring-bundle@0.1.0"
+            }
+        }"""
+    )
+
+    assert document.manifest == BenchmarkManifest.from_record(_benchmark_manifest_record())
+    assert document.digest == ContentDigest.from_value(_benchmark_manifest_record())
+
+
+def test_benchmark_manifest_document_rejects_invalid_json() -> None:
+    assert str(
+        capture_manifest_error(lambda: BenchmarkManifestDocument.from_json_bytes(b"\xff"))
+    ) == "manifest JSON must be UTF-8"
+    assert str(
+        capture_manifest_error(lambda: BenchmarkManifestDocument.from_json_bytes(b"{"))
+    ) == "invalid manifest JSON: Expecting property name enclosed in double quotes"
+    assert str(
+        capture_manifest_error(lambda: BenchmarkManifestDocument.from_json_bytes(b"[]"))
+    ) == "manifest JSON must be an object"
+
+
+def test_benchmark_manifest_document_rejects_invalid_manifest_record() -> None:
+    record = _benchmark_manifest_record()
+    record["name"] = "core.other-benchmark"
+
+    error = capture_manifest_error(
+        lambda: BenchmarkManifestDocument.from_json_bytes(_json_bytes(record))
+    )
+
+    assert str(error) == "name core.other-benchmark does not match id name core.boolean-benchmark"
+
+
+def test_benchmark_manifest_document_digest_is_stable() -> None:
+    left = BenchmarkManifestDocument.from_json_bytes(_json_bytes(_benchmark_manifest_record()))
+    right = BenchmarkManifestDocument.from_json_bytes(
+        _json_bytes(
+            {
+                "declaration": _benchmark_declaration_record(),
+                "name": "core.boolean-benchmark",
+                "id": "core.boolean-benchmark@0.1.0",
+            }
+        )
+    )
+
+    assert left.digest == right.digest
+
+
 def capture_benchmark_error(
     call: Callable[[], object],
 ) -> BenchmarkDeclarationValidationError:
@@ -226,6 +285,12 @@ def _benchmark_manifest_record() -> dict[str, object]:
         "name": "core.boolean-benchmark",
         "declaration": _benchmark_declaration_record(),
     }
+
+
+def _json_bytes(record: Mapping[str, object]) -> bytes:
+    import json
+
+    return json.dumps(record).encode("utf-8")
 
 
 def _boolean_bundle_record() -> dict[str, object]:
