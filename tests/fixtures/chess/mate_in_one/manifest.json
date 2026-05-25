@@ -1,0 +1,7 @@
+{
+  "id": "benchmarks.chess@0.1.0",
+  "outcome_space_id": "benchmarks.chess.uci-moves@0.1.0",
+  "observation_ids": [
+    "fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"
+  ]
+}
