@@ -9,6 +9,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+__all__ = ["PolicyViolation"]
+
 _FORBIDDEN_NAMES = frozenset(
     {
         ".leibniz",

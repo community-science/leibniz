@@ -19,6 +19,17 @@ from leibniz.identifiers import (
     SemanticVersion,
 )
 
+__all__ = [
+    "FieldKind",
+    "FieldSpec",
+    "RecordSpec",
+    "RecordValidationError",
+    "RecordValue",
+    "RecordViolation",
+    "ScalarKind",
+    "ValidatedRecord",
+]
+
 ScalarKind: TypeAlias = Literal["boolean", "integer", "number", "string"]
 FieldKind: TypeAlias = ScalarKind | Literal[
     "identifier",
