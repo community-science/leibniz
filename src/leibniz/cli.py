@@ -23,6 +23,7 @@ from leibniz.model_lineage import ModelLineageDocument
 from leibniz.model_manifests import ModelArtifactManifestDocument
 from leibniz.model_operations import ModelOperationDocument
 from leibniz.outcomes import OutcomeSpace
+from leibniz.projection_records import ProjectionRecordDocument
 from leibniz.publications import SubmissionPublicationDocument
 from leibniz.resources import ResourceReportDocument, ResourceReportSetDocument
 from leibniz.submission_registries import SubmissionRegistry, SubmissionRegistryDocument
@@ -129,6 +130,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     view_manifest.add_argument("path", type=Path)
 
+    projection_record = validate_subcommands.add_parser(
+        "projection-record",
+        help="validate a projection record document",
+    )
+    projection_record.add_argument("path", type=Path)
+
     model_derivation = validate_subcommands.add_parser(
         "model-derivation",
         help="validate a model derivation compatibility report document",
@@ -216,6 +223,10 @@ def _validate(args: argparse.Namespace) -> int:
         if artifact == "view-manifest":
             document = ViewManifestDocument.from_bytes(args.path.read_bytes())
             print(f"valid view manifest {document.manifest.id}")
+            return 0
+        if artifact == "projection-record":
+            document = ProjectionRecordDocument.from_bytes(args.path.read_bytes())
+            print(f"valid projection record {document.record.id}")
             return 0
         if artifact == "model-derivation":
             document = ModelDerivationCompatibilityReportDocument.from_bytes(args.path.read_bytes())
