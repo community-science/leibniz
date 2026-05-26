@@ -307,38 +307,45 @@ function BenchmarkModelsPane({
 
   return (
     <div className="benchmark-task">
-      <section className="benchmark-result-table-section">
-        <h3>Model Comparison</h3>
+      <section className="benchmark-model-workbench">
+        <div className="benchmark-model-workbench-heading">
+          <h3>Model Workbench</h3>
+          <span>{rows.length} candidates</span>
+        </div>
         <div className="benchmark-model-inspector-layout">
-          <div className="benchmark-model-grid">
-          {rows.map(({ inspection, model }) => (
-            <button
-              className={`benchmark-model-card ${model.model_key === selectedRow?.model.model_key ? 'selected' : ''}`}
-              key={model.model_key}
-              onClick={() => setSelectedModelKey(model.model_key)}
-              type="button"
-            >
-              <div className="benchmark-model-heading">
-                <strong>{shortDigest(model.architecture_digest)}</strong>
-                <span>{scoreLabel(model.score)}</span>
-              </div>
-              <dl>
-                <dt>Cost</dt>
-                <dd>{formatCost(costValue(model.cost_summary, costAxis))}</dd>
-                <dt>Complexity</dt>
-                <dd>{model.observed_complexities.join(', ') || 'none'}</dd>
-                <dt>Measurements</dt>
-                <dd>{model.measurement_count}</dd>
-                <dt>Runs</dt>
-                <dd>{model.run_ids.length}</dd>
-                <dt>Layers</dt>
-                <dd>{inspection?.layers.length ?? model.cost_summary.layer_count}</dd>
-                <dt>Source</dt>
-                <dd>{model.source_kinds.join(', ') || 'unknown'}</dd>
-              </dl>
-            </button>
-          ))}
-          </div>
+          <aside className="benchmark-model-rail" aria-label="Benchmark model candidates">
+            {rows.map(({ inspection, model }) => (
+              <button
+                className={`benchmark-model-card ${model.model_key === selectedRow?.model.model_key ? 'selected' : ''}`}
+                key={model.model_key}
+                onClick={() => setSelectedModelKey(model.model_key)}
+                type="button"
+              >
+                <div className="benchmark-model-heading">
+                  <strong>{shortDigest(model.architecture_digest)}</strong>
+                  <span>{scoreLabel(model.score)}</span>
+                </div>
+                <dl>
+                  <div>
+                    <dt>Cost</dt>
+                    <dd>{formatCost(costValue(model.cost_summary, costAxis))}</dd>
+                  </div>
+                  <div>
+                    <dt>Layers</dt>
+                    <dd>{inspection?.layers.length ?? model.cost_summary.layer_count}</dd>
+                  </div>
+                  <div>
+                    <dt>Runs</dt>
+                    <dd>{model.run_ids.length}</dd>
+                  </div>
+                  <div>
+                    <dt>Sources</dt>
+                    <dd>{model.source_kinds.length}</dd>
+                  </div>
+                </dl>
+              </button>
+            ))}
+          </aside>
           {selectedRow === undefined ? null : (
             <BenchmarkModelInspector
               costAxis={costAxis}
@@ -363,30 +370,33 @@ function BenchmarkModelInspector({
 }) {
   return (
     <article className="benchmark-model-detail">
-      <header className="benchmark-model-detail-header">
+      <header className="benchmark-model-artifact-hero">
+        <div className="benchmark-model-artifact-mark">M</div>
         <div>
+          <span>Model artifact</span>
           <h3>{shortDigest(model.architecture_digest)}</h3>
-          <p>{model.model_key}</p>
+          <code>{model.model_key}</code>
         </div>
-        <dl className="benchmark-model-detail-metrics">
-          <div>
-            <dt>Score</dt>
-            <dd>{model.score.toFixed(4)}</dd>
-          </div>
-          <div>
-            <dt>Cost</dt>
-            <dd>{formatCost(costValue(model.cost_summary, costAxis))}</dd>
-          </div>
-          <div>
-            <dt>Measurements</dt>
-            <dd>{model.measurement_count}</dd>
-          </div>
-          <div>
-            <dt>Runs</dt>
-            <dd>{model.run_ids.length}</dd>
-          </div>
-        </dl>
       </header>
+      <ModelArtifactFlow inspection={inspection} model={model} />
+      <dl className="benchmark-model-detail-metrics">
+        <div>
+          <dt>Score</dt>
+          <dd>{model.score.toFixed(4)}</dd>
+        </div>
+        <div>
+          <dt>Cost</dt>
+          <dd>{formatCost(costValue(model.cost_summary, costAxis))}</dd>
+        </div>
+        <div>
+          <dt>Measurements</dt>
+          <dd>{model.measurement_count}</dd>
+        </div>
+        <div>
+          <dt>Runs</dt>
+          <dd>{model.run_ids.length}</dd>
+        </div>
+      </dl>
       <section className="benchmark-model-detail-section">
         <h4>Architecture</h4>
         <dl className="benchmark-model-detail-grid">
@@ -409,6 +419,51 @@ function BenchmarkModelInspector({
   );
 }
 
+function ModelArtifactFlow({
+  inspection,
+  model,
+}: {
+  inspection: ModelInspectionRecord | undefined;
+  model: BenchmarkResultRecord['leaderboard'][number];
+}) {
+  const items = [
+    {
+      label: 'Architecture',
+      value: inspection === undefined
+        ? shortDigest(model.architecture_digest)
+        : referenceLabel(inspection.architecture),
+    },
+    {
+      label: 'Measurements',
+      value: inspection?.measurement_dataset === undefined
+        ? `${model.measurement_count} records`
+        : referenceLabel(inspection.measurement_dataset),
+    },
+    {
+      label: 'Training',
+      value: inspection?.training_provenance.length
+        ? `${inspection.training_provenance.length} records`
+        : `${model.run_ids.length} runs`,
+    },
+    {
+      label: 'Artifacts',
+      value: inspection?.model_artifacts.length
+        ? `${inspection.model_artifacts.length} records`
+        : 'not recorded',
+    },
+  ];
+  return (
+    <section className="benchmark-model-artifact-flow" aria-label="Selected model artifact flow">
+      {items.map((item) => (
+        <div key={item.label}>
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function ModelCostDetail({
   inspection,
   model,
@@ -420,19 +475,31 @@ function ModelCostDetail({
   return (
     <section className="benchmark-model-detail-section">
       <h4>Cost Summary</h4>
-      <dl className="benchmark-model-detail-grid">
-        <dt>Layers</dt>
-        <dd>{summary.layer_count}</dd>
-        <dt>Parameters</dt>
-        <dd>{optionalNumberLabel(summary.parameter_count)}</dd>
-        <dt>Bytes</dt>
-        <dd>{optionalNumberLabel(summary.parameter_bytes)}</dd>
-        <dt>FLOPs</dt>
-        <dd>{optionalNumberLabel(summary.inference_flops)}</dd>
-        <dt>Unknown Parameters</dt>
-        <dd>{unknownLayerLabel(inspection?.cost_summary.unknown_parameter_layers)}</dd>
-        <dt>Unknown FLOPs</dt>
-        <dd>{unknownLayerLabel(inspection?.cost_summary.unknown_flop_layers)}</dd>
+      <dl className="benchmark-model-cost-grid">
+        <div>
+          <dt>Layers</dt>
+          <dd>{summary.layer_count}</dd>
+        </div>
+        <div>
+          <dt>Parameters</dt>
+          <dd>{optionalNumberLabel(summary.parameter_count)}</dd>
+        </div>
+        <div>
+          <dt>Bytes</dt>
+          <dd>{optionalNumberLabel(summary.parameter_bytes)}</dd>
+        </div>
+        <div>
+          <dt>FLOPs</dt>
+          <dd>{optionalNumberLabel(summary.inference_flops)}</dd>
+        </div>
+        <div>
+          <dt>Unknown Parameters</dt>
+          <dd>{unknownLayerLabel(inspection?.cost_summary.unknown_parameter_layers)}</dd>
+        </div>
+        <div>
+          <dt>Unknown FLOPs</dt>
+          <dd>{unknownLayerLabel(inspection?.cost_summary.unknown_flop_layers)}</dd>
+        </div>
       </dl>
     </section>
   );
@@ -455,24 +522,30 @@ function ModelLayerTrace({ inspection }: { inspection: ModelInspectionRecord | u
           <article className="benchmark-model-layer" key={layer.index}>
             <div className="benchmark-model-layer-heading">
               <span>{layer.index}</span>
-              <strong>{layer.kind}</strong>
+              <div>
+                <strong>{operatorSummary(layer)}</strong>
+                <small>{layer.kind}</small>
+              </div>
             </div>
-            <dl className="benchmark-model-detail-grid">
-              <dt>Input</dt>
-              <dd>{optionalShapeLabel(layer.input_shape)}</dd>
-              <dt>Output</dt>
-              <dd>{optionalShapeLabel(layer.output_shape)}</dd>
-              <dt>Parameters</dt>
-              <dd>{optionalNumberLabel(layer.parameter_count)}</dd>
-              <dt>Bytes</dt>
-              <dd>{optionalNumberLabel(layer.parameter_bytes)}</dd>
-              <dt>FLOPs</dt>
-              <dd>{optionalNumberLabel(layer.inference_flops)}</dd>
-              <dt>Operator</dt>
-              <dd>{operatorSummary(layer)}</dd>
-              <dt>Config</dt>
-              <dd>{recordLabel(layer.parameters)}</dd>
+            <dl className="benchmark-model-layer-shape-grid">
+              <div>
+                <dt>Input</dt>
+                <dd>{optionalShapeLabel(layer.input_shape)}</dd>
+              </div>
+              <div>
+                <dt>Output</dt>
+                <dd>{optionalShapeLabel(layer.output_shape)}</dd>
+              </div>
+              <div>
+                <dt>Parameters</dt>
+                <dd>{optionalNumberLabel(layer.parameter_count)}</dd>
+              </div>
+              <div>
+                <dt>FLOPs</dt>
+                <dd>{optionalNumberLabel(layer.inference_flops)}</dd>
+              </div>
             </dl>
+            <p className="benchmark-model-layer-config">{recordLabel(layer.parameters)}</p>
             {operatorEntries(layer).length === 0 ? null : (
               <dl className="benchmark-model-operator-grid">
                 {operatorEntries(layer).map(([key, value]) => (
@@ -522,6 +595,8 @@ function ModelProvenanceDetail({
           <dl key={`${label}:${referenceLabel(reference)}`}>
             <dt>{label}</dt>
             <dd>{referenceLabel(reference)}</dd>
+            <dt>Kind</dt>
+            <dd>{reference.kind}</dd>
           </dl>
         ))}
       </div>

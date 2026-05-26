@@ -482,9 +482,19 @@ def _draw_mark(
         for point in _sample_bezier_curve(mark.control_points)
     )
     threshold = mark.width / (2.0 * resolution)
-    for y_index in range(resolution):
+    x_range = _pixel_range(
+        min(point[0] for point in curve_points) - threshold,
+        max(point[0] for point in curve_points) + threshold,
+        resolution=resolution,
+    )
+    y_range = _pixel_range(
+        min(point[1] for point in curve_points) - threshold,
+        max(point[1] for point in curve_points) + threshold,
+        resolution=resolution,
+    )
+    for y_index in y_range:
         y = (y_index + 0.5) / resolution
-        for x_index in range(resolution):
+        for x_index in x_range:
             x = (x_index + 0.5) / resolution
             if _polyline_distance((x, y), curve_points) <= threshold:
                 value_index = (
@@ -493,6 +503,12 @@ def _draw_mark(
                     + x_index
                 )
                 values[value_index] = max(values[value_index], mark.value)
+
+
+def _pixel_range(lower: float, upper: float, *, resolution: int) -> range:
+    start = max(0, math.floor(lower * resolution))
+    stop = min(resolution, math.ceil(upper * resolution))
+    return range(start, stop)
 
 
 def _sample_bezier_curve(
