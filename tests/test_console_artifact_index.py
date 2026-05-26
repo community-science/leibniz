@@ -41,6 +41,10 @@ _public_fixture_sources = (
         source_path=PurePosixPath("src/leibniz/benchmarks/digits/observation_formation.json"),
     ),
     ConsoleArtifactIndexSource(
+        kind="observation-showcase",
+        source_path=PurePosixPath("src/leibniz/benchmarks/digits/inspection_showcase.json"),
+    ),
+    ConsoleArtifactIndexSource(
         kind="benchmark-manifest",
         source_path=PurePosixPath("tests/fixtures/chess/mate_in_one/manifest.json"),
     ),
@@ -89,6 +93,7 @@ def test_console_artifact_index_validates_public_fixture_documents() -> None:
         "materialization-plan",
         "measurement",
         "observation-formation-declaration",
+        "observation-showcase",
     }
     assert all("reference" in artifact for artifact in artifacts)
     assert all("digest" in artifact for artifact in artifacts)
@@ -113,6 +118,7 @@ def test_console_artifact_index_records_available_dependency_references() -> Non
     observation_formation = artifacts[
         "src/leibniz/benchmarks/digits/observation_formation.json"
     ]
+    observation_showcase = artifacts["src/leibniz/benchmarks/digits/inspection_showcase.json"]
 
     assert finite_measurement["dependencies"] == [
         {
@@ -155,6 +161,20 @@ def test_console_artifact_index_records_available_dependency_references() -> Non
             "kind": "benchmark-manifest",
             "protocol_id": "benchmarks.digits@0.1.0",
         }
+    ]
+    assert observation_showcase["dependencies"] == [
+        {
+            "kind": "benchmark-manifest",
+            "protocol_id": "benchmarks.digits@0.1.0",
+        },
+        {
+            "kind": "observation-formation-declaration",
+            "protocol_id": "benchmarks.digits.observation-formation@0.1.0",
+        },
+        {
+            "kind": "materialization-declaration",
+            "protocol_id": "benchmarks.digits.materialization@0.1.0",
+        },
     ]
 
 

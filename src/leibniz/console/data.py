@@ -18,6 +18,11 @@ from leibniz.console.artifact_index import (
     ConsoleArtifactIndexValidationError,
 )
 from leibniz.documents import canonical_document_bytes
+from leibniz.identifiers import ProtocolIdentifier, ProtocolName
+from leibniz.materialization import MaterializationDeclarationDocument, MaterializationPlan
+from leibniz.observation_formation import ObservationFormationDeclarationDocument
+from leibniz.observation_inspection import ObservationInspectionRecord
+from leibniz.observation_showcases import ObservationShowcaseDocument
 
 __all__ = [
     "ConsoleData",
@@ -39,6 +44,7 @@ class ConsoleData:
 
     artifact_index: ConsoleArtifactIndex
     artifact_details: tuple[Mapping[str, object], ...]
+    observation_inspections: tuple[Mapping[str, object], ...]
     source_modules: tuple[Mapping[str, object], ...]
 
     def to_record(self) -> dict[str, object]:
@@ -47,6 +53,7 @@ class ConsoleData:
             "format_version": _format_version,
             "artifact_index": self.artifact_index.to_record(),
             "artifact_details": list(self.artifact_details),
+            "observation_inspections": list(self.observation_inspections),
             "source_modules": list(self.source_modules),
         }
 
@@ -65,10 +72,12 @@ class ConsoleDataBuilder:
         sources = tuple(self._discover_sources(tuple(roots)))
         artifact_index = self._artifact_builder.build(sources)
         details = tuple(self._detail_for_source(source) for source in artifact_index.entries)
+        observation_inspections = tuple(self._observation_inspections(artifact_index.entries))
         source_modules = tuple(self._source_modules())
         return ConsoleData(
             artifact_index=artifact_index,
             artifact_details=details,
+            observation_inspections=observation_inspections,
             source_modules=source_modules,
         )
 
@@ -222,7 +231,109 @@ class ConsoleDataBuilder:
                 ),
                 "components": record["components"],
             }
+        if kind == "observation-showcase":
+            return {
+                "id": record["id"],
+                "benchmark_id": record["benchmark_id"],
+                "formation_declaration": record["formation_declaration"],
+                "materialization_declaration": record["materialization_declaration"],
+                "samples": record["samples"],
+            }
         raise ConsoleDataValidationError(f"unsupported document kind: {kind}")
+
+    def _observation_inspections(
+        self,
+        entries: tuple[ConsoleArtifactIndexEntry, ...],
+    ) -> tuple[Mapping[str, object], ...]:
+        formation_declarations = {
+            document.declaration.id: document.declaration
+            for document in (
+                ObservationFormationDeclarationDocument.from_bytes(
+                    self._repository_path(
+                        entry.source_path,
+                        description="source document",
+                    ).read_bytes()
+                )
+                for entry in entries
+                if entry.kind == "observation-formation-declaration"
+            )
+        }
+        materialization_declarations = {
+            document.declaration.id: document.declaration
+            for document in (
+                MaterializationDeclarationDocument.from_bytes(
+                    self._repository_path(
+                        entry.source_path,
+                        description="source document",
+                    ).read_bytes()
+                )
+                for entry in entries
+                if entry.kind == "materialization-declaration"
+            )
+        }
+        inspections: list[Mapping[str, object]] = []
+        for entry in entries:
+            if entry.kind != "observation-showcase":
+                continue
+            document = ObservationShowcaseDocument.from_bytes(
+                self._repository_path(entry.source_path, description="source document").read_bytes()
+            )
+            showcase = document.manifest
+            if showcase.formation_declaration.protocol_id is None:
+                raise ConsoleDataValidationError(
+                    f"{entry.source_path}: formation_declaration must include protocol_id"
+                )
+            if showcase.materialization_declaration.protocol_id is None:
+                raise ConsoleDataValidationError(
+                    f"{entry.source_path}: materialization_declaration must include protocol_id"
+                )
+            try:
+                formation = formation_declarations[showcase.formation_declaration.protocol_id]
+                materialization = materialization_declarations[
+                    showcase.materialization_declaration.protocol_id
+                ]
+            except KeyError as error:
+                raise ConsoleDataValidationError(
+                    f"{entry.source_path}: showcase references an undiscovered declaration"
+                ) from error
+            if not showcase.formation_declaration.matches_record(formation.to_record()):
+                raise ConsoleDataValidationError(
+                    f"{entry.source_path}: formation_declaration reference does not match"
+                )
+            if not showcase.materialization_declaration.matches_record(
+                materialization.to_record()
+            ):
+                raise ConsoleDataValidationError(
+                    f"{entry.source_path}: materialization_declaration reference does not match"
+                )
+            for sample in showcase.samples:
+                plan = MaterializationPlan.resolve(
+                    id=_child_identifier(sample.id, "materialization-plan"),
+                    declaration=materialization,
+                    scale_assignment=sample.scale_assignment,
+                    complexity_assignment=sample.complexity_assignment,
+                    seed=sample.seed,
+                )
+                observation = formation.form_observation(
+                    id=_child_identifier(sample.id, "formed-observation"),
+                    plan=plan,
+                    component_sequence=sample.component_sequence,
+                )
+                inspection = ObservationInspectionRecord.from_formed_observation(
+                    id=sample.id,
+                    observation=observation,
+                    materialization_plan=plan,
+                    sample_index=sample.sample_index,
+                    outcome_id=sample.outcome_id,
+                )
+                record = inspection.to_record()
+                record["label"] = sample.label
+                record["showcase"] = {
+                    "id": str(showcase.id),
+                    "source_path": entry.source_path.as_posix(),
+                }
+                inspections.append(record)
+        return tuple(inspections)
 
     def _required_mapping(self, value: object, description: str) -> Mapping[str, object]:
         if not isinstance(value, Mapping):
@@ -345,6 +456,13 @@ def _main(argv: list[str] | None = None) -> int:
 
     sys.stdout.buffer.write(data.to_bytes())
     return 0
+
+
+def _child_identifier(parent: ProtocolIdentifier, suffix: str) -> ProtocolIdentifier:
+    return ProtocolIdentifier(
+        name=ProtocolName.parse(f"{parent.name}.{suffix}"),
+        version=parent.version,
+    )
 
 
 if __name__ == "__main__":

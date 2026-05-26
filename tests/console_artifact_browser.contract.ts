@@ -67,6 +67,11 @@ const observationFormation = artifacts.find(
 );
 const observationFormationDetail =
   observationFormation === undefined ? undefined : detailForArtifact(details, observationFormation);
+const observationShowcase = artifacts.find(
+  (artifact) => artifact.protocol_id === 'benchmarks.digits.inspection-showcase@0.1.0',
+);
+const observationShowcaseDetail =
+  observationShowcase === undefined ? undefined : detailForArtifact(details, observationShowcase);
 
 assertEqual(
   kinds.join(','),
@@ -79,11 +84,12 @@ assertEqual(
     'materialization-plan',
     'measurement',
     'observation-formation-declaration',
+    'observation-showcase',
   ].join(','),
   'kinds',
 );
 assertEqual(kinds[0], allArtifactKinds, 'all kind first');
-assertEqual(dependencyCount, 12, 'dependency count');
+assertEqual(dependencyCount, 15, 'dependency count');
 assertEqual(measurementArtifacts.length, 2, 'measurement filter count');
 assertEqual(
   measurementArtifacts.map((artifact) => artifact.dependencies[0]?.protocol_id).join(','),
@@ -195,6 +201,13 @@ assertEqual(
     : '',
   '10:38',
   'digits observation formation coverage',
+);
+assertEqual(
+  observationShowcaseDetail?.kind === 'observation-showcase'
+    ? observationShowcaseDetail.samples.map((sample) => sample.label).join(',')
+    : '',
+  'Single digit 7,Three digit sequence 123',
+  'digits observation showcase samples',
 );
 assertEqual(
   detailForArtifact(details, artifacts[0])?.kind,

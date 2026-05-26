@@ -17,8 +17,9 @@ const consoleDataSource = parsed.source_modules.find(
 
 assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
-assertEqual(artifacts.length, 11, 'artifact count');
+assertEqual(artifacts.length, 12, 'artifact count');
 assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detail coverage');
+assertEqual(parsed.observation_inspections.length, 2, 'observation inspection count');
 assertEqual(parsed.source_modules.length > 20, true, 'source module count');
 assertEqual(consoleDataSource?.source_path, 'src/leibniz/console/data.py', 'console data source path');
 assertEqual(
@@ -45,8 +46,19 @@ assertEqual(
     'measurement:tests/fixtures/chess/mate_in_one/measurement.json',
     'measurement:tests/fixtures/finite_outcome/measurement.json',
     'observation-formation-declaration:src/leibniz/benchmarks/digits/observation_formation.json',
+    'observation-showcase:src/leibniz/benchmarks/digits/inspection_showcase.json',
   ].join('|'),
   'artifact order',
+);
+assertEqual(
+  parsed.observation_inspections.map((inspection) => inspection.label).join('|'),
+  'Single digit 7|Three digit sequence 123',
+  'observation inspection labels',
+);
+assertEqual(
+  parsed.observation_inspections[1]?.component_sequence.join(','),
+  '1,2,3',
+  'observation inspection component sequence',
 );
 assertEqual(
   artifacts
