@@ -22,11 +22,14 @@ from leibniz.console.artifact_index import (
 from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.local_results import LocalResultImportError, load_console_result_view
-from leibniz.materialization import MaterializationDeclarationDocument, MaterializationPlan
+from leibniz.materialization import MaterializationDeclarationDocument
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
-from leibniz.observation_inspection import ObservationInspectionRecord
-from leibniz.observation_showcases import ObservationShowcaseDocument
+from leibniz.observation_generation import (
+    ObservationGenerator,
+    field_to_png_data_url,
+    load_observation_generator,
+)
 from leibniz.performance_bundles import PerformanceViewBundle, PerformanceViewBundleDocument
 
 __all__ = [
@@ -38,6 +41,10 @@ __all__ = [
 _format = "leibniz.console-data"
 _format_version = 1
 _document_suffix = "." + "".join(("j", "s", "o", "n"))
+_generated_batch_cache: dict[
+    tuple[str, str, int, int, int, str, bool, tuple[tuple[int, ...], ...] | None],
+    Mapping[str, object],
+] = {}
 
 
 class ConsoleDataValidationError(ValueError):
@@ -50,10 +57,10 @@ class ConsoleData:
 
     artifact_index: ConsoleArtifactIndex
     artifact_details: tuple[Mapping[str, object], ...]
-    observation_inspections: tuple[Mapping[str, object], ...]
     performance_views: tuple[Mapping[str, object], ...]
     result_views: tuple[Mapping[str, object], ...]
     model_inspections: tuple[Mapping[str, object], ...]
+    benchmark_tasks: tuple[Mapping[str, object], ...]
     source_modules: tuple[Mapping[str, object], ...]
 
     def to_record(self) -> dict[str, object]:
@@ -62,10 +69,10 @@ class ConsoleData:
             "format_version": _format_version,
             "artifact_index": self.artifact_index.to_record(),
             "artifact_details": list(self.artifact_details),
-            "observation_inspections": list(self.observation_inspections),
             "performance_views": list(self.performance_views),
             "result_views": list(self.result_views),
             "model_inspections": list(self.model_inspections),
+            "benchmark_tasks": list(self.benchmark_tasks),
             "source_modules": list(self.source_modules),
         }
 
@@ -89,18 +96,18 @@ class ConsoleDataBuilder:
         sources = tuple(self._discover_sources(tuple(roots)))
         artifact_index = self._artifact_builder.build(sources)
         details = tuple(self._detail_for_source(source) for source in artifact_index.entries)
-        observation_inspections = tuple(self._observation_inspections(artifact_index.entries))
         performance_views = tuple(self._performance_views(artifact_index.entries))
         result_views = tuple(self._result_views(tuple(result_roots)))
         model_inspections = tuple(self._model_inspections(artifact_index.entries))
+        benchmark_tasks = tuple(self._benchmark_tasks(artifact_index.entries))
         source_modules = tuple(self._source_modules())
         return ConsoleData(
             artifact_index=artifact_index,
             artifact_details=details,
-            observation_inspections=observation_inspections,
             performance_views=performance_views,
             result_views=result_views,
             model_inspections=model_inspections,
+            benchmark_tasks=benchmark_tasks,
             source_modules=source_modules,
         )
 
@@ -282,100 +289,6 @@ class ConsoleDataBuilder:
             }
         raise ConsoleDataValidationError(f"unsupported document kind: {kind}")
 
-    def _observation_inspections(
-        self,
-        entries: tuple[ConsoleArtifactIndexEntry, ...],
-    ) -> tuple[Mapping[str, object], ...]:
-        formation_declarations = {
-            document.declaration.id: document.declaration
-            for document in (
-                ObservationFormationDeclarationDocument.from_bytes(
-                    self._repository_path(
-                        entry.source_path,
-                        description="source document",
-                    ).read_bytes()
-                )
-                for entry in entries
-                if entry.kind == "observation-formation-declaration"
-            )
-        }
-        materialization_declarations = {
-            document.declaration.id: document.declaration
-            for document in (
-                MaterializationDeclarationDocument.from_bytes(
-                    self._repository_path(
-                        entry.source_path,
-                        description="source document",
-                    ).read_bytes()
-                )
-                for entry in entries
-                if entry.kind == "materialization-declaration"
-            )
-        }
-        inspections: list[Mapping[str, object]] = []
-        for entry in entries:
-            if entry.kind != "observation-showcase":
-                continue
-            document = ObservationShowcaseDocument.from_bytes(
-                self._repository_path(entry.source_path, description="source document").read_bytes()
-            )
-            showcase = document.manifest
-            if showcase.formation_declaration.protocol_id is None:
-                raise ConsoleDataValidationError(
-                    f"{entry.source_path}: formation_declaration must include protocol_id"
-                )
-            if showcase.materialization_declaration.protocol_id is None:
-                raise ConsoleDataValidationError(
-                    f"{entry.source_path}: materialization_declaration must include protocol_id"
-                )
-            try:
-                formation = formation_declarations[showcase.formation_declaration.protocol_id]
-                materialization = materialization_declarations[
-                    showcase.materialization_declaration.protocol_id
-                ]
-            except KeyError as error:
-                raise ConsoleDataValidationError(
-                    f"{entry.source_path}: showcase references an undiscovered declaration"
-                ) from error
-            if not showcase.formation_declaration.matches_record(formation.to_record()):
-                raise ConsoleDataValidationError(
-                    f"{entry.source_path}: formation_declaration reference does not match"
-                )
-            if not showcase.materialization_declaration.matches_record(
-                materialization.to_record()
-            ):
-                raise ConsoleDataValidationError(
-                    f"{entry.source_path}: materialization_declaration reference does not match"
-                )
-            for sample in showcase.samples:
-                plan = MaterializationPlan.resolve(
-                    id=_child_identifier(sample.id, "materialization-plan"),
-                    declaration=materialization,
-                    scale_assignment=sample.scale_assignment,
-                    complexity_assignment=sample.complexity_assignment,
-                    seed=sample.seed,
-                )
-                observation = formation.form_observation(
-                    id=_child_identifier(sample.id, "formed-observation"),
-                    plan=plan,
-                    component_sequence=sample.component_sequence,
-                )
-                inspection = ObservationInspectionRecord.from_formed_observation(
-                    id=sample.id,
-                    observation=observation,
-                    materialization_plan=plan,
-                    sample_index=sample.sample_index,
-                    outcome_id=sample.outcome_id,
-                )
-                record = inspection.to_record()
-                record["label"] = sample.label
-                record["showcase"] = {
-                    "id": str(showcase.id),
-                    "source_path": entry.source_path.as_posix(),
-                }
-                inspections.append(record)
-        return tuple(inspections)
-
     def _performance_views(
         self,
         entries: tuple[ConsoleArtifactIndexEntry, ...],
@@ -482,6 +395,155 @@ class ConsoleDataBuilder:
             record["source_path"] = entry.source_path.as_posix()
             inspections.append(record)
         return tuple(inspections)
+
+    def _benchmark_tasks(
+        self,
+        entries: tuple[ConsoleArtifactIndexEntry, ...],
+    ) -> tuple[Mapping[str, object], ...]:
+        tasks: list[Mapping[str, object]] = []
+        for entry in entries:
+            if entry.kind != "benchmark-manifest":
+                continue
+            benchmark_root = self._repository_path(
+                entry.source_path,
+                description="benchmark manifest",
+            ).parent
+            required = (
+                "manifest",
+                "latent_factors",
+                "materialization",
+                "observation_formation",
+            )
+            if any(not (benchmark_root / (name + _document_suffix)).is_file() for name in required):
+                continue
+            generator = load_observation_generator(benchmark_root)
+            manifest = generator.benchmark_manifest
+            if manifest.outcome_sequence is None:
+                continue
+            if manifest.scale_parameter is None:
+                raise ConsoleDataValidationError(
+                    f"{entry.source_path}: benchmark task requires scale_parameter"
+                )
+            atom_count = manifest.outcome_sequence.atom_count
+            scales = (1, 2, 3, 4)
+            batches: list[Mapping[str, object]] = []
+            for scale in scales:
+                batches.append(
+                    self._generated_observation_batch(
+                        generator=generator,
+                        mode="canonical",
+                        label=f"Canonical L={scale}",
+                        scale=scale,
+                        sample_count=4,
+                        seed=101,
+                        sample_card_density="standard",
+                        aggregate_mode=False,
+                    )
+                )
+            batches.append(
+                self._generated_observation_batch(
+                    generator=generator,
+                    mode="symbol-probe",
+                    label="Symbol probe",
+                    scale=1,
+                    sample_count=atom_count,
+                    seed=101,
+                    component_sequences=tuple((digit,) for digit in range(atom_count)),
+                    sample_card_density="compact",
+                    aggregate_mode=False,
+                )
+            )
+            for scale in scales:
+                batches.append(
+                    self._generated_observation_batch(
+                        generator=generator,
+                        mode="complexity-sweep",
+                        label=f"Complexity C={scale}",
+                        scale=scale,
+                        sample_count=1,
+                        seed=202,
+                        component_sequences=(
+                            tuple(index % atom_count for index in range(scale)),
+                        ),
+                        sample_card_density="standard",
+                        aggregate_mode=True,
+                    )
+                )
+            tasks.append(
+                {
+                    "kind": "generated-observations",
+                    "benchmark_id": str(manifest.id),
+                    "label": _title_from_protocol_name(str(manifest.name)),
+                    "source_path": entry.source_path.as_posix(),
+                    "scale_axis": manifest.scale_parameter.symbol,
+                    "complexity_axis": manifest.complexity_coordinate,
+                    "outcome_atom_name": manifest.outcome_sequence.atom_name,
+                    "outcome_atom_count": atom_count,
+                    "batches": batches,
+                }
+            )
+        return tuple(tasks)
+
+    def _generated_observation_batch(
+        self,
+        *,
+        generator: ObservationGenerator,
+        mode: str,
+        label: str,
+        scale: int,
+        sample_count: int,
+        seed: int,
+        sample_card_density: str,
+        aggregate_mode: bool,
+        component_sequences: tuple[tuple[int, ...], ...] | None = None,
+    ) -> Mapping[str, object]:
+        cache_key = (
+            str(generator.benchmark_manifest.id),
+            mode,
+            scale,
+            sample_count,
+            seed,
+            sample_card_density,
+            aggregate_mode,
+            component_sequences,
+        )
+        cached = _generated_batch_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        batch = generator.sample_batch(
+            scale=scale,
+            sample_count=sample_count,
+            seed=seed,
+            component_sequences=component_sequences,
+        )
+        record = {
+            "mode": mode,
+            "label": label,
+            "scale": batch.scale,
+            "seed": batch.seed,
+            "sample_count": len(batch.samples),
+            "presentation": {
+                "sample_card_density": sample_card_density,
+                "aggregate_mode": aggregate_mode,
+            },
+            "samples": [
+                {
+                    "index": sample.index,
+                    "outcome_id": sample.outcome_id,
+                    "component_sequence": list(sample.observation.component_sequence),
+                    "complexity": sample.complexity,
+                    "field_shape": list(sample.field.shape),
+                    "image_data_url": field_to_png_data_url(sample.field),
+                    "materialization_plan": sample.materialization_plan.to_record(),
+                    "latent_coordinates": [
+                        dict(coordinate) for coordinate in sample.latent_coordinates
+                    ],
+                }
+                for sample in batch.samples
+            ],
+        }
+        _generated_batch_cache[cache_key] = record
+        return record
 
     def _required_mapping(self, value: object, description: str) -> Mapping[str, object]:
         if not isinstance(value, Mapping):
@@ -659,18 +721,17 @@ def _main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _child_identifier(parent: ProtocolIdentifier, suffix: str) -> ProtocolIdentifier:
-    return ProtocolIdentifier(
-        name=ProtocolName.parse(f"{parent.name}.{suffix}"),
-        version=parent.version,
-    )
-
-
 def _model_inspection_identifier(architecture_id: ProtocolIdentifier) -> ProtocolIdentifier:
     return ProtocolIdentifier(
         name=ProtocolName.parse(f"model-inspections.{architecture_id.name}"),
         version=architecture_id.version,
     )
+
+
+def _title_from_protocol_name(name: str) -> str:
+    parts = name.split(".")
+    label = parts[-1] if parts else name
+    return " ".join(word.capitalize() for word in label.replace("-", "_").split("_") if word)
 
 
 if __name__ == "__main__":

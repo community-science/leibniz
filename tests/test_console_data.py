@@ -67,15 +67,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     ]
     assert {artifact["validation_status"] for artifact in artifacts} == {"valid"}
 
-    inspections = cast(list[dict[str, object]], record["observation_inspections"])
-    assert [inspection["label"] for inspection in inspections] == [
-        "Single digit 7",
-        "Three digit sequence 123",
-    ]
-    assert inspections[0]["scale_assignment"] == {"values": [{"axis": "L", "value": 1}]}
-    assert inspections[1]["complexity_assignment"] == {"values": [{"axis": "C", "value": 3}]}
-    assert inspections[1]["component_sequence"] == [1, 2, 3]
-    assert inspections[1]["outcome_id"] == "digit-1-2-3"
+    assert "observation_inspections" not in record
 
     performance_detail = next(
         detail for detail in details if detail["kind"] == "performance-view-bundle"
@@ -119,6 +111,44 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         ("flatten", [4]),
         ("dense", [10]),
     ]
+
+    benchmark_tasks = cast(list[dict[str, object]], record["benchmark_tasks"])
+    assert len(benchmark_tasks) == 1
+    task = benchmark_tasks[0]
+    assert task["kind"] == "generated-observations"
+    assert task["benchmark_id"] == "benchmarks.digits@0.1.0"
+    assert task["scale_axis"] == "L"
+    assert task["complexity_axis"] == "C"
+    assert task["outcome_atom_count"] == 10
+    batches = cast(list[dict[str, object]], task["batches"])
+    assert [(batch["mode"], batch["scale"], batch["sample_count"]) for batch in batches] == [
+        ("canonical", 1, 4),
+        ("canonical", 2, 4),
+        ("canonical", 3, 4),
+        ("canonical", 4, 4),
+        ("symbol-probe", 1, 10),
+        ("complexity-sweep", 1, 1),
+        ("complexity-sweep", 2, 1),
+        ("complexity-sweep", 3, 1),
+        ("complexity-sweep", 4, 1),
+    ]
+    symbol_probe = batches[4]
+    symbol_presentation = cast(dict[str, object], symbol_probe["presentation"])
+    assert symbol_presentation == {
+        "sample_card_density": "compact",
+        "aggregate_mode": False,
+    }
+    symbol_samples = cast(list[dict[str, object]], symbol_probe["samples"])
+    assert [sample["component_sequence"] for sample in symbol_samples] == [
+        [digit] for digit in range(10)
+    ]
+    assert str(symbol_samples[0]["image_data_url"]).startswith("data:image/png;base64,")
+    assert symbol_samples[0]["field_shape"] == [1, 32, 32]
+    sweep_presentation = cast(dict[str, object], batches[5]["presentation"])
+    assert sweep_presentation == {
+        "sample_card_density": "standard",
+        "aggregate_mode": True,
+    }
 
 
 def test_console_data_includes_public_source_module_inventory() -> None:
