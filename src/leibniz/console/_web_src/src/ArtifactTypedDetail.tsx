@@ -51,12 +51,45 @@ export function ArtifactTypedDetail({
     return (
       <DetailSection title="Benchmark">
         <DetailItem label="Benchmark ID" value={detail.id} />
-        <DetailItem label="Outcome Space" value={detail.outcome_space.id} />
-        <DetailItem label="Outcomes" value={String(detail.outcome_space.outcomes.length)} />
+        {detail.outcome_space === undefined ? null : (
+          <>
+            <DetailItem label="Outcome Space" value={detail.outcome_space.id} />
+            <DetailItem label="Outcomes" value={String(detail.outcome_space.outcomes.length)} />
+          </>
+        )}
+        {detail.outcome_sequence === undefined ? null : (
+          <>
+            <DetailItem
+              label="Outcome Atoms"
+              value={`${detail.outcome_sequence.atom_count} ${detail.outcome_sequence.atom_name}s`}
+            />
+            <DetailItem
+              label="Sequence Length"
+              value={detail.outcome_sequence.length_parameter}
+            />
+          </>
+        )}
+        {detail.scale_parameter === undefined ? null : (
+          <DetailItem
+            label="Scale Parameter"
+            value={`${detail.scale_parameter.symbol} >= ${detail.scale_parameter.minimum}`}
+          />
+        )}
+        {detail.complexity_coordinate === undefined ? null : (
+          <DetailItem label="Complexity" value={detail.complexity_coordinate} />
+        )}
+        {detail.latent_factor_declaration?.protocol_id === undefined ? null : (
+          <DetailItem
+            label="Latent Factors"
+            value={detail.latent_factor_declaration.protocol_id}
+          />
+        )}
         {detail.observation_ids === undefined ? null : (
           <DetailItem label="Observations" value={String(detail.observation_ids.length)} />
         )}
-        <OutcomeList outcomes={detail.outcome_space.outcomes.map((outcome) => outcome.id)} />
+        {detail.outcome_space === undefined ? null : (
+          <OutcomeList outcomes={detail.outcome_space.outcomes.map((outcome) => outcome.id)} />
+        )}
       </DetailSection>
     );
   }

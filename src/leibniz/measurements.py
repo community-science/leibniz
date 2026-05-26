@@ -116,6 +116,10 @@ class MeasurementRecord:
         return ContentDigest.from_value(self.to_record())
 
     def validate_manifest(self, manifest: BenchmarkManifest) -> None:
+        if manifest.outcome_space is None:
+            raise MeasurementRecordValidationError(
+                "scale-indexed benchmark manifests require resolved outcome spaces"
+            )
         if self.benchmark_id != manifest.id:
             raise MeasurementRecordValidationError(
                 f"benchmark_id {self.benchmark_id} does not match manifest {manifest.id}"

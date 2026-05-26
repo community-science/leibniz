@@ -1,0 +1,19 @@
+{
+  "id": "benchmarks.digits@0.1.0",
+  "name": "benchmarks.digits",
+  "outcome_sequence": {
+    "atom_count": 10,
+    "atom_name": "digit",
+    "length_parameter": "L"
+  },
+  "scale_parameter": {
+    "symbol": "L",
+    "minimum": 1,
+    "description": "Number of digit slots in the image."
+  },
+  "latent_factor_declaration": {
+    "kind": "latent-factor-declaration",
+    "protocol_id": "benchmarks.digits.latent-factors@0.1.0"
+  },
+  "complexity_coordinate": "C"
+}

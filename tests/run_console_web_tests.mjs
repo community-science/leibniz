@@ -18,9 +18,13 @@ const generatedDataContracts = new Set([
   'tests/console_data_transport.contract.ts',
 ]);
 
-const generatedPayload = run('python', ['-m', 'leibniz.console.data', 'tests/fixtures'], {
-  captureOutput: true,
-});
+const generatedPayload = run(
+  'python',
+  ['-m', 'leibniz.console.data', 'tests/fixtures', 'src/leibniz/benchmarks'],
+  {
+    captureOutput: true,
+  },
+);
 writeFileSync(generatedPayloadPath, generatedPayload);
 assertShellUsesGeneratedConsoleData();
 

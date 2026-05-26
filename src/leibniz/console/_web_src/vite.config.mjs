@@ -25,10 +25,14 @@ function leibnizConsoleData() {
       if (id !== resolvedConsoleDataModuleId) {
         return null;
       }
-      const payload = execFileSync('python', ['-m', 'leibniz.console.data', 'tests/fixtures'], {
-        cwd: repositoryRoot,
-        encoding: 'utf8',
-      });
+      const payload = execFileSync(
+        'python',
+        ['-m', 'leibniz.console.data', 'tests/fixtures', 'src/leibniz/benchmarks'],
+        {
+          cwd: repositoryRoot,
+          encoding: 'utf8',
+        },
+      );
       return [
         "import { parseConsoleDataRecord } from '/src/consoleData.ts';",
         `const payload = ${payload};`,

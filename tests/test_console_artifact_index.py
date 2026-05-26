@@ -18,6 +18,10 @@ _public_fixture_sources = (
     ),
     ConsoleArtifactIndexSource(
         kind="benchmark-manifest",
+        source_path=PurePosixPath("src/leibniz/benchmarks/digits/manifest.json"),
+    ),
+    ConsoleArtifactIndexSource(
+        kind="benchmark-manifest",
         source_path=PurePosixPath("tests/fixtures/chess/mate_in_one/manifest.json"),
     ),
     ConsoleArtifactIndexSource(
@@ -79,11 +83,18 @@ def test_console_artifact_index_records_available_dependency_references() -> Non
     }
 
     finite_measurement = artifacts["tests/fixtures/finite_outcome/measurement.json"]
+    digits_manifest = artifacts["src/leibniz/benchmarks/digits/manifest.json"]
 
     assert finite_measurement["dependencies"] == [
         {
             "kind": "benchmark-manifest",
             "protocol_id": "core.boolean-benchmark@0.1.0",
+        }
+    ]
+    assert digits_manifest["dependencies"] == [
+        {
+            "kind": "latent-factor-declaration",
+            "protocol_id": "benchmarks.digits.latent-factors@0.1.0",
         }
     ]
 

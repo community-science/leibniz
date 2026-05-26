@@ -12,12 +12,15 @@ _repository_root = Path(__file__).parents[1]
 def test_console_data_discovery_is_deterministic() -> None:
     builder = ConsoleDataBuilder(_repository_root)
 
-    first = builder.discover((PurePosixPath("tests/fixtures"),))
+    first = builder.discover(
+        (PurePosixPath("tests/fixtures"), PurePosixPath("src/leibniz/benchmarks"))
+    )
     second = builder.discover(
         (
             PurePosixPath("tests/fixtures/finite_outcome"),
             PurePosixPath("tests/fixtures/chess"),
             PurePosixPath("tests/fixtures/architecture"),
+            PurePosixPath("src/leibniz/benchmarks"),
         )
     )
 
@@ -25,7 +28,9 @@ def test_console_data_discovery_is_deterministic() -> None:
 
 
 def test_console_data_discovers_supported_public_fixture_documents() -> None:
-    data = ConsoleDataBuilder(_repository_root).discover((PurePosixPath("tests/fixtures"),))
+    data = ConsoleDataBuilder(_repository_root).discover(
+        (PurePosixPath("tests/fixtures"), PurePosixPath("src/leibniz/benchmarks"))
+    )
     record = data.to_record()
 
     assert record["format"] == "leibniz.console-data"
@@ -37,6 +42,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
 
     assert [(artifact["kind"], artifact["source_path"]) for artifact in artifacts] == [
         ("architecture-manifest", "tests/fixtures/architecture/digits_pool/manifest.json"),
+        ("benchmark-manifest", "src/leibniz/benchmarks/digits/manifest.json"),
         ("benchmark-manifest", "tests/fixtures/chess/mate_in_one/manifest.json"),
         ("benchmark-manifest", "tests/fixtures/finite_outcome/manifest.json"),
         ("measurement", "tests/fixtures/chess/mate_in_one/measurement.json"),
@@ -71,7 +77,9 @@ def test_console_data_includes_public_source_module_inventory() -> None:
 
 
 def test_console_data_payload_is_a_canonical_object_document() -> None:
-    data = ConsoleDataBuilder(_repository_root).discover((PurePosixPath("tests/fixtures"),))
+    data = ConsoleDataBuilder(_repository_root).discover(
+        (PurePosixPath("tests/fixtures"), PurePosixPath("src/leibniz/benchmarks"))
+    )
 
     record = load_object_document(data.to_bytes(), description="console data")
 
