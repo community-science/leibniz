@@ -28,6 +28,7 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
             ".venv/pyvenv.cfg",
             ".vite/deps/react.js",
             "build/lib/leibniz/__init__.py",
+            "docs/latent-factor-complexity.md",
             "dist/leibniz-0.0.0.tar.gz",
             "src/leibniz/__pycache__/__init__.cpython-311.pyc",
             "src/leibniz/module.pyc",
@@ -58,6 +59,10 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
         ),
         PolicyViolation(
             path=PurePosixPath("build/lib/leibniz/__init__.py"),
+            message="tracked local, cache, or generated directory",
+        ),
+        PolicyViolation(
+            path=PurePosixPath("docs/latent-factor-complexity.md"),
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(

@@ -1,0 +1,58 @@
+{
+  "id": "benchmarks.digits.latent-factors@0.1.0",
+  "construction_factors": [
+    {
+      "name": "benchmarks.digits.construction.stroke-basis",
+      "degree_measure": {
+        "kind": "constant-count",
+        "count": 7
+      },
+      "description": "Fixed digit construction basis used by this declaration."
+    }
+  ],
+  "sample_factors": [
+    {
+      "name": "benchmarks.digits.sample.digit-identity",
+      "role": "content",
+      "degree_measure": {
+        "kind": "discrete-choice",
+        "count": 1,
+        "domain_size": 10
+      }
+    },
+    {
+      "name": "benchmarks.digits.sample.translation",
+      "role": "nuisance",
+      "degree_measure": {
+        "kind": "vector-dimension",
+        "count": 2
+      }
+    },
+    {
+      "name": "benchmarks.digits.materialization.canvas-side",
+      "role": "materialization",
+      "degree_measure": {
+        "kind": "scalar",
+        "count": 1
+      }
+    }
+  ],
+  "complexity_projections": [
+    {
+      "name": "benchmarks.digits.complexity.content",
+      "coordinate": "C",
+      "included_roles": ["content"],
+      "description": "Primary content-complexity coordinate."
+    }
+  ],
+  "resolution_requirements": [
+    {
+      "name": "benchmarks.digits.resolution.minimum-c1",
+      "resolution_axis": "N",
+      "content_coordinate": "C",
+      "content_complexity": 1,
+      "minimum_resolution": 32,
+      "basis": "declared-minimum"
+    }
+  ]
+}
