@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
+from leibniz.documents import document_filename_suffix
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.latent_factors import (
     LatentFactorDeclaration,
@@ -40,7 +41,7 @@ __all__ = [
     "load_observation_generator",
 ]
 
-_document_suffix = "." + "".join(("j", "s", "o", "n"))
+_document_suffix = document_filename_suffix()
 
 
 class ObservationGenerationError(ValueError):

@@ -19,7 +19,7 @@ from leibniz.console.artifact_index import (
     ConsoleArtifactIndexSource,
     ConsoleArtifactIndexValidationError,
 )
-from leibniz.documents import canonical_document_bytes
+from leibniz.documents import canonical_document_bytes, document_filename_suffix
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.local_results import LocalResultImportError, load_console_result_view
 from leibniz.materialization import MaterializationDeclarationDocument
@@ -40,7 +40,7 @@ __all__ = [
 
 _format = "leibniz.console-data"
 _format_version = 1
-_document_suffix = "." + "".join(("j", "s", "o", "n"))
+_document_suffix = document_filename_suffix()
 _generated_batch_cache: dict[
     tuple[str, str, int, int, int, str, bool, tuple[tuple[int, ...], ...] | None],
     Mapping[str, object],

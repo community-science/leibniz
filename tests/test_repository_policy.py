@@ -1,3 +1,4 @@
+import re
 from pathlib import Path, PurePosixPath
 
 from leibniz._repository_policy import PolicyViolation, RepositoryPolicy
@@ -99,3 +100,28 @@ def test_benchmark_artifact_tree_contains_only_data_files() -> None:
     assert tracked_files
     assert all(path.suffix == ".json" for path in tracked_files)
     assert not any(path.suffix == ".py" for path in tracked_files)
+
+
+def test_benchmark_names_are_not_hardcoded_outside_benchmark_artifacts() -> None:
+    source_root = _repository_root / "src" / "leibniz"
+    benchmark_root = source_root / "benchmarks"
+    benchmark_names = tuple(path.name for path in benchmark_root.iterdir() if path.is_dir())
+
+    offenders = tuple(
+        path.relative_to(_repository_root)
+        for path in sorted(source_root.rglob("*"))
+        if path.is_file()
+        and path.suffix in {".py", ".ts", ".tsx"}
+        and benchmark_root not in path.parents
+        and "node_modules" not in path.parts
+        and "dist" not in path.parts
+        and any(
+            re.search(
+                rf"(?i)(?<![a-z]){re.escape(benchmark_name)}(?![a-z])",
+                path.read_text(encoding="utf-8"),
+            )
+            for benchmark_name in benchmark_names
+        )
+    )
+
+    assert offenders == ()

@@ -7,6 +7,7 @@ from collections.abc import Mapping
 __all__ = [
     "ContentEncodingError",
     "canonical_document_bytes",
+    "document_filename_suffix",
     "load_object_document",
 ]
 
@@ -19,6 +20,12 @@ def canonical_document_bytes(value: object) -> bytes:
     from leibniz._formats._json import canonical_json_bytes
 
     return canonical_json_bytes(value)
+
+
+def document_filename_suffix() -> str:
+    """Return the current source-controlled document filename suffix."""
+
+    return ".json"
 
 
 def load_object_document(data: bytes, *, description: str) -> Mapping[str, object]:

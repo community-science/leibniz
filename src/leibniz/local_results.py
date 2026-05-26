@@ -9,7 +9,11 @@ from typing import cast
 
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.content import ContentDigest
-from leibniz.documents import canonical_document_bytes, load_object_document
+from leibniz.documents import (
+    canonical_document_bytes,
+    document_filename_suffix,
+    load_object_document,
+)
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementRecord
 from leibniz.publications import SubmissionPublicationDocument
@@ -23,7 +27,7 @@ __all__ = [
 
 _console_result_view_format = "leibniz.console.imported-results"
 _console_result_view_format_version = 1
-_document_suffix = "." + "".join(("j", "s", "o", "n"))
+_document_suffix = document_filename_suffix()
 _manifest_filename = "manifest" + _document_suffix
 
 
