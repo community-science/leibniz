@@ -134,7 +134,6 @@ export function ConsoleShell() {
         <div className="console-overview" hidden={currentTab !== 'benchmarks'}>
           <BenchmarksPanel
             modelInspections={consoleData.model_inspections}
-            performanceViews={consoleData.performance_views}
             resultViews={consoleData.result_views}
             tasks={consoleData.benchmark_tasks}
           />

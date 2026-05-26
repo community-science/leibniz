@@ -21,7 +21,6 @@ assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
 assertEqual(artifacts.length, 12, 'artifact count');
 assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detail coverage');
-assertEqual(parsed.performance_views.length, 0, 'performance view count');
 assertEqual(parsed.result_views.length, 0, 'result view count');
 assertEqual(parsed.model_inspections.length, 1, 'model inspection count');
 assertEqual(parsed.benchmark_tasks.length, 1, 'benchmark task count');

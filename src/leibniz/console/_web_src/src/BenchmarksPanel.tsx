@@ -2,14 +2,12 @@ import { Activity, ChevronDown, Gauge } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
-import { BenchmarkPerformanceBundle } from './BenchmarkPerformanceBundle.tsx';
 import { BenchmarkResultDashboard } from './BenchmarkResultDashboard.tsx';
 import {
   benchmarkResultsForTask,
   costValue,
   formatCost,
   modelComparisonRows,
-  performanceViewsForTask,
   scoreLabel,
   shortDigest,
 } from './benchmarkDashboardModel.ts';
@@ -19,19 +17,16 @@ import type {
   GeneratedObservationSampleRecord,
 } from './benchmarkTasks.ts';
 import type { ModelInspectionRecord } from './modelInspections.ts';
-import type { PerformanceViewRecord } from './performanceViews.ts';
 import type { BenchmarkResultRecord, ResultViewRecord } from './resultViews.ts';
 
 type SampleCardDensity = 'standard' | 'compact';
 
 export function BenchmarksPanel({
   modelInspections,
-  performanceViews,
   resultViews,
   tasks,
 }: {
   modelInspections: ModelInspectionRecord[];
-  performanceViews: PerformanceViewRecord[];
   resultViews: ResultViewRecord[];
   tasks: BenchmarkTaskRecord[];
 }) {
@@ -45,13 +40,6 @@ export function BenchmarksPanel({
     [resultViews, selected],
   );
   const selectedResult = benchmarkResults[0];
-  const benchmarkPerformanceViews = useMemo(
-    () =>
-      selected === undefined
-        ? []
-        : performanceViewsForTask(performanceViews, selected.benchmark_id),
-    [performanceViews, selected],
-  );
 
   if (selected === undefined) {
     return (
@@ -88,10 +76,7 @@ export function BenchmarksPanel({
             <BenchmarkTaskPane task={selected} />
           </CollapsibleBenchmarkSection>
           <CollapsibleBenchmarkSection label="Performance">
-            <BenchmarkPerformancePane
-              performanceViews={benchmarkPerformanceViews}
-              resultEntry={selectedResult}
-            />
+            <BenchmarkPerformancePane benchmark={selected} resultEntry={selectedResult} />
           </CollapsibleBenchmarkSection>
           <CollapsibleBenchmarkSection label="Models">
             <BenchmarkModelsPane
@@ -130,10 +115,10 @@ function CollapsibleBenchmarkSection({
 }
 
 function BenchmarkPerformancePane({
-  performanceViews,
+  benchmark,
   resultEntry,
 }: {
-  performanceViews: PerformanceViewRecord[];
+  benchmark: BenchmarkTaskRecord;
   resultEntry:
     | {
         sourcePath: string;
@@ -141,27 +126,30 @@ function BenchmarkPerformancePane({
       }
     | undefined;
 }) {
-  if (resultEntry === undefined && performanceViews.length === 0) {
-    return (
-      <div className="benchmark-task">
-        <p className="artifact-detail-note">No benchmark performance records are available.</p>
-      </div>
-    );
-  }
+  const result = resultEntry?.result ?? emptyBenchmarkResult(benchmark);
+  const sourcePath = resultEntry?.sourcePath ?? 'No result view loaded';
 
   return (
     <div className="benchmark-task">
-      {resultEntry === undefined ? null : (
-        <BenchmarkResultDashboard
-          result={resultEntry.result}
-          sourcePath={resultEntry.sourcePath}
-        />
-      )}
-      {performanceViews.map((view) => (
-        <BenchmarkPerformanceBundle key={view.id} view={view} />
-      ))}
+      <BenchmarkResultDashboard
+        result={result}
+        sourcePath={sourcePath}
+      />
     </div>
   );
+}
+
+function emptyBenchmarkResult(benchmark: BenchmarkTaskRecord): BenchmarkResultRecord {
+  return {
+    benchmark_id: benchmark.benchmark_id,
+    complexity_axis: benchmark.complexity_axis,
+    cost_axes: [{ key: 'parameter_count', label: 'Parameters' }],
+    frontiers: {},
+    leaderboard: [],
+    proposals: [],
+    scale_axis: benchmark.scale_axis,
+    training_history: [],
+  };
 }
 
 function BenchmarkModelsPane({

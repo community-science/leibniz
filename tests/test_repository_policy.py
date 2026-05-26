@@ -2,6 +2,7 @@ import re
 from pathlib import Path, PurePosixPath
 
 from leibniz._repository_policy import PolicyViolation, RepositoryPolicy
+from leibniz.console.artifact_index import ConsoleArtifactIndexBuilder
 
 _repository_root = Path(__file__).parents[1]
 
@@ -125,3 +126,17 @@ def test_benchmark_names_are_not_hardcoded_outside_benchmark_artifacts() -> None
     )
 
     assert offenders == ()
+
+
+def test_legacy_performance_bundles_are_not_supported() -> None:
+    assert "performance-view-bundle" not in ConsoleArtifactIndexBuilder.supported_kinds()
+    assert not (_repository_root / "src" / "leibniz" / "performance_bundles.py").exists()
+    assert not (
+        _repository_root
+        / "src"
+        / "leibniz"
+        / "console"
+        / "_web_src"
+        / "src"
+        / "performanceViews.ts"
+    ).exists()

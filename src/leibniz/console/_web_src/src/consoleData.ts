@@ -6,7 +6,6 @@ import {
   parseConsoleArtifactDetailRecords,
   type ConsoleArtifactDetailMap,
 } from './artifactDetails.ts';
-import { parsePerformanceViewRecords, type PerformanceViewRecord } from './performanceViews.ts';
 import { parseModelInspectionRecords, type ModelInspectionRecord } from './modelInspections.ts';
 import {
   parseResultViewRecords,
@@ -20,7 +19,6 @@ export type ConsoleDataRecord = {
   format_version: 1;
   artifact_index: ConsoleArtifactIndexRecord;
   artifact_details: ConsoleArtifactDetailMap;
-  performance_views: PerformanceViewRecord[];
   result_views: ResultViewRecord[];
   model_inspections: ModelInspectionRecord[];
   benchmark_tasks: BenchmarkTaskRecord[];
@@ -40,7 +38,6 @@ export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
   const formatVersion = requireLiteral(record.format_version, 'format_version', 1);
   const artifactIndex = parseConsoleArtifactIndexRecord(record.artifact_index);
   const artifactDetails = parseConsoleArtifactDetailRecords(record.artifact_details);
-  const performanceViews = parsePerformanceViewRecords(record.performance_views);
   const resultViews = parseResultViewRecords(record.result_views);
   const modelInspections = parseModelInspectionRecords(record.model_inspections);
   const benchmarkTasks = parseBenchmarkTaskRecords(record.benchmark_tasks);
@@ -51,7 +48,6 @@ export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
     format_version: formatVersion,
     artifact_index: artifactIndex,
     artifact_details: artifactDetails,
-    performance_views: performanceViews,
     result_views: resultViews,
     model_inspections: modelInspections,
     benchmark_tasks: benchmarkTasks,

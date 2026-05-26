@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import type { CSSProperties } from 'react';
 
 import {
+  benchmarkPlotModel,
   costValue,
   formatCost,
   scoreLabel,
@@ -14,6 +14,22 @@ import type {
   RunResultRecord,
 } from './resultViews.ts';
 
+type PlotView = {
+  xDomain: [number, number];
+  yDomain: [number, number];
+};
+
+const plotWidth = 960;
+const plotHeight = 440;
+const plotMargin = {
+  bottom: 58,
+  left: 72,
+  right: 26,
+  top: 26,
+};
+const plotBodyWidth = plotWidth - plotMargin.left - plotMargin.right;
+const plotBodyHeight = plotHeight - plotMargin.top - plotMargin.bottom;
+
 export function BenchmarkResultDashboard({
   result,
   sourcePath,
@@ -22,8 +38,16 @@ export function BenchmarkResultDashboard({
   sourcePath: string;
 }) {
   const [costAxis, setCostAxis] = useState(result.cost_axes[0]?.key ?? 'parameter_count');
+  const [plotView, setPlotView] = useState<PlotView | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const frontier = result.frontiers[costAxis] ?? [];
   const topModel = result.leaderboard[0];
+  const plot = benchmarkPlotModel(result, costAxis);
+  const activeView = plotView ?? {
+    xDomain: plot.xDomain,
+    yDomain: plot.yDomain,
+  };
 
   return (
     <section className="performance-section benchmark-result-dashboard">
@@ -34,7 +58,15 @@ export function BenchmarkResultDashboard({
         </div>
         <label className="benchmark-result-axis">
           <span>Cost Axis</span>
-          <select value={costAxis} onChange={(event) => setCostAxis(event.target.value)}>
+          <select
+            value={costAxis}
+            onChange={(event) => {
+              setCostAxis(event.target.value);
+              setPlotView(null);
+              setHoveredId(null);
+              setSelectedId(null);
+            }}
+          >
             {result.cost_axes.map((axis) => (
               <option key={axis.key} value={axis.key}>
                 {axis.label}
@@ -65,7 +97,17 @@ export function BenchmarkResultDashboard({
           </div>
         </dl>
       )}
-      <FrontierChart costAxis={costAxis} models={frontier} />
+      <BenchmarkFrontierPlot
+        costAxis={costAxis}
+        model={plot}
+        onHover={setHoveredId}
+        onReset={() => setPlotView(null)}
+        onSelect={setSelectedId}
+        onZoom={(factor) => setPlotView(zoomedView(activeView, factor, plot))}
+        selectedId={selectedId}
+        view={activeView}
+        hoveredId={hoveredId}
+      />
       <ModelResultTable costAxis={costAxis} models={frontier} title="Frontier" />
       <ModelResultTable costAxis={costAxis} models={result.leaderboard} title="Leaderboard" />
       <ProposalCards proposals={result.proposals} />
@@ -74,39 +116,212 @@ export function BenchmarkResultDashboard({
   );
 }
 
-function FrontierChart({
+function BenchmarkFrontierPlot({
   costAxis,
-  models,
+  hoveredId,
+  model,
+  onHover,
+  onReset,
+  onSelect,
+  onZoom,
+  selectedId,
+  view,
 }: {
   costAxis: string;
-  models: ModelResultRecord[];
+  hoveredId: string | null;
+  model: ReturnType<typeof benchmarkPlotModel>;
+  onHover: (id: string | null) => void;
+  onReset: () => void;
+  onSelect: (id: string | null) => void;
+  onZoom: (factor: number) => void;
+  selectedId: string | null;
+  view: PlotView;
 }) {
-  if (models.length === 0) {
-    return null;
-  }
-
-  const costs = models.map((model) => costValue(model.cost_summary, costAxis));
-  const minCost = Math.min(...costs);
-  const maxCost = Math.max(...costs);
-  const minScore = Math.min(...models.map((model) => model.score));
-  const maxScore = Math.max(...models.map((model) => model.score));
+  const x = (logCost: number) =>
+    plotMargin.left +
+    ((logCost - view.xDomain[0]) / (view.xDomain[1] - view.xDomain[0])) * plotBodyWidth;
+  const y = (score: number) =>
+    plotMargin.top +
+    (1 - (score - view.yDomain[0]) / (view.yDomain[1] - view.yDomain[0])) * plotBodyHeight;
+  const visiblePoints = model.points.filter(
+    (point) =>
+      point.logCost >= view.xDomain[0] &&
+      point.logCost <= view.xDomain[1] &&
+      point.score >= view.yDomain[0] &&
+      point.score <= view.yDomain[1],
+  );
+  const visibleProposals = model.proposals.filter(
+    (proposal) =>
+      proposal.logCost >= view.xDomain[0] &&
+      proposal.logCost <= view.xDomain[1] &&
+      proposal.predictedScore >= view.yDomain[0] &&
+      proposal.predictedScore <= view.yDomain[1],
+  );
+  const selectedPoint =
+    model.points.find((point) => point.id === selectedId) ??
+    model.proposals.find((proposal) => proposal.id === selectedId);
+  const hoveredPoint =
+    model.points.find((point) => point.id === hoveredId) ??
+    model.proposals.find((proposal) => proposal.id === hoveredId);
+  const activePoint = hoveredPoint ?? selectedPoint;
 
   return (
     <section className="benchmark-result-table-section">
-      <h3>Frontier Chart</h3>
-      <div className="frontier-chart" role="img" aria-label="Frontier score by selected cost">
-        {models.map((model) => {
-          const x = normalizedPosition(costValue(model.cost_summary, costAxis), minCost, maxCost);
-          const y = normalizedPosition(model.score, minScore, maxScore);
-          return (
-            <span
-              className="frontier-chart-point"
-              key={model.model_key}
-              style={{ '--point-x': `${x}%`, '--point-y': `${100 - y}%` } as CSSProperties}
-              title={`${shortDigest(model.architecture_digest)} score ${model.score.toFixed(4)}`}
+      <div className="benchmark-plot-heading">
+        <h3>Frontier Plot</h3>
+        <div className="benchmark-plot-actions">
+          <button onClick={() => onZoom(0.72)} type="button">Zoom In</button>
+          <button onClick={() => onZoom(1.28)} type="button">Zoom Out</button>
+          <button onClick={onReset} type="button">Reset</button>
+        </div>
+      </div>
+      <div className="frontier-chart">
+        <svg
+          aria-label={`Frontier score by ${costAxis}`}
+          className="frontier-chart-svg"
+          role="img"
+          viewBox={`0 0 ${plotWidth} ${plotHeight}`}
+          onClick={() => onSelect(null)}
+        >
+            <rect
+              className="frontier-chart-frame"
+              height={plotBodyHeight}
+              width={plotBodyWidth}
+              x={plotMargin.left}
+              y={plotMargin.top}
             />
-          );
-        })}
+            {model.xTicks.map((tick) => {
+              const logTick = Math.log2(tick);
+              if (logTick < view.xDomain[0] || logTick > view.xDomain[1]) {
+                return null;
+              }
+              const tickX = x(logTick);
+              return (
+                <g key={`x-${tick}`}>
+                  <line
+                    className="frontier-chart-grid"
+                    x1={tickX}
+                    x2={tickX}
+                    y1={plotMargin.top}
+                    y2={plotMargin.top + plotBodyHeight}
+                  />
+                  <text className="frontier-chart-tick" textAnchor="middle" x={tickX} y={plotHeight - 22}>
+                    2^{Math.round(logTick)}
+                  </text>
+                </g>
+              );
+            })}
+            {model.yTicks.map((tick) => {
+              if (tick < view.yDomain[0] || tick > view.yDomain[1]) {
+                return null;
+              }
+              const tickY = y(tick);
+              return (
+                <g key={`y-${tick}`}>
+                  <line
+                    className="frontier-chart-grid"
+                    x1={plotMargin.left}
+                    x2={plotMargin.left + plotBodyWidth}
+                    y1={tickY}
+                    y2={tickY}
+                  />
+                  <text className="frontier-chart-tick" textAnchor="end" x={plotMargin.left - 10} y={tickY + 4}>
+                    {tick.toFixed(2)}
+                  </text>
+                </g>
+              );
+            })}
+            {model.staircase.length > 0 ? (
+              <polyline
+                className="frontier-chart-staircase"
+                fill="none"
+                points={model.staircase.map(([logCost, score]) => `${x(logCost)},${y(score)}`).join(' ')}
+              />
+            ) : null}
+            {visibleProposals.map((proposal) => {
+              const proposalX = x(proposal.logCost);
+              const proposalY = y(proposal.predictedScore);
+              const uncertainty = proposal.uncertainty;
+              return (
+                <g key={proposal.id}>
+                  {uncertainty === undefined ? null : (
+                    <line
+                      className="frontier-chart-proposal-band"
+                      x1={proposalX}
+                      x2={proposalX}
+                      y1={y(proposal.predictedScore - uncertainty)}
+                      y2={y(proposal.predictedScore + uncertainty)}
+                    />
+                  )}
+                  <circle
+                    className={`frontier-chart-proposal ${selectedId === proposal.id ? 'selected' : ''}`}
+                    cx={proposalX}
+                    cy={proposalY}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSelect(proposal.id);
+                    }}
+                    onMouseEnter={() => onHover(proposal.id)}
+                    onMouseLeave={() => onHover(null)}
+                    r={6}
+                  />
+                </g>
+              );
+            })}
+            {visiblePoints.map((point) => (
+              <circle
+                className={[
+                  'frontier-chart-point',
+                  point.frontier ? 'frontier' : '',
+                  selectedId === point.id ? 'selected' : '',
+                  hoveredId === point.id ? 'hovered' : '',
+                ].filter(Boolean).join(' ')}
+                cx={x(point.logCost)}
+                cy={y(point.score)}
+                key={point.id}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelect(point.id);
+                }}
+                onMouseEnter={() => onHover(point.id)}
+                onMouseLeave={() => onHover(null)}
+                r={point.frontier ? 5 : 3}
+              />
+            ))}
+            <text className="frontier-chart-axis-label" textAnchor="middle" x={plotMargin.left + plotBodyWidth / 2} y={plotHeight - 6}>
+              {costAxis}
+            </text>
+            <text
+              className="frontier-chart-axis-label"
+              textAnchor="middle"
+              transform={`rotate(-90 ${18} ${plotMargin.top + plotBodyHeight / 2})`}
+              x={18}
+              y={plotMargin.top + plotBodyHeight / 2}
+            >
+              Score
+            </text>
+            {model.points.length === 0 ? (
+              <text
+                className="frontier-chart-empty-label"
+                textAnchor="middle"
+                x={plotMargin.left + plotBodyWidth / 2}
+                y={plotMargin.top + plotBodyHeight / 2}
+              >
+                No model results yet
+              </text>
+            ) : null}
+        </svg>
+        {activePoint === undefined ? null : (
+          <div className="frontier-chart-tooltip">
+            <strong>{activePoint.label}</strong>
+            <span>{formatCost(activePoint.cost)} cost</span>
+            <span>
+              {'predictedScore' in activePoint
+                ? `prediction ${scoreLabel(activePoint.predictedScore)}`
+                : `score ${scoreLabel(activePoint.score)}`}
+            </span>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -216,9 +431,30 @@ function RunHistoryTable({ costAxis, runs }: { costAxis: string; runs: RunResult
   );
 }
 
-function normalizedPosition(value: number, min: number, max: number): number {
-  if (max === min) {
-    return 50;
+function zoomedView(
+  view: PlotView,
+  factor: number,
+  model: ReturnType<typeof benchmarkPlotModel>,
+): PlotView {
+  const nextX = zoomedDomain(view.xDomain, factor, model.xDomain);
+  const nextY = zoomedDomain(view.yDomain, factor, model.yDomain);
+  return { xDomain: nextX, yDomain: nextY };
+}
+
+function zoomedDomain(
+  [min, max]: [number, number],
+  factor: number,
+  bounds: [number, number],
+): [number, number] {
+  const midpoint = (min + max) / 2;
+  const span = Math.min(bounds[1] - bounds[0], (max - min) * factor);
+  const rawMin = midpoint - span / 2;
+  const rawMax = midpoint + span / 2;
+  if (rawMin < bounds[0]) {
+    return [bounds[0], bounds[0] + span];
   }
-  return ((value - min) / (max - min)) * 100;
+  if (rawMax > bounds[1]) {
+    return [bounds[1] - span, bounds[1]];
+  }
+  return [rawMin, rawMax];
 }
