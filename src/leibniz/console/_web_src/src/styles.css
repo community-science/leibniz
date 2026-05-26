@@ -48,6 +48,7 @@
   --performance-bar-height: 10px;
   --result-table-model-column: 2fr;
   --result-table-metric-column: 1fr;
+  --proposal-card-min: 240px;
   --model-list-width: 300px;
   --model-layer-min: 220px;
   --model-source-label-min: 132px;
@@ -960,6 +961,67 @@ p {
   font-weight: 700;
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
+}
+
+.proposal-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--proposal-card-min), 1fr));
+  gap: var(--space-lg);
+}
+
+.proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  border: var(--line-thin) solid var(--border-color-strong);
+  border-radius: var(--radius-md);
+  background: var(--control-bg);
+  padding: var(--space-xl);
+}
+
+.proposal-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+}
+
+.proposal-card-heading span,
+.proposal-card code {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-control);
+}
+
+.proposal-card-heading strong {
+  color: var(--neon-blue);
+}
+
+.proposal-card dl {
+  display: grid;
+  grid-template-columns: minmax(var(--inspection-metadata-label-min), auto) minmax(0, 1fr);
+  gap: var(--space-xs) var(--space-lg);
+  margin: 0;
+}
+
+.proposal-card dt {
+  color: var(--text-dim);
+  font-size: var(--font-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.proposal-card dd,
+.proposal-card p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: white;
+  font-size: var(--font-control);
+}
+
+.proposal-card dd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .model-layout {

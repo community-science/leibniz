@@ -27,6 +27,7 @@ from leibniz.model_manifests import ModelArtifactManifestDocument
 from leibniz.model_operations import ModelOperationDocument
 from leibniz.outcomes import OutcomeSpace
 from leibniz.projection_records import ProjectionRecordDocument
+from leibniz.proposal_generation import ProposalGenerationPlan, generate_experiment_proposals
 from leibniz.publications import SubmissionPublicationDocument
 from leibniz.resources import ResourceReportDocument, ResourceReportSetDocument
 from leibniz.submission_registries import SubmissionRegistry, SubmissionRegistryDocument
@@ -211,6 +212,24 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="ignored local run-state root; defaults to .runs",
     )
+    propose_results = results_subcommands.add_parser(
+        "propose",
+        description="generate deterministic local benchmark proposals",
+        help="generate local proposals",
+    )
+    propose_results.add_argument("--benchmark-root", type=Path, required=True)
+    propose_results.add_argument(
+        "--runs-root",
+        default=Path(".runs"),
+        type=Path,
+        help="ignored local run-state root; defaults to .runs",
+    )
+    propose_results.add_argument("--scale", default=1, type=int)
+    propose_results.add_argument("--candidate-budget", default=3, type=int)
+    propose_results.add_argument("--sample-count", default=4, type=int)
+    propose_results.add_argument("--seed", default=101, type=int)
+    propose_results.add_argument("--train-steps", default=1, type=int)
+    propose_results.add_argument("--learning-rate", default=0.01, type=float)
 
     benchmark = subcommands.add_parser(
         "benchmark",
@@ -305,6 +324,25 @@ def _results(args: argparse.Namespace) -> int:
                 f"{summary.run_count} run(s)"
             )
             print(f"view: {summary.view_file}")
+            return 0
+        if results_command == "propose":
+            summary = generate_experiment_proposals(
+                ProposalGenerationPlan(
+                    benchmark_root=args.benchmark_root,
+                    runs_root=args.runs_root,
+                    scale=args.scale,
+                    candidate_budget=args.candidate_budget,
+                    sample_count=args.sample_count,
+                    seed=args.seed,
+                    train_steps=args.train_steps,
+                    learning_rate=args.learning_rate,
+                )
+            )
+            print(
+                f"generated {summary.proposal_count} proposal(s) "
+                f"for {summary.benchmark_id}"
+            )
+            print(f"proposal set: {summary.proposal_set_path}")
             return 0
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)

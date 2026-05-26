@@ -16,6 +16,7 @@ __all__ = [
     "ModelOperatorExecutionError",
     "ModelOperatorPlan",
     "ModelOperatorSummary",
+    "formal_image_classifier_architecture",
     "summarize_architecture_operators",
 ]
 
@@ -293,6 +294,47 @@ def summarize_architecture_operators(
         input_shape=architecture.input_shape,
         output_shape=architecture.output_shape,
         operators=tuple(operators),
+    )
+
+
+def formal_image_classifier_architecture(
+    *,
+    input_shape: tuple[int, ...],
+    output_count: int,
+    local_aggregation_size: int,
+) -> ArchitectureManifest:
+    """Build a manifest for the first formal image-classifier specialization."""
+
+    _require_optional_shape(input_shape, field="input_shape")
+    if type(output_count) is not int or output_count < 2:
+        raise ModelOperatorExecutionError("output_count must be an integer at least 2")
+    if type(local_aggregation_size) is not int or local_aggregation_size < 1:
+        raise ModelOperatorExecutionError("local_aggregation_size must be positive")
+    if len(input_shape) < 3:
+        raise ModelOperatorExecutionError("image classifier input_shape must have rank at least 3")
+    return ArchitectureManifest.from_record(
+        {
+            "input_shape": list(input_shape),
+            "output_shape": [output_count],
+            "layers": [
+                {
+                    "kind": _layer_operator_specializations[0].alias,
+                    "parameters": {
+                        "dimension": 2,
+                        "size": local_aggregation_size,
+                    },
+                },
+                {
+                    "kind": _layer_operator_specializations[1].alias,
+                },
+                {
+                    "kind": _layer_operator_specializations[2].alias,
+                    "parameters": {
+                        "out": output_count,
+                    },
+                },
+            ],
+        }
     )
 
 

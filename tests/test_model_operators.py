@@ -8,6 +8,7 @@ from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocu
 from leibniz.model_operators import (
     ExecutableModelOperator,
     ModelOperatorExecutionError,
+    formal_image_classifier_architecture,
     summarize_architecture_operators,
 )
 
@@ -95,6 +96,24 @@ def test_torch_instantiation_is_a_minimal_sequential_specialization() -> None:
 
     assert len(module) == 3
     assert output.shape == (2, 10)
+
+
+def test_formal_image_classifier_architecture_routes_aliases_through_operator_registry() -> None:
+    manifest = formal_image_classifier_architecture(
+        input_shape=(1, 32, 32),
+        output_count=10,
+        local_aggregation_size=3,
+    )
+    plan = summarize_architecture_operators(manifest)
+
+    assert manifest.input_shape == (1, 32, 32)
+    assert manifest.output_shape == (10,)
+    assert [operator.descriptor.kind for operator in plan.operators] == [
+        "local-aggregation",
+        "rank-collapse",
+        "affine-readout",
+    ]
+    assert plan.parameter_count == 100
 
 
 def test_layer_alias_literals_are_defined_only_in_the_operator_registry() -> None:

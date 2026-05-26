@@ -40,6 +40,7 @@ export type BenchmarkResultRecord = {
   leaderboard: ModelResultRecord[];
   frontiers: Record<string, ModelResultRecord[]>;
   training_history: RunResultRecord[];
+  proposals: ProposalRecord[];
 };
 
 export type CostAxisRecord = {
@@ -81,6 +82,20 @@ export type RunResultRecord = {
   architecture: Record<string, unknown>;
   measurement_dataset_digest: string;
   training_summary?: Record<string, unknown>;
+};
+
+export type ProposalRecord = {
+  id: string;
+  rank: number;
+  candidate_kind: string;
+  candidate_id: string;
+  rationale: string;
+  predicted_score?: number;
+  uncertainty?: number;
+  acquisition_value?: number;
+  novelty?: number;
+  expected_frontier_improvement?: number;
+  command: string[];
 };
 
 export type CostSummaryRecord = {
@@ -181,6 +196,12 @@ function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultReco
     training_history: requireArray(record.training_history, `${path}.training_history`).map(
       (run, index) => parseRunResult(run, `${path}.training_history.${index}`),
     ),
+    proposals:
+      record.proposals === undefined
+        ? []
+        : requireArray(record.proposals, `${path}.proposals`).map((proposal, index) =>
+            parseProposal(proposal, `${path}.proposals.${index}`),
+          ),
   };
 }
 
@@ -238,6 +259,27 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
       record.training_summary === undefined
         ? undefined
         : requireRecord(record.training_summary, `${path}.training_summary`),
+  };
+}
+
+function parseProposal(value: unknown, path: string): ProposalRecord {
+  const record = requireRecord(value, path);
+  return {
+    id: requireString(record.id, `${path}.id`),
+    rank: requireNumber(record.rank, `${path}.rank`),
+    candidate_kind: requireString(record.candidate_kind, `${path}.candidate_kind`),
+    candidate_id: requireString(record.candidate_id, `${path}.candidate_id`),
+    rationale: requireString(record.rationale, `${path}.rationale`),
+    predicted_score: optionalNumber(record.predicted_score, `${path}.predicted_score`),
+    uncertainty: optionalNumber(record.uncertainty, `${path}.uncertainty`),
+    acquisition_value: optionalNumber(record.acquisition_value, `${path}.acquisition_value`),
+    novelty: optionalNumber(record.novelty, `${path}.novelty`),
+    expected_frontier_improvement: optionalNumber(
+      record.expected_frontier_improvement,
+      `${path}.expected_frontier_improvement`,
+    ),
+    command:
+      record.command === undefined ? [] : parseStringArray(record.command, `${path}.command`),
   };
 }
 
@@ -318,6 +360,13 @@ function requireNumber(value: unknown, path: string): number {
     throw new ResultViewTransportError(`${path}: expected number`);
   }
   return value;
+}
+
+function optionalNumber(value: unknown, path: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return requireNumber(value, path);
 }
 
 function requireLiteral<const Literal extends string | number>(

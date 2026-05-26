@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, cast
@@ -43,6 +44,16 @@ _proposal_record = RecordSpec(
         "candidate_id": FieldSpec(kind="identifier"),
         "rationale": FieldSpec(kind="string"),
         "source_relationship_fit_id": FieldSpec(kind="identifier", required=False),
+        "predicted_score": FieldSpec(kind="number", required=False),
+        "uncertainty": FieldSpec(kind="number", required=False),
+        "acquisition_value": FieldSpec(kind="number", required=False),
+        "novelty": FieldSpec(kind="number", required=False),
+        "expected_frontier_improvement": FieldSpec(kind="number", required=False),
+        "command": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="string"),
+            required=False,
+        ),
     }
 )
 
@@ -61,6 +72,12 @@ class ExperimentProposal:
     candidate_id: ProtocolIdentifier
     rationale: str
     source_relationship_fit_id: ProtocolIdentifier | None = None
+    predicted_score: float | None = None
+    uncertainty: float | None = None
+    acquisition_value: float | None = None
+    novelty: float | None = None
+    expected_frontier_improvement: float | None = None
+    command: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         try:
@@ -80,6 +97,16 @@ class ExperimentProposal:
             )
         if not self.rationale:
             raise ExperimentProposalValidationError("rationale must be nonempty")
+        _require_optional_probability(self.predicted_score, field="predicted_score")
+        _require_optional_nonnegative(self.uncertainty, field="uncertainty")
+        _require_optional_nonnegative(self.acquisition_value, field="acquisition_value")
+        _require_optional_nonnegative(self.novelty, field="novelty")
+        _require_optional_nonnegative(
+            self.expected_frontier_improvement,
+            field="expected_frontier_improvement",
+        )
+        if any(not argument for argument in self.command):
+            raise ExperimentProposalValidationError("command arguments must be nonempty")
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ExperimentProposal:
@@ -101,6 +128,21 @@ class ExperimentProposal:
                 if "source_relationship_fit_id" in validated
                 else None
             ),
+            predicted_score=_optional_float(validated.get("predicted_score"), "predicted_score"),
+            uncertainty=_optional_float(validated.get("uncertainty"), "uncertainty"),
+            acquisition_value=_optional_float(
+                validated.get("acquisition_value"),
+                "acquisition_value",
+            ),
+            novelty=_optional_float(validated.get("novelty"), "novelty"),
+            expected_frontier_improvement=_optional_float(
+                validated.get("expected_frontier_improvement"),
+                "expected_frontier_improvement",
+            ),
+            command=tuple(
+                _as_string(argument, field="command")
+                for argument in _as_sequence(validated.get("command", ()), field="command")
+            ),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -113,6 +155,18 @@ class ExperimentProposal:
         }
         if self.source_relationship_fit_id is not None:
             record["source_relationship_fit_id"] = str(self.source_relationship_fit_id)
+        if self.predicted_score is not None:
+            record["predicted_score"] = self.predicted_score
+        if self.uncertainty is not None:
+            record["uncertainty"] = self.uncertainty
+        if self.acquisition_value is not None:
+            record["acquisition_value"] = self.acquisition_value
+        if self.novelty is not None:
+            record["novelty"] = self.novelty
+        if self.expected_frontier_improvement is not None:
+            record["expected_frontier_improvement"] = self.expected_frontier_improvement
+        if self.command:
+            record["command"] = list(self.command)
         return record
 
 
@@ -298,6 +352,35 @@ def _as_int(value: object, *, field: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ExperimentProposalValidationError(f"{field}: expected parsed integer")
     return value
+
+
+def _as_string(value: object, *, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ExperimentProposalValidationError(f"{field}: expected nonempty string")
+    return value
+
+
+def _optional_float(value: object, field: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ExperimentProposalValidationError(f"{field}: expected number")
+    return float(value)
+
+
+def _require_optional_probability(value: float | None, *, field: str) -> None:
+    if value is None:
+        return
+    _require_optional_nonnegative(value, field=field)
+    if value > 1:
+        raise ExperimentProposalValidationError(f"{field} must not exceed 1")
+
+
+def _require_optional_nonnegative(value: float | None, *, field: str) -> None:
+    if value is None:
+        return
+    if value < 0 or not math.isfinite(value):
+        raise ExperimentProposalValidationError(f"{field} must be finite and nonnegative")
 
 
 def _reject_duplicate_ranks(proposals: tuple[ExperimentProposal, ...]) -> None:
