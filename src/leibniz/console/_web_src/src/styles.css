@@ -44,7 +44,7 @@
   --performance-point-min: 220px;
   --performance-source-min: 240px;
   --performance-bar-height: 10px;
-  --frontier-chart-height: 180px;
+  --frontier-chart-height: 440px;
   --frontier-point-size: 10px;
   --result-table-model-column: 2fr;
   --result-table-metric-column: 1fr;
@@ -827,28 +827,137 @@ p {
 
 .frontier-chart {
   position: relative;
-  min-height: var(--frontier-chart-height);
   overflow: hidden;
   border: var(--line-thin) solid var(--border-color-strong);
   border-radius: var(--radius-md);
-  background:
-    linear-gradient(to right, var(--border-color) var(--line-thin), transparent var(--line-thin)),
-    linear-gradient(to bottom, var(--border-color) var(--line-thin), transparent var(--line-thin)),
-    var(--control-bg);
-  background-size: var(--space-7xl) var(--space-7xl);
+  background: var(--control-bg);
+}
+
+.benchmark-plot-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+}
+
+.benchmark-plot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.benchmark-plot-actions button {
+  border: var(--line-thin) solid var(--border-color-strong);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: white;
+  cursor: pointer;
+  padding: var(--space-sm) var(--space-lg);
+}
+
+.benchmark-plot-actions button:hover {
+  border-color: var(--accent-border-strong);
+  background: var(--accent-bg);
+}
+
+.frontier-chart-svg {
+  display: block;
+  width: 100%;
+  min-height: var(--frontier-chart-height);
+}
+
+.frontier-chart-frame {
+  fill: rgba(255, 255, 255, 0.015);
+  stroke: var(--border-color-strong);
+  stroke-width: var(--line-thin);
+}
+
+.frontier-chart-grid {
+  stroke: rgba(255, 255, 255, 0.06);
+  stroke-width: var(--line-thin);
+}
+
+.frontier-chart-tick,
+.frontier-chart-axis-label {
+  fill: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-control);
+}
+
+.frontier-chart-axis-label {
+  fill: var(--text-secondary);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.frontier-chart-staircase {
+  stroke: var(--neon-blue);
+  stroke-width: 2;
 }
 
 .frontier-chart-point {
+  cursor: pointer;
+  fill: rgba(108, 180, 240, 0.72);
+  stroke: transparent;
+  stroke-width: 0;
+}
+
+.frontier-chart-point.frontier {
+  fill: var(--neon-blue);
+  stroke: rgba(255, 255, 255, 0.7);
+  stroke-width: var(--line-thin);
+}
+
+.frontier-chart-point.hovered,
+.frontier-chart-point.selected {
+  fill: white;
+  stroke: var(--neon-blue);
+  stroke-width: 2;
+}
+
+.frontier-chart-proposal {
+  cursor: pointer;
+  fill: rgba(127, 201, 127, 0.88);
+  stroke: rgba(255, 255, 255, 0.72);
+  stroke-width: var(--line-thin);
+}
+
+.frontier-chart-proposal.selected {
+  fill: white;
+  stroke: rgba(127, 201, 127, 0.95);
+  stroke-width: 2;
+}
+
+.frontier-chart-proposal-band {
+  stroke: rgba(127, 201, 127, 0.65);
+  stroke-dasharray: var(--space-xs) var(--space-xs);
+  stroke-width: 2;
+}
+
+.frontier-chart-tooltip {
   position: absolute;
-  left: var(--point-x);
-  top: var(--point-y);
-  width: var(--frontier-point-size);
-  height: var(--frontier-point-size);
-  border: var(--line-thin) solid white;
-  border-radius: 50%;
-  background: var(--neon-blue);
-  box-shadow: 0 0 var(--space-lg) var(--accent-border-strong);
-  transform: translate(-50%, -50%);
+  right: var(--space-xl);
+  top: var(--space-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  max-width: min(100% - var(--space-4xl), var(--performance-source-min));
+  border: var(--line-thin) solid var(--border-color-strong);
+  border-radius: var(--radius-sm);
+  background: rgba(10, 10, 12, 0.92);
+  padding: var(--space-lg);
+}
+
+.frontier-chart-tooltip strong,
+.frontier-chart-tooltip span {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-control);
+}
+
+.frontier-chart-tooltip span {
+  color: var(--text-muted);
 }
 
 .benchmark-result-table {
