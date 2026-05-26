@@ -72,9 +72,24 @@ assertEqual(
   'model inspection parameter count',
 );
 assertEqual(
+  modelInspection.cost_summary.parameter_bytes,
+  200,
+  'model inspection parameter bytes',
+);
+assertEqual(
+  modelInspection.cost_summary.inference_flops,
+  1104,
+  'model inspection flops',
+);
+assertEqual(
   modelInspection.layers.map((layer) => layer.kind).join(','),
   'adaptive-pooling,flatten,dense',
   'model inspection layers',
+);
+assertEqual(
+  modelInspection.layers.map((layer) => layer.operator?.kind).join(','),
+  'local-aggregation,rank-collapse,affine-readout',
+  'model operator summaries',
 );
 const benchmarkTask = parsed.benchmark_tasks[0];
 if (benchmarkTask === undefined) {

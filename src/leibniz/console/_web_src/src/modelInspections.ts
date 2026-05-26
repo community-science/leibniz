@@ -22,13 +22,19 @@ export type ModelInspectionLayerRecord = {
   parameters: Record<string, unknown>;
   input_shape?: number[];
   output_shape?: number[];
+  operator?: Record<string, unknown>;
   parameter_count?: number;
+  parameter_bytes?: number;
+  inference_flops?: number;
 };
 
 export type ModelInspectionCostSummaryRecord = {
   layer_count: number;
   parameter_count?: number;
+  parameter_bytes?: number;
+  inference_flops?: number;
   unknown_parameter_layers: number[];
+  unknown_flop_layers: number[];
 };
 
 export class ModelInspectionError extends Error {
@@ -90,8 +96,17 @@ function parseLayer(value: unknown, path: string): ModelInspectionLayerRecord {
   if (record.output_shape !== undefined) {
     layer.output_shape = parseIntegerArray(record.output_shape, `${path}.output_shape`);
   }
+  if (record.operator !== undefined) {
+    layer.operator = requireRecord(record.operator, `${path}.operator`);
+  }
   if (record.parameter_count !== undefined) {
     layer.parameter_count = requireInteger(record.parameter_count, `${path}.parameter_count`);
+  }
+  if (record.parameter_bytes !== undefined) {
+    layer.parameter_bytes = requireInteger(record.parameter_bytes, `${path}.parameter_bytes`);
+  }
+  if (record.inference_flops !== undefined) {
+    layer.inference_flops = requireInteger(record.inference_flops, `${path}.inference_flops`);
   }
   return layer;
 }
@@ -104,9 +119,19 @@ function parseCostSummary(value: unknown, path: string): ModelInspectionCostSumm
       record.unknown_parameter_layers,
       `${path}.unknown_parameter_layers`,
     ),
+    unknown_flop_layers:
+      record.unknown_flop_layers === undefined
+        ? []
+        : parseIntegerArray(record.unknown_flop_layers, `${path}.unknown_flop_layers`),
   };
   if (record.parameter_count !== undefined) {
     summary.parameter_count = requireInteger(record.parameter_count, `${path}.parameter_count`);
+  }
+  if (record.parameter_bytes !== undefined) {
+    summary.parameter_bytes = requireInteger(record.parameter_bytes, `${path}.parameter_bytes`);
+  }
+  if (record.inference_flops !== undefined) {
+    summary.inference_flops = requireInteger(record.inference_flops, `${path}.inference_flops`);
   }
   return summary;
 }

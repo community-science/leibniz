@@ -4,5 +4,6 @@ channels:
 dependencies:
   - python=3.12
   - pip>=24
+  - pytorch>=2
   - pip:
       - "-e .[dev]"

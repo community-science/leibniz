@@ -36,16 +36,29 @@ def test_model_inspection_derives_architecture_layers_and_costs() -> None:
     )
     assert inspection.layers[0].input_shape == (1, 32, 32)
     assert inspection.layers[0].output_shape == (1, 2, 2)
+    assert inspection.layers[0].operator is not None
+    assert inspection.layers[0].operator["kind"] == "local-aggregation"
+    assert inspection.layers[0].operator["aliases"] == ["adaptive-pooling"]
     assert inspection.layers[0].parameter_count == 0
+    assert inspection.layers[0].inference_flops == 1024
     assert inspection.layers[1].input_shape == (1, 2, 2)
     assert inspection.layers[1].output_shape == (4,)
+    assert inspection.layers[1].operator is not None
+    assert inspection.layers[1].operator["kind"] == "rank-collapse"
     assert inspection.layers[1].parameter_count == 0
     assert inspection.layers[2].input_shape == (4,)
     assert inspection.layers[2].output_shape == (10,)
+    assert inspection.layers[2].operator is not None
+    assert inspection.layers[2].operator["kind"] == "affine-readout"
     assert inspection.layers[2].parameter_count == 50
+    assert inspection.layers[2].parameter_bytes == 200
+    assert inspection.layers[2].inference_flops == 80
     assert inspection.cost_summary.layer_count == 3
     assert inspection.cost_summary.parameter_count == 50
+    assert inspection.cost_summary.parameter_bytes == 200
+    assert inspection.cost_summary.inference_flops == 1104
     assert inspection.cost_summary.unknown_parameter_layers == ()
+    assert inspection.cost_summary.unknown_flop_layers == ()
     assert inspection.digest == ContentDigest.from_value(inspection.to_record())
 
 

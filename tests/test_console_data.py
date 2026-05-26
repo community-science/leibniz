@@ -103,6 +103,8 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert model_inspection["cost_summary"] == {
         "layer_count": 3,
         "parameter_count": 50,
+        "parameter_bytes": 200,
+        "inference_flops": 1104,
         "unknown_parameter_layers": [],
     }
     model_layers = cast(list[dict[str, object]], model_inspection["layers"])
@@ -110,6 +112,44 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         ("adaptive-pooling", [1, 2, 2]),
         ("flatten", [4]),
         ("dense", [10]),
+    ]
+    assert [layer["operator"] for layer in model_layers] == [
+        {
+            "kind": "local-aggregation",
+            "tensor_relation": "aggregation",
+            "state": "fixed",
+            "support": "local-window",
+            "projection_law": "equal-output-partition",
+            "aggregation_law": "mean",
+            "parameter_sharing": "none",
+            "shape_law": "preserve-prefix-replace-trailing-axes",
+            "cost_law": "input-elements",
+            "aliases": ["adaptive-pooling"],
+        },
+        {
+            "kind": "rank-collapse",
+            "tensor_relation": "shape-transform",
+            "state": "fixed",
+            "support": "rank-collapsing",
+            "projection_law": "row-major-axis-concatenation",
+            "aggregation_law": "none",
+            "parameter_sharing": "none",
+            "shape_law": "product-of-input-axes",
+            "cost_law": "zero-arithmetic",
+            "aliases": ["flatten"],
+        },
+        {
+            "kind": "affine-readout",
+            "tensor_relation": "affine",
+            "state": "learned",
+            "support": "global",
+            "projection_law": "full-input-support",
+            "aggregation_law": "weighted-sum-plus-bias",
+            "parameter_sharing": "none",
+            "shape_law": "rank-1-output",
+            "cost_law": "multiply-add-per-input-output-pair",
+            "aliases": ["dense"],
+        },
     ]
 
     benchmark_tasks = cast(list[dict[str, object]], record["benchmark_tasks"])
