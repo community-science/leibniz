@@ -19,6 +19,7 @@ _forbidden_names = frozenset(
         ".vite",
         "__pycache__",
         "build",
+        "docs",
         "dist",
         "venv",
     }
