@@ -65,7 +65,10 @@
   --model-layer-min: 220px;
   --model-source-label-min: 132px;
   --benchmark-list-width: 300px;
-  --benchmark-sample-min: 220px;
+  --benchmark-sample-min: calc(
+    var(--benchmark-preview-size) + var(--benchmark-label-min) + var(--space-lg) + var(--space-lg) +
+      var(--space-lg)
+  );
   --benchmark-compact-sample-min: 132px;
   --benchmark-preview-size: 128px;
   --benchmark-compact-preview-size: 96px;
@@ -1730,12 +1733,17 @@ p {
   display: flex;
   gap: var(--space-lg);
   align-items: center;
+  min-width: 0;
 }
 
 .benchmark-sample-detail-preview h3,
 .benchmark-sample-detail-section h4,
 .benchmark-latent-role h5 {
   margin: 0;
+}
+
+.benchmark-sample-detail-preview h3 {
+  overflow-wrap: anywhere;
 }
 
 .benchmark-sample-detail-preview p {
@@ -1748,7 +1756,7 @@ p {
 
 .benchmark-sample-detail-grid {
   display: grid;
-  grid-template-columns: minmax(var(--benchmark-label-min), auto) minmax(0, 1fr);
+  grid-template-columns: minmax(0, var(--benchmark-label-min)) minmax(0, 1fr);
   gap: var(--space-xs) var(--space-lg);
   align-content: start;
   margin: 0;
