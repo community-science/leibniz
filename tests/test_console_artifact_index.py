@@ -45,6 +45,10 @@ _public_fixture_sources = (
         source_path=PurePosixPath("src/leibniz/benchmarks/digits/inspection_showcase.json"),
     ),
     ConsoleArtifactIndexSource(
+        kind="performance-view-bundle",
+        source_path=PurePosixPath("src/leibniz/benchmarks/digits/performance_view_bundle.json"),
+    ),
+    ConsoleArtifactIndexSource(
         kind="benchmark-manifest",
         source_path=PurePosixPath("tests/fixtures/chess/mate_in_one/manifest.json"),
     ),
@@ -94,6 +98,7 @@ def test_console_artifact_index_validates_public_fixture_documents() -> None:
         "measurement",
         "observation-formation-declaration",
         "observation-showcase",
+        "performance-view-bundle",
     }
     assert all("reference" in artifact for artifact in artifacts)
     assert all("digest" in artifact for artifact in artifacts)
@@ -119,6 +124,9 @@ def test_console_artifact_index_records_available_dependency_references() -> Non
         "src/leibniz/benchmarks/digits/observation_formation.json"
     ]
     observation_showcase = artifacts["src/leibniz/benchmarks/digits/inspection_showcase.json"]
+    performance_bundle = artifacts[
+        "src/leibniz/benchmarks/digits/performance_view_bundle.json"
+    ]
 
     assert finite_measurement["dependencies"] == [
         {
@@ -175,6 +183,15 @@ def test_console_artifact_index_records_available_dependency_references() -> Non
             "kind": "materialization-declaration",
             "protocol_id": "benchmarks.digits.materialization@0.1.0",
         },
+    ]
+    assert [
+        dependency["kind"]
+        for dependency in cast(list[dict[str, object]], performance_bundle["dependencies"])
+    ] == [
+        "benchmark-manifest",
+        "materialization-declaration",
+        "observation-formation-declaration",
+        "competence-integral-view",
     ]
 
 

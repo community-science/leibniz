@@ -239,6 +239,24 @@ class ConsoleDataBuilder:
                 "materialization_declaration": record["materialization_declaration"],
                 "samples": record["samples"],
             }
+        if kind == "performance-view-bundle":
+            measurement_cases = self._required_sequence(
+                record["measurement_cases"],
+                "measurement_cases",
+            )
+            return {
+                "id": record["id"],
+                "benchmark_manifest": record["benchmark_manifest"],
+                "materialization_declaration": record["materialization_declaration"],
+                "observation_formation_declaration": (
+                    record["observation_formation_declaration"]
+                ),
+                "view_id": record["view_id"],
+                "complexity_axis": record["complexity_axis"],
+                "expected_complexities": record["expected_complexities"],
+                "measurement_cases": record["measurement_cases"],
+                "measurement_count": len(measurement_cases),
+            }
         raise ConsoleDataValidationError(f"unsupported document kind: {kind}")
 
     def _observation_inspections(

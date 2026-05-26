@@ -57,6 +57,10 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
             "src/leibniz/benchmarks/digits/observation_formation.json",
         ),
         ("observation-showcase", "src/leibniz/benchmarks/digits/inspection_showcase.json"),
+        (
+            "performance-view-bundle",
+            "src/leibniz/benchmarks/digits/performance_view_bundle.json",
+        ),
     ]
     assert [(detail["kind"], detail["source_path"]) for detail in details] == [
         (artifact["kind"], artifact["source_path"]) for artifact in artifacts
@@ -72,6 +76,16 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert inspections[1]["complexity_assignment"] == {"values": [{"axis": "C", "value": 3}]}
     assert inspections[1]["component_sequence"] == [1, 2, 3]
     assert inspections[1]["outcome_id"] == "digit-1-2-3"
+
+    performance_detail = next(
+        detail for detail in details if detail["kind"] == "performance-view-bundle"
+    )
+    assert performance_detail["measurement_count"] == 2
+    assert performance_detail["view_id"] == "views.competence-integrals.digits.performance@0.1.0"
+    assert performance_detail["expected_complexities"] == [1.0, 2.0, 3.0]
+    cases = cast(list[dict[str, object]], performance_detail["measurement_cases"])
+    assert cases[1]["component_sequence"] == [1, 2]
+    assert cases[1]["accepted_outcome_sequence"] == [1, 2]
 
 
 def test_console_data_includes_public_source_module_inventory() -> None:

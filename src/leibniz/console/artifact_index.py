@@ -21,6 +21,7 @@ from leibniz.materialization import (
 from leibniz.measurements import MeasurementDocument
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
 from leibniz.observation_showcases import ObservationShowcaseDocument
+from leibniz.performance_bundles import PerformanceViewBundleDocument
 
 __all__ = [
     "ConsoleArtifactIndex",
@@ -266,6 +267,19 @@ def _load_observation_showcase(data: bytes) -> _LoadedArtifact:
     return manifest.id, record, document.digest, dependencies
 
 
+def _load_performance_view_bundle(data: bytes) -> _LoadedArtifact:
+    document = PerformanceViewBundleDocument.from_bytes(data)
+    manifest = document.manifest
+    record = manifest.to_record()
+    dependencies = (
+        manifest.benchmark_manifest,
+        manifest.materialization_declaration,
+        manifest.observation_formation_declaration,
+        ArtifactReference(kind="competence-integral-view", protocol_id=manifest.view_id),
+    )
+    return manifest.id, record, document.digest, dependencies
+
+
 _artifact_loaders: Mapping[str, _ArtifactLoader] = {
     "architecture-manifest": _load_architecture_manifest,
     "benchmark-manifest": _load_benchmark_manifest,
@@ -275,6 +289,7 @@ _artifact_loaders: Mapping[str, _ArtifactLoader] = {
     "measurement": _load_measurement,
     "observation-formation-declaration": _load_observation_formation_declaration,
     "observation-showcase": _load_observation_showcase,
+    "performance-view-bundle": _load_performance_view_bundle,
 }
 
 
