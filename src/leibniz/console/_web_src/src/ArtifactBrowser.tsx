@@ -1,30 +1,28 @@
-import { CheckCircle2, FileJson, Network } from 'lucide-react';
+import { CheckCircle2, FileJson, Link2, Network } from 'lucide-react';
+import type { KeyboardEvent } from 'react';
+import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
 import type { ConsoleArtifactIndexEntryRecord, ConsoleArtifactIndexRecord } from './artifactIndex';
-
-type ArtifactBrowserProps = {
-  index: ConsoleArtifactIndexRecord;
-};
-
-const allKinds = 'all';
+import {
+  allArtifactKinds,
+  artifactKey,
+  artifactKinds,
+  filterArtifacts,
+  referenceLabel,
+  resolveSelectedArtifact,
+  shortDigest,
+} from './artifactBrowserModel';
 
 export function ArtifactBrowser({ index }: ArtifactBrowserProps) {
-  const [selectedKind, setSelectedKind] = useState<string>(allKinds);
-  const kinds = useMemo(
-    () => [
-      allKinds,
-      ...Array.from(new Set(index.artifacts.map((artifact) => artifact.kind))).sort(),
-    ],
-    [index.artifacts],
-  );
+  const [selectedKind, setSelectedKind] = useState<string>(allArtifactKinds);
+  const [selectedArtifactKey, setSelectedArtifactKey] = useState<string | null>(null);
+  const kinds = useMemo(() => artifactKinds(index.artifacts), [index.artifacts]);
   const filteredArtifacts = useMemo(
-    () =>
-      selectedKind === allKinds
-        ? index.artifacts
-        : index.artifacts.filter((artifact) => artifact.kind === selectedKind),
+    () => filterArtifacts(index.artifacts, selectedKind),
     [index.artifacts, selectedKind],
   );
+  const selectedArtifact = resolveSelectedArtifact(filteredArtifacts, selectedArtifactKey);
   const dependencyCount = index.artifacts.reduce(
     (count, artifact) => count + artifact.dependencies.length,
     0,
@@ -61,23 +59,60 @@ export function ArtifactBrowser({ index }: ArtifactBrowserProps) {
             onClick={() => setSelectedKind(kind)}
             type="button"
           >
-            {kind === allKinds ? 'All' : kind}
+            {kind === allArtifactKinds ? 'All' : kind}
           </button>
         ))}
       </div>
 
-      <div className="artifact-list" aria-label="Indexed artifacts">
-        {filteredArtifacts.map((artifact) => (
-          <ArtifactRow artifact={artifact} key={artifact.source_path} />
-        ))}
+      <div className="artifact-workspace">
+        <div className="artifact-list" aria-label="Indexed artifacts" role="listbox">
+          {filteredArtifacts.map((artifact) => {
+            const isSelected =
+              selectedArtifact !== undefined &&
+              artifactKey(artifact) === artifactKey(selectedArtifact);
+            return (
+              <ArtifactRow
+                artifact={artifact}
+                isSelected={isSelected}
+                key={artifact.source_path}
+                onSelect={() => setSelectedArtifactKey(artifactKey(artifact))}
+              />
+            );
+          })}
+        </div>
+        <ArtifactDetailPanel artifact={selectedArtifact} />
       </div>
     </section>
   );
 }
 
-function ArtifactRow({ artifact }: { artifact: ConsoleArtifactIndexEntryRecord }) {
+type ArtifactBrowserProps = {
+  index: ConsoleArtifactIndexRecord;
+};
+
+type ArtifactRowProps = {
+  artifact: ConsoleArtifactIndexEntryRecord;
+  isSelected: boolean;
+  onSelect: () => void;
+};
+
+function ArtifactRow({ artifact, isSelected, onSelect }: ArtifactRowProps) {
+  const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onSelect();
+    }
+  };
+
   return (
-    <article className="artifact-row">
+    <article
+      aria-selected={isSelected}
+      className={`artifact-row ${isSelected ? 'selected' : ''}`}
+      onClick={onSelect}
+      onKeyDown={handleKeyDown}
+      role="option"
+      tabIndex={0}
+    >
       <div className="artifact-row-icon" aria-hidden="true">
         <FileJson size={18} />
       </div>
@@ -112,19 +147,96 @@ function ArtifactRow({ artifact }: { artifact: ConsoleArtifactIndexEntryRecord }
   );
 }
 
-function referenceLabel(reference: ConsoleArtifactIndexEntryRecord['reference']) {
+function ArtifactDetailPanel({ artifact }: { artifact: ConsoleArtifactIndexEntryRecord | undefined }) {
+  if (artifact === undefined) {
+    return (
+      <aside className="artifact-detail empty" aria-label="Artifact detail">
+        <p className="section-label">Selection</p>
+        <h3>No artifact selected</h3>
+        <p className="artifact-detail-empty">
+          Choose a filter with matching artifacts to inspect an index entry.
+        </p>
+      </aside>
+    );
+  }
+
   return (
-    reference.protocol_id ??
-    reference.record_digest ??
-    reference.content_digest ??
-    reference.kind
+    <aside className="artifact-detail" aria-label="Artifact detail">
+      <header className="artifact-detail-header">
+        <p className="section-label">Selected Artifact</p>
+        <h3>{artifact.protocol_id ?? artifact.kind}</h3>
+        <p>{artifact.source_path}</p>
+      </header>
+
+      <DetailSection title="Identity">
+        <DetailItem label="Kind" value={artifact.kind} />
+        <DetailItem label="Protocol ID" value={artifact.protocol_id ?? 'Not declared'} />
+        <DetailItem label="Digest" value={shortDigest(artifact.digest)} />
+      </DetailSection>
+
+      <DetailSection title="Reference">
+        <ReferenceDetail reference={artifact.reference} />
+      </DetailSection>
+
+      <DetailSection title="Dependencies">
+        {artifact.dependencies.length > 0 ? (
+          <ul className="artifact-reference-list">
+            {artifact.dependencies.map((dependency) => (
+              <li key={`${dependency.kind}:${referenceLabel(dependency)}`}>
+                <Link2 size={14} aria-hidden="true" />
+                <span>{referenceLabel(dependency)}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="artifact-detail-note">No dependencies declared.</p>
+        )}
+      </DetailSection>
+
+      <DetailSection title="Validation">
+        <DetailItem label="Status" value={artifact.validation_status} />
+        <DetailItem label="Command" value={artifact.validation_command} />
+      </DetailSection>
+    </aside>
   );
 }
 
-function shortDigest(digest: string) {
-  const prefix = 'sha256:';
-  if (digest.startsWith(prefix) && digest.length > prefix.length + 14) {
-    return `${prefix}${digest.slice(prefix.length, prefix.length + 14)}`;
-  }
-  return digest;
+function DetailSection({ children, title }: { children: ReactNode; title: string }) {
+  return (
+    <section className="artifact-detail-section">
+      <h4>{title}</h4>
+      {children}
+    </section>
+  );
+}
+
+function DetailItem({ label, value }: { label: string; value: string }) {
+  return (
+    <dl className="artifact-detail-item">
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </dl>
+  );
+}
+
+function ReferenceDetail({ reference }: { reference: ConsoleArtifactIndexEntryRecord['reference'] }) {
+  const fields = [
+    ['Kind', reference.kind],
+    ['Protocol ID', reference.protocol_id],
+    ['Record Digest', reference.record_digest],
+    ['Content Digest', reference.content_digest],
+    ['External URI', reference.external_uri],
+  ].filter((field): field is [string, string] => field[1] !== undefined);
+
+  return (
+    <div className="artifact-reference-fields">
+      {fields.map(([label, value]) => (
+        <DetailItem
+          key={label}
+          label={label}
+          value={label.includes('Digest') ? shortDigest(value) : value}
+        />
+      ))}
+    </div>
+  );
 }
