@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import {
   benchmarkPlotModel,
@@ -39,9 +39,11 @@ const plotBodyWidth = plotWidth - plotMargin.left - plotMargin.right;
 const plotBodyHeight = plotHeight - plotMargin.top - plotMargin.bottom;
 
 export function BenchmarkResultDashboard({
+  resetToken,
   result,
   sourcePath,
 }: {
+  resetToken: number;
   result: BenchmarkResultRecord;
   sourcePath: string;
 }) {
@@ -77,6 +79,9 @@ export function BenchmarkResultDashboard({
     xDomain: plot.xDomain,
     yDomain: plot.yDomain,
   };
+  useEffect(() => {
+    setPlotView(null);
+  }, [resetToken]);
 
   return (
     <section className="performance-section benchmark-result-dashboard">
@@ -130,7 +135,6 @@ export function BenchmarkResultDashboard({
         costAxis={costAxis}
         model={plot}
         onHover={setHoveredId}
-        onReset={() => setPlotView(null)}
         onSelect={setSelectedId}
         onZoom={(factor) => setPlotView(zoomedView(activeView, factor, plot))}
         selectedId={selectedId}
@@ -176,7 +180,6 @@ function BenchmarkFrontierPlot({
   hoveredId,
   model,
   onHover,
-  onReset,
   onSelect,
   onZoom,
   selectedId,
@@ -186,7 +189,6 @@ function BenchmarkFrontierPlot({
   hoveredId: string | null;
   model: ReturnType<typeof benchmarkPlotModel>;
   onHover: (id: string | null) => void;
-  onReset: () => void;
   onSelect: (id: string | null) => void;
   onZoom: (factor: number) => void;
   selectedId: string | null;
@@ -223,14 +225,21 @@ function BenchmarkFrontierPlot({
   return (
     <section className="benchmark-result-table-section">
       <div className="benchmark-plot-heading">
-        <h3>Frontier Plot</h3>
+        <div>
+          <h3>Frontier Plot</h3>
+          <p>Best-known score by model cost, with candidate proposals overlaid.</p>
+        </div>
         <div className="benchmark-plot-actions">
-          <button onClick={() => onZoom(0.72)} type="button">Zoom In</button>
-          <button onClick={() => onZoom(1.28)} type="button">Zoom Out</button>
-          <button onClick={onReset} type="button">Reset</button>
+          <button onClick={() => onZoom(0.72)} type="button">+</button>
+          <button onClick={() => onZoom(1.28)} type="button">-</button>
         </div>
       </div>
       <div className="frontier-chart">
+        <div className="frontier-chart-legend" aria-label="Frontier plot legend">
+          <span><i className="frontier" />Frontier</span>
+          <span><i className="measured" />Measured</span>
+          <span><i className="proposal" />Proposal</span>
+        </div>
         <svg
           aria-label={`Frontier score by ${costAxis}`}
           className="frontier-chart-svg"
@@ -300,16 +309,43 @@ function BenchmarkFrontierPlot({
               return (
                 <g key={proposal.id}>
                   {uncertainty === undefined ? null : (
-                    <line
-                      className="frontier-chart-proposal-band"
-                      x1={proposalX}
-                      x2={proposalX}
-                      y1={y(proposal.predictedScore - uncertainty)}
-                      y2={y(proposal.predictedScore + uncertainty)}
-                    />
+                    <g className="frontier-chart-proposal-interval">
+                      <line
+                        className="frontier-chart-proposal-band"
+                        x1={proposalX}
+                        x2={proposalX}
+                        y1={y(proposal.predictedScore - uncertainty)}
+                        y2={y(proposal.predictedScore + uncertainty)}
+                      />
+                      <line
+                        className="frontier-chart-proposal-cap"
+                        x1={proposalX - 7}
+                        x2={proposalX + 7}
+                        y1={y(proposal.predictedScore - uncertainty)}
+                        y2={y(proposal.predictedScore - uncertainty)}
+                      />
+                      <line
+                        className="frontier-chart-proposal-cap"
+                        x1={proposalX - 7}
+                        x2={proposalX + 7}
+                        y1={y(proposal.predictedScore + uncertainty)}
+                        y2={y(proposal.predictedScore + uncertainty)}
+                      />
+                    </g>
                   )}
+                  <line
+                    className="frontier-chart-proposal-guide"
+                    x1={proposalX}
+                    x2={proposalX}
+                    y1={plotMargin.top}
+                    y2={plotMargin.top + plotBodyHeight}
+                  />
                   <circle
-                    className={`frontier-chart-proposal ${selectedId === proposal.id ? 'selected' : ''}`}
+                    className={[
+                      'frontier-chart-proposal',
+                      selectedId === proposal.id ? 'selected' : '',
+                      hoveredId === proposal.id ? 'hovered' : '',
+                    ].filter(Boolean).join(' ')}
                     cx={proposalX}
                     cy={proposalY}
                     onClick={(event) => {
@@ -368,6 +404,9 @@ function BenchmarkFrontierPlot({
         </svg>
         {activePoint === undefined ? null : (
           <div className="frontier-chart-tooltip">
+            <span className="frontier-chart-tooltip-kicker">
+              {'predictedScore' in activePoint ? 'Proposal' : activePoint.frontier ? 'Frontier model' : 'Measured model'}
+            </span>
             <strong>{activePoint.label}</strong>
             <span>{formatCost(activePoint.cost)} cost</span>
             <span>
@@ -375,6 +414,9 @@ function BenchmarkFrontierPlot({
                 ? `prediction ${scoreLabel(activePoint.predictedScore)}`
                 : `score ${scoreLabel(activePoint.score)}`}
             </span>
+            {'uncertainty' in activePoint && activePoint.uncertainty !== undefined ? (
+              <span>uncertainty +/- {scoreLabel(activePoint.uncertainty)}</span>
+            ) : null}
           </div>
         )}
       </div>

@@ -15,6 +15,9 @@
   --frontier-accent: #e8c45a;
   --frontier-accent-bg: rgba(232, 196, 90, 0.08);
   --frontier-accent-border: rgba(232, 196, 90, 0.28);
+  --frontier-grid-major: rgba(255, 255, 255, 0.055);
+  --frontier-frame-bg: rgba(255, 255, 255, 0.01);
+  --frontier-tooltip-bg: rgba(10, 10, 12, 0.94);
   --proposal-accent: #7fc97f;
   --proposal-accent-bg: rgba(127, 201, 127, 0.12);
   --proposal-accent-border: rgba(127, 201, 127, 0.35);
@@ -885,9 +888,9 @@ p {
 .frontier-chart {
   position: relative;
   overflow: hidden;
-  border: var(--line-thin) solid var(--border-color-strong);
-  border-radius: var(--radius-md);
-  background: var(--control-bg);
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
 }
 
 .benchmark-plot-heading {
@@ -897,24 +900,34 @@ p {
   gap: var(--space-lg);
 }
 
+.benchmark-plot-heading p {
+  margin: var(--space-3xs) 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-status);
+}
+
 .benchmark-plot-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-sm);
+  gap: var(--space-xs);
 }
 
 .benchmark-plot-actions button {
+  width: var(--space-6xl);
+  height: var(--space-6xl);
   border: var(--line-thin) solid var(--border-color-strong);
   border-radius: var(--radius-sm);
   background: var(--control-bg);
   color: white;
   cursor: pointer;
-  padding: var(--space-sm) var(--space-lg);
+  padding: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1;
 }
 
 .benchmark-plot-actions button:hover {
-  border-color: var(--accent-border-strong);
-  background: var(--accent-bg);
+  border-color: var(--frontier-accent-border);
+  background: var(--frontier-accent-bg);
 }
 
 .frontier-chart-svg {
@@ -924,13 +937,13 @@ p {
 }
 
 .frontier-chart-frame {
-  fill: rgba(255, 255, 255, 0.015);
-  stroke: var(--border-color-strong);
+  fill: var(--frontier-frame-bg);
+  stroke: var(--border-color);
   stroke-width: var(--line-thin);
 }
 
 .frontier-chart-grid {
-  stroke: rgba(255, 255, 255, 0.06);
+  stroke: var(--frontier-grid-major);
   stroke-width: var(--line-thin);
 }
 
@@ -955,7 +968,9 @@ p {
 
 .frontier-chart-staircase {
   stroke: var(--frontier-accent);
-  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 
 .frontier-chart-point {
@@ -963,11 +978,15 @@ p {
   fill: var(--measured-accent);
   stroke: transparent;
   stroke-width: 0;
+  transition:
+    fill 120ms ease,
+    r 120ms ease,
+    stroke 120ms ease;
 }
 
 .frontier-chart-point.frontier {
   fill: var(--frontier-accent);
-  stroke: rgba(255, 255, 255, 0.7);
+  stroke: var(--preview-bg);
   stroke-width: var(--line-thin);
 }
 
@@ -975,26 +994,89 @@ p {
 .frontier-chart-point.selected {
   fill: white;
   stroke: var(--frontier-accent);
-  stroke-width: 2;
+  stroke-width: var(--line-accent);
 }
 
 .frontier-chart-proposal {
   cursor: pointer;
   fill: var(--proposal-accent);
-  stroke: rgba(255, 255, 255, 0.72);
+  stroke: var(--preview-bg);
   stroke-width: var(--line-thin);
+  transition:
+    fill 120ms ease,
+    r 120ms ease,
+    stroke 120ms ease;
 }
 
+.frontier-chart-proposal.hovered,
 .frontier-chart-proposal.selected {
   fill: white;
   stroke: var(--proposal-accent);
-  stroke-width: 2;
+  stroke-width: var(--line-accent);
+}
+
+.frontier-chart-proposal-guide {
+  stroke: var(--proposal-accent);
+  stroke-dasharray: var(--space-2xs) var(--space-2xs);
+  stroke-opacity: 0.55;
+  stroke-width: var(--line-thin);
+  pointer-events: none;
+}
+
+.frontier-chart-proposal-band,
+.frontier-chart-proposal-cap {
+  stroke: var(--proposal-accent);
+  stroke-width: 1.4;
+  pointer-events: none;
 }
 
 .frontier-chart-proposal-band {
-  stroke: var(--proposal-accent);
-  stroke-dasharray: var(--space-xs) var(--space-xs);
-  stroke-width: 2;
+  stroke-opacity: 0.82;
+}
+
+.frontier-chart-proposal-cap {
+  stroke-opacity: 0.9;
+}
+
+.frontier-chart-legend {
+  position: absolute;
+  top: var(--space-lg);
+  left: var(--space-lg);
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  pointer-events: none;
+}
+
+.frontier-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-label);
+  letter-spacing: var(--tracking-control);
+  text-transform: uppercase;
+}
+
+.frontier-chart-legend i {
+  display: inline-block;
+  width: var(--space-sm);
+  height: var(--space-sm);
+  border-radius: 999px;
+}
+
+.frontier-chart-legend i.frontier {
+  background: var(--frontier-accent);
+}
+
+.frontier-chart-legend i.measured {
+  background: var(--measured-accent);
+}
+
+.frontier-chart-legend i.proposal {
+  background: var(--proposal-accent);
 }
 
 .frontier-chart-tooltip {
@@ -1007,7 +1089,7 @@ p {
   max-width: min(100% - var(--space-4xl), var(--performance-source-min));
   border: var(--line-thin) solid var(--border-color-strong);
   border-radius: var(--radius-sm);
-  background: rgba(10, 10, 12, 0.92);
+  background: var(--frontier-tooltip-bg);
   padding: var(--space-lg);
 }
 
@@ -1020,6 +1102,14 @@ p {
 
 .frontier-chart-tooltip span {
   color: var(--text-muted);
+}
+
+.frontier-chart-tooltip-kicker {
+  color: var(--frontier-accent) !important;
+  font-size: var(--font-label) !important;
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 
 .benchmark-result-table {
