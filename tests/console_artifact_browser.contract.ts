@@ -28,6 +28,17 @@ const selectedMeasurementDetail =
   selectedMeasurement === undefined
     ? undefined
     : detailForArtifact(demoArtifactDetails, selectedMeasurement);
+const detailsByArtifact = demoArtifactIndex.artifacts.map((artifact) =>
+  detailForArtifact(demoArtifactDetails, artifact),
+);
+const chessBenchmark = demoArtifactIndex.artifacts.find(
+  (artifact) => artifact.protocol_id === 'benchmarks.chess@0.1.0',
+);
+const chessMeasurement = demoArtifactIndex.artifacts.find(
+  (artifact) => artifact.protocol_id === 'benchmarks.chess.fixture.mate-in-one-evidence@0.1.0',
+);
+const chessMeasurementDetail =
+  chessMeasurement === undefined ? undefined : detailForArtifact(demoArtifactDetails, chessMeasurement);
 
 assertEqual(
   kinds.join(','),
@@ -35,26 +46,26 @@ assertEqual(
   'kinds',
 );
 assertEqual(kinds[0], allArtifactKinds, 'all kind first');
-assertEqual(dependencyCount, 1, 'dependency count');
-assertEqual(measurementArtifacts.length, 1, 'measurement filter count');
+assertEqual(dependencyCount, 2, 'dependency count');
+assertEqual(measurementArtifacts.length, 2, 'measurement filter count');
 assertEqual(
-  measurementArtifacts[0]?.dependencies[0]?.protocol_id,
-  'core.boolean-benchmark@0.1.0',
-  'measurement dependency protocol id',
+  measurementArtifacts.map((artifact) => artifact.dependencies[0]?.protocol_id).join(','),
+  'benchmarks.chess@0.1.0,core.boolean-benchmark@0.1.0',
+  'measurement dependency protocol ids',
 );
 assertEqual(
   selectedMeasurement?.protocol_id,
-  'core.boolean-evidence@0.1.0',
+  'benchmarks.chess.fixture.mate-in-one-evidence@0.1.0',
   'fallback selection after filter change',
 );
 assertEqual(
   referenceLabel(measurementArtifacts[0].dependencies[0]),
-  'core.boolean-benchmark@0.1.0',
+  'benchmarks.chess@0.1.0',
   'dependency reference label',
 );
 assertEqual(
   shortDigest(measurementArtifacts[0].digest),
-  'sha256:d91a31bac63324',
+  'sha256:07b9ca6e8603a2',
   'short digest',
 );
 assertEqual(selectedMeasurementDetail?.kind, 'measurement', 'selected measurement detail kind');
@@ -62,15 +73,26 @@ assertEqual(
   selectedMeasurementDetail?.kind === 'measurement'
     ? selectedMeasurementDetail.accepted_event.outcomes.join(',')
     : '',
-  'yes',
+  'g7f8',
   'measurement accepted outcomes',
 );
 assertEqual(
   selectedMeasurementDetail?.kind === 'measurement'
     ? selectedMeasurementDetail.probability_measure.probabilities.length
     : 0,
-  2,
+  3,
   'measurement probability count',
+);
+assertEqual(detailsByArtifact.every((detail) => detail !== undefined), true, 'all artifacts have details');
+assertEqual(chessBenchmark?.source_path, 'tests/fixtures/chess/mate_in_one/manifest.json', 'chess benchmark path');
+assertEqual(
+  chessMeasurementDetail?.kind === 'measurement'
+    ? chessMeasurementDetail.probability_measure.probabilities
+        .map((probability) => `${probability.outcome_id}:${probability.probability}`)
+        .join(',')
+    : '',
+  'g7f8:0.7,g7g8:0.2,g6f7:0.1',
+  'chess probabilities',
 );
 assertEqual(
   detailForArtifact(demoArtifactDetails, demoArtifactIndex.artifacts[0])?.kind,

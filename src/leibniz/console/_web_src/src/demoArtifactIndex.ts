@@ -22,6 +22,20 @@ export const demoArtifactIndex = parseConsoleArtifactIndexRecord({
     },
     {
       kind: 'benchmark-manifest',
+      source_path: 'tests/fixtures/chess/mate_in_one/manifest.json',
+      digest: 'sha256:76c634026a6923287784d945e805b9ca0a309f6a07835bff06b4b11d9d1ba2fd',
+      protocol_id: 'benchmarks.chess@0.1.0',
+      reference: {
+        kind: 'benchmark-manifest',
+        protocol_id: 'benchmarks.chess@0.1.0',
+        record_digest: 'sha256:76c634026a6923287784d945e805b9ca0a309f6a07835bff06b4b11d9d1ba2fd',
+      },
+      dependencies: [],
+      validation_status: 'valid',
+      validation_command: 'python -m pytest tests/test_console_artifact_index.py',
+    },
+    {
+      kind: 'benchmark-manifest',
       source_path: 'tests/fixtures/finite_outcome/manifest.json',
       digest: 'sha256:b9297f71ed09f10d69c6e46e1ef779951d99a7c31c2b41912fefe38d8968a0fe',
       protocol_id: 'core.boolean-benchmark@0.1.0',
@@ -31,6 +45,25 @@ export const demoArtifactIndex = parseConsoleArtifactIndexRecord({
         record_digest: 'sha256:b9297f71ed09f10d69c6e46e1ef779951d99a7c31c2b41912fefe38d8968a0fe',
       },
       dependencies: [],
+      validation_status: 'valid',
+      validation_command: 'python -m pytest tests/test_console_artifact_index.py',
+    },
+    {
+      kind: 'measurement',
+      source_path: 'tests/fixtures/chess/mate_in_one/measurement.json',
+      digest: 'sha256:07b9ca6e8603a2a6af5222cf43bc24fde53cbf93fe7a7c5a5b169910df6bc68b',
+      protocol_id: 'benchmarks.chess.fixture.mate-in-one-evidence@0.1.0',
+      reference: {
+        kind: 'measurement',
+        protocol_id: 'benchmarks.chess.fixture.mate-in-one-evidence@0.1.0',
+        record_digest: 'sha256:07b9ca6e8603a2a6af5222cf43bc24fde53cbf93fe7a7c5a5b169910df6bc68b',
+      },
+      dependencies: [
+        {
+          kind: 'benchmark-manifest',
+          protocol_id: 'benchmarks.chess@0.1.0',
+        },
+      ],
       validation_status: 'valid',
       validation_command: 'python -m pytest tests/test_console_artifact_index.py',
     },
