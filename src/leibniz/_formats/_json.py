@@ -7,7 +7,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias, cast
 
-from leibniz._documents import ContentEncodingError
+from leibniz.documents import ContentEncodingError
 
 _JsonScalar: TypeAlias = None | bool | int | float | str
 _JsonValue: TypeAlias = _JsonScalar | Mapping[str, "_JsonValue"] | Sequence["_JsonValue"]

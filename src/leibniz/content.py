@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from leibniz._documents import ContentEncodingError, canonical_document_bytes
+from leibniz.documents import ContentEncodingError, canonical_document_bytes
 
 __all__ = [
     "ContentEncodingError",

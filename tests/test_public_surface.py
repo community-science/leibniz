@@ -71,12 +71,56 @@ def test_python_source_avoids_module_scope_upper_snake_names() -> None:
     assert offenders == ()
 
 
+def test_public_modules_do_not_import_private_leibniz_modules() -> None:
+    offenders = tuple(
+        f"{module_name}:{imported_name}"
+        for module_name in _leibniz_module_names()
+        for imported_name in _private_leibniz_imports(module_name)
+    )
+
+    assert offenders == ()
+
+
 def _leibniz_module_names() -> tuple[str, ...]:
     return tuple(
         module_info.name
         for module_info in pkgutil.walk_packages(leibniz.__path__, prefix=f"{leibniz.__name__}.")
         if not module_info.ispkg and not module_info.name.rsplit(".", 1)[-1].startswith("_")
     )
+
+
+def _private_leibniz_imports(module_name: str) -> tuple[str, ...]:
+    module = importlib.import_module(module_name)
+    source_path = getattr(module, "__file__", None)
+    assert source_path is not None, f"{module.__name__} must have a source file"
+    tree = ast.parse(Path(source_path).read_text(encoding="utf-8"))
+
+    imports: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module is not None:
+            if _is_private_leibniz_module(node.module) and not _allowed_private_import(
+                module_name,
+                node.module,
+            ):
+                imports.append(node.module)
+        elif isinstance(node, ast.Import):
+            imports.extend(
+                alias.name
+                for alias in node.names
+                if _is_private_leibniz_module(alias.name)
+                and not _allowed_private_import(module_name, alias.name)
+            )
+    return tuple(sorted(imports))
+
+
+def _allowed_private_import(module_name: str, imported_name: str) -> bool:
+    return module_name == "leibniz.documents" and imported_name == "leibniz._formats._json"
+
+
+def _is_private_leibniz_module(module_name: str) -> bool:
+    if not module_name.startswith("leibniz."):
+        return False
+    return any(part.startswith("_") for part in module_name.split(".")[1:])
 
 
 def _public_names(module: ModuleType) -> tuple[str, ...]:

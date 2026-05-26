@@ -7,8 +7,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, cast
 
-from leibniz._documents import ContentEncodingError, load_object_document
 from leibniz.content import ContentDigest
+from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDataset
 from leibniz.records import FieldSpec, RecordSpec

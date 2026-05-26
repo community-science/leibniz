@@ -1,13 +1,13 @@
 import math
 from collections.abc import Callable, Mapping
 
-from leibniz._documents import canonical_document_bytes
 from leibniz.benchmarks import (
     BenchmarkManifest,
     BenchmarkManifestDocument,
     BenchmarkManifestValidationError,
 )
 from leibniz.content import ContentDigest
+from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementRecord, MeasurementRecordValidationError
 from leibniz.outcomes import OutcomeSpace

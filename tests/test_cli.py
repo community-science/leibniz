@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from leibniz._documents import canonical_document_bytes
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
+from leibniz.documents import canonical_document_bytes
 from leibniz.measurements import MeasurementDocument
 
 _fixtures_root = Path(__file__).parent / "fixtures"
