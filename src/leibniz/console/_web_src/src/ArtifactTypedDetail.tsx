@@ -229,6 +229,32 @@ export function ArtifactTypedDetail({
     );
   }
 
+  if (detail.kind === 'performance-view-bundle') {
+    return (
+      <DetailSection title="Performance Bundle">
+        <DetailItem label="Bundle ID" value={detail.id} />
+        <DetailItem label="View" value={detail.view_id} />
+        <DetailItem label="Measurements" value={String(detail.measurement_count)} />
+        <DetailItem label="Complexity Axis" value={detail.complexity_axis} />
+        <DetailItem label="Expected C" value={detail.expected_complexities.join(', ')} />
+        {detail.benchmark_manifest.protocol_id === undefined ? null : (
+          <DetailItem label="Benchmark" value={detail.benchmark_manifest.protocol_id} />
+        )}
+        <ul className="artifact-detail-list">
+          {detail.measurement_cases.map((measurementCase) => (
+            <li key={measurementCase.id}>
+              <span>{axisAssignmentLabel(measurementCase.complexity_assignment)}</span>
+              <small>
+                {measurementCase.component_sequence.join('-')} {'->'}{' '}
+                {measurementCase.accepted_outcome_sequence.join('-')}
+              </small>
+            </li>
+          ))}
+        </ul>
+      </DetailSection>
+    );
+  }
+
   return (
     <DetailSection title="Measurement">
       <DetailItem label="Evidence ID" value={detail.id} />

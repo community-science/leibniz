@@ -96,6 +96,20 @@ export type ObservationShowcaseDetailRecord = {
   samples: ObservationShowcaseSampleSummaryRecord[];
 };
 
+export type PerformanceViewBundleDetailRecord = {
+  kind: 'performance-view-bundle';
+  source_path: string;
+  id: string;
+  benchmark_manifest: ArtifactReferenceRecord;
+  materialization_declaration: ArtifactReferenceRecord;
+  observation_formation_declaration: ArtifactReferenceRecord;
+  view_id: string;
+  complexity_axis: string;
+  expected_complexities: number[];
+  measurement_count: number;
+  measurement_cases: PerformanceMeasurementCaseSummaryRecord[];
+};
+
 export type ConsoleArtifactDetailRecord =
   | ArchitectureManifestDetailRecord
   | BenchmarkManifestDetailRecord
@@ -104,7 +118,8 @@ export type ConsoleArtifactDetailRecord =
   | MaterializationPlanDetailRecord
   | MeasurementDetailRecord
   | ObservationFormationDeclarationDetailRecord
-  | ObservationShowcaseDetailRecord;
+  | ObservationShowcaseDetailRecord
+  | PerformanceViewBundleDetailRecord;
 
 export type ConsoleArtifactDetailMap = ReadonlyMap<string, ConsoleArtifactDetailRecord>;
 
@@ -219,6 +234,20 @@ type ObservationShowcaseSampleSummaryRecord = {
   component_sequence: number[];
   outcome_id?: string;
 };
+
+type PerformanceMeasurementCaseSummaryRecord = {
+  id: string;
+  component_sequence: number[];
+  accepted_outcome_sequence: number[];
+  scale_assignment: AxisAssignmentSummaryRecord;
+  complexity_assignment: AxisAssignmentSummaryRecord;
+  seed: number;
+  probabilities: PerformanceProbabilityMassSummaryRecord[];
+};
+
+type PerformanceProbabilityMassSummaryRecord =
+  | { outcome_id: string; probability: number; outcome_sequence?: never }
+  | { outcome_sequence: number[]; probability: number; outcome_id?: never };
 
 export class ConsoleArtifactDetailError extends Error {
   constructor(message: string) {
@@ -436,6 +465,39 @@ function parseDetailRecord(value: unknown, path: string): ConsoleArtifactDetailR
       ),
       samples: requireArray(record.samples, `${path}.samples`).map((sample, index) =>
         parseObservationShowcaseSample(sample, `${path}.samples.${index}`),
+      ),
+    };
+  }
+
+  if (kind === 'performance-view-bundle') {
+    return {
+      kind,
+      source_path: requireString(record.source_path, `${path}.source_path`),
+      id: requireString(record.id, `${path}.id`),
+      benchmark_manifest: parseReferenceRecord(
+        record.benchmark_manifest,
+        `${path}.benchmark_manifest`,
+      ),
+      materialization_declaration: parseReferenceRecord(
+        record.materialization_declaration,
+        `${path}.materialization_declaration`,
+      ),
+      observation_formation_declaration: parseReferenceRecord(
+        record.observation_formation_declaration,
+        `${path}.observation_formation_declaration`,
+      ),
+      view_id: requireString(record.view_id, `${path}.view_id`),
+      complexity_axis: requireString(record.complexity_axis, `${path}.complexity_axis`),
+      expected_complexities: parseNumberArray(
+        record.expected_complexities,
+        `${path}.expected_complexities`,
+      ),
+      measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`),
+      measurement_cases: requireArray(
+        record.measurement_cases,
+        `${path}.measurement_cases`,
+      ).map((measurementCase, index) =>
+        parsePerformanceMeasurementCase(measurementCase, `${path}.measurement_cases.${index}`),
       ),
     };
   }
@@ -687,6 +749,53 @@ function parseObservationShowcaseSample(
     sample.outcome_id = requireString(record.outcome_id, `${path}.outcome_id`);
   }
   return sample;
+}
+
+function parsePerformanceMeasurementCase(
+  value: unknown,
+  path: string,
+): PerformanceMeasurementCaseSummaryRecord {
+  const record = requireRecord(value, path);
+  return {
+    id: requireString(record.id, `${path}.id`),
+    component_sequence: parseNumberArray(record.component_sequence, `${path}.component_sequence`),
+    accepted_outcome_sequence: parseNumberArray(
+      record.accepted_outcome_sequence,
+      `${path}.accepted_outcome_sequence`,
+    ),
+    scale_assignment: parseAxisAssignment(record.scale_assignment, `${path}.scale_assignment`),
+    complexity_assignment: parseAxisAssignment(
+      record.complexity_assignment,
+      `${path}.complexity_assignment`,
+    ),
+    seed: requireNumber(record.seed, `${path}.seed`),
+    probabilities: requireArray(record.probabilities, `${path}.probabilities`).map(
+      (mass, index) => parsePerformanceProbabilityMass(mass, `${path}.probabilities.${index}`),
+    ),
+  };
+}
+
+function parsePerformanceProbabilityMass(
+  value: unknown,
+  path: string,
+): PerformanceProbabilityMassSummaryRecord {
+  const record = requireRecord(value, path);
+  const probability = requireNumber(record.probability, `${path}.probability`);
+  const hasOutcomeId = record.outcome_id !== undefined;
+  const hasOutcomeSequence = record.outcome_sequence !== undefined;
+  if (hasOutcomeId === hasOutcomeSequence) {
+    throw new ConsoleArtifactDetailError(`${path}: expected exactly one outcome identity`);
+  }
+  if (hasOutcomeId) {
+    return {
+      outcome_id: requireString(record.outcome_id, `${path}.outcome_id`),
+      probability,
+    };
+  }
+  return {
+    outcome_sequence: parseNumberArray(record.outcome_sequence, `${path}.outcome_sequence`),
+    probability,
+  };
 }
 
 function parseReferenceRecord(value: unknown, path: string): ArtifactReferenceRecord {

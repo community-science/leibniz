@@ -72,6 +72,11 @@ const observationShowcase = artifacts.find(
 );
 const observationShowcaseDetail =
   observationShowcase === undefined ? undefined : detailForArtifact(details, observationShowcase);
+const performanceBundle = artifacts.find(
+  (artifact) => artifact.protocol_id === 'performance-view-bundles.digits@0.1.0',
+);
+const performanceBundleDetail =
+  performanceBundle === undefined ? undefined : detailForArtifact(details, performanceBundle);
 
 assertEqual(
   kinds.join(','),
@@ -85,11 +90,12 @@ assertEqual(
     'measurement',
     'observation-formation-declaration',
     'observation-showcase',
+    'performance-view-bundle',
   ].join(','),
   'kinds',
 );
 assertEqual(kinds[0], allArtifactKinds, 'all kind first');
-assertEqual(dependencyCount, 15, 'dependency count');
+assertEqual(dependencyCount, 19, 'dependency count');
 assertEqual(measurementArtifacts.length, 2, 'measurement filter count');
 assertEqual(
   measurementArtifacts.map((artifact) => artifact.dependencies[0]?.protocol_id).join(','),
@@ -208,6 +214,20 @@ assertEqual(
     : '',
   'Single digit 7,Three digit sequence 123',
   'digits observation showcase samples',
+);
+assertEqual(
+  performanceBundleDetail?.kind === 'performance-view-bundle'
+    ? performanceBundleDetail.view_id
+    : '',
+  'views.competence-integrals.digits.performance@0.1.0',
+  'digits performance view id',
+);
+assertEqual(
+  performanceBundleDetail?.kind === 'performance-view-bundle'
+    ? performanceBundleDetail.measurement_cases[1]?.component_sequence.join(',')
+    : '',
+  '1,2',
+  'digits performance compact case',
 );
 assertEqual(
   detailForArtifact(details, artifacts[0])?.kind,
