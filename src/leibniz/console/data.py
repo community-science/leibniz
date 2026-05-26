@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
 
+from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.console.artifact_index import (
     ConsoleArtifactIndex,
@@ -21,6 +22,7 @@ from leibniz.console.artifact_index import (
 from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.materialization import MaterializationDeclarationDocument, MaterializationPlan
+from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
 from leibniz.observation_inspection import ObservationInspectionRecord
 from leibniz.observation_showcases import ObservationShowcaseDocument
@@ -48,6 +50,7 @@ class ConsoleData:
     artifact_details: tuple[Mapping[str, object], ...]
     observation_inspections: tuple[Mapping[str, object], ...]
     performance_views: tuple[Mapping[str, object], ...]
+    model_inspections: tuple[Mapping[str, object], ...]
     source_modules: tuple[Mapping[str, object], ...]
 
     def to_record(self) -> dict[str, object]:
@@ -58,6 +61,7 @@ class ConsoleData:
             "artifact_details": list(self.artifact_details),
             "observation_inspections": list(self.observation_inspections),
             "performance_views": list(self.performance_views),
+            "model_inspections": list(self.model_inspections),
             "source_modules": list(self.source_modules),
         }
 
@@ -78,12 +82,14 @@ class ConsoleDataBuilder:
         details = tuple(self._detail_for_source(source) for source in artifact_index.entries)
         observation_inspections = tuple(self._observation_inspections(artifact_index.entries))
         performance_views = tuple(self._performance_views(artifact_index.entries))
+        model_inspections = tuple(self._model_inspections(artifact_index.entries))
         source_modules = tuple(self._source_modules())
         return ConsoleData(
             artifact_index=artifact_index,
             artifact_details=details,
             observation_inspections=observation_inspections,
             performance_views=performance_views,
+            model_inspections=model_inspections,
             source_modules=source_modules,
         )
 
@@ -446,6 +452,26 @@ class ConsoleDataBuilder:
             views.append(record)
         return tuple(views)
 
+    def _model_inspections(
+        self,
+        entries: tuple[ConsoleArtifactIndexEntry, ...],
+    ) -> tuple[Mapping[str, object], ...]:
+        inspections: list[Mapping[str, object]] = []
+        for entry in entries:
+            if entry.kind != "architecture-manifest":
+                continue
+            document = ArchitectureManifestDocument.from_bytes(
+                self._repository_path(entry.source_path, description="source document").read_bytes()
+            )
+            inspection = ModelInspectionRecord.from_architecture(
+                id=_model_inspection_identifier(document.manifest.id),
+                architecture_manifest=document.manifest,
+            )
+            record = inspection.to_record()
+            record["source_path"] = entry.source_path.as_posix()
+            inspections.append(record)
+        return tuple(inspections)
+
     def _required_mapping(self, value: object, description: str) -> Mapping[str, object]:
         if not isinstance(value, Mapping):
             raise ConsoleDataValidationError(f"{description} must be a record")
@@ -573,6 +599,13 @@ def _child_identifier(parent: ProtocolIdentifier, suffix: str) -> ProtocolIdenti
     return ProtocolIdentifier(
         name=ProtocolName.parse(f"{parent.name}.{suffix}"),
         version=parent.version,
+    )
+
+
+def _model_inspection_identifier(architecture_id: ProtocolIdentifier) -> ProtocolIdentifier:
+    return ProtocolIdentifier(
+        name=ProtocolName.parse(f"model-inspections.{architecture_id.name}"),
+        version=architecture_id.version,
     )
 
 
