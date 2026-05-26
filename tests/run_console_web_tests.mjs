@@ -114,6 +114,14 @@ function assertBenchmarkWebSourceIsDataDriven() {
 }
 
 function assertConsoleResultRootPolicy() {
+  const viteConfig = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/vite.config.mjs'),
+    'utf8',
+  );
+  if (viteConfig.includes('addWatchFile')) {
+    throw new Error('Console result roots must be watched through the dev-server watcher');
+  }
+
   const tempRoot = mkdtempSync(resolve(tmpdir(), 'leibniz-console-roots-'));
   try {
     assertEqual(consoleResultRoots({}, tempRoot).length, 0, 'missing default result root');

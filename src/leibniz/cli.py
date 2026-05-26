@@ -513,3 +513,7 @@ def _load_outcome_space(path: Path) -> OutcomeSpace:
 
 def _load_submission_registry(path: Path) -> SubmissionRegistry:
     return SubmissionRegistryDocument.from_bytes(path.read_bytes()).registry
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

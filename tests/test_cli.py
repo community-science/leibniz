@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,6 +26,24 @@ def test_cli_help_text(capsys: pytest.CaptureFixture[str]) -> None:
 
     assert exit_info.value.code == 0
     assert "validate artifact files" in capsys.readouterr().out
+
+
+def test_cli_module_invokes_main() -> None:
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).parents[1] / "src"),
+    }
+    result = subprocess.run(
+        [sys.executable, "-m", "leibniz.cli", "validate", "--help"],
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "validate artifact files" in result.stdout
+    assert result.stderr == ""
 
 
 def test_cli_validate_help_lists_expanded_artifacts(capsys: pytest.CaptureFixture[str]) -> None:
