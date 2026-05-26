@@ -20,6 +20,7 @@ def test_console_data_discovery_is_deterministic() -> None:
             PurePosixPath("tests/fixtures/finite_outcome"),
             PurePosixPath("tests/fixtures/chess"),
             PurePosixPath("tests/fixtures/architecture"),
+            PurePosixPath("tests/fixtures/digits"),
             PurePosixPath("src/leibniz/benchmarks"),
         )
     )
@@ -45,8 +46,16 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         ("benchmark-manifest", "src/leibniz/benchmarks/digits/manifest.json"),
         ("benchmark-manifest", "tests/fixtures/chess/mate_in_one/manifest.json"),
         ("benchmark-manifest", "tests/fixtures/finite_outcome/manifest.json"),
+        ("latent-factor-declaration", "src/leibniz/benchmarks/digits/latent_factors.json"),
+        ("materialization-declaration", "src/leibniz/benchmarks/digits/materialization.json"),
+        ("materialization-plan", "tests/fixtures/digits/materialization_plan_l1.json"),
+        ("materialization-plan", "tests/fixtures/digits/materialization_plan_l3.json"),
         ("measurement", "tests/fixtures/chess/mate_in_one/measurement.json"),
         ("measurement", "tests/fixtures/finite_outcome/measurement.json"),
+        (
+            "observation-formation-declaration",
+            "src/leibniz/benchmarks/digits/observation_formation.json",
+        ),
     ]
     assert [(detail["kind"], detail["source_path"]) for detail in details] == [
         (artifact["kind"], artifact["source_path"]) for artifact in artifacts

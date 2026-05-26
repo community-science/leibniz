@@ -46,14 +46,44 @@ const chessMeasurement = artifacts.find(
 );
 const chessMeasurementDetail =
   chessMeasurement === undefined ? undefined : detailForArtifact(details, chessMeasurement);
+const latentFactors = artifacts.find(
+  (artifact) => artifact.protocol_id === 'benchmarks.digits.latent-factors@0.1.0',
+);
+const latentFactorsDetail =
+  latentFactors === undefined ? undefined : detailForArtifact(details, latentFactors);
+const materialization = artifacts.find(
+  (artifact) => artifact.protocol_id === 'benchmarks.digits.materialization@0.1.0',
+);
+const materializationDetail =
+  materialization === undefined ? undefined : detailForArtifact(details, materialization);
+const materializationPlan = artifacts.find(
+  (artifact) =>
+    artifact.protocol_id === 'benchmarks.digits.materialization-plan.l3.seed101@0.1.0',
+);
+const materializationPlanDetail =
+  materializationPlan === undefined ? undefined : detailForArtifact(details, materializationPlan);
+const observationFormation = artifacts.find(
+  (artifact) => artifact.protocol_id === 'benchmarks.digits.observation-formation@0.1.0',
+);
+const observationFormationDetail =
+  observationFormation === undefined ? undefined : detailForArtifact(details, observationFormation);
 
 assertEqual(
   kinds.join(','),
-  'all,architecture-manifest,benchmark-manifest,measurement',
+  [
+    'all',
+    'architecture-manifest',
+    'benchmark-manifest',
+    'latent-factor-declaration',
+    'materialization-declaration',
+    'materialization-plan',
+    'measurement',
+    'observation-formation-declaration',
+  ].join(','),
   'kinds',
 );
 assertEqual(kinds[0], allArtifactKinds, 'all kind first');
-assertEqual(dependencyCount, 3, 'dependency count');
+assertEqual(dependencyCount, 12, 'dependency count');
 assertEqual(measurementArtifacts.length, 2, 'measurement filter count');
 assertEqual(
   measurementArtifacts.map((artifact) => artifact.dependencies[0]?.protocol_id).join(','),
@@ -126,6 +156,45 @@ assertEqual(
     : '',
   'g6f7:0.1,g7f8:0.7,g7g8:0.2',
   'chess probabilities',
+);
+assertEqual(
+  latentFactorsDetail?.kind === 'latent-factor-declaration'
+    ? latentFactorsDetail.sample_factors.map((factor) => `${factor.name}:${factor.role}`).join(',')
+    : '',
+  [
+    'benchmarks.digits.sample.digit-identity:content',
+    'benchmarks.digits.sample.translation:nuisance',
+    'benchmarks.digits.materialization.canvas-side:materialization',
+  ].join(','),
+  'digits latent sample factors',
+);
+assertEqual(
+  latentFactorsDetail?.kind === 'latent-factor-declaration'
+    ? latentFactorsDetail.complexity_projections[0]?.coordinate
+    : '',
+  'C',
+  'digits latent complexity coordinate',
+);
+assertEqual(
+  materializationDetail?.kind === 'materialization-declaration'
+    ? materializationDetail.requirements[0]?.coefficient
+    : 0,
+  32,
+  'digits materialization resolution coefficient',
+);
+assertEqual(
+  materializationPlanDetail?.kind === 'materialization-plan'
+    ? materializationPlanDetail.resolution_assignment.values[0]?.value
+    : 0,
+  96,
+  'digits materialization plan resolution',
+);
+assertEqual(
+  observationFormationDetail?.kind === 'observation-formation-declaration'
+    ? `${observationFormationDetail.component_count}:${observationFormationDetail.mark_count}`
+    : '',
+  '10:38',
+  'digits observation formation coverage',
 );
 assertEqual(
   detailForArtifact(details, artifacts[0])?.kind,

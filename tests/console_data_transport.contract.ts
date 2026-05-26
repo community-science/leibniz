@@ -17,7 +17,7 @@ const consoleDataSource = parsed.source_modules.find(
 
 assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
-assertEqual(artifacts.length, 6, 'artifact count');
+assertEqual(artifacts.length, 11, 'artifact count');
 assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detail coverage');
 assertEqual(parsed.source_modules.length > 20, true, 'source module count');
 assertEqual(consoleDataSource?.source_path, 'src/leibniz/console/data.py', 'console data source path');
@@ -38,8 +38,13 @@ assertEqual(
     'benchmark-manifest:src/leibniz/benchmarks/digits/manifest.json',
     'benchmark-manifest:tests/fixtures/chess/mate_in_one/manifest.json',
     'benchmark-manifest:tests/fixtures/finite_outcome/manifest.json',
+    'latent-factor-declaration:src/leibniz/benchmarks/digits/latent_factors.json',
+    'materialization-declaration:src/leibniz/benchmarks/digits/materialization.json',
+    'materialization-plan:tests/fixtures/digits/materialization_plan_l1.json',
+    'materialization-plan:tests/fixtures/digits/materialization_plan_l3.json',
     'measurement:tests/fixtures/chess/mate_in_one/measurement.json',
     'measurement:tests/fixtures/finite_outcome/measurement.json',
+    'observation-formation-declaration:src/leibniz/benchmarks/digits/observation_formation.json',
   ].join('|'),
   'artifact order',
 );

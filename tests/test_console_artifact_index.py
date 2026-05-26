@@ -21,6 +21,26 @@ _public_fixture_sources = (
         source_path=PurePosixPath("src/leibniz/benchmarks/digits/manifest.json"),
     ),
     ConsoleArtifactIndexSource(
+        kind="latent-factor-declaration",
+        source_path=PurePosixPath("src/leibniz/benchmarks/digits/latent_factors.json"),
+    ),
+    ConsoleArtifactIndexSource(
+        kind="materialization-declaration",
+        source_path=PurePosixPath("src/leibniz/benchmarks/digits/materialization.json"),
+    ),
+    ConsoleArtifactIndexSource(
+        kind="materialization-plan",
+        source_path=PurePosixPath("tests/fixtures/digits/materialization_plan_l1.json"),
+    ),
+    ConsoleArtifactIndexSource(
+        kind="materialization-plan",
+        source_path=PurePosixPath("tests/fixtures/digits/materialization_plan_l3.json"),
+    ),
+    ConsoleArtifactIndexSource(
+        kind="observation-formation-declaration",
+        source_path=PurePosixPath("src/leibniz/benchmarks/digits/observation_formation.json"),
+    ),
+    ConsoleArtifactIndexSource(
         kind="benchmark-manifest",
         source_path=PurePosixPath("tests/fixtures/chess/mate_in_one/manifest.json"),
     ),
@@ -64,7 +84,11 @@ def test_console_artifact_index_validates_public_fixture_documents() -> None:
     assert {artifact["kind"] for artifact in artifacts} == {
         "architecture-manifest",
         "benchmark-manifest",
+        "latent-factor-declaration",
+        "materialization-declaration",
+        "materialization-plan",
         "measurement",
+        "observation-formation-declaration",
     }
     assert all("reference" in artifact for artifact in artifacts)
     assert all("digest" in artifact for artifact in artifacts)
@@ -84,6 +108,11 @@ def test_console_artifact_index_records_available_dependency_references() -> Non
 
     finite_measurement = artifacts["tests/fixtures/finite_outcome/measurement.json"]
     digits_manifest = artifacts["src/leibniz/benchmarks/digits/manifest.json"]
+    materialization = artifacts["src/leibniz/benchmarks/digits/materialization.json"]
+    materialization_plan = artifacts["tests/fixtures/digits/materialization_plan_l1.json"]
+    observation_formation = artifacts[
+        "src/leibniz/benchmarks/digits/observation_formation.json"
+    ]
 
     assert finite_measurement["dependencies"] == [
         {
@@ -95,6 +124,36 @@ def test_console_artifact_index_records_available_dependency_references() -> Non
         {
             "kind": "latent-factor-declaration",
             "protocol_id": "benchmarks.digits.latent-factors@0.1.0",
+        }
+    ]
+    assert materialization["dependencies"] == [
+        {
+            "kind": "benchmark-manifest",
+            "protocol_id": "benchmarks.digits@0.1.0",
+        },
+        {
+            "kind": "latent-factor-declaration",
+            "protocol_id": "benchmarks.digits.latent-factors@0.1.0",
+        },
+    ]
+    assert materialization_plan["dependencies"] == [
+        {
+            "kind": "benchmark-manifest",
+            "protocol_id": "benchmarks.digits@0.1.0",
+        },
+        {
+            "kind": "materialization-declaration",
+            "protocol_id": "benchmarks.digits.materialization@0.1.0",
+        },
+        {
+            "kind": "latent-factor-declaration",
+            "protocol_id": "benchmarks.digits.latent-factors@0.1.0",
+        },
+    ]
+    assert observation_formation["dependencies"] == [
+        {
+            "kind": "benchmark-manifest",
+            "protocol_id": "benchmarks.digits@0.1.0",
         }
     ]
 
