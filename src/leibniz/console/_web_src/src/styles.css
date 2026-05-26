@@ -65,10 +65,12 @@
   --model-layer-min: 220px;
   --model-source-label-min: 132px;
   --benchmark-list-width: 300px;
-  --benchmark-sample-min: calc(var(--benchmark-preview-size) + var(--space-xl) + var(--space-xl));
-  --benchmark-compact-sample-min: 132px;
+  --benchmark-sample-tile-size: 128px;
+  --benchmark-sample-caption-height: 40px;
+  --benchmark-sample-min: var(--benchmark-sample-tile-size);
+  --benchmark-compact-sample-min: var(--benchmark-sample-tile-size);
   --benchmark-preview-size: 128px;
-  --benchmark-compact-preview-size: 96px;
+  --benchmark-compact-preview-size: var(--benchmark-preview-size);
   --benchmark-label-min: 88px;
   --benchmark-model-card-min: 240px;
   --metric-min: 84px;
@@ -1572,7 +1574,7 @@ p {
 .benchmark-task {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2xl);
+  gap: var(--space-xl);
 }
 
 .benchmark-task-controls,
@@ -1632,30 +1634,37 @@ p {
 
 .benchmark-sample-grid {
   display: grid;
-  gap: var(--space-lg);
+  gap: var(--space-md);
+  grid-template-columns: repeat(auto-fill, var(--benchmark-sample-tile-size));
+  justify-content: start;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: var(--space-xs);
 }
 
 .benchmark-sample-grid.standard {
-  grid-template-columns: repeat(auto-fit, minmax(var(--benchmark-sample-min), 1fr));
+  grid-template-columns: repeat(auto-fill, var(--benchmark-sample-tile-size));
 }
 
 .benchmark-sample-grid.compact {
-  grid-template-columns: repeat(auto-fill, minmax(var(--benchmark-compact-sample-min), 1fr));
+  grid-template-columns: repeat(auto-fill, var(--benchmark-sample-tile-size));
 }
 
 .benchmark-sample-card {
   display: grid;
   grid-template-columns: 1fr;
+  grid-template-rows: var(--benchmark-preview-size) var(--benchmark-sample-caption-height);
   justify-items: center;
-  gap: var(--space-lg);
-  width: 100%;
-  border: var(--line-thin) solid transparent;
-  border-radius: var(--radius-md);
+  gap: 0;
+  width: var(--benchmark-sample-tile-size);
+  border: 0;
+  border-radius: 0;
   background: transparent;
   color: inherit;
   cursor: pointer;
-  padding: var(--space-lg);
-  text-align: left;
+  padding: 0;
+  text-align: initial;
 }
 
 .benchmark-sample-card > * {
@@ -1663,19 +1672,19 @@ p {
 }
 
 .benchmark-sample-card.selected {
-  border-color: var(--accent-border-strong);
-  background: var(--accent-bg);
+  background: transparent;
 }
 
 .benchmark-sample-card:hover {
-  border-color: var(--accent-border);
+  color: var(--text-primary);
 }
 
 .benchmark-sample-card.compact {
   grid-template-columns: 1fr;
+  grid-template-rows: var(--benchmark-preview-size) var(--benchmark-sample-caption-height);
   justify-items: center;
-  gap: var(--space-md);
-  padding: var(--space-md);
+  gap: 0;
+  padding: 0;
 }
 
 .benchmark-image-shell {
@@ -1684,8 +1693,18 @@ p {
   width: var(--benchmark-preview-size);
   height: var(--benchmark-preview-size);
   border: var(--line-thin) solid var(--border-color-strong);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   background: var(--preview-bg);
+  padding: var(--space-2xs);
+}
+
+.benchmark-sample-card.selected .benchmark-image-shell {
+  border-color: var(--frontier-accent);
+  box-shadow: 0 0 0 var(--line-thin) var(--frontier-accent);
+}
+
+.benchmark-sample-card:hover .benchmark-image-shell {
+  border-color: var(--frontier-accent-border);
 }
 
 .benchmark-sample-card.compact .benchmark-image-shell {
@@ -1699,100 +1718,90 @@ p {
   image-rendering: pixelated;
 }
 
-.benchmark-sample-card dl {
+.benchmark-sample-caption {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-sm);
-  align-content: start;
-  width: 100%;
-  min-width: 0;
-  margin: 0;
-}
-
-.benchmark-sample-card dl div {
-  min-width: 0;
-}
-
-.benchmark-sample-card dt {
-  color: var(--text-muted);
-  font-size: var(--font-label);
-  letter-spacing: var(--tracking-label);
-  overflow-wrap: anywhere;
-  text-transform: uppercase;
-}
-
-.benchmark-sample-card dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--text-primary);
-  font-size: var(--font-meta);
-}
-
-.benchmark-sample-card-body,
-.benchmark-sample-card-title {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 100%;
-  min-width: 0;
-}
-
-.benchmark-sample-card-body {
-  gap: var(--space-md);
-}
-
-.benchmark-sample-card-title {
+  grid-template-rows: 1fr 1fr;
   gap: var(--space-3xs);
+  width: 100%;
+  height: var(--benchmark-sample-caption-height);
+  border: var(--line-thin) solid var(--border-color);
+  border-top-width: 0;
+  background: var(--metric-bg);
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-label);
+  line-height: var(--line-tight);
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--space-2xs);
   text-align: center;
 }
 
-.benchmark-sample-card-title strong {
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  font-size: var(--font-panel-title);
-  line-height: var(--line-tight);
-}
-
-.benchmark-sample-card-title span {
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  color: var(--text-muted);
-  font-size: var(--font-status);
-}
-
-.benchmark-sample-detail {
-  display: grid;
-  grid-template-columns: minmax(var(--benchmark-sample-min), 3fr) minmax(0, 5fr);
-  gap: var(--space-xl);
-  border: var(--line-thin) solid var(--border-color-strong);
-  border-radius: var(--radius-md);
-  background: var(--panel-bg-subtle);
-  padding: var(--space-xl);
-}
-
-.benchmark-sample-detail-preview {
-  display: flex;
-  gap: var(--space-lg);
-  align-items: center;
+.benchmark-sample-caption span {
+  display: block;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.benchmark-sample-detail-preview h3,
-.benchmark-sample-detail-section h4,
-.benchmark-latent-role h5 {
+.benchmark-sample-coordinate-inspector {
+  width: 100%;
+  border: var(--line-thin) solid var(--border-color);
+  background: var(--control-bg);
+  padding: var(--space-md) var(--space-lg);
+}
+
+.benchmark-sample-coordinate-title {
+  margin-bottom: var(--space-sm);
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-label);
+  font-weight: 800;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.benchmark-sample-coordinate-inspector dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--metric-min), 1fr));
+  gap: var(--space-sm) var(--space-lg);
   margin: 0;
 }
 
-.benchmark-sample-detail-preview h3 {
-  overflow-wrap: anywhere;
+.benchmark-sample-coordinate-inspector div {
+  min-width: 0;
 }
 
-.benchmark-sample-detail-preview p {
-  margin: var(--space-xs) 0 0;
-  overflow-wrap: anywhere;
+.benchmark-sample-coordinate-inspector dt {
+  margin-bottom: var(--space-3xs);
   color: var(--text-muted);
+  font-size: var(--font-label);
+  font-weight: 800;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.benchmark-sample-coordinate-inspector dd {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--font-path);
+  font-size: var(--font-control);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.benchmark-sample-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+}
+
+.benchmark-sample-detail-section h4,
+.benchmark-latent-role h5 {
+  margin: 0;
 }
 
 .benchmark-sample-detail-grid {
@@ -1833,7 +1842,9 @@ p {
 }
 
 .benchmark-sample-detail-section {
-  grid-column: 1 / -1;
+  border: var(--line-thin) solid var(--border-color);
+  background: var(--control-bg);
+  padding: var(--space-lg);
 }
 
 .benchmark-latent-role {

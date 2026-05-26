@@ -692,6 +692,13 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
           value={aggregateMode ? `${visibleSamples.length} samples` : selected.label}
         />
       </section>
+      {selectedSample === undefined ? null : (
+        <BenchmarkSampleCoordinateInspector
+          batch={selectedSample.batch}
+          sample={selectedSample.sample}
+          task={task}
+        />
+      )}
       <section
         className={`benchmark-sample-grid ${selected.presentation.sample_card_density}`}
         aria-label="Generated benchmark samples"
@@ -708,9 +715,7 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
       </section>
       {selectedSample === undefined ? null : (
         <BenchmarkSampleDetail
-          batch={selectedSample.batch}
           sample={selectedSample.sample}
-          task={task}
         />
       )}
     </div>
@@ -728,8 +733,6 @@ function BenchmarkSampleCard({
   sample: GeneratedObservationSampleRecord;
   selected: boolean;
 }) {
-  const content = sample.latent_coordinates.find((coordinate) => coordinate.role === 'content');
-  const nuisance = sample.latent_coordinates.find((coordinate) => coordinate.role === 'nuisance');
   return (
     <button
       className={`benchmark-sample-card ${density} ${selected ? 'selected' : ''}`}
@@ -739,42 +742,15 @@ function BenchmarkSampleCard({
       <div className="benchmark-image-shell">
         <img alt={sample.outcome_id} src={sample.image_data_url} />
       </div>
-      {density === 'compact' ? (
-        <div className="benchmark-compact-label">
-          <strong>{sample.component_sequence.join('')}</strong>
-          <span>{sample.outcome_id}</span>
-        </div>
-      ) : (
-        <div className="benchmark-sample-card-body">
-          <div className="benchmark-sample-card-title">
-            <strong>{sample.component_sequence.join('')}</strong>
-            <span>{sample.outcome_id}</span>
-          </div>
-          <dl>
-            <div>
-              <dt>Complexity</dt>
-              <dd>{sample.complexity}</dd>
-            </div>
-            <div>
-              <dt>Shape</dt>
-              <dd>{sample.field_shape.join(' x ')}</dd>
-            </div>
-            <div>
-              <dt>Content</dt>
-              <dd>{content?.multiplicity ?? 'n/a'}</dd>
-            </div>
-            <div>
-              <dt>Nuisance</dt>
-              <dd>{nuisance?.multiplicity ?? 'n/a'}</dd>
-            </div>
-          </dl>
-        </div>
-      )}
+      <div className="benchmark-sample-caption">
+        <span>{sample.component_sequence.join('')}</span>
+        <span>{sample.outcome_id}</span>
+      </div>
     </button>
   );
 }
 
-function BenchmarkSampleDetail({
+function BenchmarkSampleCoordinateInspector({
   batch,
   sample,
   task,
@@ -783,34 +759,45 @@ function BenchmarkSampleDetail({
   sample: GeneratedObservationSampleRecord;
   task: BenchmarkTaskRecord;
 }) {
+  const content = sample.latent_coordinates.find((coordinate) => coordinate.role === 'content');
+  const nuisance = sample.latent_coordinates.find((coordinate) => coordinate.role === 'nuisance');
+  const entries: [string, string][] = [
+    ['Outcome', sample.outcome_id],
+    ['Components', sample.component_sequence.join('')],
+    [task.scale_axis, String(batch.scale)],
+    [task.complexity_axis, String(sample.complexity)],
+    ['Seed', String(batch.seed)],
+    ['Sample', `${sample.index + 1} / ${batch.sample_count}`],
+    ['Field', sample.field_shape.join(' x ')],
+    ['Content DOF', String(content?.multiplicity ?? 'n/a')],
+    ['Nuisance DOF', String(nuisance?.multiplicity ?? 'n/a')],
+  ];
+  return (
+    <section
+      className="benchmark-sample-coordinate-inspector"
+      aria-label="Selected sample coordinates"
+    >
+      <div className="benchmark-sample-coordinate-title">Selected Coordinates</div>
+      <dl>
+        {entries.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd title={value}>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function BenchmarkSampleDetail({
+  sample,
+}: {
+  sample: GeneratedObservationSampleRecord;
+}) {
   const latentRoles = unique(sample.latent_coordinates.map((coordinate) => coordinate.role));
   return (
     <section className="benchmark-sample-detail" aria-label="Selected sample detail">
-      <div className="benchmark-sample-detail-preview">
-        <div className="benchmark-image-shell">
-          <img alt={sample.outcome_id} src={sample.image_data_url} />
-        </div>
-        <div>
-          <h3>{sample.outcome_id}</h3>
-          <p>{sample.component_sequence.join('')}</p>
-        </div>
-      </div>
-      <dl className="benchmark-sample-detail-grid">
-        <dt>Mode</dt>
-        <dd>{modeLabel(batch.mode)}</dd>
-        <dt>{task.scale_axis}</dt>
-        <dd>{batch.scale}</dd>
-        <dt>{task.complexity_axis}</dt>
-        <dd>{sample.complexity}</dd>
-        <dt>Seed</dt>
-        <dd>{batch.seed}</dd>
-        <dt>Sample</dt>
-        <dd>{sample.index + 1} of {batch.sample_count}</dd>
-        <dt>Field Shape</dt>
-        <dd>{sample.field_shape.join(' x ')}</dd>
-        <dt>Components</dt>
-        <dd>{sample.component_sequence.join(', ')}</dd>
-      </dl>
       <section className="benchmark-sample-detail-section">
         <h4>Materialization</h4>
         <dl className="benchmark-sample-detail-grid">
@@ -834,6 +821,8 @@ function BenchmarkSampleDetail({
                   <dl className="benchmark-sample-detail-grid" key={coordinate.name}>
                     <dt>Name</dt>
                     <dd>{coordinate.name}</dd>
+                    <dt>Role</dt>
+                    <dd>{coordinate.role}</dd>
                     <dt>Multiplicity</dt>
                     <dd>{coordinate.multiplicity}</dd>
                     <dt>Measure</dt>
