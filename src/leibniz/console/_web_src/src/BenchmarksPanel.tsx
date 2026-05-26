@@ -45,45 +45,67 @@ export function BenchmarksPanel({
 
   if (selected === undefined) {
     return (
-      <section className="benchmark-layout">
+      <section className="benchmark-workbench">
         <p className="artifact-detail-note">No benchmark tasks are available.</p>
       </section>
     );
   }
 
+  const result = selectedResult?.result;
+  const sampleCount = selected.batches.reduce(
+    (total, batch) => total + batch.samples.length,
+    0,
+  );
+
   return (
-    <section className="benchmark-layout" aria-label="Benchmarks">
-      <aside className="benchmark-sidebar" aria-label="Benchmarks">
-        {tasks.map((task) => (
-          <button
-            className={`benchmark-list-item ${task.benchmark_id === selected.benchmark_id ? 'active' : ''}`}
-            key={task.benchmark_id}
-            onClick={() => setSelectedBenchmarkId(task.benchmark_id)}
-            type="button"
-          >
-            <span>{task.label}</span>
-            <small>{task.benchmark_id}</small>
-          </button>
-        ))}
-      </aside>
-      <div className="benchmark-main">
+    <section className="benchmark-workbench" aria-label="Benchmarks">
+      <div className="benchmark-workbench-content">
         <div className="benchmark-header">
-          <div>
-            <h2>{selected.label}</h2>
-            <p>{selected.source_path}</p>
-          </div>
+          <h2>{selected.label}</h2>
+          <p>{selected.source_path}</p>
         </div>
+
+        <div className="benchmark-selector-row" aria-label="Benchmarks">
+          <span>Benchmarks:</span>
+          {tasks.map((task) => (
+            <button
+              className={task.benchmark_id === selected.benchmark_id ? 'active' : ''}
+              key={task.benchmark_id}
+              onClick={() => setSelectedBenchmarkId(task.benchmark_id)}
+              type="button"
+            >
+              {task.label}
+            </button>
+          ))}
+        </div>
+
+        <BenchmarkStatusRow
+          resultEntry={selectedResult}
+          sampleCount={sampleCount}
+          task={selected}
+        />
+
         <div className="benchmark-section-stack">
-          <CollapsibleBenchmarkSection label="Samples">
+          <CollapsibleBenchmarkSection
+            label="Samples"
+            summary={`${selected.batches.length} batches / ${sampleCount} samples`}
+          >
             <BenchmarkTaskPane task={selected} />
           </CollapsibleBenchmarkSection>
-          <CollapsibleBenchmarkSection label="Performance">
+          <CollapsibleBenchmarkSection
+            actions={<BenchmarkPerformanceActions />}
+            label="Performance"
+            summary={`${result?.leaderboard.length ?? 0} models / ${result?.training_history.length ?? 0} runs`}
+          >
             <BenchmarkPerformancePane benchmark={selected} resultEntry={selectedResult} />
           </CollapsibleBenchmarkSection>
-          <CollapsibleBenchmarkSection label="Models">
+          <CollapsibleBenchmarkSection
+            label="Models"
+            summary={`${modelComparisonRows(result, modelInspections).length} inspected candidates`}
+          >
             <BenchmarkModelsPane
               inspections={modelInspections}
-              result={selectedResult?.result}
+              result={result}
             />
           </CollapsibleBenchmarkSection>
         </div>
@@ -93,26 +115,62 @@ export function BenchmarksPanel({
 }
 
 function CollapsibleBenchmarkSection({
+  actions,
   children,
   label,
+  summary,
 }: {
+  actions?: ReactNode;
   children: ReactNode;
   label: string;
+  summary?: string;
 }) {
   const [expanded, setExpanded] = useState(true);
   return (
     <section className="benchmark-collapsible-section">
-      <button
-        aria-expanded={expanded}
-        className="benchmark-section-toggle"
-        onClick={() => setExpanded((value) => !value)}
-        type="button"
-      >
-        <span>{label}</span>
-        <ChevronDown aria-hidden="true" className={expanded ? 'expanded' : ''} size={16} />
-      </button>
+      <div className="benchmark-section-heading">
+        <button
+          aria-expanded={expanded}
+          className="benchmark-section-toggle"
+          onClick={() => setExpanded((value) => !value)}
+          type="button"
+        >
+          <ChevronDown aria-hidden="true" className={expanded ? 'expanded' : ''} size={16} />
+          <span>{label}</span>
+        </button>
+        {summary === undefined ? null : <span className="benchmark-section-summary">{summary}</span>}
+        {actions === undefined ? null : <div className="benchmark-section-actions">{actions}</div>}
+      </div>
       <div hidden={!expanded}>{children}</div>
     </section>
+  );
+}
+
+function BenchmarkPerformanceActions() {
+  return <span>Read-only frontier</span>;
+}
+
+function BenchmarkStatusRow({
+  resultEntry,
+  sampleCount,
+  task,
+}: {
+  resultEntry: BenchmarkResultEntry | undefined;
+  sampleCount: number;
+  task: BenchmarkTaskRecord;
+}) {
+  const status = resultEntry === undefined ? 'o AWAITING RESULTS' : 'o RESULT VIEW LOADED';
+  const source = resultEntry?.sourcePath ?? task.source_path;
+  return (
+    <div className="benchmark-status-row">
+      <span>{status}</span>
+      <span>/</span>
+      <span>{sampleCount} generated samples</span>
+      <span>/</span>
+      <span>benchmark={task.benchmark_id}</span>
+      <span>/</span>
+      <span>{source}</span>
+    </div>
   );
 }
 
@@ -687,20 +745,30 @@ function BenchmarkSampleCard({
           <span>{sample.outcome_id}</span>
         </div>
       ) : (
-        <dl>
-          <dt>Outcome</dt>
-          <dd>{sample.outcome_id}</dd>
-          <dt>Sequence</dt>
-          <dd>{sample.component_sequence.join(', ')}</dd>
-          <dt>Complexity</dt>
-          <dd>{sample.complexity}</dd>
-          <dt>Shape</dt>
-          <dd>{sample.field_shape.join(' x ')}</dd>
-          <dt>Content DOF</dt>
-          <dd>{content?.multiplicity ?? 'n/a'}</dd>
-          <dt>Nuisance DOF</dt>
-          <dd>{nuisance?.multiplicity ?? 'n/a'}</dd>
-        </dl>
+        <div className="benchmark-sample-card-body">
+          <div className="benchmark-sample-card-title">
+            <strong>{sample.component_sequence.join('')}</strong>
+            <span>{sample.outcome_id}</span>
+          </div>
+          <dl>
+            <div>
+              <dt>Complexity</dt>
+              <dd>{sample.complexity}</dd>
+            </div>
+            <div>
+              <dt>Shape</dt>
+              <dd>{sample.field_shape.join(' x ')}</dd>
+            </div>
+            <div>
+              <dt>Content</dt>
+              <dd>{content?.multiplicity ?? 'n/a'}</dd>
+            </div>
+            <div>
+              <dt>Nuisance</dt>
+              <dd>{nuisance?.multiplicity ?? 'n/a'}</dd>
+            </div>
+          </dl>
+        </div>
       )}
     </button>
   );

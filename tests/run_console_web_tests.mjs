@@ -36,6 +36,7 @@ const generatedPayload = run(
 );
 writeFileSync(generatedPayloadPath, generatedPayload);
 assertShellUsesGeneratedConsoleData();
+assertBenchmarkWorkbenchStructure();
 assertBenchmarkWebSourceIsDataDriven();
 assertConsoleResultRootPolicy();
 
@@ -109,6 +110,44 @@ function assertBenchmarkWebSourceIsDataDriven() {
       if (pattern.test(source)) {
         throw new Error(`${relativePath} hard-codes benchmark-specific presentation: ${pattern}`);
       }
+    }
+  }
+}
+
+function assertBenchmarkWorkbenchStructure() {
+  const panel = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/BenchmarksPanel.tsx'),
+    'utf8',
+  );
+  const styles = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/styles.css'),
+    'utf8',
+  );
+  const requiredPanelMarkers = [
+    'benchmark-workbench',
+    'benchmark-selector-row',
+    'benchmark-status-row',
+    'benchmark-section-summary',
+    'benchmark-section-actions',
+  ];
+  for (const marker of requiredPanelMarkers) {
+    if (!panel.includes(marker)) {
+      throw new Error(`BenchmarksPanel must expose benchmark workbench marker: ${marker}`);
+    }
+  }
+  if (panel.includes('benchmark-sidebar') || panel.includes('benchmark-list-item')) {
+    throw new Error('BenchmarksPanel must not use the old sidebar benchmark layout');
+  }
+
+  const requiredThemeTokens = [
+    '--frontier-accent',
+    '--proposal-accent',
+    '--measured-accent',
+    '--benchmark-workbench-wide',
+  ];
+  for (const token of requiredThemeTokens) {
+    if (!styles.includes(token)) {
+      throw new Error(`Console styles must define benchmark workbench token: ${token}`);
     }
   }
 }
