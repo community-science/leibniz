@@ -87,6 +87,19 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert cases[1]["component_sequence"] == [1, 2]
     assert cases[1]["accepted_outcome_sequence"] == [1, 2]
 
+    performance_views = cast(list[dict[str, object]], record["performance_views"])
+    assert len(performance_views) == 1
+    performance_view = performance_views[0]
+    assert performance_view["source_path"] == (
+        "src/leibniz/benchmarks/digits/performance_view_bundle.json"
+    )
+    competence_view = cast(dict[str, object], performance_view["competence_integral_view"])
+    entries = cast(list[dict[str, object]], competence_view["entries"])
+    assert competence_view["expected_complexities"] == [1.0, 2.0, 3.0]
+    assert entries[0]["integral"] == 0.25
+    assert entries[0]["coverage"] == 2 / 3
+    assert entries[0]["missing_complexities"] == [3.0]
+
 
 def test_console_data_includes_public_source_module_inventory() -> None:
     data = ConsoleDataBuilder(_repository_root).discover((PurePosixPath("tests/fixtures"),))

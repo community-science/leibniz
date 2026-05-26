@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
 
+from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.console.artifact_index import (
     ConsoleArtifactIndex,
     ConsoleArtifactIndexBuilder,
@@ -23,6 +24,7 @@ from leibniz.materialization import MaterializationDeclarationDocument, Material
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
 from leibniz.observation_inspection import ObservationInspectionRecord
 from leibniz.observation_showcases import ObservationShowcaseDocument
+from leibniz.performance_bundles import PerformanceViewBundle, PerformanceViewBundleDocument
 
 __all__ = [
     "ConsoleData",
@@ -45,6 +47,7 @@ class ConsoleData:
     artifact_index: ConsoleArtifactIndex
     artifact_details: tuple[Mapping[str, object], ...]
     observation_inspections: tuple[Mapping[str, object], ...]
+    performance_views: tuple[Mapping[str, object], ...]
     source_modules: tuple[Mapping[str, object], ...]
 
     def to_record(self) -> dict[str, object]:
@@ -54,6 +57,7 @@ class ConsoleData:
             "artifact_index": self.artifact_index.to_record(),
             "artifact_details": list(self.artifact_details),
             "observation_inspections": list(self.observation_inspections),
+            "performance_views": list(self.performance_views),
             "source_modules": list(self.source_modules),
         }
 
@@ -73,11 +77,13 @@ class ConsoleDataBuilder:
         artifact_index = self._artifact_builder.build(sources)
         details = tuple(self._detail_for_source(source) for source in artifact_index.entries)
         observation_inspections = tuple(self._observation_inspections(artifact_index.entries))
+        performance_views = tuple(self._performance_views(artifact_index.entries))
         source_modules = tuple(self._source_modules())
         return ConsoleData(
             artifact_index=artifact_index,
             artifact_details=details,
             observation_inspections=observation_inspections,
+            performance_views=performance_views,
             source_modules=source_modules,
         )
 
@@ -352,6 +358,93 @@ class ConsoleDataBuilder:
                 }
                 inspections.append(record)
         return tuple(inspections)
+
+    def _performance_views(
+        self,
+        entries: tuple[ConsoleArtifactIndexEntry, ...],
+    ) -> tuple[Mapping[str, object], ...]:
+        benchmark_manifests = {
+            document.manifest.id: document.manifest
+            for document in (
+                BenchmarkManifestDocument.from_bytes(
+                    self._repository_path(
+                        entry.source_path,
+                        description="source document",
+                    ).read_bytes()
+                )
+                for entry in entries
+                if entry.kind == "benchmark-manifest"
+            )
+        }
+        materialization_declarations = {
+            document.declaration.id: document.declaration
+            for document in (
+                MaterializationDeclarationDocument.from_bytes(
+                    self._repository_path(
+                        entry.source_path,
+                        description="source document",
+                    ).read_bytes()
+                )
+                for entry in entries
+                if entry.kind == "materialization-declaration"
+            )
+        }
+        formation_declarations = {
+            document.declaration.id: document.declaration
+            for document in (
+                ObservationFormationDeclarationDocument.from_bytes(
+                    self._repository_path(
+                        entry.source_path,
+                        description="source document",
+                    ).read_bytes()
+                )
+                for entry in entries
+                if entry.kind == "observation-formation-declaration"
+            )
+        }
+        views: list[Mapping[str, object]] = []
+        for entry in entries:
+            if entry.kind != "performance-view-bundle":
+                continue
+            document = PerformanceViewBundleDocument.from_bytes(
+                self._repository_path(entry.source_path, description="source document").read_bytes()
+            )
+            manifest = document.manifest
+            if manifest.benchmark_manifest.protocol_id is None:
+                raise ConsoleDataValidationError(
+                    f"{entry.source_path}: benchmark_manifest must include protocol_id"
+                )
+            if manifest.materialization_declaration.protocol_id is None:
+                raise ConsoleDataValidationError(
+                    f"{entry.source_path}: materialization_declaration must include protocol_id"
+                )
+            if manifest.observation_formation_declaration.protocol_id is None:
+                raise ConsoleDataValidationError(
+                    f"{entry.source_path}: observation_formation_declaration must include "
+                    "protocol_id"
+                )
+            try:
+                benchmark_manifest = benchmark_manifests[manifest.benchmark_manifest.protocol_id]
+                materialization_declaration = materialization_declarations[
+                    manifest.materialization_declaration.protocol_id
+                ]
+                formation_declaration = formation_declarations[
+                    manifest.observation_formation_declaration.protocol_id
+                ]
+            except KeyError as error:
+                raise ConsoleDataValidationError(
+                    f"{entry.source_path}: performance bundle references an undiscovered source"
+                ) from error
+            bundle = PerformanceViewBundle.from_manifest(
+                manifest,
+                benchmark_manifest=benchmark_manifest,
+                materialization_declaration=materialization_declaration,
+                observation_formation_declaration=formation_declaration,
+            )
+            record = bundle.to_record()
+            record["source_path"] = entry.source_path.as_posix()
+            views.append(record)
+        return tuple(views)
 
     def _required_mapping(self, value: object, description: str) -> Mapping[str, object]:
         if not isinstance(value, Mapping):
