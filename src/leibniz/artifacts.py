@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 from urllib.parse import urlparse
 
 from leibniz._documents import ContentEncodingError, load_object_document
@@ -13,6 +14,8 @@ from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
 from leibniz.records import FieldSpec, RecordSpec
 
 __all__ = [
+    "ArtifactIndex",
+    "ArtifactIndexDocument",
     "ArtifactReference",
     "ArtifactReferenceDocument",
     "ArtifactReferenceValidationError",
@@ -29,6 +32,17 @@ _artifact_reference_record = RecordSpec(
         "content_digest": FieldSpec(kind="string", required=False),
         "record_digest": FieldSpec(kind="string", required=False),
         "external_uri": FieldSpec(kind="string", required=False),
+    }
+)
+_artifact_index_record = RecordSpec(
+    fields={
+        "id": FieldSpec(kind="identifier"),
+        "source_kind": FieldSpec(kind="string", required=False),
+        "source_digest": FieldSpec(kind="string", required=False),
+        "artifacts": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="record"),
+        ),
     }
 )
 
@@ -135,6 +149,129 @@ class ArtifactReferenceDocument:
         return cls(reference=reference, digest=ContentDigest.from_value(reference.to_record()))
 
 
+@dataclass(frozen=True, slots=True)
+class ArtifactIndex:
+    """A canonical local inventory over explicit artifact references."""
+
+    id: ProtocolIdentifier
+    artifacts: tuple[ArtifactReference, ...]
+    source_kind: str | None = None
+    source_digest: ContentDigest | None = None
+
+    def __post_init__(self) -> None:
+        try:
+            self.id.require_unreleased()
+        except IdentifierSyntaxError as error:
+            raise ArtifactReferenceValidationError(str(error)) from error
+        if not str(self.id.name).startswith("artifact-indexes."):
+            raise ArtifactReferenceValidationError("id must be a valid artifact index id")
+        if (self.source_kind is None) != (self.source_digest is None):
+            raise ArtifactReferenceValidationError(
+                "source_kind and source_digest must be supplied together"
+            )
+        if self.source_kind is not None:
+            _validate_kind(self.source_kind)
+        if not self.artifacts:
+            raise ArtifactReferenceValidationError(
+                "artifacts must contain at least one artifact reference"
+            )
+        expected_artifacts = tuple(sorted(self.artifacts, key=_reference_sort_key))
+        if self.artifacts != expected_artifacts:
+            object.__setattr__(self, "artifacts", expected_artifacts)
+        duplicate = _first_duplicate_reference(self.artifacts)
+        if duplicate is not None:
+            raise ArtifactReferenceValidationError(f"duplicate artifact reference: {duplicate}")
+
+    @classmethod
+    def from_record(
+        cls,
+        record: Mapping[str, object],
+        *,
+        source_record: Mapping[str, object] | None = None,
+    ) -> ArtifactIndex:
+        try:
+            validated = _artifact_index_record.validate(record)
+            artifacts = tuple(
+                ArtifactReference.from_record(_as_mapping(item, field="artifacts"))
+                for item in _as_sequence(validated["artifacts"], field="artifacts")
+            )
+        except ValueError as error:
+            raise ArtifactReferenceValidationError(str(error)) from error
+        index = cls(
+            id=_as_identifier(validated["id"], field="id"),
+            artifacts=artifacts,
+            source_kind=_as_optional_string(validated.get("source_kind"), field="source_kind"),
+            source_digest=_as_optional_digest(
+                validated.get("source_digest"),
+                field="source_digest",
+            ),
+        )
+        if source_record is not None:
+            index.validate_source(source_record)
+        return index
+
+    @classmethod
+    def from_source_record(
+        cls,
+        *,
+        id: ProtocolIdentifier,
+        source_kind: str,
+        source_record: Mapping[str, object],
+        artifacts: tuple[ArtifactReference, ...],
+    ) -> ArtifactIndex:
+        return cls(
+            id=id,
+            source_kind=source_kind,
+            source_digest=ContentDigest.from_value(source_record),
+            artifacts=artifacts,
+        )
+
+    @property
+    def digest(self) -> ContentDigest:
+        return ContentDigest.from_value(self.to_record())
+
+    def validate_source(self, source_record: Mapping[str, object]) -> None:
+        if self.source_digest is None:
+            raise ArtifactReferenceValidationError(
+                "source_digest is required when validating a source record"
+            )
+        if self.source_digest != ContentDigest.from_value(source_record):
+            raise ArtifactReferenceValidationError("source_digest does not match source record")
+
+    def to_record(self) -> dict[str, object]:
+        record: dict[str, object] = {
+            "id": str(self.id),
+            "artifacts": [artifact.to_record() for artifact in self.artifacts],
+        }
+        if self.source_kind is not None:
+            record["source_kind"] = self.source_kind
+        if self.source_digest is not None:
+            record["source_digest"] = str(self.source_digest)
+        return record
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactIndexDocument:
+    """A loaded artifact index and its canonical digest."""
+
+    index: ArtifactIndex
+    digest: ContentDigest
+
+    @classmethod
+    def from_bytes(
+        cls,
+        data: bytes,
+        *,
+        source_record: Mapping[str, object] | None = None,
+    ) -> ArtifactIndexDocument:
+        try:
+            record = load_object_document(data, description="artifact index document")
+        except ContentEncodingError as error:
+            raise ArtifactReferenceValidationError(str(error)) from error
+        index = ArtifactIndex.from_record(record, source_record=source_record)
+        return cls(index=index, digest=index.digest)
+
+
 def reference_for_record(
     *,
     kind: str,
@@ -191,6 +328,24 @@ def _as_optional_string(value: object, *, field: str) -> str | None:
     return _as_string(value, field=field)
 
 
+def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
+    if not isinstance(value, ProtocolIdentifier):
+        raise ArtifactReferenceValidationError(f"{field}: expected parsed identifier")
+    return value
+
+
+def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ArtifactReferenceValidationError(f"{field}: expected record")
+    return cast(Mapping[str, object], value)
+
+
+def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
+    if not isinstance(value, tuple):
+        raise ArtifactReferenceValidationError(f"{field}: expected parsed sequence")
+    return cast(tuple[object, ...], value)
+
+
 def _as_optional_identifier(value: object) -> ProtocolIdentifier | None:
     if value is None:
         return None
@@ -211,3 +366,23 @@ def _as_optional_digest(value: object, *, field: str) -> ContentDigest | None:
         return ContentDigest(algorithm=algorithm, hex=digest_hex)
     except ContentEncodingError as error:
         raise ArtifactReferenceValidationError(str(error)) from error
+
+
+def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:
+    return (
+        reference.kind,
+        str(reference.protocol_id) if reference.protocol_id is not None else "",
+        str(reference.content_digest) if reference.content_digest is not None else "",
+        str(reference.record_digest) if reference.record_digest is not None else "",
+        reference.external_uri if reference.external_uri is not None else "",
+    )
+
+
+def _first_duplicate_reference(references: tuple[ArtifactReference, ...]) -> str | None:
+    seen: set[str] = set()
+    for reference in references:
+        key = str(ContentDigest.from_value(reference.to_record()))
+        if key in seen:
+            return key
+        seen.add(key)
+    return None
