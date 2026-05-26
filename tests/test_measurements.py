@@ -1,7 +1,7 @@
-import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from leibniz._documents import canonical_document_bytes
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
@@ -449,7 +449,7 @@ def _other_raw_scoring_evidence_record() -> dict[str, object]:
 
 
 def _json_bytes(record: Mapping[str, object]) -> bytes:
-    return json.dumps(record).encode("utf-8")
+    return canonical_document_bytes(record)
 
 
 def capture_measurement_error(

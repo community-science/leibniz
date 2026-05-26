@@ -1,6 +1,7 @@
 import math
 from collections.abc import Callable, Mapping
 
+from leibniz._documents import canonical_document_bytes
 from leibniz.benchmarks import (
     BenchmarkManifest,
     BenchmarkManifestDocument,
@@ -276,9 +277,7 @@ def _outcome_space_record() -> dict[str, object]:
 
 
 def _json_bytes(record: Mapping[str, object]) -> bytes:
-    import json
-
-    return json.dumps(record).encode("utf-8")
+    return canonical_document_bytes(record)
 
 
 def _measurement_record() -> dict[str, object]:
