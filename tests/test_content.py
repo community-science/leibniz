@@ -19,7 +19,6 @@ from leibniz.outcomes import (
 _source_root = Path(__file__).parents[1] / "src" / "leibniz"
 _tests_root = Path(__file__).parents[1] / "tests"
 _format_boundary_files = {
-    _source_root / "_documents.py",
     _source_root / "documents.py",
     _source_root / "_formats" / "_json.py",
 }

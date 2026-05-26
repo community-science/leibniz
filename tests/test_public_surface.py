@@ -1,5 +1,6 @@
 import ast
 import importlib
+import importlib.util
 import inspect
 import pkgutil
 import re
@@ -79,6 +80,10 @@ def test_public_modules_do_not_import_private_leibniz_modules() -> None:
     )
 
     assert offenders == ()
+
+
+def test_private_document_compatibility_shim_is_not_importable() -> None:
+    assert importlib.util.find_spec("leibniz._documents") is None
 
 
 def _leibniz_module_names() -> tuple[str, ...]:
