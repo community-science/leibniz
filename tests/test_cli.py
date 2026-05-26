@@ -201,6 +201,11 @@ def test_cli_reports_incompatible_manifest_pair(
             "valid view manifest view-manifests.cli@0.1.0",
         ),
         (
+            "projection-record",
+            "_projection_record",
+            "valid projection record projection-records.cli@0.1.0",
+        ),
+        (
             "model-derivation",
             "_model_derivation_record",
             "valid model derivation compatibility report model-derivations.cli@0.1.0",
@@ -298,6 +303,7 @@ def test_cli_validates_federation_ingest_plan_with_registry(
         "model-operation",
         "model-lineage",
         "view-manifest",
+        "projection-record",
         "model-derivation",
         "publication-bundle",
         "submission-registry",
@@ -380,6 +386,8 @@ def _expanded_artifact_record(factory_name: str) -> dict[str, object]:
         return _model_lineage_record()
     if factory_name == "_view_manifest_record":
         return _view_manifest_record()
+    if factory_name == "_projection_record":
+        return _projection_record()
     if factory_name == "_model_derivation_record":
         return _model_derivation_record()
     if factory_name == "_submission_registry_record":
@@ -508,6 +516,38 @@ def _view_manifest_record() -> dict[str, object]:
         ],
         "metric_name": "negative_log_score",
         "score_direction": "lower",
+    }
+
+
+def _projection_record() -> dict[str, object]:
+    return {
+        "id": "projection-records.cli@0.1.0",
+        "subject": {
+            "kind": "view-manifest",
+            "protocol_id": "view-manifests.cli@0.1.0",
+        },
+        "predicate": "declares_projection",
+        "object": {
+            "kind": "metric",
+            "protocol_id": "metrics.negative-log-score@0.1.0",
+        },
+        "scope": [
+            {
+                "kind": "measurement-dataset",
+                "content_digest": str(ContentDigest.from_value({"measurements": []})),
+            }
+        ],
+        "evidence": [
+            {
+                "kind": "view-manifest",
+                "protocol_id": "view-manifests.cli@0.1.0",
+            }
+        ],
+        "modality": "measurement",
+        "status": "proposed",
+        "statement": "The view manifest declares a measurement projection.",
+        "assumptions": ["The referenced view manifest validates."],
+        "limitations": ["No ranking is recomputed by this record."],
     }
 
 
