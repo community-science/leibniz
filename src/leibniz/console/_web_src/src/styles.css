@@ -1624,14 +1624,34 @@ p {
   gap: var(--space-lg);
 }
 
+.benchmark-model-inspector-layout {
+  display: grid;
+  grid-template-columns: minmax(var(--benchmark-model-card-min), 4fr) minmax(0, 8fr);
+  gap: var(--space-xl);
+  align-items: start;
+}
+
 .benchmark-model-card {
   display: flex;
   flex-direction: column;
   gap: var(--space-lg);
+  width: 100%;
   border: var(--line-thin) solid var(--border-color-strong);
   border-radius: var(--radius-md);
   background: var(--panel-bg-subtle);
+  color: inherit;
+  cursor: pointer;
   padding: var(--space-xl);
+  text-align: left;
+}
+
+.benchmark-model-card.selected {
+  border-color: var(--accent-border-strong);
+  background: var(--accent-bg);
+}
+
+.benchmark-model-card:hover {
+  border-color: var(--accent-border);
 }
 
 .benchmark-model-heading {
@@ -1674,9 +1694,143 @@ p {
 .benchmark-model-card dd {
   margin: 0;
   overflow-wrap: anywhere;
-  color: white;
+  color: var(--text-primary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--font-control);
+}
+
+.benchmark-model-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+  border: var(--line-thin) solid var(--border-color-strong);
+  border-radius: var(--radius-md);
+  background: var(--panel-bg-subtle);
+  padding: var(--space-xl);
+}
+
+.benchmark-model-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2xl);
+}
+
+.benchmark-model-detail-header h3,
+.benchmark-model-detail-section h4 {
+  margin: 0;
+}
+
+.benchmark-model-detail-header p {
+  margin: var(--space-xs) 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-path);
+}
+
+.benchmark-model-detail-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(var(--metric-min), 1fr));
+  gap: var(--space-sm);
+  margin: 0;
+}
+
+.benchmark-model-detail-metrics div {
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--metric-bg);
+  padding: var(--space-sm);
+}
+
+.benchmark-model-detail-metrics dt,
+.benchmark-model-detail-grid dt,
+.benchmark-model-operator-grid dt,
+.benchmark-model-source-list dt {
+  color: var(--text-dim);
+  font-size: var(--font-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.benchmark-model-detail-metrics dd,
+.benchmark-model-detail-grid dd,
+.benchmark-model-operator-grid dd,
+.benchmark-model-source-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-control);
+}
+
+.benchmark-model-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.benchmark-model-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(var(--inspection-metadata-label-min), auto) minmax(0, 1fr);
+  gap: var(--space-xs) var(--space-lg);
+  margin: 0;
+}
+
+.benchmark-model-layer-list,
+.benchmark-model-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.benchmark-model-layer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--control-bg);
+  padding: var(--space-lg);
+}
+
+.benchmark-model-layer-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+}
+
+.benchmark-model-layer-heading span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--space-5xl);
+  border: var(--line-thin) solid var(--border-color-strong);
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-control);
+}
+
+.benchmark-model-layer-heading strong {
+  overflow-wrap: anywhere;
+}
+
+.benchmark-model-operator-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--model-layer-min), 1fr));
+  gap: var(--space-sm);
+  margin: 0;
+}
+
+.benchmark-model-operator-grid div,
+.benchmark-model-source-list dl {
+  margin: 0;
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  padding: var(--space-sm);
 }
 
 @media (max-width: 820px) {

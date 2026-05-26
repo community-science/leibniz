@@ -11,12 +11,13 @@ import {
   scoreLabel,
   shortDigest,
 } from './benchmarkDashboardModel.ts';
+import type { ArtifactReferenceRecord } from './artifactIndex.ts';
 import type {
   BenchmarkTaskRecord,
   GeneratedObservationBatchRecord,
   GeneratedObservationSampleRecord,
 } from './benchmarkTasks.ts';
-import type { ModelInspectionRecord } from './modelInspections.ts';
+import type { ModelInspectionLayerRecord, ModelInspectionRecord } from './modelInspections.ts';
 import type { BenchmarkResultRecord, ResultViewRecord } from './resultViews.ts';
 
 type SampleCardDensity = 'standard' | 'compact';
@@ -161,6 +162,9 @@ function BenchmarkModelsPane({
 }) {
   const rows = modelComparisonRows(result, inspections);
   const costAxis = result?.cost_axes[0]?.key ?? 'parameter_count';
+  const [selectedModelKey, setSelectedModelKey] = useState(rows[0]?.model.model_key ?? '');
+  const selectedRow =
+    rows.find(({ model }) => model.model_key === selectedModelKey) ?? rows[0];
 
   if (rows.length === 0) {
     return (
@@ -174,9 +178,15 @@ function BenchmarkModelsPane({
     <div className="benchmark-task">
       <section className="benchmark-result-table-section">
         <h3>Model Comparison</h3>
-        <div className="benchmark-model-grid">
+        <div className="benchmark-model-inspector-layout">
+          <div className="benchmark-model-grid">
           {rows.map(({ inspection, model }) => (
-            <article className="benchmark-model-card" key={model.model_key}>
+            <button
+              className={`benchmark-model-card ${model.model_key === selectedRow?.model.model_key ? 'selected' : ''}`}
+              key={model.model_key}
+              onClick={() => setSelectedModelKey(model.model_key)}
+              type="button"
+            >
               <div className="benchmark-model-heading">
                 <strong>{shortDigest(model.architecture_digest)}</strong>
                 <span>{scoreLabel(model.score)}</span>
@@ -195,11 +205,262 @@ function BenchmarkModelsPane({
                 <dt>Source</dt>
                 <dd>{model.source_kinds.join(', ') || 'unknown'}</dd>
               </dl>
-            </article>
+            </button>
           ))}
+          </div>
+          {selectedRow === undefined ? null : (
+            <BenchmarkModelInspector
+              costAxis={costAxis}
+              inspection={selectedRow.inspection}
+              model={selectedRow.model}
+            />
+          )}
         </div>
       </section>
     </div>
+  );
+}
+
+function BenchmarkModelInspector({
+  costAxis,
+  inspection,
+  model,
+}: {
+  costAxis: string;
+  inspection: ModelInspectionRecord | undefined;
+  model: BenchmarkResultRecord['leaderboard'][number];
+}) {
+  return (
+    <article className="benchmark-model-detail">
+      <header className="benchmark-model-detail-header">
+        <div>
+          <h3>{shortDigest(model.architecture_digest)}</h3>
+          <p>{model.model_key}</p>
+        </div>
+        <dl className="benchmark-model-detail-metrics">
+          <div>
+            <dt>Score</dt>
+            <dd>{model.score.toFixed(4)}</dd>
+          </div>
+          <div>
+            <dt>Cost</dt>
+            <dd>{formatCost(costValue(model.cost_summary, costAxis))}</dd>
+          </div>
+          <div>
+            <dt>Measurements</dt>
+            <dd>{model.measurement_count}</dd>
+          </div>
+          <div>
+            <dt>Runs</dt>
+            <dd>{model.run_ids.length}</dd>
+          </div>
+        </dl>
+      </header>
+      <section className="benchmark-model-detail-section">
+        <h4>Architecture</h4>
+        <dl className="benchmark-model-detail-grid">
+          <dt>Digest</dt>
+          <dd>{model.architecture_digest}</dd>
+          <dt>Input</dt>
+          <dd>{inspection === undefined ? 'unknown' : shapeLabel(inspection.input_shape)}</dd>
+          <dt>Output</dt>
+          <dd>{inspection === undefined ? 'unknown' : shapeLabel(inspection.output_shape)}</dd>
+          <dt>Observed C</dt>
+          <dd>{model.observed_complexities.join(', ') || 'none'}</dd>
+          <dt>Sources</dt>
+          <dd>{model.source_kinds.join(', ') || 'unknown'}</dd>
+        </dl>
+      </section>
+      <ModelCostDetail inspection={inspection} model={model} />
+      <ModelLayerTrace inspection={inspection} />
+      <ModelProvenanceDetail inspection={inspection} />
+    </article>
+  );
+}
+
+function ModelCostDetail({
+  inspection,
+  model,
+}: {
+  inspection: ModelInspectionRecord | undefined;
+  model: BenchmarkResultRecord['leaderboard'][number];
+}) {
+  const summary = inspection?.cost_summary ?? model.cost_summary;
+  return (
+    <section className="benchmark-model-detail-section">
+      <h4>Cost Summary</h4>
+      <dl className="benchmark-model-detail-grid">
+        <dt>Layers</dt>
+        <dd>{summary.layer_count}</dd>
+        <dt>Parameters</dt>
+        <dd>{optionalNumberLabel(summary.parameter_count)}</dd>
+        <dt>Bytes</dt>
+        <dd>{optionalNumberLabel(summary.parameter_bytes)}</dd>
+        <dt>FLOPs</dt>
+        <dd>{optionalNumberLabel(summary.inference_flops)}</dd>
+        <dt>Unknown Parameters</dt>
+        <dd>{unknownLayerLabel(inspection?.cost_summary.unknown_parameter_layers)}</dd>
+        <dt>Unknown FLOPs</dt>
+        <dd>{unknownLayerLabel(inspection?.cost_summary.unknown_flop_layers)}</dd>
+      </dl>
+    </section>
+  );
+}
+
+function ModelLayerTrace({ inspection }: { inspection: ModelInspectionRecord | undefined }) {
+  if (inspection === undefined) {
+    return (
+      <section className="benchmark-model-detail-section">
+        <h4>Layer Trace</h4>
+        <p className="artifact-detail-note">No model inspection record matches this model.</p>
+      </section>
+    );
+  }
+  return (
+    <section className="benchmark-model-detail-section">
+      <h4>Layer Trace</h4>
+      <div className="benchmark-model-layer-list">
+        {inspection.layers.map((layer) => (
+          <article className="benchmark-model-layer" key={layer.index}>
+            <div className="benchmark-model-layer-heading">
+              <span>{layer.index}</span>
+              <strong>{layer.kind}</strong>
+            </div>
+            <dl className="benchmark-model-detail-grid">
+              <dt>Input</dt>
+              <dd>{optionalShapeLabel(layer.input_shape)}</dd>
+              <dt>Output</dt>
+              <dd>{optionalShapeLabel(layer.output_shape)}</dd>
+              <dt>Parameters</dt>
+              <dd>{optionalNumberLabel(layer.parameter_count)}</dd>
+              <dt>Bytes</dt>
+              <dd>{optionalNumberLabel(layer.parameter_bytes)}</dd>
+              <dt>FLOPs</dt>
+              <dd>{optionalNumberLabel(layer.inference_flops)}</dd>
+              <dt>Operator</dt>
+              <dd>{operatorSummary(layer)}</dd>
+              <dt>Config</dt>
+              <dd>{recordLabel(layer.parameters)}</dd>
+            </dl>
+            {operatorEntries(layer).length === 0 ? null : (
+              <dl className="benchmark-model-operator-grid">
+                {operatorEntries(layer).map(([key, value]) => (
+                  <div key={key}>
+                    <dt>{key}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ModelProvenanceDetail({
+  inspection,
+}: {
+  inspection: ModelInspectionRecord | undefined;
+}) {
+  if (inspection === undefined) {
+    return null;
+  }
+  const references = [
+    referenceEntry('Architecture', inspection.architecture),
+    referenceEntry('Model manifest', inspection.model_manifest),
+    referenceEntry('Submission package', inspection.submission_package),
+    referenceEntry('Benchmark', inspection.benchmark_manifest),
+    referenceEntry('Measurements', inspection.measurement_dataset),
+    ...inspection.model_artifacts.map((reference, index) =>
+      referenceEntry(`Model artifact ${index + 1}`, reference),
+    ),
+    ...inspection.training_provenance.map((reference, index) =>
+      referenceEntry(`Training provenance ${index + 1}`, reference),
+    ),
+  ].filter((entry): entry is { label: string; reference: ArtifactReferenceRecord } => entry !== null);
+  if (references.length === 0) {
+    return null;
+  }
+  return (
+    <section className="benchmark-model-detail-section">
+      <h4>Provenance</h4>
+      <div className="benchmark-model-source-list">
+        {references.map(({ label, reference }) => (
+          <dl key={`${label}:${referenceLabel(reference)}`}>
+            <dt>{label}</dt>
+            <dd>{referenceLabel(reference)}</dd>
+          </dl>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function shapeLabel(shape: number[]): string {
+  return shape.join(' x ');
+}
+
+function optionalShapeLabel(shape: number[] | undefined): string {
+  return shape === undefined ? 'unknown' : shapeLabel(shape);
+}
+
+function optionalNumberLabel(value: number | undefined): string {
+  return value === undefined ? 'unknown' : value.toLocaleString();
+}
+
+function unknownLayerLabel(layers: number[] | undefined): string {
+  return layers === undefined || layers.length === 0 ? 'none' : layers.join(', ');
+}
+
+function operatorSummary(layer: ModelInspectionLayerRecord): string {
+  const operator = layer.operator;
+  if (operator === undefined) {
+    return 'unknown';
+  }
+  return typeof operator.kind === 'string' ? operator.kind : 'unknown';
+}
+
+function operatorEntries(layer: ModelInspectionLayerRecord): [string, string][] {
+  const operator = layer.operator;
+  if (operator === undefined) {
+    return [];
+  }
+  return Object.entries(operator)
+    .filter(([key]) => key !== 'kind')
+    .map(([key, value]) => [key, parameterValueLabel(value)]);
+}
+
+function recordLabel(record: Record<string, unknown>): string {
+  const entries = Object.entries(record);
+  if (entries.length === 0) {
+    return 'none';
+  }
+  return entries.map(([key, value]) => `${key}: ${parameterValueLabel(value)}`).join(', ');
+}
+
+function parameterValueLabel(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function referenceEntry(label: string, reference: ArtifactReferenceRecord | undefined) {
+  if (reference === undefined) {
+    return null;
+  }
+  return { label, reference };
+}
+
+function referenceLabel(reference: ArtifactReferenceRecord): string {
+  return (
+    reference.protocol_id ??
+    reference.record_digest ??
+    reference.content_digest ??
+    reference.external_uri ??
+    reference.kind
   );
 }
 
