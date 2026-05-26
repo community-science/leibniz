@@ -4,6 +4,8 @@ from pathlib import Path
 from leibniz._documents import canonical_document_bytes
 from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.artifacts import (
+    ArtifactIndex,
+    ArtifactIndexDocument,
     ArtifactReference,
     ArtifactReferenceDocument,
     ArtifactReferenceValidationError,
@@ -204,10 +206,170 @@ def test_artifact_reference_document_rejects_invalid_bytes() -> None:
     ) == "artifact reference document must contain an object"
 
 
+def test_artifact_index_canonicalizes_explicit_references() -> None:
+    architecture = reference_for_record(
+        kind="architecture-manifest",
+        record=_architecture_record(),
+    )
+    weights = ArtifactReference.from_record(
+        {
+            "kind": "model-weights",
+            "content_digest": str(ContentDigest.from_value({"weights": [1, 2, 3]})),
+        }
+    )
+
+    index = ArtifactIndex.from_record(
+        {
+            "id": "artifact-indexes.boolean-publication@0.1.0",
+            "artifacts": [weights.to_record(), architecture.to_record()],
+        }
+    )
+
+    assert index == ArtifactIndex(
+        id=ProtocolIdentifier.parse("artifact-indexes.boolean-publication@0.1.0"),
+        artifacts=(architecture, weights),
+    )
+    assert index.to_record() == {
+        "id": "artifact-indexes.boolean-publication@0.1.0",
+        "artifacts": [architecture.to_record(), weights.to_record()],
+    }
+    assert index.digest == ContentDigest.from_value(index.to_record())
+
+
+def test_artifact_index_records_equivalent_orderings_with_same_digest() -> None:
+    references = _index_references()
+    forward = ArtifactIndex.from_record(
+        {
+            "id": "artifact-indexes.boolean-publication@0.1.0",
+            "artifacts": [reference.to_record() for reference in references],
+        }
+    )
+    reverse = ArtifactIndex.from_record(
+        {
+            "id": "artifact-indexes.boolean-publication@0.1.0",
+            "artifacts": [reference.to_record() for reference in reversed(references)],
+        }
+    )
+
+    assert forward.to_record() == reverse.to_record()
+    assert forward.digest == reverse.digest
+
+
+def test_artifact_index_validates_source_digest_when_source_is_supplied() -> None:
+    source_record = {"publication": True, "version": 1}
+    index = ArtifactIndex.from_source_record(
+        id=ProtocolIdentifier.parse("artifact-indexes.boolean-publication@0.1.0"),
+        source_kind="publication-bundle",
+        source_record=source_record,
+        artifacts=_index_references(),
+    )
+
+    parsed = ArtifactIndex.from_record(index.to_record(), source_record=source_record)
+    document = ArtifactIndexDocument.from_bytes(
+        canonical_document_bytes(index.to_record()),
+        source_record=source_record,
+    )
+
+    assert parsed == index
+    assert document.index == index
+    assert document.digest == ContentDigest.from_value(index.to_record())
+    assert index.to_record()["source_digest"] == str(ContentDigest.from_value(source_record))
+
+    altered_source = {"publication": True, "version": 2}
+    assert str(
+        capture_artifact_error(
+            lambda: ArtifactIndex.from_record(index.to_record(), source_record=altered_source)
+        )
+    ) == "source_digest does not match source record"
+
+
+def test_artifact_index_rejects_duplicate_and_malformed_records() -> None:
+    reference = reference_for_record(
+        kind="architecture-manifest",
+        record=_architecture_record(),
+    )
+
+    assert str(
+        capture_artifact_error(
+            lambda: ArtifactIndex.from_record(
+                {
+                    "id": "artifact-indexes.boolean-publication@0.1.0",
+                    "artifacts": [reference.to_record(), reference.to_record()],
+                }
+            )
+        )
+    ).startswith("duplicate artifact reference: sha256:")
+
+    assert str(
+        capture_artifact_error(
+            lambda: ArtifactIndex.from_record(
+                {
+                    "id": "artifact-indexes.boolean-publication@0.1.0",
+                    "artifacts": [],
+                }
+            )
+        )
+    ) == "artifacts must contain at least one artifact reference"
+
+    assert str(
+        capture_artifact_error(
+            lambda: ArtifactIndex.from_record(
+                {
+                    "id": "core.boolean-index@0.1.0",
+                    "artifacts": [reference.to_record()],
+                }
+            )
+        )
+    ) == "id must be a valid artifact index id"
+
+    assert str(
+        capture_artifact_error(
+            lambda: ArtifactIndex.from_record(
+                {
+                    "id": "artifact-indexes.boolean-publication@0.1.0",
+                    "source_digest": str(ContentDigest.from_value({"source": True})),
+                    "artifacts": [reference.to_record()],
+                }
+            )
+        )
+    ) == "source_kind and source_digest must be supplied together"
+
+    assert str(
+        capture_artifact_error(
+            lambda: ArtifactIndex.from_record(
+                {
+                    "id": "artifact-indexes.boolean-publication@0.1.0",
+                    "source_kind": "publication-bundle",
+                    "artifacts": [reference.to_record()],
+                }
+            )
+        )
+    ) == "source_kind and source_digest must be supplied together"
+
+    assert str(
+        capture_artifact_error(lambda: ArtifactIndexDocument.from_bytes(b"[]"))
+    ) == "artifact index document must contain an object"
+
+
 def _architecture_record() -> dict[str, object]:
     return ArchitectureManifestDocument.from_bytes(
         (_fixtures_root / "architecture" / "digits_pool" / "manifest.json").read_bytes()
     ).manifest.to_record()
+
+
+def _index_references() -> tuple[ArtifactReference, ArtifactReference]:
+    return (
+        reference_for_record(
+            kind="architecture-manifest",
+            record=_architecture_record(),
+        ),
+        ArtifactReference.from_record(
+            {
+                "kind": "model-weights",
+                "content_digest": str(ContentDigest.from_value({"weights": [1, 2, 3]})),
+            }
+        ),
+    )
 
 
 def capture_artifact_error(
