@@ -20,6 +20,7 @@ assertEqual(parsed.format_version, 1, 'format version');
 assertEqual(artifacts.length, 13, 'artifact count');
 assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detail coverage');
 assertEqual(parsed.observation_inspections.length, 2, 'observation inspection count');
+assertEqual(parsed.performance_views.length, 1, 'performance view count');
 assertEqual(parsed.source_modules.length > 20, true, 'source module count');
 assertEqual(consoleDataSource?.source_path, 'src/leibniz/console/data.py', 'console data source path');
 assertEqual(
@@ -60,6 +61,16 @@ assertEqual(
   parsed.observation_inspections[1]?.component_sequence.join(','),
   '1,2,3',
   'observation inspection component sequence',
+);
+assertEqual(
+  parsed.performance_views[0]?.competence_integral_view.entries[0]?.integral,
+  0.25,
+  'performance view integral',
+);
+assertEqual(
+  parsed.performance_views[0]?.measurement_dataset.measurements.length,
+  2,
+  'performance measurement count',
 );
 assertEqual(
   artifacts

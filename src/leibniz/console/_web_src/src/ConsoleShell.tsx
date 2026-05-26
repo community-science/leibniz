@@ -1,8 +1,17 @@
-import { Database, FileJson, FolderTree, Images, Network, ScrollText } from 'lucide-react';
+import {
+  BarChart3,
+  Database,
+  FileJson,
+  FolderTree,
+  Images,
+  Network,
+  ScrollText,
+} from 'lucide-react';
 import { useState } from 'react';
 
 import { ArtifactBrowser } from './ArtifactBrowser';
 import { ObservationInspectionPanel } from './ObservationInspectionPanel';
+import { PerformanceViewPanel } from './PerformanceViewPanel';
 import { SourceModuleInventory } from './SourceModuleInventory';
 import consoleData from 'virtual:leibniz-console-data';
 
@@ -12,7 +21,7 @@ type ConsoleSection = {
   description: string;
 };
 
-type TabId = 'home' | 'artifacts' | 'data' | 'source';
+type TabId = 'home' | 'artifacts' | 'data' | 'performance' | 'source';
 
 type ConsoleTab = {
   id: TabId;
@@ -23,6 +32,7 @@ const tabs: ConsoleTab[] = [
   { id: 'home', label: 'Home' },
   { id: 'artifacts', label: 'Artifacts' },
   { id: 'data', label: 'Data' },
+  { id: 'performance', label: 'Performance' },
   { id: 'source', label: 'Source' },
 ];
 
@@ -46,6 +56,11 @@ const sections: ConsoleSection[] = [
     id: 'data',
     label: 'Data',
     description: 'Build-time generated inspections of benchmark-owned showcase samples.',
+  },
+  {
+    id: 'performance',
+    label: 'Performance',
+    description: 'Derived competence-integral views over benchmark-owned measurement cases.',
   },
 ];
 
@@ -72,6 +87,8 @@ export function ConsoleShell() {
               <Database size={16} />
             ) : tab.id === 'data' ? (
               <Images size={16} />
+            ) : tab.id === 'performance' ? (
+              <BarChart3 size={16} />
             ) : (
               <FolderTree size={16} />
             )}
@@ -92,6 +109,8 @@ export function ConsoleShell() {
                     <Network size={20} />
                   ) : section.id === 'data' ? (
                     <Images size={20} />
+                  ) : section.id === 'performance' ? (
+                    <BarChart3 size={20} />
                   ) : (
                     <FileJson size={20} />
                   )}
@@ -114,6 +133,10 @@ export function ConsoleShell() {
 
         <div className="console-overview" hidden={currentTab !== 'data'}>
           <ObservationInspectionPanel inspections={consoleData.observation_inspections} />
+        </div>
+
+        <div className="console-overview" hidden={currentTab !== 'performance'}>
+          <PerformanceViewPanel views={consoleData.performance_views} />
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'source'}>
