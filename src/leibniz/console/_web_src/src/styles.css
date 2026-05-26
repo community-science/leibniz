@@ -58,7 +58,6 @@
   --benchmark-preview-size: 128px;
   --benchmark-compact-preview-size: 96px;
   --benchmark-label-min: 88px;
-  --benchmark-pane-tab-min: 112px;
   --benchmark-model-card-min: 240px;
   --metric-min: 84px;
   --font-label: 0.65rem;
@@ -1206,35 +1205,49 @@ p {
   overflow-wrap: anywhere;
 }
 
-.benchmark-pane-tabs {
+.benchmark-section-stack {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  justify-content: flex-end;
+  flex-direction: column;
+  gap: var(--space-2xl);
+  padding: var(--space-2xl);
 }
 
-.benchmark-pane-tab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-sm);
-  min-width: var(--benchmark-pane-tab-min);
+.benchmark-collapsible-section {
+  overflow: hidden;
   border: var(--line-thin) solid var(--border-color-strong);
-  border-radius: var(--radius-sm);
-  background: var(--control-bg);
+  border-radius: var(--radius-md);
+  background: var(--panel-bg-subtle);
+}
+
+.benchmark-section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: 0;
+  border-bottom: var(--line-thin) solid var(--border-color);
+  background: var(--metric-bg);
   color: white;
   cursor: pointer;
-  padding: var(--space-sm) var(--space-lg);
+  padding: var(--space-lg) var(--space-xl);
 }
 
-.benchmark-pane-tab:hover,
-.benchmark-pane-tab.active {
-  border-color: var(--accent-border-strong);
-  background: var(--accent-bg);
+.benchmark-section-toggle span {
+  color: var(--text-secondary);
+  font-size: var(--font-status);
+  font-weight: 700;
+  letter-spacing: var(--tracking-status);
+  text-transform: uppercase;
 }
 
-.benchmark-pane-tab svg {
+.benchmark-section-toggle svg {
   color: var(--neon-blue);
+  transform: rotate(-90deg);
+  transition: transform 140ms ease;
+}
+
+.benchmark-section-toggle svg.expanded {
+  transform: rotate(0deg);
 }
 
 .benchmark-task {

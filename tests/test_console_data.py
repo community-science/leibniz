@@ -57,10 +57,6 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
             "src/leibniz/benchmarks/digits/observation_formation.json",
         ),
         ("observation-showcase", "src/leibniz/benchmarks/digits/inspection_showcase.json"),
-        (
-            "performance-view-bundle",
-            "src/leibniz/benchmarks/digits/performance_view_bundle.json",
-        ),
     ]
     assert [(detail["kind"], detail["source_path"]) for detail in details] == [
         (artifact["kind"], artifact["source_path"]) for artifact in artifacts
@@ -69,28 +65,8 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
 
     assert "observation_inspections" not in record
 
-    performance_detail = next(
-        detail for detail in details if detail["kind"] == "performance-view-bundle"
-    )
-    assert performance_detail["measurement_count"] == 2
-    assert performance_detail["view_id"] == "views.competence-integrals.digits.performance@0.1.0"
-    assert performance_detail["expected_complexities"] == [1.0, 2.0, 3.0]
-    cases = cast(list[dict[str, object]], performance_detail["measurement_cases"])
-    assert cases[1]["component_sequence"] == [1, 2]
-    assert cases[1]["accepted_outcome_sequence"] == [1, 2]
-
     performance_views = cast(list[dict[str, object]], record["performance_views"])
-    assert len(performance_views) == 1
-    performance_view = performance_views[0]
-    assert performance_view["source_path"] == (
-        "src/leibniz/benchmarks/digits/performance_view_bundle.json"
-    )
-    competence_view = cast(dict[str, object], performance_view["competence_integral_view"])
-    entries = cast(list[dict[str, object]], competence_view["entries"])
-    assert competence_view["expected_complexities"] == [1.0, 2.0, 3.0]
-    assert entries[0]["integral"] == 0.25
-    assert entries[0]["coverage"] == 2 / 3
-    assert entries[0]["missing_complexities"] == [3.0]
+    assert performance_views == []
 
     model_inspections = cast(list[dict[str, object]], record["model_inspections"])
     assert len(model_inspections) == 1

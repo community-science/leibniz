@@ -16,6 +16,7 @@ from leibniz.performance_bundles import (
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
+_performance_bundle_fixture = Path(__file__).with_name("performance_view_bundle_fixture.json")
 
 
 def test_digits_performance_view_bundle_loads_validated_sources() -> None:
@@ -38,7 +39,7 @@ def test_digits_performance_view_bundle_loads_validated_sources() -> None:
 
 def test_performance_view_bundle_round_trips_canonically() -> None:
     document = PerformanceViewBundleDocument.from_bytes(
-        (_digits_benchmark_root / "performance_view_bundle.json").read_bytes()
+        _performance_bundle_fixture.read_bytes()
     )
 
     assert PerformanceViewBundleManifest.from_record(
@@ -49,7 +50,7 @@ def test_performance_view_bundle_round_trips_canonically() -> None:
 
 def test_performance_view_bundle_rejects_source_reference_mismatch() -> None:
     record = PerformanceViewBundleDocument.from_bytes(
-        (_digits_benchmark_root / "performance_view_bundle.json").read_bytes()
+        _performance_bundle_fixture.read_bytes()
     ).manifest.to_record()
     benchmark_reference = record["benchmark_manifest"]
     assert isinstance(benchmark_reference, dict)
@@ -64,7 +65,7 @@ def test_performance_view_bundle_rejects_source_reference_mismatch() -> None:
 
 def test_performance_view_bundle_rejects_malformed_probability_cases() -> None:
     record = PerformanceViewBundleDocument.from_bytes(
-        (_digits_benchmark_root / "performance_view_bundle.json").read_bytes()
+        _performance_bundle_fixture.read_bytes()
     ).manifest.to_record()
     cases = record["measurement_cases"]
     assert isinstance(cases, list)
@@ -89,7 +90,7 @@ def _digits_bundle(
 ) -> PerformanceViewBundle:
     if manifest is None:
         manifest = PerformanceViewBundleDocument.from_bytes(
-            (_digits_benchmark_root / "performance_view_bundle.json").read_bytes()
+            _performance_bundle_fixture.read_bytes()
         ).manifest
     benchmark_manifest = BenchmarkManifestDocument.from_bytes(
         (_digits_benchmark_root / "manifest.json").read_bytes()

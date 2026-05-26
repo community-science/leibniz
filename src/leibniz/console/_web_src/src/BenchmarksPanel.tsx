@@ -1,4 +1,4 @@
-import { Activity, BarChart3, Boxes, Gauge, Images } from 'lucide-react';
+import { Activity, ChevronDown, Gauge } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
@@ -23,13 +23,6 @@ import type { PerformanceViewRecord } from './performanceViews.ts';
 import type { BenchmarkResultRecord, ResultViewRecord } from './resultViews.ts';
 
 type SampleCardDensity = 'standard' | 'compact';
-type BenchmarkPane = 'samples' | 'performance' | 'models';
-
-const benchmarkPanes: { id: BenchmarkPane; label: string; icon: ReactNode }[] = [
-  { id: 'samples', label: 'Samples', icon: <Images size={16} /> },
-  { id: 'performance', label: 'Performance', icon: <BarChart3 size={16} /> },
-  { id: 'models', label: 'Models', icon: <Boxes size={16} /> },
-];
 
 export function BenchmarksPanel({
   modelInspections,
@@ -43,7 +36,6 @@ export function BenchmarksPanel({
   tasks: BenchmarkTaskRecord[];
 }) {
   const [selectedBenchmarkId, setSelectedBenchmarkId] = useState(tasks[0]?.benchmark_id ?? '');
-  const [currentPane, setCurrentPane] = useState<BenchmarkPane>('samples');
   const selected = tasks.find((task) => task.benchmark_id === selectedBenchmarkId) ?? tasks[0];
   const benchmarkResults = useMemo(
     () =>
@@ -90,34 +82,49 @@ export function BenchmarksPanel({
             <h2>{selected.label}</h2>
             <p>{selected.source_path}</p>
           </div>
-          <nav className="benchmark-pane-tabs" aria-label="Benchmark panes">
-            {benchmarkPanes.map((pane) => (
-              <button
-                className={`benchmark-pane-tab ${currentPane === pane.id ? 'active' : ''}`}
-                key={pane.id}
-                onClick={() => setCurrentPane(pane.id)}
-                type="button"
-              >
-                {pane.icon}
-                {pane.label}
-              </button>
-            ))}
-          </nav>
         </div>
-        {currentPane === 'samples' ? (
-          <BenchmarkTaskPane task={selected} />
-        ) : currentPane === 'performance' ? (
-          <BenchmarkPerformancePane
-            performanceViews={benchmarkPerformanceViews}
-            resultEntry={selectedResult}
-          />
-        ) : (
-          <BenchmarkModelsPane
-            inspections={modelInspections}
-            result={selectedResult?.result}
-          />
-        )}
+        <div className="benchmark-section-stack">
+          <CollapsibleBenchmarkSection label="Samples">
+            <BenchmarkTaskPane task={selected} />
+          </CollapsibleBenchmarkSection>
+          <CollapsibleBenchmarkSection label="Performance">
+            <BenchmarkPerformancePane
+              performanceViews={benchmarkPerformanceViews}
+              resultEntry={selectedResult}
+            />
+          </CollapsibleBenchmarkSection>
+          <CollapsibleBenchmarkSection label="Models">
+            <BenchmarkModelsPane
+              inspections={modelInspections}
+              result={selectedResult?.result}
+            />
+          </CollapsibleBenchmarkSection>
+        </div>
       </div>
+    </section>
+  );
+}
+
+function CollapsibleBenchmarkSection({
+  children,
+  label,
+}: {
+  children: ReactNode;
+  label: string;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  return (
+    <section className="benchmark-collapsible-section">
+      <button
+        aria-expanded={expanded}
+        className="benchmark-section-toggle"
+        onClick={() => setExpanded((value) => !value)}
+        type="button"
+      >
+        <span>{label}</span>
+        <ChevronDown aria-hidden="true" className={expanded ? 'expanded' : ''} size={16} />
+      </button>
+      <div hidden={!expanded}>{children}</div>
     </section>
   );
 }

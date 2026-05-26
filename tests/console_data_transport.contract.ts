@@ -19,9 +19,9 @@ if (modelInspection === undefined) {
 
 assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
-assertEqual(artifacts.length, 13, 'artifact count');
+assertEqual(artifacts.length, 12, 'artifact count');
 assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detail coverage');
-assertEqual(parsed.performance_views.length, 1, 'performance view count');
+assertEqual(parsed.performance_views.length, 0, 'performance view count');
 assertEqual(parsed.result_views.length, 0, 'result view count');
 assertEqual(parsed.model_inspections.length, 1, 'model inspection count');
 assertEqual(parsed.benchmark_tasks.length, 1, 'benchmark task count');
@@ -52,19 +52,8 @@ assertEqual(
     'measurement:tests/fixtures/finite_outcome/measurement.json',
     'observation-formation-declaration:src/leibniz/benchmarks/digits/observation_formation.json',
     'observation-showcase:src/leibniz/benchmarks/digits/inspection_showcase.json',
-    'performance-view-bundle:src/leibniz/benchmarks/digits/performance_view_bundle.json',
   ].join('|'),
   'artifact order',
-);
-assertEqual(
-  parsed.performance_views[0]?.competence_integral_view.entries[0]?.integral,
-  0.25,
-  'performance view integral',
-);
-assertEqual(
-  parsed.performance_views[0]?.measurement_dataset.measurements.length,
-  2,
-  'performance measurement count',
 );
 assertEqual(
   modelInspection.cost_summary.parameter_count,
