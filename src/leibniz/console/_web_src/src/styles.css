@@ -4,6 +4,7 @@
   --bg-dark: #0a0a0c;
   --panel-bg: rgba(20, 20, 25, 0.85);
   --panel-bg-subtle: rgba(20, 20, 25, 0.72);
+  --preview-bg: #050506;
   --border-color: rgba(255, 255, 255, 0.1);
   --border-color-strong: rgba(255, 255, 255, 0.12);
   --control-bg: rgba(255, 255, 255, 0.03);
@@ -1544,7 +1545,23 @@ p {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: var(--space-lg);
+  width: 100%;
+  border: var(--line-thin) solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
   padding: var(--space-lg);
+  text-align: left;
+}
+
+.benchmark-sample-card.selected {
+  border-color: var(--accent-border-strong);
+  background: var(--accent-bg);
+}
+
+.benchmark-sample-card:hover {
+  border-color: var(--accent-border);
 }
 
 .benchmark-sample-card.compact {
@@ -1561,7 +1578,7 @@ p {
   height: var(--benchmark-preview-size);
   border: var(--line-thin) solid var(--border-color-strong);
   border-radius: var(--radius-sm);
-  background: #050506;
+  background: var(--preview-bg);
 }
 
 .benchmark-sample-card.compact .benchmark-image-shell {
@@ -1593,8 +1610,86 @@ p {
 .benchmark-sample-card dd {
   margin: 0;
   overflow-wrap: anywhere;
-  color: white;
+  color: var(--text-primary);
   font-size: var(--font-meta);
+}
+
+.benchmark-sample-detail {
+  display: grid;
+  grid-template-columns: minmax(var(--benchmark-sample-min), 3fr) minmax(0, 5fr);
+  gap: var(--space-xl);
+  border: var(--line-thin) solid var(--border-color-strong);
+  border-radius: var(--radius-md);
+  background: var(--panel-bg-subtle);
+  padding: var(--space-xl);
+}
+
+.benchmark-sample-detail-preview {
+  display: flex;
+  gap: var(--space-lg);
+  align-items: center;
+}
+
+.benchmark-sample-detail-preview h3,
+.benchmark-sample-detail-section h4,
+.benchmark-latent-role h5 {
+  margin: 0;
+}
+
+.benchmark-sample-detail-preview p {
+  margin: var(--space-xs) 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-path);
+}
+
+.benchmark-sample-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(var(--benchmark-label-min), auto) minmax(0, 1fr);
+  gap: var(--space-xs) var(--space-lg);
+  align-content: start;
+  margin: 0;
+}
+
+.benchmark-sample-detail-grid div {
+  display: contents;
+}
+
+.benchmark-sample-detail-grid dt,
+.benchmark-latent-role h5 {
+  color: var(--text-muted);
+  font-size: var(--font-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.benchmark-sample-detail-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-control);
+}
+
+.benchmark-sample-detail-section,
+.benchmark-latent-role-list,
+.benchmark-latent-role {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.benchmark-sample-detail-section {
+  grid-column: 1 / -1;
+}
+
+.benchmark-latent-role {
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  padding: var(--space-lg);
 }
 
 .benchmark-compact-label {
