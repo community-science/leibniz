@@ -9,6 +9,7 @@ from pathlib import Path
 
 from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
 from leibniz.authority_indexes import AuthorityIndexDocument
+from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.documents import load_object_document
 from leibniz.federation_ingest import FederationIngestPlanDocument
@@ -44,6 +45,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _validate(args)
     if command == "results":
         return _results(args)
+    if command == "benchmark":
+        return _benchmark(args)
     parser.print_help(sys.stderr)
     return 2
 
@@ -198,7 +201,69 @@ def _parser() -> argparse.ArgumentParser:
         help="ignored local run-state root; defaults to .runs",
     )
 
+    benchmark = subcommands.add_parser(
+        "benchmark",
+        description="run local benchmark workflows",
+        help="run local benchmark workflows",
+    )
+    benchmark_subcommands = benchmark.add_subparsers(dest="benchmark_command", required=True)
+    run = benchmark_subcommands.add_parser(
+        "run",
+        description="run a benchmark locally",
+        help="run a benchmark locally",
+    )
+    run.add_argument("--architecture", type=Path, required=True)
+    run.add_argument("--benchmark-root", type=Path, required=True)
+    run.add_argument(
+        "--runs-root",
+        default=Path(".runs"),
+        type=Path,
+        help="ignored local run-state root; defaults to .runs",
+    )
+    run.add_argument("--scale", default=1, type=int)
+    run.add_argument("--sample-count", default=4, type=int)
+    run.add_argument("--seed", default=101, type=int)
+    run.add_argument("--train-steps", default=1, type=int)
+    run.add_argument("--learning-rate", default=0.01, type=float)
+    run.add_argument("--dry-run", action="store_true")
+
     return parser
+
+
+def _benchmark(args: argparse.Namespace) -> int:
+    try:
+        if str(args.benchmark_command) == "run":
+            summary = run_benchmark(
+                BenchmarkRunPlan(
+                    architecture_path=args.architecture,
+                    runs_root=args.runs_root,
+                    benchmark_root=args.benchmark_root,
+                    scale=args.scale,
+                    sample_count=args.sample_count,
+                    seed=args.seed,
+                    train_steps=args.train_steps,
+                    learning_rate=args.learning_rate,
+                    dry_run=args.dry_run,
+                )
+            )
+            prefix = "planned" if summary.dry_run else "completed"
+            print(
+                f"{prefix} benchmark run {summary.run_slug} "
+                f"({summary.measurement_count} measurement(s))"
+            )
+            print(f"measurements: {summary.measurement_dataset_path}")
+            print(f"model inspection: {summary.model_inspection_path}")
+            print(f"training summary: {summary.training_summary_path}")
+            return 0
+    except (OSError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(
+        "error: unsupported benchmark command "
+        f"{args.benchmark_command!r}",
+        file=sys.stderr,
+    )
+    return 2
 
 
 def _results(args: argparse.Namespace) -> int:

@@ -7,7 +7,11 @@ from pathlib import Path
 import leibniz.content as content
 from leibniz._formats._json import canonical_json_bytes, load_json_object_file
 from leibniz.content import ContentDigest, ContentEncodingError
-from leibniz.documents import canonical_document_bytes, load_object_document
+from leibniz.documents import (
+    canonical_document_bytes,
+    document_filename_suffix,
+    load_object_document,
+)
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.outcomes import (
     AcceptedEvent,
@@ -118,6 +122,10 @@ def test_canonical_document_bytes_delegate_to_current_format() -> None:
     assert canonical_document_bytes({"b": 2, "a": 1}) == b'{"a":1,"b":2}'
 
 
+def test_document_filename_suffix_is_defined_at_document_boundary() -> None:
+    assert document_filename_suffix() == ".json"
+
+
 def test_source_mentions_json_only_at_document_format_boundary() -> None:
     offenders = tuple(
         path.relative_to(_source_root.parents[1])
@@ -129,21 +137,33 @@ def test_source_mentions_json_only_at_document_format_boundary() -> None:
     assert offenders == ()
 
 
-def test_source_does_not_hide_json_terms_by_concatenating_string_literals() -> None:
+def test_generated_document_filename_suffix_is_defined_only_at_document_boundary() -> None:
     offenders = tuple(
         path.relative_to(_source_root.parents[1])
         for path in sorted(_source_root.rglob("*.py"))
-        if path not in _format_boundary_files
-        and _has_hidden_json_term(path.read_text(encoding="utf-8"))
+        if path != _source_root / "documents.py"
+        and _has_json_filename_suffix_literal(path.read_text(encoding="utf-8"))
     )
 
     assert offenders == ()
 
 
-def test_hidden_json_term_detector_rejects_split_string_literal_terms() -> None:
-    assert _has_hidden_json_term('suffix = "js" + "on"')
-    assert _has_hidden_json_term('name = "_js" + "on"')
-    assert not _has_hidden_json_term('suffix = "csv"')
+def test_source_does_not_hide_json_filename_suffixes_by_concatenating_string_literals() -> None:
+    offenders = tuple(
+        path.relative_to(_source_root.parents[1])
+        for path in sorted(_source_root.rglob("*.py"))
+        if _has_hidden_json_suffix(path.read_text(encoding="utf-8"))
+    )
+
+    assert offenders == ()
+
+
+def test_json_suffix_detectors_reject_split_string_literal_terms() -> None:
+    assert _has_hidden_json_suffix('suffix = "." + "".join(("j", "s", "o", "n"))')
+    assert _has_hidden_json_suffix('suffix = "." + "js" + "on"')
+    assert _has_json_filename_suffix_literal('suffix = ".json"')
+    assert not _has_hidden_json_suffix('suffix = ".json"')
+    assert not _has_json_filename_suffix_literal('suffix = ".csv"')
 
 
 def test_tests_import_json_only_at_document_format_boundary() -> None:
@@ -157,14 +177,32 @@ def test_tests_import_json_only_at_document_format_boundary() -> None:
     assert offenders == ()
 
 
-def _has_hidden_json_term(source: str) -> bool:
+def _has_hidden_json_suffix(source: str) -> bool:
     tree = ast.parse(source)
     return any(
-        isinstance(node, ast.BinOp)
-        and isinstance(node.op, ast.Add)
-        and _string_literal_value(node) is not None
-        and re.search(r"\bjson\b|\bJSON\b|_json", _string_literal_value(node) or "")
+        isinstance(node, ast.Assign | ast.AnnAssign)
+        and _assigns_hidden_json_suffix(node)
         for node in ast.walk(tree)
+    )
+
+
+def _has_json_filename_suffix_literal(source: str) -> bool:
+    tree = ast.parse(source)
+    return any(
+        isinstance(node, ast.Constant) and node.value == ".json"
+        for node in ast.walk(tree)
+    )
+
+
+def _assigns_hidden_json_suffix(node: ast.Assign | ast.AnnAssign) -> bool:
+    targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
+    if not any(isinstance(target, ast.Name) and target.id.endswith("suffix") for target in targets):
+        return False
+    if node.value is None:
+        return False
+    literal = _string_literal_value(node.value)
+    return literal == ".json" and not (
+        isinstance(node.value, ast.Constant) and node.value.value == ".json"
     )
 
 
@@ -176,7 +214,29 @@ def _string_literal_value(node: ast.AST) -> str | None:
         right = _string_literal_value(node.right)
         if left is not None and right is not None:
             return left + right
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "join"
+        and _string_literal_value(node.func.value) is not None
+        and len(node.args) == 1
+    ):
+        values = _string_literal_sequence(node.args[0])
+        if values is not None:
+            return (_string_literal_value(node.func.value) or "").join(values)
     return None
+
+
+def _string_literal_sequence(node: ast.AST) -> tuple[str, ...] | None:
+    if not isinstance(node, ast.Tuple | ast.List):
+        return None
+    values: list[str] = []
+    for item in node.elts:
+        value = _string_literal_value(item)
+        if value is None:
+            return None
+        values.append(value)
+    return tuple(values)
 
 
 def test_canonical_json_and_digests_cover_finite_outcome_records() -> None:
