@@ -171,6 +171,11 @@ def test_cli_reports_incompatible_manifest_pair(
             "valid artifact index artifact-indexes.cli@0.1.0",
         ),
         (
+            "authority-index",
+            "_authority_index_record",
+            "valid authority index authority-indexes.cli@0.1.0",
+        ),
+        (
             "resource-report",
             "_resource_report_record",
             "valid resource report resource-reports.cli@0.1.0",
@@ -297,6 +302,7 @@ def test_cli_validates_federation_ingest_plan_with_registry(
     [
         "artifact-reference",
         "artifact-index",
+        "authority-index",
         "resource-report",
         "resource-report-set",
         "model-manifest",
@@ -374,6 +380,8 @@ def _expanded_artifact_record(factory_name: str) -> dict[str, object]:
         return _artifact_reference_record()
     if factory_name == "_artifact_index_record":
         return _artifact_index_record()
+    if factory_name == "_authority_index_record":
+        return _authority_index_record()
     if factory_name == "_resource_report_record":
         return _resource_report_record()
     if factory_name == "_resource_report_set_record":
@@ -399,6 +407,22 @@ def _artifact_index_record() -> dict[str, object]:
     return {
         "id": "artifact-indexes.cli@0.1.0",
         "artifacts": [_publication_bundle_reference().to_record()],
+    }
+
+
+def _authority_index_record() -> dict[str, object]:
+    artifact = _publication_bundle_reference().to_record()
+    return {
+        "id": "authority-indexes.cli@0.1.0",
+        "artifacts": [artifact],
+        "dependencies": [],
+        "validations": [
+            {
+                "artifact": artifact,
+                "status": "valid",
+                "message": "artifact reference was supplied explicitly",
+            }
+        ],
     }
 
 

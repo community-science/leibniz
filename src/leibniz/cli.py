@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
+from leibniz.authority_indexes import AuthorityIndexDocument
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.documents import load_object_document
 from leibniz.federation_ingest import FederationIngestPlanDocument
@@ -86,6 +87,12 @@ def _parser() -> argparse.ArgumentParser:
         help="validate an artifact index document",
     )
     artifact_index.add_argument("path", type=Path)
+
+    authority_index = validate_subcommands.add_parser(
+        "authority-index",
+        help="validate an authority index document",
+    )
+    authority_index.add_argument("path", type=Path)
 
     resource_report = validate_subcommands.add_parser(
         "resource-report",
@@ -192,6 +199,10 @@ def _validate(args: argparse.Namespace) -> int:
         if artifact == "artifact-index":
             document = ArtifactIndexDocument.from_bytes(args.path.read_bytes())
             print(f"valid artifact index {document.index.id}")
+            return 0
+        if artifact == "authority-index":
+            document = AuthorityIndexDocument.from_bytes(args.path.read_bytes())
+            print(f"valid authority index {document.index.id}")
             return 0
         if artifact == "resource-report":
             document = ResourceReportDocument.from_bytes(args.path.read_bytes())
