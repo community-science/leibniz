@@ -1,16 +1,28 @@
 import math
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
 from leibniz.benchmarks import (
     BenchmarkManifest,
     BenchmarkManifestDocument,
     BenchmarkManifestValidationError,
+    BenchmarkOutcomeSequence,
+    BenchmarkScaleParameter,
 )
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
+from leibniz.latent_factors import LatentFactorDeclarationDocument
 from leibniz.measurements import MeasurementRecord, MeasurementRecordValidationError
 from leibniz.outcomes import OutcomeSpace
+
+_repository_root = Path(__file__).parents[1]
+_digits_manifest_path = (
+    _repository_root / "src" / "leibniz" / "benchmarks" / "digits" / "manifest.json"
+)
+_digits_latent_factors_path = (
+    _repository_root / "src" / "leibniz" / "generators" / "digits" / "latent_factors.json"
+)
 
 
 def test_benchmark_manifest_parses_finite_outcome_contract() -> None:
@@ -22,6 +34,28 @@ def test_benchmark_manifest_parses_finite_outcome_contract() -> None:
         outcome_space=OutcomeSpace.from_record(_outcome_space_record()),
     )
     assert manifest.to_record() == _benchmark_manifest_record()
+
+
+def test_benchmark_manifest_parses_scale_indexed_outcome_sequence() -> None:
+    manifest = BenchmarkManifest.from_record(_scale_indexed_manifest_record())
+
+    assert manifest == BenchmarkManifest(
+        id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
+        name=ProtocolIdentifier.parse("benchmarks.digits@0.1.0").name,
+        outcome_sequence=BenchmarkOutcomeSequence(
+            atom_count=10,
+            atom_name="digit",
+            length_parameter="L",
+        ),
+        scale_parameter=BenchmarkScaleParameter(symbol="L", minimum=1),
+    )
+    assert manifest.outcome_sequence is not None
+    assert manifest.outcome_sequence.outcome_count(1) == 10
+    assert manifest.outcome_sequence.outcome_count(3) == 1000
+    assert manifest.scale_parameter is not None
+    assert manifest.scale_parameter.contains(1)
+    assert manifest.scale_parameter.contains(100)
+    assert not manifest.scale_parameter.contains(0)
 
 
 def test_benchmark_manifest_parses_minimal_authoring_record() -> None:
@@ -145,7 +179,7 @@ def test_benchmark_manifest_rejects_invalid_observation_ids() -> None:
     )
 
 
-def test_benchmark_manifest_rejects_missing_outcome_space() -> None:
+def test_benchmark_manifest_rejects_missing_outcome_declaration() -> None:
     assert str(
         capture_manifest_error(
             lambda: BenchmarkManifest.from_record(
@@ -155,7 +189,35 @@ def test_benchmark_manifest_rejects_missing_outcome_space() -> None:
                 }
             )
         )
-    ) == "outcome_space: missing required field"
+    ) == "manifest must declare exactly one of outcome_space or outcome_sequence"
+
+
+def test_benchmark_manifest_rejects_ambiguous_outcome_declaration() -> None:
+    record = _benchmark_manifest_record()
+    record["outcome_sequence"] = _outcome_sequence_record()
+    record["scale_parameter"] = _scale_parameter_record()
+
+    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
+        "manifest must declare exactly one of outcome_space or outcome_sequence"
+    )
+
+
+def test_benchmark_manifest_rejects_sequence_without_matching_scale_parameter() -> None:
+    record = _scale_indexed_manifest_record()
+    del record["scale_parameter"]
+
+    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
+        "outcome_sequence requires scale_parameter"
+    )
+
+    record = _scale_indexed_manifest_record()
+    scale_parameter = dict(_scale_parameter_record())
+    scale_parameter["symbol"] = "N"
+    record["scale_parameter"] = scale_parameter
+
+    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
+        "outcome_sequence length_parameter must match scale_parameter symbol"
+    )
 
 
 def test_benchmark_manifest_digest_is_stable() -> None:
@@ -226,6 +288,63 @@ def test_benchmark_manifest_document_digest_is_stable() -> None:
     assert left.digest == right.digest
 
 
+def test_digits_benchmark_manifest_loads_source_artifact() -> None:
+    document = BenchmarkManifestDocument.from_bytes(_digits_manifest_path.read_bytes())
+    manifest = document.manifest
+
+    assert manifest.id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
+    assert manifest.outcome_sequence == BenchmarkOutcomeSequence(
+        atom_count=10,
+        atom_name="digit",
+        length_parameter="L",
+    )
+    assert manifest.scale_parameter == BenchmarkScaleParameter(
+        symbol="L",
+        minimum=1,
+        description="Number of digit slots in the image.",
+    )
+    assert manifest.outcome_sequence is not None
+    assert manifest.outcome_sequence.outcome_count(4) == 10000
+    assert manifest.latent_factor_declaration is not None
+    assert manifest.latent_factor_declaration.kind == "latent-factor-declaration"
+    assert str(manifest.latent_factor_declaration.protocol_id) == (
+        "benchmarks.digits.latent-factors@0.1.0"
+    )
+    assert manifest.complexity_coordinate == "C"
+    assert document.digest == ContentDigest.from_value(manifest.to_record())
+
+
+def test_digits_benchmark_manifest_validates_complexity_declaration() -> None:
+    manifest = BenchmarkManifestDocument.from_bytes(_digits_manifest_path.read_bytes()).manifest
+    declaration = LatentFactorDeclarationDocument.from_bytes(
+        _digits_latent_factors_path.read_bytes()
+    ).declaration
+
+    manifest.validate_latent_factor_declaration(declaration)
+
+
+def test_benchmark_manifest_rejects_complexity_coordinate_without_declaration() -> None:
+    record = _two_field_benchmark_manifest_record()
+    record["complexity_coordinate"] = "C"
+
+    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
+        "complexity_coordinate requires latent_factor_declaration"
+    )
+
+
+def test_benchmark_manifest_rejects_wrong_latent_factor_reference_kind() -> None:
+    record = _two_field_benchmark_manifest_record()
+    record["latent_factor_declaration"] = {
+        "kind": "benchmark-manifest",
+        "protocol_id": "benchmarks.digits.latent-factors@0.1.0",
+    }
+    record["complexity_coordinate"] = "C"
+
+    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
+        "latent_factor_declaration reference must have kind latent-factor-declaration"
+    )
+
+
 def capture_manifest_error(
     call: Callable[[], object],
 ) -> BenchmarkManifestValidationError:
@@ -266,6 +385,29 @@ def _two_field_benchmark_manifest_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
         "outcome_space": _outcome_space_record(),
+    }
+
+
+def _scale_indexed_manifest_record() -> dict[str, object]:
+    return {
+        "id": "benchmarks.digits@0.1.0",
+        "outcome_sequence": _outcome_sequence_record(),
+        "scale_parameter": _scale_parameter_record(),
+    }
+
+
+def _outcome_sequence_record() -> dict[str, object]:
+    return {
+        "atom_count": 10,
+        "atom_name": "digit",
+        "length_parameter": "L",
+    }
+
+
+def _scale_parameter_record() -> dict[str, object]:
+    return {
+        "symbol": "L",
+        "minimum": 1,
     }
 
 

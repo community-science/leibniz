@@ -36,6 +36,11 @@ const detailsByArtifact = artifacts.map((artifact) => detailForArtifact(details,
 const chessBenchmark = artifacts.find(
   (artifact) => artifact.protocol_id === 'benchmarks.chess@0.1.0',
 );
+const digitsBenchmark = artifacts.find(
+  (artifact) => artifact.protocol_id === 'benchmarks.digits@0.1.0',
+);
+const digitsBenchmarkDetail =
+  digitsBenchmark === undefined ? undefined : detailForArtifact(details, digitsBenchmark);
 const chessMeasurement = artifacts.find(
   (artifact) => artifact.protocol_id === 'benchmarks.chess.fixture.mate-in-one-evidence@0.1.0',
 );
@@ -48,7 +53,7 @@ assertEqual(
   'kinds',
 );
 assertEqual(kinds[0], allArtifactKinds, 'all kind first');
-assertEqual(dependencyCount, 2, 'dependency count');
+assertEqual(dependencyCount, 3, 'dependency count');
 assertEqual(measurementArtifacts.length, 2, 'measurement filter count');
 assertEqual(
   measurementArtifacts.map((artifact) => artifact.dependencies[0]?.protocol_id).join(','),
@@ -87,6 +92,32 @@ assertEqual(
 );
 assertEqual(detailsByArtifact.every((detail) => detail !== undefined), true, 'all artifacts have details');
 assertEqual(chessBenchmark?.source_path, 'tests/fixtures/chess/mate_in_one/manifest.json', 'chess benchmark path');
+assertEqual(
+  digitsBenchmark?.dependencies[0]?.protocol_id,
+  'benchmarks.digits.latent-factors@0.1.0',
+  'digits latent factor dependency',
+);
+assertEqual(
+  digitsBenchmarkDetail?.kind === 'benchmark-manifest'
+    ? digitsBenchmarkDetail.complexity_coordinate
+    : '',
+  'C',
+  'digits complexity coordinate',
+);
+assertEqual(
+  digitsBenchmarkDetail?.kind === 'benchmark-manifest'
+    ? digitsBenchmarkDetail.scale_parameter?.symbol
+    : '',
+  'L',
+  'digits scale parameter',
+);
+assertEqual(
+  digitsBenchmarkDetail?.kind === 'benchmark-manifest'
+    ? digitsBenchmarkDetail.outcome_sequence?.atom_count
+    : 0,
+  10,
+  'digits atom count',
+);
 assertEqual(
   chessMeasurementDetail?.kind === 'measurement'
     ? chessMeasurementDetail.probability_measure.probabilities

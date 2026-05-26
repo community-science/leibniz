@@ -186,7 +186,12 @@ def _load_architecture_manifest(data: bytes) -> _LoadedArtifact:
 def _load_benchmark_manifest(data: bytes) -> _LoadedArtifact:
     document = BenchmarkManifestDocument.from_bytes(data)
     record = document.manifest.to_record()
-    return document.manifest.id, record, document.digest, ()
+    dependencies: tuple[ArtifactReference, ...]
+    if document.manifest.latent_factor_declaration is None:
+        dependencies = ()
+    else:
+        dependencies = (document.manifest.latent_factor_declaration,)
+    return document.manifest.id, record, document.digest, dependencies
 
 
 def _load_measurement(data: bytes) -> _LoadedArtifact:

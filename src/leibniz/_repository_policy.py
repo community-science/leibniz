@@ -26,6 +26,7 @@ _forbidden_names = frozenset(
 )
 _forbidden_suffixes = (".pyc", ".pyo")
 _forbidden_env_files = frozenset({".env"})
+_benchmark_artifact_root = PurePosixPath("src/leibniz/benchmarks")
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +75,14 @@ def _validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]
                     message="tracked local environment file",
                 )
             )
+            continue
+        if _is_benchmark_interpreter_file(path):
+            violations.append(
+                PolicyViolation(
+                    path=path,
+                    message="tracked interpreter file under benchmark artifact tree",
+                )
+            )
     return tuple(violations)
 
 
@@ -111,6 +120,12 @@ def _main(argv: Sequence[str] | None = None) -> int:
 
 def _has_forbidden_name(path: PurePosixPath) -> bool:
     return any(part in _forbidden_names for part in path.parts)
+
+
+def _is_benchmark_interpreter_file(path: PurePosixPath) -> bool:
+    if path.suffix != ".py":
+        return False
+    return path.is_relative_to(_benchmark_artifact_root)
 
 
 if __name__ == "__main__":

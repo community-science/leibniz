@@ -145,10 +145,19 @@ class ConsoleDataBuilder:
         if kind == "benchmark-manifest":
             summary: dict[str, object] = {
                 "id": record["id"],
-                "outcome_space": record["outcome_space"],
             }
+            if "outcome_space" in record:
+                summary["outcome_space"] = record["outcome_space"]
+            if "outcome_sequence" in record:
+                summary["outcome_sequence"] = record["outcome_sequence"]
+            if "scale_parameter" in record:
+                summary["scale_parameter"] = record["scale_parameter"]
             if "observation_ids" in record:
                 summary["observation_ids"] = record["observation_ids"]
+            if "latent_factor_declaration" in record:
+                summary["latent_factor_declaration"] = record["latent_factor_declaration"]
+            if "complexity_coordinate" in record:
+                summary["complexity_coordinate"] = record["complexity_coordinate"]
             return summary
         if kind == "measurement":
             raw_scoring_evidence = self._required_mapping(

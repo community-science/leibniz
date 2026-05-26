@@ -17,7 +17,7 @@ const consoleDataSource = parsed.source_modules.find(
 
 assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
-assertEqual(artifacts.length, 5, 'artifact count');
+assertEqual(artifacts.length, 6, 'artifact count');
 assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detail coverage');
 assertEqual(parsed.source_modules.length > 20, true, 'source module count');
 assertEqual(consoleDataSource?.source_path, 'src/leibniz/console/data.py', 'console data source path');
@@ -35,6 +35,7 @@ assertEqual(
   artifacts.map((artifact) => `${artifact.kind}:${artifact.source_path}`).join('|'),
   [
     'architecture-manifest:tests/fixtures/architecture/digits_pool/manifest.json',
+    'benchmark-manifest:src/leibniz/benchmarks/digits/manifest.json',
     'benchmark-manifest:tests/fixtures/chess/mate_in_one/manifest.json',
     'benchmark-manifest:tests/fixtures/finite_outcome/manifest.json',
     'measurement:tests/fixtures/chess/mate_in_one/measurement.json',

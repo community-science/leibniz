@@ -1,4 +1,4 @@
-import type { ConsoleArtifactIndexEntryRecord } from './artifactIndex';
+import type { ArtifactReferenceRecord, ConsoleArtifactIndexEntryRecord } from './artifactIndex';
 import { artifactKey } from './artifactBrowserModel.ts';
 
 export type ArchitectureManifestDetailRecord = {
@@ -13,8 +13,12 @@ export type BenchmarkManifestDetailRecord = {
   kind: 'benchmark-manifest';
   source_path: string;
   id: string;
-  outcome_space: OutcomeSpaceSummaryRecord;
+  outcome_space?: OutcomeSpaceSummaryRecord;
+  outcome_sequence?: OutcomeSequenceSummaryRecord;
+  scale_parameter?: ScaleParameterSummaryRecord;
   observation_ids?: string[];
+  latent_factor_declaration?: ArtifactReferenceRecord;
+  complexity_coordinate?: string;
 };
 
 export type MeasurementDetailRecord = {
@@ -51,6 +55,18 @@ type LayerSummaryRecord = {
 type OutcomeSpaceSummaryRecord = {
   id: string;
   outcomes: { id: string }[];
+};
+
+type OutcomeSequenceSummaryRecord = {
+  atom_count: number;
+  atom_name: string;
+  length_parameter: string;
+};
+
+type ScaleParameterSummaryRecord = {
+  symbol: string;
+  minimum: number;
+  description?: string;
 };
 
 type ProbabilitySummaryRecord = {
@@ -111,10 +127,36 @@ function parseDetailRecord(value: unknown, path: string): ConsoleArtifactDetailR
       kind,
       source_path: requireString(record.source_path, `${path}.source_path`),
       id: requireString(record.id, `${path}.id`),
-      outcome_space: parseOutcomeSpace(record.outcome_space, `${path}.outcome_space`),
     };
+    if (record.outcome_space !== undefined) {
+      detail.outcome_space = parseOutcomeSpace(record.outcome_space, `${path}.outcome_space`);
+    }
+    if (record.outcome_sequence !== undefined) {
+      detail.outcome_sequence = parseOutcomeSequence(
+        record.outcome_sequence,
+        `${path}.outcome_sequence`,
+      );
+    }
+    if (record.scale_parameter !== undefined) {
+      detail.scale_parameter = parseScaleParameter(
+        record.scale_parameter,
+        `${path}.scale_parameter`,
+      );
+    }
     if (record.observation_ids !== undefined) {
       detail.observation_ids = parseStringArray(record.observation_ids, `${path}.observation_ids`);
+    }
+    if (record.latent_factor_declaration !== undefined) {
+      detail.latent_factor_declaration = parseReferenceRecord(
+        record.latent_factor_declaration,
+        `${path}.latent_factor_declaration`,
+      );
+    }
+    if (record.complexity_coordinate !== undefined) {
+      detail.complexity_coordinate = requireString(
+        record.complexity_coordinate,
+        `${path}.complexity_coordinate`,
+      );
     }
     return detail;
   }
@@ -160,6 +202,27 @@ function parseOutcomeSpace(value: unknown, path: string): OutcomeSpaceSummaryRec
   };
 }
 
+function parseOutcomeSequence(value: unknown, path: string): OutcomeSequenceSummaryRecord {
+  const record = requireRecord(value, path);
+  return {
+    atom_count: requireNumber(record.atom_count, `${path}.atom_count`),
+    atom_name: requireString(record.atom_name, `${path}.atom_name`),
+    length_parameter: requireString(record.length_parameter, `${path}.length_parameter`),
+  };
+}
+
+function parseScaleParameter(value: unknown, path: string): ScaleParameterSummaryRecord {
+  const record = requireRecord(value, path);
+  const parameter: ScaleParameterSummaryRecord = {
+    symbol: requireString(record.symbol, `${path}.symbol`),
+    minimum: requireNumber(record.minimum, `${path}.minimum`),
+  };
+  if (record.description !== undefined) {
+    parameter.description = requireString(record.description, `${path}.description`);
+  }
+  return parameter;
+}
+
 function parseAcceptedEvent(
   value: unknown,
   path: string,
@@ -192,6 +255,26 @@ function parseProbability(value: unknown, path: string): ProbabilitySummaryRecor
     outcome_id: requireString(record.outcome_id, `${path}.outcome_id`),
     probability: requireNumber(record.probability, `${path}.probability`),
   };
+}
+
+function parseReferenceRecord(value: unknown, path: string): ArtifactReferenceRecord {
+  const record = requireRecord(value, path);
+  const reference: ArtifactReferenceRecord = {
+    kind: requireString(record.kind, `${path}.kind`),
+  };
+  if (record.protocol_id !== undefined) {
+    reference.protocol_id = requireString(record.protocol_id, `${path}.protocol_id`);
+  }
+  if (record.content_digest !== undefined) {
+    reference.content_digest = requireString(record.content_digest, `${path}.content_digest`);
+  }
+  if (record.record_digest !== undefined) {
+    reference.record_digest = requireString(record.record_digest, `${path}.record_digest`);
+  }
+  if (record.external_uri !== undefined) {
+    reference.external_uri = requireString(record.external_uri, `${path}.external_uri`);
+  }
+  return reference;
 }
 
 function parseParameters(value: unknown, path: string): Record<string, string | number | boolean> {

@@ -17,7 +17,8 @@ from leibniz.latent_factors import (
     SampleLatentFactor,
 )
 
-_fixtures_root = Path(__file__).parent / "fixtures"
+_repository_root = Path(__file__).parents[1]
+_digits_generator_root = _repository_root / "src" / "leibniz" / "generators" / "digits"
 
 
 def test_degree_measure_validates_supported_kinds() -> None:
@@ -100,9 +101,9 @@ def test_resolution_requirement_rejects_infeasible_canvas_size() -> None:
     )
 
 
-def test_latent_factor_declaration_document_loads_digits_fixture() -> None:
+def test_latent_factor_declaration_document_loads_digits_source_artifact() -> None:
     document = LatentFactorDeclarationDocument.from_bytes(
-        (_fixtures_root / "digits" / "latent_factors.json").read_bytes()
+        (_digits_generator_root / "latent_factors.json").read_bytes()
     )
 
     assert document.declaration.id == ProtocolIdentifier.parse(
