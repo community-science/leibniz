@@ -2,8 +2,7 @@ import { Database, FileJson, FolderTree, Network, ScrollText } from 'lucide-reac
 import { useState } from 'react';
 
 import { ArtifactBrowser } from './ArtifactBrowser';
-import { demoArtifactDetails } from './demoArtifactDetails';
-import { demoArtifactIndex } from './demoArtifactIndex';
+import consoleData from 'virtual:leibniz-console-data';
 
 type ConsoleSection = {
   id: string;
@@ -95,7 +94,10 @@ export function ConsoleShell() {
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'artifacts'}>
-          <ArtifactBrowser details={demoArtifactDetails} index={demoArtifactIndex} />
+          <ArtifactBrowser
+            details={consoleData.artifact_details}
+            index={consoleData.artifact_index}
+          />
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'source'}>

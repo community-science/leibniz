@@ -1,4 +1,3 @@
-import { demoArtifactIndex } from '../src/leibniz/console/_web_src/src/demoArtifactIndex.ts';
 import {
   allArtifactKinds,
   artifactKey,
@@ -12,33 +11,36 @@ import {
   detailForArtifact,
   parseConsoleArtifactDetailRecords,
 } from '../src/leibniz/console/_web_src/src/artifactDetails.ts';
-import { demoArtifactDetails } from '../src/leibniz/console/_web_src/src/demoArtifactDetails.ts';
+import { parseConsoleDataRecord } from '../src/leibniz/console/_web_src/src/consoleData.ts';
 
-const kinds = artifactKinds(demoArtifactIndex.artifacts);
-const dependencyCount = demoArtifactIndex.artifacts.reduce(
+declare const consoleDataPayload: unknown;
+
+const consoleData = parseConsoleDataRecord(consoleDataPayload);
+const artifacts = consoleData.artifact_index.artifacts;
+const details = consoleData.artifact_details;
+const kinds = artifactKinds(artifacts);
+const dependencyCount = artifacts.reduce(
   (count, artifact) => count + artifact.dependencies.length,
   0,
 );
-const measurementArtifacts = filterArtifacts(demoArtifactIndex.artifacts, 'measurement');
+const measurementArtifacts = filterArtifacts(artifacts, 'measurement');
 const selectedMeasurement = resolveSelectedArtifact(
   measurementArtifacts,
-  artifactKey(demoArtifactIndex.artifacts[0]),
+  artifactKey(artifacts[0]),
 );
 const selectedMeasurementDetail =
   selectedMeasurement === undefined
     ? undefined
-    : detailForArtifact(demoArtifactDetails, selectedMeasurement);
-const detailsByArtifact = demoArtifactIndex.artifacts.map((artifact) =>
-  detailForArtifact(demoArtifactDetails, artifact),
-);
-const chessBenchmark = demoArtifactIndex.artifacts.find(
+    : detailForArtifact(details, selectedMeasurement);
+const detailsByArtifact = artifacts.map((artifact) => detailForArtifact(details, artifact));
+const chessBenchmark = artifacts.find(
   (artifact) => artifact.protocol_id === 'benchmarks.chess@0.1.0',
 );
-const chessMeasurement = demoArtifactIndex.artifacts.find(
+const chessMeasurement = artifacts.find(
   (artifact) => artifact.protocol_id === 'benchmarks.chess.fixture.mate-in-one-evidence@0.1.0',
 );
 const chessMeasurementDetail =
-  chessMeasurement === undefined ? undefined : detailForArtifact(demoArtifactDetails, chessMeasurement);
+  chessMeasurement === undefined ? undefined : detailForArtifact(details, chessMeasurement);
 
 assertEqual(
   kinds.join(','),
@@ -91,11 +93,11 @@ assertEqual(
         .map((probability) => `${probability.outcome_id}:${probability.probability}`)
         .join(',')
     : '',
-  'g7f8:0.7,g7g8:0.2,g6f7:0.1',
+  'g6f7:0.1,g7f8:0.7,g7g8:0.2',
   'chess probabilities',
 );
 assertEqual(
-  detailForArtifact(demoArtifactDetails, demoArtifactIndex.artifacts[0])?.kind,
+  detailForArtifact(details, artifacts[0])?.kind,
   'architecture-manifest',
   'architecture detail lookup',
 );
