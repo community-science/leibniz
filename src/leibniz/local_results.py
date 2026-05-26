@@ -192,7 +192,13 @@ def materialize_benchmark_result_views(
         if manifest is None:
             raise LocalResultImportError(f"unknown benchmark id in local results: {benchmark_id}")
         benchmark_runs = tuple(run for run in runs if run.benchmark_id == benchmark_id)
-        benchmark_records.append(_benchmark_result_record(manifest=manifest, runs=benchmark_runs))
+        benchmark_records.append(
+            _benchmark_result_record(
+                manifest=manifest,
+                runs=benchmark_runs,
+                proposals=_proposal_records(runs_root, benchmark_id=benchmark_id),
+            )
+        )
 
     view_root = runs_root / "views"
     view_root.mkdir(parents=True, exist_ok=True)
@@ -413,6 +419,7 @@ def _benchmark_result_record(
     *,
     manifest: BenchmarkManifest,
     runs: tuple[_BenchmarkRunRecord, ...],
+    proposals: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
     models = tuple(_model_result_records(runs))
     record: dict[str, object] = {
@@ -429,6 +436,8 @@ def _benchmark_result_record(
         },
         "training_history": [run.to_record() for run in runs],
     }
+    if proposals:
+        record["proposals"] = list(proposals)
     if manifest.complexity_coordinate is not None:
         record["complexity_axis"] = manifest.complexity_coordinate
     if manifest.scale_parameter is not None:
@@ -467,6 +476,24 @@ def _model_result_records(
             }
         )
     return tuple(sorted(records, key=_model_sort_key))
+
+
+def _proposal_records(
+    runs_root: Path,
+    *,
+    benchmark_id: ProtocolIdentifier,
+) -> tuple[Mapping[str, object], ...]:
+    proposal_path = (
+        runs_root
+        / "proposals"
+        / _identifier_atom(benchmark_id)
+        / ("proposal_set" + _document_suffix)
+    )
+    if not proposal_path.is_file():
+        return ()
+    record = load_object_document(proposal_path.read_bytes(), description="proposal set")
+    proposals = _as_sequence(record.get("proposals"), "proposals")
+    return tuple(_as_mapping(proposal, "proposals") for proposal in proposals)
 
 
 def _competence_points(
@@ -626,6 +653,10 @@ def _run_sort_key(run: _BenchmarkRunRecord) -> tuple[str, str, str]:
     return (str(run.benchmark_id), run.run_id, run.source_path.as_posix())
 
 
+def _identifier_atom(identifier: ProtocolIdentifier) -> str:
+    return str(identifier.name).rsplit(".", maxsplit=1)[-1]
+
+
 def _resolve_output_root(repository_root: Path, runs_root: Path) -> Path:
     if runs_root.is_absolute():
         resolved = runs_root.resolve()
@@ -685,6 +716,8 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
     history = _as_sequence(record.get("training_history"), "training_history")
     for index, run in enumerate(history):
         _validate_run_result(_as_mapping(run, f"training_history.{index}"))
+    for index, proposal in enumerate(_as_sequence(record.get("proposals", ()), "proposals")):
+        _validate_proposal_result(_as_mapping(proposal, f"proposals.{index}"))
 
 
 def _validate_model_result(record: Mapping[str, object]) -> None:
@@ -712,6 +745,27 @@ def _validate_run_result(record: Mapping[str, object]) -> None:
     _as_mapping(record.get("cost_summary"), "cost_summary")
     _as_mapping(record.get("architecture"), "architecture")
     _as_string(record.get("measurement_dataset_digest"), "measurement_dataset_digest")
+
+
+def _validate_proposal_result(record: Mapping[str, object]) -> None:
+    _as_string(record.get("id"), "proposals.id")
+    _as_nonnegative_number(record.get("rank"), "proposals.rank")
+    _as_string(record.get("candidate_kind"), "proposals.candidate_kind")
+    _as_string(record.get("candidate_id"), "proposals.candidate_id")
+    _as_string(record.get("rationale"), "proposals.rationale")
+    for field in (
+        "predicted_score",
+        "uncertainty",
+        "acquisition_value",
+        "novelty",
+        "expected_frontier_improvement",
+    ):
+        if field in record:
+            _as_nonnegative_number(record[field], f"proposals.{field}")
+    if "command" in record:
+        command = _as_sequence(record["command"], "proposals.command")
+        if not all(isinstance(argument, str) and argument for argument in command):
+            raise LocalResultImportError("proposals.command must contain strings")
 
 
 def _as_mapping(value: object, field: str) -> Mapping[str, object]:

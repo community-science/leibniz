@@ -11,6 +11,7 @@ import type {
   BenchmarkResultViewRecord,
   ImportedResultViewRecord,
   ModelResultRecord,
+  ProposalRecord,
   ResultViewRecord,
   RunResultRecord,
 } from './resultViews.ts';
@@ -162,7 +163,44 @@ function BenchmarkResultDashboard({
         models={result.leaderboard}
         title="Leaderboard"
       />
+      <ProposalCards proposals={result.proposals} />
       <RunHistoryTable costAxis={costAxis} runs={result.training_history} />
+    </section>
+  );
+}
+
+function ProposalCards({ proposals }: { proposals: ProposalRecord[] }) {
+  if (proposals.length === 0) {
+    return <p className="artifact-detail-note">No active proposals are available.</p>;
+  }
+
+  return (
+    <section className="benchmark-result-table-section">
+      <h3>Proposals</h3>
+      <div className="proposal-card-grid">
+        {proposals.map((proposal) => (
+          <article className="proposal-card" key={proposal.id}>
+            <div className="proposal-card-heading">
+              <span>Rank {proposal.rank}</span>
+              <strong>{scoreLabel(proposal.acquisition_value)}</strong>
+            </div>
+            <dl>
+              <dt>Candidate</dt>
+              <dd>{proposal.candidate_id}</dd>
+              <dt>Prediction</dt>
+              <dd>{scoreLabel(proposal.predicted_score)}</dd>
+              <dt>Uncertainty</dt>
+              <dd>{scoreLabel(proposal.uncertainty)}</dd>
+              <dt>Novelty</dt>
+              <dd>{scoreLabel(proposal.novelty)}</dd>
+              <dt>Improvement</dt>
+              <dd>{scoreLabel(proposal.expected_frontier_improvement)}</dd>
+            </dl>
+            <p>{proposal.rationale}</p>
+            {proposal.command.length === 0 ? null : <code>{proposal.command.join(' ')}</code>}
+          </article>
+        ))}
+      </div>
     </section>
   );
 }
@@ -304,6 +342,10 @@ function costValue(costSummary: Record<string, unknown>, costAxis: string): numb
 
 function formatCost(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
+function scoreLabel(value: number | undefined): string {
+  return value === undefined ? 'n/a' : value.toFixed(4);
 }
 
 function shortDigest(value: string): string {
