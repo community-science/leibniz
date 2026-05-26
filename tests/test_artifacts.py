@@ -1,7 +1,6 @@
 from collections.abc import Callable
 from pathlib import Path
 
-from leibniz._documents import canonical_document_bytes
 from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.artifacts import (
     ArtifactIndex,
@@ -12,6 +11,7 @@ from leibniz.artifacts import (
     reference_for_record,
 )
 from leibniz.content import ContentDigest
+from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
 
 _fixtures_root = Path(__file__).parent / "fixtures"

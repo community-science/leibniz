@@ -1,9 +1,9 @@
 from collections.abc import Callable
 from pathlib import Path
 
-from leibniz._documents import canonical_document_bytes
 from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.content import ContentDigest
+from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDataset, MeasurementDocument
 from leibniz.relationships import (

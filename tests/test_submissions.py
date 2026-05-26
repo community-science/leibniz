@@ -1,10 +1,10 @@
 from collections.abc import Callable
 from pathlib import Path
 
-from leibniz._documents import canonical_document_bytes
 from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.content import ContentDigest
+from leibniz.documents import canonical_document_bytes
 from leibniz.measurements import MeasurementDatasetDocument, MeasurementDocument
 from leibniz.submissions import (
     SubmissionArtifact,

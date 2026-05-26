@@ -2,9 +2,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
-from leibniz._documents import canonical_document_bytes
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.content import ContentDigest
+from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDataset, MeasurementDocument
 from leibniz.proposals import (

@@ -2,8 +2,8 @@ import math
 from collections.abc import Callable
 from typing import cast
 
-from leibniz._documents import canonical_document_bytes
 from leibniz.content import ContentDigest
+from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDataset
 from leibniz.views import (

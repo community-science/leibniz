@@ -1,7 +1,6 @@
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from leibniz._documents import canonical_document_bytes
 from leibniz.architectures import (
     ArchitectureLayer,
     ArchitectureManifest,
@@ -9,6 +8,7 @@ from leibniz.architectures import (
     ArchitectureManifestValidationError,
 )
 from leibniz.content import ContentDigest
+from leibniz.documents import canonical_document_bytes
 
 _fixtures_root = Path(__file__).parent / "fixtures"
 

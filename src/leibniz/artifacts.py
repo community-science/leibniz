@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from typing import cast
 from urllib.parse import urlparse
 
-from leibniz._documents import ContentEncodingError, load_object_document
 from leibniz.content import ContentDigest
+from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
 from leibniz.records import FieldSpec, RecordSpec
 

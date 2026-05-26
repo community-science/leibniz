@@ -4,9 +4,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 import leibniz.content as content
-from leibniz._documents import canonical_document_bytes, load_object_document
 from leibniz._formats._json import canonical_json_bytes, load_json_object_file
 from leibniz.content import ContentDigest, ContentEncodingError
+from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.outcomes import (
     AcceptedEvent,
@@ -20,6 +20,7 @@ _source_root = Path(__file__).parents[1] / "src" / "leibniz"
 _tests_root = Path(__file__).parents[1] / "tests"
 _format_boundary_files = {
     _source_root / "_documents.py",
+    _source_root / "documents.py",
     _source_root / "_formats" / "_json.py",
 }
 _json_test_boundary_files = {
