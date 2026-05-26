@@ -106,6 +106,18 @@ export type CostSummaryRecord = {
   unknown_parameter_layers?: string[];
 };
 
+export function isBenchmarkResultView(
+  view: ResultViewRecord,
+): view is BenchmarkResultViewRecord {
+  return view.format === 'leibniz.console.benchmark-results';
+}
+
+export function isImportedResultView(
+  view: ResultViewRecord,
+): view is ImportedResultViewRecord {
+  return view.format === 'leibniz.console.imported-results';
+}
+
 export function parseResultViewRecords(value: unknown): ResultViewRecord[] {
   return requireArray(value, 'result_views').map((view, index) =>
     parseResultViewRecord(view, `result_views.${index}`),

@@ -1,5 +1,4 @@
 import {
-  BarChart3,
   BookOpenCheck,
   Cpu,
   Database,
@@ -13,7 +12,6 @@ import { useState } from 'react';
 import { ArtifactBrowser } from './ArtifactBrowser';
 import { BenchmarksPanel } from './BenchmarksPanel';
 import { ModelInspectionPanel } from './ModelInspectionPanel';
-import { PerformanceViewPanel } from './PerformanceViewPanel';
 import { SourceModuleInventory } from './SourceModuleInventory';
 import consoleData from 'virtual:leibniz-console-data';
 
@@ -23,7 +21,7 @@ type ConsoleSection = {
   description: string;
 };
 
-type TabId = 'home' | 'artifacts' | 'benchmarks' | 'performance' | 'models' | 'source';
+type TabId = 'home' | 'artifacts' | 'benchmarks' | 'models' | 'source';
 
 type ConsoleTab = {
   id: TabId;
@@ -34,7 +32,6 @@ const tabs: ConsoleTab[] = [
   { id: 'home', label: 'Home' },
   { id: 'artifacts', label: 'Artifacts' },
   { id: 'benchmarks', label: 'Benchmarks' },
-  { id: 'performance', label: 'Performance' },
   { id: 'models', label: 'Models' },
   { id: 'source', label: 'Source' },
 ];
@@ -58,12 +55,7 @@ const sections: ConsoleSection[] = [
   {
     id: 'benchmarks',
     label: 'Benchmarks',
-    description: 'Benchmark task panes, generated samples, and benchmark-owned data views.',
-  },
-  {
-    id: 'performance',
-    label: 'Performance',
-    description: 'Derived competence-integral views over benchmark-owned measurement cases.',
+    description: 'Benchmark samples, competence views, imported results, proposals, and runs.',
   },
   {
     id: 'models',
@@ -95,8 +87,6 @@ export function ConsoleShell() {
               <Database size={16} />
             ) : tab.id === 'benchmarks' ? (
               <BookOpenCheck size={16} />
-            ) : tab.id === 'performance' ? (
-              <BarChart3 size={16} />
             ) : tab.id === 'models' ? (
               <Cpu size={16} />
             ) : (
@@ -119,8 +109,6 @@ export function ConsoleShell() {
                     <Network size={20} />
                   ) : section.id === 'benchmarks' ? (
                     <BookOpenCheck size={20} />
-                  ) : section.id === 'performance' ? (
-                    <BarChart3 size={20} />
                   ) : section.id === 'models' ? (
                     <Cpu size={20} />
                   ) : (
@@ -144,13 +132,11 @@ export function ConsoleShell() {
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'benchmarks'}>
-          <BenchmarksPanel tasks={consoleData.benchmark_tasks} />
-        </div>
-
-        <div className="console-overview" hidden={currentTab !== 'performance'}>
-          <PerformanceViewPanel
+          <BenchmarksPanel
+            modelInspections={consoleData.model_inspections}
+            performanceViews={consoleData.performance_views}
             resultViews={consoleData.result_views}
-            views={consoleData.performance_views}
+            tasks={consoleData.benchmark_tasks}
           />
         </div>
 
