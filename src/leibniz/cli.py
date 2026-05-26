@@ -7,6 +7,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from leibniz.active_loop import ActiveTrainingLoopPlan, run_active_training_loop
 from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
 from leibniz.authority_indexes import AuthorityIndexDocument
 from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
@@ -256,6 +257,26 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--train-steps", default=1, type=int)
     run.add_argument("--learning-rate", default=0.01, type=float)
     run.add_argument("--dry-run", action="store_true")
+    loop = benchmark_subcommands.add_parser(
+        "loop",
+        description="run an active benchmark proposal loop",
+        help="run an active benchmark loop",
+    )
+    loop.add_argument("--benchmark-root", type=Path, required=True)
+    loop.add_argument(
+        "--runs-root",
+        default=Path(".runs"),
+        type=Path,
+        help="ignored local run-state root; defaults to .runs",
+    )
+    loop.add_argument("--iterations", default=1, type=int)
+    loop.add_argument("--scale", default=1, type=int)
+    loop.add_argument("--candidate-budget", default=3, type=int)
+    loop.add_argument("--sample-count", default=4, type=int)
+    loop.add_argument("--seed", default=101, type=int)
+    loop.add_argument("--train-steps", default=1, type=int)
+    loop.add_argument("--learning-rate", default=0.01, type=float)
+    loop.add_argument("--dry-run", action="store_true")
 
     return parser
 
@@ -284,6 +305,31 @@ def _benchmark(args: argparse.Namespace) -> int:
             print(f"measurements: {summary.measurement_dataset_path}")
             print(f"model inspection: {summary.model_inspection_path}")
             print(f"training summary: {summary.training_summary_path}")
+            return 0
+        if str(args.benchmark_command) == "loop":
+            summary = run_active_training_loop(
+                ActiveTrainingLoopPlan(
+                    benchmark_root=args.benchmark_root,
+                    runs_root=args.runs_root,
+                    iterations=args.iterations,
+                    scale=args.scale,
+                    candidate_budget=args.candidate_budget,
+                    sample_count=args.sample_count,
+                    seed=args.seed,
+                    train_steps=args.train_steps,
+                    learning_rate=args.learning_rate,
+                    dry_run=args.dry_run,
+                )
+            )
+            prefix = "planned" if summary.dry_run else "completed"
+            print(
+                f"{prefix} active benchmark loop for {summary.benchmark_id}: "
+                f"{summary.completed_run_count}/{summary.iteration_count} run(s)"
+            )
+            for command in summary.planned_commands:
+                print("command: " + " ".join(command))
+            if summary.result_view_path is not None:
+                print(f"view: {summary.result_view_path}")
             return 0
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
