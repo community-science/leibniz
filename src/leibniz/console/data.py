@@ -469,7 +469,10 @@ class ConsoleDataBuilder:
                     raise ConsoleDataValidationError(
                         f"{path}: invalid console result view: {error}"
                     ) from error
+                stat = path.stat()
                 record["source_path"] = self._display_path(path)
+                record["source_mtime_ms"] = int(stat.st_mtime * 1000)
+                record["source_size_bytes"] = stat.st_size
                 views.append(record)
         return tuple(sorted(views, key=lambda view: str(view["source_path"])))
 

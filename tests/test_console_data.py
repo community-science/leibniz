@@ -303,6 +303,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
         view for view in result_views if view["format"] == "leibniz.console.benchmark-results"
     )
     assert imported["source_path"] == (result_root / "imported_results.json").as_posix()
+    assert isinstance(imported["source_mtime_ms"], int)
+    assert isinstance(imported["source_size_bytes"], int)
     bundles = cast(list[dict[str, object]], imported["publication_bundles"])
     assert bundles[0]["measurement_count"] == 1
     results = cast(list[dict[str, object]], benchmark["benchmark_results"])

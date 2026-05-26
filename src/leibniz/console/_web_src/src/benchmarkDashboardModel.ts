@@ -10,6 +10,8 @@ import {
 
 export type BenchmarkResultEntry = {
   sourcePath: string;
+  sourceMtimeMs?: number;
+  sourceSizeBytes?: number;
   result: BenchmarkResultRecord;
 };
 
@@ -80,7 +82,12 @@ export function benchmarkResultsForTask(
   return resultViews
     .filter(isBenchmarkResultView)
     .flatMap((view) =>
-      view.benchmark_results.map((result) => ({ sourcePath: view.source_path, result })),
+      view.benchmark_results.map((result) => ({
+        sourceMtimeMs: view.source_mtime_ms,
+        sourcePath: view.source_path,
+        sourceSizeBytes: view.source_size_bytes,
+        result,
+      })),
     )
     .filter((entry) => entry.result.benchmark_id === benchmarkId);
 }

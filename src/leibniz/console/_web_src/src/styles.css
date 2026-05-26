@@ -46,6 +46,7 @@
   --inspection-metadata-label-min: 92px;
   --performance-point-min: 220px;
   --performance-source-min: 240px;
+  --result-source-metric-min: 96px;
   --performance-bar-height: 10px;
   --frontier-chart-height: 440px;
   --frontier-point-size: 10px;
@@ -766,6 +767,59 @@ p {
   border-radius: var(--radius-md);
   background: var(--panel-bg-subtle);
   padding: var(--space-xl);
+}
+
+.benchmark-result-source {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2xl);
+  align-items: start;
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--control-bg);
+  padding: var(--space-xl);
+}
+
+.benchmark-result-source span {
+  color: var(--neon-blue);
+  font-size: var(--font-status);
+  font-weight: 700;
+  letter-spacing: var(--tracking-status);
+  text-transform: uppercase;
+}
+
+.benchmark-result-source p {
+  margin: var(--space-xs) 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-path);
+}
+
+.benchmark-result-source dl {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(var(--result-source-metric-min), auto));
+  gap: var(--space-lg);
+  margin: 0;
+}
+
+.benchmark-result-source div {
+  min-width: 0;
+}
+
+.benchmark-result-source dt {
+  color: var(--text-muted);
+  font-size: var(--font-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.benchmark-result-source dd {
+  margin: var(--space-2xs) 0 0;
+  color: var(--text-primary);
+  font-size: var(--font-meta);
+  white-space: nowrap;
 }
 
 .benchmark-result-heading {
@@ -1968,10 +2022,19 @@ p {
 
   .performance-header,
   .benchmark-result-heading,
+  .benchmark-result-source,
   .model-header,
   .benchmark-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .benchmark-result-source {
+    display: flex;
+  }
+
+  .benchmark-result-source dl {
+    grid-template-columns: repeat(auto-fit, minmax(var(--result-source-metric-min), 1fr));
   }
 
   .artifact-browser-header {
