@@ -12,6 +12,7 @@ from leibniz.local_results import (
     LocalResultImportError,
     import_submission_publications,
     load_console_result_view,
+    materialize_benchmark_result_views,
 )
 from leibniz.measurements import MeasurementDataset, MeasurementDocument
 from leibniz.publications import SubmissionPublicationDocument
@@ -68,6 +69,53 @@ def test_import_submission_publications_ignores_non_publication_json(tmp_path: P
 def test_console_result_view_rejects_wrong_format() -> None:
     with pytest.raises(LocalResultImportError, match="unsupported format"):
         load_console_result_view(canonical_document_bytes({"format": "other", "format_version": 1}))
+
+
+def test_materialize_benchmark_result_views_projects_imported_publications(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "hf-checkout"
+    source_root.mkdir()
+    bundle_path = source_root / "digits_publication.json"
+    bundle_path.write_bytes(canonical_document_bytes(_digits_publication_bundle_record()))
+    import_submission_publications(
+        (source_root,),
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+
+    assert summary.benchmark_count == 1
+    assert summary.model_count == 1
+    assert summary.run_count == 1
+    assert summary.view_file == tmp_path / ".runs" / "views" / "benchmark_results.json"
+
+    view = load_console_result_view(summary.view_file.read_bytes())
+    assert view["format"] == "leibniz.console.benchmark-results"
+    results = cast(list[dict[str, object]], view["benchmark_results"])
+    result = results[0]
+    assert result["benchmark_id"] == "benchmarks.digits@0.1.0"
+    leaderboard = cast(list[dict[str, object]], result["leaderboard"])
+    assert leaderboard[0]["score"] == 1.0
+    assert leaderboard[0]["observed_complexities"] == [1.0]
+    cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
+    assert cost_summary["parameter_count"] == 50
+    frontiers = cast(dict[str, object], result["frontiers"])
+    assert len(cast(list[dict[str, object]], frontiers["parameter_count"])) == 1
+    history = cast(list[dict[str, object]], result["training_history"])
+    assert history[0]["source_kind"] == "imported-publication"
+
+
+def test_materialize_benchmark_result_views_rejects_empty_runs_root(tmp_path: Path) -> None:
+    with pytest.raises(LocalResultImportError, match="no benchmark result records"):
+        materialize_benchmark_result_views(
+            repository_root=_repository_root,
+            runs_root=tmp_path / ".runs",
+        )
 
 
 def _digits_publication_bundle_record() -> dict[str, object]:

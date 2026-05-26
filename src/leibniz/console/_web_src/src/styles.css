@@ -46,6 +46,8 @@
   --performance-point-min: 220px;
   --performance-source-min: 240px;
   --performance-bar-height: 10px;
+  --result-table-model-column: 2fr;
+  --result-table-metric-column: 1fr;
   --model-list-width: 300px;
   --model-layer-min: 220px;
   --model-source-label-min: 132px;
@@ -859,6 +861,107 @@ p {
   margin: var(--space-lg) 0 0;
 }
 
+.benchmark-result-dashboard {
+  border: var(--line-thin) solid var(--border-color-strong);
+  border-radius: var(--radius-md);
+  background: var(--panel-bg-subtle);
+  padding: var(--space-xl);
+}
+
+.benchmark-result-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2xl);
+}
+
+.benchmark-result-heading p {
+  margin: var(--space-xs) 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-path);
+}
+
+.benchmark-result-axis {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-width: var(--performance-point-min);
+}
+
+.benchmark-result-axis span {
+  color: var(--text-muted);
+  font-size: var(--font-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.benchmark-result-axis select {
+  border: var(--line-thin) solid var(--border-color-strong);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: white;
+  padding: var(--space-sm) var(--space-lg);
+}
+
+.benchmark-result-table-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.benchmark-result-table-section h3 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-status);
+  font-weight: 700;
+  letter-spacing: var(--tracking-status);
+  text-transform: uppercase;
+}
+
+.benchmark-result-table {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: var(--line-thin) solid var(--border-color-strong);
+  border-radius: var(--radius-md);
+}
+
+.benchmark-result-row {
+  display: grid;
+  grid-template-columns:
+    minmax(0, var(--result-table-model-column))
+    repeat(4, minmax(0, var(--result-table-metric-column)));
+  gap: var(--space-lg);
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--control-bg);
+}
+
+.benchmark-result-row + .benchmark-result-row {
+  border-top: var(--line-thin) solid var(--border-color);
+}
+
+.benchmark-result-row.header {
+  background: var(--metric-bg);
+}
+
+.benchmark-result-row span {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-control);
+}
+
+.benchmark-result-row.header span {
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--font-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
 .model-layout {
   display: grid;
   grid-template-columns: var(--model-list-width) minmax(0, 1fr);
@@ -1308,6 +1411,7 @@ p {
   }
 
   .performance-header,
+  .benchmark-result-heading,
   .model-header,
   .benchmark-header {
     align-items: stretch;
@@ -1337,6 +1441,10 @@ p {
   }
 
   .artifact-row {
+    grid-template-columns: 1fr;
+  }
+
+  .benchmark-result-row {
     grid-template-columns: 1fr;
   }
 

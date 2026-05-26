@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from leibniz.benchmarks import BenchmarkManifestDocument
+from leibniz.architectures import ArchitectureManifest
+from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.content import ContentDigest
 from leibniz.documents import (
     canonical_document_bytes,
@@ -15,17 +17,25 @@ from leibniz.documents import (
     load_object_document,
 )
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.measurements import MeasurementRecord
+from leibniz.measurements import (
+    MeasurementDataset,
+    MeasurementDatasetDocument,
+    MeasurementRecord,
+)
+from leibniz.model_inspection import ModelInspectionDocument, ModelInspectionRecord
 from leibniz.publications import SubmissionPublicationDocument
 
 __all__ = [
+    "LocalBenchmarkResultViewSummary",
     "LocalResultImportError",
     "LocalResultImportSummary",
     "import_submission_publications",
     "load_console_result_view",
+    "materialize_benchmark_result_views",
 ]
 
 _console_result_view_format = "leibniz.console.imported-results"
+_benchmark_result_view_format = "leibniz.console.benchmark-results"
 _console_result_view_format_version = 1
 _document_suffix = document_filename_suffix()
 _manifest_filename = "manifest" + _document_suffix
@@ -52,6 +62,26 @@ class LocalResultImportSummary:
             "view_file": self.view_file.as_posix(),
             "publication_bundle_count": self.publication_bundle_count,
             "measurement_count": self.measurement_count,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LocalBenchmarkResultViewSummary:
+    """Summary of one operator-local benchmark result projection."""
+
+    source_files: tuple[Path, ...]
+    view_file: Path
+    benchmark_count: int
+    model_count: int
+    run_count: int
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "source_files": [path.as_posix() for path in self.source_files],
+            "view_file": self.view_file.as_posix(),
+            "benchmark_count": self.benchmark_count,
+            "model_count": self.model_count,
+            "run_count": self.run_count,
         }
 
 
@@ -140,6 +170,52 @@ def import_submission_publications(
     )
 
 
+def materialize_benchmark_result_views(
+    *,
+    repository_root: Path | None = None,
+    runs_root: Path = Path(".runs"),
+) -> LocalBenchmarkResultViewSummary:
+    """Derive console benchmark result views from ignored run/import state."""
+
+    repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
+    runs_root = _resolve_output_root(repository_root, runs_root)
+    manifests = _known_benchmark_manifests(repository_root)
+    local_runs = _local_run_records(runs_root)
+    imported_runs = _imported_run_records(runs_root)
+    runs = tuple(sorted((*local_runs, *imported_runs), key=_run_sort_key))
+    if not runs:
+        raise LocalResultImportError("no benchmark result records found")
+
+    benchmark_records: list[Mapping[str, object]] = []
+    for benchmark_id in sorted({run.benchmark_id for run in runs}, key=str):
+        manifest = manifests.get(benchmark_id)
+        if manifest is None:
+            raise LocalResultImportError(f"unknown benchmark id in local results: {benchmark_id}")
+        benchmark_runs = tuple(run for run in runs if run.benchmark_id == benchmark_id)
+        benchmark_records.append(_benchmark_result_record(manifest=manifest, runs=benchmark_runs))
+
+    view_root = runs_root / "views"
+    view_root.mkdir(parents=True, exist_ok=True)
+    view_file = view_root / ("benchmark_results" + _document_suffix)
+    view_file.write_bytes(
+        canonical_document_bytes(
+            {
+                "format": _benchmark_result_view_format,
+                "format_version": _console_result_view_format_version,
+                "benchmark_results": benchmark_records,
+            }
+        )
+        + b"\n"
+    )
+    return LocalBenchmarkResultViewSummary(
+        source_files=tuple(run.source_path for run in runs),
+        view_file=view_file,
+        benchmark_count=len(benchmark_records),
+        model_count=len({(run.benchmark_id, run.model_key) for run in runs}),
+        run_count=len(runs),
+    )
+
+
 def load_console_result_view(data: bytes) -> Mapping[str, object]:
     """Load a generated console result view document."""
 
@@ -147,6 +223,9 @@ def load_console_result_view(data: bytes) -> Mapping[str, object]:
         record = load_object_document(data, description="console result view")
     except ValueError as error:
         raise LocalResultImportError(str(error)) from error
+    if record.get("format") == _benchmark_result_view_format:
+        _validate_benchmark_result_view(record)
+        return record
     if record.get("format") != _console_result_view_format:
         raise LocalResultImportError("console result view has unsupported format")
     if record.get("format_version") != _console_result_view_format_version:
@@ -157,6 +236,46 @@ def load_console_result_view(data: bytes) -> Mapping[str, object]:
             _as_mapping(publication_bundle, f"publication_bundles.{index}")
         )
     return record
+
+
+@dataclass(frozen=True, slots=True)
+class _BenchmarkRunRecord:
+    source_kind: str
+    source_path: Path
+    run_id: str
+    run_slug: str
+    benchmark_id: ProtocolIdentifier
+    architecture_digest: ContentDigest
+    model_key: str
+    scale: int | None
+    measurement_count: int
+    score: float
+    cost_summary: Mapping[str, object]
+    architecture: Mapping[str, object]
+    measurement_dataset: MeasurementDataset
+    measurement_dataset_digest: ContentDigest
+    training_summary: Mapping[str, object] | None = None
+
+    def to_record(self) -> dict[str, object]:
+        record: dict[str, object] = {
+            "source_kind": self.source_kind,
+            "source_path": self.source_path.as_posix(),
+            "run_id": self.run_id,
+            "run_slug": self.run_slug,
+            "benchmark_id": str(self.benchmark_id),
+            "architecture_digest": str(self.architecture_digest),
+            "model_key": self.model_key,
+            "measurement_count": self.measurement_count,
+            "score": self.score,
+            "cost_summary": dict(self.cost_summary),
+            "architecture": dict(self.architecture),
+            "measurement_dataset_digest": str(self.measurement_dataset_digest),
+        }
+        if self.scale is not None:
+            record["scale"] = self.scale
+        if self.training_summary is not None:
+            record["training_summary"] = dict(self.training_summary)
+        return record
 
 
 def _publication_documents(
@@ -183,14 +302,230 @@ def _candidate_document_files(source_root: Path) -> tuple[Path, ...]:
 
 
 def _known_benchmark_ids(repository_root: Path) -> frozenset[ProtocolIdentifier]:
+    return frozenset(_known_benchmark_manifests(repository_root))
+
+
+def _known_benchmark_manifests(
+    repository_root: Path,
+) -> dict[ProtocolIdentifier, BenchmarkManifest]:
     benchmark_root = repository_root / "src" / "leibniz" / "benchmarks"
-    ids: set[ProtocolIdentifier] = set()
+    manifests: dict[ProtocolIdentifier, BenchmarkManifest] = {}
     for path in sorted(benchmark_root.rglob(_manifest_filename)):
         document = BenchmarkManifestDocument.from_bytes(path.read_bytes())
-        ids.add(document.manifest.id)
-    if not ids:
+        manifests[document.manifest.id] = document.manifest
+    if not manifests:
         raise LocalResultImportError("no known benchmark manifests found")
-    return frozenset(ids)
+    return manifests
+
+
+def _local_run_records(runs_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
+    training_root = runs_root / "training"
+    if not training_root.is_dir():
+        return ()
+    records: list[_BenchmarkRunRecord] = []
+    for path in sorted(training_root.rglob("*" + _document_suffix)):
+        summary = load_object_document(path.read_bytes(), description="training summary")
+        if summary.get("format") != "leibniz.benchmark-run":
+            continue
+        measurement_dataset_path = _local_artifact_path(
+            runs_root=runs_root,
+            value=summary.get("measurement_dataset_path"),
+            field="measurement_dataset_path",
+        )
+        model_inspection_path = _local_artifact_path(
+            runs_root=runs_root,
+            value=summary.get("model_inspection_path"),
+            field="model_inspection_path",
+        )
+        dataset = MeasurementDatasetDocument.from_bytes(
+            measurement_dataset_path.read_bytes()
+        ).dataset
+        inspection = ModelInspectionDocument.from_bytes(
+            model_inspection_path.read_bytes()
+        ).inspection
+        records.append(
+            _BenchmarkRunRecord(
+                source_kind="local-run",
+                source_path=path.resolve(),
+                run_id=_as_string(summary.get("run_slug"), "run_slug"),
+                run_slug=_as_string(summary.get("run_slug"), "run_slug"),
+                benchmark_id=_as_identifier(summary.get("benchmark_id"), "benchmark_id"),
+                architecture_digest=_record_digest(inspection.architecture.to_record()),
+                model_key=str(inspection.architecture.record_digest),
+                scale=_optional_int(summary.get("scale"), "scale"),
+                measurement_count=len(dataset.measurements),
+                score=_mean_accepted_mass(dataset),
+                cost_summary=inspection.cost_summary.to_record(),
+                architecture=inspection.architecture.to_record(),
+                measurement_dataset=dataset,
+                measurement_dataset_digest=dataset.digest,
+                training_summary=summary,
+            )
+        )
+    return tuple(records)
+
+
+def _imported_run_records(runs_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
+    import_root = runs_root / "imports" / "publication_bundles"
+    if not import_root.is_dir():
+        return ()
+    records: list[_BenchmarkRunRecord] = []
+    for path in sorted(import_root.rglob("*" + _document_suffix)):
+        document = SubmissionPublicationDocument.from_bytes(path.read_bytes())
+        bundle = document.bundle
+        package = bundle.submission_package
+        inspection = _inspection_from_architecture(package.architecture_manifest)
+        records.append(
+            _BenchmarkRunRecord(
+                source_kind="imported-publication",
+                source_path=path.resolve(),
+                run_id=str(bundle.id),
+                run_slug=str(bundle.id.name),
+                benchmark_id=package.benchmark_manifest.id,
+                architecture_digest=package.architecture_manifest.digest,
+                model_key=str(package.architecture_manifest.digest),
+                scale=_dataset_scale(
+                    manifest=package.benchmark_manifest,
+                    dataset=bundle.measurement_dataset,
+                ),
+                measurement_count=len(bundle.measurement_dataset.measurements),
+                score=_mean_accepted_mass(bundle.measurement_dataset),
+                cost_summary=inspection.cost_summary.to_record(),
+                architecture=inspection.architecture.to_record(),
+                measurement_dataset=bundle.measurement_dataset,
+                measurement_dataset_digest=bundle.measurement_dataset.digest,
+            )
+        )
+    return tuple(records)
+
+
+def _inspection_from_architecture(architecture: ArchitectureManifest) -> ModelInspectionRecord:
+    return ModelInspectionRecord.from_architecture(
+        id=ProtocolIdentifier.parse(
+            "model-inspections.imported."
+            f"{str(architecture.digest).split(':', maxsplit=1)[1][:16]}@0.1.0"
+        ),
+        architecture_manifest=architecture,
+    )
+
+
+def _benchmark_result_record(
+    *,
+    manifest: BenchmarkManifest,
+    runs: tuple[_BenchmarkRunRecord, ...],
+) -> dict[str, object]:
+    models = tuple(_model_result_records(runs))
+    record: dict[str, object] = {
+        "benchmark_id": str(runs[0].benchmark_id),
+        "cost_axes": [
+            {"key": "parameter_count", "label": "Parameters"},
+            {"key": "inference_flops", "label": "FLOPs"},
+            {"key": "parameter_bytes", "label": "Storage"},
+        ],
+        "leaderboard": list(models),
+        "frontiers": {
+            axis: _frontier_records(models, cost_axis=axis)
+            for axis in ("parameter_count", "inference_flops", "parameter_bytes")
+        },
+        "training_history": [run.to_record() for run in runs],
+    }
+    if manifest.complexity_coordinate is not None:
+        record["complexity_axis"] = manifest.complexity_coordinate
+    if manifest.scale_parameter is not None:
+        record["scale_axis"] = manifest.scale_parameter.symbol
+    return record
+
+
+def _model_result_records(
+    runs: tuple[_BenchmarkRunRecord, ...],
+) -> tuple[dict[str, object], ...]:
+    grouped: dict[str, list[_BenchmarkRunRecord]] = {}
+    for run in runs:
+        grouped.setdefault(run.model_key, []).append(run)
+
+    records: list[dict[str, object]] = []
+    for model_key, model_runs in grouped.items():
+        ordered_runs = tuple(sorted(model_runs, key=_run_sort_key))
+        points = _competence_points(ordered_runs)
+        score = _competence_integral(points)
+        best_run = max(
+            ordered_runs,
+            key=lambda run: (run.score, -_cost_value(run.cost_summary, "parameter_count")),
+        )
+        records.append(
+            {
+                "model_key": model_key,
+                "architecture_digest": str(best_run.architecture_digest),
+                "benchmark_id": str(best_run.benchmark_id),
+                "score": score,
+                "observed_complexities": [point["complexity"] for point in points],
+                "points": list(points),
+                "cost_summary": dict(best_run.cost_summary),
+                "run_ids": [run.run_id for run in ordered_runs],
+                "measurement_count": sum(run.measurement_count for run in ordered_runs),
+                "source_kinds": sorted({run.source_kind for run in ordered_runs}),
+            }
+        )
+    return tuple(sorted(records, key=_model_sort_key))
+
+
+def _competence_points(
+    runs: tuple[_BenchmarkRunRecord, ...],
+) -> tuple[dict[str, object], ...]:
+    by_complexity: dict[float, list[_BenchmarkRunRecord]] = {}
+    for run in runs:
+        if run.scale is None:
+            continue
+        by_complexity.setdefault(float(run.scale), []).append(run)
+    points: list[dict[str, object]] = []
+    for complexity, complexity_runs in by_complexity.items():
+        score = sum(run.score for run in complexity_runs) / len(complexity_runs)
+        points.append(
+            {
+                "complexity": complexity,
+                "score": score,
+                "run_ids": [run.run_id for run in sorted(complexity_runs, key=_run_sort_key)],
+            }
+        )
+    return tuple(sorted(points, key=_point_complexity))
+
+
+def _competence_integral(points: tuple[dict[str, object], ...]) -> float:
+    if not points:
+        return 0.0
+    if len(points) == 1:
+        return _point_score(points[0])
+    total_width = _point_complexity(points[-1]) - _point_complexity(points[0])
+    if total_width <= 0:
+        return _point_score(points[-1])
+    area = 0.0
+    for left, right in zip(points, points[1:], strict=True):
+        width = _point_complexity(right) - _point_complexity(left)
+        area += width * (_point_score(left) + _point_score(right)) / 2.0
+    return area / total_width
+
+
+def _frontier_records(
+    models: tuple[dict[str, object], ...],
+    *,
+    cost_axis: str,
+) -> list[dict[str, object]]:
+    ordered = sorted(
+        models,
+        key=lambda model: (
+            _cost_value(_as_mapping(model["cost_summary"], "cost_summary"), cost_axis),
+            -_as_nonnegative_number(model["score"], "score"),
+            str(model["model_key"]),
+        ),
+    )
+    frontier: list[dict[str, object]] = []
+    best_score = -math.inf
+    for model in ordered:
+        score = _as_nonnegative_number(model["score"], "score")
+        if score > best_score:
+            frontier.append(model)
+            best_score = score
+    return frontier
 
 
 def _validate_known_benchmarks(
@@ -202,6 +537,93 @@ def _validate_known_benchmarks(
             raise LocalResultImportError(
                 f"unknown benchmark id in imported measurement: {measurement.benchmark_id}"
             )
+
+
+def _local_artifact_path(*, runs_root: Path, value: object, field: str) -> Path:
+    path = Path(_as_string(value, field))
+    resolved = path.resolve() if path.is_absolute() else (runs_root.parent / path).resolve()
+    if not resolved.is_relative_to(runs_root.resolve()):
+        raise LocalResultImportError(f"{field} must stay inside runs root")
+    if not resolved.is_file():
+        raise LocalResultImportError(f"{field} does not exist: {path}")
+    return resolved
+
+
+def _dataset_scale(*, manifest: BenchmarkManifest, dataset: MeasurementDataset) -> int | None:
+    scales = {
+        _scale_from_outcome_space_id(
+            manifest=manifest,
+            outcome_space_id=measurement.outcome_space.id,
+        )
+        for measurement in dataset.measurements
+    }
+    scales.discard(None)
+    if len(scales) > 1:
+        raise LocalResultImportError("measurement dataset spans multiple scales")
+    return next(iter(scales), None)
+
+
+def _scale_from_outcome_space_id(
+    *,
+    manifest: BenchmarkManifest,
+    outcome_space_id: ProtocolIdentifier,
+) -> int | None:
+    if manifest.outcome_space is not None:
+        return None
+    prefix = f"{manifest.id.name}.outcomes.l"
+    outcome_space_name = str(outcome_space_id.name)
+    if not outcome_space_name.startswith(prefix):
+        raise LocalResultImportError(
+            "measurement outcome_space does not match scale-indexed benchmark"
+        )
+    scale_text = outcome_space_name.removeprefix(prefix)
+    if not scale_text.isdecimal():
+        raise LocalResultImportError("measurement outcome_space does not declare an integer scale")
+    return int(scale_text)
+
+
+def _mean_accepted_mass(dataset: MeasurementDataset) -> float:
+    if not dataset.measurements:
+        return 0.0
+    return sum(
+        measurement.raw_scoring_evidence.accepted_mass
+        for measurement in dataset.measurements
+    ) / len(dataset.measurements)
+
+
+def _record_digest(record: Mapping[str, object]) -> ContentDigest:
+    digest = record.get("record_digest")
+    if digest is None:
+        return ContentDigest.from_value(record)
+    return _as_digest(digest, field="record_digest")
+
+
+def _cost_value(cost_summary: Mapping[str, object], cost_axis: str) -> float:
+    value = cost_summary.get(cost_axis)
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise LocalResultImportError(f"cost summary missing numeric {cost_axis}")
+    return float(value)
+
+
+def _point_complexity(point: Mapping[str, object]) -> float:
+    return _as_nonnegative_number(point["complexity"], "complexity")
+
+
+def _point_score(point: Mapping[str, object]) -> float:
+    return _as_nonnegative_number(point["score"], "score")
+
+
+def _model_sort_key(record: Mapping[str, object]) -> tuple[float, float, str]:
+    cost_summary = _as_mapping(record["cost_summary"], "cost_summary")
+    return (
+        -_as_nonnegative_number(record["score"], "score"),
+        _cost_value(cost_summary, "parameter_count"),
+        str(record["model_key"]),
+    )
+
+
+def _run_sort_key(run: _BenchmarkRunRecord) -> tuple[str, str, str]:
+    return (str(run.benchmark_id), run.run_id, run.source_path.as_posix())
 
 
 def _resolve_output_root(repository_root: Path, runs_root: Path) -> Path:
@@ -237,6 +659,61 @@ def _validate_publication_bundle_view(record: Mapping[str, object]) -> None:
     _as_mapping(record.get("measurement_score_view"), "measurement_score_view")
 
 
+def _validate_benchmark_result_view(record: Mapping[str, object]) -> None:
+    if record.get("format_version") != _console_result_view_format_version:
+        raise LocalResultImportError("console result view has unsupported format_version")
+    results = _as_sequence(record.get("benchmark_results"), "benchmark_results")
+    for index, result in enumerate(results):
+        _validate_benchmark_result(_as_mapping(result, f"benchmark_results.{index}"))
+
+
+def _validate_benchmark_result(record: Mapping[str, object]) -> None:
+    _as_string(record.get("benchmark_id"), "benchmark_id")
+    cost_axes = _as_sequence(record.get("cost_axes"), "cost_axes")
+    if not cost_axes:
+        raise LocalResultImportError("cost_axes must not be empty")
+    for index, axis in enumerate(cost_axes):
+        axis_record = _as_mapping(axis, f"cost_axes.{index}")
+        _as_string(axis_record.get("key"), f"cost_axes.{index}.key")
+        _as_string(axis_record.get("label"), f"cost_axes.{index}.label")
+    leaderboard = _as_sequence(record.get("leaderboard"), "leaderboard")
+    for index, model in enumerate(leaderboard):
+        _validate_model_result(_as_mapping(model, f"leaderboard.{index}"))
+    frontiers = _as_mapping(record.get("frontiers"), "frontiers")
+    for axis in ("parameter_count", "inference_flops", "parameter_bytes"):
+        _as_sequence(frontiers.get(axis), f"frontiers.{axis}")
+    history = _as_sequence(record.get("training_history"), "training_history")
+    for index, run in enumerate(history):
+        _validate_run_result(_as_mapping(run, f"training_history.{index}"))
+
+
+def _validate_model_result(record: Mapping[str, object]) -> None:
+    _as_string(record.get("model_key"), "model_key")
+    _as_string(record.get("architecture_digest"), "architecture_digest")
+    _as_string(record.get("benchmark_id"), "benchmark_id")
+    _as_nonnegative_number(record.get("score"), "score")
+    _as_sequence(record.get("observed_complexities"), "observed_complexities")
+    _as_sequence(record.get("points"), "points")
+    _as_mapping(record.get("cost_summary"), "cost_summary")
+    _as_sequence(record.get("run_ids"), "run_ids")
+    _as_sequence(record.get("source_kinds"), "source_kinds")
+
+
+def _validate_run_result(record: Mapping[str, object]) -> None:
+    _as_string(record.get("source_kind"), "source_kind")
+    _as_string(record.get("source_path"), "source_path")
+    _as_string(record.get("run_id"), "run_id")
+    _as_string(record.get("run_slug"), "run_slug")
+    _as_string(record.get("benchmark_id"), "benchmark_id")
+    _as_string(record.get("architecture_digest"), "architecture_digest")
+    _as_string(record.get("model_key"), "model_key")
+    _as_nonnegative_number(record.get("measurement_count"), "measurement_count")
+    _as_nonnegative_number(record.get("score"), "score")
+    _as_mapping(record.get("cost_summary"), "cost_summary")
+    _as_mapping(record.get("architecture"), "architecture")
+    _as_string(record.get("measurement_dataset_digest"), "measurement_dataset_digest")
+
+
 def _as_mapping(value: object, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise LocalResultImportError(f"{field}: expected record")
@@ -255,3 +732,43 @@ def _as_string(value: object, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise LocalResultImportError(f"{field}: expected nonempty string")
     return value
+
+
+def _as_identifier(value: object, field: str) -> ProtocolIdentifier:
+    if isinstance(value, ProtocolIdentifier):
+        return value
+    if isinstance(value, str):
+        try:
+            return ProtocolIdentifier.parse(value)
+        except ValueError as error:
+            raise LocalResultImportError(str(error)) from error
+    raise LocalResultImportError(f"{field}: expected identifier")
+
+
+def _optional_int(value: object, field: str) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int:
+        raise LocalResultImportError(f"{field}: expected integer")
+    return value
+
+
+def _as_digest(value: object, *, field: str) -> ContentDigest:
+    if not isinstance(value, str):
+        raise LocalResultImportError(f"{field}: expected digest string")
+    algorithm, separator, digest_hex = value.partition(":")
+    if separator == "":
+        raise LocalResultImportError(f"{field}: expected algorithm:digest")
+    try:
+        return ContentDigest(algorithm=algorithm, hex=digest_hex)
+    except ValueError as error:
+        raise LocalResultImportError(str(error)) from error
+
+
+def _as_nonnegative_number(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise LocalResultImportError(f"{field}: expected number")
+    numeric = float(value)
+    if numeric < 0 or not math.isfinite(numeric):
+        raise LocalResultImportError(f"{field}: expected finite nonnegative number")
+    return numeric

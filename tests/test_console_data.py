@@ -247,6 +247,71 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
 """,
         encoding="utf-8",
     )
+    (result_root / "benchmark_results.json").write_text(
+        """
+{
+  "format": "leibniz.console.benchmark-results",
+  "format_version": 1,
+  "benchmark_results": [
+    {
+      "benchmark_id": "benchmarks.digits@0.1.0",
+      "complexity_axis": "C",
+      "scale_axis": "L",
+      "cost_axes": [{"key": "parameter_count", "label": "Parameters"}],
+      "leaderboard": [
+        {
+          "model_key": "sha256:model",
+          "architecture_digest": "sha256:model",
+          "benchmark_id": "benchmarks.digits@0.1.0",
+          "score": 1.0,
+          "observed_complexities": [1.0],
+          "points": [{"complexity": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
+          "cost_summary": {
+            "layer_count": 1,
+            "parameter_count": 10,
+            "parameter_bytes": 40,
+            "inference_flops": 20,
+            "unknown_parameter_layers": []
+          },
+          "run_ids": ["run-1"],
+          "measurement_count": 1,
+          "source_kinds": ["local-run"]
+        }
+      ],
+      "frontiers": {
+        "parameter_count": [],
+        "inference_flops": [],
+        "parameter_bytes": []
+      },
+      "training_history": [
+        {
+          "source_kind": "local-run",
+          "source_path": ".runs/training/example.json",
+          "run_id": "run-1",
+          "run_slug": "run-1",
+          "benchmark_id": "benchmarks.digits@0.1.0",
+          "architecture_digest": "sha256:model",
+          "model_key": "sha256:model",
+          "scale": 1,
+          "measurement_count": 1,
+          "score": 1.0,
+          "cost_summary": {
+            "layer_count": 1,
+            "parameter_count": 10,
+            "parameter_bytes": 40,
+            "inference_flops": 20,
+            "unknown_parameter_layers": []
+          },
+          "architecture": {"kind": "architecture-manifest"},
+          "measurement_dataset_digest": "sha256:dataset"
+        }
+      ]
+    }
+  ]
+}
+""",
+        encoding="utf-8",
+    )
 
     data = ConsoleDataBuilder(_repository_root).discover(
         (PurePosixPath("tests/fixtures"),),
@@ -255,10 +320,18 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
     record = data.to_record()
     result_views = cast(list[dict[str, object]], record["result_views"])
 
-    assert len(result_views) == 1
-    assert result_views[0]["source_path"] == (result_root / "imported_results.json").as_posix()
-    bundles = cast(list[dict[str, object]], result_views[0]["publication_bundles"])
+    assert len(result_views) == 2
+    imported = next(
+        view for view in result_views if view["format"] == "leibniz.console.imported-results"
+    )
+    benchmark = next(
+        view for view in result_views if view["format"] == "leibniz.console.benchmark-results"
+    )
+    assert imported["source_path"] == (result_root / "imported_results.json").as_posix()
+    bundles = cast(list[dict[str, object]], imported["publication_bundles"])
     assert bundles[0]["measurement_count"] == 1
+    results = cast(list[dict[str, object]], benchmark["benchmark_results"])
+    assert results[0]["benchmark_id"] == "benchmarks.digits@0.1.0"
 
 
 def test_console_data_rejects_local_state_roots() -> None:
