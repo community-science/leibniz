@@ -11,6 +11,7 @@ import {
   type ObservationInspectionRecord,
 } from './observationInspections.ts';
 import { parsePerformanceViewRecords, type PerformanceViewRecord } from './performanceViews.ts';
+import { parseModelInspectionRecords, type ModelInspectionRecord } from './modelInspections.ts';
 import { parseSourceModuleRecords, type SourceModuleRecord } from './sourceModules.ts';
 
 export type ConsoleDataRecord = {
@@ -20,6 +21,7 @@ export type ConsoleDataRecord = {
   artifact_details: ConsoleArtifactDetailMap;
   observation_inspections: ObservationInspectionRecord[];
   performance_views: PerformanceViewRecord[];
+  model_inspections: ModelInspectionRecord[];
   source_modules: SourceModuleRecord[];
 };
 
@@ -38,6 +40,7 @@ export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
   const artifactDetails = parseConsoleArtifactDetailRecords(record.artifact_details);
   const observationInspections = parseObservationInspectionRecords(record.observation_inspections);
   const performanceViews = parsePerformanceViewRecords(record.performance_views);
+  const modelInspections = parseModelInspectionRecords(record.model_inspections);
   const sourceModules = parseSourceModuleRecords(record.source_modules);
 
   return {
@@ -47,6 +50,7 @@ export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
     artifact_details: artifactDetails,
     observation_inspections: observationInspections,
     performance_views: performanceViews,
+    model_inspections: modelInspections,
     source_modules: sourceModules,
   };
 }

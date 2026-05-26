@@ -100,6 +100,26 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert entries[0]["coverage"] == 2 / 3
     assert entries[0]["missing_complexities"] == [3.0]
 
+    model_inspections = cast(list[dict[str, object]], record["model_inspections"])
+    assert len(model_inspections) == 1
+    model_inspection = model_inspections[0]
+    assert model_inspection["source_path"] == (
+        "tests/fixtures/architecture/digits_pool/manifest.json"
+    )
+    assert model_inspection["input_shape"] == [1, 32, 32]
+    assert model_inspection["output_shape"] == [10]
+    assert model_inspection["cost_summary"] == {
+        "layer_count": 3,
+        "parameter_count": 50,
+        "unknown_parameter_layers": [],
+    }
+    model_layers = cast(list[dict[str, object]], model_inspection["layers"])
+    assert [(layer["kind"], layer.get("output_shape")) for layer in model_layers] == [
+        ("adaptive-pooling", [1, 2, 2]),
+        ("flatten", [4]),
+        ("dense", [10]),
+    ]
+
 
 def test_console_data_includes_public_source_module_inventory() -> None:
     data = ConsoleDataBuilder(_repository_root).discover((PurePosixPath("tests/fixtures"),))

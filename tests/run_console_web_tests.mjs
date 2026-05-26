@@ -1,12 +1,15 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { delimiter, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const testsRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(testsRoot, '..');
 const generatedPayloadPath = resolve(tmpdir(), 'leibniz-console-data.contract.json');
+const pythonPath = [resolve(repositoryRoot, 'src'), process.env.PYTHONPATH]
+  .filter((path) => path !== undefined && path !== '')
+  .join(delimiter);
 
 const contracts = [
   'tests/console_artifact_browser.contract.ts',
@@ -23,6 +26,7 @@ const generatedPayload = run(
   ['-m', 'leibniz.console.data', 'tests/fixtures', 'src/leibniz/benchmarks'],
   {
     captureOutput: true,
+    env: { PYTHONPATH: pythonPath },
   },
 );
 writeFileSync(generatedPayloadPath, generatedPayload);

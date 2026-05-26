@@ -1,12 +1,10 @@
-import {
-  ConsoleDataTransportError,
-  parseConsoleDataRecord,
-} from '../src/leibniz/console/_web_src/src/consoleData.ts';
+import { parseConsoleDataRecord } from '../src/leibniz/console/_web_src/src/consoleData.ts';
 import { detailForArtifact } from '../src/leibniz/console/_web_src/src/artifactDetails.ts';
 
 declare const consoleDataPayload: unknown;
 
 const parsed = parseConsoleDataRecord(consoleDataPayload);
+const rawConsoleData = consoleDataPayload as Record<string, unknown>;
 const artifacts = parsed.artifact_index.artifacts;
 const detailCoverage = artifacts.map((artifact) =>
   detailForArtifact(parsed.artifact_details, artifact),
@@ -14,6 +12,10 @@ const detailCoverage = artifacts.map((artifact) =>
 const consoleDataSource = parsed.source_modules.find(
   (sourceModule) => sourceModule.module_name === 'leibniz.console.data',
 );
+const modelInspection = parsed.model_inspections[0];
+if (modelInspection === undefined) {
+  throw new Error('expected model inspection fixture');
+}
 
 assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
@@ -21,6 +23,7 @@ assertEqual(artifacts.length, 13, 'artifact count');
 assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detail coverage');
 assertEqual(parsed.observation_inspections.length, 2, 'observation inspection count');
 assertEqual(parsed.performance_views.length, 1, 'performance view count');
+assertEqual(parsed.model_inspections.length, 1, 'model inspection count');
 assertEqual(parsed.source_modules.length > 20, true, 'source module count');
 assertEqual(consoleDataSource?.source_path, 'src/leibniz/console/data.py', 'console data source path');
 assertEqual(
@@ -73,6 +76,16 @@ assertEqual(
   'performance measurement count',
 );
 assertEqual(
+  modelInspection.cost_summary.parameter_count,
+  50,
+  'model inspection parameter count',
+);
+assertEqual(
+  modelInspection.layers.map((layer) => layer.kind).join(','),
+  'adaptive-pooling,flatten,dense',
+  'model inspection layers',
+);
+assertEqual(
   artifacts
     .filter((artifact) => artifact.kind === 'measurement')
     .map((artifact) => artifact.dependencies[0]?.protocol_id)
@@ -83,6 +96,14 @@ assertEqual(
 assertDataError(
   () => parseConsoleDataRecord({ ...parsed, format_version: 2 }),
   'format_version: expected 1',
+);
+assertDataError(
+  () =>
+    parseConsoleDataRecord({
+      ...rawConsoleData,
+      model_inspections: [{ ...modelInspection, layers: [{ index: '0' }] }],
+    }),
+  'model inspections.0.layers.0.index: expected number',
 );
 
 function assertEqual(actual: unknown, expected: unknown, label: string) {
@@ -95,7 +116,7 @@ function assertDataError(callback: () => void, expectedMessage: string) {
   try {
     callback();
   } catch (error) {
-    if (error instanceof ConsoleDataTransportError && error.message === expectedMessage) {
+    if (error instanceof Error && error.message === expectedMessage) {
       return;
     }
     throw error;

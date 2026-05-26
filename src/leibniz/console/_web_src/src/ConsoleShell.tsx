@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Cpu,
   Database,
   FileJson,
   FolderTree,
@@ -10,6 +11,7 @@ import {
 import { useState } from 'react';
 
 import { ArtifactBrowser } from './ArtifactBrowser';
+import { ModelInspectionPanel } from './ModelInspectionPanel';
 import { ObservationInspectionPanel } from './ObservationInspectionPanel';
 import { PerformanceViewPanel } from './PerformanceViewPanel';
 import { SourceModuleInventory } from './SourceModuleInventory';
@@ -21,7 +23,7 @@ type ConsoleSection = {
   description: string;
 };
 
-type TabId = 'home' | 'artifacts' | 'data' | 'performance' | 'source';
+type TabId = 'home' | 'artifacts' | 'data' | 'performance' | 'models' | 'source';
 
 type ConsoleTab = {
   id: TabId;
@@ -33,6 +35,7 @@ const tabs: ConsoleTab[] = [
   { id: 'artifacts', label: 'Artifacts' },
   { id: 'data', label: 'Data' },
   { id: 'performance', label: 'Performance' },
+  { id: 'models', label: 'Models' },
   { id: 'source', label: 'Source' },
 ];
 
@@ -62,6 +65,11 @@ const sections: ConsoleSection[] = [
     label: 'Performance',
     description: 'Derived competence-integral views over benchmark-owned measurement cases.',
   },
+  {
+    id: 'models',
+    label: 'Models',
+    description: 'Read-only architecture, dimensionality, cost, and model source inspection.',
+  },
 ];
 
 export function ConsoleShell() {
@@ -89,6 +97,8 @@ export function ConsoleShell() {
               <Images size={16} />
             ) : tab.id === 'performance' ? (
               <BarChart3 size={16} />
+            ) : tab.id === 'models' ? (
+              <Cpu size={16} />
             ) : (
               <FolderTree size={16} />
             )}
@@ -111,6 +121,8 @@ export function ConsoleShell() {
                     <Images size={20} />
                   ) : section.id === 'performance' ? (
                     <BarChart3 size={20} />
+                  ) : section.id === 'models' ? (
+                    <Cpu size={20} />
                   ) : (
                     <FileJson size={20} />
                   )}
@@ -137,6 +149,10 @@ export function ConsoleShell() {
 
         <div className="console-overview" hidden={currentTab !== 'performance'}>
           <PerformanceViewPanel views={consoleData.performance_views} />
+        </div>
+
+        <div className="console-overview" hidden={currentTab !== 'models'}>
+          <ModelInspectionPanel inspections={consoleData.model_inspections} />
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'source'}>
