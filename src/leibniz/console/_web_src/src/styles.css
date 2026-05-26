@@ -65,10 +65,7 @@
   --model-layer-min: 220px;
   --model-source-label-min: 132px;
   --benchmark-list-width: 300px;
-  --benchmark-sample-min: calc(
-    var(--benchmark-preview-size) + var(--benchmark-label-min) + var(--space-lg) + var(--space-lg) +
-      var(--space-lg)
-  );
+  --benchmark-sample-min: calc(var(--benchmark-preview-size) + var(--space-xl) + var(--space-xl));
   --benchmark-compact-sample-min: 132px;
   --benchmark-preview-size: 128px;
   --benchmark-compact-preview-size: 96px;
@@ -1648,7 +1645,8 @@ p {
 
 .benchmark-sample-card {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: 1fr;
+  justify-items: center;
   gap: var(--space-lg);
   width: 100%;
   border: var(--line-thin) solid transparent;
@@ -1703,12 +1701,16 @@ p {
 
 .benchmark-sample-card dl {
   display: grid;
-  grid-template-columns: minmax(0, var(--benchmark-label-min)) minmax(0, 1fr);
-  gap: var(--space-xs) var(--space-md);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-sm);
   align-content: start;
   width: 100%;
   min-width: 0;
   margin: 0;
+}
+
+.benchmark-sample-card dl div {
+  min-width: 0;
 }
 
 .benchmark-sample-card dt {
@@ -1724,6 +1726,38 @@ p {
   overflow-wrap: anywhere;
   color: var(--text-primary);
   font-size: var(--font-meta);
+}
+
+.benchmark-sample-card-body,
+.benchmark-sample-card-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+
+.benchmark-sample-card-body {
+  gap: var(--space-md);
+}
+
+.benchmark-sample-card-title {
+  gap: var(--space-3xs);
+  text-align: center;
+}
+
+.benchmark-sample-card-title strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: var(--font-panel-title);
+  line-height: var(--line-tight);
+}
+
+.benchmark-sample-card-title span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: var(--font-status);
 }
 
 .benchmark-sample-detail {

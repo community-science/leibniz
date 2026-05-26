@@ -745,20 +745,30 @@ function BenchmarkSampleCard({
           <span>{sample.outcome_id}</span>
         </div>
       ) : (
-        <dl>
-          <dt>Outcome</dt>
-          <dd>{sample.outcome_id}</dd>
-          <dt>Sequence</dt>
-          <dd>{sample.component_sequence.join(', ')}</dd>
-          <dt>Complexity</dt>
-          <dd>{sample.complexity}</dd>
-          <dt>Shape</dt>
-          <dd>{sample.field_shape.join(' x ')}</dd>
-          <dt>Content DOF</dt>
-          <dd>{content?.multiplicity ?? 'n/a'}</dd>
-          <dt>Nuisance DOF</dt>
-          <dd>{nuisance?.multiplicity ?? 'n/a'}</dd>
-        </dl>
+        <div className="benchmark-sample-card-body">
+          <div className="benchmark-sample-card-title">
+            <strong>{sample.component_sequence.join('')}</strong>
+            <span>{sample.outcome_id}</span>
+          </div>
+          <dl>
+            <div>
+              <dt>Complexity</dt>
+              <dd>{sample.complexity}</dd>
+            </div>
+            <div>
+              <dt>Shape</dt>
+              <dd>{sample.field_shape.join(' x ')}</dd>
+            </div>
+            <div>
+              <dt>Content</dt>
+              <dd>{content?.multiplicity ?? 'n/a'}</dd>
+            </div>
+            <div>
+              <dt>Nuisance</dt>
+              <dd>{nuisance?.multiplicity ?? 'n/a'}</dd>
+            </div>
+          </dl>
+        </div>
       )}
     </button>
   );
