@@ -541,6 +541,84 @@ p {
   text-align: right;
 }
 
+.source-inventory {
+  max-width: var(--content-wide);
+  margin: 0 auto;
+  padding: var(--space-6xl);
+}
+
+.source-module-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.source-module-row {
+  display: grid;
+  grid-template-columns: var(--icon-size-md) minmax(0, 1fr);
+  gap: var(--space-xl);
+  align-items: start;
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--panel-bg-subtle);
+  padding: var(--space-xl);
+}
+
+.source-module-main h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--font-body);
+  line-height: var(--line-title);
+}
+
+.source-module-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-xl);
+  margin-top: var(--space-lg);
+}
+
+.source-module-section h4 {
+  margin: 0 0 var(--space-sm);
+  color: var(--text-dim);
+  font-size: var(--font-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.source-module-section ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.source-module-section li {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--space-xs);
+  border: var(--line-thin) solid var(--border-color-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-soft);
+  background: var(--metric-bg);
+  padding: var(--space-2xs) var(--space-sm);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-status);
+}
+
+.source-module-section span {
+  overflow-wrap: anywhere;
+}
+
+.source-module-section p {
+  color: var(--text-secondary);
+  font-size: var(--font-path);
+}
+
 @media (max-width: 820px) {
   .mission-header,
   .tab-navigation {
@@ -565,6 +643,10 @@ p {
     padding: var(--space-4xl);
   }
 
+  .source-inventory {
+    padding: var(--space-4xl);
+  }
+
   .artifact-browser-header {
     align-items: stretch;
     flex-direction: column;
@@ -584,6 +666,11 @@ p {
   }
 
   .artifact-row {
+    grid-template-columns: 1fr;
+  }
+
+  .source-module-row,
+  .source-module-sections {
     grid-template-columns: 1fr;
   }
 

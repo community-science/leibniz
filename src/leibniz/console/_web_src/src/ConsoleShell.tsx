@@ -2,6 +2,7 @@ import { Database, FileJson, FolderTree, Network, ScrollText } from 'lucide-reac
 import { useState } from 'react';
 
 import { ArtifactBrowser } from './ArtifactBrowser';
+import { SourceModuleInventory } from './SourceModuleInventory';
 import consoleData from 'virtual:leibniz-console-data';
 
 type ConsoleSection = {
@@ -101,17 +102,7 @@ export function ConsoleShell() {
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'source'}>
-          <section className="console-grid" aria-label="Source views">
-            <article className="console-section">
-              <div className="section-icon" aria-hidden="true">
-                <FolderTree size={20} />
-              </div>
-              <div>
-                <h2>Source</h2>
-                <p>Public package modules, exports, tests, and validation commands.</p>
-              </div>
-            </article>
-          </section>
+          <SourceModuleInventory modules={consoleData.source_modules} />
         </div>
       </section>
     </main>

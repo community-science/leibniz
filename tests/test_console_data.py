@@ -48,6 +48,28 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert {artifact["validation_status"] for artifact in artifacts} == {"valid"}
 
 
+def test_console_data_includes_public_source_module_inventory() -> None:
+    data = ConsoleDataBuilder(_repository_root).discover((PurePosixPath("tests/fixtures"),))
+    record = data.to_record()
+    modules = {
+        source_module["module_name"]: source_module
+        for source_module in cast(list[dict[str, object]], record["source_modules"])
+    }
+
+    assert "leibniz.console.data" in modules
+    console_data = modules["leibniz.console.data"]
+
+    assert console_data["source_path"] == "src/leibniz/console/data.py"
+    assert console_data["public_exports"] == [
+        "ConsoleData",
+        "ConsoleDataBuilder",
+        "ConsoleDataValidationError",
+    ]
+    validation_commands = cast(list[str], console_data["validation_commands"])
+    assert "python -m pytest tests/test_console_data.py" in validation_commands
+    assert "python -m pytest tests/test_public_surface.py" in validation_commands
+
+
 def test_console_data_payload_is_a_canonical_object_document() -> None:
     data = ConsoleDataBuilder(_repository_root).discover((PurePosixPath("tests/fixtures"),))
 

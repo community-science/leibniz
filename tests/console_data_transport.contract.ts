@@ -11,11 +11,26 @@ const artifacts = parsed.artifact_index.artifacts;
 const detailCoverage = artifacts.map((artifact) =>
   detailForArtifact(parsed.artifact_details, artifact),
 );
+const consoleDataSource = parsed.source_modules.find(
+  (sourceModule) => sourceModule.module_name === 'leibniz.console.data',
+);
 
 assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
 assertEqual(artifacts.length, 5, 'artifact count');
 assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detail coverage');
+assertEqual(parsed.source_modules.length > 20, true, 'source module count');
+assertEqual(consoleDataSource?.source_path, 'src/leibniz/console/data.py', 'console data source path');
+assertEqual(
+  consoleDataSource?.public_exports.join(','),
+  'ConsoleData,ConsoleDataBuilder,ConsoleDataValidationError',
+  'console data exports',
+);
+assertEqual(
+  consoleDataSource?.validation_commands.includes('python -m pytest tests/test_console_data.py'),
+  true,
+  'console data validation command',
+);
 assertEqual(
   artifacts.map((artifact) => `${artifact.kind}:${artifact.source_path}`).join('|'),
   [
