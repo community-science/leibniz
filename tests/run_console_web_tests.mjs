@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { delimiter, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,7 @@ const pythonPath = [resolve(repositoryRoot, 'src'), process.env.PYTHONPATH]
 
 const contracts = [
   'tests/console_artifact_browser.contract.ts',
+  'tests/console_benchmark_dashboard.contract.ts',
   'tests/console_data_transport.contract.ts',
   'tests/console_artifact_index_transport.contract.ts',
 ];
@@ -78,6 +79,9 @@ function assertShellUsesGeneratedConsoleData() {
   if (shell.includes("{ id: 'data', label: 'Data' }")) {
     throw new Error('ConsoleShell must not expose a top-level Data tab');
   }
+  if (shell.includes("{ id: 'performance', label: 'Performance' }")) {
+    throw new Error('ConsoleShell must not expose a top-level Performance tab');
+  }
 }
 
 function assertBenchmarkWebSourceIsDataDriven() {
@@ -93,13 +97,8 @@ function assertBenchmarkWebSourceIsDataDriven() {
     /['"]symbol-probe['"]/,
     /['"]complexity-sweep['"]/,
   ];
-  for (const relativePath of [
-    'BenchmarksPanel.tsx',
-    'benchmarkTasks.ts',
-    'consoleData.ts',
-    'styles.css',
-  ]) {
-    const path = resolve(sourceRoot, relativePath);
+  for (const path of webSourceFiles(sourceRoot)) {
+    const relativePath = path.slice(sourceRoot.length + 1);
     const source = readFileSync(path, 'utf8');
     for (const pattern of bannedPatterns) {
       if (pattern.test(source)) {
@@ -107,6 +106,18 @@ function assertBenchmarkWebSourceIsDataDriven() {
       }
     }
   }
+}
+
+function webSourceFiles(root) {
+  return readdirSync(root)
+    .flatMap((entry) => {
+      const path = resolve(root, entry);
+      if (statSync(path).isDirectory()) {
+        return webSourceFiles(path);
+      }
+      return [path];
+    })
+    .filter((path) => /\.(css|ts|tsx)$/.test(path));
 }
 
 function run(command, args, options = {}) {

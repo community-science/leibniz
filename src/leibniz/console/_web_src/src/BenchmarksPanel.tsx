@@ -1,22 +1,65 @@
-import { Activity, Gauge } from 'lucide-react';
+import { Activity, BarChart3, Boxes, Gauge, Images } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
+import { BenchmarkPerformanceBundle } from './BenchmarkPerformanceBundle.tsx';
+import { BenchmarkResultDashboard } from './BenchmarkResultDashboard.tsx';
+import {
+  benchmarkResultsForTask,
+  costValue,
+  formatCost,
+  modelComparisonRows,
+  performanceViewsForTask,
+  scoreLabel,
+  shortDigest,
+} from './benchmarkDashboardModel.ts';
 import type {
   BenchmarkTaskRecord,
   GeneratedObservationBatchRecord,
   GeneratedObservationSampleRecord,
 } from './benchmarkTasks.ts';
+import type { ModelInspectionRecord } from './modelInspections.ts';
+import type { PerformanceViewRecord } from './performanceViews.ts';
+import type { BenchmarkResultRecord, ResultViewRecord } from './resultViews.ts';
 
 type SampleCardDensity = 'standard' | 'compact';
+type BenchmarkPane = 'samples' | 'performance' | 'models';
+
+const benchmarkPanes: { id: BenchmarkPane; label: string; icon: ReactNode }[] = [
+  { id: 'samples', label: 'Samples', icon: <Images size={16} /> },
+  { id: 'performance', label: 'Performance', icon: <BarChart3 size={16} /> },
+  { id: 'models', label: 'Models', icon: <Boxes size={16} /> },
+];
 
 export function BenchmarksPanel({
+  modelInspections,
+  performanceViews,
+  resultViews,
   tasks,
 }: {
+  modelInspections: ModelInspectionRecord[];
+  performanceViews: PerformanceViewRecord[];
+  resultViews: ResultViewRecord[];
   tasks: BenchmarkTaskRecord[];
 }) {
   const [selectedBenchmarkId, setSelectedBenchmarkId] = useState(tasks[0]?.benchmark_id ?? '');
+  const [currentPane, setCurrentPane] = useState<BenchmarkPane>('samples');
   const selected = tasks.find((task) => task.benchmark_id === selectedBenchmarkId) ?? tasks[0];
+  const benchmarkResults = useMemo(
+    () =>
+      selected === undefined
+        ? []
+        : benchmarkResultsForTask(resultViews, selected.benchmark_id),
+    [resultViews, selected],
+  );
+  const selectedResult = benchmarkResults[0];
+  const benchmarkPerformanceViews = useMemo(
+    () =>
+      selected === undefined
+        ? []
+        : performanceViewsForTask(performanceViews, selected.benchmark_id),
+    [performanceViews, selected],
+  );
 
   if (selected === undefined) {
     return (
@@ -47,10 +90,121 @@ export function BenchmarksPanel({
             <h2>{selected.label}</h2>
             <p>{selected.source_path}</p>
           </div>
+          <nav className="benchmark-pane-tabs" aria-label="Benchmark panes">
+            {benchmarkPanes.map((pane) => (
+              <button
+                className={`benchmark-pane-tab ${currentPane === pane.id ? 'active' : ''}`}
+                key={pane.id}
+                onClick={() => setCurrentPane(pane.id)}
+                type="button"
+              >
+                {pane.icon}
+                {pane.label}
+              </button>
+            ))}
+          </nav>
         </div>
-        <BenchmarkTaskPane task={selected} />
+        {currentPane === 'samples' ? (
+          <BenchmarkTaskPane task={selected} />
+        ) : currentPane === 'performance' ? (
+          <BenchmarkPerformancePane
+            performanceViews={benchmarkPerformanceViews}
+            resultEntry={selectedResult}
+          />
+        ) : (
+          <BenchmarkModelsPane
+            inspections={modelInspections}
+            result={selectedResult?.result}
+          />
+        )}
       </div>
     </section>
+  );
+}
+
+function BenchmarkPerformancePane({
+  performanceViews,
+  resultEntry,
+}: {
+  performanceViews: PerformanceViewRecord[];
+  resultEntry:
+    | {
+        sourcePath: string;
+        result: BenchmarkResultRecord;
+      }
+    | undefined;
+}) {
+  if (resultEntry === undefined && performanceViews.length === 0) {
+    return (
+      <div className="benchmark-task">
+        <p className="artifact-detail-note">No benchmark performance records are available.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="benchmark-task">
+      {resultEntry === undefined ? null : (
+        <BenchmarkResultDashboard
+          result={resultEntry.result}
+          sourcePath={resultEntry.sourcePath}
+        />
+      )}
+      {performanceViews.map((view) => (
+        <BenchmarkPerformanceBundle key={view.id} view={view} />
+      ))}
+    </div>
+  );
+}
+
+function BenchmarkModelsPane({
+  inspections,
+  result,
+}: {
+  inspections: ModelInspectionRecord[];
+  result: BenchmarkResultRecord | undefined;
+}) {
+  const rows = modelComparisonRows(result, inspections);
+  const costAxis = result?.cost_axes[0]?.key ?? 'parameter_count';
+
+  if (rows.length === 0) {
+    return (
+      <div className="benchmark-task">
+        <p className="artifact-detail-note">No benchmark model comparisons are available.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="benchmark-task">
+      <section className="benchmark-result-table-section">
+        <h3>Model Comparison</h3>
+        <div className="benchmark-model-grid">
+          {rows.map(({ inspection, model }) => (
+            <article className="benchmark-model-card" key={model.model_key}>
+              <div className="benchmark-model-heading">
+                <strong>{shortDigest(model.architecture_digest)}</strong>
+                <span>{scoreLabel(model.score)}</span>
+              </div>
+              <dl>
+                <dt>Cost</dt>
+                <dd>{formatCost(costValue(model.cost_summary, costAxis))}</dd>
+                <dt>Complexity</dt>
+                <dd>{model.observed_complexities.join(', ') || 'none'}</dd>
+                <dt>Measurements</dt>
+                <dd>{model.measurement_count}</dd>
+                <dt>Runs</dt>
+                <dd>{model.run_ids.length}</dd>
+                <dt>Layers</dt>
+                <dd>{inspection?.layers.length ?? model.cost_summary.layer_count}</dd>
+                <dt>Source</dt>
+                <dd>{model.source_kinds.join(', ') || 'unknown'}</dd>
+              </dl>
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
   );
 }
 
