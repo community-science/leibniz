@@ -123,14 +123,34 @@ class ConsoleArtifactIndexBuilder:
         source_tuple = tuple(sources)
         return ConsoleArtifactIndex(tuple(self._entry_for(source) for source in source_tuple))
 
+    @staticmethod
+    def supported_kinds() -> tuple[str, ...]:
+        """Return the public document kinds supported by the console artifact index."""
+
+        return tuple(_artifact_loaders)
+
+    @staticmethod
+    def load_supported_artifact(kind: str, data: bytes) -> _LoadedArtifact:
+        """Load a document for one of the console artifact index's supported kinds."""
+
+        try:
+            loader = _artifact_loaders[kind]
+        except KeyError as error:
+            raise ConsoleArtifactIndexValidationError(
+                f"unsupported document kind: {kind}"
+            ) from error
+        return loader(data)
+
     def _entry_for(self, source: ConsoleArtifactIndexSource) -> ConsoleArtifactIndexEntry:
         path = self._repository_path(source.source_path)
         if not path.is_file():
             raise ConsoleArtifactIndexValidationError(
                 f"source_path does not name a file: {source.source_path}"
             )
-        loader = _artifact_loaders[source.kind]
-        protocol_id, record, digest, dependencies = loader(path.read_bytes())
+        protocol_id, record, digest, dependencies = self.load_supported_artifact(
+            source.kind,
+            path.read_bytes(),
+        )
         reference = ArtifactReference(
             kind=source.kind,
             protocol_id=protocol_id,

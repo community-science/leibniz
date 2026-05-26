@@ -1,0 +1,60 @@
+import {
+  ConsoleDataTransportError,
+  parseConsoleDataRecord,
+} from '../src/leibniz/console/_web_src/src/consoleData.ts';
+import { detailForArtifact } from '../src/leibniz/console/_web_src/src/artifactDetails.ts';
+
+declare const consoleDataPayload: unknown;
+
+const parsed = parseConsoleDataRecord(consoleDataPayload);
+const artifacts = parsed.artifact_index.artifacts;
+const detailCoverage = artifacts.map((artifact) =>
+  detailForArtifact(parsed.artifact_details, artifact),
+);
+
+assertEqual(parsed.format, 'leibniz.console-data', 'format');
+assertEqual(parsed.format_version, 1, 'format version');
+assertEqual(artifacts.length, 5, 'artifact count');
+assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detail coverage');
+assertEqual(
+  artifacts.map((artifact) => `${artifact.kind}:${artifact.source_path}`).join('|'),
+  [
+    'architecture-manifest:tests/fixtures/architecture/digits_pool/manifest.json',
+    'benchmark-manifest:tests/fixtures/chess/mate_in_one/manifest.json',
+    'benchmark-manifest:tests/fixtures/finite_outcome/manifest.json',
+    'measurement:tests/fixtures/chess/mate_in_one/measurement.json',
+    'measurement:tests/fixtures/finite_outcome/measurement.json',
+  ].join('|'),
+  'artifact order',
+);
+assertEqual(
+  artifacts
+    .filter((artifact) => artifact.kind === 'measurement')
+    .map((artifact) => artifact.dependencies[0]?.protocol_id)
+    .join(','),
+  'benchmarks.chess@0.1.0,core.boolean-benchmark@0.1.0',
+  'measurement dependencies',
+);
+assertDataError(
+  () => parseConsoleDataRecord({ ...parsed, format_version: 2 }),
+  'format_version: expected 1',
+);
+
+function assertEqual(actual: unknown, expected: unknown, label: string) {
+  if (actual !== expected) {
+    throw new Error(`${label}: expected ${String(expected)}, got ${String(actual)}`);
+  }
+}
+
+function assertDataError(callback: () => void, expectedMessage: string) {
+  try {
+    callback();
+  } catch (error) {
+    if (error instanceof ConsoleDataTransportError && error.message === expectedMessage) {
+      return;
+    }
+    throw error;
+  }
+
+  throw new Error(`expected console data transport error: ${expectedMessage}`);
+}
