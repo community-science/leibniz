@@ -4,6 +4,8 @@ export type ImportedResultViewRecord = {
   format: 'leibniz.console.imported-results';
   format_version: 1;
   source_path: string;
+  source_mtime_ms?: number;
+  source_size_bytes?: number;
   publication_bundles: ImportedPublicationBundleRecord[];
 };
 
@@ -29,6 +31,8 @@ export type BenchmarkResultViewRecord = {
   format: 'leibniz.console.benchmark-results';
   format_version: 1;
   source_path: string;
+  source_mtime_ms?: number;
+  source_size_bytes?: number;
   benchmark_results: BenchmarkResultRecord[];
 };
 
@@ -139,6 +143,8 @@ function parseImportedResultViewRecord(
   const format = requireLiteral(record.format, `${path}.format`, 'leibniz.console.imported-results');
   const formatVersion = requireLiteral(record.format_version, `${path}.format_version`, 1);
   const sourcePath = requireString(record.source_path, `${path}.source_path`);
+  const sourceMtimeMs = optionalNumber(record.source_mtime_ms, `${path}.source_mtime_ms`);
+  const sourceSizeBytes = optionalNumber(record.source_size_bytes, `${path}.source_size_bytes`);
   const publicationBundles = requireArray(
     record.publication_bundles,
     `${path}.publication_bundles`,
@@ -149,6 +155,8 @@ function parseImportedResultViewRecord(
     format,
     format_version: formatVersion,
     source_path: sourcePath,
+    source_mtime_ms: sourceMtimeMs,
+    source_size_bytes: sourceSizeBytes,
     publication_bundles: publicationBundles,
   };
 }
@@ -160,6 +168,8 @@ function parseBenchmarkResultViewRecord(
   const format = requireLiteral(record.format, `${path}.format`, 'leibniz.console.benchmark-results');
   const formatVersion = requireLiteral(record.format_version, `${path}.format_version`, 1);
   const sourcePath = requireString(record.source_path, `${path}.source_path`);
+  const sourceMtimeMs = optionalNumber(record.source_mtime_ms, `${path}.source_mtime_ms`);
+  const sourceSizeBytes = optionalNumber(record.source_size_bytes, `${path}.source_size_bytes`);
   const benchmarkResults = requireArray(
     record.benchmark_results,
     `${path}.benchmark_results`,
@@ -168,6 +178,8 @@ function parseBenchmarkResultViewRecord(
     format,
     format_version: formatVersion,
     source_path: sourcePath,
+    source_mtime_ms: sourceMtimeMs,
+    source_size_bytes: sourceSizeBytes,
     benchmark_results: benchmarkResults,
   };
 }

@@ -130,7 +130,9 @@ const resultViews: ResultViewRecord[] = [
     ],
     format: 'leibniz.console.benchmark-results',
     format_version: 1,
+    source_mtime_ms: 123456789,
     source_path: 'results/benchmark_results.json',
+    source_size_bytes: 4096,
   },
 ];
 const inspections: ModelInspectionRecord[] = [
@@ -164,6 +166,16 @@ const inspections: ModelInspectionRecord[] = [
 ];
 assertEqual(benchmarkResultsForTask(resultViews, targetBenchmark).length, 1, 'target results');
 assertEqual(benchmarkResultsForTask(resultViews, otherBenchmark).length, 1, 'other results');
+assertEqual(
+  benchmarkResultsForTask(resultViews, targetBenchmark)[0]?.sourceMtimeMs,
+  123456789,
+  'result view source mtime',
+);
+assertEqual(
+  benchmarkResultsForTask(resultViews, targetBenchmark)[0]?.sourceSizeBytes,
+  4096,
+  'result view source size',
+);
 assertEqual(
   modelComparisonRows(result, inspections)[0]?.inspection?.id,
   'inspection-a',

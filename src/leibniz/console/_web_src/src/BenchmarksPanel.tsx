@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 
 import { BenchmarkResultDashboard } from './BenchmarkResultDashboard.tsx';
 import {
+  type BenchmarkResultEntry,
   benchmarkResultsForTask,
   costValue,
   formatCost,
@@ -121,10 +122,7 @@ function BenchmarkPerformancePane({
 }: {
   benchmark: BenchmarkTaskRecord;
   resultEntry:
-    | {
-        sourcePath: string;
-        result: BenchmarkResultRecord;
-      }
+    | BenchmarkResultEntry
     | undefined;
 }) {
   const result = resultEntry?.result ?? emptyBenchmarkResult(benchmark);
@@ -132,11 +130,70 @@ function BenchmarkPerformancePane({
 
   return (
     <div className="benchmark-task">
+      <ResultSourceStatus result={result} resultEntry={resultEntry} />
       <BenchmarkResultDashboard
         result={result}
         sourcePath={sourcePath}
       />
     </div>
+  );
+}
+
+function ResultSourceStatus({
+  result,
+  resultEntry,
+}: {
+  result: BenchmarkResultRecord;
+  resultEntry: BenchmarkResultEntry | undefined;
+}) {
+  const status = resultEntry === undefined ? 'Awaiting result view' : 'Loaded result view';
+  const updatedAt =
+    resultEntry?.sourceMtimeMs === undefined
+      ? 'Not reported'
+      : new Intl.DateTimeFormat(undefined, {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        }).format(new Date(resultEntry.sourceMtimeMs));
+  const size =
+    resultEntry?.sourceSizeBytes === undefined
+      ? 'Not reported'
+      : new Intl.NumberFormat(undefined, {
+          maximumFractionDigits: 1,
+          minimumFractionDigits: 0,
+          style: 'unit',
+          unit: 'byte',
+          unitDisplay: 'narrow',
+        }).format(resultEntry.sourceSizeBytes);
+
+  return (
+    <section className="benchmark-result-source" aria-label="Result source">
+      <div>
+        <span>{status}</span>
+        <p>{resultEntry?.sourcePath ?? 'Materialize benchmark results into .runs/views to populate the frontier.'}</p>
+      </div>
+      <dl>
+        <div>
+          <dt>Updated</dt>
+          <dd>{updatedAt}</dd>
+        </div>
+        <div>
+          <dt>Size</dt>
+          <dd>{size}</dd>
+        </div>
+        <div>
+          <dt>Models</dt>
+          <dd>{result.leaderboard.length}</dd>
+        </div>
+        <div>
+          <dt>Runs</dt>
+          <dd>{result.training_history.length}</dd>
+        </div>
+        <div>
+          <dt>Proposals</dt>
+          <dd>{result.proposals.length}</dd>
+        </div>
+      </dl>
+    </section>
   );
 }
 

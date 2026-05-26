@@ -1,8 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { delimiter, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import {
+  consoleResultRoots,
+  resultRootArguments,
+} from '../src/leibniz/console/_web_src/vite.config.mjs';
 
 const testsRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(testsRoot, '..');
@@ -33,6 +37,7 @@ const generatedPayload = run(
 writeFileSync(generatedPayloadPath, generatedPayload);
 assertShellUsesGeneratedConsoleData();
 assertBenchmarkWebSourceIsDataDriven();
+assertConsoleResultRootPolicy();
 
 for (const contract of contracts) {
   run('tsc', [
@@ -108,6 +113,34 @@ function assertBenchmarkWebSourceIsDataDriven() {
   }
 }
 
+function assertConsoleResultRootPolicy() {
+  const tempRoot = mkdtempSync(resolve(tmpdir(), 'leibniz-console-roots-'));
+  try {
+    assertEqual(consoleResultRoots({}, tempRoot).length, 0, 'missing default result root');
+    const defaultRoot = resolve(tempRoot, '.runs/views');
+    mkdirSync(defaultRoot, { recursive: true });
+    assertEqual(consoleResultRoots({}, tempRoot)[0], defaultRoot, 'default result root');
+
+    const explicitRoot = resolve(tempRoot, 'publication-results');
+    const explicitMissingRoot = resolve(tempRoot, 'missing-results');
+    const env = {
+      LEIBNIZ_CONSOLE_RESULT_ROOTS: [explicitRoot, explicitMissingRoot].join(delimiter),
+    };
+    assertEqual(
+      consoleResultRoots(env, tempRoot).join('|'),
+      [explicitRoot, explicitMissingRoot].join('|'),
+      'explicit result roots',
+    );
+    assertEqual(
+      resultRootArguments([explicitRoot]).join('|'),
+      ['--result-root', explicitRoot].join('|'),
+      'result root arguments',
+    );
+  } finally {
+    rmSync(tempRoot, { force: true, recursive: true });
+  }
+}
+
 function webSourceFiles(root) {
   return readdirSync(root)
     .flatMap((entry) => {
@@ -118,6 +151,12 @@ function webSourceFiles(root) {
       return [path];
     })
     .filter((path) => /\.(css|ts|tsx)$/.test(path));
+}
+
+function assertEqual(actual, expected, label) {
+  if (actual !== expected) {
+    throw new Error(`${label}: expected ${String(expected)}, got ${String(actual)}`);
+  }
 }
 
 function run(command, args, options = {}) {
