@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
-from leibniz.architectures import ArchitectureLayer, ArchitectureManifest
+from leibniz.architectures import ArchitectureManifest
 from leibniz.artifacts import ArtifactReference, reference_for_record
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.model_manifests import ModelArtifactManifest
+from leibniz.model_operators import summarize_architecture_operators
 from leibniz.records import FieldSpec, RecordSpec
 from leibniz.submissions import SubmissionPackageManifest
 
@@ -35,16 +35,26 @@ _layer_record = RecordSpec(
             item=FieldSpec(kind="integer"),
             required=False,
         ),
+        "operator": FieldSpec(kind="record", required=False),
         "parameter_count": FieldSpec(kind="integer", required=False),
+        "parameter_bytes": FieldSpec(kind="integer", required=False),
+        "inference_flops": FieldSpec(kind="integer", required=False),
     }
 )
 _cost_summary_record = RecordSpec(
     fields={
         "layer_count": FieldSpec(kind="integer"),
         "parameter_count": FieldSpec(kind="integer", required=False),
+        "parameter_bytes": FieldSpec(kind="integer", required=False),
+        "inference_flops": FieldSpec(kind="integer", required=False),
         "unknown_parameter_layers": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="integer"),
+        ),
+        "unknown_flop_layers": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="integer"),
+            required=False,
         ),
     }
 )
@@ -87,7 +97,10 @@ class ModelInspectionLayer:
     parameters: Mapping[str, object]
     input_shape: tuple[int, ...] | None = None
     output_shape: tuple[int, ...] | None = None
+    operator: Mapping[str, object] | None = None
     parameter_count: int | None = None
+    parameter_bytes: int | None = None
+    inference_flops: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.index) is not int:
@@ -98,8 +111,17 @@ class ModelInspectionLayer:
             raise ModelInspectionValidationError("kind must be nonempty")
         _require_shape(self.input_shape, field="input_shape", allow_none=True)
         _require_shape(self.output_shape, field="output_shape", allow_none=True)
+        if self.operator is not None:
+            try:
+                ContentDigest.from_value(self.operator)
+            except ContentEncodingError as error:
+                raise ModelInspectionValidationError(str(error)) from error
         if self.parameter_count is not None and self.parameter_count < 0:
             raise ModelInspectionValidationError("parameter_count must be nonnegative")
+        if self.parameter_bytes is not None and self.parameter_bytes < 0:
+            raise ModelInspectionValidationError("parameter_bytes must be nonnegative")
+        if self.inference_flops is not None and self.inference_flops < 0:
+            raise ModelInspectionValidationError("inference_flops must be nonnegative")
         try:
             ContentDigest.from_value(self.to_record())
         except ContentEncodingError as error:
@@ -117,9 +139,18 @@ class ModelInspectionLayer:
             parameters=_as_mapping(validated["parameters"], field="parameters"),
             input_shape=_optional_shape(validated.get("input_shape"), field="input_shape"),
             output_shape=_optional_shape(validated.get("output_shape"), field="output_shape"),
+            operator=_optional_mapping(validated.get("operator"), field="operator"),
             parameter_count=_optional_int(
                 validated.get("parameter_count"),
                 field="parameter_count",
+            ),
+            parameter_bytes=_optional_int(
+                validated.get("parameter_bytes"),
+                field="parameter_bytes",
+            ),
+            inference_flops=_optional_int(
+                validated.get("inference_flops"),
+                field="inference_flops",
             ),
         )
 
@@ -133,8 +164,14 @@ class ModelInspectionLayer:
             record["input_shape"] = list(self.input_shape)
         if self.output_shape is not None:
             record["output_shape"] = list(self.output_shape)
+        if self.operator is not None:
+            record["operator"] = dict(self.operator)
         if self.parameter_count is not None:
             record["parameter_count"] = self.parameter_count
+        if self.parameter_bytes is not None:
+            record["parameter_bytes"] = self.parameter_bytes
+        if self.inference_flops is not None:
+            record["inference_flops"] = self.inference_flops
         return record
 
 
@@ -144,19 +181,32 @@ class ModelInspectionCostSummary:
 
     layer_count: int
     parameter_count: int | None
+    parameter_bytes: int | None = None
+    inference_flops: int | None = None
     unknown_parameter_layers: tuple[int, ...] = ()
+    unknown_flop_layers: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.layer_count) is not int or self.layer_count < 0:
             raise ModelInspectionValidationError("layer_count must be a nonnegative integer")
         if self.parameter_count is not None and self.parameter_count < 0:
             raise ModelInspectionValidationError("parameter_count must be nonnegative")
+        if self.parameter_bytes is not None and self.parameter_bytes < 0:
+            raise ModelInspectionValidationError("parameter_bytes must be nonnegative")
+        if self.inference_flops is not None and self.inference_flops < 0:
+            raise ModelInspectionValidationError("inference_flops must be nonnegative")
         if any(type(index) is not int or index < 0 for index in self.unknown_parameter_layers):
             raise ModelInspectionValidationError(
                 "unknown_parameter_layers must contain nonnegative integers"
             )
         if self.unknown_parameter_layers != tuple(sorted(set(self.unknown_parameter_layers))):
             raise ModelInspectionValidationError("unknown_parameter_layers must be sorted unique")
+        if any(type(index) is not int or index < 0 for index in self.unknown_flop_layers):
+            raise ModelInspectionValidationError(
+                "unknown_flop_layers must contain nonnegative integers"
+            )
+        if self.unknown_flop_layers != tuple(sorted(set(self.unknown_flop_layers))):
+            raise ModelInspectionValidationError("unknown_flop_layers must be sorted unique")
         if self.parameter_count is None and not self.unknown_parameter_layers:
             raise ModelInspectionValidationError(
                 "unknown parameter_count requires unknown_parameter_layers"
@@ -174,11 +224,26 @@ class ModelInspectionCostSummary:
                 validated.get("parameter_count"),
                 field="parameter_count",
             ),
+            parameter_bytes=_optional_int(
+                validated.get("parameter_bytes"),
+                field="parameter_bytes",
+            ),
+            inference_flops=_optional_int(
+                validated.get("inference_flops"),
+                field="inference_flops",
+            ),
             unknown_parameter_layers=tuple(
                 _as_int(index, field="unknown_parameter_layers")
                 for index in _as_sequence(
                     validated["unknown_parameter_layers"],
                     field="unknown_parameter_layers",
+                )
+            ),
+            unknown_flop_layers=tuple(
+                _as_int(index, field="unknown_flop_layers")
+                for index in _as_sequence(
+                    validated.get("unknown_flop_layers", ()),
+                    field="unknown_flop_layers",
                 )
             ),
         )
@@ -190,6 +255,12 @@ class ModelInspectionCostSummary:
         }
         if self.parameter_count is not None:
             record["parameter_count"] = self.parameter_count
+        if self.parameter_bytes is not None:
+            record["parameter_bytes"] = self.parameter_bytes
+        if self.inference_flops is not None:
+            record["inference_flops"] = self.inference_flops
+        if self.unknown_flop_layers:
+            record["unknown_flop_layers"] = list(self.unknown_flop_layers)
         return record
 
 
@@ -451,70 +522,32 @@ def _architecture_layers(
     architecture_manifest: ArchitectureManifest,
 ) -> tuple[tuple[ModelInspectionLayer, ...], ModelInspectionCostSummary]:
     layers: list[ModelInspectionLayer] = []
-    shape: tuple[int, ...] | None = architecture_manifest.input_shape
-    parameter_counts: list[int] = []
-    unknown_parameter_layers: list[int] = []
-    for index, layer in enumerate(architecture_manifest.layers):
-        input_shape = shape
-        output_shape, parameter_count = _layer_output_and_cost(layer, input_shape)
-        if parameter_count is None:
-            unknown_parameter_layers.append(index)
-        else:
-            parameter_counts.append(parameter_count)
+    plan = summarize_architecture_operators(architecture_manifest)
+    for layer, operator in zip(architecture_manifest.layers, plan.operators, strict=True):
         layers.append(
             ModelInspectionLayer(
-                index=index,
+                index=operator.index,
                 kind=layer.kind,
                 parameters=layer.parameters,
-                input_shape=input_shape,
-                output_shape=output_shape,
-                parameter_count=parameter_count,
+                input_shape=operator.input_shape,
+                output_shape=operator.output_shape,
+                operator=operator.descriptor.to_record(),
+                parameter_count=operator.parameter_count,
+                parameter_bytes=operator.parameter_bytes,
+                inference_flops=operator.inference_flops,
             )
         )
-        shape = output_shape
-    total_parameters = None if unknown_parameter_layers else sum(parameter_counts)
     return (
         tuple(layers),
         ModelInspectionCostSummary(
             layer_count=len(layers),
-            parameter_count=total_parameters,
-            unknown_parameter_layers=tuple(unknown_parameter_layers),
+            parameter_count=plan.parameter_count,
+            parameter_bytes=plan.parameter_bytes,
+            inference_flops=plan.inference_flops,
+            unknown_parameter_layers=plan.unknown_parameter_layers,
+            unknown_flop_layers=plan.unknown_flop_layers,
         ),
     )
-
-
-def _layer_output_and_cost(
-    layer: ArchitectureLayer,
-    input_shape: tuple[int, ...] | None,
-) -> tuple[tuple[int, ...] | None, int | None]:
-    if layer.kind == "flatten":
-        if input_shape is None:
-            return None, 0
-        return (math.prod(input_shape),), 0
-    if layer.kind == "dense":
-        if input_shape is None or len(input_shape) != 1:
-            return None, None
-        out = _optional_positive_int_parameter(layer.parameters, "out")
-        if out is None:
-            return None, None
-        return (out,), (input_shape[0] + 1) * out
-    if layer.kind == "adaptive-pooling":
-        if input_shape is None or len(input_shape) < 2:
-            return None, None
-        size = _optional_positive_int_parameter(layer.parameters, "size")
-        dimension = _optional_positive_int_parameter(layer.parameters, "dimension")
-        if size is None or dimension is None or dimension >= len(input_shape) + 1:
-            return None, None
-        preserved = input_shape[: len(input_shape) - dimension]
-        return (*preserved, *(size for _index in range(dimension))), 0
-    return None, None
-
-
-def _optional_positive_int_parameter(parameters: Mapping[str, object], key: str) -> int | None:
-    value = parameters.get(key)
-    if type(value) is not int or value < 1:
-        return None
-    return value
 
 
 def _require_reference_kind(
@@ -553,6 +586,12 @@ def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise ModelInspectionValidationError(f"{field}: expected record")
     return cast(Mapping[str, object], value)
+
+
+def _optional_mapping(value: object, *, field: str) -> Mapping[str, object] | None:
+    if value is None:
+        return None
+    return _as_mapping(value, field=field)
 
 
 def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:

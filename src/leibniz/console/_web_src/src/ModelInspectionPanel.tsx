@@ -79,6 +79,10 @@ export function ModelInspectionPanel({
                   <dd>{optionalShapeLabel(layer.output_shape)}</dd>
                   <dt>Parameters</dt>
                   <dd>{optionalNumberLabel(layer.parameter_count)}</dd>
+                  <dt>FLOPs</dt>
+                  <dd>{optionalNumberLabel(layer.inference_flops)}</dd>
+                  <dt>Operator</dt>
+                  <dd>{operatorLabel(layer.operator)}</dd>
                   <dt>Config</dt>
                   <dd>{parameterLabel(layer.parameters)}</dd>
                 </dl>
@@ -105,8 +109,16 @@ function ModelCostSummary({ inspection }: { inspection: ModelInspectionRecord })
         <dd>{optionalNumberLabel(inspection.cost_summary.parameter_count)}</dd>
       </div>
       <div>
+        <dt>Bytes</dt>
+        <dd>{optionalNumberLabel(inspection.cost_summary.parameter_bytes)}</dd>
+      </div>
+      <div>
+        <dt>FLOPs</dt>
+        <dd>{optionalNumberLabel(inspection.cost_summary.inference_flops)}</dd>
+      </div>
+      <div>
         <dt>Unknown</dt>
-        <dd>{inspection.cost_summary.unknown_parameter_layers.join(', ') || 'none'}</dd>
+        <dd>{unknownCostLabel(inspection)}</dd>
       </div>
     </dl>
   );
@@ -176,6 +188,21 @@ function optionalNumberLabel(value: number | undefined): string {
     return 'unknown';
   }
   return value.toLocaleString();
+}
+
+function operatorLabel(operator: Record<string, unknown> | undefined): string {
+  if (operator === undefined) {
+    return 'unknown';
+  }
+  return typeof operator.kind === 'string' ? operator.kind : 'unknown';
+}
+
+function unknownCostLabel(inspection: ModelInspectionRecord): string {
+  const parameters = inspection.cost_summary.unknown_parameter_layers.map(
+    (index) => `parameters:${index}`,
+  );
+  const flops = inspection.cost_summary.unknown_flop_layers.map((index) => `flops:${index}`);
+  return [...parameters, ...flops].join(', ') || 'none';
 }
 
 function parameterLabel(parameters: Record<string, unknown>): string {
