@@ -9,6 +9,7 @@ __pycache__/
 .venv/
 .miniforge/
 venv/
+node_modules/
 dist/
 build/
 
