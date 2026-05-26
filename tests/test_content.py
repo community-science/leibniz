@@ -1,3 +1,4 @@
+import ast
 import math
 import re
 from collections.abc import Callable
@@ -128,6 +129,23 @@ def test_source_mentions_json_only_at_document_format_boundary() -> None:
     assert offenders == ()
 
 
+def test_source_does_not_hide_json_terms_by_concatenating_string_literals() -> None:
+    offenders = tuple(
+        path.relative_to(_source_root.parents[1])
+        for path in sorted(_source_root.rglob("*.py"))
+        if path not in _format_boundary_files
+        and _has_hidden_json_term(path.read_text(encoding="utf-8"))
+    )
+
+    assert offenders == ()
+
+
+def test_hidden_json_term_detector_rejects_split_string_literal_terms() -> None:
+    assert _has_hidden_json_term('suffix = "js" + "on"')
+    assert _has_hidden_json_term('name = "_js" + "on"')
+    assert not _has_hidden_json_term('suffix = "csv"')
+
+
 def test_tests_import_json_only_at_document_format_boundary() -> None:
     offenders = tuple(
         path.relative_to(_tests_root)
@@ -137,6 +155,28 @@ def test_tests_import_json_only_at_document_format_boundary() -> None:
     )
 
     assert offenders == ()
+
+
+def _has_hidden_json_term(source: str) -> bool:
+    tree = ast.parse(source)
+    return any(
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Add)
+        and _string_literal_value(node) is not None
+        and re.search(r"\bjson\b|\bJSON\b|_json", _string_literal_value(node) or "")
+        for node in ast.walk(tree)
+    )
+
+
+def _string_literal_value(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _string_literal_value(node.left)
+        right = _string_literal_value(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
 
 
 def test_canonical_json_and_digests_cover_finite_outcome_records() -> None:

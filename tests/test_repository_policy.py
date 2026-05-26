@@ -26,6 +26,7 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
             ".pytest_cache/v/cache/nodeids",
             ".ruff_cache/CACHEDIR.TAG",
             ".venv/pyvenv.cfg",
+            ".vite/deps/react.js",
             "build/lib/leibniz/__init__.py",
             "dist/leibniz-0.0.0.tar.gz",
             "src/leibniz/__pycache__/__init__.cpython-311.pyc",
@@ -49,6 +50,10 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
         ),
         PolicyViolation(
             path=PurePosixPath(".venv/pyvenv.cfg"),
+            message="tracked local, cache, or generated directory",
+        ),
+        PolicyViolation(
+            path=PurePosixPath(".vite/deps/react.js"),
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(
