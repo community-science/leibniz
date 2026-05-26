@@ -148,7 +148,10 @@ export function ConsoleShell() {
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'performance'}>
-          <PerformanceViewPanel views={consoleData.performance_views} />
+          <PerformanceViewPanel
+            resultViews={consoleData.result_views}
+            views={consoleData.performance_views}
+          />
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'models'}>

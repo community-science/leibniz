@@ -6,14 +6,22 @@ import type {
   MeasurementRecord,
   PerformanceViewRecord,
 } from './performanceViews.ts';
+import type { ImportedResultViewRecord } from './resultViews.ts';
 
-export function PerformanceViewPanel({ views }: { views: PerformanceViewRecord[] }) {
+export function PerformanceViewPanel({
+  resultViews,
+  views,
+}: {
+  resultViews: ImportedResultViewRecord[];
+  views: PerformanceViewRecord[];
+}) {
   const [selectedId, setSelectedId] = useState(views[0]?.id ?? '');
   const selected = views.find((view) => view.id === selectedId) ?? views[0];
 
   if (selected === undefined) {
     return (
       <section className="performance-layout">
+        <ImportedResultViews views={resultViews} />
         <p className="artifact-detail-note">No performance views are available.</p>
       </section>
     );
@@ -24,6 +32,7 @@ export function PerformanceViewPanel({ views }: { views: PerformanceViewRecord[]
   return (
     <section className="performance-layout" aria-label="Performance views">
       <aside className="performance-list" aria-label="Performance view bundles">
+        <ImportedResultViews views={resultViews} />
         {views.map((view) => (
           <button
             className={`performance-list-item ${view.id === selected.id ? 'active' : ''}`}
@@ -58,6 +67,34 @@ export function PerformanceViewPanel({ views }: { views: PerformanceViewRecord[]
           </>
         )}
       </article>
+    </section>
+  );
+}
+
+function ImportedResultViews({ views }: { views: ImportedResultViewRecord[] }) {
+  if (views.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="imported-results" aria-label="Imported result views">
+      <h3>Imported Results</h3>
+      {views.map((view) => (
+        <article className="imported-result-view" key={view.source_path}>
+          <span>{view.source_path}</span>
+          <dl>
+            <dt>Bundles</dt>
+            <dd>{view.publication_bundles.length}</dd>
+            <dt>Measurements</dt>
+            <dd>
+              {view.publication_bundles.reduce(
+                (sum, bundle) => sum + bundle.measurement_count,
+                0,
+              )}
+            </dd>
+          </dl>
+        </article>
+      ))}
     </section>
   );
 }

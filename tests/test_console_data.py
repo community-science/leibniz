@@ -153,9 +153,58 @@ def test_console_data_payload_is_a_canonical_object_document() -> None:
     assert record["format"] == "leibniz.console-data"
 
 
+def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
+    result_root = tmp_path / "views"
+    result_root.mkdir()
+    (result_root / "imported_results.json").write_text(
+        """
+{
+  "format": "leibniz.console.imported-results",
+  "format_version": 1,
+  "publication_bundles": [
+    {
+      "id": "publication-bundles.digits@0.1.0",
+      "digest": "sha256:abc",
+      "source_path": "/tmp/submissions/digits.json",
+      "submission_package_id": "submissions.digits@0.1.0",
+      "benchmark_ids": ["benchmarks.digits@0.1.0"],
+      "measurement_count": 1,
+      "measurement_dataset": {"measurements": []},
+      "measurement_score_view": {"entries": []}
+    }
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+
+    data = ConsoleDataBuilder(_repository_root).discover(
+        (PurePosixPath("tests/fixtures"),),
+        result_roots=(result_root,),
+    )
+    record = data.to_record()
+    result_views = cast(list[dict[str, object]], record["result_views"])
+
+    assert len(result_views) == 1
+    assert result_views[0]["source_path"] == (result_root / "imported_results.json").as_posix()
+    bundles = cast(list[dict[str, object]], result_views[0]["publication_bundles"])
+    assert bundles[0]["measurement_count"] == 1
+
+
 def test_console_data_rejects_local_state_roots() -> None:
     with pytest.raises(ConsoleDataValidationError, match="local state"):
         ConsoleDataBuilder(_repository_root).discover((PurePosixPath(".leibniz"),))
+
+    with pytest.raises(ConsoleDataValidationError, match="local state"):
+        ConsoleDataBuilder(_repository_root).discover((PurePosixPath(".runs"),))
+
+
+def test_console_data_rejects_raw_runs_result_roots() -> None:
+    with pytest.raises(ConsoleDataValidationError, match=".runs/views"):
+        ConsoleDataBuilder(_repository_root).discover(
+            (PurePosixPath("tests/fixtures"),),
+            result_roots=(Path(".runs"),),
+        )
 
 
 def test_console_data_rejects_missing_public_roots() -> None:

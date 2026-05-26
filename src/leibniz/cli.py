@@ -12,6 +12,7 @@ from leibniz.authority_indexes import AuthorityIndexDocument
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.documents import load_object_document
 from leibniz.federation_ingest import FederationIngestPlanDocument
+from leibniz.local_results import import_submission_publications
 from leibniz.measurements import (
     MeasurementDataset,
     MeasurementDatasetDocument,
@@ -41,6 +42,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     command = getattr(args, "command", None)
     if command == "validate":
         return _validate(args)
+    if command == "results":
+        return _results(args)
     parser.print_help(sys.stderr)
     return 2
 
@@ -168,7 +171,57 @@ def _parser() -> argparse.ArgumentParser:
     federation_ingest_plan.add_argument("path", type=Path)
     federation_ingest_plan.add_argument("--registry", type=Path)
 
+    results = subcommands.add_parser(
+        "results",
+        description="manage operator-local result views",
+        help="manage operator-local result views",
+    )
+    results_subcommands = results.add_subparsers(dest="results_command", required=True)
+
+    import_results = results_subcommands.add_parser(
+        "import",
+        description="import local publication bundles into ignored run state",
+        help="import local publication bundles",
+    )
+    import_results.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        required=True,
+        type=Path,
+        help="local publication checkout path or publication bundle document file",
+    )
+    import_results.add_argument(
+        "--runs-root",
+        default=Path(".runs"),
+        type=Path,
+        help="ignored local run-state root; defaults to .runs",
+    )
+
     return parser
+
+
+def _results(args: argparse.Namespace) -> int:
+    try:
+        results_command = str(args.results_command)
+        if results_command == "import":
+            summary = import_submission_publications(
+                args.source,
+                repository_root=Path.cwd(),
+                runs_root=args.runs_root,
+            )
+            print(
+                "imported "
+                f"{summary.publication_bundle_count} publication bundle(s), "
+                f"{summary.measurement_count} measurement(s)"
+            )
+            print(f"view: {summary.view_file}")
+            return 0
+    except (OSError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(f"error: unsupported results command {args.results_command!r}", file=sys.stderr)
+    return 2
 
 
 def _validate(args: argparse.Namespace) -> int:

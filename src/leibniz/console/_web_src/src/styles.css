@@ -45,6 +45,7 @@
   --inspection-preview-size: min(52vh, 420px);
   --inspection-metadata-label-min: 92px;
   --performance-list-width: 300px;
+  --imported-result-metric-min: 78px;
   --performance-point-min: 220px;
   --performance-source-min: 240px;
   --performance-bar-height: 10px;
@@ -748,6 +749,57 @@ p {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
+}
+
+.imported-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.imported-results h3 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-status);
+  font-weight: 700;
+  letter-spacing: var(--tracking-status);
+  text-transform: uppercase;
+}
+
+.imported-result-view {
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--control-bg);
+  padding: var(--space-lg);
+}
+
+.imported-result-view > span {
+  display: block;
+  overflow-wrap: anywhere;
+  color: white;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-status);
+}
+
+.imported-result-view dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(var(--imported-result-metric-min), 1fr));
+  gap: var(--space-xs);
+  margin: var(--space-sm) 0 0;
+}
+
+.imported-result-view dt {
+  color: var(--text-muted);
+  font-size: var(--font-label);
+  text-transform: uppercase;
+}
+
+.imported-result-view dd {
+  margin: 0;
+  color: white;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-control);
 }
 
 .performance-list-item {
