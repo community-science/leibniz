@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -9,6 +10,7 @@ from leibniz.benchmark_runner import (
 )
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
+from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
 from leibniz.measurements import MeasurementDatasetDocument
 from leibniz.model_inspection import ModelInspectionDocument
 
@@ -66,6 +68,32 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert inspection_document.inspection.cost_summary.parameter_count == 50
     assert inspection_document.inspection.cost_summary.inference_flops == 1104
     assert summary.training_summary_path.exists()
+
+
+def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: Path) -> None:
+    run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            runs_root=tmp_path / ".runs",
+            sample_count=2,
+            seed=101,
+            train_steps=1,
+        )
+    )
+
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+
+    view = load_console_result_view(summary.view_file.read_bytes())
+    results = cast(list[dict[str, object]], view["benchmark_results"])
+    result = results[0]
+    history = cast(list[dict[str, object]], result["training_history"])
+    assert history[0]["source_kind"] == "local-run"
+    leaderboard = cast(list[dict[str, object]], result["leaderboard"])
+    assert leaderboard[0]["observed_complexities"] == [1.0]
 
 
 def test_digits_benchmark_runner_rejects_unmatched_architecture_shape(tmp_path: Path) -> None:

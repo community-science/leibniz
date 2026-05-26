@@ -1,3 +1,5 @@
+export type ResultViewRecord = ImportedResultViewRecord | BenchmarkResultViewRecord;
+
 export type ImportedResultViewRecord = {
   format: 'leibniz.console.imported-results';
   format_version: 1;
@@ -23,14 +25,90 @@ export type ImportedPublicationBundleRecord = {
   measurement_score_view: Record<string, unknown>;
 };
 
-export function parseImportedResultViewRecords(value: unknown): ImportedResultViewRecord[] {
+export type BenchmarkResultViewRecord = {
+  format: 'leibniz.console.benchmark-results';
+  format_version: 1;
+  source_path: string;
+  benchmark_results: BenchmarkResultRecord[];
+};
+
+export type BenchmarkResultRecord = {
+  benchmark_id: string;
+  complexity_axis?: string;
+  scale_axis?: string;
+  cost_axes: CostAxisRecord[];
+  leaderboard: ModelResultRecord[];
+  frontiers: Record<string, ModelResultRecord[]>;
+  training_history: RunResultRecord[];
+};
+
+export type CostAxisRecord = {
+  key: string;
+  label: string;
+};
+
+export type ModelResultRecord = {
+  model_key: string;
+  architecture_digest: string;
+  benchmark_id: string;
+  score: number;
+  observed_complexities: number[];
+  points: CompetencePointRecord[];
+  cost_summary: CostSummaryRecord;
+  run_ids: string[];
+  measurement_count: number;
+  source_kinds: string[];
+};
+
+export type CompetencePointRecord = {
+  complexity: number;
+  score: number;
+  run_ids: string[];
+};
+
+export type RunResultRecord = {
+  source_kind: string;
+  source_path: string;
+  run_id: string;
+  run_slug: string;
+  benchmark_id: string;
+  architecture_digest: string;
+  model_key: string;
+  scale?: number;
+  measurement_count: number;
+  score: number;
+  cost_summary: CostSummaryRecord;
+  architecture: Record<string, unknown>;
+  measurement_dataset_digest: string;
+  training_summary?: Record<string, unknown>;
+};
+
+export type CostSummaryRecord = {
+  layer_count: number;
+  parameter_count: number;
+  parameter_bytes: number;
+  inference_flops: number;
+  unknown_parameter_layers?: string[];
+};
+
+export function parseResultViewRecords(value: unknown): ResultViewRecord[] {
   return requireArray(value, 'result_views').map((view, index) =>
-    parseImportedResultViewRecord(view, `result_views.${index}`),
+    parseResultViewRecord(view, `result_views.${index}`),
   );
 }
 
-function parseImportedResultViewRecord(value: unknown, path: string): ImportedResultViewRecord {
+function parseResultViewRecord(value: unknown, path: string): ResultViewRecord {
   const record = requireRecord(value, path);
+  if (record.format === 'leibniz.console.benchmark-results') {
+    return parseBenchmarkResultViewRecord(record, path);
+  }
+  return parseImportedResultViewRecord(record, path);
+}
+
+function parseImportedResultViewRecord(
+  record: Record<string, unknown>,
+  path: string,
+): ImportedResultViewRecord {
   const format = requireLiteral(record.format, `${path}.format`, 'leibniz.console.imported-results');
   const formatVersion = requireLiteral(record.format_version, `${path}.format_version`, 1);
   const sourcePath = requireString(record.source_path, `${path}.source_path`);
@@ -46,6 +124,138 @@ function parseImportedResultViewRecord(value: unknown, path: string): ImportedRe
     source_path: sourcePath,
     publication_bundles: publicationBundles,
   };
+}
+
+function parseBenchmarkResultViewRecord(
+  record: Record<string, unknown>,
+  path: string,
+): BenchmarkResultViewRecord {
+  const format = requireLiteral(record.format, `${path}.format`, 'leibniz.console.benchmark-results');
+  const formatVersion = requireLiteral(record.format_version, `${path}.format_version`, 1);
+  const sourcePath = requireString(record.source_path, `${path}.source_path`);
+  const benchmarkResults = requireArray(
+    record.benchmark_results,
+    `${path}.benchmark_results`,
+  ).map((result, index) => parseBenchmarkResult(result, `${path}.benchmark_results.${index}`));
+  return {
+    format,
+    format_version: formatVersion,
+    source_path: sourcePath,
+    benchmark_results: benchmarkResults,
+  };
+}
+
+function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultRecord {
+  const record = requireRecord(value, path);
+  const costAxes = requireArray(record.cost_axes, `${path}.cost_axes`).map((axis, index) => {
+    const axisRecord = requireRecord(axis, `${path}.cost_axes.${index}`);
+    return {
+      key: requireString(axisRecord.key, `${path}.cost_axes.${index}.key`),
+      label: requireString(axisRecord.label, `${path}.cost_axes.${index}.label`),
+    };
+  });
+  const frontiersRecord = requireRecord(record.frontiers, `${path}.frontiers`);
+  const frontiers = Object.fromEntries(
+    Object.entries(frontiersRecord).map(([key, value]) => [
+      key,
+      requireArray(value, `${path}.frontiers.${key}`).map((model, index) =>
+        parseModelResult(model, `${path}.frontiers.${key}.${index}`),
+      ),
+    ]),
+  );
+  return {
+    benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`),
+    complexity_axis:
+      record.complexity_axis === undefined
+        ? undefined
+        : requireString(record.complexity_axis, `${path}.complexity_axis`),
+    scale_axis:
+      record.scale_axis === undefined
+        ? undefined
+        : requireString(record.scale_axis, `${path}.scale_axis`),
+    cost_axes: costAxes,
+    leaderboard: requireArray(record.leaderboard, `${path}.leaderboard`).map((model, index) =>
+      parseModelResult(model, `${path}.leaderboard.${index}`),
+    ),
+    frontiers,
+    training_history: requireArray(record.training_history, `${path}.training_history`).map(
+      (run, index) => parseRunResult(run, `${path}.training_history.${index}`),
+    ),
+  };
+}
+
+function parseModelResult(value: unknown, path: string): ModelResultRecord {
+  const record = requireRecord(value, path);
+  return {
+    model_key: requireString(record.model_key, `${path}.model_key`),
+    architecture_digest: requireString(record.architecture_digest, `${path}.architecture_digest`),
+    benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`),
+    score: requireNumber(record.score, `${path}.score`),
+    observed_complexities: parseNumberArray(
+      record.observed_complexities,
+      `${path}.observed_complexities`,
+    ),
+    points: requireArray(record.points, `${path}.points`).map((point, index) =>
+      parseCompetencePoint(point, `${path}.points.${index}`),
+    ),
+    cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
+    run_ids: parseStringArray(record.run_ids, `${path}.run_ids`),
+    measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`),
+    source_kinds: parseStringArray(record.source_kinds, `${path}.source_kinds`),
+  };
+}
+
+function parseCompetencePoint(value: unknown, path: string): CompetencePointRecord {
+  const record = requireRecord(value, path);
+  return {
+    complexity: requireNumber(record.complexity, `${path}.complexity`),
+    score: requireNumber(record.score, `${path}.score`),
+    run_ids: parseStringArray(record.run_ids, `${path}.run_ids`),
+  };
+}
+
+function parseRunResult(value: unknown, path: string): RunResultRecord {
+  const record = requireRecord(value, path);
+  return {
+    source_kind: requireString(record.source_kind, `${path}.source_kind`),
+    source_path: requireString(record.source_path, `${path}.source_path`),
+    run_id: requireString(record.run_id, `${path}.run_id`),
+    run_slug: requireString(record.run_slug, `${path}.run_slug`),
+    benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`),
+    architecture_digest: requireString(record.architecture_digest, `${path}.architecture_digest`),
+    model_key: requireString(record.model_key, `${path}.model_key`),
+    scale:
+      record.scale === undefined ? undefined : requireNumber(record.scale, `${path}.scale`),
+    measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`),
+    score: requireNumber(record.score, `${path}.score`),
+    cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
+    architecture: requireRecord(record.architecture, `${path}.architecture`),
+    measurement_dataset_digest: requireString(
+      record.measurement_dataset_digest,
+      `${path}.measurement_dataset_digest`,
+    ),
+    training_summary:
+      record.training_summary === undefined
+        ? undefined
+        : requireRecord(record.training_summary, `${path}.training_summary`),
+  };
+}
+
+function parseCostSummary(value: unknown, path: string): CostSummaryRecord {
+  const record = requireRecord(value, path);
+  const costSummary: CostSummaryRecord = {
+    layer_count: requireNumber(record.layer_count, `${path}.layer_count`),
+    parameter_count: requireNumber(record.parameter_count, `${path}.parameter_count`),
+    parameter_bytes: requireNumber(record.parameter_bytes, `${path}.parameter_bytes`),
+    inference_flops: requireNumber(record.inference_flops, `${path}.inference_flops`),
+  };
+  if (record.unknown_parameter_layers !== undefined) {
+    costSummary.unknown_parameter_layers = parseStringArray(
+      record.unknown_parameter_layers,
+      `${path}.unknown_parameter_layers`,
+    );
+  }
+  return costSummary;
 }
 
 function parseImportedPublicationBundleRecord(
@@ -86,6 +296,14 @@ function requireArray(value: unknown, path: string): unknown[] {
     throw new ResultViewTransportError(`${path}: expected array`);
   }
   return value;
+}
+
+function parseNumberArray(value: unknown, path: string): number[] {
+  return requireArray(value, path).map((item, index) => requireNumber(item, `${path}.${index}`));
+}
+
+function parseStringArray(value: unknown, path: string): string[] {
+  return requireArray(value, path).map((item, index) => requireString(item, `${path}.${index}`));
 }
 
 function requireString(value: unknown, path: string): string {

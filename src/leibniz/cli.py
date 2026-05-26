@@ -13,7 +13,7 @@ from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.documents import load_object_document
 from leibniz.federation_ingest import FederationIngestPlanDocument
-from leibniz.local_results import import_submission_publications
+from leibniz.local_results import import_submission_publications, materialize_benchmark_result_views
 from leibniz.measurements import (
     MeasurementDataset,
     MeasurementDatasetDocument,
@@ -200,6 +200,17 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="ignored local run-state root; defaults to .runs",
     )
+    materialize_results = results_subcommands.add_parser(
+        "materialize",
+        description="derive console result views from ignored run state",
+        help="materialize local result views",
+    )
+    materialize_results.add_argument(
+        "--runs-root",
+        default=Path(".runs"),
+        type=Path,
+        help="ignored local run-state root; defaults to .runs",
+    )
 
     benchmark = subcommands.add_parser(
         "benchmark",
@@ -279,6 +290,19 @@ def _results(args: argparse.Namespace) -> int:
                 "imported "
                 f"{summary.publication_bundle_count} publication bundle(s), "
                 f"{summary.measurement_count} measurement(s)"
+            )
+            print(f"view: {summary.view_file}")
+            return 0
+        if results_command == "materialize":
+            summary = materialize_benchmark_result_views(
+                repository_root=Path.cwd(),
+                runs_root=args.runs_root,
+            )
+            print(
+                "materialized "
+                f"{summary.benchmark_count} benchmark result view(s), "
+                f"{summary.model_count} model(s), "
+                f"{summary.run_count} run(s)"
             )
             print(f"view: {summary.view_file}")
             return 0
