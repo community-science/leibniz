@@ -37,6 +37,7 @@ const generatedPayload = run(
 writeFileSync(generatedPayloadPath, generatedPayload);
 assertShellUsesGeneratedConsoleData();
 assertBenchmarkWorkbenchStructure();
+assertBenchmarkSamplePaneStructure();
 assertBenchmarkWebSourceIsDataDriven();
 assertConsoleResultRootPolicy();
 
@@ -148,6 +149,42 @@ function assertBenchmarkWorkbenchStructure() {
   for (const token of requiredThemeTokens) {
     if (!styles.includes(token)) {
       throw new Error(`Console styles must define benchmark workbench token: ${token}`);
+    }
+  }
+}
+
+function assertBenchmarkSamplePaneStructure() {
+  const panel = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/BenchmarksPanel.tsx'),
+    'utf8',
+  );
+  const styles = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/styles.css'),
+    'utf8',
+  );
+  const requiredPanelMarkers = [
+    'BenchmarkSampleCoordinateInspector',
+    'benchmark-sample-coordinate-inspector',
+    'benchmark-sample-caption',
+  ];
+  for (const marker of requiredPanelMarkers) {
+    if (!panel.includes(marker)) {
+      throw new Error(`BenchmarksPanel must expose sample pane marker: ${marker}`);
+    }
+  }
+  if (panel.includes('benchmark-sample-card-body') || panel.includes('benchmark-sample-card-title')) {
+    throw new Error('Benchmark sample cards must remain tile/caption oriented');
+  }
+
+  const requiredStyleMarkers = [
+    '--benchmark-sample-tile-size',
+    '--benchmark-sample-caption-height',
+    '.benchmark-sample-coordinate-inspector',
+    'text-overflow: ellipsis',
+  ];
+  for (const marker of requiredStyleMarkers) {
+    if (!styles.includes(marker)) {
+      throw new Error(`Console styles must preserve sample pane marker: ${marker}`);
     }
   }
 }
