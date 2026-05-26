@@ -159,6 +159,38 @@ class ConsoleDataBuilder:
             if "complexity_coordinate" in record:
                 summary["complexity_coordinate"] = record["complexity_coordinate"]
             return summary
+        if kind == "latent-factor-declaration":
+            return {
+                "id": record["id"],
+                "construction_factors": record["construction_factors"],
+                "sample_factors": record["sample_factors"],
+                "complexity_projections": record["complexity_projections"],
+                "resolution_requirements": record.get("resolution_requirements", ()),
+            }
+        if kind == "materialization-declaration":
+            summary = {
+                "id": record["id"],
+                "benchmark_id": record["benchmark_id"],
+                "requirements": record["requirements"],
+            }
+            if "latent_factor_declaration" in record:
+                summary["latent_factor_declaration"] = record["latent_factor_declaration"]
+            if "layout" in record:
+                summary["layout"] = record["layout"]
+            return summary
+        if kind == "materialization-plan":
+            summary = {
+                "id": record["id"],
+                "benchmark_id": record["benchmark_id"],
+                "materialization_declaration": record["materialization_declaration"],
+                "scale_assignment": record["scale_assignment"],
+                "complexity_assignment": record["complexity_assignment"],
+                "resolution_assignment": record["resolution_assignment"],
+                "seed": record["seed"],
+            }
+            if "latent_factor_declaration" in record:
+                summary["latent_factor_declaration"] = record["latent_factor_declaration"]
+            return summary
         if kind == "measurement":
             raw_scoring_evidence = self._required_mapping(
                 record["raw_scoring_evidence"],
@@ -172,12 +204,37 @@ class ConsoleDataBuilder:
                 "accepted_event": record["accepted_event"],
                 "probability_measure": record["probability_measure"],
             }
+        if kind == "observation-formation-declaration":
+            components = self._required_sequence(record["components"], "components")
+            return {
+                "id": record["id"],
+                "benchmark_id": record["benchmark_id"],
+                "interpreter": record["interpreter"],
+                "output_field": record["output_field"],
+                "slot_composition": record["slot_composition"],
+                "component_count": len(components),
+                "mark_count": sum(
+                    len(self._required_sequence(
+                        self._required_mapping(component, "components")["marks"],
+                        "marks",
+                    ))
+                    for component in components
+                ),
+                "components": record["components"],
+            }
         raise ConsoleDataValidationError(f"unsupported document kind: {kind}")
 
     def _required_mapping(self, value: object, description: str) -> Mapping[str, object]:
         if not isinstance(value, Mapping):
             raise ConsoleDataValidationError(f"{description} must be a record")
         return cast(Mapping[str, object], value)
+
+    def _required_sequence(self, value: object, description: str) -> tuple[object, ...]:
+        if isinstance(value, tuple):
+            return cast(tuple[object, ...], value)
+        if isinstance(value, list):
+            return tuple(cast(list[object], value))
+        raise ConsoleDataValidationError(f"{description} must be a sequence")
 
     def _repository_path(self, source_path: PurePosixPath, *, description: str) -> Path:
         if source_path.is_absolute():

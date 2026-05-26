@@ -13,7 +13,13 @@ from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
+from leibniz.latent_factors import LatentFactorDeclarationDocument
+from leibniz.materialization import (
+    MaterializationDeclarationDocument,
+    MaterializationPlanDocument,
+)
 from leibniz.measurements import MeasurementDocument
+from leibniz.observation_formation import ObservationFormationDeclarationDocument
 
 __all__ = [
     "ConsoleArtifactIndex",
@@ -194,6 +200,37 @@ def _load_benchmark_manifest(data: bytes) -> _LoadedArtifact:
     return document.manifest.id, record, document.digest, dependencies
 
 
+def _load_latent_factor_declaration(data: bytes) -> _LoadedArtifact:
+    document = LatentFactorDeclarationDocument.from_bytes(data)
+    record = document.declaration.to_record()
+    return document.declaration.id, record, document.digest, ()
+
+
+def _load_materialization_declaration(data: bytes) -> _LoadedArtifact:
+    document = MaterializationDeclarationDocument.from_bytes(data)
+    declaration = document.declaration
+    record = declaration.to_record()
+    dependencies = [
+        ArtifactReference(kind="benchmark-manifest", protocol_id=declaration.benchmark_id)
+    ]
+    if declaration.latent_factor_declaration is not None:
+        dependencies.append(declaration.latent_factor_declaration)
+    return declaration.id, record, document.digest, tuple(dependencies)
+
+
+def _load_materialization_plan(data: bytes) -> _LoadedArtifact:
+    document = MaterializationPlanDocument.from_bytes(data)
+    plan = document.plan
+    record = plan.to_record()
+    dependencies = [
+        ArtifactReference(kind="benchmark-manifest", protocol_id=plan.benchmark_id),
+        plan.materialization_declaration,
+    ]
+    if plan.latent_factor_declaration is not None:
+        dependencies.append(plan.latent_factor_declaration)
+    return plan.id, record, document.digest, tuple(dependencies)
+
+
 def _load_measurement(data: bytes) -> _LoadedArtifact:
     document = MeasurementDocument.from_bytes(data)
     measurement = document.measurement
@@ -202,13 +239,28 @@ def _load_measurement(data: bytes) -> _LoadedArtifact:
         kind="benchmark-manifest",
         protocol_id=measurement.benchmark_id,
     )
-    return measurement.raw_scoring_evidence.id, record, document.digest, (benchmark_reference,)
+    dependencies = (benchmark_reference, *measurement.evidence_artifacts)
+    return measurement.raw_scoring_evidence.id, record, document.digest, dependencies
+
+
+def _load_observation_formation_declaration(data: bytes) -> _LoadedArtifact:
+    document = ObservationFormationDeclarationDocument.from_bytes(data)
+    declaration = document.declaration
+    record = declaration.to_record()
+    dependencies = (
+        ArtifactReference(kind="benchmark-manifest", protocol_id=declaration.benchmark_id),
+    )
+    return declaration.id, record, document.digest, dependencies
 
 
 _artifact_loaders: Mapping[str, _ArtifactLoader] = {
     "architecture-manifest": _load_architecture_manifest,
     "benchmark-manifest": _load_benchmark_manifest,
+    "latent-factor-declaration": _load_latent_factor_declaration,
+    "materialization-declaration": _load_materialization_declaration,
+    "materialization-plan": _load_materialization_plan,
     "measurement": _load_measurement,
+    "observation-formation-declaration": _load_observation_formation_declaration,
 }
 
 
