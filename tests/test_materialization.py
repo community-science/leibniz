@@ -1,0 +1,218 @@
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+
+from leibniz.artifacts import ArtifactReference
+from leibniz.content import ContentDigest
+from leibniz.identifiers import ProtocolIdentifier, ProtocolName
+from leibniz.materialization import (
+    AxisAssignment,
+    LinearResolutionRequirement,
+    MaterializationDeclaration,
+    MaterializationDeclarationDocument,
+    MaterializationPlan,
+    MaterializationPlanDocument,
+    MaterializationValidationError,
+)
+
+_repository_root = Path(__file__).parents[1]
+_digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
+_digits_fixture_root = _repository_root / "tests" / "fixtures" / "digits"
+
+
+def test_axis_assignment_round_trips_in_canonical_order() -> None:
+    assignment = AxisAssignment(values={"N": 96, "L": 3})
+
+    assert assignment.require_axis("L") == 3
+    assert assignment.to_record() == {
+        "values": [
+            {"axis": "L", "value": 3},
+            {"axis": "N", "value": 96},
+        ]
+    }
+    assert AxisAssignment.from_record(assignment.to_record()) == assignment
+
+
+def test_axis_assignment_rejects_invalid_values() -> None:
+    assert str(capture_materialization_error(lambda: AxisAssignment(values={}))) == (
+        "axis assignment must not be empty"
+    )
+    assert str(capture_materialization_error(lambda: AxisAssignment(values={"L": -1}))) == (
+        "L: axis value must be nonnegative"
+    )
+    duplicate_record = {
+        "values": [
+            {"axis": "L", "value": 1},
+            {"axis": "L", "value": 2},
+        ]
+    }
+
+    assert str(
+        capture_materialization_error(lambda: AxisAssignment.from_record(duplicate_record))
+    ) == "duplicate axis assignment: L"
+
+
+def test_linear_resolution_requirement_derives_minimum_resolution() -> None:
+    requirement = LinearResolutionRequirement(
+        name=ProtocolName.parse("benchmarks.digits.resolution.canvas-side"),
+        source_axis="L",
+        resolution_axis="N",
+        coefficient=32,
+        minimum=32,
+        basis="analytic-bound",
+    )
+
+    assert requirement.minimum_resolution(AxisAssignment(values={"L": 1})) == 32
+    assert requirement.minimum_resolution(AxisAssignment(values={"L": 3})) == 96
+
+    requirement.require_resolution(
+        scale_assignment=AxisAssignment(values={"L": 3}),
+        resolution_assignment=AxisAssignment(values={"N": 96}),
+    )
+    assert str(
+        capture_materialization_error(
+            lambda: requirement.require_resolution(
+                scale_assignment=AxisAssignment(values={"L": 3}),
+                resolution_assignment=AxisAssignment(values={"N": 95}),
+            )
+        )
+    ) == "N=95 is below minimum 96 for L=3"
+
+
+def test_digits_materialization_declaration_loads_source_artifact() -> None:
+    document = MaterializationDeclarationDocument.from_bytes(
+        (_digits_benchmark_root / "materialization.json").read_bytes()
+    )
+    declaration = document.declaration
+
+    assert declaration.id == ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0")
+    assert declaration.benchmark_id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
+    assert declaration.latent_factor_declaration == ArtifactReference(
+        kind="latent-factor-declaration",
+        protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
+    )
+    assert declaration.minimum_resolution(AxisAssignment(values={"L": 4})) == AxisAssignment(
+        values={"N": 128}
+    )
+    assert document.digest == ContentDigest.from_value(declaration.to_record())
+
+
+def test_materialization_declaration_uses_strongest_requirement_per_resolution_axis() -> None:
+    declaration = MaterializationDeclarationDocument.from_bytes(
+        (_digits_benchmark_root / "materialization.json").read_bytes()
+    ).declaration
+    stronger = LinearResolutionRequirement(
+        name=ProtocolName.parse("benchmarks.digits.resolution.extra-margin"),
+        source_axis="L",
+        resolution_axis="N",
+        coefficient=40,
+        basis="analytic-bound",
+    )
+    declaration = MaterializationDeclaration(
+        id=declaration.id,
+        benchmark_id=declaration.benchmark_id,
+        requirements=(*declaration.requirements, stronger),
+        latent_factor_declaration=declaration.latent_factor_declaration,
+        layout=declaration.layout,
+    )
+
+    assert declaration.minimum_resolution(AxisAssignment(values={"L": 3})) == AxisAssignment(
+        values={"N": 120}
+    )
+
+
+def test_materialization_plan_resolves_from_declaration_deterministically() -> None:
+    declaration = MaterializationDeclarationDocument.from_bytes(
+        (_digits_benchmark_root / "materialization.json").read_bytes()
+    ).declaration
+    scale = AxisAssignment(values={"L": 3})
+    complexity = AxisAssignment(values={"C": 3})
+
+    left = MaterializationPlan.resolve(
+        id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.l3.seed101@0.1.0"),
+        declaration=declaration,
+        scale_assignment=scale,
+        complexity_assignment=complexity,
+        seed=101,
+    )
+    right = MaterializationPlan.resolve(
+        id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.l3.seed101@0.1.0"),
+        declaration=declaration,
+        scale_assignment=scale,
+        complexity_assignment=complexity,
+        seed=101,
+    )
+
+    assert left == right
+    assert left.resolution_assignment == AxisAssignment(values={"N": 96})
+    assert left.complexity_assignment.require_axis("C") == 3
+    left.validate_declaration(declaration)
+
+
+def test_materialization_plan_documents_validate_digits_fixtures() -> None:
+    declaration = MaterializationDeclarationDocument.from_bytes(
+        (_digits_benchmark_root / "materialization.json").read_bytes()
+    ).declaration
+    l1 = MaterializationPlanDocument.from_bytes(
+        (_digits_fixture_root / "materialization_plan_l1.json").read_bytes()
+    )
+    l3 = MaterializationPlanDocument.from_bytes(
+        (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
+    )
+
+    l1.plan.validate_declaration(declaration)
+    l3.plan.validate_declaration(declaration)
+
+    assert l1.plan.scale_assignment.require_axis("L") == 1
+    assert l1.plan.complexity_assignment.require_axis("C") == 1
+    assert l1.plan.resolution_assignment.require_axis("N") == 32
+    assert l3.plan.scale_assignment.require_axis("L") == 3
+    assert l3.plan.complexity_assignment.require_axis("C") == 3
+    assert l3.plan.resolution_assignment.require_axis("N") == 96
+    assert l3.digest == ContentDigest.from_value(l3.plan.to_record())
+
+
+def test_materialization_plan_rejects_under_resolved_request() -> None:
+    declaration = MaterializationDeclarationDocument.from_bytes(
+        (_digits_benchmark_root / "materialization.json").read_bytes()
+    ).declaration
+    plan = MaterializationPlan(
+        id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.bad@0.1.0"),
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
+        materialization_declaration=ArtifactReference(
+            kind="materialization-declaration",
+            protocol_id=ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0"),
+        ),
+        latent_factor_declaration=ArtifactReference(
+            kind="latent-factor-declaration",
+            protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
+        ),
+        scale_assignment=AxisAssignment(values={"L": 3}),
+        complexity_assignment=AxisAssignment(values={"C": 3}),
+        resolution_assignment=AxisAssignment(values={"N": 95}),
+        seed=101,
+    )
+
+    assert str(capture_materialization_error(lambda: plan.validate_declaration(declaration))) == (
+        "N=95 is below minimum 96 for L=3"
+    )
+
+
+def test_materialization_documents_reject_invalid_bytes() -> None:
+    assert str(
+        capture_materialization_error(
+            lambda: MaterializationDeclarationDocument.from_bytes(b"\xff")
+        )
+    ) == "materialization declaration must be UTF-8"
+    assert str(
+        capture_materialization_error(lambda: MaterializationPlanDocument.from_bytes(b"[]"))
+    ) == "materialization plan must contain an object"
+
+
+def capture_materialization_error(
+    call: Callable[[], object],
+) -> MaterializationValidationError:
+    with pytest.raises(MaterializationValidationError) as error:
+        call()
+    return error.value

@@ -91,7 +91,7 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
     )
 
 
-def test_benchmark_artifact_tree_contains_only_manifest_files() -> None:
+def test_benchmark_artifact_tree_contains_only_data_files() -> None:
     benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks"
 
     tracked_files = tuple(path for path in benchmark_root.rglob("*") if path.is_file())
