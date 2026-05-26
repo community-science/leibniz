@@ -21,7 +21,7 @@ _digits_manifest_path = (
     _repository_root / "src" / "leibniz" / "benchmarks" / "digits" / "manifest.json"
 )
 _digits_latent_factors_path = (
-    _repository_root / "src" / "leibniz" / "generators" / "digits" / "latent_factors.json"
+    _repository_root / "src" / "leibniz" / "benchmarks" / "digits" / "latent_factors.json"
 )
 
 

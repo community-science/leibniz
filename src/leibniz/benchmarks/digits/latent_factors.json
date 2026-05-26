@@ -44,15 +44,5 @@
       "included_roles": ["content"],
       "description": "Primary content-complexity coordinate."
     }
-  ],
-  "resolution_requirements": [
-    {
-      "name": "benchmarks.digits.resolution.minimum-c1",
-      "resolution_axis": "N",
-      "content_coordinate": "C",
-      "content_complexity": 1,
-      "minimum_resolution": 32,
-      "basis": "declared-minimum"
-    }
   ]
 }
