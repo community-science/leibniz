@@ -38,6 +38,7 @@ writeFileSync(generatedPayloadPath, generatedPayload);
 assertShellUsesGeneratedConsoleData();
 assertBenchmarkWorkbenchStructure();
 assertBenchmarkSamplePaneStructure();
+assertBenchmarkFrontierPlotStructure();
 assertBenchmarkWebSourceIsDataDriven();
 assertConsoleResultRootPolicy();
 
@@ -185,6 +186,51 @@ function assertBenchmarkSamplePaneStructure() {
   for (const marker of requiredStyleMarkers) {
     if (!styles.includes(marker)) {
       throw new Error(`Console styles must preserve sample pane marker: ${marker}`);
+    }
+  }
+}
+
+function assertBenchmarkFrontierPlotStructure() {
+  const dashboard = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/BenchmarkResultDashboard.tsx'),
+    'utf8',
+  );
+  const panel = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/BenchmarksPanel.tsx'),
+    'utf8',
+  );
+  const styles = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/styles.css'),
+    'utf8',
+  );
+  const requiredDashboardMarkers = [
+    'frontier-chart-legend',
+    'frontier-chart-proposal-guide',
+    'frontier-chart-proposal-cap',
+    'frontier-chart-tooltip-kicker',
+  ];
+  for (const marker of requiredDashboardMarkers) {
+    if (!dashboard.includes(marker)) {
+      throw new Error(`BenchmarkResultDashboard must expose frontier plot marker: ${marker}`);
+    }
+  }
+  if (dashboard.includes('Reset</button>')) {
+    throw new Error('Frontier plot reset must live in the benchmark section action slot');
+  }
+  if (!panel.includes('Reset Zoom') || !panel.includes('resetToken')) {
+    throw new Error('BenchmarksPanel must route frontier reset through section actions');
+  }
+
+  const requiredStyleMarkers = [
+    '--frontier-grid-major',
+    '--frontier-frame-bg',
+    '--frontier-tooltip-bg',
+    '.frontier-chart-legend',
+    '.frontier-chart-proposal-guide',
+  ];
+  for (const marker of requiredStyleMarkers) {
+    if (!styles.includes(marker)) {
+      throw new Error(`Console styles must preserve frontier plot marker: ${marker}`);
     }
   }
 }
