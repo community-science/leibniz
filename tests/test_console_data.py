@@ -65,8 +65,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
 
     assert "observation_inspections" not in record
 
-    performance_views = cast(list[dict[str, object]], record["performance_views"])
-    assert performance_views == []
+    assert "performance_views" not in record
 
     model_inspections = cast(list[dict[str, object]], record["model_inspections"])
     assert len(model_inspections) == 1

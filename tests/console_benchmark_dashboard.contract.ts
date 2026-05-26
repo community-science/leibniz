@@ -2,10 +2,8 @@ import {
   benchmarkPlotModel,
   benchmarkResultsForTask,
   modelComparisonRows,
-  performanceViewsForTask,
 } from '../src/leibniz/console/_web_src/src/benchmarkDashboardModel.ts';
 import type { ModelInspectionRecord } from '../src/leibniz/console/_web_src/src/modelInspections.ts';
-import type { PerformanceViewRecord } from '../src/leibniz/console/_web_src/src/performanceViews.ts';
 import type {
   BenchmarkResultRecord,
   ResultViewRecord,
@@ -136,53 +134,8 @@ const inspections: ModelInspectionRecord[] = [
     training_provenance: [],
   },
 ];
-const performanceViews: PerformanceViewRecord[] = [
-  {
-    competence_integral_view: {
-      complexity_axis: 'C',
-      entries: [
-        {
-          benchmark_id: targetBenchmark,
-          coverage: 1,
-          integral: 0.75,
-          missing_complexities: [],
-          observed_complexities: [1],
-          points: [],
-        },
-      ],
-      expected_complexities: [1],
-      id: 'integral-view',
-      projection_rule: 'mean',
-      source_dataset_digest: 'sha256:1234',
-    },
-    id: 'performance-view',
-    manifest: {
-      benchmark_manifest: {
-        kind: 'benchmark-manifest',
-        protocol_id: targetBenchmark,
-      },
-      complexity_axis: 'C',
-      expected_complexities: [1],
-      id: 'manifest',
-      materialization_declaration: {
-        kind: 'materialization-declaration',
-      },
-      measurement_cases: [],
-      observation_formation_declaration: {
-        kind: 'observation-formation-declaration',
-      },
-      view_id: 'views.target.performance@0.1.0',
-    },
-    materialization_plans: [],
-    measurement_dataset: { measurements: [] },
-    source_path: 'benchmarks/target/performance_view_bundle.json',
-  },
-];
-
 assertEqual(benchmarkResultsForTask(resultViews, targetBenchmark).length, 1, 'target results');
 assertEqual(benchmarkResultsForTask(resultViews, otherBenchmark).length, 1, 'other results');
-assertEqual(performanceViewsForTask(performanceViews, targetBenchmark).length, 1, 'target views');
-assertEqual(performanceViewsForTask(performanceViews, otherBenchmark).length, 0, 'other views');
 assertEqual(
   modelComparisonRows(result, inspections)[0]?.inspection?.id,
   'inspection-a',
@@ -196,6 +149,18 @@ assertEqual(plotModel.proposals[0]?.cost, 10, 'plot proposal cost');
 assertEqual(plotModel.staircase.length, 1, 'plot staircase point count');
 assertEqual(plotModel.xTicks.includes(16), true, 'plot log ticks');
 assertEqual(plotModel.yDomain[0], 0, 'plot y starts at zero');
+const emptyPlotModel = benchmarkPlotModel(
+  {
+    ...result,
+    frontiers: {},
+    leaderboard: [],
+    proposals: [],
+  },
+  'parameter_count',
+);
+assertEqual(emptyPlotModel.points.length, 0, 'empty plot point count');
+assertEqual(emptyPlotModel.xTicks.length > 0, true, 'empty plot has x ticks');
+assertEqual(emptyPlotModel.yTicks.length > 0, true, 'empty plot has y ticks');
 
 function assertEqual(actual: unknown, expected: unknown, label: string) {
   if (actual !== expected) {

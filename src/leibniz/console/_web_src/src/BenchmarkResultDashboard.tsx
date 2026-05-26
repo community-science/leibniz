@@ -175,17 +175,14 @@ function BenchmarkFrontierPlot({
           <button onClick={onReset} type="button">Reset</button>
         </div>
       </div>
-      {model.points.length === 0 ? (
-        <p className="artifact-detail-note">No plottable model results are available.</p>
-      ) : (
-        <div className="frontier-chart">
-          <svg
-            aria-label={`Frontier score by ${costAxis}`}
-            className="frontier-chart-svg"
-            role="img"
-            viewBox={`0 0 ${plotWidth} ${plotHeight}`}
-            onClick={() => onSelect(null)}
-          >
+      <div className="frontier-chart">
+        <svg
+          aria-label={`Frontier score by ${costAxis}`}
+          className="frontier-chart-svg"
+          role="img"
+          viewBox={`0 0 ${plotWidth} ${plotHeight}`}
+          onClick={() => onSelect(null)}
+        >
             <rect
               className="frontier-chart-frame"
               height={plotBodyHeight}
@@ -303,20 +300,29 @@ function BenchmarkFrontierPlot({
             >
               Score
             </text>
-          </svg>
-          {activePoint === undefined ? null : (
-            <div className="frontier-chart-tooltip">
-              <strong>{'model' in activePoint ? activePoint.label : activePoint.label}</strong>
-              <span>{formatCost(activePoint.cost)} cost</span>
-              <span>
-                {'predictedScore' in activePoint
-                  ? `prediction ${scoreLabel(activePoint.predictedScore)}`
-                  : `score ${scoreLabel(activePoint.score)}`}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
+            {model.points.length === 0 ? (
+              <text
+                className="frontier-chart-empty-label"
+                textAnchor="middle"
+                x={plotMargin.left + plotBodyWidth / 2}
+                y={plotMargin.top + plotBodyHeight / 2}
+              >
+                No model results yet
+              </text>
+            ) : null}
+        </svg>
+        {activePoint === undefined ? null : (
+          <div className="frontier-chart-tooltip">
+            <strong>{activePoint.label}</strong>
+            <span>{formatCost(activePoint.cost)} cost</span>
+            <span>
+              {'predictedScore' in activePoint
+                ? `prediction ${scoreLabel(activePoint.predictedScore)}`
+                : `score ${scoreLabel(activePoint.score)}`}
+            </span>
+          </div>
+        )}
+      </div>
     </section>
   );
 }

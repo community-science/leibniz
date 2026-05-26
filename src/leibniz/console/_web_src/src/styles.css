@@ -765,13 +765,6 @@ p {
   padding: var(--space-xl);
 }
 
-.benchmark-performance-bundle {
-  border: var(--line-thin) solid var(--border-color-strong);
-  border-radius: var(--radius-md);
-  background: var(--panel-bg-subtle);
-  padding: var(--space-xl);
-}
-
 .benchmark-result-heading {
   display: flex;
   align-items: flex-start;
@@ -889,6 +882,11 @@ p {
   font-weight: 700;
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
+}
+
+.frontier-chart-empty-label {
+  fill: var(--text-muted);
+  font-size: var(--font-body);
 }
 
 .frontier-chart-staircase {

@@ -11,7 +11,6 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 from leibniz.architectures import ArchitectureManifestDocument
-from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.console.artifact_index import (
     ConsoleArtifactIndex,
     ConsoleArtifactIndexBuilder,
@@ -22,15 +21,12 @@ from leibniz.console.artifact_index import (
 from leibniz.documents import canonical_document_bytes, document_filename_suffix
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.local_results import LocalResultImportError, load_console_result_view
-from leibniz.materialization import MaterializationDeclarationDocument
 from leibniz.model_inspection import ModelInspectionRecord
-from leibniz.observation_formation import ObservationFormationDeclarationDocument
 from leibniz.observation_generation import (
     ObservationGenerator,
     field_to_png_data_url,
     load_observation_generator,
 )
-from leibniz.performance_bundles import PerformanceViewBundle, PerformanceViewBundleDocument
 
 __all__ = [
     "ConsoleData",
@@ -57,7 +53,6 @@ class ConsoleData:
 
     artifact_index: ConsoleArtifactIndex
     artifact_details: tuple[Mapping[str, object], ...]
-    performance_views: tuple[Mapping[str, object], ...]
     result_views: tuple[Mapping[str, object], ...]
     model_inspections: tuple[Mapping[str, object], ...]
     benchmark_tasks: tuple[Mapping[str, object], ...]
@@ -69,7 +64,6 @@ class ConsoleData:
             "format_version": _format_version,
             "artifact_index": self.artifact_index.to_record(),
             "artifact_details": list(self.artifact_details),
-            "performance_views": list(self.performance_views),
             "result_views": list(self.result_views),
             "model_inspections": list(self.model_inspections),
             "benchmark_tasks": list(self.benchmark_tasks),
@@ -96,7 +90,6 @@ class ConsoleDataBuilder:
         sources = tuple(self._discover_sources(tuple(roots)))
         artifact_index = self._artifact_builder.build(sources)
         details = tuple(self._detail_for_source(source) for source in artifact_index.entries)
-        performance_views = tuple(self._performance_views(artifact_index.entries))
         result_views = tuple(self._result_views(tuple(result_roots)))
         model_inspections = tuple(self._model_inspections(artifact_index.entries))
         benchmark_tasks = tuple(self._benchmark_tasks(artifact_index.entries))
@@ -104,7 +97,6 @@ class ConsoleDataBuilder:
         return ConsoleData(
             artifact_index=artifact_index,
             artifact_details=details,
-            performance_views=performance_views,
             result_views=result_views,
             model_inspections=model_inspections,
             benchmark_tasks=benchmark_tasks,
@@ -269,112 +261,7 @@ class ConsoleDataBuilder:
                 "materialization_declaration": record["materialization_declaration"],
                 "samples": record["samples"],
             }
-        if kind == "performance-view-bundle":
-            measurement_cases = self._required_sequence(
-                record["measurement_cases"],
-                "measurement_cases",
-            )
-            return {
-                "id": record["id"],
-                "benchmark_manifest": record["benchmark_manifest"],
-                "materialization_declaration": record["materialization_declaration"],
-                "observation_formation_declaration": (
-                    record["observation_formation_declaration"]
-                ),
-                "view_id": record["view_id"],
-                "complexity_axis": record["complexity_axis"],
-                "expected_complexities": record["expected_complexities"],
-                "measurement_cases": record["measurement_cases"],
-                "measurement_count": len(measurement_cases),
-            }
         raise ConsoleDataValidationError(f"unsupported document kind: {kind}")
-
-    def _performance_views(
-        self,
-        entries: tuple[ConsoleArtifactIndexEntry, ...],
-    ) -> tuple[Mapping[str, object], ...]:
-        benchmark_manifests = {
-            document.manifest.id: document.manifest
-            for document in (
-                BenchmarkManifestDocument.from_bytes(
-                    self._repository_path(
-                        entry.source_path,
-                        description="source document",
-                    ).read_bytes()
-                )
-                for entry in entries
-                if entry.kind == "benchmark-manifest"
-            )
-        }
-        materialization_declarations = {
-            document.declaration.id: document.declaration
-            for document in (
-                MaterializationDeclarationDocument.from_bytes(
-                    self._repository_path(
-                        entry.source_path,
-                        description="source document",
-                    ).read_bytes()
-                )
-                for entry in entries
-                if entry.kind == "materialization-declaration"
-            )
-        }
-        formation_declarations = {
-            document.declaration.id: document.declaration
-            for document in (
-                ObservationFormationDeclarationDocument.from_bytes(
-                    self._repository_path(
-                        entry.source_path,
-                        description="source document",
-                    ).read_bytes()
-                )
-                for entry in entries
-                if entry.kind == "observation-formation-declaration"
-            )
-        }
-        views: list[Mapping[str, object]] = []
-        for entry in entries:
-            if entry.kind != "performance-view-bundle":
-                continue
-            document = PerformanceViewBundleDocument.from_bytes(
-                self._repository_path(entry.source_path, description="source document").read_bytes()
-            )
-            manifest = document.manifest
-            if manifest.benchmark_manifest.protocol_id is None:
-                raise ConsoleDataValidationError(
-                    f"{entry.source_path}: benchmark_manifest must include protocol_id"
-                )
-            if manifest.materialization_declaration.protocol_id is None:
-                raise ConsoleDataValidationError(
-                    f"{entry.source_path}: materialization_declaration must include protocol_id"
-                )
-            if manifest.observation_formation_declaration.protocol_id is None:
-                raise ConsoleDataValidationError(
-                    f"{entry.source_path}: observation_formation_declaration must include "
-                    "protocol_id"
-                )
-            try:
-                benchmark_manifest = benchmark_manifests[manifest.benchmark_manifest.protocol_id]
-                materialization_declaration = materialization_declarations[
-                    manifest.materialization_declaration.protocol_id
-                ]
-                formation_declaration = formation_declarations[
-                    manifest.observation_formation_declaration.protocol_id
-                ]
-            except KeyError as error:
-                raise ConsoleDataValidationError(
-                    f"{entry.source_path}: performance bundle references an undiscovered source"
-                ) from error
-            bundle = PerformanceViewBundle.from_manifest(
-                manifest,
-                benchmark_manifest=benchmark_manifest,
-                materialization_declaration=materialization_declaration,
-                observation_formation_declaration=formation_declaration,
-            )
-            record = bundle.to_record()
-            record["source_path"] = entry.source_path.as_posix()
-            views.append(record)
-        return tuple(views)
 
     def _model_inspections(
         self,

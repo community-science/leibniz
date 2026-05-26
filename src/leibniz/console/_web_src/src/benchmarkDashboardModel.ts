@@ -6,7 +6,6 @@ import {
   type ProposalRecord,
   type ResultViewRecord,
 } from './resultViews.ts';
-import type { PerformanceViewRecord } from './performanceViews.ts';
 
 export type BenchmarkResultEntry = {
   sourcePath: string;
@@ -59,16 +58,6 @@ export function benchmarkResultsForTask(
       view.benchmark_results.map((result) => ({ sourcePath: view.source_path, result })),
     )
     .filter((entry) => entry.result.benchmark_id === benchmarkId);
-}
-
-export function performanceViewsForTask(
-  views: PerformanceViewRecord[],
-  benchmarkId: string,
-): PerformanceViewRecord[] {
-  return views.filter((view) =>
-    view.manifest.benchmark_manifest.protocol_id === benchmarkId ||
-    view.competence_integral_view.entries.some((entry) => entry.benchmark_id === benchmarkId),
-  );
 }
 
 export function modelComparisonRows(
