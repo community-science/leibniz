@@ -2,6 +2,7 @@ import { Database, FileJson, FolderTree, Network, ScrollText } from 'lucide-reac
 import { useState } from 'react';
 
 import { ArtifactBrowser } from './ArtifactBrowser';
+import { demoArtifactDetails } from './demoArtifactDetails';
 import { demoArtifactIndex } from './demoArtifactIndex';
 
 type ConsoleSection = {
@@ -94,7 +95,7 @@ export function ConsoleShell() {
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'artifacts'}>
-          <ArtifactBrowser index={demoArtifactIndex} />
+          <ArtifactBrowser details={demoArtifactDetails} index={demoArtifactIndex} />
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'source'}>

@@ -1,8 +1,9 @@
 import { CheckCircle2, FileJson, Link2, Network } from 'lucide-react';
 import type { KeyboardEvent } from 'react';
-import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
+import { DetailItem, DetailSection } from './ArtifactDetailPrimitives';
+import { ArtifactTypedDetail } from './ArtifactTypedDetail';
 import type { ConsoleArtifactIndexEntryRecord, ConsoleArtifactIndexRecord } from './artifactIndex';
 import {
   allArtifactKinds,
@@ -13,8 +14,10 @@ import {
   resolveSelectedArtifact,
   shortDigest,
 } from './artifactBrowserModel';
+import type { ConsoleArtifactDetailMap, ConsoleArtifactDetailRecord } from './artifactDetails';
+import { detailForArtifact } from './artifactDetails';
 
-export function ArtifactBrowser({ index }: ArtifactBrowserProps) {
+export function ArtifactBrowser({ details, index }: ArtifactBrowserProps) {
   const [selectedKind, setSelectedKind] = useState<string>(allArtifactKinds);
   const [selectedArtifactKey, setSelectedArtifactKey] = useState<string | null>(null);
   const kinds = useMemo(() => artifactKinds(index.artifacts), [index.artifacts]);
@@ -80,13 +83,19 @@ export function ArtifactBrowser({ index }: ArtifactBrowserProps) {
             );
           })}
         </div>
-        <ArtifactDetailPanel artifact={selectedArtifact} />
+        <ArtifactDetailPanel
+          artifact={selectedArtifact}
+          detail={
+            selectedArtifact === undefined ? undefined : detailForArtifact(details, selectedArtifact)
+          }
+        />
       </div>
     </section>
   );
 }
 
 type ArtifactBrowserProps = {
+  details?: ConsoleArtifactDetailMap;
   index: ConsoleArtifactIndexRecord;
 };
 
@@ -147,7 +156,13 @@ function ArtifactRow({ artifact, isSelected, onSelect }: ArtifactRowProps) {
   );
 }
 
-function ArtifactDetailPanel({ artifact }: { artifact: ConsoleArtifactIndexEntryRecord | undefined }) {
+function ArtifactDetailPanel({
+  artifact,
+  detail,
+}: {
+  artifact: ConsoleArtifactIndexEntryRecord | undefined;
+  detail: ConsoleArtifactDetailRecord | undefined;
+}) {
   if (artifact === undefined) {
     return (
       <aside className="artifact-detail empty" aria-label="Artifact detail">
@@ -178,6 +193,8 @@ function ArtifactDetailPanel({ artifact }: { artifact: ConsoleArtifactIndexEntry
         <ReferenceDetail reference={artifact.reference} />
       </DetailSection>
 
+      <ArtifactTypedDetail artifact={artifact} detail={detail} />
+
       <DetailSection title="Dependencies">
         {artifact.dependencies.length > 0 ? (
           <ul className="artifact-reference-list">
@@ -198,24 +215,6 @@ function ArtifactDetailPanel({ artifact }: { artifact: ConsoleArtifactIndexEntry
         <DetailItem label="Command" value={artifact.validation_command} />
       </DetailSection>
     </aside>
-  );
-}
-
-function DetailSection({ children, title }: { children: ReactNode; title: string }) {
-  return (
-    <section className="artifact-detail-section">
-      <h4>{title}</h4>
-      {children}
-    </section>
-  );
-}
-
-function DetailItem({ label, value }: { label: string; value: string }) {
-  return (
-    <dl className="artifact-detail-item">
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </dl>
   );
 }
 
