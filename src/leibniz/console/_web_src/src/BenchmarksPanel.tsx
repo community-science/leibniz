@@ -467,6 +467,7 @@ function referenceLabel(reference: ArtifactReferenceRecord): string {
 function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
   const modes = useMemo(() => unique(task.batches.map((batch) => batch.mode)), [task.batches]);
   const [mode, setMode] = useState(modes[0] ?? '');
+  const [selectedSampleKey, setSelectedSampleKey] = useState<string | null>(null);
   const matchingMode = matchingBatches(task.batches, { mode });
   const scales = unique(matchingMode.map((batch) => batch.scale));
   const [scale, setScale] = useState(scales[0] ?? task.batches[0]?.scale ?? 1);
@@ -501,6 +502,13 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
   const visibleSamples = visibleBatches.flatMap((batch) =>
     batch.samples.map((sample) => ({ batch, sample })),
   );
+  const selectedSample =
+    visibleSamples.find(({ batch, sample }) => sampleKey(batch, sample) === selectedSampleKey) ??
+    visibleSamples[0];
+  const selectedKey =
+    selectedSample === undefined
+      ? null
+      : sampleKey(selectedSample.batch, selectedSample.sample);
 
   if (selected === undefined) {
     return <p className="artifact-detail-note">No generated samples are available.</p>;
@@ -577,25 +585,42 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
           <BenchmarkSampleCard
             density={batch.presentation.sample_card_density}
             key={`${batch.mode}-${batch.scale}-${sample.index}-${sample.outcome_id}`}
+            onSelect={() => setSelectedSampleKey(sampleKey(batch, sample))}
             sample={sample}
+            selected={sampleKey(batch, sample) === selectedKey}
           />
         ))}
       </section>
+      {selectedSample === undefined ? null : (
+        <BenchmarkSampleDetail
+          batch={selectedSample.batch}
+          sample={selectedSample.sample}
+          task={task}
+        />
+      )}
     </div>
   );
 }
 
 function BenchmarkSampleCard({
   density,
+  onSelect,
   sample,
+  selected,
 }: {
   density: SampleCardDensity;
+  onSelect: () => void;
   sample: GeneratedObservationSampleRecord;
+  selected: boolean;
 }) {
   const content = sample.latent_coordinates.find((coordinate) => coordinate.role === 'content');
   const nuisance = sample.latent_coordinates.find((coordinate) => coordinate.role === 'nuisance');
   return (
-    <article className={`benchmark-sample-card ${density}`}>
+    <button
+      className={`benchmark-sample-card ${density} ${selected ? 'selected' : ''}`}
+      onClick={onSelect}
+      type="button"
+    >
       <div className="benchmark-image-shell">
         <img alt={sample.outcome_id} src={sample.image_data_url} />
       </div>
@@ -620,8 +645,127 @@ function BenchmarkSampleCard({
           <dd>{nuisance?.multiplicity ?? 'n/a'}</dd>
         </dl>
       )}
-    </article>
+    </button>
   );
+}
+
+function BenchmarkSampleDetail({
+  batch,
+  sample,
+  task,
+}: {
+  batch: GeneratedObservationBatchRecord;
+  sample: GeneratedObservationSampleRecord;
+  task: BenchmarkTaskRecord;
+}) {
+  const latentRoles = unique(sample.latent_coordinates.map((coordinate) => coordinate.role));
+  return (
+    <section className="benchmark-sample-detail" aria-label="Selected sample detail">
+      <div className="benchmark-sample-detail-preview">
+        <div className="benchmark-image-shell">
+          <img alt={sample.outcome_id} src={sample.image_data_url} />
+        </div>
+        <div>
+          <h3>{sample.outcome_id}</h3>
+          <p>{sample.component_sequence.join('')}</p>
+        </div>
+      </div>
+      <dl className="benchmark-sample-detail-grid">
+        <dt>Mode</dt>
+        <dd>{modeLabel(batch.mode)}</dd>
+        <dt>{task.scale_axis}</dt>
+        <dd>{batch.scale}</dd>
+        <dt>{task.complexity_axis}</dt>
+        <dd>{sample.complexity}</dd>
+        <dt>Seed</dt>
+        <dd>{batch.seed}</dd>
+        <dt>Sample</dt>
+        <dd>{sample.index + 1} of {batch.sample_count}</dd>
+        <dt>Field Shape</dt>
+        <dd>{sample.field_shape.join(' x ')}</dd>
+        <dt>Components</dt>
+        <dd>{sample.component_sequence.join(', ')}</dd>
+      </dl>
+      <section className="benchmark-sample-detail-section">
+        <h4>Materialization</h4>
+        <dl className="benchmark-sample-detail-grid">
+          {materializationEntries(sample).map(([key, value]) => (
+            <div key={key}>
+              <dt>{key}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+      <section className="benchmark-sample-detail-section">
+        <h4>Latent Coordinates</h4>
+        <div className="benchmark-latent-role-list">
+          {latentRoles.map((role) => (
+            <article className="benchmark-latent-role" key={role}>
+              <h5>{modeLabel(role)}</h5>
+              {sample.latent_coordinates
+                .filter((coordinate) => coordinate.role === role)
+                .map((coordinate) => (
+                  <dl className="benchmark-sample-detail-grid" key={coordinate.name}>
+                    <dt>Name</dt>
+                    <dd>{coordinate.name}</dd>
+                    <dt>Multiplicity</dt>
+                    <dd>{coordinate.multiplicity}</dd>
+                    <dt>Measure</dt>
+                    <dd>{recordLabel(coordinate.degree_measure)}</dd>
+                    <dt>Values</dt>
+                    <dd>{parameterValueLabel(coordinate.values)}</dd>
+                  </dl>
+                ))}
+            </article>
+          ))}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function sampleKey(
+  batch: GeneratedObservationBatchRecord,
+  sample: GeneratedObservationSampleRecord,
+): string {
+  return `${batch.mode}:${batch.scale}:${batch.seed}:${batch.sample_count}:${sample.index}:${sample.outcome_id}`;
+}
+
+function materializationEntries(sample: GeneratedObservationSampleRecord): [string, string][] {
+  return [
+    ['Plan', recordString(sample.materialization_plan, 'id')],
+    ['Benchmark', recordString(sample.materialization_plan, 'benchmark_id')],
+    ['Scale', assignmentLabel(sample.materialization_plan.scale_assignment)],
+    ['Complexity', assignmentLabel(sample.materialization_plan.complexity_assignment)],
+    ['Resolution', assignmentLabel(sample.materialization_plan.resolution_assignment)],
+    ['Seed', recordString(sample.materialization_plan, 'seed')],
+  ];
+}
+
+function assignmentLabel(value: unknown): string {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return 'unknown';
+  }
+  const values = (value as Record<string, unknown>).values;
+  if (!Array.isArray(values)) {
+    return 'unknown';
+  }
+  return values
+    .map((entry) => {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      return `${String(record.axis)}=${String(record.value)}`;
+    })
+    .filter((entry): entry is string => entry !== null)
+    .join(', ') || 'unknown';
+}
+
+function recordString(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : 'unknown';
 }
 
 function SelectControl({

@@ -105,6 +105,34 @@ assertEqual(
   true,
   'aggregate batch presentation',
 );
+const canonicalSample = benchmarkTask?.batches[0]?.samples[0];
+if (canonicalSample === undefined) {
+  throw new Error('expected canonical sample');
+}
+assertEqual(canonicalSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
+assertEqual(canonicalSample.field_shape.join('x'), '1x32x32', 'sample field shape');
+assertEqual(
+  canonicalSample.latent_coordinates.map((coordinate) => coordinate.role).join(','),
+  'content,nuisance,materialization',
+  'sample latent roles',
+);
+assertEqual(
+  canonicalSample.latent_coordinates.find((coordinate) => coordinate.role === 'content')?.multiplicity,
+  1,
+  'sample content multiplicity',
+);
+const materializationPlan = canonicalSample.materialization_plan as Record<string, unknown>;
+assertEqual(assignmentLabel(materializationPlan.scale_assignment), 'L=1', 'sample scale assignment');
+assertEqual(
+  assignmentLabel(materializationPlan.complexity_assignment),
+  'C=1',
+  'sample complexity assignment',
+);
+assertEqual(
+  assignmentLabel(materializationPlan.resolution_assignment),
+  'N=32',
+  'sample resolution assignment',
+);
 assertEqual(
   artifacts
     .filter((artifact) => artifact.kind === 'measurement')
@@ -156,4 +184,24 @@ function assertDataError(callback: () => void, expectedMessage: string) {
   }
 
   throw new Error(`expected console data transport error: ${expectedMessage}`);
+}
+
+function assignmentLabel(value: unknown): string {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return 'unknown';
+  }
+  const values = (value as Record<string, unknown>).values;
+  if (!Array.isArray(values)) {
+    return 'unknown';
+  }
+  return values
+    .map((entry) => {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      return `${String(record.axis)}=${String(record.value)}`;
+    })
+    .filter((entry): entry is string => entry !== null)
+    .join(',');
 }
