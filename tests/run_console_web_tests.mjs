@@ -13,11 +13,16 @@ const contracts = [
   'tests/console_data_transport.contract.ts',
   'tests/console_artifact_index_transport.contract.ts',
 ];
+const generatedDataContracts = new Set([
+  'tests/console_artifact_browser.contract.ts',
+  'tests/console_data_transport.contract.ts',
+]);
 
 const generatedPayload = run('python', ['-m', 'leibniz.console.data', 'tests/fixtures'], {
   captureOutput: true,
 });
 writeFileSync(generatedPayloadPath, generatedPayload);
+assertShellUsesGeneratedConsoleData();
 
 for (const contract of contracts) {
   run('tsc', [
@@ -35,7 +40,7 @@ for (const contract of contracts) {
     '--skipLibCheck',
     contract,
   ]);
-  if (contract === 'tests/console_data_transport.contract.ts') {
+  if (generatedDataContracts.has(contract)) {
     const payload = readFileSync(generatedPayloadPath, 'utf8');
     const script = [
       `globalThis.consoleDataPayload = ${payload};`,
@@ -44,6 +49,19 @@ for (const contract of contracts) {
     run('node', ['--experimental-strip-types', '--eval', script]);
   } else {
     run('node', ['--experimental-strip-types', contract]);
+  }
+}
+
+function assertShellUsesGeneratedConsoleData() {
+  const shell = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/ConsoleShell.tsx'),
+    'utf8',
+  );
+  if (!shell.includes("from 'virtual:leibniz-console-data'")) {
+    throw new Error('ConsoleShell must import generated console data');
+  }
+  if (shell.includes('demoArtifact')) {
+    throw new Error('ConsoleShell must not import handwritten demo artifact data');
   }
 }
 
