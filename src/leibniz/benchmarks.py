@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import product
 from typing import cast
 
 from leibniz.artifacts import ArtifactReference
@@ -11,7 +12,7 @@ from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.latent_factors import LatentFactorDeclaration
-from leibniz.outcomes import OutcomeSpace
+from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.records import FieldSpec, RecordSpec
 
 __all__ = [
@@ -136,6 +137,35 @@ class BenchmarkOutcomeSequence:
             raise BenchmarkManifestValidationError("scale must be positive")
         return self.atom_count**scale
 
+    def outcome_id(self, atoms: Sequence[int]) -> str:
+        atom_values = tuple(_as_int(atom, field="atoms") for atom in atoms)
+        if not atom_values:
+            raise BenchmarkManifestValidationError("outcome sequence must not be empty")
+        for atom in atom_values:
+            if atom < 0 or atom >= self.atom_count:
+                raise BenchmarkManifestValidationError(
+                    f"outcome atom {atom} is outside 0..{self.atom_count - 1}"
+                )
+        return "-".join((self.atom_name, *(str(atom) for atom in atom_values)))
+
+    def resolve_outcome_space(
+        self,
+        *,
+        id: ProtocolIdentifier,
+        length: int,
+    ) -> OutcomeSpace:
+        if isinstance(length, bool):
+            raise BenchmarkManifestValidationError("length must be an integer")
+        if length < 1:
+            raise BenchmarkManifestValidationError("length must be positive")
+        return OutcomeSpace(
+            id=id,
+            outcomes=tuple(
+                Outcome(self.outcome_id(atoms))
+                for atoms in product(range(self.atom_count), repeat=length)
+            ),
+        )
+
     def to_record(self) -> dict[str, object]:
         return {
             "atom_count": self.atom_count,
@@ -248,6 +278,22 @@ class BenchmarkManifest:
             declaration.projection(self.complexity_coordinate)
         except ValueError as error:
             raise BenchmarkManifestValidationError(str(error)) from error
+
+    def resolve_outcome_space(self, *, scale: int) -> OutcomeSpace:
+        """Resolve this benchmark's finite outcome space at one scale."""
+
+        if self.outcome_space is not None:
+            return self.outcome_space
+        if self.outcome_sequence is None or self.scale_parameter is None:
+            raise BenchmarkManifestValidationError("manifest does not declare outcomes")
+        if not self.scale_parameter.contains(scale):
+            raise BenchmarkManifestValidationError(
+                f"scale {scale} is below minimum {self.scale_parameter.minimum}"
+            )
+        return self.outcome_sequence.resolve_outcome_space(
+            id=ProtocolIdentifier.parse(f"{self.id.name}.outcomes.l{scale}@0.1.0"),
+            length=scale,
+        )
 
     def to_record(self) -> dict[str, object]:
         record: dict[str, object] = {

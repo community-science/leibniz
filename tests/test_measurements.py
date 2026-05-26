@@ -1,6 +1,7 @@
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from leibniz.artifacts import ArtifactReference
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes
@@ -107,6 +108,28 @@ def test_measurement_record_digest_is_stable_for_minimal_and_expanded_records() 
     assert measurement.digest == expanded.digest
 
 
+def test_measurement_record_preserves_evidence_artifact_references() -> None:
+    record = _measurement_record()
+    record["evidence_artifacts"] = [
+        {
+            "kind": "materialization-plan",
+            "protocol_id": "core.boolean-materialization.plan-one@0.1.0",
+        }
+    ]
+
+    measurement = MeasurementRecord.from_record(record)
+
+    assert measurement.evidence_artifacts == (
+        ArtifactReference(
+            kind="materialization-plan",
+            protocol_id=ProtocolIdentifier.parse(
+                "core.boolean-materialization.plan-one@0.1.0"
+            ),
+        ),
+    )
+    assert measurement.to_record()["evidence_artifacts"] == record["evidence_artifacts"]
+
+
 def test_measurement_record_rejects_malformed_records_and_state_paths() -> None:
     assert str(
         capture_measurement_error(
@@ -152,6 +175,17 @@ def test_measurement_record_rejects_malformed_records_and_state_paths() -> None:
             )
         )
     ) == "local_path: unknown field"
+
+    record = _measurement_record()
+    artifact = {
+        "kind": "materialization-plan",
+        "protocol_id": "core.boolean-materialization.plan-one@0.1.0",
+    }
+    record["evidence_artifacts"] = [artifact, artifact]
+
+    assert str(capture_measurement_error(lambda: MeasurementRecord.from_record(record))) == (
+        "duplicate evidence artifact"
+    )
 
 
 def test_measurement_record_rejects_conflicting_raw_scoring_evidence() -> None:
