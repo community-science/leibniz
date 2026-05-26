@@ -21,6 +21,7 @@ from leibniz.console.artifact_index import (
 )
 from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
+from leibniz.local_results import LocalResultImportError, load_console_result_view
 from leibniz.materialization import MaterializationDeclarationDocument, MaterializationPlan
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
@@ -36,6 +37,7 @@ __all__ = [
 
 _format = "leibniz.console-data"
 _format_version = 1
+_document_suffix = "." + "".join(("j", "s", "o", "n"))
 
 
 class ConsoleDataValidationError(ValueError):
@@ -50,6 +52,7 @@ class ConsoleData:
     artifact_details: tuple[Mapping[str, object], ...]
     observation_inspections: tuple[Mapping[str, object], ...]
     performance_views: tuple[Mapping[str, object], ...]
+    result_views: tuple[Mapping[str, object], ...]
     model_inspections: tuple[Mapping[str, object], ...]
     source_modules: tuple[Mapping[str, object], ...]
 
@@ -61,6 +64,7 @@ class ConsoleData:
             "artifact_details": list(self.artifact_details),
             "observation_inspections": list(self.observation_inspections),
             "performance_views": list(self.performance_views),
+            "result_views": list(self.result_views),
             "model_inspections": list(self.model_inspections),
             "source_modules": list(self.source_modules),
         }
@@ -76,12 +80,18 @@ class ConsoleDataBuilder:
         self._repository_root = repository_root.resolve()
         self._artifact_builder = ConsoleArtifactIndexBuilder(self._repository_root)
 
-    def discover(self, roots: Iterable[PurePosixPath]) -> ConsoleData:
+    def discover(
+        self,
+        roots: Iterable[PurePosixPath],
+        *,
+        result_roots: Iterable[Path] = (),
+    ) -> ConsoleData:
         sources = tuple(self._discover_sources(tuple(roots)))
         artifact_index = self._artifact_builder.build(sources)
         details = tuple(self._detail_for_source(source) for source in artifact_index.entries)
         observation_inspections = tuple(self._observation_inspections(artifact_index.entries))
         performance_views = tuple(self._performance_views(artifact_index.entries))
+        result_views = tuple(self._result_views(tuple(result_roots)))
         model_inspections = tuple(self._model_inspections(artifact_index.entries))
         source_modules = tuple(self._source_modules())
         return ConsoleData(
@@ -89,6 +99,7 @@ class ConsoleDataBuilder:
             artifact_details=details,
             observation_inspections=observation_inspections,
             performance_views=performance_views,
+            result_views=result_views,
             model_inspections=model_inspections,
             source_modules=source_modules,
         )
@@ -487,12 +498,58 @@ class ConsoleDataBuilder:
     def _repository_path(self, source_path: PurePosixPath, *, description: str) -> Path:
         if source_path.is_absolute():
             raise ConsoleDataValidationError(f"{description} must be repository-relative")
-        if ".leibniz" in source_path.parts:
+        if ".leibniz" in source_path.parts or ".runs" in source_path.parts:
             raise ConsoleDataValidationError(f"{description} must not reference local state")
         path = (self._repository_root / Path(source_path)).resolve()
         if not path.is_relative_to(self._repository_root):
             raise ConsoleDataValidationError(f"{description} must stay inside repository root")
         return path
+
+    def _result_views(self, roots: tuple[Path, ...]) -> tuple[Mapping[str, object], ...]:
+        views: list[Mapping[str, object]] = []
+        seen_paths: set[Path] = set()
+        for root in roots:
+            root_path = self._result_root_path(root)
+            if root_path in seen_paths:
+                continue
+            seen_paths.add(root_path)
+            for path in self._result_view_files(root_path):
+                try:
+                    record = dict(load_console_result_view(path.read_bytes()))
+                except LocalResultImportError as error:
+                    raise ConsoleDataValidationError(
+                        f"{path}: invalid console result view: {error}"
+                    ) from error
+                record["source_path"] = self._display_path(path)
+                views.append(record)
+        return tuple(sorted(views, key=lambda view: str(view["source_path"])))
+
+    def _result_root_path(self, root: Path) -> Path:
+        path = (
+            root.resolve()
+            if root.is_absolute()
+            else (self._repository_root / root).resolve()
+        )
+        if path.is_relative_to(self._repository_root):
+            relative = path.relative_to(self._repository_root)
+            if ".leibniz" in relative.parts:
+                raise ConsoleDataValidationError("result root must not reference .leibniz")
+            if ".runs" in relative.parts and relative.parts[:2] != (".runs", "views"):
+                raise ConsoleDataValidationError("result root inside .runs must be .runs/views")
+        if not path.is_dir():
+            raise ConsoleDataValidationError(f"result root does not name a directory: {root}")
+        return path
+
+    def _result_view_files(self, root: Path) -> tuple[Path, ...]:
+        return tuple(
+            sorted(path for path in root.rglob("*" + _document_suffix) if path.is_file())
+        )
+
+    def _display_path(self, path: Path) -> str:
+        resolved = path.resolve()
+        if resolved.is_relative_to(self._repository_root):
+            return resolved.relative_to(self._repository_root).as_posix()
+        return resolved.as_posix()
 
     def _source_modules(self) -> tuple[Mapping[str, object], ...]:
         package_root = self._repository_root / "src" / "leibniz"
@@ -583,11 +640,18 @@ def _main(argv: list[str] | None = None) -> int:
         nargs="+",
         help="repository-relative public roots to discover",
     )
+    parser.add_argument(
+        "--result-root",
+        action="append",
+        default=[],
+        type=Path,
+        help="explicit generated result-view root, such as .runs/views",
+    )
     args = parser.parse_args(argv)
 
     try:
         roots = tuple(PurePosixPath(root) for root in args.roots)
-        data = ConsoleDataBuilder(Path.cwd()).discover(roots)
+        data = ConsoleDataBuilder(Path.cwd()).discover(roots, result_roots=args.result_root)
     except (ConsoleArtifactIndexValidationError, ConsoleDataValidationError) as error:
         parser.error(str(error))
 

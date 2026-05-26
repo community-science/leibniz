@@ -108,7 +108,10 @@ class SubmissionPackageManifest:
             )
         _reject_duplicate_artifact_ids(self.artifacts)
         try:
-            self.measurement_dataset.validate_manifest(self.benchmark_manifest)
+            _validate_measurement_dataset_manifest(
+                dataset=self.measurement_dataset,
+                manifest=self.benchmark_manifest,
+            )
         except ValueError as error:
             raise SubmissionPackageValidationError(str(error)) from error
 
@@ -179,6 +182,39 @@ def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
     if not isinstance(value, ProtocolIdentifier):
         raise SubmissionPackageValidationError(f"{field}: expected parsed identifier")
     return value
+
+
+def _validate_measurement_dataset_manifest(
+    *,
+    dataset: MeasurementDataset,
+    manifest: BenchmarkManifest,
+) -> None:
+    if manifest.outcome_space is not None:
+        dataset.validate_manifest(manifest)
+        return
+    for measurement in dataset.measurements:
+        measurement.validate_manifest(
+            manifest,
+            scale=_scale_from_measurement_outcome_space(manifest, measurement.outcome_space.id),
+        )
+
+
+def _scale_from_measurement_outcome_space(
+    manifest: BenchmarkManifest,
+    outcome_space_id: ProtocolIdentifier,
+) -> int:
+    prefix = f"{manifest.id.name}.outcomes.l"
+    outcome_space_name = str(outcome_space_id.name)
+    if not outcome_space_name.startswith(prefix):
+        raise SubmissionPackageValidationError(
+            "measurement outcome_space does not match scale-indexed manifest"
+        )
+    scale_text = outcome_space_name.removeprefix(prefix)
+    if not scale_text.isdecimal():
+        raise SubmissionPackageValidationError(
+            "measurement outcome_space does not declare an integer scale"
+        )
+    return int(scale_text)
 
 
 def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:

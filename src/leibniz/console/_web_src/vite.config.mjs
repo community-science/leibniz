@@ -1,6 +1,7 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { execFileSync } from 'node:child_process';
+import { delimiter } from 'node:path';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,9 +26,16 @@ function leibnizConsoleData() {
       if (id !== resolvedConsoleDataModuleId) {
         return null;
       }
+      const resultRootArgs = resultRootArguments();
       const payload = execFileSync(
         'python',
-        ['-m', 'leibniz.console.data', 'tests/fixtures', 'src/leibniz/benchmarks'],
+        [
+          '-m',
+          'leibniz.console.data',
+          ...resultRootArgs,
+          'tests/fixtures',
+          'src/leibniz/benchmarks',
+        ],
         {
           cwd: repositoryRoot,
           encoding: 'utf8',
@@ -40,4 +48,15 @@ function leibnizConsoleData() {
       ].join('\n');
     },
   };
+}
+
+function resultRootArguments() {
+  const raw = process.env.LEIBNIZ_CONSOLE_RESULT_ROOTS ?? '';
+  if (raw.trim() === '') {
+    return [];
+  }
+  return raw
+    .split(delimiter)
+    .filter((root) => root.trim() !== '')
+    .flatMap((root) => ['--result-root', root]);
 }

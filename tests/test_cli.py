@@ -297,6 +297,31 @@ def test_cli_validates_federation_ingest_plan_with_registry(
     assert captured.err == ""
 
 
+def test_cli_results_import_reports_missing_publications(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "other.json").write_text("{}", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "results",
+            "import",
+            "--source",
+            str(source_root),
+            "--runs-root",
+            str(tmp_path / ".runs"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert captured.err == "error: no publication bundle documents found\n"
+
+
 @pytest.mark.parametrize(
     "artifact",
     [

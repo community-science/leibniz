@@ -23,6 +23,7 @@ assertEqual(artifacts.length, 13, 'artifact count');
 assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detail coverage');
 assertEqual(parsed.observation_inspections.length, 2, 'observation inspection count');
 assertEqual(parsed.performance_views.length, 1, 'performance view count');
+assertEqual(parsed.result_views.length, 0, 'result view count');
 assertEqual(parsed.model_inspections.length, 1, 'model inspection count');
 assertEqual(parsed.source_modules.length > 20, true, 'source module count');
 assertEqual(consoleDataSource?.source_path, 'src/leibniz/console/data.py', 'console data source path');
