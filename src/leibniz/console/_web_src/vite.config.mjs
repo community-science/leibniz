@@ -29,9 +29,6 @@ function leibnizConsoleData() {
         return null;
       }
       const roots = consoleResultRoots();
-      for (const root of roots) {
-        this.addWatchFile(root);
-      }
       const resultRootArgs = resultRootArguments(roots);
       const payload = execFileSync(
         'python',
