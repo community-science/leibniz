@@ -58,6 +58,20 @@ def test_benchmark_manifest_parses_scale_indexed_outcome_sequence() -> None:
     assert not manifest.scale_parameter.contains(0)
 
 
+def test_benchmark_manifest_resolves_scale_indexed_outcome_space() -> None:
+    manifest = BenchmarkManifest.from_record(_scale_indexed_manifest_record())
+    outcome_space = manifest.resolve_outcome_space(scale=3)
+
+    assert outcome_space.id == ProtocolIdentifier.parse(
+        "benchmarks.digits.outcomes.l3@0.1.0"
+    )
+    assert len(outcome_space.outcomes) == 1000
+    assert outcome_space.outcomes[0].id == "digit-0-0-0"
+    assert outcome_space.outcomes[-1].id == "digit-9-9-9"
+    assert manifest.outcome_sequence is not None
+    assert manifest.outcome_sequence.outcome_id((1, 2, 3)) == "digit-1-2-3"
+
+
 def test_benchmark_manifest_parses_minimal_authoring_record() -> None:
     manifest = BenchmarkManifest.from_record(_minimal_benchmark_manifest_record())
 

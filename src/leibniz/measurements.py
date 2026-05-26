@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
+from leibniz.artifacts import ArtifactReference
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
@@ -37,6 +38,11 @@ _measurement_record = RecordSpec(
         "accepted_event": FieldSpec(kind="record", required=False),
         "probability_measure": FieldSpec(kind="record", required=False),
         "raw_scoring_evidence": FieldSpec(kind="record", required=False),
+        "evidence_artifacts": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="record"),
+            required=False,
+        ),
     }
 )
 _measurement_scoring_fields = frozenset(
@@ -84,6 +90,7 @@ class MeasurementRecord:
     accepted_event: AcceptedEvent
     probability_measure: FiniteProbabilityMeasure
     raw_scoring_evidence: RawScoringEvidence
+    evidence_artifacts: tuple[ArtifactReference, ...] = ()
 
     def __post_init__(self) -> None:
         try:
@@ -109,14 +116,15 @@ class MeasurementRecord:
             accepted_event=accepted_event,
             probability_measure=probability_measure,
             raw_scoring_evidence=raw_scoring_evidence,
+            evidence_artifacts=_evidence_artifacts(validated),
         )
 
     @property
     def digest(self) -> ContentDigest:
         return ContentDigest.from_value(self.to_record())
 
-    def validate_manifest(self, manifest: BenchmarkManifest) -> None:
-        if manifest.outcome_space is None:
+    def validate_manifest(self, manifest: BenchmarkManifest, *, scale: int | None = None) -> None:
+        if manifest.outcome_space is None and scale is None:
             raise MeasurementRecordValidationError(
                 "scale-indexed benchmark manifests require resolved outcome spaces"
             )
@@ -124,10 +132,17 @@ class MeasurementRecord:
             raise MeasurementRecordValidationError(
                 f"benchmark_id {self.benchmark_id} does not match manifest {manifest.id}"
             )
-        if self.outcome_space != manifest.outcome_space:
+        expected_outcome_space = (
+            manifest.outcome_space if scale is None else manifest.resolve_outcome_space(scale=scale)
+        )
+        if expected_outcome_space is None:
+            raise MeasurementRecordValidationError(
+                "scale-indexed benchmark manifests require resolved outcome spaces"
+            )
+        if self.outcome_space != expected_outcome_space:
             raise MeasurementRecordValidationError(
                 "measurement outcome_space does not match manifest outcome_space "
-                f"{manifest.outcome_space.id}"
+                f"{expected_outcome_space.id}"
             )
         if (
             manifest.observation_ids is not None
@@ -140,13 +155,18 @@ class MeasurementRecord:
             )
 
     def to_record(self) -> dict[str, object]:
-        return {
+        record: dict[str, object] = {
             "benchmark_id": str(self.benchmark_id),
             "outcome_space": self.outcome_space.to_record(),
             "accepted_event": self.accepted_event.to_record(),
             "probability_measure": self.probability_measure.to_record(),
             "raw_scoring_evidence": self.raw_scoring_evidence.to_record(),
         }
+        if self.evidence_artifacts:
+            record["evidence_artifacts"] = [
+                artifact.to_record() for artifact in self.evidence_artifacts
+            ]
+        return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,9 +223,9 @@ class MeasurementDataset:
     def digest(self) -> ContentDigest:
         return ContentDigest.from_value(self.to_record())
 
-    def validate_manifest(self, manifest: BenchmarkManifest) -> None:
+    def validate_manifest(self, manifest: BenchmarkManifest, *, scale: int | None = None) -> None:
         for measurement in self.measurements:
-            measurement.validate_manifest(manifest)
+            measurement.validate_manifest(manifest, scale=scale)
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -407,12 +427,37 @@ def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
     return cast(tuple[object, ...], value)
 
 
+def _evidence_artifacts(record: Mapping[str, object]) -> tuple[ArtifactReference, ...]:
+    raw_artifacts = record.get("evidence_artifacts")
+    if raw_artifacts is None:
+        return ()
+    artifacts = tuple(
+        ArtifactReference.from_record(_scoring_mapping(item, field="evidence_artifacts"))
+        for item in _as_sequence(raw_artifacts, field="evidence_artifacts")
+    )
+    duplicate = _first_duplicate_references(artifacts)
+    if duplicate is not None:
+        raise MeasurementRecordValidationError("duplicate evidence artifact")
+    return artifacts
+
+
 def _measurement_id(measurement: MeasurementRecord) -> ProtocolIdentifier:
     return measurement.raw_scoring_evidence.id
 
 
 def _first_duplicate(values: tuple[ProtocolIdentifier, ...]) -> ProtocolIdentifier | None:
     seen: set[ProtocolIdentifier] = set()
+    for value in values:
+        if value in seen:
+            return value
+        seen.add(value)
+    return None
+
+
+def _first_duplicate_references(
+    values: tuple[ArtifactReference, ...],
+) -> ArtifactReference | None:
+    seen: set[ArtifactReference] = set()
     for value in values:
         if value in seen:
             return value
