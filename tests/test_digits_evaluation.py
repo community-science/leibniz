@@ -13,6 +13,7 @@ from leibniz.outcomes import (
     ProbabilityMass,
     RawScoringEvidence,
 )
+from leibniz.views import CompetenceIntegralSource, CompetenceIntegralView
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -85,6 +86,51 @@ def test_digits_length_three_measurements_use_resolved_sequence_outcome_space() 
         "benchmarks.digits.evidence.l3.digit-1-2-3.perfect@0.1.0",
         "benchmarks.digits.evidence.l3.digit-1-2-3.uniform@0.1.0",
     ]
+
+
+def test_digits_competence_integral_uses_materialization_complexity_assignments() -> None:
+    length_one = _measurement_for_sequence(
+        sequence=(7,),
+        plan_name="materialization_plan_l1.json",
+        measure_kind="perfect",
+    )
+    length_three = _measurement_for_sequence(
+        sequence=(1, 2, 3),
+        plan_name="materialization_plan_l3.json",
+        measure_kind="uniform",
+    )
+    l1_plan = MaterializationPlanDocument.from_bytes(
+        (_digits_fixture_root / "materialization_plan_l1.json").read_bytes()
+    ).plan
+    l3_plan = MaterializationPlanDocument.from_bytes(
+        (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
+    ).plan
+    dataset = MeasurementDataset(measurements=(length_one, length_three))
+
+    view = CompetenceIntegralView.from_sources(
+        id=ProtocolIdentifier.parse("views.competence-integrals.digits@0.1.0"),
+        dataset=dataset,
+        sources=(
+            CompetenceIntegralSource(
+                measurement=length_one,
+                materialization_plan=l1_plan,
+            ),
+            CompetenceIntegralSource(
+                measurement=length_three,
+                materialization_plan=l3_plan,
+            ),
+        ),
+        complexity_axis="C",
+        expected_complexities=(1.0, 2.0, 3.0),
+    )
+
+    assert view.entries[0].benchmark_id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
+    assert view.entries[0].observed_complexities == (1.0, 3.0)
+    assert view.entries[0].missing_complexities == (2.0,)
+    assert view.entries[0].coverage == 2 / 3
+    assert view.entries[0].points[0].competence == 1.0
+    assert view.entries[0].points[1].competence == 0.001
+    assert view.entries[0].integral == 0.25025
 
 
 def _measurement_for_sequence(

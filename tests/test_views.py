@@ -2,11 +2,16 @@ import math
 from collections.abc import Callable
 from typing import cast
 
+from leibniz.artifacts import ArtifactReference
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
+from leibniz.materialization import AxisAssignment, MaterializationPlan
 from leibniz.measurements import MeasurementDataset
 from leibniz.views import (
+    CompetenceIntegralSource,
+    CompetenceIntegralView,
+    CompetenceIntegralViewDocument,
     MeasurementScoreView,
     MeasurementScoreViewDocument,
     MeasurementScoreViewValidationError,
@@ -174,6 +179,172 @@ def test_measurement_score_view_document_rejects_invalid_bytes() -> None:
     ) == "measurement score view document must contain an object"
 
 
+def test_competence_integral_view_uses_declared_complexity_spacing() -> None:
+    dataset, sources = _competence_dataset(
+        first_mass=1.0,
+        second_mass=0.0,
+        first_complexity=1,
+        second_complexity=2,
+    )
+    close_view = CompetenceIntegralView.from_sources(
+        id=ProtocolIdentifier.parse("views.competence-integrals.boolean@0.1.0"),
+        dataset=dataset,
+        sources=sources,
+        complexity_axis="C",
+        expected_complexities=(1.0, 2.0),
+    )
+    wide_view = CompetenceIntegralView.from_sources(
+        id=ProtocolIdentifier.parse("views.competence-integrals.boolean@0.1.0"),
+        dataset=dataset,
+        sources=sources,
+        complexity_axis="C",
+        expected_complexities=(1.0, 2.0, 10.0),
+    )
+
+    assert close_view.entries[0].integral == 0.5
+    assert wide_view.entries[0].integral == 0.5 / 9.0
+    assert close_view.entries[0].missing_complexities == ()
+    assert wide_view.entries[0].missing_complexities == (10.0,)
+
+
+def test_competence_integral_view_validates_against_sources() -> None:
+    dataset, sources = _competence_dataset(
+        first_mass=1.0,
+        second_mass=0.0,
+        first_complexity=1,
+        second_complexity=2,
+    )
+    view = CompetenceIntegralView.from_sources(
+        id=ProtocolIdentifier.parse("views.competence-integrals.boolean@0.1.0"),
+        dataset=dataset,
+        sources=sources,
+        complexity_axis="C",
+        expected_complexities=(1.0, 2.0),
+    )
+
+    parsed = CompetenceIntegralView.from_record(
+        view.to_record(),
+        dataset=dataset,
+        sources=sources,
+    )
+    document = CompetenceIntegralViewDocument.from_bytes(
+        canonical_document_bytes(view.to_record()),
+        dataset=dataset,
+        sources=sources,
+    )
+
+    assert parsed == view
+    assert document.view == view
+    assert document.digest == ContentDigest.from_value(view.to_record())
+
+
+def test_competence_integral_view_reports_missing_levels_without_mutating_measurements() -> None:
+    dataset, sources = _competence_dataset(
+        first_mass=1.0,
+        second_mass=1.0,
+        first_complexity=1,
+        second_complexity=3,
+    )
+    view = CompetenceIntegralView.from_sources(
+        id=ProtocolIdentifier.parse("views.competence-integrals.boolean@0.1.0"),
+        dataset=dataset,
+        sources=sources,
+        complexity_axis="C",
+        expected_complexities=(1.0, 2.0, 3.0),
+    )
+
+    assert view.entries[0].coverage == 2 / 3
+    assert view.entries[0].missing_complexities == (2.0,)
+    accepted_masses = [
+        measurement.raw_scoring_evidence.accepted_mass
+        for measurement in dataset.measurements
+    ]
+    assert accepted_masses == [
+        1.0,
+        1.0,
+    ]
+
+
+def test_competence_integral_view_rejects_malformed_records() -> None:
+    dataset, sources = _competence_dataset(
+        first_mass=1.0,
+        second_mass=0.0,
+        first_complexity=1,
+        second_complexity=2,
+    )
+    view = CompetenceIntegralView.from_sources(
+        id=ProtocolIdentifier.parse("views.competence-integrals.boolean@0.1.0"),
+        dataset=dataset,
+        sources=sources,
+        complexity_axis="C",
+        expected_complexities=(1.0, 2.0),
+    )
+
+    record = view.to_record()
+    record["id"] = "core.boolean-view@0.1.0"
+    assert str(
+        capture_view_error(
+            lambda: CompetenceIntegralView.from_record(
+                record,
+                dataset=dataset,
+                sources=sources,
+            )
+        )
+    ) == "id must be a valid competence integral view id"
+
+    record = view.to_record()
+    record["expected_complexities"] = [2.0, 1.0]
+    assert str(
+        capture_view_error(
+            lambda: CompetenceIntegralView.from_record(
+                record,
+                dataset=dataset,
+                sources=sources,
+            )
+        )
+    ) == "expected_complexities must be sorted"
+
+
+def test_competence_integral_view_rejects_sources_outside_dataset() -> None:
+    dataset, sources = _competence_dataset(
+        first_mass=1.0,
+        second_mass=0.0,
+        first_complexity=1,
+        second_complexity=2,
+    )
+    other_dataset, _other_sources = _competence_dataset(
+        first_mass=1.0,
+        second_mass=0.0,
+        first_complexity=1,
+        second_complexity=2,
+        prefix="other",
+    )
+
+    assert str(
+        capture_view_error(
+            lambda: CompetenceIntegralView.from_sources(
+                id=ProtocolIdentifier.parse("views.competence-integrals.boolean@0.1.0"),
+                dataset=other_dataset,
+                sources=sources,
+                complexity_axis="C",
+                expected_complexities=(1.0, 2.0),
+            )
+        )
+    ) == "source measurement core.boolean-evidence-a@0.1.0 is not in dataset"
+
+    assert str(
+        capture_view_error(
+            lambda: CompetenceIntegralView.from_sources(
+                id=ProtocolIdentifier.parse("views.competence-integrals.boolean@0.1.0"),
+                dataset=dataset,
+                sources=(sources[0], sources[0]),
+                complexity_axis="C",
+                expected_complexities=(1.0, 2.0),
+            )
+        )
+    ) == "duplicate source measurement id: core.boolean-evidence-a@0.1.0"
+
+
 def _measurement_dataset() -> MeasurementDataset:
     return MeasurementDataset.from_record(
         {
@@ -201,16 +372,89 @@ def _measurement_dataset() -> MeasurementDataset:
     )
 
 
+def _competence_dataset(
+    *,
+    first_mass: float,
+    second_mass: float,
+    first_complexity: int,
+    second_complexity: int,
+    prefix: str = "core",
+) -> tuple[MeasurementDataset, tuple[CompetenceIntegralSource, ...]]:
+    benchmark_id = f"{prefix}.boolean-benchmark@0.1.0"
+    first = _measurement_record(
+        evidence_id=f"{prefix}.boolean-evidence-a@0.1.0",
+        probability_measure_id=f"{prefix}.boolean-prediction-a@0.1.0",
+        yes_probability=first_mass,
+        observation_id="observation-a",
+        benchmark_id=benchmark_id,
+    )
+    second = _measurement_record(
+        evidence_id=f"{prefix}.boolean-evidence-b@0.1.0",
+        probability_measure_id=f"{prefix}.boolean-prediction-b@0.1.0",
+        yes_probability=second_mass,
+        observation_id="observation-b",
+        benchmark_id=benchmark_id,
+    )
+    first_plan = _materialization_plan("a", first_complexity, benchmark_id=benchmark_id)
+    second_plan = _materialization_plan("b", second_complexity, benchmark_id=benchmark_id)
+    first["evidence_artifacts"] = [_materialization_reference(first_plan)]
+    second["evidence_artifacts"] = [_materialization_reference(second_plan)]
+    dataset = MeasurementDataset.from_record({"measurements": [first, second]})
+    measurements = {str(item.raw_scoring_evidence.id): item for item in dataset.measurements}
+    return (
+        dataset,
+        (
+            CompetenceIntegralSource(
+                measurement=measurements[f"{prefix}.boolean-evidence-a@0.1.0"],
+                materialization_plan=first_plan,
+            ),
+            CompetenceIntegralSource(
+                measurement=measurements[f"{prefix}.boolean-evidence-b@0.1.0"],
+                materialization_plan=second_plan,
+            ),
+        ),
+    )
+
+
+def _materialization_plan(
+    label: str,
+    complexity: int,
+    *,
+    benchmark_id: str,
+) -> MaterializationPlan:
+    return MaterializationPlan(
+        id=ProtocolIdentifier.parse(f"core.boolean.materialization-plan.{label}@0.1.0"),
+        benchmark_id=ProtocolIdentifier.parse(benchmark_id),
+        materialization_declaration=ArtifactReference(
+            kind="materialization-declaration",
+            protocol_id=ProtocolIdentifier.parse("core.boolean.materialization@0.1.0"),
+        ),
+        scale_assignment=AxisAssignment(values={"L": complexity}),
+        complexity_assignment=AxisAssignment(values={"C": complexity}),
+        resolution_assignment=AxisAssignment(values={"N": complexity}),
+        seed=101,
+    )
+
+
+def _materialization_reference(plan: MaterializationPlan) -> dict[str, object]:
+    return {
+        "kind": "materialization-plan",
+        "protocol_id": str(plan.id),
+        "record_digest": str(plan.digest),
+    }
+
+
 def _measurement_record(
     *,
     evidence_id: str,
     probability_measure_id: str,
     yes_probability: float,
     observation_id: str = "observation-1",
+    benchmark_id: str = "core.boolean-benchmark@0.1.0",
 ) -> dict[str, object]:
     no_probability = 1.0 - yes_probability
     return {
-        "benchmark_id": "core.boolean-benchmark@0.1.0",
+        "benchmark_id": benchmark_id,
         "id": evidence_id,
         "observation_id": observation_id,
         "outcome_space": {
