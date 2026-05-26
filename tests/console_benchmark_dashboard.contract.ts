@@ -2,6 +2,12 @@ import {
   benchmarkPlotModel,
   benchmarkResultsForTask,
   modelComparisonRows,
+  nextModelResultSort,
+  proposalAssociations,
+  runDetails,
+  runSelectionId,
+  selectionForId,
+  sortedModelResults,
 } from '../src/leibniz/console/_web_src/src/benchmarkDashboardModel.ts';
 import type { ModelInspectionRecord } from '../src/leibniz/console/_web_src/src/modelInspections.ts';
 import type {
@@ -88,7 +94,29 @@ const result: BenchmarkResultRecord = {
       uncertainty: 0.05,
     },
   ],
-  training_history: [],
+  training_history: [
+    {
+      architecture: { layers: [] },
+      architecture_digest: architectureDigest,
+      benchmark_id: targetBenchmark,
+      cost_summary: {
+        inference_flops: 20,
+        layer_count: 1,
+        parameter_bytes: 40,
+        parameter_count: 10,
+      },
+      measurement_count: 2,
+      measurement_dataset_digest: 'sha256:dataset1234',
+      model_key: 'model-a',
+      run_id: 'run-a',
+      run_slug: 'train-a',
+      scale: 1,
+      score: 0.75,
+      source_kind: 'local',
+      source_path: '.runs/training/run-a.json',
+      training_summary: { epochs: 3 },
+    },
+  ],
 };
 const resultViews: ResultViewRecord[] = [
   {
@@ -149,6 +177,31 @@ assertEqual(plotModel.proposals[0]?.cost, 10, 'plot proposal cost');
 assertEqual(plotModel.staircase.length, 1, 'plot staircase point count');
 assertEqual(plotModel.xTicks.includes(16), true, 'plot log ticks');
 assertEqual(plotModel.yDomain[0], 0, 'plot y starts at zero');
+assertEqual(
+  sortedModelResults(result.leaderboard, 'parameter_count', {
+    key: 'cost',
+    direction: 'descending',
+  })[0]?.model_key,
+  'model-b',
+  'model cost sort',
+);
+assertEqual(
+  nextModelResultSort({ key: 'score', direction: 'descending' }, 'score').direction,
+  'ascending',
+  'sort toggle',
+);
+assertEqual(proposalAssociations(result)[0]?.model?.model_key, 'model-a', 'proposal model match');
+assertEqual(runDetails(result)[0]?.model?.model_key, 'model-a', 'run model match');
+assertEqual(
+  selectionForId(result, 'proposal-a').selectedProposal?.candidate_id,
+  'model-a',
+  'proposal selection',
+);
+assertEqual(
+  selectionForId(result, runSelectionId(result.training_history[0]!)).selectedRun?.run_slug,
+  'train-a',
+  'run selection',
+);
 const emptyPlotModel = benchmarkPlotModel(
   {
     ...result,

@@ -4,14 +4,22 @@ import {
   benchmarkPlotModel,
   costValue,
   formatCost,
+  nextModelResultSort,
+  proposalAssociations,
+  runDetails,
+  runSelectionId,
   scoreLabel,
+  selectionForId,
   shortDigest,
+  sortedModelResults,
+  type BenchmarkProposalAssociation,
+  type BenchmarkRunDetail,
+  type ModelResultSort,
+  type ModelResultSortKey,
 } from './benchmarkDashboardModel.ts';
 import type {
   BenchmarkResultRecord,
   ModelResultRecord,
-  ProposalRecord,
-  RunResultRecord,
 } from './resultViews.ts';
 
 type PlotView = {
@@ -41,9 +49,30 @@ export function BenchmarkResultDashboard({
   const [plotView, setPlotView] = useState<PlotView | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [frontierSort, setFrontierSort] = useState<ModelResultSort>({
+    key: 'cost',
+    direction: 'ascending',
+  });
+  const [leaderboardSort, setLeaderboardSort] = useState<ModelResultSort>({
+    key: 'score',
+    direction: 'descending',
+  });
   const frontier = result.frontiers[costAxis] ?? [];
   const topModel = result.leaderboard[0];
   const plot = benchmarkPlotModel(result, costAxis);
+  const selection = selectionForId(result, selectedId);
+  const proposalRows = proposalAssociations(result);
+  const selectedProposalAssociation = proposalRows.find(
+    ({ proposal }) => proposal.id === selection.selectedProposal?.id,
+  );
+  const runRows = runDetails(result);
+  const selectedRunDetail = runRows.find(
+    ({ run }) => runSelectionId(run) === selectedId,
+  );
+  const selectedModelKey =
+    selection.selectedModel?.model_key ??
+    selectedProposalAssociation?.model?.model_key ??
+    selectedRunDetail?.model?.model_key;
   const activeView = plotView ?? {
     xDomain: plot.xDomain,
     yDomain: plot.yDomain,
@@ -108,10 +137,36 @@ export function BenchmarkResultDashboard({
         view={activeView}
         hoveredId={hoveredId}
       />
-      <ModelResultTable costAxis={costAxis} models={frontier} title="Frontier" />
-      <ModelResultTable costAxis={costAxis} models={result.leaderboard} title="Leaderboard" />
-      <ProposalCards proposals={result.proposals} />
-      <RunHistoryTable costAxis={costAxis} runs={result.training_history} />
+      <ModelResultTable
+        costAxis={costAxis}
+        models={frontier}
+        onSelect={setSelectedId}
+        onSort={(key) => setFrontierSort((current) => nextModelResultSort(current, key))}
+        selectedModelKey={selectedModelKey}
+        sort={frontierSort}
+        title="Frontier"
+      />
+      <ModelResultTable
+        costAxis={costAxis}
+        models={result.leaderboard}
+        onSelect={setSelectedId}
+        onSort={(key) => setLeaderboardSort((current) => nextModelResultSort(current, key))}
+        selectedModelKey={selectedModelKey}
+        sort={leaderboardSort}
+        title="Leaderboard"
+      />
+      <ProposalCards
+        associations={proposalRows}
+        onSelect={setSelectedId}
+        selectedId={selectedId}
+      />
+      <RunHistoryTable
+        costAxis={costAxis}
+        onSelect={setSelectedId}
+        rows={runRows}
+        selectedId={selectedId}
+        selectedRunDetail={selectedRunDetail}
+      />
     </section>
   );
 }
@@ -327,8 +382,16 @@ function BenchmarkFrontierPlot({
   );
 }
 
-function ProposalCards({ proposals }: { proposals: ProposalRecord[] }) {
-  if (proposals.length === 0) {
+function ProposalCards({
+  associations,
+  onSelect,
+  selectedId,
+}: {
+  associations: BenchmarkProposalAssociation[];
+  onSelect: (id: string) => void;
+  selectedId: string | null;
+}) {
+  if (associations.length === 0) {
     return <p className="artifact-detail-note">No active proposals are available.</p>;
   }
 
@@ -336,8 +399,13 @@ function ProposalCards({ proposals }: { proposals: ProposalRecord[] }) {
     <section className="benchmark-result-table-section">
       <h3>Proposals</h3>
       <div className="proposal-card-grid">
-        {proposals.map((proposal) => (
-          <article className="proposal-card" key={proposal.id}>
+        {associations.map(({ model, proposal }) => (
+          <button
+            className={`proposal-card ${selectedId === proposal.id ? 'selected' : ''}`}
+            key={proposal.id}
+            onClick={() => onSelect(proposal.id)}
+            type="button"
+          >
             <div className="proposal-card-heading">
               <span>Rank {proposal.rank}</span>
               <strong>{scoreLabel(proposal.acquisition_value)}</strong>
@@ -353,10 +421,12 @@ function ProposalCards({ proposals }: { proposals: ProposalRecord[] }) {
               <dd>{scoreLabel(proposal.novelty)}</dd>
               <dt>Improvement</dt>
               <dd>{scoreLabel(proposal.expected_frontier_improvement)}</dd>
+              <dt>Matched Model</dt>
+              <dd>{model === undefined ? 'none' : shortDigest(model.architecture_digest)}</dd>
             </dl>
             <p>{proposal.rationale}</p>
             {proposal.command.length === 0 ? null : <code>{proposal.command.join(' ')}</code>}
-          </article>
+          </button>
         ))}
       </div>
     </section>
@@ -366,10 +436,18 @@ function ProposalCards({ proposals }: { proposals: ProposalRecord[] }) {
 function ModelResultTable({
   costAxis,
   models,
+  onSelect,
+  onSort,
+  selectedModelKey,
+  sort,
   title,
 }: {
   costAxis: string;
   models: ModelResultRecord[];
+  onSelect: (id: string) => void;
+  onSort: (key: ModelResultSortKey) => void;
+  selectedModelKey: string | undefined;
+  sort: ModelResultSort;
   title: string;
 }) {
   if (models.length === 0) {
@@ -380,29 +458,103 @@ function ModelResultTable({
     <section className="benchmark-result-table-section">
       <h3>{title}</h3>
       <div className="benchmark-result-table" role="table" aria-label={title}>
-        <div className="benchmark-result-row header" role="row">
-          <span role="columnheader">Model</span>
-          <span role="columnheader">Score</span>
-          <span role="columnheader">Cost</span>
+        <div className="benchmark-result-row benchmark-model-result-row header" role="row">
+          <SortHeader
+            active={sort.key === 'model'}
+            direction={sort.direction}
+            label="Model"
+            onClick={() => onSort('model')}
+          />
+          <SortHeader
+            active={sort.key === 'score'}
+            direction={sort.direction}
+            label="Score"
+            onClick={() => onSort('score')}
+          />
+          <SortHeader
+            active={sort.key === 'cost'}
+            direction={sort.direction}
+            label="Cost"
+            onClick={() => onSort('cost')}
+          />
           <span role="columnheader">C</span>
-          <span role="columnheader">Runs</span>
+          <SortHeader
+            active={sort.key === 'runs'}
+            direction={sort.direction}
+            label="Runs"
+            onClick={() => onSort('runs')}
+          />
+          <SortHeader
+            active={sort.key === 'measurements'}
+            direction={sort.direction}
+            label="Measurements"
+            onClick={() => onSort('measurements')}
+          />
         </div>
-        {models.map((model) => (
-          <div className="benchmark-result-row" key={model.model_key} role="row">
+        {sortedModelResults(models, costAxis, sort).map((model) => (
+          <button
+            className={[
+              'benchmark-result-row',
+              'benchmark-model-result-row',
+              selectedModelKey === model.model_key ? 'selected' : '',
+            ].filter(Boolean).join(' ')}
+            key={model.model_key}
+            onClick={() => onSelect(model.model_key)}
+            role="row"
+            type="button"
+          >
             <span role="cell">{shortDigest(model.architecture_digest)}</span>
             <span role="cell">{model.score.toFixed(4)}</span>
             <span role="cell">{formatCost(costValue(model.cost_summary, costAxis))}</span>
             <span role="cell">{model.observed_complexities.join(', ') || 'none'}</span>
             <span role="cell">{model.run_ids.length}</span>
-          </div>
+            <span role="cell">{model.measurement_count}</span>
+          </button>
         ))}
       </div>
     </section>
   );
 }
 
-function RunHistoryTable({ costAxis, runs }: { costAxis: string; runs: RunResultRecord[] }) {
-  if (runs.length === 0) {
+function SortHeader({
+  active,
+  direction,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  direction: 'ascending' | 'descending';
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      aria-sort={active ? direction : 'none'}
+      className={`benchmark-sort-header ${active ? 'active' : ''}`}
+      onClick={onClick}
+      role="columnheader"
+      type="button"
+    >
+      <span>{label}</span>
+      {active ? <span aria-hidden="true">{direction === 'ascending' ? 'asc' : 'desc'}</span> : null}
+    </button>
+  );
+}
+
+function RunHistoryTable({
+  costAxis,
+  onSelect,
+  rows,
+  selectedId,
+  selectedRunDetail,
+}: {
+  costAxis: string;
+  onSelect: (id: string) => void;
+  rows: BenchmarkRunDetail[];
+  selectedId: string | null;
+  selectedRunDetail: BenchmarkRunDetail | undefined;
+}) {
+  if (rows.length === 0) {
     return <p className="artifact-detail-note">No training history is available.</p>;
   }
 
@@ -417,17 +569,66 @@ function RunHistoryTable({ costAxis, runs }: { costAxis: string; runs: RunResult
           <span role="columnheader">Scale</span>
           <span role="columnheader">Measurements</span>
         </div>
-        {runs.map((run) => (
-          <div className="benchmark-result-row" key={`${run.source_kind}:${run.run_id}`} role="row">
-            <span role="cell">{run.run_slug}</span>
-            <span role="cell">{run.score.toFixed(4)}</span>
-            <span role="cell">{formatCost(costValue(run.cost_summary, costAxis))}</span>
-            <span role="cell">{run.scale ?? 'n/a'}</span>
-            <span role="cell">{run.measurement_count}</span>
-          </div>
-        ))}
+        {rows.map(({ run }) => {
+          const id = runSelectionId(run);
+          return (
+            <button
+              className={`benchmark-result-row ${selectedId === id ? 'selected' : ''}`}
+              key={id}
+              onClick={() => onSelect(id)}
+              role="row"
+              type="button"
+            >
+              <span role="cell">{run.run_slug}</span>
+              <span role="cell">{run.score.toFixed(4)}</span>
+              <span role="cell">{formatCost(costValue(run.cost_summary, costAxis))}</span>
+              <span role="cell">{run.scale ?? 'n/a'}</span>
+              <span role="cell">{run.measurement_count}</span>
+            </button>
+          );
+        })}
       </div>
+      {selectedRunDetail === undefined ? null : (
+        <RunDetailCard costAxis={costAxis} detail={selectedRunDetail} />
+      )}
     </section>
+  );
+}
+
+function RunDetailCard({
+  costAxis,
+  detail,
+}: {
+  costAxis: string;
+  detail: BenchmarkRunDetail;
+}) {
+  const { model, run } = detail;
+  return (
+    <article className="run-detail-card">
+      <div>
+        <h4>{run.run_slug}</h4>
+        <p>{run.source_path}</p>
+      </div>
+      <dl>
+        <dt>Score</dt>
+        <dd>{run.score.toFixed(4)}</dd>
+        <dt>Cost</dt>
+        <dd>{formatCost(costValue(run.cost_summary, costAxis))}</dd>
+        <dt>Architecture</dt>
+        <dd>{shortDigest(run.architecture_digest)}</dd>
+        <dt>Matched Model</dt>
+        <dd>{model === undefined ? 'none' : shortDigest(model.architecture_digest)}</dd>
+        <dt>Measurements</dt>
+        <dd>{run.measurement_count}</dd>
+        <dt>Dataset</dt>
+        <dd>{shortDigest(run.measurement_dataset_digest)}</dd>
+        <dt>Source</dt>
+        <dd>{run.source_kind}</dd>
+      </dl>
+      {run.training_summary === undefined ? null : (
+        <pre>{JSON.stringify(run.training_summary, null, 2)}</pre>
+      )}
+    </article>
   );
 }
 
