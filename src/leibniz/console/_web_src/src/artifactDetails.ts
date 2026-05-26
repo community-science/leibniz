@@ -86,6 +86,16 @@ export type ObservationFormationDeclarationDetailRecord = {
   components: ObservationComponentSummaryRecord[];
 };
 
+export type ObservationShowcaseDetailRecord = {
+  kind: 'observation-showcase';
+  source_path: string;
+  id: string;
+  benchmark_id: string;
+  formation_declaration: ArtifactReferenceRecord;
+  materialization_declaration: ArtifactReferenceRecord;
+  samples: ObservationShowcaseSampleSummaryRecord[];
+};
+
 export type ConsoleArtifactDetailRecord =
   | ArchitectureManifestDetailRecord
   | BenchmarkManifestDetailRecord
@@ -93,7 +103,8 @@ export type ConsoleArtifactDetailRecord =
   | MaterializationDeclarationDetailRecord
   | MaterializationPlanDetailRecord
   | MeasurementDetailRecord
-  | ObservationFormationDeclarationDetailRecord;
+  | ObservationFormationDeclarationDetailRecord
+  | ObservationShowcaseDetailRecord;
 
 export type ConsoleArtifactDetailMap = ReadonlyMap<string, ConsoleArtifactDetailRecord>;
 
@@ -196,6 +207,17 @@ type ObservationMarkSummaryRecord = {
   control_points: number[][];
   width: number;
   value?: number;
+};
+
+type ObservationShowcaseSampleSummaryRecord = {
+  id: string;
+  label: string;
+  sample_index: number;
+  scale_assignment: AxisAssignmentSummaryRecord;
+  complexity_assignment: AxisAssignmentSummaryRecord;
+  seed: number;
+  component_sequence: number[];
+  outcome_id?: string;
 };
 
 export class ConsoleArtifactDetailError extends Error {
@@ -394,6 +416,26 @@ function parseDetailRecord(value: unknown, path: string): ConsoleArtifactDetailR
       mark_count: requireNumber(record.mark_count, `${path}.mark_count`),
       components: requireArray(record.components, `${path}.components`).map((component, index) =>
         parseObservationComponent(component, `${path}.components.${index}`),
+      ),
+    };
+  }
+
+  if (kind === 'observation-showcase') {
+    return {
+      kind,
+      source_path: requireString(record.source_path, `${path}.source_path`),
+      id: requireString(record.id, `${path}.id`),
+      benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`),
+      formation_declaration: parseReferenceRecord(
+        record.formation_declaration,
+        `${path}.formation_declaration`,
+      ),
+      materialization_declaration: parseReferenceRecord(
+        record.materialization_declaration,
+        `${path}.materialization_declaration`,
+      ),
+      samples: requireArray(record.samples, `${path}.samples`).map((sample, index) =>
+        parseObservationShowcaseSample(sample, `${path}.samples.${index}`),
       ),
     };
   }
@@ -622,6 +664,29 @@ function parseObservationMark(value: unknown, path: string): ObservationMarkSumm
     mark.value = requireNumber(record.value, `${path}.value`);
   }
   return mark;
+}
+
+function parseObservationShowcaseSample(
+  value: unknown,
+  path: string,
+): ObservationShowcaseSampleSummaryRecord {
+  const record = requireRecord(value, path);
+  const sample: ObservationShowcaseSampleSummaryRecord = {
+    id: requireString(record.id, `${path}.id`),
+    label: requireString(record.label, `${path}.label`),
+    sample_index: requireNumber(record.sample_index, `${path}.sample_index`),
+    scale_assignment: parseAxisAssignment(record.scale_assignment, `${path}.scale_assignment`),
+    complexity_assignment: parseAxisAssignment(
+      record.complexity_assignment,
+      `${path}.complexity_assignment`,
+    ),
+    seed: requireNumber(record.seed, `${path}.seed`),
+    component_sequence: parseNumberArray(record.component_sequence, `${path}.component_sequence`),
+  };
+  if (record.outcome_id !== undefined) {
+    sample.outcome_id = requireString(record.outcome_id, `${path}.outcome_id`);
+  }
+  return sample;
 }
 
 function parseReferenceRecord(value: unknown, path: string): ArtifactReferenceRecord {

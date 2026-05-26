@@ -1,7 +1,8 @@
-import { Database, FileJson, FolderTree, Network, ScrollText } from 'lucide-react';
+import { Database, FileJson, FolderTree, Images, Network, ScrollText } from 'lucide-react';
 import { useState } from 'react';
 
 import { ArtifactBrowser } from './ArtifactBrowser';
+import { ObservationInspectionPanel } from './ObservationInspectionPanel';
 import { SourceModuleInventory } from './SourceModuleInventory';
 import consoleData from 'virtual:leibniz-console-data';
 
@@ -11,7 +12,7 @@ type ConsoleSection = {
   description: string;
 };
 
-type TabId = 'home' | 'artifacts' | 'source';
+type TabId = 'home' | 'artifacts' | 'data' | 'source';
 
 type ConsoleTab = {
   id: TabId;
@@ -21,6 +22,7 @@ type ConsoleTab = {
 const tabs: ConsoleTab[] = [
   { id: 'home', label: 'Home' },
   { id: 'artifacts', label: 'Artifacts' },
+  { id: 'data', label: 'Data' },
   { id: 'source', label: 'Source' },
 ];
 
@@ -39,6 +41,11 @@ const sections: ConsoleSection[] = [
     id: 'documents',
     label: 'Documents',
     description: 'Typed views over already-public Leibniz document families.',
+  },
+  {
+    id: 'data',
+    label: 'Data',
+    description: 'Build-time generated inspections of benchmark-owned showcase samples.',
   },
 ];
 
@@ -63,6 +70,8 @@ export function ConsoleShell() {
               <ScrollText size={16} />
             ) : tab.id === 'artifacts' ? (
               <Database size={16} />
+            ) : tab.id === 'data' ? (
+              <Images size={16} />
             ) : (
               <FolderTree size={16} />
             )}
@@ -81,6 +90,8 @@ export function ConsoleShell() {
                     <Database size={20} />
                   ) : section.id === 'dependencies' ? (
                     <Network size={20} />
+                  ) : section.id === 'data' ? (
+                    <Images size={20} />
                   ) : (
                     <FileJson size={20} />
                   )}
@@ -99,6 +110,10 @@ export function ConsoleShell() {
             details={consoleData.artifact_details}
             index={consoleData.artifact_index}
           />
+        </div>
+
+        <div className="console-overview" hidden={currentTab !== 'data'}>
+          <ObservationInspectionPanel inspections={consoleData.observation_inspections} />
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'source'}>

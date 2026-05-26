@@ -200,6 +200,35 @@ export function ArtifactTypedDetail({
     );
   }
 
+  if (detail.kind === 'observation-showcase') {
+    return (
+      <DetailSection title="Observation Showcase">
+        <DetailItem label="Showcase ID" value={detail.id} />
+        <DetailItem label="Benchmark ID" value={detail.benchmark_id} />
+        <DetailItem label="Samples" value={String(detail.samples.length)} />
+        {detail.formation_declaration.protocol_id === undefined ? null : (
+          <DetailItem label="Formation" value={detail.formation_declaration.protocol_id} />
+        )}
+        {detail.materialization_declaration.protocol_id === undefined ? null : (
+          <DetailItem
+            label="Materialization"
+            value={detail.materialization_declaration.protocol_id}
+          />
+        )}
+        <ul className="artifact-detail-list">
+          {detail.samples.map((sample) => (
+            <li key={sample.id}>
+              <span>{sample.label}</span>
+              <small>
+                {axisAssignmentLabel(sample.scale_assignment)}, {sample.component_sequence.join('-')}
+              </small>
+            </li>
+          ))}
+        </ul>
+      </DetailSection>
+    );
+  }
+
   return (
     <DetailSection title="Measurement">
       <DetailItem label="Evidence ID" value={detail.id} />

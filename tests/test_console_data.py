@@ -56,11 +56,22 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
             "observation-formation-declaration",
             "src/leibniz/benchmarks/digits/observation_formation.json",
         ),
+        ("observation-showcase", "src/leibniz/benchmarks/digits/inspection_showcase.json"),
     ]
     assert [(detail["kind"], detail["source_path"]) for detail in details] == [
         (artifact["kind"], artifact["source_path"]) for artifact in artifacts
     ]
     assert {artifact["validation_status"] for artifact in artifacts} == {"valid"}
+
+    inspections = cast(list[dict[str, object]], record["observation_inspections"])
+    assert [inspection["label"] for inspection in inspections] == [
+        "Single digit 7",
+        "Three digit sequence 123",
+    ]
+    assert inspections[0]["scale_assignment"] == {"values": [{"axis": "L", "value": 1}]}
+    assert inspections[1]["complexity_assignment"] == {"values": [{"axis": "C", "value": 3}]}
+    assert inspections[1]["component_sequence"] == [1, 2, 3]
+    assert inspections[1]["outcome_id"] == "digit-1-2-3"
 
 
 def test_console_data_includes_public_source_module_inventory() -> None:

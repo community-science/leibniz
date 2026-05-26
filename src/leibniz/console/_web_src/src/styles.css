@@ -40,6 +40,10 @@
   --artifact-list-column: 7fr;
   --artifact-detail-column: 5fr;
   --artifact-detail-sticky-offset: var(--space-6xl);
+  --inspection-list-width: 280px;
+  --inspection-preview-column-min: 240px;
+  --inspection-preview-size: min(52vh, 420px);
+  --inspection-metadata-label-min: 92px;
   --metric-min: 84px;
   --font-label: 0.65rem;
   --font-status: 0.7rem;
@@ -619,6 +623,111 @@ p {
   font-size: var(--font-path);
 }
 
+.inspection-layout {
+  display: grid;
+  grid-template-columns: var(--inspection-list-width) minmax(0, 1fr);
+  gap: var(--space-2xl);
+  max-width: var(--content-wide);
+  margin: 0 auto;
+  padding: var(--space-6xl);
+}
+
+.inspection-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.inspection-list-item {
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--panel-bg-subtle);
+  color: white;
+  cursor: pointer;
+  padding: var(--space-xl);
+  text-align: left;
+}
+
+.inspection-list-item:hover,
+.inspection-list-item.active {
+  border-color: var(--accent-border-strong);
+  background: var(--panel-bg);
+}
+
+.inspection-list-item span,
+.inspection-list-item small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.inspection-list-item small {
+  margin-top: var(--space-xs);
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-status);
+}
+
+.inspection-detail {
+  display: grid;
+  grid-template-columns: minmax(var(--inspection-preview-column-min), 0.9fr) minmax(0, 1.1fr);
+  gap: var(--space-2xl);
+  align-items: start;
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--panel-bg);
+  padding: var(--space-3xl);
+}
+
+.inspection-preview-shell {
+  display: grid;
+  place-items: center;
+  min-height: var(--inspection-preview-size);
+  border: var(--line-thin) solid var(--border-color-strong);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.04) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.04) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.04) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.04) 75%);
+  background-color: rgba(0, 0, 0, 0.32);
+  background-position: 0 0, 0 var(--space-sm), var(--space-sm) calc(-1 * var(--space-sm)), calc(-1 * var(--space-sm)) 0;
+  background-size: calc(2 * var(--space-sm)) calc(2 * var(--space-sm));
+}
+
+.inspection-preview {
+  width: min(100%, var(--inspection-preview-size));
+  height: auto;
+  image-rendering: pixelated;
+}
+
+.inspection-metadata h2 {
+  margin: 0 0 var(--space-2xl);
+  font-size: var(--font-panel-title);
+}
+
+.inspection-metadata dl {
+  display: grid;
+  grid-template-columns: minmax(var(--inspection-metadata-label-min), auto) minmax(0, 1fr);
+  gap: var(--space-md) var(--space-lg);
+  margin: 0;
+}
+
+.inspection-metadata dt {
+  color: var(--text-dim);
+  font-size: var(--font-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.inspection-metadata dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: white;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-control);
+}
+
 @media (max-width: 820px) {
   .mission-header,
   .tab-navigation {
@@ -645,6 +754,15 @@ p {
 
   .source-inventory {
     padding: var(--space-4xl);
+  }
+
+  .inspection-layout {
+    grid-template-columns: 1fr;
+    padding: var(--space-4xl);
+  }
+
+  .inspection-detail {
+    grid-template-columns: 1fr;
   }
 
   .artifact-browser-header {

@@ -20,6 +20,7 @@ from leibniz.materialization import (
 )
 from leibniz.measurements import MeasurementDocument
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
+from leibniz.observation_showcases import ObservationShowcaseDocument
 
 __all__ = [
     "ConsoleArtifactIndex",
@@ -253,6 +254,18 @@ def _load_observation_formation_declaration(data: bytes) -> _LoadedArtifact:
     return declaration.id, record, document.digest, dependencies
 
 
+def _load_observation_showcase(data: bytes) -> _LoadedArtifact:
+    document = ObservationShowcaseDocument.from_bytes(data)
+    manifest = document.manifest
+    record = manifest.to_record()
+    dependencies = (
+        ArtifactReference(kind="benchmark-manifest", protocol_id=manifest.benchmark_id),
+        manifest.formation_declaration,
+        manifest.materialization_declaration,
+    )
+    return manifest.id, record, document.digest, dependencies
+
+
 _artifact_loaders: Mapping[str, _ArtifactLoader] = {
     "architecture-manifest": _load_architecture_manifest,
     "benchmark-manifest": _load_benchmark_manifest,
@@ -261,6 +274,7 @@ _artifact_loaders: Mapping[str, _ArtifactLoader] = {
     "materialization-plan": _load_materialization_plan,
     "measurement": _load_measurement,
     "observation-formation-declaration": _load_observation_formation_declaration,
+    "observation-showcase": _load_observation_showcase,
 }
 
 
