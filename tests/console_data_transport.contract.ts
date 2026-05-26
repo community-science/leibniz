@@ -21,10 +21,10 @@ assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
 assertEqual(artifacts.length, 13, 'artifact count');
 assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detail coverage');
-assertEqual(parsed.observation_inspections.length, 2, 'observation inspection count');
 assertEqual(parsed.performance_views.length, 1, 'performance view count');
 assertEqual(parsed.result_views.length, 0, 'result view count');
 assertEqual(parsed.model_inspections.length, 1, 'model inspection count');
+assertEqual(parsed.benchmark_tasks.length, 1, 'benchmark task count');
 assertEqual(parsed.source_modules.length > 20, true, 'source module count');
 assertEqual(consoleDataSource?.source_path, 'src/leibniz/console/data.py', 'console data source path');
 assertEqual(
@@ -57,16 +57,6 @@ assertEqual(
   'artifact order',
 );
 assertEqual(
-  parsed.observation_inspections.map((inspection) => inspection.label).join('|'),
-  'Single digit 7|Three digit sequence 123',
-  'observation inspection labels',
-);
-assertEqual(
-  parsed.observation_inspections[1]?.component_sequence.join(','),
-  '1,2,3',
-  'observation inspection component sequence',
-);
-assertEqual(
   parsed.performance_views[0]?.competence_integral_view.entries[0]?.integral,
   0.25,
   'performance view integral',
@@ -85,6 +75,32 @@ assertEqual(
   modelInspection.layers.map((layer) => layer.kind).join(','),
   'adaptive-pooling,flatten,dense',
   'model inspection layers',
+);
+const benchmarkTask = parsed.benchmark_tasks[0];
+if (benchmarkTask === undefined) {
+  throw new Error('expected benchmark task');
+}
+assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind');
+assertEqual(benchmarkTask?.batches.length, 9, 'benchmark batch count');
+assertEqual(
+  benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.scale}:${batch.sample_count}`).join('|'),
+  'canonical:1:4|canonical:2:4|canonical:3:4|canonical:4:4|symbol-probe:1:10|complexity-sweep:1:1|complexity-sweep:2:1|complexity-sweep:3:1|complexity-sweep:4:1',
+  'generated benchmark batches',
+);
+assertEqual(
+  benchmarkTask?.batches[4]?.samples.map((sample) => sample.component_sequence.join('')).join(','),
+  '0,1,2,3,4,5,6,7,8,9',
+  'symbol probe batch',
+);
+assertEqual(
+  benchmarkTask?.batches[4]?.presentation.sample_card_density,
+  'compact',
+  'compact batch presentation',
+);
+assertEqual(
+  benchmarkTask?.batches[5]?.presentation.aggregate_mode,
+  true,
+  'aggregate batch presentation',
 );
 assertEqual(
   artifacts
@@ -105,6 +121,19 @@ assertDataError(
       model_inspections: [{ ...modelInspection, layers: [{ index: '0' }] }],
     }),
   'model inspections.0.layers.0.index: expected number',
+);
+assertDataError(
+  () =>
+    parseConsoleDataRecord({
+      ...rawConsoleData,
+      benchmark_tasks: [
+        {
+          ...benchmarkTask,
+          batches: [{ ...benchmarkTask.batches[0], samples: [] }],
+        },
+      ],
+    }),
+  'benchmark tasks.0.batches.0.sample_count: expected sample length',
 );
 
 function assertEqual(actual: unknown, expected: unknown, label: string) {

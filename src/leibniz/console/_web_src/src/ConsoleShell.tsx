@@ -1,18 +1,18 @@
 import {
   BarChart3,
+  BookOpenCheck,
   Cpu,
   Database,
   FileJson,
   FolderTree,
-  Images,
   Network,
   ScrollText,
 } from 'lucide-react';
 import { useState } from 'react';
 
 import { ArtifactBrowser } from './ArtifactBrowser';
+import { BenchmarksPanel } from './BenchmarksPanel';
 import { ModelInspectionPanel } from './ModelInspectionPanel';
-import { ObservationInspectionPanel } from './ObservationInspectionPanel';
 import { PerformanceViewPanel } from './PerformanceViewPanel';
 import { SourceModuleInventory } from './SourceModuleInventory';
 import consoleData from 'virtual:leibniz-console-data';
@@ -23,7 +23,7 @@ type ConsoleSection = {
   description: string;
 };
 
-type TabId = 'home' | 'artifacts' | 'data' | 'performance' | 'models' | 'source';
+type TabId = 'home' | 'artifacts' | 'benchmarks' | 'performance' | 'models' | 'source';
 
 type ConsoleTab = {
   id: TabId;
@@ -33,7 +33,7 @@ type ConsoleTab = {
 const tabs: ConsoleTab[] = [
   { id: 'home', label: 'Home' },
   { id: 'artifacts', label: 'Artifacts' },
-  { id: 'data', label: 'Data' },
+  { id: 'benchmarks', label: 'Benchmarks' },
   { id: 'performance', label: 'Performance' },
   { id: 'models', label: 'Models' },
   { id: 'source', label: 'Source' },
@@ -56,9 +56,9 @@ const sections: ConsoleSection[] = [
     description: 'Typed views over already-public Leibniz document families.',
   },
   {
-    id: 'data',
-    label: 'Data',
-    description: 'Build-time generated inspections of benchmark-owned showcase samples.',
+    id: 'benchmarks',
+    label: 'Benchmarks',
+    description: 'Benchmark task panes, generated samples, and benchmark-owned data views.',
   },
   {
     id: 'performance',
@@ -93,8 +93,8 @@ export function ConsoleShell() {
               <ScrollText size={16} />
             ) : tab.id === 'artifacts' ? (
               <Database size={16} />
-            ) : tab.id === 'data' ? (
-              <Images size={16} />
+            ) : tab.id === 'benchmarks' ? (
+              <BookOpenCheck size={16} />
             ) : tab.id === 'performance' ? (
               <BarChart3 size={16} />
             ) : tab.id === 'models' ? (
@@ -117,8 +117,8 @@ export function ConsoleShell() {
                     <Database size={20} />
                   ) : section.id === 'dependencies' ? (
                     <Network size={20} />
-                  ) : section.id === 'data' ? (
-                    <Images size={20} />
+                  ) : section.id === 'benchmarks' ? (
+                    <BookOpenCheck size={20} />
                   ) : section.id === 'performance' ? (
                     <BarChart3 size={20} />
                   ) : section.id === 'models' ? (
@@ -143,8 +143,8 @@ export function ConsoleShell() {
           />
         </div>
 
-        <div className="console-overview" hidden={currentTab !== 'data'}>
-          <ObservationInspectionPanel inspections={consoleData.observation_inspections} />
+        <div className="console-overview" hidden={currentTab !== 'benchmarks'}>
+          <BenchmarksPanel tasks={consoleData.benchmark_tasks} />
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'performance'}>

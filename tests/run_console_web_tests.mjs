@@ -31,6 +31,7 @@ const generatedPayload = run(
 );
 writeFileSync(generatedPayloadPath, generatedPayload);
 assertShellUsesGeneratedConsoleData();
+assertBenchmarkWebSourceIsDataDriven();
 
 for (const contract of contracts) {
   run('tsc', [
@@ -70,6 +71,41 @@ function assertShellUsesGeneratedConsoleData() {
   }
   if (shell.includes('demoArtifact')) {
     throw new Error('ConsoleShell must not import handwritten demo artifact data');
+  }
+  if (!shell.includes("{ id: 'benchmarks', label: 'Benchmarks' }")) {
+    throw new Error('ConsoleShell must expose a Benchmarks tab');
+  }
+  if (shell.includes("{ id: 'data', label: 'Data' }")) {
+    throw new Error('ConsoleShell must not expose a top-level Data tab');
+  }
+}
+
+function assertBenchmarkWebSourceIsDataDriven() {
+  const sourceRoot = resolve(repositoryRoot, 'src/leibniz/console/_web_src/src');
+  const bannedPatterns = [
+    /\bDigitsBenchmark\b/,
+    /\bDigitsTask\b/,
+    /\bDigitsSample\b/,
+    /benchmarks\.digits/,
+    /kind\s*!==\s*['"]digits['"]/,
+    /kind\s*:\s*['"]digits['"]/,
+    /\.digits-/,
+    /['"]symbol-probe['"]/,
+    /['"]complexity-sweep['"]/,
+  ];
+  for (const relativePath of [
+    'BenchmarksPanel.tsx',
+    'benchmarkTasks.ts',
+    'consoleData.ts',
+    'styles.css',
+  ]) {
+    const path = resolve(sourceRoot, relativePath);
+    const source = readFileSync(path, 'utf8');
+    for (const pattern of bannedPatterns) {
+      if (pattern.test(source)) {
+        throw new Error(`${relativePath} hard-codes benchmark-specific presentation: ${pattern}`);
+      }
+    }
   }
 }
 
