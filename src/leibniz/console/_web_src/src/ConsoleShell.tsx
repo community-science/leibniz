@@ -1,6 +1,9 @@
 import { Database, FileJson, FolderTree, Network, ScrollText } from 'lucide-react';
 import { useState } from 'react';
 
+import { ArtifactBrowser } from './ArtifactBrowser';
+import { demoArtifactIndex } from './demoArtifactIndex';
+
 type ConsoleSection = {
   id: string;
   label: string;
@@ -43,7 +46,7 @@ export function ConsoleShell() {
 
   return (
     <main className="mission-control">
-      <header>
+      <header className="mission-header">
         <div className="logo">LEIBNIZ</div>
       </header>
 
@@ -91,25 +94,7 @@ export function ConsoleShell() {
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'artifacts'}>
-          <section className="console-grid" aria-label="Artifact views">
-            {sections.map((section) => (
-              <article className="console-section" key={section.id}>
-                <div className="section-icon" aria-hidden="true">
-                  {section.id === 'artifacts' ? (
-                    <Database size={20} />
-                  ) : section.id === 'dependencies' ? (
-                    <Network size={20} />
-                  ) : (
-                    <FileJson size={20} />
-                  )}
-                </div>
-                <div>
-                  <h2>{section.label}</h2>
-                  <p>{section.description}</p>
-                </div>
-              </article>
-            ))}
-          </section>
+          <ArtifactBrowser index={demoArtifactIndex} />
         </div>
 
         <div className="console-overview" hidden={currentTab !== 'source'}>

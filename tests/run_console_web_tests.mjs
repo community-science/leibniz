@@ -6,6 +6,7 @@ const testsRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(testsRoot, '..');
 
 const contracts = [
+  'tests/console_artifact_browser.contract.ts',
   'tests/console_artifact_index_transport.contract.ts',
 ];
 
