@@ -77,6 +77,33 @@ def test_active_training_loop_runs_one_iteration_and_refreshes_results(tmp_path:
     assert queue_items[0]["candidate_id"]
 
 
+def test_active_training_loop_runs_bounded_proposal_batch(tmp_path: Path) -> None:
+    summary = run_active_training_loop(
+        ActiveTrainingLoopPlan(
+            benchmark_root=_benchmark_root,
+            runs_root=tmp_path / ".runs",
+            iterations=1,
+            candidate_budget=2,
+            candidate_sample_count=8,
+            sample_count=1,
+            train_steps=0,
+        )
+    )
+
+    queue_view = load_console_result_view(
+        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
+    )
+    queue_items = cast(list[dict[str, object]], queue_view["queue_items"])
+
+    assert summary.completed_run_count == 2
+    assert len(summary.planned_commands) == 2
+    assert len(summary.measurement_dataset_paths) == 2
+    assert [item["status"] for item in queue_items] == ["completed", "completed"]
+    assert [item["sequence"] for item in queue_items] == [0, 1]
+    assert len({item["candidate_id"] for item in queue_items}) == 2
+    assert len({item["run_id"] for item in queue_items}) == 2
+
+
 def test_active_training_loop_resumes_pending_dry_run_work(tmp_path: Path) -> None:
     dry_run_summary = run_active_training_loop(
         ActiveTrainingLoopPlan(

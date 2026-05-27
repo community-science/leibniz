@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.artifacts import ArtifactReference
+from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes, document_filename_suffix
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDataset, MeasurementRecord
@@ -192,7 +193,11 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
         outcome_space=outcome_space,
     )
 
-    summary = _run_summary(plan=plan, benchmark_id=generator.benchmark_manifest.id)
+    summary = _run_summary(
+        plan=plan,
+        benchmark_id=generator.benchmark_manifest.id,
+        architecture_digest=architecture.digest,
+    )
     if plan.dry_run:
         return summary
 
@@ -225,7 +230,7 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
     model_inspection = ModelInspectionRecord.from_architecture(
         id=ProtocolIdentifier.parse(
             f"model-inspections.{_identifier_atom(generator.benchmark_manifest.id)}."
-            f"{plan.run_slug}@0.1.0"
+            f"{summary.run_slug}@0.1.0"
         ),
         architecture_manifest=architecture,
     )
@@ -267,9 +272,11 @@ def _run_summary(
     *,
     plan: BenchmarkRunPlan,
     benchmark_id: ProtocolIdentifier,
+    architecture_digest: ContentDigest,
 ) -> BenchmarkRunSummary:
     benchmark_atom = _identifier_atom(benchmark_id)
-    run_slug = f"{benchmark_atom}-{plan.run_slug}"
+    architecture_atom = f"arch-{architecture_digest.hex[:12]}"
+    run_slug = f"{benchmark_atom}-{architecture_atom}-{plan.run_slug}"
     return BenchmarkRunSummary(
         run_slug=run_slug,
         benchmark_id=benchmark_id,

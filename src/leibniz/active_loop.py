@@ -169,92 +169,94 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
         )
         benchmark_id = proposal_summary.benchmark_id
         proposal_summaries.append(proposal_summary)
-        proposal = _first_proposal(proposal_summary.proposal_set_path)
-        command = _proposal_command(proposal)
-        planned_commands.append(command)
-        queue_item = _queue_item_for_proposal(
-            proposal=proposal,
-            proposal_summary=proposal_summary,
-            command=command,
-            iteration=iteration,
-        )
-        existing_queue_item = _matching_queue_item(
-            plan.runs_root,
-            benchmark_id=proposal_summary.benchmark_id,
-            command=command,
-        )
-        if existing_queue_item is not None:
-            queue_item = replace(
-                existing_queue_item,
-                candidate_id=_proposal_string(proposal, "candidate_id"),
-                proposal_id=str(proposal["id"]),
-                proposal_set_path=proposal_summary.proposal_set_path,
-                sequence=iteration,
+        proposals = _proposal_records(proposal_summary.proposal_set_path)
+        for proposal_index, proposal in enumerate(proposals):
+            command = _proposal_command(proposal)
+            planned_commands.append(command)
+            sequence = iteration * len(proposals) + proposal_index
+            queue_item = _queue_item_for_proposal(
+                proposal=proposal,
+                proposal_summary=proposal_summary,
+                command=command,
+                sequence=sequence,
             )
-        if queue_item.status == "completed":
-            materialize_work_queue_view(plan.runs_root)
-            continue
-        if queue_item.status == "failed" and not plan.retry_failed:
-            materialize_work_queue_view(plan.runs_root)
-            raise ActiveTrainingLoopError(
-                "matching failed queue item requires --retry-failed"
+            existing_queue_item = _matching_queue_item(
+                plan.runs_root,
+                benchmark_id=proposal_summary.benchmark_id,
+                command=command,
             )
-        if queue_item.status == "failed":
-            queue_item = replace(queue_item, error=None, status="pending")
-        if queue_item.status == "pending":
-            write_work_queue_item(plan.runs_root, queue_item)
-            materialize_work_queue_view(plan.runs_root)
-        if plan.dry_run:
-            continue
-
-        architecture_path = _architecture_path_for_command(command)
-        write_work_queue_item(
-            plan.runs_root,
-            replace(queue_item, status="reserved"),
-        )
-        materialize_work_queue_view(plan.runs_root)
-        try:
-            benchmark_summary = run_benchmark(
-                BenchmarkRunPlan(
-                    architecture_path=architecture_path,
-                    benchmark_root=plan.benchmark_root,
-                    runs_root=plan.runs_root,
-                    scale=plan.scale,
-                    sample_count=plan.sample_count,
-                    evaluation_sample_count=plan.evaluation_sample_count,
-                    seed=iteration_seed,
-                    train_steps=plan.train_steps,
-                    learning_rate=plan.learning_rate,
-                    optimizer=plan.optimizer,
-                    schedule=plan.schedule,
-                    validation_interval=plan.validation_interval,
-                    convergence_patience=plan.convergence_patience,
-                    convergence_min_delta=plan.convergence_min_delta,
-                    target_validation_loss=plan.target_validation_loss,
+            if existing_queue_item is not None:
+                queue_item = replace(
+                    existing_queue_item,
+                    candidate_id=_proposal_string(proposal, "candidate_id"),
+                    proposal_id=str(proposal["id"]),
+                    proposal_set_path=proposal_summary.proposal_set_path,
+                    sequence=sequence,
                 )
-            )
-        except Exception as error:
+            if queue_item.status == "completed":
+                materialize_work_queue_view(plan.runs_root)
+                continue
+            if queue_item.status == "failed" and not plan.retry_failed:
+                materialize_work_queue_view(plan.runs_root)
+                raise ActiveTrainingLoopError(
+                    "matching failed queue item requires --retry-failed"
+                )
+            if queue_item.status == "failed":
+                queue_item = replace(queue_item, error=None, status="pending")
+            if queue_item.status == "pending":
+                write_work_queue_item(plan.runs_root, queue_item)
+                materialize_work_queue_view(plan.runs_root)
+            if plan.dry_run:
+                continue
+
+            architecture_path = _architecture_path_for_command(command)
             write_work_queue_item(
                 plan.runs_root,
-                replace(queue_item, error=str(error), status="failed"),
+                replace(queue_item, status="reserved"),
             )
             materialize_work_queue_view(plan.runs_root)
-            raise
-        write_work_queue_item(
-            plan.runs_root,
-            replace(
-                queue_item,
-                measurement_dataset_path=benchmark_summary.measurement_dataset_path,
-                run_id=benchmark_summary.run_slug,
-                status="completed",
-            ),
-        )
-        benchmark_summaries.append(benchmark_summary)
-        result_view_path = materialize_benchmark_result_views(
-            repository_root=Path.cwd(),
-            runs_root=plan.runs_root,
-        ).view_file
-        materialize_work_queue_view(plan.runs_root)
+            try:
+                benchmark_summary = run_benchmark(
+                    BenchmarkRunPlan(
+                        architecture_path=architecture_path,
+                        benchmark_root=plan.benchmark_root,
+                        runs_root=plan.runs_root,
+                        scale=plan.scale,
+                        sample_count=plan.sample_count,
+                        evaluation_sample_count=plan.evaluation_sample_count,
+                        seed=iteration_seed,
+                        train_steps=plan.train_steps,
+                        learning_rate=plan.learning_rate,
+                        optimizer=plan.optimizer,
+                        schedule=plan.schedule,
+                        validation_interval=plan.validation_interval,
+                        convergence_patience=plan.convergence_patience,
+                        convergence_min_delta=plan.convergence_min_delta,
+                        target_validation_loss=plan.target_validation_loss,
+                    )
+                )
+            except Exception as error:
+                write_work_queue_item(
+                    plan.runs_root,
+                    replace(queue_item, error=str(error), status="failed"),
+                )
+                materialize_work_queue_view(plan.runs_root)
+                raise
+            write_work_queue_item(
+                plan.runs_root,
+                replace(
+                    queue_item,
+                    measurement_dataset_path=benchmark_summary.measurement_dataset_path,
+                    run_id=benchmark_summary.run_slug,
+                    status="completed",
+                ),
+            )
+            benchmark_summaries.append(benchmark_summary)
+            result_view_path = materialize_benchmark_result_views(
+                repository_root=Path.cwd(),
+                runs_root=plan.runs_root,
+            ).view_file
+            materialize_work_queue_view(plan.runs_root)
 
     if benchmark_id is None:
         raise ActiveTrainingLoopError("active loop did not generate proposals")
@@ -277,19 +279,19 @@ def _queue_item_for_proposal(
     proposal: Mapping[str, object],
     proposal_summary: ProposalGenerationSummary,
     command: tuple[str, ...],
-    iteration: int,
+    sequence: int,
 ) -> WorkQueueItem:
     rank = proposal.get("rank", 1)
     command_digest = str(ContentDigest.from_value(list(command))).split(":", maxsplit=1)[1][:12]
     return WorkQueueItem(
-        id=f"iteration-{iteration + 1}-rank-{rank}-{command_digest}",
+        id=f"sequence-{sequence + 1}-rank-{rank}-{command_digest}",
         benchmark_id=proposal_summary.benchmark_id,
         proposal_id=str(proposal["id"]),
         candidate_id=_proposal_string(proposal, "candidate_id"),
         proposal_set_path=proposal_summary.proposal_set_path,
         command=command,
         status="pending",
-        sequence=iteration,
+        sequence=sequence,
     )
 
 
@@ -324,16 +326,15 @@ def _materialize_if_possible(runs_root: Path) -> Path | None:
         raise
 
 
-def _first_proposal(path: Path) -> Mapping[str, object]:
+def _proposal_records(path: Path) -> tuple[Mapping[str, object], ...]:
     record = load_object_document(path.read_bytes(), description="proposal set")
     proposals_value = record.get("proposals")
     if not isinstance(proposals_value, tuple | list) or not proposals_value:
         raise ActiveTrainingLoopError("proposal set does not contain proposals")
     proposals = tuple(cast(tuple[object, ...], proposals_value))
-    first = proposals[0]
-    if not isinstance(first, Mapping):
+    if not all(isinstance(proposal, Mapping) for proposal in proposals):
         raise ActiveTrainingLoopError("proposal set contains malformed proposal")
-    return cast(Mapping[str, object], first)
+    return cast(tuple[Mapping[str, object], ...], proposals)
 
 
 def _proposal_command(proposal: Mapping[str, object]) -> tuple[str, ...]:
