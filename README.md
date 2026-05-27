@@ -48,6 +48,32 @@ python -m leibniz._repository_policy .
 python -m build --no-isolation
 ```
 
+Use narrower checks while iterating when they prove the contract you changed,
+such as a focused `python -m pytest tests/test_example.py`. Before opening or
+updating a non-documentation pull request, run the full local check set above
+unless the pull request explains why a check was skipped. Heavy benchmark
+training, GPU jobs, and network-dependent publication or federation workflows
+are manual validation paths, not routine pull-request checks.
+
+## Repository Layout
+
+- `src/leibniz/`: Python package containing protocol artifact definitions,
+  validation, CLI commands, benchmark orchestration, local publication flows,
+  and console data generation.
+- `src/leibniz/_formats/`: shared structured-format helpers used by protocol
+  artifact readers and writers.
+- `src/leibniz/benchmarks/`: packaged benchmark manifests and benchmark-local
+  protocol documents.
+- `src/leibniz/console/`: console data, artifact indexing, code generation,
+  and the embedded web console source under `_web_src/`.
+- `tests/`: Python contract, workflow, and policy tests. Fixtures live under
+  `tests/fixtures/`; console web contract tests live beside the Python tests.
+- `scripts/`: repository environment setup and activation helpers.
+- `.github/workflows/`: pull-request and main-branch CI checks.
+- `.leibniz/`, `.runs/`, caches, checkpoints, and local publication checkouts:
+  local runtime state only; do not commit these unless a deterministic producer
+  and review path are explicitly documented.
+
 ## Result Publication Workflow
 
 Use a Hugging Face dataset repository as the local run-state checkout. The
