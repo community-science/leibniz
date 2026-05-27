@@ -126,7 +126,56 @@ export type RunResultRecord = {
   model_inspection_path?: string;
   measurement_dataset_digest: string;
   sampled_competence?: Record<string, unknown>;
-  training_summary?: Record<string, unknown>;
+  training_diagnostics?: TrainingDiagnosticsRecord;
+};
+
+export type TrainingDiagnosticsRecord = {
+  status: string;
+  stop_reason: string;
+  steps_run: number;
+  validation_checks: number;
+  best_validation_loss: number;
+  best_validation_step: number;
+  best_validation_check: number;
+  final_validation_loss: number;
+  final_validation_step: number;
+  final_validation_check: number;
+  protocol: TrainingProtocolRecord;
+  validation_history: TrainingHistoryPointRecord[];
+  artifacts: TrainingArtifactReferenceRecord[];
+};
+
+export type TrainingProtocolRecord = {
+  kind: string;
+  objective: string;
+  optimizer: string;
+  learning_rate: number;
+  schedule: string;
+  seed: number;
+  batch_size: number;
+  max_steps: number;
+  validation_interval: number;
+  validation_sample_count: number;
+  min_delta: number;
+  patience: number;
+  validation_source: string;
+};
+
+export type TrainingHistoryPointRecord = {
+  step: number;
+  validation_check: number;
+  validation_loss: number;
+  best_validation_loss: number;
+  best_validation_step: number;
+  best_validation_check: number;
+  stale_checks: number;
+  learning_rates?: number[];
+};
+
+export type TrainingArtifactReferenceRecord = {
+  kind: string;
+  digest: string;
+  path?: string;
 };
 
 export type ProposalRecord = {
@@ -425,10 +474,117 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
       record.sampled_competence === undefined
         ? undefined
         : requireRecord(record.sampled_competence, `${path}.sampled_competence`),
-    training_summary:
-      record.training_summary === undefined
+    training_diagnostics:
+      record.training_diagnostics === undefined
         ? undefined
-        : requireRecord(record.training_summary, `${path}.training_summary`),
+        : parseTrainingDiagnostics(
+            record.training_diagnostics,
+            `${path}.training_diagnostics`,
+          ),
+  };
+}
+
+function parseTrainingDiagnostics(value: unknown, path: string): TrainingDiagnosticsRecord {
+  const record = requireRecord(value, path);
+  return {
+    status: requireString(record.status, `${path}.status`),
+    stop_reason: requireString(record.stop_reason, `${path}.stop_reason`),
+    steps_run: requireNumber(record.steps_run, `${path}.steps_run`),
+    validation_checks: requireNumber(record.validation_checks, `${path}.validation_checks`),
+    best_validation_loss: requireNumber(
+      record.best_validation_loss,
+      `${path}.best_validation_loss`,
+    ),
+    best_validation_step: requireNumber(
+      record.best_validation_step,
+      `${path}.best_validation_step`,
+    ),
+    best_validation_check: requireNumber(
+      record.best_validation_check,
+      `${path}.best_validation_check`,
+    ),
+    final_validation_loss: requireNumber(
+      record.final_validation_loss,
+      `${path}.final_validation_loss`,
+    ),
+    final_validation_step: requireNumber(
+      record.final_validation_step,
+      `${path}.final_validation_step`,
+    ),
+    final_validation_check: requireNumber(
+      record.final_validation_check,
+      `${path}.final_validation_check`,
+    ),
+    protocol: parseTrainingProtocol(record.protocol, `${path}.protocol`),
+    validation_history: requireArray(record.validation_history, `${path}.validation_history`).map(
+      (point, index) => parseTrainingHistoryPoint(point, `${path}.validation_history.${index}`),
+    ),
+    artifacts: requireArray(record.artifacts, `${path}.artifacts`).map((artifact, index) =>
+      parseTrainingArtifactReference(artifact, `${path}.artifacts.${index}`),
+    ),
+  };
+}
+
+function parseTrainingProtocol(value: unknown, path: string): TrainingProtocolRecord {
+  const record = requireRecord(value, path);
+  return {
+    kind: requireString(record.kind, `${path}.kind`),
+    objective: requireString(record.objective, `${path}.objective`),
+    optimizer: requireString(record.optimizer, `${path}.optimizer`),
+    learning_rate: requireNumber(record.learning_rate, `${path}.learning_rate`),
+    schedule: requireString(record.schedule, `${path}.schedule`),
+    seed: requireNumber(record.seed, `${path}.seed`),
+    batch_size: requireNumber(record.batch_size, `${path}.batch_size`),
+    max_steps: requireNumber(record.max_steps, `${path}.max_steps`),
+    validation_interval: requireNumber(
+      record.validation_interval,
+      `${path}.validation_interval`,
+    ),
+    validation_sample_count: requireNumber(
+      record.validation_sample_count,
+      `${path}.validation_sample_count`,
+    ),
+    min_delta: requireNumber(record.min_delta, `${path}.min_delta`),
+    patience: requireNumber(record.patience, `${path}.patience`),
+    validation_source: requireString(record.validation_source, `${path}.validation_source`),
+  };
+}
+
+function parseTrainingHistoryPoint(value: unknown, path: string): TrainingHistoryPointRecord {
+  const record = requireRecord(value, path);
+  return {
+    step: requireNumber(record.step, `${path}.step`),
+    validation_check: requireNumber(record.validation_check, `${path}.validation_check`),
+    validation_loss: requireNumber(record.validation_loss, `${path}.validation_loss`),
+    best_validation_loss: requireNumber(
+      record.best_validation_loss,
+      `${path}.best_validation_loss`,
+    ),
+    best_validation_step: requireNumber(
+      record.best_validation_step,
+      `${path}.best_validation_step`,
+    ),
+    best_validation_check: requireNumber(
+      record.best_validation_check,
+      `${path}.best_validation_check`,
+    ),
+    stale_checks: requireNumber(record.stale_checks, `${path}.stale_checks`),
+    learning_rates:
+      record.learning_rates === undefined
+        ? undefined
+        : parseNumberArray(record.learning_rates, `${path}.learning_rates`),
+  };
+}
+
+function parseTrainingArtifactReference(
+  value: unknown,
+  path: string,
+): TrainingArtifactReferenceRecord {
+  const record = requireRecord(value, path);
+  return {
+    kind: requireString(record.kind, `${path}.kind`),
+    digest: requireString(record.digest, `${path}.digest`),
+    path: record.path === undefined ? undefined : requireString(record.path, `${path}.path`),
   };
 }
 

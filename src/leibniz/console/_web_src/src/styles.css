@@ -52,6 +52,7 @@
   --radius-md: 6px;
   --line-thin: 1px;
   --line-accent: 2px;
+  --line-thick: 3px;
   --icon-size-md: 40px;
   --content-wide: 1180px;
   --benchmark-workbench-wide: 1100px;
@@ -69,6 +70,7 @@
   --result-table-metric-column: 1fr;
   --proposal-card-min: 240px;
   --model-layer-min: 220px;
+  --artifact-reference-min: 220px;
   --benchmark-list-width: 300px;
   --benchmark-sample-tile-size: 128px;
   --benchmark-sample-caption-height: 40px;
@@ -2114,6 +2116,7 @@ p {
 .benchmark-model-detail-metrics dt,
 .benchmark-model-detail-grid dt,
 .benchmark-model-cost-grid dt,
+.benchmark-model-training-artifacts dt,
 .benchmark-model-training-grid dt,
 .benchmark-model-layer-shape-grid dt,
 .benchmark-model-operator-grid dt,
@@ -2128,6 +2131,7 @@ p {
 .benchmark-model-detail-metrics dd,
 .benchmark-model-detail-grid dd,
 .benchmark-model-cost-grid dd,
+.benchmark-model-training-artifacts dd,
 .benchmark-model-training-grid dd,
 .benchmark-model-layer-shape-grid dd,
 .benchmark-model-operator-grid dd,
@@ -2177,6 +2181,19 @@ p {
 .benchmark-model-training-grid div {
   min-width: 0;
   border-left: var(--line-accent) solid var(--measured-accent-border);
+  padding-left: var(--space-sm);
+}
+
+.benchmark-model-training-artifacts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--artifact-reference-min), 1fr));
+  gap: var(--space-sm);
+  margin: 0;
+}
+
+.benchmark-model-training-artifacts div {
+  min-width: 0;
+  border-left: var(--line-thick) solid var(--border-color);
   padding-left: var(--space-sm);
 }
 

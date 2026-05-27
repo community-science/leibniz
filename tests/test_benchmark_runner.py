@@ -165,12 +165,24 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert "model_inspection_digest" in history[0]
     assert "model_inspection_path" in history[0]
     assert "sampled_competence" in history[0]
-    training_summary = cast(dict[str, object], history[0]["training_summary"])
-    training_run = cast(dict[str, object], training_summary["training_run"])
-    protocol = cast(dict[str, object], training_run["protocol"])
+    diagnostics = cast(dict[str, object], history[0]["training_diagnostics"])
+    protocol = cast(dict[str, object], diagnostics["protocol"])
     assert protocol["optimizer"] == "sgd"
     assert protocol["schedule"] == "none"
-    assert len(cast(list[dict[str, object]], training_run["validation_history"])) == 2
+    assert diagnostics["stop_reason"] == "max-steps"
+    assert diagnostics["steps_run"] == 1
+    assert diagnostics["validation_checks"] == 2
+    assert "final_validation_loss" in diagnostics
+    assert len(cast(list[dict[str, object]], diagnostics["validation_history"])) == 2
+    artifact_kinds = {
+        artifact["kind"]
+        for artifact in cast(list[dict[str, object]], diagnostics["artifacts"])
+    }
+    assert artifact_kinds == {
+        "measurement-dataset",
+        "model-inspection",
+        "training-summary",
+    }
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     assert leaderboard[0]["observed_complexities"] == [1.0]
     points = cast(list[dict[str, object]], leaderboard[0]["points"])

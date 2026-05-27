@@ -32,6 +32,8 @@ import type {
   BenchmarkResultRecord,
   ResultViewRecord,
   RunResultRecord,
+  TrainingHistoryPointRecord,
+  TrainingProtocolRecord,
   WorkQueueItemRecord,
 } from './resultViews.ts';
 import { isWorkQueueView } from './resultViews.ts';
@@ -52,6 +54,7 @@ type ModelLineageNode = {
 };
 type ValidationHistoryPoint = {
   best_validation_loss: number;
+  best_validation_step: number;
   stale_checks?: number;
   step: number;
   validation_loss: number;
@@ -706,13 +709,14 @@ function ModelTrainingDetail({ runs }: { runs: RunResultRecord[] }) {
     );
   }
   const history = runs.flatMap((run) =>
-    trainingValidationHistory(run.training_summary).map((point) => ({
+    trainingValidationHistory(run).map((point) => ({
       ...point,
       run,
     })),
   );
   const latestRun = runs[0];
-  const protocol = trainingProtocol(latestRun.training_summary);
+  const diagnostics = latestRun.training_diagnostics;
+  const protocol = diagnostics?.protocol;
   return (
     <section className="benchmark-model-detail-section">
       <h4>Training History</h4>
@@ -733,6 +737,26 @@ function ModelTrainingDetail({ runs }: { runs: RunResultRecord[] }) {
           <dt>Measurements</dt>
           <dd>{latestRun.measurement_count}</dd>
         </div>
+        {diagnostics === undefined ? null : (
+          <>
+            <div>
+              <dt>Status</dt>
+              <dd>{parameterValueLabel(diagnostics.status)}</dd>
+            </div>
+            <div>
+              <dt>Stop</dt>
+              <dd>{parameterValueLabel(diagnostics.stop_reason)}</dd>
+            </div>
+            <div>
+              <dt>Best Loss</dt>
+              <dd>{diagnostics.best_validation_loss.toFixed(4)}</dd>
+            </div>
+            <div>
+              <dt>Final Loss</dt>
+              <dd>{diagnostics.final_validation_loss.toFixed(4)}</dd>
+            </div>
+          </>
+        )}
       </dl>
       {protocol === undefined ? null : (
         <dl className="benchmark-model-training-grid">
@@ -744,8 +768,31 @@ function ModelTrainingDetail({ runs }: { runs: RunResultRecord[] }) {
           ))}
         </dl>
       )}
+      {diagnostics === undefined ? null : (
+        <TrainingArtifactReferences artifacts={diagnostics.artifacts} />
+      )}
       {history.length === 0 ? null : <ModelValidationChart points={history} />}
     </section>
+  );
+}
+
+function TrainingArtifactReferences({
+  artifacts,
+}: {
+  artifacts: NonNullable<RunResultRecord['training_diagnostics']>['artifacts'];
+}) {
+  if (artifacts.length === 0) {
+    return null;
+  }
+  return (
+    <dl className="benchmark-model-training-artifacts">
+      {artifacts.map((artifact) => (
+        <div key={`${artifact.kind}:${artifact.digest}`}>
+          <dt>{parameterValueLabel(artifact.kind)}</dt>
+          <dd>{artifact.path ?? shortDigest(artifact.digest)}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -993,20 +1040,16 @@ function runsForModel(
   );
 }
 
-function trainingProtocol(
-  summary: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  const trainingRun = recordValue(summary?.training_run);
-  return recordValue(trainingRun?.protocol);
-}
-
-function trainingProtocolEntries(protocol: Record<string, unknown>): [string, string][] {
+function trainingProtocolEntries(protocol: TrainingProtocolRecord): [string, string][] {
   const entries: [string, unknown][] = [
     ['Objective', protocol.objective],
     ['Optimizer', protocol.optimizer],
     ['Schedule', protocol.schedule],
+    ['Learning Rate', protocol.learning_rate],
     ['Steps', protocol.max_steps],
     ['Batch', protocol.batch_size],
+    ['Interval', protocol.validation_interval],
+    ['Patience', protocol.patience],
     ['Validation', protocol.validation_source],
   ];
   return entries
@@ -1014,51 +1057,16 @@ function trainingProtocolEntries(protocol: Record<string, unknown>): [string, st
     .map(([label, value]) => [label, parameterValueLabel(value)]);
 }
 
-function trainingValidationHistory(
-  summary: Record<string, unknown> | undefined,
-): ValidationHistoryPoint[] {
-  const trainingRun = recordValue(summary?.training_run);
-  const history = trainingRun?.validation_history;
-  if (!Array.isArray(history)) {
-    return [];
-  }
-  return history.flatMap((item) => {
-    const record = recordValue(item);
-    if (record === undefined) {
-      return [];
-    }
-    const step = numberRecordValue(record, 'step');
-    const validationLoss = numberRecordValue(record, 'validation_loss');
-    const bestValidationLoss = numberRecordValue(record, 'best_validation_loss');
-    if (
-      step === undefined ||
-      validationLoss === undefined ||
-      bestValidationLoss === undefined
-    ) {
-      return [];
-    }
-    const staleChecks = numberRecordValue(record, 'stale_checks');
-    return [
-      {
-        best_validation_loss: bestValidationLoss,
-        stale_checks: staleChecks,
-        step,
-        validation_loss: validationLoss,
-      },
-    ];
-  });
-}
-
-function recordValue(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
-
-function numberRecordValue(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+function trainingValidationHistory(run: RunResultRecord): ValidationHistoryPoint[] {
+  return (run.training_diagnostics?.validation_history ?? []).map(
+    (point: TrainingHistoryPointRecord) => ({
+      best_validation_loss: point.best_validation_loss,
+      best_validation_step: point.best_validation_step,
+      stale_checks: point.stale_checks,
+      step: point.step,
+      validation_loss: point.validation_loss,
+    }),
+  );
 }
 
 function shapeLabel(shape: number[]): string {
