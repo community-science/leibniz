@@ -10,6 +10,7 @@ from leibniz.model_operators import (
     ModelOperatorExecutionError,
     ModelOperatorSearchPoint,
     materialize_model_operator_search_point,
+    model_operator_semantic_coordinates,
     summarize_architecture_operators,
 )
 
@@ -118,6 +119,25 @@ def test_semantic_search_point_materialization_routes_aliases_through_operator_r
         "affine-readout",
     ]
     assert plan.parameter_count == 100
+
+
+def test_model_operator_semantic_coordinates_are_derived_from_operator_summaries() -> None:
+    coordinates = model_operator_semantic_coordinates(_architecture_manifest())
+    by_name = {coordinate.name: coordinate.value for coordinate in coordinates}
+
+    assert by_name["input.rank"] == 3
+    assert by_name["output.rank"] == 1
+    assert by_name["operator.count"] == 3
+    assert by_name["operator.0.tensor_relation"] == "aggregation"
+    assert by_name["operator.0.support"] == "local-window"
+    assert by_name["operator.0.local_support_dimension"] == 2
+    assert by_name["operator.0.local_support_size"] == 2
+    assert by_name["operator.1.shape_law"] == "product-of-input-axes"
+    assert by_name["operator.2.tensor_relation"] == "affine"
+    assert by_name["operator.2.output_count"] == 10
+    assert by_name["resource.parameter_count"] == 50
+    assert by_name["resource.inference_flops"] == 1104
+    assert len(by_name) == len(coordinates)
 
 
 def test_layer_alias_literals_are_defined_only_in_the_operator_registry() -> None:

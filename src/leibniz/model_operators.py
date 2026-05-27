@@ -12,12 +12,14 @@ from leibniz.architectures import ArchitectureLayer, ArchitectureManifest
 
 __all__ = [
     "ExecutableModelOperator",
+    "ModelOperatorCoordinate",
     "ModelOperatorDescriptor",
     "ModelOperatorExecutionError",
     "ModelOperatorPlan",
     "ModelOperatorSearchPoint",
     "ModelOperatorSummary",
     "materialize_model_operator_search_point",
+    "model_operator_semantic_coordinates",
     "summarize_architecture_operators",
 ]
 
@@ -116,6 +118,28 @@ class ModelOperatorSummary:
         if self.inference_flops is not None:
             record["inference_flops"] = self.inference_flops
         return record
+
+
+@dataclass(frozen=True, slots=True)
+class ModelOperatorCoordinate:
+    """One stable semantic coordinate derived from an operator manifest."""
+
+    name: str
+    value: int | str
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ModelOperatorExecutionError("coordinate name must be nonempty")
+        if type(self.value) not in {int, str}:
+            raise ModelOperatorExecutionError("coordinate value must be an integer or string")
+        if self.value == "":
+            raise ModelOperatorExecutionError("coordinate value must be nonempty")
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "value": self.value,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,6 +342,59 @@ def summarize_architecture_operators(
     )
 
 
+def model_operator_semantic_coordinates(
+    architecture: ArchitectureManifest,
+    *,
+    plan: ModelOperatorPlan | None = None,
+) -> tuple[ModelOperatorCoordinate, ...]:
+    """Return architecture coordinates derived from operator semantics and resources."""
+
+    resolved = summarize_architecture_operators(architecture) if plan is None else plan
+    if resolved.input_shape != architecture.input_shape:
+        raise ModelOperatorExecutionError("operator plan input_shape does not match architecture")
+    if resolved.output_shape != architecture.output_shape:
+        raise ModelOperatorExecutionError("operator plan output_shape does not match architecture")
+    if len(resolved.operators) != len(architecture.layers):
+        raise ModelOperatorExecutionError("operator plan length does not match architecture")
+
+    coordinates: list[ModelOperatorCoordinate] = [
+        ModelOperatorCoordinate("input.rank", len(architecture.input_shape)),
+        ModelOperatorCoordinate("output.rank", len(architecture.output_shape)),
+        ModelOperatorCoordinate("operator.count", len(resolved.operators)),
+    ]
+    for summary, layer in zip(resolved.operators, architecture.layers, strict=True):
+        prefix = f"operator.{summary.index}"
+        descriptor = summary.descriptor
+        coordinates.extend(
+            (
+                ModelOperatorCoordinate(f"{prefix}.kind", descriptor.kind),
+                ModelOperatorCoordinate(
+                    f"{prefix}.tensor_relation",
+                    descriptor.tensor_relation,
+                ),
+                ModelOperatorCoordinate(f"{prefix}.state", descriptor.state),
+                ModelOperatorCoordinate(f"{prefix}.support", descriptor.support),
+                ModelOperatorCoordinate(f"{prefix}.projection_law", descriptor.projection_law),
+                ModelOperatorCoordinate(
+                    f"{prefix}.aggregation_law",
+                    descriptor.aggregation_law,
+                ),
+                ModelOperatorCoordinate(
+                    f"{prefix}.parameter_sharing",
+                    descriptor.parameter_sharing,
+                ),
+                ModelOperatorCoordinate(f"{prefix}.shape_law", descriptor.shape_law),
+                ModelOperatorCoordinate(f"{prefix}.cost_law", descriptor.cost_law),
+            )
+        )
+        _append_shape_coordinates(coordinates, prefix, summary)
+        _append_salient_parameter_coordinates(coordinates, prefix, summary, layer)
+    _append_optional_coordinate(coordinates, "resource.parameter_count", resolved.parameter_count)
+    _append_optional_coordinate(coordinates, "resource.inference_flops", resolved.inference_flops)
+    _reject_duplicate_coordinate_names(coordinates)
+    return tuple(coordinates)
+
+
 def materialize_model_operator_search_point(
     *,
     input_shape: tuple[int, ...],
@@ -405,6 +482,80 @@ def _operator_shape_and_cost(
         preserved = input_shape[: len(input_shape) - dimension]
         return (*preserved, *(size for _index in range(dimension))), 0, math.prod(input_shape)
     return None, None, None
+
+
+def _append_shape_coordinates(
+    coordinates: list[ModelOperatorCoordinate],
+    prefix: str,
+    summary: ModelOperatorSummary,
+) -> None:
+    if summary.input_shape is not None:
+        coordinates.append(
+            ModelOperatorCoordinate(f"{prefix}.input_rank", len(summary.input_shape))
+        )
+    if summary.output_shape is not None:
+        coordinates.append(
+            ModelOperatorCoordinate(f"{prefix}.output_rank", len(summary.output_shape))
+        )
+
+
+def _append_salient_parameter_coordinates(
+    coordinates: list[ModelOperatorCoordinate],
+    prefix: str,
+    summary: ModelOperatorSummary,
+    layer: ArchitectureLayer,
+) -> None:
+    if summary.descriptor.kind == _operator_local_aggregation:
+        _append_required_parameter_coordinate(
+            coordinates,
+            f"{prefix}.local_support_dimension",
+            layer,
+            "dimension",
+        )
+        _append_required_parameter_coordinate(
+            coordinates,
+            f"{prefix}.local_support_size",
+            layer,
+            "size",
+        )
+    elif summary.descriptor.kind == _operator_affine_readout:
+        _append_required_parameter_coordinate(
+            coordinates,
+            f"{prefix}.output_count",
+            layer,
+            "out",
+        )
+
+
+def _append_required_parameter_coordinate(
+    coordinates: list[ModelOperatorCoordinate],
+    coordinate_name: str,
+    layer: ArchitectureLayer,
+    parameter_name: str,
+) -> None:
+    coordinates.append(
+        ModelOperatorCoordinate(
+            coordinate_name,
+            _positive_int_parameter(layer.parameters, parameter_name),
+        )
+    )
+
+
+def _append_optional_coordinate(
+    coordinates: list[ModelOperatorCoordinate],
+    name: str,
+    value: int | None,
+) -> None:
+    if value is not None:
+        coordinates.append(ModelOperatorCoordinate(name, value))
+
+
+def _reject_duplicate_coordinate_names(
+    coordinates: list[ModelOperatorCoordinate],
+) -> None:
+    names = [coordinate.name for coordinate in coordinates]
+    if len(set(names)) != len(names):
+        raise ModelOperatorExecutionError("semantic coordinates must have unique names")
 
 
 def _positive_int_parameter(parameters: Mapping[str, object], key: str) -> int:

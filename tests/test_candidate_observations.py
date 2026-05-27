@@ -41,6 +41,13 @@ def test_candidate_observations_mark_measured_candidates_by_digest() -> None:
     assert observations[0].measured_score is None
     assert observations[0].best_measured_score_at_or_below_cost == 0.0
     assert observations[2].best_measured_score_at_or_below_cost == 0.75
+    coordinate_map = {
+        coordinate.name: coordinate.value
+        for coordinate in observations[1].semantic_coordinates
+    }
+    assert coordinate_map["operator.0.local_support_size"] == 2
+    assert coordinate_map["operator.2.tensor_relation"] == "affine"
+    assert coordinate_map["resource.parameter_count"] == observations[1].parameter_count
     operator_kinds = {
         operator
         for observation in observations

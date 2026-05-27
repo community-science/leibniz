@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from leibniz.architecture_candidates import ArchitectureCandidate
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier
+from leibniz.model_operators import ModelOperatorCoordinate
 
 __all__ = [
     "ArchitectureCandidateObservation",
@@ -44,6 +45,7 @@ class ArchitectureCandidateObservation:
     candidate_id: ProtocolIdentifier
     architecture_digest: ContentDigest
     operator_kinds: tuple[str, ...]
+    semantic_coordinates: tuple[ModelOperatorCoordinate, ...]
     parameter_count: int
     inference_flops: int | None
     is_measured: bool
@@ -60,6 +62,15 @@ class ArchitectureCandidateObservation:
             raise CandidateObservationProjectionError("architecture_digest must match candidate")
         if not self.operator_kinds or any(not operator for operator in self.operator_kinds):
             raise CandidateObservationProjectionError("operator_kinds must be nonempty")
+        coordinate_names = tuple(coordinate.name for coordinate in self.semantic_coordinates)
+        if not coordinate_names:
+            raise CandidateObservationProjectionError(
+                "semantic_coordinates must be nonempty"
+            )
+        if len(set(coordinate_names)) != len(coordinate_names):
+            raise CandidateObservationProjectionError(
+                "semantic_coordinates must not repeat names"
+            )
         if type(self.parameter_count) is not int or self.parameter_count < 0:
             raise CandidateObservationProjectionError("parameter_count must be nonnegative")
         if self.inference_flops is not None and (
@@ -109,6 +120,7 @@ def project_architecture_candidate_observations(
                 operator_kinds=tuple(
                     operator.descriptor.kind for operator in candidate.operator_plan.operators
                 ),
+                semantic_coordinates=candidate.semantic_coordinates,
                 parameter_count=parameter_count,
                 inference_flops=candidate.operator_plan.inference_flops,
                 is_measured=measured_evidence is not None,
