@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -40,6 +40,14 @@ __all__ = [
 ]
 
 _document_suffix = document_filename_suffix()
+_progress_format = "leibniz.benchmark-training-progress"
+_progress_format_version = 1
+_default_sample_count = 512
+_default_train_steps = 50_000
+_default_validation_interval = 250
+_default_convergence_patience = 12
+_default_convergence_min_delta = 1e-3
+_default_convergence_min_steps = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,16 +86,17 @@ class BenchmarkRunPlan:
     benchmark_root: Path
     runs_root: Path = Path(".runs")
     scale: int = 1
-    sample_count: int = 4
+    sample_count: int = _default_sample_count
     evaluation_sample_count: int | None = None
     seed: int = 101
-    train_steps: int = 1
+    train_steps: int = _default_train_steps
     learning_rate: float = 0.01
     optimizer: str = "sgd"
     schedule: str = "none"
-    validation_interval: int = 1
-    convergence_patience: int = 0
-    convergence_min_delta: float = 0.0
+    validation_interval: int = _default_validation_interval
+    convergence_patience: int = _default_convergence_patience
+    convergence_min_delta: float = _default_convergence_min_delta
+    convergence_min_steps: int = _default_convergence_min_steps
     target_validation_loss: float | None = None
     dry_run: bool = False
 
@@ -120,6 +129,8 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError("convergence_patience must be nonnegative")
         if self.convergence_min_delta < 0:
             raise BenchmarkRunnerError("convergence_min_delta must be nonnegative")
+        if type(self.convergence_min_steps) is not int or self.convergence_min_steps < 0:
+            raise BenchmarkRunnerError("convergence_min_steps must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise BenchmarkRunnerError("target_validation_loss must be nonnegative")
 
@@ -146,6 +157,7 @@ class BenchmarkRunPlan:
             "validation_interval": self.validation_interval,
             "convergence_patience": self.convergence_patience,
             "convergence_min_delta": float(self.convergence_min_delta),
+            "convergence_min_steps": self.convergence_min_steps,
             "target_validation_loss": (
                 None if self.target_validation_loss is None else float(self.target_validation_loss)
             ),
@@ -191,7 +203,11 @@ class BenchmarkRunSummary:
         }
 
 
-def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
+def run_benchmark(
+    plan: BenchmarkRunPlan,
+    *,
+    progress_callback: Callable[[BenchmarkRunSummary], None] | None = None,
+) -> BenchmarkRunSummary:
     """Run or dry-run a tiny local benchmark workflow."""
 
     generator = load_observation_generator(plan.benchmark_root)
@@ -218,6 +234,22 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
     if plan.dry_run:
         return summary
 
+    progress_path = _training_progress_path(summary)
+
+    def publish_progress(training_run: TrainingRunRecord) -> None:
+        _write_document_atomic(
+            progress_path,
+            _training_progress_record(
+                plan=plan,
+                summary=summary,
+                architecture=architecture,
+                outcome_space=outcome_space,
+                training_run=training_run,
+            ),
+        )
+        if progress_callback is not None:
+            progress_callback(summary)
+
     training_result = _train_and_predict(
         architecture=architecture,
         evaluation_batch=evaluation_batch,
@@ -232,8 +264,10 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
         validation_interval=plan.validation_interval,
         convergence_patience=plan.convergence_patience,
         convergence_min_delta=float(plan.convergence_min_delta),
+        convergence_min_steps=plan.convergence_min_steps,
         target_validation_loss=plan.target_validation_loss,
         seed=plan.seed,
+        progress_callback=publish_progress,
     )
     measurements = _measurements_for_predictions(
         generator=generator,
@@ -270,6 +304,7 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
             "validation_interval": plan.validation_interval,
             "convergence_patience": plan.convergence_patience,
             "convergence_min_delta": float(plan.convergence_min_delta),
+            "convergence_min_steps": plan.convergence_min_steps,
             "training_run": training_result.training_run.to_record(),
             "sampled_competence": _sampled_competence_record(
                 generator=generator,
@@ -282,6 +317,7 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
             "model_inspection_digest": str(model_inspection.digest),
         },
     )
+    progress_path.unlink(missing_ok=True)
     return summary
 
 
@@ -312,6 +348,15 @@ def _run_summary(
             plan.runs_root / "training" / benchmark_atom / f"{run_slug}{_document_suffix}"
         ),
         dry_run=plan.dry_run,
+    )
+
+
+def _training_progress_path(summary: BenchmarkRunSummary) -> Path:
+    return (
+        summary.training_summary_path.parent.parent.parent
+        / "training-progress"
+        / summary.training_summary_path.parent.name
+        / summary.training_summary_path.name
     )
 
 
@@ -350,8 +395,10 @@ def _train_and_predict(
     validation_interval: int,
     convergence_patience: int,
     convergence_min_delta: float,
+    convergence_min_steps: int,
     target_validation_loss: float | None,
     seed: int,
+    progress_callback: Callable[[TrainingRunRecord], None] | None = None,
 ) -> _TrainingResult:
     torch = _torch()
     torch.manual_seed(seed)
@@ -392,7 +439,27 @@ def _train_and_predict(
         validation_interval=validation_interval,
         patience=convergence_patience,
         min_delta=convergence_min_delta,
+        min_steps=convergence_min_steps,
         target_validation_loss=target_validation_loss,
+        on_validation=lambda history: (
+            progress_callback(
+                _running_training_run_record(
+                    seed=seed,
+                    batch_size=sample_count,
+                    max_steps=train_steps,
+                    learning_rate=float(learning_rate),
+                    optimizer_name=optimizer_name,
+                    schedule_name=schedule_name,
+                    validation_interval=validation_interval,
+                    convergence_patience=convergence_patience,
+                    convergence_min_delta=convergence_min_delta,
+                    convergence_min_steps=convergence_min_steps,
+                    validation_history=tuple(history),
+                )
+            )
+            if progress_callback is not None
+            else None
+        ),
     )
     eval_fields, _eval_labels = _batch_tensors(
         torch=torch,
@@ -412,6 +479,7 @@ def _train_and_predict(
         validation_interval=validation_interval,
         convergence_patience=convergence_patience,
         convergence_min_delta=convergence_min_delta,
+        convergence_min_steps=convergence_min_steps,
         validation_history=tuple(validation_history),
     )
     return _TrainingResult(
@@ -433,7 +501,9 @@ def _train_until_convergence(
     validation_interval: int,
     patience: int,
     min_delta: float,
+    min_steps: int,
     target_validation_loss: float | None,
+    on_validation: Callable[[tuple[TrainingHistoryPoint, ...]], None] | None = None,
 ) -> list[TrainingHistoryPoint]:
     validation_history: list[TrainingHistoryPoint] = []
     best_loss = float("inf")
@@ -475,6 +545,8 @@ def _train_until_convergence(
                 learning_rates=learning_rates,
             )
         )
+        if on_validation is not None:
+            on_validation(tuple(validation_history))
 
     append_validation(step=0, check=0)
     validation_check = 1
@@ -491,9 +563,13 @@ def _train_until_convergence(
             continue
         append_validation(step=step, check=validation_check)
         validation_check += 1
-        if target_validation_loss is not None and best_loss <= target_validation_loss:
+        if (
+            target_validation_loss is not None
+            and step >= min_steps
+            and best_loss <= target_validation_loss
+        ):
             break
-        if patience > 0 and stale_checks >= patience:
+        if patience > 0 and step >= min_steps and stale_checks >= patience:
             break
     return validation_history
 
@@ -526,6 +602,7 @@ def _training_run_record(
     validation_interval: int,
     convergence_patience: int,
     convergence_min_delta: float,
+    convergence_min_steps: int,
     validation_history: tuple[TrainingHistoryPoint, ...],
 ) -> TrainingRunRecord:
     best = validation_history[-1]
@@ -565,9 +642,112 @@ def _training_run_record(
             min_delta=convergence_min_delta,
             patience=convergence_patience,
             validation_source="generator-resample",
+            min_steps=convergence_min_steps,
         ),
         validation_history=validation_history,
     )
+
+
+def _running_training_run_record(
+    *,
+    seed: int,
+    batch_size: int,
+    max_steps: int,
+    learning_rate: float,
+    optimizer_name: str,
+    schedule_name: str,
+    validation_interval: int,
+    convergence_patience: int,
+    convergence_min_delta: float,
+    convergence_min_steps: int,
+    validation_history: tuple[TrainingHistoryPoint, ...],
+) -> TrainingRunRecord:
+    best = validation_history[-1]
+    return TrainingRunRecord(
+        status="running",
+        stop_reason="validation-checkpoint",
+        steps_run=validation_history[-1].step,
+        validation_checks=len(validation_history),
+        best_validation_loss=best.best_validation_loss,
+        best_validation_step=best.best_validation_step,
+        best_validation_check=best.best_validation_check,
+        protocol=TrainingProtocol(
+            kind="fixed-step-local-batch",
+            objective="cross-entropy",
+            optimizer=cast(Any, optimizer_name),
+            learning_rate=learning_rate,
+            schedule=cast(Any, schedule_name),
+            seed=seed,
+            batch_size=batch_size,
+            max_steps=max_steps,
+            validation_interval=validation_interval,
+            validation_sample_count=batch_size,
+            min_delta=convergence_min_delta,
+            patience=convergence_patience,
+            validation_source="generator-resample",
+            min_steps=convergence_min_steps,
+        ),
+        validation_history=validation_history,
+    )
+
+
+def _training_progress_record(
+    *,
+    plan: BenchmarkRunPlan,
+    summary: BenchmarkRunSummary,
+    architecture: ArchitectureManifest,
+    outcome_space: OutcomeSpace,
+    training_run: TrainingRunRecord,
+) -> Mapping[str, object]:
+    inspection = ModelInspectionRecord.from_architecture(
+        id=ProtocolIdentifier.parse(
+            f"model-inspections.{_identifier_atom(summary.benchmark_id)}."
+            f"{summary.run_slug}.progress@0.1.0"
+        ),
+        architecture_manifest=architecture,
+    )
+    return {
+        "format": _progress_format,
+        "format_version": _progress_format_version,
+        "run_slug": summary.run_slug,
+        "run_status": "running",
+        "benchmark_id": str(summary.benchmark_id),
+        "architecture_path": summary.architecture_path.as_posix(),
+        "scale": plan.scale,
+        "sample_count": plan.sample_count,
+        "evaluation_sample_count": plan.resolved_evaluation_sample_count,
+        "seed": plan.seed,
+        "train_steps": plan.train_steps,
+        "learning_rate": float(plan.learning_rate),
+        "optimizer": plan.optimizer,
+        "schedule": plan.schedule,
+        "validation_interval": plan.validation_interval,
+        "convergence_patience": plan.convergence_patience,
+        "convergence_min_delta": float(plan.convergence_min_delta),
+        "convergence_min_steps": plan.convergence_min_steps,
+        "target_validation_loss": (
+            None
+            if plan.target_validation_loss is None
+            else float(plan.target_validation_loss)
+        ),
+        "training_run": training_run.to_record(),
+        "architecture": inspection.architecture.to_record(),
+        "cost_summary": inspection.cost_summary.to_record(),
+        "model_inspection": inspection.to_record(),
+        "architecture_digest": str(architecture.digest),
+        "model_inspection_digest": str(inspection.digest),
+        "provisional_score": _validation_competence(
+            best_validation_loss=training_run.best_validation_loss,
+            outcome_count=len(outcome_space.outcomes),
+        ),
+    }
+
+
+def _validation_competence(*, best_validation_loss: float, outcome_count: int) -> float:
+    reference_cross_entropy = math.log(outcome_count)
+    if reference_cross_entropy <= 0:
+        return 0.0
+    return max(0.0, min(1.0, 1.0 - best_validation_loss / reference_cross_entropy))
 
 
 def _make_optimizer(
@@ -769,6 +949,13 @@ def _renormalized_probabilities(probabilities: Sequence[float]) -> tuple[float, 
 def _write_document(path: Path, record: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(canonical_document_bytes(record))
+
+
+def _write_document_atomic(path: Path, record: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_bytes(canonical_document_bytes(record))
+    temporary.replace(path)
 
 
 def _torch() -> Any:

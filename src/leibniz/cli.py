@@ -340,10 +340,10 @@ def _parser() -> argparse.ArgumentParser:
     propose_results.add_argument("--scale", default=1, type=int)
     propose_results.add_argument("--candidate-budget", default=3, type=int)
     propose_results.add_argument("--candidate-sample-count", default=64, type=int)
-    propose_results.add_argument("--sample-count", default=4, type=int)
+    propose_results.add_argument("--sample-count", default=512, type=int)
     propose_results.add_argument("--evaluation-sample-count", default=None, type=int)
     propose_results.add_argument("--seed", default=101, type=int)
-    propose_results.add_argument("--train-steps", default=1, type=int)
+    propose_results.add_argument("--train-steps", default=50_000, type=int)
     propose_results.add_argument("--learning-rate", default=0.01, type=float)
     propose_results.add_argument("--optimizer", default="sgd", choices=("sgd", "adam", "adamw"))
     propose_results.add_argument(
@@ -351,9 +351,10 @@ def _parser() -> argparse.ArgumentParser:
         default="none",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
-    propose_results.add_argument("--validation-interval", default=1, type=int)
-    propose_results.add_argument("--convergence-patience", default=0, type=int)
-    propose_results.add_argument("--convergence-min-delta", default=0.0, type=float)
+    propose_results.add_argument("--validation-interval", default=250, type=int)
+    propose_results.add_argument("--convergence-patience", default=12, type=int)
+    propose_results.add_argument("--convergence-min-delta", default=1e-3, type=float)
+    propose_results.add_argument("--convergence-min-steps", default=500, type=int)
     propose_results.add_argument("--target-validation-loss", default=None, type=float)
 
     benchmark = subcommands.add_parser(
@@ -376,10 +377,10 @@ def _parser() -> argparse.ArgumentParser:
         help="local result checkout; defaults to .runs",
     )
     run.add_argument("--scale", default=1, type=int)
-    run.add_argument("--sample-count", default=4, type=int)
+    run.add_argument("--sample-count", default=512, type=int)
     run.add_argument("--evaluation-sample-count", default=None, type=int)
     run.add_argument("--seed", default=101, type=int)
-    run.add_argument("--train-steps", default=1, type=int)
+    run.add_argument("--train-steps", default=50_000, type=int)
     run.add_argument("--learning-rate", default=0.01, type=float)
     run.add_argument("--optimizer", default="sgd", choices=("sgd", "adam", "adamw"))
     run.add_argument(
@@ -387,9 +388,10 @@ def _parser() -> argparse.ArgumentParser:
         default="none",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
-    run.add_argument("--validation-interval", default=1, type=int)
-    run.add_argument("--convergence-patience", default=0, type=int)
-    run.add_argument("--convergence-min-delta", default=0.0, type=float)
+    run.add_argument("--validation-interval", default=250, type=int)
+    run.add_argument("--convergence-patience", default=12, type=int)
+    run.add_argument("--convergence-min-delta", default=1e-3, type=float)
+    run.add_argument("--convergence-min-steps", default=500, type=int)
     run.add_argument("--target-validation-loss", default=None, type=float)
     run.add_argument("--dry-run", action="store_true")
     loop = benchmark_subcommands.add_parser(
@@ -408,10 +410,10 @@ def _parser() -> argparse.ArgumentParser:
     loop.add_argument("--scale", default=1, type=int)
     loop.add_argument("--candidate-budget", default=3, type=int)
     loop.add_argument("--candidate-sample-count", default=64, type=int)
-    loop.add_argument("--sample-count", default=4, type=int)
+    loop.add_argument("--sample-count", default=512, type=int)
     loop.add_argument("--evaluation-sample-count", default=None, type=int)
     loop.add_argument("--seed", default=101, type=int)
-    loop.add_argument("--train-steps", default=1, type=int)
+    loop.add_argument("--train-steps", default=50_000, type=int)
     loop.add_argument("--learning-rate", default=0.01, type=float)
     loop.add_argument("--optimizer", default="sgd", choices=("sgd", "adam", "adamw"))
     loop.add_argument(
@@ -419,9 +421,10 @@ def _parser() -> argparse.ArgumentParser:
         default="none",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
-    loop.add_argument("--validation-interval", default=1, type=int)
-    loop.add_argument("--convergence-patience", default=0, type=int)
-    loop.add_argument("--convergence-min-delta", default=0.0, type=float)
+    loop.add_argument("--validation-interval", default=250, type=int)
+    loop.add_argument("--convergence-patience", default=12, type=int)
+    loop.add_argument("--convergence-min-delta", default=1e-3, type=float)
+    loop.add_argument("--convergence-min-steps", default=500, type=int)
     loop.add_argument("--target-validation-loss", default=None, type=float)
     loop.add_argument("--dry-run", action="store_true")
     loop.add_argument("--retry-failed", action="store_true")
@@ -455,6 +458,7 @@ def _parser() -> argparse.ArgumentParser:
     shakedown.add_argument("--validation-interval", default=1, type=int)
     shakedown.add_argument("--convergence-patience", default=0, type=int)
     shakedown.add_argument("--convergence-min-delta", default=0.0, type=float)
+    shakedown.add_argument("--convergence-min-steps", default=0, type=int)
     shakedown.add_argument("--target-validation-loss", default=None, type=float)
     shakedown.add_argument("--retry-failed", action="store_true")
 
@@ -521,6 +525,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                     validation_interval=args.validation_interval,
                     convergence_patience=args.convergence_patience,
                     convergence_min_delta=args.convergence_min_delta,
+                    convergence_min_steps=args.convergence_min_steps,
                     target_validation_loss=args.target_validation_loss,
                     dry_run=args.dry_run,
                 )
@@ -610,6 +615,7 @@ def _active_training_loop_plan(
         validation_interval=args.validation_interval,
         convergence_patience=args.convergence_patience,
         convergence_min_delta=args.convergence_min_delta,
+        convergence_min_steps=args.convergence_min_steps,
         target_validation_loss=args.target_validation_loss,
         dry_run=dry_run,
         retry_failed=args.retry_failed,
@@ -799,6 +805,7 @@ def _results(args: argparse.Namespace) -> int:
                     validation_interval=args.validation_interval,
                     convergence_patience=args.convergence_patience,
                     convergence_min_delta=args.convergence_min_delta,
+                    convergence_min_steps=args.convergence_min_steps,
                     target_validation_loss=args.target_validation_loss,
                 )
             )

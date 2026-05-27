@@ -7,6 +7,7 @@ import pytest
 from leibniz.benchmark_runner import (
     BenchmarkRunnerError,
     BenchmarkRunPlan,
+    BenchmarkRunSummary,
     run_benchmark,
 )
 from leibniz.benchmarks import BenchmarkManifestDocument
@@ -31,18 +32,22 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
             benchmark_root=_digits_benchmark_root,
             runs_root=tmp_path / ".runs",
             sample_count=2,
+            train_steps=1,
             dry_run=True,
         )
     )
 
     assert summary.dry_run is True
     assert summary.measurement_count == 2
+    assert summary.run_slug.startswith(
+        "digits-arch-bb0dde9254dc-l1-seed101-samples2-steps1-train-"
+    )
     assert summary.measurement_dataset_path == (
         tmp_path
         / ".runs"
         / "measurements"
         / "digits"
-        / "digits-arch-bb0dde9254dc-l1-seed101-samples2-steps1-train-824456cc16d4.json"
+        / f"{summary.run_slug}.json"
     )
     assert not summary.measurement_dataset_path.exists()
     assert not (tmp_path / ".runs").exists()
@@ -231,6 +236,68 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert "training_provenance" in inspections[0]
 
 
+def test_digits_benchmark_runner_materializes_running_training_history(
+    tmp_path: Path,
+) -> None:
+    progress_views: list[Mapping[str, object]] = []
+
+    def refresh_progress(_summary: BenchmarkRunSummary) -> None:
+        view_summary = materialize_benchmark_result_views(
+            repository_root=_repository_root,
+            runs_root=tmp_path / ".runs",
+        )
+        progress_views.append(load_console_result_view(view_summary.view_file.read_bytes()))
+
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            runs_root=tmp_path / ".runs",
+            sample_count=2,
+            evaluation_sample_count=2,
+            seed=101,
+            train_steps=2,
+            validation_interval=1,
+            convergence_patience=0,
+            convergence_min_delta=0.0,
+            convergence_min_steps=0,
+        ),
+        progress_callback=refresh_progress,
+    )
+
+    assert progress_views
+    progress_view = progress_views[0]
+    result = cast(list[dict[str, object]], progress_view["benchmark_results"])[0]
+    history = cast(list[dict[str, object]], result["training_history"])
+    running_run = history[0]
+    diagnostics = cast(dict[str, object], running_run["training_diagnostics"])
+
+    assert running_run["source_kind"] == "local-progress"
+    assert running_run["measurement_count"] == 0
+    assert diagnostics["status"] == "running"
+    assert diagnostics["stop_reason"] == "validation-checkpoint"
+    assert diagnostics["validation_checks"] == 1
+    assert cast(list[dict[str, object]], result["leaderboard"])[0]["source_kinds"] == [
+        "local-progress"
+    ]
+
+    final_view_summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+    final_view = load_console_result_view(final_view_summary.view_file.read_bytes())
+    final_result = cast(list[dict[str, object]], final_view["benchmark_results"])[0]
+    final_history = cast(list[dict[str, object]], final_result["training_history"])
+    progress_path = (
+        summary.training_summary_path.parent.parent.parent
+        / "training-progress"
+        / summary.training_summary_path.parent.name
+        / summary.training_summary_path.name
+    )
+    assert final_history[0]["source_kind"] == "local-run"
+    assert not progress_path.exists()
+
+
 def test_digits_benchmark_runner_rejects_unmatched_architecture_shape(tmp_path: Path) -> None:
     with pytest.raises(BenchmarkRunnerError, match="does not match generated observation shape"):
         run_benchmark(
@@ -269,6 +336,6 @@ def test_cli_runs_digits_benchmark_dry_run(
     assert captured.err == ""
     assert captured.out.startswith(
         "planned benchmark run "
-        "digits-arch-bb0dde9254dc-l1-seed101-samples2-steps1-train-824456cc16d4"
+        "digits-arch-bb0dde9254dc-l1-seed101-samples2-steps50000-train-"
     )
     assert not (tmp_path / ".runs").exists()

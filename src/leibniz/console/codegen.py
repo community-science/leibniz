@@ -322,6 +322,7 @@ export type TrainingProtocolRecord = {
   validation_sample_count: number;
   min_delta: number;
   patience: number;
+  min_steps?: number;
   validation_source: string;
 };
 
@@ -780,6 +781,10 @@ function parseTrainingProtocol(value: unknown, path: string): TrainingProtocolRe
     ),
     min_delta: requireNumber(record.min_delta, `${path}.min_delta`),
     patience: requireNumber(record.patience, `${path}.patience`),
+    min_steps:
+      record.min_steps === undefined
+        ? undefined
+        : requireNumber(record.min_steps, `${path}.min_steps`),
     validation_source: requireString(record.validation_source, `${path}.validation_source`),
   };
 }

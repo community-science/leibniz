@@ -46,16 +46,17 @@ class ActiveTrainingLoopPlan:
     scale: int = 1
     candidate_budget: int = 3
     candidate_sample_count: int = 64
-    sample_count: int = 4
+    sample_count: int = 512
     evaluation_sample_count: int | None = None
     seed: int = 101
-    train_steps: int = 1
+    train_steps: int = 50_000
     learning_rate: float = 0.01
     optimizer: str = "sgd"
     schedule: str = "none"
-    validation_interval: int = 1
-    convergence_patience: int = 0
-    convergence_min_delta: float = 0.0
+    validation_interval: int = 250
+    convergence_patience: int = 12
+    convergence_min_delta: float = 1e-3
+    convergence_min_steps: int = 500
     target_validation_loss: float | None = None
     dry_run: bool = False
     retry_failed: bool = False
@@ -99,6 +100,8 @@ class ActiveTrainingLoopPlan:
             raise ActiveTrainingLoopError("convergence_patience must be nonnegative")
         if self.convergence_min_delta < 0:
             raise ActiveTrainingLoopError("convergence_min_delta must be nonnegative")
+        if type(self.convergence_min_steps) is not int or self.convergence_min_steps < 0:
+            raise ActiveTrainingLoopError("convergence_min_steps must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise ActiveTrainingLoopError("target_validation_loss must be nonnegative")
         if type(self.retry_failed) is not bool:
@@ -162,6 +165,7 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                 validation_interval=plan.validation_interval,
                 convergence_patience=plan.convergence_patience,
                 convergence_min_delta=plan.convergence_min_delta,
+                convergence_min_steps=plan.convergence_min_steps,
                 target_validation_loss=plan.target_validation_loss,
             )
         )
@@ -214,6 +218,13 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
             )
             materialize_work_queue_view(plan.runs_root)
             try:
+                def refresh_progress(_summary: BenchmarkRunSummary) -> None:
+                    materialize_benchmark_result_views(
+                        repository_root=Path.cwd(),
+                        runs_root=plan.runs_root,
+                    )
+                    materialize_work_queue_view(plan.runs_root)
+
                 benchmark_summary = run_benchmark(
                     BenchmarkRunPlan(
                         architecture_path=architecture_path,
@@ -230,8 +241,10 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                         validation_interval=plan.validation_interval,
                         convergence_patience=plan.convergence_patience,
                         convergence_min_delta=plan.convergence_min_delta,
+                        convergence_min_steps=plan.convergence_min_steps,
                         target_validation_loss=plan.target_validation_loss,
-                    )
+                    ),
+                    progress_callback=refresh_progress,
                 )
             except Exception as error:
                 write_work_queue_item(

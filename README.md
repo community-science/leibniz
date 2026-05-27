@@ -76,6 +76,20 @@ leibniz benchmark shakedown \
   --benchmark-root src/leibniz/benchmarks/digits
 ```
 
+`benchmark shakedown` is the fast smoke-test path. The default `benchmark run`,
+`benchmark loop`, and `results propose` training profile is a full convergence
+run: 50,000 maximum optimizer steps, 500 minimum steps before early stopping,
+validation every 250 steps, patience 12, and convergence min delta `1e-3`.
+Override those with `--train-steps`, `--convergence-min-steps`,
+`--validation-interval`, `--convergence-patience`, and
+`--convergence-min-delta` when you need a shorter diagnostic run.
+
+While a benchmark loop is training a reserved candidate, validation checkpoints
+are written under `.runs/training-progress/` and materialized into the local
+benchmark result view as running leaderboard entries with accumulated validation
+history. Completed runs replace that progress state with final measurement,
+model-inspection, and training-summary records.
+
 Publish the local dirty state as a commit:
 
 ```bash
