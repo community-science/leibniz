@@ -9,10 +9,12 @@ from leibniz.model_operators import (
     ExecutableModelOperator,
     ModelOperatorExecutionError,
     ModelOperatorSearchPoint,
+    ModelProgramEffect,
     materialize_model_operator_search_point,
     model_operator_semantic_coordinates,
     model_operator_vocabulary,
     summarize_architecture_operators,
+    summarize_model_program_effects,
 )
 
 _fixtures_root = Path(__file__).parent / "fixtures"
@@ -174,6 +176,103 @@ def test_model_operator_vocabulary_exports_registry_metadata() -> None:
         descriptor["name"]: descriptor["display_name"]
         for descriptor in coordinate_descriptors
     }["operator.{index}.local_support_size"] == "Local support size"
+
+
+def test_program_effect_summary_resolves_branch_share_and_merge_trace() -> None:
+    plan = summarize_model_program_effects(
+        input_shape=(1, 8, 8),
+        effects=(
+            ModelProgramEffect(kind="branch", arity=2),
+            ModelProgramEffect(
+                kind="parameter-sharing",
+                arity=2,
+                parameter_group="shared-stem",
+            ),
+            ModelProgramEffect(kind="merge", arity=2),
+        ),
+    )
+
+    assert plan.output_shape == (1, 8, 8)
+    assert plan.parameter_count == 0
+    assert plan.inference_flops == 0
+    assert [summary.descriptor.kind for summary in plan.effects] == [
+        "branch",
+        "parameter-sharing",
+        "merge",
+    ]
+    assert plan.effects[0].descriptor.to_record() == {
+        "kind": "branch",
+        "input_arity": 1,
+        "output_arity": 2,
+        "shape_law": "duplicate-input-shape",
+        "cost_law": "zero-arithmetic",
+        "trace_law": "fan-out",
+    }
+    assert plan.effects[1].trace == ("parameter-sharing group=shared-stem arity=2",)
+    assert plan.effects[2].input_shapes == ((1, 8, 8), (1, 8, 8))
+    assert plan.effects[2].output_shapes == ((1, 8, 8),)
+    assert plan.to_record()["output_shapes"] == [[1, 8, 8]]
+
+
+def test_program_effect_summary_scales_nested_repeat_cost() -> None:
+    plan = summarize_model_program_effects(
+        input_shape=(4,),
+        effects=(
+            ModelProgramEffect(
+                kind="repeat",
+                repetitions=3,
+                nested_parameter_count=5,
+                nested_inference_flops=11,
+            ),
+        ),
+    )
+
+    assert plan.output_shape == (4,)
+    assert plan.parameter_count == 15
+    assert plan.inference_flops == 33
+    assert plan.effects[0].descriptor.shape_law == "preserve-shape"
+    assert plan.effects[0].trace == (
+        "repeat count=3",
+        "nested_parameter_count=5",
+        "nested_inference_flops=11",
+    )
+
+
+def test_program_effect_summary_resolves_identity_and_route() -> None:
+    plan = summarize_model_program_effects(
+        input_shape=(2, 4),
+        effects=(
+            ModelProgramEffect(kind="identity-path"),
+            ModelProgramEffect(kind="branch", arity=3),
+            ModelProgramEffect(kind="route", arity=3),
+        ),
+    )
+
+    assert plan.output_shape == (2, 4)
+    assert [summary.descriptor.shape_law for summary in plan.effects] == [
+        "preserve-shape",
+        "duplicate-input-shape",
+        "select-equal-input-shape",
+    ]
+    assert plan.effects[0].trace == ("identity-path",)
+    assert plan.effects[2].trace == ("route choices=3",)
+
+
+def test_program_effect_summary_rejects_invalid_structure() -> None:
+    assert str(
+        capture_operator_error(
+            lambda: summarize_model_program_effects(
+                input_shape=(1, 8, 8),
+                effects=(ModelProgramEffect(kind="merge", arity=2),),
+            )
+        )
+    ) == "merge expected 2 input path(s), got 1"
+    assert str(
+        capture_operator_error(lambda: ModelProgramEffect(kind="branch", arity=1))
+    ) == "branch program effect arity must be at least 2"
+    assert str(
+        capture_operator_error(lambda: ModelProgramEffect(kind="repeat", repetitions=1))
+    ) == "repeat program effect repetitions must be at least 2"
 
 
 def test_operator_vocabulary_sections_have_console_consumers() -> None:
