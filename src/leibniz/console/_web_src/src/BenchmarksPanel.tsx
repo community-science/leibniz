@@ -32,6 +32,7 @@ import type {
   ModelInspectionTraceStageRecord,
 } from './modelInspections.ts';
 import {
+  descriptorAxisDisplayName,
   descriptorValueDisplayName,
   operatorDisplayName,
   parameterDisplayName,
@@ -1067,19 +1068,16 @@ function traceStageEntries(
   stage: ModelInspectionTraceStageRecord,
   vocabulary: OperatorVocabularyRecord,
 ): [string, string][] {
+  const descriptorEntry = (axis: string, value: string): [string, string] => [
+    descriptorAxisDisplayName(vocabulary, axis),
+    descriptorValueDisplayName(vocabulary, axis, value),
+  ];
   return [
-    [
-      'Tensor relation',
-      descriptorValueDisplayName(
-        vocabulary,
-        'tensor_relation',
-        stage.descriptor_axes.tensor_relation,
-      ),
-    ],
-    ['Support', descriptorValueDisplayName(vocabulary, 'support', stage.descriptor_axes.support)],
-    ['State', descriptorValueDisplayName(vocabulary, 'state', stage.descriptor_axes.state)],
-    ['Shape law', descriptorValueDisplayName(vocabulary, 'shape_law', stage.shape_law)],
-    ['Cost law', descriptorValueDisplayName(vocabulary, 'cost_law', stage.cost_law)],
+    descriptorEntry('tensor_relation', stage.descriptor_axes.tensor_relation),
+    descriptorEntry('support', stage.descriptor_axes.support),
+    descriptorEntry('state', stage.descriptor_axes.state),
+    descriptorEntry('shape_law', stage.shape_law),
+    descriptorEntry('cost_law', stage.cost_law),
   ].filter((entry): entry is [string, string] => entry[1] !== undefined && entry[1] !== '');
 }
 

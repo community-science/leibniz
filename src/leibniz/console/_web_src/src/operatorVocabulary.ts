@@ -2,6 +2,7 @@ export type OperatorVocabularyRecord = {
   format: 'leibniz.model-operator-vocabulary';
   format_version: 1;
   operators: OperatorVocabularyEntry[];
+  descriptor_axis_descriptors: OperatorDescriptorAxisDescriptor[];
   descriptor_axes: Record<string, OperatorDescriptorAxisValue[]>;
   syntax_aliases: OperatorSyntaxAlias[];
   coordinate_descriptors: OperatorCoordinateDescriptor[];
@@ -24,6 +25,11 @@ export type OperatorParameterRole = {
 
 export type OperatorDescriptorAxisValue = {
   value: string;
+  display_name: string;
+};
+
+export type OperatorDescriptorAxisDescriptor = {
+  name: string;
   display_name: string;
 };
 
@@ -57,6 +63,15 @@ export function parseOperatorVocabularyRecord(value: unknown): OperatorVocabular
     format_version: requireLiteral(record.format_version, 'operator vocabulary.format_version', 1),
     operators: requireArray(record.operators, 'operator vocabulary.operators').map(
       (operator, index) => parseOperator(operator, `operator vocabulary.operators.${index}`),
+    ),
+    descriptor_axis_descriptors: requireArray(
+      record.descriptor_axis_descriptors,
+      'operator vocabulary.descriptor_axis_descriptors',
+    ).map((descriptor, index) =>
+      parseDescriptorAxisDescriptor(
+        descriptor,
+        `operator vocabulary.descriptor_axis_descriptors.${index}`,
+      ),
     ),
     descriptor_axes: parseDescriptorAxes(
       record.descriptor_axes,
@@ -120,6 +135,16 @@ export function descriptorValueDisplayName(
   );
 }
 
+export function descriptorAxisDisplayName(
+  vocabulary: OperatorVocabularyRecord,
+  axis: string,
+): string {
+  return (
+    vocabulary.descriptor_axis_descriptors.find((descriptor) => descriptor.name === axis)
+      ?.display_name ?? axis
+  );
+}
+
 export function coordinateDisplayName(
   vocabulary: OperatorVocabularyRecord,
   coordinateName: string,
@@ -176,6 +201,17 @@ function parseAxisValue(value: unknown, path: string): OperatorDescriptorAxisVal
   const record = requireRecord(value, path);
   return {
     value: requireString(record.value, `${path}.value`),
+    display_name: requireString(record.display_name, `${path}.display_name`),
+  };
+}
+
+function parseDescriptorAxisDescriptor(
+  value: unknown,
+  path: string,
+): OperatorDescriptorAxisDescriptor {
+  const record = requireRecord(value, path);
+  return {
+    name: requireString(record.name, `${path}.name`),
     display_name: requireString(record.display_name, `${path}.display_name`),
   };
 }
