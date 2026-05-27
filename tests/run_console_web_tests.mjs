@@ -288,6 +288,9 @@ function assertBenchmarkModelWorkbenchStructure() {
     'benchmark-model-rail',
     'benchmark-model-artifact-hero',
     'benchmark-model-artifact-flow',
+    'benchmark-model-lineage-graph',
+    'benchmark-model-training-grid',
+    'benchmark-model-validation-chart',
     'benchmark-model-cost-grid',
     'benchmark-model-layer-shape-grid',
   ];
@@ -304,6 +307,8 @@ function assertBenchmarkModelWorkbenchStructure() {
     '--measured-accent-bg',
     '--measured-accent-border',
     '.benchmark-model-artifact-flow',
+    '.benchmark-model-lineage-graph',
+    '.benchmark-model-validation-chart',
     '.benchmark-model-layer-shape-grid',
   ];
   for (const marker of requiredStyleMarkers) {
