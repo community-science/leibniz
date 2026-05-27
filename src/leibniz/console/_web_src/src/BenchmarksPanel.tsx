@@ -164,6 +164,7 @@ export function BenchmarksPanel({
           >
             <BenchmarkPerformancePane
               benchmark={selected}
+              queueItems={queueItems}
               resultEntry={selectedResult}
             />
           </CollapsibleBenchmarkSection>
@@ -269,9 +270,11 @@ function workQueueStatusLabel(items: WorkQueueItemRecord[]): string {
 
 function BenchmarkPerformancePane({
   benchmark,
+  queueItems,
   resultEntry,
 }: {
   benchmark: BenchmarkTaskRecord;
+  queueItems: WorkQueueItemRecord[];
   resultEntry:
     | BenchmarkResultEntry
     | undefined;
@@ -282,6 +285,7 @@ function BenchmarkPerformancePane({
     <div className="benchmark-task">
       <ResultSourceStatus result={result} resultEntry={resultEntry} />
       <BenchmarkResultDashboard
+        queueItems={queueItems}
         result={result}
       />
     </div>

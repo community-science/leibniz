@@ -1166,6 +1166,45 @@ p {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.proposal-acquisition-components {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--result-source-metric-min), 1fr));
+  gap: var(--space-sm);
+  margin: 0;
+  border-top: var(--line-thin) solid var(--border-color);
+  padding-top: var(--space-md);
+}
+
+.proposal-acquisition-components div {
+  min-width: 0;
+  border-left: var(--line-accent) solid var(--proposal-accent-border);
+  padding-left: var(--space-sm);
+}
+
+.proposal-acquisition-components dt {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--font-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.proposal-acquisition-components dd {
+  margin: var(--space-2xs) 0 0;
+  color: var(--proposal-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-control);
+}
+
+.proposal-card-command {
+  display: block;
+  border-top: var(--line-thin) solid var(--border-color);
+  padding-top: var(--space-md);
+}
+
 .run-detail-card {
   display: flex;
   flex-direction: column;
