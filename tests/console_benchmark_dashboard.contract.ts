@@ -259,7 +259,12 @@ assertEqual(plotModel.proposals.length, 1, 'plot proposal count');
 assertEqual(plotModel.proposals[0]?.cost, 10, 'plot proposal cost');
 assertEqual(plotModel.staircase.length, 1, 'plot staircase point count');
 assertEqual(plotModel.xTicks.includes(16), true, 'plot log ticks');
+assertEqual(plotModel.xDomain[0], 0, 'plot default x minimum');
+assertEqual(plotModel.xDomain[1], 20, 'plot default x maximum');
+assertEqual(plotModel.xMajorTicks.includes(1), true, 'plot major x ticks');
+assertEqual(plotModel.xMinorTicks.includes(2), true, 'plot minor x ticks');
 assertEqual(plotModel.yDomain[0], 0, 'plot y starts at zero');
+assertEqual(plotModel.yDomain[1], 1.05, 'plot y ceiling follows score scale');
 assertEqual(
   sortedModelResults(result.leaderboard, 'parameter_count', {
     key: 'cost',
@@ -303,6 +308,24 @@ const emptyPlotModel = benchmarkPlotModel(
 assertEqual(emptyPlotModel.points.length, 0, 'empty plot point count');
 assertEqual(emptyPlotModel.xTicks.length > 0, true, 'empty plot has x ticks');
 assertEqual(emptyPlotModel.yTicks.length > 0, true, 'empty plot has y ticks');
+const expandedPlotModel = benchmarkPlotModel(
+  {
+    ...result,
+    leaderboard: [
+      ...result.leaderboard,
+      {
+        ...result.leaderboard[1]!,
+        cost_summary: {
+          ...result.leaderboard[1]!.cost_summary,
+          parameter_count: 2 ** 22,
+        },
+        model_key: 'model-c',
+      },
+    ],
+  },
+  'parameter_count',
+);
+assertEqual(expandedPlotModel.xDomain[1], 22, 'plot x maximum expands by log2 step');
 
 function assertEqual(actual: unknown, expected: unknown, label: string) {
   if (actual !== expected) {

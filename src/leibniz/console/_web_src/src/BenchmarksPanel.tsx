@@ -120,8 +120,22 @@ export function BenchmarksPanel({
       <div className="benchmark-workbench-content">
         <div className="benchmark-header">
           <div>
-            <h2>{selected.label}</h2>
+            <h2>
+              <select
+                aria-label="Benchmark"
+                className="benchmark-title-select"
+                onChange={(event) => setSelectedBenchmarkId(event.target.value)}
+                value={selected.benchmark_id}
+              >
+                {tasks.map((task) => (
+                  <option key={task.benchmark_id} value={task.benchmark_id}>
+                    {task.label}
+                  </option>
+                ))}
+              </select>
+            </h2>
             <p>{selected.benchmark_id}</p>
+            <p>{selectedResult?.sourcePath ?? selected.source_path}</p>
           </div>
           <dl className="benchmark-header-metrics">
             <div>
@@ -136,29 +150,20 @@ export function BenchmarksPanel({
               <dt>Samples</dt>
               <dd>{sampleCount}</dd>
             </div>
+            <div>
+              <dt>Queue</dt>
+              <dd>{workQueueStatusLabel(queueItems)}</dd>
+            </div>
+            <div>
+              <dt>Updated</dt>
+              <dd>{resultUpdatedLabel(selectedResult)}</dd>
+            </div>
+            <div>
+              <dt>Size</dt>
+              <dd>{resultSizeLabel(selectedResult)}</dd>
+            </div>
           </dl>
         </div>
-
-        <div className="benchmark-selector-row" aria-label="Benchmarks">
-          <span>Benchmarks:</span>
-          {tasks.map((task) => (
-            <button
-              className={task.benchmark_id === selected.benchmark_id ? 'active' : ''}
-              key={task.benchmark_id}
-              onClick={() => setSelectedBenchmarkId(task.benchmark_id)}
-              type="button"
-            >
-              {task.label}
-            </button>
-          ))}
-        </div>
-
-        <BenchmarkStatusRow
-          queueItems={queueItems}
-          resultEntry={selectedResult}
-          sampleCount={sampleCount}
-          task={selected}
-        />
 
         <div className="benchmark-section-stack">
           <CollapsibleBenchmarkSection
@@ -223,28 +228,6 @@ function CollapsibleBenchmarkSection({
   );
 }
 
-function BenchmarkStatusRow({
-  queueItems,
-  resultEntry,
-  sampleCount,
-  task,
-}: {
-  queueItems: WorkQueueItemRecord[];
-  resultEntry: BenchmarkResultEntry | undefined;
-  sampleCount: number;
-  task: BenchmarkTaskRecord;
-}) {
-  const status = resultEntry === undefined ? 'Awaiting Results' : 'Result View Loaded';
-  return (
-    <div className="benchmark-status-row">
-      <span>{status}</span>
-      <span>{workQueueStatusLabel(queueItems)}</span>
-      <span>{sampleCount} generated samples</span>
-      <span>{task.source_path}</span>
-    </div>
-  );
-}
-
 function workQueueItemsForTask(
   resultViews: ResultViewRecord[],
   benchmarkId: string,
@@ -271,6 +254,29 @@ function workQueueStatusLabel(items: WorkQueueItemRecord[]): string {
     .join(' / ');
 }
 
+function resultUpdatedLabel(resultEntry: BenchmarkResultEntry | undefined): string {
+  if (resultEntry?.sourceMtimeMs === undefined) {
+    return 'Not reported';
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(resultEntry.sourceMtimeMs));
+}
+
+function resultSizeLabel(resultEntry: BenchmarkResultEntry | undefined): string {
+  if (resultEntry?.sourceSizeBytes === undefined) {
+    return 'Not reported';
+  }
+  return new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 1,
+    minimumFractionDigits: 0,
+    style: 'unit',
+    unit: 'byte',
+    unitDisplay: 'narrow',
+  }).format(resultEntry.sourceSizeBytes);
+}
+
 function BenchmarkPerformancePane({
   benchmark,
   queueItems,
@@ -286,70 +292,11 @@ function BenchmarkPerformancePane({
 
   return (
     <div className="benchmark-task">
-      <ResultSourceStatus result={result} resultEntry={resultEntry} />
       <BenchmarkResultDashboard
         queueItems={queueItems}
         result={result}
       />
     </div>
-  );
-}
-
-function ResultSourceStatus({
-  result,
-  resultEntry,
-}: {
-  result: BenchmarkResultRecord;
-  resultEntry: BenchmarkResultEntry | undefined;
-}) {
-  const status = resultEntry === undefined ? 'Awaiting result view' : 'Loaded result view';
-  const updatedAt =
-    resultEntry?.sourceMtimeMs === undefined
-      ? 'Not reported'
-      : new Intl.DateTimeFormat(undefined, {
-          dateStyle: 'medium',
-          timeStyle: 'short',
-        }).format(new Date(resultEntry.sourceMtimeMs));
-  const size =
-    resultEntry?.sourceSizeBytes === undefined
-      ? 'Not reported'
-      : new Intl.NumberFormat(undefined, {
-          maximumFractionDigits: 1,
-          minimumFractionDigits: 0,
-          style: 'unit',
-          unit: 'byte',
-          unitDisplay: 'narrow',
-        }).format(resultEntry.sourceSizeBytes);
-
-  return (
-    <section className="benchmark-result-source" aria-label="Result source">
-      <div>
-        <span>{status}</span>
-        <p>{resultEntry?.sourcePath ?? 'No result view loaded'}</p>
-      </div>
-      <dl>
-        <div>
-          <dt>Updated</dt>
-          <dd>{updatedAt}</dd>
-        </div>
-        <div>
-          <dt>Size</dt>
-          <dd>{size}</dd>
-        </div>
-        <div>
-          <dt>Models</dt>
-          <dd>{result.leaderboard.length}</dd>
-        </div>
-        <div>
-          <dt>Runs</dt>
-          <dd>{result.training_history.length}</dd>
-        </div>
-        <div>
-          <dt>Proposals</dt>
-          <dd>{result.proposals.length}</dd>
-        </div>
-      </dl>
-    </section>
   );
 }
 

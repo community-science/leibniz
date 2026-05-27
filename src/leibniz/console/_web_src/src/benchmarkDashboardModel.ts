@@ -47,9 +47,16 @@ export type BenchmarkPlotModel = {
   xDomain: [number, number];
   yDomain: [number, number];
   xTicks: number[];
+  xMajorTicks: number[];
+  xMinorTicks: number[];
   yTicks: number[];
   staircase: [number, number][];
 };
+
+const fallbackLogCostDomain: [number, number] = [0, 20];
+const fallbackScoreDomain: [number, number] = [0, 1.05];
+const scoreTickTarget = 6;
+const denseLogTickThreshold = 14;
 
 export type ModelResultSortKey = 'score' | 'cost' | 'model' | 'runs' | 'measurements';
 export type SortDirection = 'ascending' | 'descending';
@@ -154,16 +161,19 @@ export function benchmarkPlotModel(
           ],
     ),
   ];
-  const xDomain = paddedDomain(costLogs, 0.5, [0, 1]);
+  const xDomain = logCostDomain(costLogs);
   const yDomain = scoreDomain(scores);
+  const xTicks = logCostTicks(xDomain);
   return {
     points,
     frontierPoints,
     proposals,
     xDomain,
     yDomain,
-    xTicks: logCostTicks(xDomain),
-    yTicks: linearTicks(yDomain, 5),
+    xTicks: [...xTicks.major, ...xTicks.minor].sort((left, right) => left - right),
+    xMajorTicks: xTicks.major,
+    xMinorTicks: xTicks.minor,
+    yTicks: niceTicks(yDomain, scoreTickTarget),
     staircase: staircasePoints(frontierPoints),
   };
 }
@@ -353,42 +363,53 @@ function plotProposal(
   };
 }
 
-function paddedDomain(values: number[], padding: number, fallback: [number, number]): [number, number] {
+function logCostDomain(values: number[]): [number, number] {
   const finite = values.filter(Number.isFinite);
   if (finite.length === 0) {
-    return fallback;
+    return fallbackLogCostDomain;
   }
-  const min = Math.min(...finite);
-  const max = Math.max(...finite);
-  if (min === max) {
-    return [min - padding, max + padding];
-  }
-  return [min - padding, max + padding];
+  const min = Math.min(fallbackLogCostDomain[0], Math.floor(Math.min(...finite)));
+  const max = Math.max(fallbackLogCostDomain[1], Math.ceil(Math.max(...finite)));
+  return [min, max];
 }
 
 function scoreDomain(values: number[]): [number, number] {
   const finite = values.filter(Number.isFinite);
   if (finite.length === 0) {
-    return [0, 1];
+    return fallbackScoreDomain;
   }
-  const min = Math.min(0, ...finite);
-  const max = Math.max(1, ...finite);
-  const padding = Math.max(0.02, (max - min) * 0.05);
-  return [min, max + padding];
+  const max = Math.max(1, Math.ceil(Math.max(...finite)));
+  return [Math.min(0, Math.floor(Math.min(...finite))), max * 1.05];
 }
 
-function logCostTicks([min, max]: [number, number]): number[] {
+function logCostTicks([min, max]: [number, number]): { major: number[]; minor: number[] } {
   const first = Math.ceil(min);
   const last = Math.floor(max);
-  return Array.from({ length: Math.max(0, last - first + 1) }, (_value, index) => 2 ** (first + index));
+  const labelStep = last - first > denseLogTickThreshold ? 2 : 1;
+  const major: number[] = [];
+  const minor: number[] = [];
+  for (let exponent = first; exponent <= last; exponent += 1) {
+    const tick = 2 ** exponent;
+    if ((exponent - first) % labelStep === 0) {
+      major.push(tick);
+    } else {
+      minor.push(tick);
+    }
+  }
+  return { major, minor };
 }
 
-function linearTicks([min, max]: [number, number], count: number): number[] {
-  if (count <= 1 || min === max) {
-    return [min];
+function niceTicks([min, max]: [number, number], target: number): number[] {
+  const span = max - min || 1;
+  const rough = span / target;
+  const power = 10 ** Math.floor(Math.log10(rough));
+  const normalized = rough / power;
+  const step = (normalized < 1.5 ? 1 : normalized < 3 ? 2 : normalized < 7 ? 5 : 10) * power;
+  const ticks: number[] = [];
+  for (let value = Math.ceil(min / step) * step; value <= max; value += step) {
+    ticks.push(Number(value.toPrecision(12)));
   }
-  const step = (max - min) / (count - 1);
-  return Array.from({ length: count }, (_value, index) => min + step * index);
+  return ticks;
 }
 
 function staircasePoints(points: BenchmarkPlotModelPoint[]): [number, number][] {
