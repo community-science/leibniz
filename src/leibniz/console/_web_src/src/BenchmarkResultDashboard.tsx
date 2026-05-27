@@ -1,4 +1,11 @@
-import { useEffect, useState } from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  RotateCcw,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
+import { useState } from 'react';
 
 import {
   benchmarkPlotModel,
@@ -38,12 +45,13 @@ const plotMargin = {
 };
 const plotBodyWidth = plotWidth - plotMargin.left - plotMargin.right;
 const plotBodyHeight = plotHeight - plotMargin.top - plotMargin.bottom;
+const plotZoomInFactor = 0.72;
+const plotZoomOutFactor = 1.28;
+const plotPanFraction = 0.18;
 
 export function BenchmarkResultDashboard({
-  resetToken,
   result,
 }: {
-  resetToken: number;
   result: BenchmarkResultRecord;
 }) {
   const [costAxis, setCostAxis] = useState(result.cost_axes[0]?.key ?? 'parameter_count');
@@ -78,9 +86,6 @@ export function BenchmarkResultDashboard({
     xDomain: plot.xDomain,
     yDomain: plot.yDomain,
   };
-  useEffect(() => {
-    setPlotView(null);
-  }, [resetToken]);
 
   return (
     <section className="performance-section benchmark-result-dashboard">
@@ -88,24 +93,26 @@ export function BenchmarkResultDashboard({
         <div>
           <h3>Frontier</h3>
         </div>
-        <label className="benchmark-result-axis">
+        <div className="benchmark-result-axis" aria-label="Cost axis">
           <span>Cost Axis</span>
-          <select
-            value={costAxis}
-            onChange={(event) => {
-              setCostAxis(event.target.value);
-              setPlotView(null);
-              setHoveredId(null);
-              setSelectedId(null);
-            }}
-          >
+          <div className="benchmark-axis-segments">
             {result.cost_axes.map((axis) => (
-              <option key={axis.key} value={axis.key}>
+              <button
+                className={axis.key === costAxis ? 'active' : ''}
+                key={axis.key}
+                onClick={() => {
+                  setCostAxis(axis.key);
+                  setPlotView(null);
+                  setHoveredId(null);
+                  setSelectedId(null);
+                }}
+                type="button"
+              >
                 {axis.label}
-              </option>
+              </button>
             ))}
-          </select>
-        </label>
+          </div>
+        </div>
       </div>
       {topModel === undefined ? null : (
         <dl className="performance-metrics">
@@ -131,6 +138,8 @@ export function BenchmarkResultDashboard({
         costAxis={costAxis}
         model={plot}
         onHover={setHoveredId}
+        onPan={(direction) => setPlotView(pannedView(activeView, direction, plot))}
+        onReset={() => setPlotView(null)}
         onSelect={setSelectedId}
         onZoom={(factor) => setPlotView(zoomedView(activeView, factor, plot))}
         selectedId={selectedId}
@@ -179,6 +188,8 @@ function BenchmarkFrontierPlot({
   hoveredId,
   model,
   onHover,
+  onPan,
+  onReset,
   onSelect,
   onZoom,
   selectedId,
@@ -188,6 +199,8 @@ function BenchmarkFrontierPlot({
   hoveredId: string | null;
   model: ReturnType<typeof benchmarkPlotModel>;
   onHover: (id: string | null) => void;
+  onPan: (direction: 'left' | 'right') => void;
+  onReset: () => void;
   onSelect: (id: string | null) => void;
   onZoom: (factor: number) => void;
   selectedId: string | null;
@@ -228,8 +241,46 @@ function BenchmarkFrontierPlot({
           <h3>Frontier Plot</h3>
         </div>
         <div className="benchmark-plot-actions">
-          <button onClick={() => onZoom(0.72)} type="button">+</button>
-          <button onClick={() => onZoom(1.28)} type="button">-</button>
+          <button
+            aria-label="Pan left"
+            onClick={() => onPan('left')}
+            title="Pan left"
+            type="button"
+          >
+            <ArrowLeft aria-hidden="true" size={14} />
+          </button>
+          <button
+            aria-label="Pan right"
+            onClick={() => onPan('right')}
+            title="Pan right"
+            type="button"
+          >
+            <ArrowRight aria-hidden="true" size={14} />
+          </button>
+          <button
+            aria-label="Zoom in"
+            onClick={() => onZoom(plotZoomInFactor)}
+            title="Zoom in"
+            type="button"
+          >
+            <ZoomIn aria-hidden="true" size={14} />
+          </button>
+          <button
+            aria-label="Zoom out"
+            onClick={() => onZoom(plotZoomOutFactor)}
+            title="Zoom out"
+            type="button"
+          >
+            <ZoomOut aria-hidden="true" size={14} />
+          </button>
+          <button
+            aria-label="Reset plot"
+            onClick={onReset}
+            title="Reset plot"
+            type="button"
+          >
+            <RotateCcw aria-hidden="true" size={14} />
+          </button>
         </div>
       </div>
       <div className="frontier-chart">
@@ -830,6 +881,17 @@ function zoomedView(
   return { xDomain: nextX, yDomain: nextY };
 }
 
+function pannedView(
+  view: PlotView,
+  direction: 'left' | 'right',
+  model: ReturnType<typeof benchmarkPlotModel>,
+): PlotView {
+  return {
+    xDomain: pannedDomain(view.xDomain, direction, model.xDomain),
+    yDomain: view.yDomain,
+  };
+}
+
 function zoomedDomain(
   [min, max]: [number, number],
   factor: number,
@@ -839,6 +901,24 @@ function zoomedDomain(
   const span = Math.min(bounds[1] - bounds[0], (max - min) * factor);
   const rawMin = midpoint - span / 2;
   const rawMax = midpoint + span / 2;
+  if (rawMin < bounds[0]) {
+    return [bounds[0], bounds[0] + span];
+  }
+  if (rawMax > bounds[1]) {
+    return [bounds[1] - span, bounds[1]];
+  }
+  return [rawMin, rawMax];
+}
+
+function pannedDomain(
+  [min, max]: [number, number],
+  direction: 'left' | 'right',
+  bounds: [number, number],
+): [number, number] {
+  const span = max - min;
+  const offset = span * plotPanFraction * (direction === 'left' ? -1 : 1);
+  const rawMin = min + offset;
+  const rawMax = max + offset;
   if (rawMin < bounds[0]) {
     return [bounds[0], bounds[0] + span];
   }

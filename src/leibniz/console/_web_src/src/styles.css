@@ -739,12 +739,28 @@ p {
   text-transform: uppercase;
 }
 
-.benchmark-result-axis select {
+.benchmark-axis-segments {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--metric-min), 1fr));
+  gap: var(--space-xs);
+}
+
+.benchmark-axis-segments button {
   border: var(--line-thin) solid var(--border-color-strong);
   border-radius: var(--radius-sm);
   background: var(--control-bg);
-  color: white;
+  color: var(--text-muted);
+  cursor: pointer;
   padding: var(--space-sm) var(--space-lg);
+  font-size: var(--font-control);
+  text-align: center;
+}
+
+.benchmark-axis-segments button:hover,
+.benchmark-axis-segments button.active {
+  border-color: var(--frontier-accent-border);
+  background: var(--frontier-accent-bg);
+  color: var(--text-primary);
 }
 
 .benchmark-result-table-section {
@@ -790,21 +806,26 @@ p {
 }
 
 .benchmark-plot-actions button {
+  display: grid;
+  place-items: center;
   width: var(--space-6xl);
   height: var(--space-6xl);
   border: var(--line-thin) solid var(--border-color-strong);
   border-radius: var(--radius-sm);
   background: var(--control-bg);
-  color: white;
+  color: var(--text-secondary);
   cursor: pointer;
   padding: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  line-height: 1;
 }
 
 .benchmark-plot-actions button:hover {
   border-color: var(--frontier-accent-border);
   background: var(--frontier-accent-bg);
+  color: var(--text-primary);
+}
+
+.benchmark-plot-actions button svg {
+  display: block;
 }
 
 .frontier-chart-svg {
@@ -1441,22 +1462,6 @@ p {
   font-size: var(--font-status);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.benchmark-section-actions {
-  flex: 0 0 auto;
-}
-
-.benchmark-section-actions span {
-  border: var(--line-thin) solid var(--border-color-strong);
-  border-radius: var(--radius-xs);
-  color: var(--text-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--font-label);
-  font-weight: 700;
-  letter-spacing: var(--tracking-control);
-  padding: var(--space-3xs) var(--space-sm);
-  text-transform: uppercase;
 }
 
 .benchmark-task {

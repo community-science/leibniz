@@ -42,7 +42,6 @@ export function BenchmarksPanel({
     [resultViews, selected],
   );
   const selectedResult = benchmarkResults[0];
-  const [performanceResetToken, setPerformanceResetToken] = useState(0);
 
   if (selected === undefined) {
     return (
@@ -105,17 +104,11 @@ export function BenchmarksPanel({
 
         <div className="benchmark-section-stack">
           <CollapsibleBenchmarkSection
-            actions={
-              <BenchmarkPerformanceActions
-                onReset={() => setPerformanceResetToken((token) => token + 1)}
-              />
-            }
             label="Performance"
             summary={`${result?.leaderboard.length ?? 0} models / ${result?.training_history.length ?? 0} runs`}
           >
             <BenchmarkPerformancePane
               benchmark={selected}
-              resetToken={performanceResetToken}
               resultEntry={selectedResult}
             />
           </CollapsibleBenchmarkSection>
@@ -143,12 +136,10 @@ export function BenchmarksPanel({
 }
 
 function CollapsibleBenchmarkSection({
-  actions,
   children,
   label,
   summary,
 }: {
-  actions?: ReactNode;
   children: ReactNode;
   label: string;
   summary?: string;
@@ -167,18 +158,9 @@ function CollapsibleBenchmarkSection({
           <span>{label}</span>
         </button>
         {summary === undefined ? null : <span className="benchmark-section-summary">{summary}</span>}
-        {actions === undefined ? null : <div className="benchmark-section-actions">{actions}</div>}
       </div>
       <div hidden={!expanded}>{children}</div>
     </section>
-  );
-}
-
-function BenchmarkPerformanceActions({ onReset }: { onReset: () => void }) {
-  return (
-    <button onClick={onReset} type="button">
-      Reset Zoom
-    </button>
   );
 }
 
@@ -203,11 +185,9 @@ function BenchmarkStatusRow({
 
 function BenchmarkPerformancePane({
   benchmark,
-  resetToken,
   resultEntry,
 }: {
   benchmark: BenchmarkTaskRecord;
-  resetToken: number;
   resultEntry:
     | BenchmarkResultEntry
     | undefined;
@@ -218,7 +198,6 @@ function BenchmarkPerformancePane({
     <div className="benchmark-task">
       <ResultSourceStatus result={result} resultEntry={resultEntry} />
       <BenchmarkResultDashboard
-        resetToken={resetToken}
         result={result}
       />
     </div>
