@@ -2,6 +2,15 @@ import {
   parseModelInspectionRecord,
   type ModelInspectionRecord,
 } from './modelInspections.ts';
+import {
+  consoleProtocolFormats,
+  consoleProtocolFormatVersions,
+} from './generated/protocolVocabulary.ts';
+
+const resultViewFormats = consoleProtocolFormats.resultViews;
+const resultViewFormatVersion = consoleProtocolFormatVersions.resultView;
+const workQueueItemFormat = consoleProtocolFormats.workQueueItem;
+const workQueueItemFormatVersion = consoleProtocolFormatVersions.workQueueItem;
 
 export type ResultViewRecord =
   | ImportedResultViewRecord
@@ -9,8 +18,8 @@ export type ResultViewRecord =
   | WorkQueueViewRecord;
 
 export type ImportedResultViewRecord = {
-  format: 'leibniz.console.imported-results';
-  format_version: 1;
+  format: typeof resultViewFormats.importedResults;
+  format_version: typeof resultViewFormatVersion;
   source_path: string;
   source_mtime_ms?: number;
   source_size_bytes?: number;
@@ -36,8 +45,8 @@ export type ImportedPublicationBundleRecord = {
 };
 
 export type BenchmarkResultViewRecord = {
-  format: 'leibniz.console.benchmark-results';
-  format_version: 1;
+  format: typeof resultViewFormats.benchmarkResults;
+  format_version: typeof resultViewFormatVersion;
   source_path: string;
   source_mtime_ms?: number;
   source_size_bytes?: number;
@@ -45,8 +54,8 @@ export type BenchmarkResultViewRecord = {
 };
 
 export type WorkQueueViewRecord = {
-  format: 'leibniz.console.work-queue';
-  format_version: 1;
+  format: typeof resultViewFormats.workQueue;
+  format_version: typeof resultViewFormatVersion;
   source_path: string;
   source_mtime_ms?: number;
   source_size_bytes?: number;
@@ -56,8 +65,8 @@ export type WorkQueueViewRecord = {
 export type WorkQueueItemStatus = 'pending' | 'reserved' | 'completed' | 'failed';
 
 export type WorkQueueItemRecord = {
-  format: 'leibniz.work-queue-item';
-  format_version: 1;
+  format: typeof workQueueItemFormat;
+  format_version: typeof workQueueItemFormatVersion;
   id: string;
   benchmark_id: string;
   proposal_id: string;
@@ -211,19 +220,19 @@ export type CostSummaryRecord = {
 export function isBenchmarkResultView(
   view: ResultViewRecord,
 ): view is BenchmarkResultViewRecord {
-  return view.format === 'leibniz.console.benchmark-results';
+  return view.format === resultViewFormats.benchmarkResults;
 }
 
 export function isImportedResultView(
   view: ResultViewRecord,
 ): view is ImportedResultViewRecord {
-  return view.format === 'leibniz.console.imported-results';
+  return view.format === resultViewFormats.importedResults;
 }
 
 export function isWorkQueueView(
   view: ResultViewRecord,
 ): view is WorkQueueViewRecord {
-  return view.format === 'leibniz.console.work-queue';
+  return view.format === resultViewFormats.workQueue;
 }
 
 export function parseResultViewRecords(value: unknown): ResultViewRecord[] {
@@ -234,10 +243,10 @@ export function parseResultViewRecords(value: unknown): ResultViewRecord[] {
 
 function parseResultViewRecord(value: unknown, path: string): ResultViewRecord {
   const record = requireRecord(value, path);
-  if (record.format === 'leibniz.console.benchmark-results') {
+  if (record.format === resultViewFormats.benchmarkResults) {
     return parseBenchmarkResultViewRecord(record, path);
   }
-  if (record.format === 'leibniz.console.work-queue') {
+  if (record.format === resultViewFormats.workQueue) {
     return parseWorkQueueViewRecord(record, path);
   }
   return parseImportedResultViewRecord(record, path);
@@ -247,8 +256,12 @@ function parseImportedResultViewRecord(
   record: Record<string, unknown>,
   path: string,
 ): ImportedResultViewRecord {
-  const format = requireLiteral(record.format, `${path}.format`, 'leibniz.console.imported-results');
-  const formatVersion = requireLiteral(record.format_version, `${path}.format_version`, 1);
+  const format = requireLiteral(record.format, `${path}.format`, resultViewFormats.importedResults);
+  const formatVersion = requireLiteral(
+    record.format_version,
+    `${path}.format_version`,
+    resultViewFormatVersion,
+  );
   const sourcePath = requireString(record.source_path, `${path}.source_path`);
   const sourceMtimeMs = optionalNumber(record.source_mtime_ms, `${path}.source_mtime_ms`);
   const sourceSizeBytes = optionalNumber(record.source_size_bytes, `${path}.source_size_bytes`);
@@ -272,8 +285,12 @@ function parseBenchmarkResultViewRecord(
   record: Record<string, unknown>,
   path: string,
 ): BenchmarkResultViewRecord {
-  const format = requireLiteral(record.format, `${path}.format`, 'leibniz.console.benchmark-results');
-  const formatVersion = requireLiteral(record.format_version, `${path}.format_version`, 1);
+  const format = requireLiteral(record.format, `${path}.format`, resultViewFormats.benchmarkResults);
+  const formatVersion = requireLiteral(
+    record.format_version,
+    `${path}.format_version`,
+    resultViewFormatVersion,
+  );
   const sourcePath = requireString(record.source_path, `${path}.source_path`);
   const sourceMtimeMs = optionalNumber(record.source_mtime_ms, `${path}.source_mtime_ms`);
   const sourceSizeBytes = optionalNumber(record.source_size_bytes, `${path}.source_size_bytes`);
@@ -295,8 +312,12 @@ function parseWorkQueueViewRecord(
   record: Record<string, unknown>,
   path: string,
 ): WorkQueueViewRecord {
-  const format = requireLiteral(record.format, `${path}.format`, 'leibniz.console.work-queue');
-  const formatVersion = requireLiteral(record.format_version, `${path}.format_version`, 1);
+  const format = requireLiteral(record.format, `${path}.format`, resultViewFormats.workQueue);
+  const formatVersion = requireLiteral(
+    record.format_version,
+    `${path}.format_version`,
+    resultViewFormatVersion,
+  );
   const sourcePath = requireString(record.source_path, `${path}.source_path`);
   const sourceMtimeMs = optionalNumber(record.source_mtime_ms, `${path}.source_mtime_ms`);
   const sourceSizeBytes = optionalNumber(record.source_size_bytes, `${path}.source_size_bytes`);
@@ -316,8 +337,12 @@ function parseWorkQueueViewRecord(
 function parseWorkQueueItem(value: unknown, path: string): WorkQueueItemRecord {
   const record = requireRecord(value, path);
   return {
-    format: requireLiteral(record.format, `${path}.format`, 'leibniz.work-queue-item'),
-    format_version: requireLiteral(record.format_version, `${path}.format_version`, 1),
+    format: requireLiteral(record.format, `${path}.format`, workQueueItemFormat),
+    format_version: requireLiteral(
+      record.format_version,
+      `${path}.format_version`,
+      workQueueItemFormatVersion,
+    ),
     id: requireString(record.id, `${path}.id`),
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`),
     proposal_id: requireString(record.proposal_id, `${path}.proposal_id`),

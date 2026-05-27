@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from leibniz.console.protocol import (
+    console_protocol_format_versions,
+    console_protocol_formats,
+)
 from leibniz.documents import (
     canonical_document_bytes,
     document_filename_suffix,
@@ -22,9 +26,11 @@ __all__ = [
     "write_work_queue_item",
 ]
 
-_item_format = "leibniz.work-queue-item"
-_view_format = "leibniz.console.work-queue"
-_format_version = 1
+_protocol_formats = console_protocol_formats()
+_protocol_format_versions = console_protocol_format_versions()
+_item_format = _protocol_formats.work_queue_item
+_view_format = _protocol_formats.work_queue_view
+_format_version = _protocol_format_versions.work_queue_item
 _document_suffix = document_filename_suffix()
 _Status = Literal["pending", "reserved", "completed", "failed"]
 

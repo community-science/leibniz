@@ -16,10 +16,14 @@ import {
   type ResultViewRecord,
 } from './resultViews.ts';
 import { parseBenchmarkTaskRecords, type BenchmarkTaskRecord } from './benchmarkTasks.ts';
+import {
+  consoleProtocolFormats,
+  consoleProtocolFormatVersions,
+} from './generated/protocolVocabulary.ts';
 
 export type ConsoleDataRecord = {
-  format: 'leibniz.console-data';
-  format_version: 1;
+  format: typeof consoleProtocolFormats.consoleData;
+  format_version: typeof consoleProtocolFormatVersions.consoleData;
   artifact_index: ConsoleArtifactIndexRecord;
   artifact_details: ConsoleArtifactDetailMap;
   result_views: ResultViewRecord[];
@@ -37,8 +41,12 @@ export class ConsoleDataTransportError extends Error {
 
 export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
   const record = requireRecord(value, 'console data');
-  const format = requireLiteral(record.format, 'format', 'leibniz.console-data');
-  const formatVersion = requireLiteral(record.format_version, 'format_version', 1);
+  const format = requireLiteral(record.format, 'format', consoleProtocolFormats.consoleData);
+  const formatVersion = requireLiteral(
+    record.format_version,
+    'format_version',
+    consoleProtocolFormatVersions.consoleData,
+  );
   const artifactIndex = parseConsoleArtifactIndexRecord(record.artifact_index);
   const artifactDetails = parseConsoleArtifactDetailRecords(record.artifact_details);
   const resultViews = parseResultViewRecords(record.result_views);

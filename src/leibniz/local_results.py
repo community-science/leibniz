@@ -10,6 +10,10 @@ from typing import cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
+from leibniz.console.protocol import (
+    console_protocol_format_versions,
+    console_protocol_formats,
+)
 from leibniz.content import ContentDigest
 from leibniz.documents import (
     canonical_document_bytes,
@@ -39,10 +43,12 @@ __all__ = [
     "publish_local_benchmark_results",
 ]
 
-_console_result_view_format = "leibniz.console.imported-results"
-_benchmark_result_view_format = "leibniz.console.benchmark-results"
-_work_queue_view_format = "leibniz.console.work-queue"
-_console_result_view_format_version = 1
+_protocol_formats = console_protocol_formats()
+_protocol_format_versions = console_protocol_format_versions()
+_console_result_view_format = _protocol_formats.imported_result_view
+_benchmark_result_view_format = _protocol_formats.benchmark_result_view
+_work_queue_view_format = _protocol_formats.work_queue_view
+_console_result_view_format_version = _protocol_format_versions.result_view
 _document_suffix = document_filename_suffix()
 _manifest_filename = "manifest" + _document_suffix
 
