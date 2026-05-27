@@ -112,8 +112,22 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
     assert benchmark_view["source_path"] == (
         runs_root / "views" / "benchmark_results.json"
     ).as_posix()
-    assert len(cast(list[dict[str, object]], digits_result["training_history"])) == 1
-    assert len(cast(list[dict[str, object]], digits_result["proposals"])) == 1
+    training_history = cast(list[dict[str, object]], digits_result["training_history"])
+    proposals = cast(list[dict[str, object]], digits_result["proposals"])
+    leaderboard = cast(list[dict[str, object]], digits_result["leaderboard"])
+    proposal = proposals[0]
+    assert len(training_history) == 1
+    assert training_history[0]["source_kind"] == "local-run"
+    assert len(proposals) == 1
+    assert proposal["selector_name"] == "resource-bootstrap"
+    assert proposal["source_candidate_rank"]
+    assert proposal["capability_family_kind"]
+    assert proposal["command"]
+    assert len(leaderboard) == 1
+    assert leaderboard[0]["observed_complexities"] == [1.0]
+    assert runs_root.joinpath("measurements").is_dir()
+    assert runs_root.joinpath("proposals").is_dir()
+    assert runs_root.joinpath("views", "benchmark_results.json").is_file()
 
 
 def test_active_training_loop_preserves_existing_measurements_on_run_failure(
