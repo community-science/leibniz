@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -56,7 +55,6 @@ class ConsoleData:
     result_views: tuple[Mapping[str, object], ...]
     model_inspections: tuple[Mapping[str, object], ...]
     benchmark_tasks: tuple[Mapping[str, object], ...]
-    source_modules: tuple[Mapping[str, object], ...]
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -67,7 +65,6 @@ class ConsoleData:
             "result_views": list(self.result_views),
             "model_inspections": list(self.model_inspections),
             "benchmark_tasks": list(self.benchmark_tasks),
-            "source_modules": list(self.source_modules),
         }
 
     def to_bytes(self) -> bytes:
@@ -93,14 +90,12 @@ class ConsoleDataBuilder:
         result_views = tuple(self._result_views(tuple(result_roots)))
         model_inspections = tuple(self._model_inspections(artifact_index.entries))
         benchmark_tasks = tuple(self._benchmark_tasks(artifact_index.entries))
-        source_modules = tuple(self._source_modules())
         return ConsoleData(
             artifact_index=artifact_index,
             artifact_details=details,
             result_views=result_views,
             model_inspections=model_inspections,
             benchmark_tasks=benchmark_tasks,
-            source_modules=source_modules,
         )
 
     def _discover_sources(
@@ -502,87 +497,6 @@ class ConsoleDataBuilder:
         if resolved.is_relative_to(self._repository_root):
             return resolved.relative_to(self._repository_root).as_posix()
         return resolved.as_posix()
-
-    def _source_modules(self) -> tuple[Mapping[str, object], ...]:
-        package_root = self._repository_root / "src" / "leibniz"
-        records: list[Mapping[str, object]] = []
-        for path in sorted(package_root.rglob("*.py")):
-            relative_path = path.relative_to(self._repository_root)
-            relative_module_path = path.relative_to(package_root)
-            if any(part.startswith("_") for part in relative_module_path.parts):
-                continue
-            module_name = self._module_name(relative_module_path)
-            if module_name is None:
-                continue
-            records.append(
-                {
-                    "module_name": module_name,
-                    "source_path": relative_path.as_posix(),
-                    "public_exports": list(self._public_exports(path)),
-                    "validation_commands": list(self._validation_commands(path)),
-                }
-            )
-        return tuple(records)
-
-    def _module_name(self, relative_module_path: Path) -> str | None:
-        if relative_module_path.name == "__init__.py":
-            module_parts = relative_module_path.parent.parts
-            if not module_parts:
-                return "leibniz"
-            return ".".join(("leibniz", *module_parts))
-        if relative_module_path.suffix != ".py":
-            return None
-        return ".".join(("leibniz", *relative_module_path.with_suffix("").parts))
-
-    def _public_exports(self, path: Path) -> tuple[str, ...]:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in tree.body:
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id == "__all__":
-                        return self._literal_string_sequence(node.value, "__all__")
-        return ()
-
-    def _literal_string_sequence(self, value: ast.expr, description: str) -> tuple[str, ...]:
-        if not isinstance(value, ast.List | ast.Tuple):
-            raise ConsoleDataValidationError(f"{description} must be a literal sequence")
-        names: list[str] = []
-        for item in value.elts:
-            if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
-                raise ConsoleDataValidationError(f"{description} must contain literal strings")
-            names.append(item.value)
-        return tuple(names)
-
-    def _validation_commands(self, path: Path) -> tuple[str, ...]:
-        test_path = self._test_path_for_source(path)
-        commands = ["python -m pytest tests/test_public_surface.py"]
-        if test_path is not None:
-            test_command_path = test_path.relative_to(self._repository_root).as_posix()
-            commands.insert(0, f"python -m pytest {test_command_path}")
-        return tuple(commands)
-
-    def _test_path_for_source(self, path: Path) -> Path | None:
-        package_root = self._repository_root / "src" / "leibniz"
-        relative_path = path.relative_to(package_root)
-        if relative_path.name == "__init__.py":
-            module_parts = relative_path.parent.parts
-        else:
-            module_parts = relative_path.with_suffix("").parts
-
-        candidates: list[Path] = []
-        if module_parts:
-            candidates.append(
-                self._repository_root / "tests" / f"test_{'_'.join(module_parts)}.py"
-            )
-            candidates.append(self._repository_root / "tests" / f"test_{module_parts[-1]}.py")
-        else:
-            candidates.append(self._repository_root / "tests" / "test_package.py")
-
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate
-        return None
-
 
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)

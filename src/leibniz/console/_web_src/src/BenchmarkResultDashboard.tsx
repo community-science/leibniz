@@ -41,11 +41,9 @@ const plotBodyHeight = plotHeight - plotMargin.top - plotMargin.bottom;
 export function BenchmarkResultDashboard({
   resetToken,
   result,
-  sourcePath,
 }: {
   resetToken: number;
   result: BenchmarkResultRecord;
-  sourcePath: string;
 }) {
   const [costAxis, setCostAxis] = useState(result.cost_axes[0]?.key ?? 'parameter_count');
   const [plotView, setPlotView] = useState<PlotView | null>(null);
@@ -87,8 +85,7 @@ export function BenchmarkResultDashboard({
     <section className="performance-section benchmark-result-dashboard">
       <div className="benchmark-result-heading">
         <div>
-          <h3>Benchmark Results</h3>
-          <p>{sourcePath}</p>
+          <h3>Frontier</h3>
         </div>
         <label className="benchmark-result-axis">
           <span>Cost Axis</span>
@@ -109,9 +106,7 @@ export function BenchmarkResultDashboard({
           </select>
         </label>
       </div>
-      {topModel === undefined ? (
-        <p className="artifact-detail-note">No model results are available.</p>
-      ) : (
+      {topModel === undefined ? null : (
         <dl className="performance-metrics">
           <div>
             <dt>Benchmark</dt>
@@ -227,7 +222,6 @@ function BenchmarkFrontierPlot({
       <div className="benchmark-plot-heading">
         <div>
           <h3>Frontier Plot</h3>
-          <p>Best-known score by model cost, with candidate proposals overlaid.</p>
         </div>
         <div className="benchmark-plot-actions">
           <button onClick={() => onZoom(0.72)} type="button">+</button>
@@ -434,7 +428,7 @@ function ProposalCards({
   selectedId: string | null;
 }) {
   if (associations.length === 0) {
-    return <p className="artifact-detail-note">No active proposals are available.</p>;
+    return null;
   }
 
   return (
@@ -493,7 +487,7 @@ function ModelResultTable({
   title: string;
 }) {
   if (models.length === 0) {
-    return <p className="artifact-detail-note">No {title.toLowerCase()} records are available.</p>;
+    return null;
   }
 
   return (
@@ -597,7 +591,7 @@ function RunHistoryTable({
   selectedRunDetail: BenchmarkRunDetail | undefined;
 }) {
   if (rows.length === 0) {
-    return <p className="artifact-detail-note">No training history is available.</p>;
+    return null;
   }
 
   return (

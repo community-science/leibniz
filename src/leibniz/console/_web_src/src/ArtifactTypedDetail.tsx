@@ -14,7 +14,7 @@ export function ArtifactTypedDetail({
   if (detail === undefined) {
     return (
       <DetailSection title="Document">
-        <p className="artifact-detail-note">No typed detail fixture is available.</p>
+        <p className="artifact-detail-note">No typed detail is available.</p>
       </DetailSection>
     );
   }
@@ -22,7 +22,7 @@ export function ArtifactTypedDetail({
   if (detail.kind !== artifact.kind) {
     return (
       <DetailSection title="Document">
-        <p className="artifact-detail-note">Typed detail fixture does not match this artifact.</p>
+        <p className="artifact-detail-note">Typed detail does not match this artifact.</p>
       </DetailSection>
     );
   }

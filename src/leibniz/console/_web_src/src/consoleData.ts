@@ -11,7 +11,6 @@ import {
   parseResultViewRecords,
   type ResultViewRecord,
 } from './resultViews.ts';
-import { parseSourceModuleRecords, type SourceModuleRecord } from './sourceModules.ts';
 import { parseBenchmarkTaskRecords, type BenchmarkTaskRecord } from './benchmarkTasks.ts';
 
 export type ConsoleDataRecord = {
@@ -22,7 +21,6 @@ export type ConsoleDataRecord = {
   result_views: ResultViewRecord[];
   model_inspections: ModelInspectionRecord[];
   benchmark_tasks: BenchmarkTaskRecord[];
-  source_modules: SourceModuleRecord[];
 };
 
 export class ConsoleDataTransportError extends Error {
@@ -41,7 +39,6 @@ export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
   const resultViews = parseResultViewRecords(record.result_views);
   const modelInspections = parseModelInspectionRecords(record.model_inspections);
   const benchmarkTasks = parseBenchmarkTaskRecords(record.benchmark_tasks);
-  const sourceModules = parseSourceModuleRecords(record.source_modules);
 
   return {
     format,
@@ -51,7 +48,6 @@ export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
     result_views: resultViews,
     model_inspections: modelInspections,
     benchmark_tasks: benchmarkTasks,
-    source_modules: sourceModules,
   };
 }
 
