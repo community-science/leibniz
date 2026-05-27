@@ -516,6 +516,7 @@ def model_operator_vocabulary() -> dict[str, object]:
             }
             for specialization in _layer_operator_specializations
         ],
+        "descriptor_axis_descriptors": _descriptor_axis_descriptor_records(),
         "descriptor_axes": _descriptor_axis_records(),
         "syntax_aliases": [
             {
@@ -853,6 +854,43 @@ def _descriptor_axis_records() -> dict[str, list[dict[str, str]]]:
         "shape_law": _axis_values_from_descriptors("shape_law"),
         "cost_law": _axis_values_from_descriptors("cost_law"),
     }
+
+
+def _descriptor_axis_descriptor_records() -> list[dict[str, str]]:
+    return [
+        {
+            "name": "tensor_relation",
+            "display_name": "Tensor relation",
+        },
+        {
+            "name": "state",
+            "display_name": "State",
+        },
+        {
+            "name": "support",
+            "display_name": "Support",
+        },
+        {
+            "name": "projection_law",
+            "display_name": "Projection law",
+        },
+        {
+            "name": "aggregation_law",
+            "display_name": "Aggregation law",
+        },
+        {
+            "name": "parameter_sharing",
+            "display_name": "Parameter sharing",
+        },
+        {
+            "name": "shape_law",
+            "display_name": "Shape law",
+        },
+        {
+            "name": "cost_law",
+            "display_name": "Cost law",
+        },
+    ]
 
 
 def _axis_values_from_descriptors(field: str) -> list[dict[str, str]]:

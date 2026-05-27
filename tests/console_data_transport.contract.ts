@@ -2,6 +2,7 @@ import { parseConsoleDataRecord } from '../src/leibniz/console/_web_src/src/cons
 import { detailForArtifact } from '../src/leibniz/console/_web_src/src/artifactDetails.ts';
 import {
   coordinateDisplayName,
+  descriptorAxisDisplayName,
   descriptorValueDisplayName,
   operatorDisplayName,
   parameterDisplayName,
@@ -52,6 +53,11 @@ assertEqual(
   descriptorValueDisplayName(parsed.operator_vocabulary, 'support', 'local-window'),
   'Local window',
   'operator vocabulary descriptor display',
+);
+assertEqual(
+  descriptorAxisDisplayName(parsed.operator_vocabulary, 'support'),
+  'Support',
+  'operator vocabulary descriptor axis display',
 );
 assertEqual(
   coordinateDisplayName(parsed.operator_vocabulary, 'operator.0.local_support_size'),

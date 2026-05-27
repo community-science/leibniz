@@ -151,6 +151,10 @@ def test_model_operator_vocabulary_exports_registry_metadata() -> None:
     assert vocabulary["format_version"] == 1
     operators = cast(list[dict[str, object]], vocabulary["operators"])
     aliases = cast(list[dict[str, object]], vocabulary["syntax_aliases"])
+    descriptor_axis_descriptors = cast(
+        list[dict[str, str]],
+        vocabulary["descriptor_axis_descriptors"],
+    )
     descriptor_axes = cast(dict[str, list[dict[str, str]]], vocabulary["descriptor_axes"])
     coordinate_descriptors = cast(
         list[dict[str, str]],
@@ -168,6 +172,10 @@ def test_model_operator_vocabulary_exports_registry_metadata() -> None:
         "dense",
     ]
     assert operators[0]["display_name"] == "Local aggregation"
+    assert descriptor_axis_descriptors[0] == {
+        "name": "tensor_relation",
+        "display_name": "Tensor relation",
+    }
     assert descriptor_axes["support"][0] == {
         "value": "global",
         "display_name": "Global",
@@ -278,6 +286,7 @@ def test_program_effect_summary_rejects_invalid_structure() -> None:
 def test_operator_vocabulary_sections_have_console_consumers() -> None:
     consumer_by_section = {
         "operators": "operatorDisplayName",
+        "descriptor_axis_descriptors": "descriptorAxisDisplayName",
         "descriptor_axes": "descriptorValueDisplayName",
         "syntax_aliases": "syntaxAliasDisplayName",
         "coordinate_descriptors": "coordinateDisplayName",

@@ -1,3 +1,4 @@
+import ast
 import re
 from pathlib import Path, PurePosixPath
 
@@ -168,3 +169,60 @@ def test_legacy_performance_bundles_are_not_supported() -> None:
         / "src"
         / "performanceViews.ts"
     ).exists()
+
+
+def test_document_suffix_is_funneled_through_documents_module() -> None:
+    source_root = _repository_root / "src" / "leibniz"
+
+    offenders = tuple(
+        f"{path.relative_to(_repository_root)}:{node.lineno}"
+        for path in sorted(source_root.rglob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.expr)
+        and _constant_string_value(node) == ".json"
+        and path.relative_to(source_root).as_posix() != "documents.py"
+    )
+
+    assert offenders == ()
+
+
+def test_document_suffix_policy_catches_disguised_string_construction() -> None:
+    expression = ast.parse(
+        '"." + "".join(("j", "s", "o", "n"))',
+        mode="eval",
+    ).body
+
+    assert _constant_string_value(expression) == ".json"
+
+
+def _constant_string_value(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _constant_string_value(node.left)
+        right = _constant_string_value(node.right)
+        if left is not None and right is not None:
+            return left + right
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "join"
+        and len(node.args) == 1
+    ):
+        separator = _constant_string_value(node.func.value)
+        items = _constant_string_sequence(node.args[0])
+        if separator is not None and items is not None:
+            return separator.join(items)
+    return None
+
+
+def _constant_string_sequence(node: ast.expr) -> tuple[str, ...] | None:
+    if not isinstance(node, ast.Tuple | ast.List):
+        return None
+    items: list[str] = []
+    for item in node.elts:
+        value = _constant_string_value(item)
+        if value is None:
+            return None
+        items.append(value)
+    return tuple(items)
