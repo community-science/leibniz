@@ -357,8 +357,8 @@ function assertConsoleTextIsUseful() {
 }
 
 function assertConsoleResultRootPolicy() {
-  const resultViews = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/resultViews.ts'),
+  const resultViewRecords = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/generated/resultViewRecords.ts'),
     'utf8',
   );
   for (const marker of [
@@ -370,7 +370,7 @@ function assertConsoleResultRootPolicy() {
     'acquisition_model',
     'acquisition_components',
   ]) {
-    if (!resultViews.includes(marker)) {
+    if (!resultViewRecords.includes(marker)) {
       throw new Error(`Result view transport must support work queue marker: ${marker}`);
     }
   }
