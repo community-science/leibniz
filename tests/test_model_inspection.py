@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.artifacts import ArtifactReference, reference_for_record
@@ -59,6 +60,25 @@ def test_model_inspection_derives_architecture_layers_and_costs() -> None:
     assert inspection.cost_summary.inference_flops == 1104
     assert inspection.cost_summary.unknown_parameter_layers == ()
     assert inspection.cost_summary.unknown_flop_layers == ()
+    assert inspection.architecture_trace.input_shape == (1, 32, 32)
+    assert inspection.architecture_trace.output_shape == (10,)
+    assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
+        "local-aggregation",
+        "rank-collapse",
+        "affine-readout",
+    ]
+    assert inspection.architecture_trace.stages[0].descriptor_axes == {
+        "aggregation_law": "mean",
+        "parameter_sharing": "none",
+        "projection_law": "equal-output-partition",
+        "state": "fixed",
+        "support": "local-window",
+        "tensor_relation": "aggregation",
+    }
+    assert inspection.architecture_trace.stages[0].shape_law == (
+        "preserve-prefix-replace-trailing-axes"
+    )
+    assert inspection.architecture_trace.stages[2].parameter_count == 50
     assert inspection.digest == ContentDigest.from_value(inspection.to_record())
 
 
@@ -166,6 +186,13 @@ def test_model_inspection_rejects_malformed_records() -> None:
     record["layers"] = layers
     error = capture_model_inspection_error(lambda: ModelInspectionRecord.from_record(record))
     assert str(error) == "layer indexes must be contiguous"
+
+    record = inspection.to_record()
+    trace = dict(cast(dict[str, object], record["architecture_trace"]))
+    trace["output_shape"] = [11]
+    record["architecture_trace"] = trace
+    error = capture_model_inspection_error(lambda: ModelInspectionRecord.from_record(record))
+    assert str(error) == "trace final output_shape does not match"
 
 
 def _model_manifest_record() -> dict[str, object]:
