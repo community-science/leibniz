@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,6 +78,7 @@ class BenchmarkRunPlan:
     runs_root: Path = Path(".runs")
     scale: int = 1
     sample_count: int = 4
+    evaluation_sample_count: int | None = None
     seed: int = 101
     train_steps: int = 1
     learning_rate: float = 0.01
@@ -93,6 +95,14 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError("scale must be a positive integer")
         if type(self.sample_count) is not int or self.sample_count < 1:
             raise BenchmarkRunnerError("sample_count must be a positive integer")
+        if (
+            self.evaluation_sample_count is not None
+            and (
+                type(self.evaluation_sample_count) is not int
+                or self.evaluation_sample_count < 1
+            )
+        ):
+            raise BenchmarkRunnerError("evaluation_sample_count must be a positive integer")
         if type(self.seed) is not int or self.seed < 0:
             raise BenchmarkRunnerError("seed must be a nonnegative integer")
         if type(self.train_steps) is not int or self.train_steps < 0:
@@ -116,7 +126,21 @@ class BenchmarkRunPlan:
     def run_slug(self) -> str:
         """Return the deterministic local run suffix."""
 
-        return f"l{self.scale}-seed{self.seed}-samples{self.sample_count}-steps{self.train_steps}"
+        base = (
+            f"l{self.scale}-seed{self.seed}-samples{self.sample_count}"
+            f"-steps{self.train_steps}"
+        )
+        if self.resolved_evaluation_sample_count == self.sample_count:
+            return base
+        return f"{base}-eval{self.resolved_evaluation_sample_count}"
+
+    @property
+    def resolved_evaluation_sample_count(self) -> int:
+        """Return the explicit evaluation sample count for this run."""
+
+        if self.evaluation_sample_count is None:
+            return self.sample_count
+        return self.evaluation_sample_count
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,15 +180,15 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
-    batch = generator.sample_batch(
+    evaluation_batch = generator.sample_batch(
         scale=plan.scale,
-        sample_count=plan.sample_count,
+        sample_count=plan.resolved_evaluation_sample_count,
         seed=plan.seed,
     )
     outcome_space = generator.benchmark_manifest.resolve_outcome_space(scale=plan.scale)
     _validate_architecture_for_batch(
         architecture=architecture,
-        batch=batch,
+        batch=evaluation_batch,
         outcome_space=outcome_space,
     )
 
@@ -174,7 +198,7 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
 
     training_result = _train_and_predict(
         architecture=architecture,
-        evaluation_batch=batch,
+        evaluation_batch=evaluation_batch,
         generator=generator,
         outcome_space=outcome_space,
         scale=plan.scale,
@@ -191,7 +215,7 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
     )
     measurements = _measurements_for_predictions(
         generator=generator,
-        batch=batch,
+        batch=evaluation_batch,
         outcome_space=outcome_space,
         probabilities=training_result.probabilities,
         run_slug=summary.run_slug,
@@ -215,6 +239,7 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
             "dry_run": False,
             "scale": plan.scale,
             "sample_count": plan.sample_count,
+            "evaluation_sample_count": plan.resolved_evaluation_sample_count,
             "seed": plan.seed,
             "train_steps": plan.train_steps,
             "learning_rate": float(plan.learning_rate),
@@ -224,6 +249,11 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
             "convergence_patience": plan.convergence_patience,
             "convergence_min_delta": float(plan.convergence_min_delta),
             "training_run": training_result.training_run.to_record(),
+            "sampled_competence": _sampled_competence_record(
+                generator=generator,
+                batch=evaluation_batch,
+                measurements=measurements,
+            ),
             "architecture": model_inspection.architecture.to_record(),
             "cost_summary": model_inspection.cost_summary.to_record(),
             "measurement_dataset_digest": str(dataset.digest),
@@ -244,7 +274,7 @@ def _run_summary(
         run_slug=run_slug,
         benchmark_id=benchmark_id,
         architecture_path=plan.architecture_path,
-        measurement_count=plan.sample_count,
+        measurement_count=plan.resolved_evaluation_sample_count,
         measurement_dataset_path=(
             plan.runs_root / "measurements" / benchmark_atom / f"{run_slug}{_document_suffix}"
         ),
@@ -645,6 +675,49 @@ def _measurements_for_predictions(
             )
         )
     return tuple(measurements)
+
+
+def _sampled_competence_record(
+    *,
+    generator: ObservationGenerator,
+    batch: GeneratedObservationBatch,
+    measurements: tuple[MeasurementRecord, ...],
+) -> dict[str, object]:
+    if len(batch.samples) != len(measurements):
+        raise BenchmarkRunnerError("sampled competence requires one measurement per sample")
+    complexities = {sample.complexity for sample in batch.samples}
+    if len(complexities) != 1:
+        raise BenchmarkRunnerError("sampled competence requires one complexity class")
+    accepted_mass = tuple(
+        measurement.raw_scoring_evidence.accepted_mass for measurement in measurements
+    )
+    finite_losses = tuple(
+        measurement.raw_scoring_evidence.negative_log_score
+        for measurement in measurements
+        if math.isfinite(measurement.raw_scoring_evidence.negative_log_score)
+    )
+    mean_negative_log_score: float | str
+    if len(finite_losses) != len(measurements):
+        mean_negative_log_score = "infinity"
+    else:
+        mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
+    return {
+        "kind": "sampled-complexity-class",
+        "sampling_rule": "generator-uniform-component-sequence-v1",
+        "difficulty_assumption": "approximately-uniform-within-complexity-class",
+        "benchmark_id": str(generator.benchmark_manifest.id),
+        "scale": batch.scale,
+        "complexity_axis": generator.benchmark_manifest.complexity_coordinate,
+        "complexity": next(iter(complexities)),
+        "seed": batch.seed,
+        "sample_count": len(batch.samples),
+        "mean_accepted_mass": math.fsum(accepted_mass) / len(accepted_mass),
+        "mean_negative_log_score": mean_negative_log_score,
+        "observation_ids": [str(sample.observation.id) for sample in batch.samples],
+        "measurement_ids": [
+            str(measurement.raw_scoring_evidence.id) for measurement in measurements
+        ],
+    }
 
 
 def _sample_identifier(

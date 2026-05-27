@@ -72,6 +72,7 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
     assert "--optimizer" in document.proposal_set.proposals[0].command
     assert "--schedule" in document.proposal_set.proposals[0].command
     assert "--validation-interval" in document.proposal_set.proposals[0].command
+    assert "--evaluation-sample-count" in document.proposal_set.proposals[0].command
 
     result_summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
@@ -100,6 +101,8 @@ def test_cli_generates_experiment_proposals(
             str(tmp_path / ".runs"),
             "--candidate-budget",
             "1",
+            "--evaluation-sample-count",
+            "3",
             "--optimizer",
             "adamw",
             "--schedule",

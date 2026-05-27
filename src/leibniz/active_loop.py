@@ -39,6 +39,7 @@ class ActiveTrainingLoopPlan:
     scale: int = 1
     candidate_budget: int = 3
     sample_count: int = 4
+    evaluation_sample_count: int | None = None
     seed: int = 101
     train_steps: int = 1
     learning_rate: float = 0.01
@@ -59,6 +60,14 @@ class ActiveTrainingLoopPlan:
             raise ActiveTrainingLoopError("candidate_budget must be positive")
         if type(self.sample_count) is not int or self.sample_count < 1:
             raise ActiveTrainingLoopError("sample_count must be positive")
+        if (
+            self.evaluation_sample_count is not None
+            and (
+                type(self.evaluation_sample_count) is not int
+                or self.evaluation_sample_count < 1
+            )
+        ):
+            raise ActiveTrainingLoopError("evaluation_sample_count must be positive")
         if type(self.seed) is not int or self.seed < 0:
             raise ActiveTrainingLoopError("seed must be nonnegative")
         if type(self.train_steps) is not int or self.train_steps < 0:
@@ -127,6 +136,7 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                 scale=plan.scale,
                 candidate_budget=plan.candidate_budget,
                 sample_count=plan.sample_count,
+                evaluation_sample_count=plan.evaluation_sample_count,
                 seed=iteration_seed,
                 train_steps=plan.train_steps,
                 learning_rate=plan.learning_rate,
@@ -154,6 +164,7 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                 runs_root=plan.runs_root,
                 scale=plan.scale,
                 sample_count=plan.sample_count,
+                evaluation_sample_count=plan.evaluation_sample_count,
                 seed=iteration_seed,
                 train_steps=plan.train_steps,
                 learning_rate=plan.learning_rate,

@@ -228,6 +228,7 @@ def _parser() -> argparse.ArgumentParser:
     propose_results.add_argument("--scale", default=1, type=int)
     propose_results.add_argument("--candidate-budget", default=3, type=int)
     propose_results.add_argument("--sample-count", default=4, type=int)
+    propose_results.add_argument("--evaluation-sample-count", default=None, type=int)
     propose_results.add_argument("--seed", default=101, type=int)
     propose_results.add_argument("--train-steps", default=1, type=int)
     propose_results.add_argument("--learning-rate", default=0.01, type=float)
@@ -263,6 +264,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--scale", default=1, type=int)
     run.add_argument("--sample-count", default=4, type=int)
+    run.add_argument("--evaluation-sample-count", default=None, type=int)
     run.add_argument("--seed", default=101, type=int)
     run.add_argument("--train-steps", default=1, type=int)
     run.add_argument("--learning-rate", default=0.01, type=float)
@@ -293,6 +295,7 @@ def _parser() -> argparse.ArgumentParser:
     loop.add_argument("--scale", default=1, type=int)
     loop.add_argument("--candidate-budget", default=3, type=int)
     loop.add_argument("--sample-count", default=4, type=int)
+    loop.add_argument("--evaluation-sample-count", default=None, type=int)
     loop.add_argument("--seed", default=101, type=int)
     loop.add_argument("--train-steps", default=1, type=int)
     loop.add_argument("--learning-rate", default=0.01, type=float)
@@ -321,6 +324,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                     benchmark_root=args.benchmark_root,
                     scale=args.scale,
                     sample_count=args.sample_count,
+                    evaluation_sample_count=args.evaluation_sample_count,
                     seed=args.seed,
                     train_steps=args.train_steps,
                     learning_rate=args.learning_rate,
@@ -351,6 +355,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                     scale=args.scale,
                     candidate_budget=args.candidate_budget,
                     sample_count=args.sample_count,
+                    evaluation_sample_count=args.evaluation_sample_count,
                     seed=args.seed,
                     train_steps=args.train_steps,
                     learning_rate=args.learning_rate,
@@ -421,6 +426,7 @@ def _results(args: argparse.Namespace) -> int:
                     scale=args.scale,
                     candidate_budget=args.candidate_budget,
                     sample_count=args.sample_count,
+                    evaluation_sample_count=args.evaluation_sample_count,
                     seed=args.seed,
                     train_steps=args.train_steps,
                     learning_rate=args.learning_rate,
