@@ -35,6 +35,7 @@ from leibniz.model_operators import summarize_architecture_operators
 from leibniz.observation_generation import load_observation_generator
 from leibniz.proposals import ExperimentProposal, ExperimentProposalSet
 from leibniz.publications import SubmissionPublicationDocument
+from leibniz.resource_selection import select_resource_bootstrap_candidates
 
 __all__ = [
     "ProposalGenerationError",
@@ -108,6 +109,9 @@ class _CandidateArchitecture:
     architecture: ArchitectureManifest
     search_rank: int
     parameter_count: int
+    selector_name: str
+    resource_stratum_index: int
+    resource_stratum_count: int
     predicted_score: float
     uncertainty: float
     acquisition_value: float
@@ -174,8 +178,9 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                 candidate_kind="architecture",
                 candidate_id=candidate.architecture.id,
                 rationale=(
-                    "deterministic formal-operator candidate with unmeasured architecture "
-                    "identity"
+                    f"{candidate.selector_name} selected resource stratum "
+                    f"{candidate.resource_stratum_index + 1}/"
+                    f"{candidate.resource_stratum_count}"
                 ),
                 predicted_score=candidate.predicted_score,
                 uncertainty=candidate.uncertainty,
@@ -351,9 +356,12 @@ def _candidate_architectures(
         default=0.0,
     )
     candidates: list[_CandidateArchitecture] = []
-    for observation in candidate_observations:
-        if observation.is_measured:
-            continue
+    selections = select_resource_bootstrap_candidates(
+        candidate_observations,
+        budget=candidate_budget,
+    )
+    for selection in selections:
+        observation = selection.observation
         candidate = observation.candidate
         architecture = candidate.architecture
         parameter_count = observation.parameter_count
@@ -370,6 +378,9 @@ def _candidate_architectures(
                 architecture=architecture,
                 search_rank=observation.source_candidate_rank,
                 parameter_count=parameter_count,
+                selector_name=selection.selector_name,
+                resource_stratum_index=selection.resource_stratum_index,
+                resource_stratum_count=selection.resource_stratum_count,
                 predicted_score=predicted_score,
                 uncertainty=uncertainty,
                 acquisition_value=acquisition_value,
@@ -377,16 +388,7 @@ def _candidate_architectures(
                 expected_frontier_improvement=frontier_improvement,
             )
         )
-    return tuple(sorted(candidates, key=_candidate_sort_key)[:candidate_budget])
-
-
-def _candidate_sort_key(candidate: _CandidateArchitecture) -> tuple[float, float, int, str]:
-    return (
-        -candidate.acquisition_value,
-        float(candidate.parameter_count),
-        candidate.search_rank,
-        str(candidate.architecture.id),
-    )
+    return tuple(candidates)
 
 
 def _require_candidate_shape(
