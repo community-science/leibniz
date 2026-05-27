@@ -28,6 +28,7 @@ from leibniz.outcomes import (
     ProbabilityMass,
     RawScoringEvidence,
 )
+from leibniz.training_runs import TrainingHistoryPoint, TrainingProtocol, TrainingRunRecord
 
 __all__ = [
     "BenchmarkRunnerError",
@@ -37,6 +38,12 @@ __all__ = [
 ]
 
 _document_suffix = document_filename_suffix()
+
+
+@dataclass(frozen=True, slots=True)
+class _TrainingResult:
+    probabilities: tuple[tuple[float, ...], ...]
+    training_run: TrainingRunRecord
 
 
 class BenchmarkRunnerError(ValueError):
@@ -129,7 +136,7 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
     if plan.dry_run:
         return summary
 
-    probabilities = _train_and_predict(
+    training_result = _train_and_predict(
         architecture=architecture,
         batch=batch,
         outcome_space=outcome_space,
@@ -141,7 +148,7 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
         generator=generator,
         batch=batch,
         outcome_space=outcome_space,
-        probabilities=probabilities,
+        probabilities=training_result.probabilities,
         run_slug=summary.run_slug,
     )
     dataset = MeasurementDataset(measurements=measurements)
@@ -166,6 +173,7 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
             "seed": plan.seed,
             "train_steps": plan.train_steps,
             "learning_rate": float(plan.learning_rate),
+            "training_run": training_result.training_run.to_record(),
             "architecture": model_inspection.architecture.to_record(),
             "cost_summary": model_inspection.cost_summary.to_record(),
             "measurement_dataset_digest": str(dataset.digest),
@@ -231,7 +239,7 @@ def _train_and_predict(
     train_steps: int,
     learning_rate: float,
     seed: int,
-) -> tuple[tuple[float, ...], ...]:
+) -> _TrainingResult:
     torch = _torch()
     torch.manual_seed(seed)
     module = ExecutableModelOperator(architecture).torch_module()
@@ -241,19 +249,127 @@ def _train_and_predict(
         [outcome_ids.index(sample.outcome_id) for sample in batch.samples],
         dtype=torch.long,
     )
+    loss_function = torch.nn.CrossEntropyLoss()
+    learning_rates = (float(learning_rate),)
+    validation_history: list[TrainingHistoryPoint] = []
+    initial_loss = _validation_loss(
+        torch=torch,
+        module=module,
+        fields=fields,
+        labels=labels,
+        loss_function=loss_function,
+    )
+    validation_history.append(
+        TrainingHistoryPoint(
+            step=0,
+            validation_check=0,
+            validation_loss=initial_loss,
+            best_validation_loss=initial_loss,
+            best_validation_step=0,
+            best_validation_check=0,
+            stale_checks=0,
+            learning_rates=learning_rates,
+        )
+    )
     if train_steps:
         optimizer = torch.optim.SGD(module.parameters(), lr=learning_rate)
-        loss_function = torch.nn.CrossEntropyLoss()
         module.train()
         for _step in range(train_steps):
             optimizer.zero_grad()
             loss = loss_function(module(fields), labels)
             loss.backward()
             optimizer.step()
+        final_loss = _validation_loss(
+            torch=torch,
+            module=module,
+            fields=fields,
+            labels=labels,
+            loss_function=loss_function,
+        )
+        best_loss = min(initial_loss, final_loss)
+        best_check = 0 if initial_loss <= final_loss else 1
+        best_step = 0 if initial_loss <= final_loss else train_steps
+        validation_history.append(
+            TrainingHistoryPoint(
+                step=train_steps,
+                validation_check=1,
+                validation_loss=final_loss,
+                best_validation_loss=best_loss,
+                best_validation_step=best_step,
+                best_validation_check=best_check,
+                stale_checks=0 if final_loss < initial_loss else 1,
+                learning_rates=learning_rates,
+            )
+        )
     module.eval()
     with torch.no_grad():
         predictions = torch.softmax(module(fields), dim=1).tolist()
-    return tuple(_renormalized_probabilities(row) for row in predictions)
+    training_run = _training_run_record(
+        seed=seed,
+        batch_size=len(batch.samples),
+        max_steps=train_steps,
+        learning_rate=float(learning_rate),
+        validation_history=tuple(validation_history),
+    )
+    return _TrainingResult(
+        probabilities=tuple(_renormalized_probabilities(row) for row in predictions),
+        training_run=training_run,
+    )
+
+
+def _validation_loss(
+    *,
+    torch: Any,
+    module: Any,
+    fields: Any,
+    labels: Any,
+    loss_function: Any,
+) -> float:
+    was_training = bool(module.training)
+    module.eval()
+    with torch.no_grad():
+        loss = float(loss_function(module(fields), labels).item())
+    if was_training:
+        module.train()
+    return loss
+
+
+def _training_run_record(
+    *,
+    seed: int,
+    batch_size: int,
+    max_steps: int,
+    learning_rate: float,
+    validation_history: tuple[TrainingHistoryPoint, ...],
+) -> TrainingRunRecord:
+    best = validation_history[-1]
+    stop_reason = "max-steps" if max_steps else "no-training-steps"
+    status = "budget-exhausted" if max_steps else "completed"
+    return TrainingRunRecord(
+        status=status,
+        stop_reason=stop_reason,
+        steps_run=max_steps,
+        validation_checks=len(validation_history),
+        best_validation_loss=best.best_validation_loss,
+        best_validation_step=best.best_validation_step,
+        best_validation_check=best.best_validation_check,
+        protocol=TrainingProtocol(
+            kind="fixed-step-local-batch",
+            objective="cross-entropy",
+            optimizer="sgd",
+            learning_rate=learning_rate,
+            schedule="none",
+            seed=seed,
+            batch_size=batch_size,
+            max_steps=max_steps,
+            validation_interval=max(1, max_steps),
+            validation_sample_count=batch_size,
+            min_delta=0.0,
+            patience=0,
+            validation_source="training-batch",
+        ),
+        validation_history=validation_history,
+    )
 
 
 def _batch_tensor(*, torch: Any, batch: GeneratedObservationBatch) -> Any:
