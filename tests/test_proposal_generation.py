@@ -63,8 +63,6 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
     assert document.proposal_set.proposals[0].comparable_cost_best_score is not None
     assert document.proposal_set.proposals[0].resource_stratum_index is not None
     assert document.proposal_set.proposals[0].resource_stratum_count is not None
-    assert document.proposal_set.proposals[0].capability_family_kind is not None
-    assert document.proposal_set.proposals[0].capability_operator_kinds
     assert document.proposal_set.proposals[0].candidate_id in {
         architecture.id for architecture in architectures
     }

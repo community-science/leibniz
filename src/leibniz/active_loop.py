@@ -38,6 +38,7 @@ class ActiveTrainingLoopPlan:
     iterations: int = 1
     scale: int = 1
     candidate_budget: int = 3
+    candidate_sample_count: int = 64
     sample_count: int = 4
     evaluation_sample_count: int | None = None
     seed: int = 101
@@ -58,6 +59,12 @@ class ActiveTrainingLoopPlan:
             raise ActiveTrainingLoopError("scale must be positive")
         if type(self.candidate_budget) is not int or self.candidate_budget < 1:
             raise ActiveTrainingLoopError("candidate_budget must be positive")
+        if type(self.candidate_sample_count) is not int or self.candidate_sample_count < 1:
+            raise ActiveTrainingLoopError("candidate_sample_count must be positive")
+        if self.candidate_sample_count < self.candidate_budget:
+            raise ActiveTrainingLoopError(
+                "candidate_sample_count must be at least candidate_budget"
+            )
         if type(self.sample_count) is not int or self.sample_count < 1:
             raise ActiveTrainingLoopError("sample_count must be positive")
         if (
@@ -135,6 +142,7 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                 runs_root=plan.runs_root,
                 scale=plan.scale,
                 candidate_budget=plan.candidate_budget,
+                candidate_sample_count=plan.candidate_sample_count,
                 sample_count=plan.sample_count,
                 evaluation_sample_count=plan.evaluation_sample_count,
                 seed=iteration_seed,

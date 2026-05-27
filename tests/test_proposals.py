@@ -60,12 +60,6 @@ def test_experiment_proposal_set_parses_and_canonicalizes() -> None:
                 comparable_cost_best_score=0.4,
                 resource_stratum_index=1,
                 resource_stratum_count=3,
-                capability_family_kind="local-aggregation-readout",
-                capability_operator_kinds=(
-                    "local-aggregation",
-                    "rank-collapse",
-                    "affine-readout",
-                ),
                 command=("leibniz", "benchmark", "run"),
             ),
             ExperimentProposal(
@@ -322,12 +316,6 @@ def _proposal_set_record(
                 "comparable_cost_best_score": 0.4,
                 "resource_stratum_index": 1,
                 "resource_stratum_count": 3,
-                "capability_family_kind": "local-aggregation-readout",
-                "capability_operator_kinds": [
-                    "local-aggregation",
-                    "rank-collapse",
-                    "affine-readout",
-                ],
                 "command": ["leibniz", "benchmark", "run"],
             },
             {

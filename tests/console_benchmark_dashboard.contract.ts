@@ -83,7 +83,6 @@ const result: BenchmarkResultRecord = {
   proposals: [
     {
       acquisition_value: 0.2,
-      capability_operator_kinds: [],
       candidate_id: 'model-a',
       candidate_kind: 'architecture',
       command: [],

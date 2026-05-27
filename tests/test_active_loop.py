@@ -121,7 +121,6 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
     assert len(proposals) == 1
     assert proposal["selector_name"] == "resource-bootstrap"
     assert proposal["source_candidate_rank"]
-    assert proposal["capability_family_kind"]
     assert proposal["command"]
     assert len(leaderboard) == 1
     assert leaderboard[0]["observed_complexities"] == [1.0]

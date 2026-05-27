@@ -43,7 +43,6 @@ class ArchitectureCandidateObservation:
     source_candidate_rank: int
     candidate_id: ProtocolIdentifier
     architecture_digest: ContentDigest
-    family_kind: str
     operator_kinds: tuple[str, ...]
     parameter_count: int
     inference_flops: int | None
@@ -59,8 +58,6 @@ class ArchitectureCandidateObservation:
             raise CandidateObservationProjectionError("candidate_id must match candidate")
         if self.architecture_digest != self.candidate.architecture.digest:
             raise CandidateObservationProjectionError("architecture_digest must match candidate")
-        if not self.family_kind:
-            raise CandidateObservationProjectionError("family_kind must be nonempty")
         if not self.operator_kinds or any(not operator for operator in self.operator_kinds):
             raise CandidateObservationProjectionError("operator_kinds must be nonempty")
         if type(self.parameter_count) is not int or self.parameter_count < 0:
@@ -109,7 +106,6 @@ def project_architecture_candidate_observations(
                 source_candidate_rank=rank,
                 candidate_id=candidate.architecture.id,
                 architecture_digest=candidate.architecture.digest,
-                family_kind=candidate.family_kind,
                 operator_kinds=tuple(
                     operator.descriptor.kind for operator in candidate.operator_plan.operators
                 ),
