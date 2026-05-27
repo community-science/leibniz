@@ -101,7 +101,7 @@ export function modelComparisonRows(
   }
 
   const inspectionsByDigest = new Map<string, ModelInspectionRecord>();
-  for (const inspection of inspections) {
+  for (const inspection of [...inspections, ...result.model_inspections]) {
     for (const digest of [
       inspection.architecture.record_digest,
       inspection.architecture.content_digest,

@@ -278,6 +278,7 @@ function emptyBenchmarkResult(benchmark: BenchmarkTaskRecord): BenchmarkResultRe
     cost_axes: [{ key: 'parameter_count', label: 'Parameters' }],
     frontiers: {},
     leaderboard: [],
+    model_inspections: [],
     proposals: [],
     scale_axis: benchmark.scale_axis,
     training_history: [],

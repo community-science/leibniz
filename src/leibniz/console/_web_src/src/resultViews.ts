@@ -1,3 +1,8 @@
+import {
+  parseModelInspectionRecord,
+  type ModelInspectionRecord,
+} from './modelInspections.ts';
+
 export type ResultViewRecord = ImportedResultViewRecord | BenchmarkResultViewRecord;
 
 export type ImportedResultViewRecord = {
@@ -44,6 +49,7 @@ export type BenchmarkResultRecord = {
   leaderboard: ModelResultRecord[];
   frontiers: Record<string, ModelResultRecord[]>;
   training_history: RunResultRecord[];
+  model_inspections: ModelInspectionRecord[];
   proposals: ProposalRecord[];
 };
 
@@ -68,6 +74,7 @@ export type ModelResultRecord = {
 export type CompetencePointRecord = {
   complexity: number;
   score: number;
+  sample_count?: number;
   run_ids: string[];
 };
 
@@ -80,11 +87,15 @@ export type RunResultRecord = {
   architecture_digest: string;
   model_key: string;
   scale?: number;
+  complexity?: number;
   measurement_count: number;
   score: number;
   cost_summary: CostSummaryRecord;
   architecture: Record<string, unknown>;
+  model_inspection_digest?: string;
+  model_inspection_path?: string;
   measurement_dataset_digest: string;
+  sampled_competence?: Record<string, unknown>;
   training_summary?: Record<string, unknown>;
 };
 
@@ -227,6 +238,13 @@ function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultReco
     training_history: requireArray(record.training_history, `${path}.training_history`).map(
       (run, index) => parseRunResult(run, `${path}.training_history.${index}`),
     ),
+    model_inspections:
+      record.model_inspections === undefined
+        ? []
+        : requireArray(record.model_inspections, `${path}.model_inspections`).map(
+            (inspection, index) =>
+              parseModelInspectionRecord(inspection, `${path}.model_inspections.${index}`),
+          ),
     proposals:
       record.proposals === undefined
         ? []
@@ -262,6 +280,10 @@ function parseCompetencePoint(value: unknown, path: string): CompetencePointReco
   return {
     complexity: requireNumber(record.complexity, `${path}.complexity`),
     score: requireNumber(record.score, `${path}.score`),
+    sample_count:
+      record.sample_count === undefined
+        ? undefined
+        : requireNumber(record.sample_count, `${path}.sample_count`),
     run_ids: parseStringArray(record.run_ids, `${path}.run_ids`),
   };
 }
@@ -278,14 +300,30 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
     model_key: requireString(record.model_key, `${path}.model_key`),
     scale:
       record.scale === undefined ? undefined : requireNumber(record.scale, `${path}.scale`),
+    complexity:
+      record.complexity === undefined
+        ? undefined
+        : requireNumber(record.complexity, `${path}.complexity`),
     measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`),
     score: requireNumber(record.score, `${path}.score`),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
     architecture: requireRecord(record.architecture, `${path}.architecture`),
+    model_inspection_digest:
+      record.model_inspection_digest === undefined
+        ? undefined
+        : requireString(record.model_inspection_digest, `${path}.model_inspection_digest`),
+    model_inspection_path:
+      record.model_inspection_path === undefined
+        ? undefined
+        : requireString(record.model_inspection_path, `${path}.model_inspection_path`),
     measurement_dataset_digest: requireString(
       record.measurement_dataset_digest,
       `${path}.measurement_dataset_digest`,
     ),
+    sampled_competence:
+      record.sampled_competence === undefined
+        ? undefined
+        : requireRecord(record.sampled_competence, `${path}.sampled_competence`),
     training_summary:
       record.training_summary === undefined
         ? undefined

@@ -259,8 +259,12 @@ class _BenchmarkRunRecord:
     score: float
     cost_summary: Mapping[str, object]
     architecture: Mapping[str, object]
+    model_inspection: Mapping[str, object]
+    model_inspection_digest: ContentDigest
+    model_inspection_path: Path | None
     measurement_dataset: MeasurementDataset
     measurement_dataset_digest: ContentDigest
+    sampled_competence: Mapping[str, object] | None = None
     training_summary: Mapping[str, object] | None = None
 
     def to_record(self) -> dict[str, object]:
@@ -276,12 +280,17 @@ class _BenchmarkRunRecord:
             "score": self.score,
             "cost_summary": dict(self.cost_summary),
             "architecture": dict(self.architecture),
+            "model_inspection_digest": str(self.model_inspection_digest),
             "measurement_dataset_digest": str(self.measurement_dataset_digest),
         }
+        if self.model_inspection_path is not None:
+            record["model_inspection_path"] = self.model_inspection_path.as_posix()
         if self.scale is not None:
             record["scale"] = self.scale
         if self.complexity is not None:
             record["complexity"] = self.complexity
+        if self.sampled_competence is not None:
+            record["sampled_competence"] = dict(self.sampled_competence)
         if self.training_summary is not None:
             record["training_summary"] = dict(self.training_summary)
         return record
@@ -352,6 +361,7 @@ def _local_run_records(runs_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
         inspection = ModelInspectionDocument.from_bytes(
             model_inspection_path.read_bytes()
         ).inspection
+        sampled_competence = _sampled_competence(summary)
         records.append(
             _BenchmarkRunRecord(
                 source_kind="local-run",
@@ -367,8 +377,17 @@ def _local_run_records(runs_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
                 score=_mean_accepted_mass(dataset),
                 cost_summary=inspection.cost_summary.to_record(),
                 architecture=inspection.architecture.to_record(),
+                model_inspection=_model_inspection_view_record(
+                    inspection=inspection.to_record(),
+                    source_path=model_inspection_path.resolve(),
+                    measurement_dataset_digest=dataset.digest,
+                    training_summary=summary,
+                ),
+                model_inspection_digest=inspection.digest,
+                model_inspection_path=model_inspection_path.resolve(),
                 measurement_dataset=dataset,
                 measurement_dataset_digest=dataset.digest,
+                sampled_competence=sampled_competence,
                 training_summary=summary,
             )
         )
@@ -385,6 +404,7 @@ def _imported_run_records(runs_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
         bundle = document.bundle
         package = bundle.submission_package
         inspection = _inspection_from_architecture(package.architecture_manifest)
+        inspection_record = inspection.to_record()
         records.append(
             _BenchmarkRunRecord(
                 source_kind="imported-publication",
@@ -403,6 +423,14 @@ def _imported_run_records(runs_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
                 score=_mean_accepted_mass(bundle.measurement_dataset),
                 cost_summary=inspection.cost_summary.to_record(),
                 architecture=inspection.architecture.to_record(),
+                model_inspection=_model_inspection_view_record(
+                    inspection=inspection_record,
+                    source_path=path.resolve(),
+                    measurement_dataset_digest=bundle.measurement_dataset.digest,
+                    training_summary=None,
+                ),
+                model_inspection_digest=inspection.digest,
+                model_inspection_path=None,
                 measurement_dataset=bundle.measurement_dataset,
                 measurement_dataset_digest=bundle.measurement_dataset.digest,
             )
@@ -410,12 +438,41 @@ def _imported_run_records(runs_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
     return tuple(records)
 
 
-def _sampled_competence_complexity(summary: Mapping[str, object]) -> float | None:
+def _sampled_competence(summary: Mapping[str, object]) -> Mapping[str, object] | None:
     evidence = summary.get("sampled_competence")
     if evidence is None:
         return None
-    record = _as_mapping(evidence, "sampled_competence")
+    return _as_mapping(evidence, "sampled_competence")
+
+
+def _sampled_competence_complexity(summary: Mapping[str, object]) -> float | None:
+    record = _sampled_competence(summary)
+    if record is None:
+        return None
     return _as_nonnegative_number(record.get("complexity"), "sampled_competence.complexity")
+
+
+def _model_inspection_view_record(
+    *,
+    inspection: Mapping[str, object],
+    source_path: Path,
+    measurement_dataset_digest: ContentDigest,
+    training_summary: Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    record = dict(inspection)
+    record["source_path"] = source_path.as_posix()
+    record["measurement_dataset"] = {
+        "kind": "measurement-dataset",
+        "content_digest": str(measurement_dataset_digest),
+    }
+    if training_summary is not None:
+        record["training_provenance"] = [
+            {
+                "kind": "training-run",
+                "record_digest": str(ContentDigest.from_value(training_summary)),
+            }
+        ]
+    return record
 
 
 def _inspection_from_architecture(architecture: ArchitectureManifest) -> ModelInspectionRecord:
@@ -448,6 +505,7 @@ def _benchmark_result_record(
             for axis in ("parameter_count", "inference_flops", "parameter_bytes")
         },
         "training_history": [run.to_record() for run in runs],
+        "model_inspections": _model_inspection_records(runs),
     }
     if proposals:
         record["proposals"] = list(proposals)
@@ -456,6 +514,15 @@ def _benchmark_result_record(
     if manifest.scale_parameter is not None:
         record["scale_axis"] = manifest.scale_parameter.symbol
     return record
+
+
+def _model_inspection_records(
+    runs: tuple[_BenchmarkRunRecord, ...],
+) -> list[Mapping[str, object]]:
+    by_digest: dict[str, Mapping[str, object]] = {}
+    for run in runs:
+        by_digest.setdefault(str(run.model_inspection_digest), run.model_inspection)
+    return [by_digest[digest] for digest in sorted(by_digest)]
 
 
 def _model_result_records(
@@ -733,6 +800,7 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
     history = _as_sequence(record.get("training_history"), "training_history")
     for index, run in enumerate(history):
         _validate_run_result(_as_mapping(run, f"training_history.{index}"))
+    _as_sequence(record.get("model_inspections", ()), "model_inspections")
     for index, proposal in enumerate(_as_sequence(record.get("proposals", ()), "proposals")):
         _validate_proposal_result(_as_mapping(proposal, f"proposals.{index}"))
 
@@ -743,7 +811,13 @@ def _validate_model_result(record: Mapping[str, object]) -> None:
     _as_string(record.get("benchmark_id"), "benchmark_id")
     _as_nonnegative_number(record.get("score"), "score")
     _as_sequence(record.get("observed_complexities"), "observed_complexities")
-    _as_sequence(record.get("points"), "points")
+    for index, point in enumerate(_as_sequence(record.get("points"), "points")):
+        point_record = _as_mapping(point, f"points.{index}")
+        _as_nonnegative_number(point_record.get("complexity"), f"points.{index}.complexity")
+        _as_nonnegative_number(point_record.get("score"), f"points.{index}.score")
+        if "sample_count" in point_record:
+            _as_nonnegative_number(point_record.get("sample_count"), f"points.{index}.sample_count")
+        _as_sequence(point_record.get("run_ids"), f"points.{index}.run_ids")
     _as_mapping(record.get("cost_summary"), "cost_summary")
     _as_sequence(record.get("run_ids"), "run_ids")
     _as_sequence(record.get("source_kinds"), "source_kinds")
@@ -761,7 +835,13 @@ def _validate_run_result(record: Mapping[str, object]) -> None:
     _as_nonnegative_number(record.get("score"), "score")
     _as_mapping(record.get("cost_summary"), "cost_summary")
     _as_mapping(record.get("architecture"), "architecture")
+    if "model_inspection_digest" in record:
+        _as_string(record.get("model_inspection_digest"), "model_inspection_digest")
+    if "model_inspection_path" in record:
+        _as_string(record.get("model_inspection_path"), "model_inspection_path")
     _as_string(record.get("measurement_dataset_digest"), "measurement_dataset_digest")
+    if "sampled_competence" in record:
+        _as_mapping(record.get("sampled_competence"), "sampled_competence")
 
 
 def _validate_proposal_result(record: Mapping[str, object]) -> None:

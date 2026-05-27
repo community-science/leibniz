@@ -108,6 +108,10 @@ def test_materialize_benchmark_result_views_projects_imported_publications(
     assert len(cast(list[dict[str, object]], frontiers["parameter_count"])) == 1
     history = cast(list[dict[str, object]], result["training_history"])
     assert history[0]["source_kind"] == "imported-publication"
+    inspections = cast(list[dict[str, object]], result["model_inspections"])
+    assert len(inspections) == 1
+    assert inspections[0]["source_path"] == history[0]["source_path"]
+    assert "measurement_dataset" in inspections[0]
 
 
 def test_materialize_benchmark_result_views_rejects_empty_runs_root(tmp_path: Path) -> None:

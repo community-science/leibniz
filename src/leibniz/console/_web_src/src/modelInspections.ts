@@ -46,11 +46,14 @@ export class ModelInspectionError extends Error {
 
 export function parseModelInspectionRecords(value: unknown): ModelInspectionRecord[] {
   return requireArray(value, 'model inspections').map((item, index) =>
-    parseModelInspection(item, `model inspections.${index}`),
+    parseModelInspectionRecord(item, `model inspections.${index}`),
   );
 }
 
-function parseModelInspection(value: unknown, path: string): ModelInspectionRecord {
+export function parseModelInspectionRecord(
+  value: unknown,
+  path: string,
+): ModelInspectionRecord {
   const record = requireRecord(value, path);
   return {
     id: requireString(record.id, `${path}.id`),
