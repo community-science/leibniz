@@ -518,8 +518,6 @@ function ProposalCards({
               <dd>{proposal.source_candidate_rank ?? 'none'}</dd>
               <dt>Cost Stratum</dt>
               <dd>{resourceStratumLabel(proposal)}</dd>
-              <dt>Capability</dt>
-              <dd>{proposal.capability_family_kind ?? 'none'}</dd>
               <dt>Comparable Score</dt>
               <dd>{scoreLabel(proposal.comparable_cost_best_score)}</dd>
               <dt>Matched Model</dt>

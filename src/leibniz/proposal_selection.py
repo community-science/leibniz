@@ -5,11 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from leibniz.candidate_observations import ArchitectureCandidateObservation
-from leibniz.capability_selection import (
-    CapabilityKey,
-    capability_key_for_observation,
-    select_capability_bootstrap_candidates,
-)
 from leibniz.resource_selection import select_resource_bootstrap_candidates
 
 __all__ = [
@@ -31,7 +26,6 @@ class CandidateProposalSelection:
     selector_name: str
     source_candidate_rank: int
     comparable_cost_best_score: float
-    capability_key: CapabilityKey
     resource_stratum_index: int | None = None
     resource_stratum_count: int | None = None
 
@@ -66,12 +60,11 @@ def select_candidate_proposals(
         raise ProposalSelectionError("budget must be positive")
     if not observations:
         raise ProposalSelectionError("observations must contain at least one item")
-    resource_budget = _resource_budget(observations, budget=budget)
     resource_selections = select_resource_bootstrap_candidates(
         observations,
-        budget=resource_budget,
+        budget=budget,
     )
-    selected: list[CandidateProposalSelection] = [
+    return tuple(
         CandidateProposalSelection(
             observation=selection.observation,
             selector_name=selection.selector_name,
@@ -79,45 +72,8 @@ def select_candidate_proposals(
             comparable_cost_best_score=(
                 selection.observation.best_measured_score_at_or_below_cost
             ),
-            capability_key=capability_key_for_observation(selection.observation),
             resource_stratum_index=selection.resource_stratum_index,
             resource_stratum_count=selection.resource_stratum_count,
         )
         for selection in resource_selections
-    ]
-    remaining_budget = budget - len(selected)
-    if remaining_budget <= 0:
-        return tuple(selected)
-    capability_selections = select_capability_bootstrap_candidates(
-        observations,
-        budget=remaining_budget,
-        excluded_candidate_ids=tuple(selection.observation.candidate_id for selection in selected),
     )
-    selected.extend(
-        CandidateProposalSelection(
-            observation=selection.observation,
-            selector_name=selection.selector_name,
-            source_candidate_rank=selection.observation.source_candidate_rank,
-            comparable_cost_best_score=(
-                selection.observation.best_measured_score_at_or_below_cost
-            ),
-            capability_key=selection.capability_key,
-        )
-        for selection in capability_selections
-    )
-    return tuple(selected)
-
-
-def _resource_budget(
-    observations: tuple[ArchitectureCandidateObservation, ...],
-    *,
-    budget: int,
-) -> int:
-    capability_keys = {
-        capability_key_for_observation(observation)
-        for observation in observations
-        if not observation.is_measured
-    }
-    if len(capability_keys) <= 1 or budget == 1:
-        return budget
-    return budget - 1

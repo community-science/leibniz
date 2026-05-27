@@ -10,7 +10,7 @@ from pathlib import Path
 from leibniz.architecture_candidates import (
     ArchitectureCandidate,
     default_architecture_candidate_space,
-    generate_architecture_candidates,
+    sample_architecture_candidates,
 )
 from leibniz.architectures import ArchitectureManifest
 from leibniz.candidate_observations import (
@@ -59,6 +59,7 @@ class ProposalGenerationPlan:
     runs_root: Path = Path(".runs")
     scale: int = 1
     candidate_budget: int = 3
+    candidate_sample_count: int = 64
     sample_count: int = 4
     evaluation_sample_count: int | None = None
     seed: int = 101
@@ -76,6 +77,12 @@ class ProposalGenerationPlan:
             raise ProposalGenerationError("scale must be a positive integer")
         if type(self.candidate_budget) is not int or self.candidate_budget < 1:
             raise ProposalGenerationError("candidate_budget must be positive")
+        if type(self.candidate_sample_count) is not int or self.candidate_sample_count < 1:
+            raise ProposalGenerationError("candidate_sample_count must be positive")
+        if self.candidate_sample_count < self.candidate_budget:
+            raise ProposalGenerationError(
+                "candidate_sample_count must be at least candidate_budget"
+            )
         if type(self.sample_count) is not int or self.sample_count < 1:
             raise ProposalGenerationError("sample_count must be positive")
         if (
@@ -150,8 +157,6 @@ class _CandidateArchitecture:
     comparable_cost_best_score: float
     resource_stratum_index: int | None
     resource_stratum_count: int | None
-    capability_family_kind: str
-    capability_operator_kinds: tuple[str, ...]
     predicted_score: float
     uncertainty: float
     acquisition_value: float
@@ -171,10 +176,12 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
     candidate_space = default_architecture_candidate_space()
     candidate_observations = project_architecture_candidate_observations(
         tuple(
-            generate_architecture_candidates(
+            sample_architecture_candidates(
                 candidate_space,
                 input_shape=sample.field.shape,
                 output_count=len(outcome_space.outcomes),
+                sample_count=plan.candidate_sample_count,
+                seed=plan.seed,
             )
         ),
         measured=tuple(
@@ -228,8 +235,6 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                 comparable_cost_best_score=candidate.comparable_cost_best_score,
                 resource_stratum_index=candidate.resource_stratum_index,
                 resource_stratum_count=candidate.resource_stratum_count,
-                capability_family_kind=candidate.capability_family_kind,
-                capability_operator_kinds=candidate.capability_operator_kinds,
                 command=(
                     "leibniz",
                     "benchmark",
@@ -447,8 +452,6 @@ def _candidate_architectures(
                 comparable_cost_best_score=selection.comparable_cost_best_score,
                 resource_stratum_index=selection.resource_stratum_index,
                 resource_stratum_count=selection.resource_stratum_count,
-                capability_family_kind=selection.capability_key.family_kind,
-                capability_operator_kinds=selection.capability_key.operator_kinds,
                 predicted_score=predicted_score,
                 uncertainty=uncertainty,
                 acquisition_value=acquisition_value,
@@ -468,10 +471,7 @@ def _selection_rationale(selection: CandidateProposalSelection) -> str:
             f"{selection.selector_name} selected resource stratum "
             f"{selection.resource_stratum_index + 1}/{selection.resource_stratum_count}"
         )
-    return (
-        f"{selection.selector_name} selected capability "
-        f"{selection.capability_key.family_kind}"
-    )
+    return f"{selection.selector_name} selected resource candidate"
 
 
 def _require_candidate_shape(

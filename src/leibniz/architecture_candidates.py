@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import Literal
 
@@ -14,16 +15,17 @@ from leibniz.model_operators import (
 
 __all__ = [
     "ArchitectureCandidate",
-    "ArchitectureCandidateFamily",
+    "ArchitectureCandidateRecipe",
     "ArchitectureCandidateSpace",
     "ArchitectureCandidateSpaceValidationError",
     "default_architecture_candidate_space",
     "generate_architecture_candidates",
+    "sample_architecture_candidates",
 ]
 
-_FamilyKind = Literal["local-aggregation-readout"]
+_RecipeKind = Literal["local-aggregation-readout"]
 _SizeMaximumKind = Literal["minimum-trailing-input-axis"]
-_local_aggregation_readout: _FamilyKind = "local-aggregation-readout"
+_local_aggregation_readout: _RecipeKind = "local-aggregation-readout"
 _minimum_trailing_input_axis: _SizeMaximumKind = "minimum-trailing-input-axis"
 
 
@@ -32,10 +34,10 @@ class ArchitectureCandidateSpaceValidationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class ArchitectureCandidateFamily:
-    """One formal family within an architecture candidate space."""
+class ArchitectureCandidateRecipe:
+    """One formal construction recipe within an architecture candidate space."""
 
-    kind: _FamilyKind
+    kind: _RecipeKind
     local_aggregation_dimension: int
     local_aggregation_size_minimum: int
     local_aggregation_size_maximum: int | None = None
@@ -46,7 +48,7 @@ class ArchitectureCandidateFamily:
     def __post_init__(self) -> None:
         if self.kind != _local_aggregation_readout:
             raise ArchitectureCandidateSpaceValidationError(
-                f"unsupported candidate family: {self.kind}"
+                f"unsupported candidate recipe: {self.kind}"
             )
         if type(self.local_aggregation_dimension) is not int or (
             self.local_aggregation_dimension < 1
@@ -95,16 +97,22 @@ class ArchitectureCandidateFamily:
     def local_aggregation_sizes(self, input_shape: tuple[int, ...]) -> tuple[int, ...]:
         """Resolve the declared local aggregation size range for an input shape."""
 
+        minimum, maximum = self.local_aggregation_size_bounds(input_shape)
+        if maximum < minimum:
+            return ()
+        return tuple(range(minimum, maximum + 1))
+
+    def local_aggregation_size_bounds(self, input_shape: tuple[int, ...]) -> tuple[int, int]:
+        """Resolve inclusive local aggregation size bounds without enumerating them."""
+
         if self.local_aggregation_size_maximum is None:
             maximum = self._resolved_size_maximum(input_shape)
         else:
             maximum = self.local_aggregation_size_maximum
-        if maximum < self.local_aggregation_size_minimum:
-            return ()
-        return tuple(range(self.local_aggregation_size_minimum, maximum + 1))
+        return self.local_aggregation_size_minimum, maximum
 
     def includes_plan(self, plan: ModelOperatorPlan) -> bool:
-        """Return whether a summarized architecture satisfies this family's cost bounds."""
+        """Return whether a summarized architecture satisfies this recipe's cost bounds."""
 
         parameter_count = plan.parameter_count
         if parameter_count is None:
@@ -131,12 +139,12 @@ class ArchitectureCandidateFamily:
 class ArchitectureCandidateSpace:
     """A source-defined architecture candidate-space declaration."""
 
-    families: tuple[ArchitectureCandidateFamily, ...]
+    recipes: tuple[ArchitectureCandidateRecipe, ...]
 
     def __post_init__(self) -> None:
-        if not self.families:
+        if not self.recipes:
             raise ArchitectureCandidateSpaceValidationError(
-                "candidate space must contain at least one family"
+                "candidate space must contain at least one recipe"
             )
 
 
@@ -146,12 +154,9 @@ class ArchitectureCandidate:
 
     architecture: ArchitectureManifest
     operator_plan: ModelOperatorPlan
-    family_kind: str
     parameters: tuple[tuple[str, int], ...]
 
     def __post_init__(self) -> None:
-        if not self.family_kind:
-            raise ArchitectureCandidateSpaceValidationError("family_kind must be nonempty")
         names = tuple(name for name, _value in self.parameters)
         if len(set(names)) != len(names):
             raise ArchitectureCandidateSpaceValidationError(
@@ -180,8 +185,8 @@ def default_architecture_candidate_space() -> ArchitectureCandidateSpace:
     """Return the generic formal-operator candidate space used by local proposals."""
 
     return ArchitectureCandidateSpace(
-        families=(
-            ArchitectureCandidateFamily(
+        recipes=(
+            ArchitectureCandidateRecipe(
                 kind=_local_aggregation_readout,
                 local_aggregation_dimension=2,
                 local_aggregation_size_minimum=1,
@@ -201,10 +206,10 @@ def generate_architecture_candidates(
 
     candidates: list[ArchitectureCandidate] = []
     seen: set[object] = set()
-    for family in space.families:
+    for recipe in space.recipes:
         candidates.extend(
-            _family_candidates(
-                family,
+            _recipe_candidates(
+                recipe,
                 input_shape=input_shape,
                 output_count=output_count,
             )
@@ -218,42 +223,119 @@ def generate_architecture_candidates(
     return tuple(sorted(deduplicated, key=_candidate_sort_key))
 
 
-def _family_candidates(
-    family: ArchitectureCandidateFamily,
+def sample_architecture_candidates(
+    space: ArchitectureCandidateSpace,
+    *,
+    input_shape: tuple[int, ...],
+    output_count: int,
+    sample_count: int,
+    seed: int = 0,
+) -> tuple[ArchitectureCandidate, ...]:
+    """Draw a deterministic bounded sample from a candidate space."""
+
+    if type(sample_count) is not int or sample_count < 1:
+        raise ArchitectureCandidateSpaceValidationError("sample_count must be positive")
+    if type(seed) is not int or seed < 0:
+        raise ArchitectureCandidateSpaceValidationError("seed must be nonnegative")
+    candidates: list[ArchitectureCandidate] = []
+    per_recipe = max(1, -(-sample_count // len(space.recipes)))
+    for recipe_index, recipe in enumerate(space.recipes):
+        candidates.extend(
+            _sample_recipe_candidates(
+                recipe,
+                input_shape=input_shape,
+                output_count=output_count,
+                sample_count=per_recipe,
+                seed=seed + recipe_index,
+            )
+        )
+    deduplicated: list[ArchitectureCandidate] = []
+    seen: set[object] = set()
+    for candidate in sorted(candidates, key=_candidate_sort_key):
+        if candidate.architecture.digest in seen:
+            continue
+        seen.add(candidate.architecture.digest)
+        deduplicated.append(candidate)
+        if len(deduplicated) == sample_count:
+            break
+    return tuple(deduplicated)
+
+
+def _recipe_candidates(
+    recipe: ArchitectureCandidateRecipe,
     *,
     input_shape: tuple[int, ...],
     output_count: int,
 ) -> tuple[ArchitectureCandidate, ...]:
-    if family.kind != _local_aggregation_readout:
+    if recipe.kind != _local_aggregation_readout:
         raise ArchitectureCandidateSpaceValidationError(
-            f"unsupported candidate family: {family.kind}"
+            f"unsupported candidate recipe: {recipe.kind}"
         )
     candidates: list[ArchitectureCandidate] = []
-    for size in family.local_aggregation_sizes(input_shape):
+    for size in recipe.local_aggregation_sizes(input_shape):
         architecture = formal_image_classifier_architecture(
             input_shape=input_shape,
             output_count=output_count,
             local_aggregation_size=size,
-            local_aggregation_dimension=family.local_aggregation_dimension,
+            local_aggregation_dimension=recipe.local_aggregation_dimension,
         )
         plan = summarize_architecture_operators(architecture)
-        if not family.includes_plan(plan):
+        if not recipe.includes_plan(plan):
             continue
         candidates.append(
             ArchitectureCandidate(
                 architecture=architecture,
                 operator_plan=plan,
-                family_kind=family.kind,
                 parameters=(("local_aggregation_size", size),),
             )
         )
     return tuple(candidates)
 
 
-def _candidate_sort_key(candidate: ArchitectureCandidate) -> tuple[int, str, int, str]:
+def _sample_recipe_candidates(
+    recipe: ArchitectureCandidateRecipe,
+    *,
+    input_shape: tuple[int, ...],
+    output_count: int,
+    sample_count: int,
+    seed: int,
+) -> tuple[ArchitectureCandidate, ...]:
+    if recipe.kind != _local_aggregation_readout:
+        raise ArchitectureCandidateSpaceValidationError(
+            f"unsupported candidate recipe: {recipe.kind}"
+        )
+    minimum, maximum = recipe.local_aggregation_size_bounds(input_shape)
+    if maximum < minimum:
+        return ()
+    span = maximum - minimum + 1
+    if sample_count >= span:
+        sizes = range(minimum, maximum + 1)
+    else:
+        sizes = sorted(random.Random(seed).sample(range(minimum, maximum + 1), sample_count))
+    candidates: list[ArchitectureCandidate] = []
+    for size in sizes:
+        architecture = formal_image_classifier_architecture(
+            input_shape=input_shape,
+            output_count=output_count,
+            local_aggregation_size=size,
+            local_aggregation_dimension=recipe.local_aggregation_dimension,
+        )
+        plan = summarize_architecture_operators(architecture)
+        if not recipe.includes_plan(plan):
+            continue
+        candidates.append(
+            ArchitectureCandidate(
+                architecture=architecture,
+                operator_plan=plan,
+                parameters=(("local_aggregation_size", size),),
+            )
+        )
+    return tuple(candidates)
+
+
+def _candidate_sort_key(candidate: ArchitectureCandidate) -> tuple[int, int, str]:
     return (
         candidate.parameter_count,
-        candidate.family_kind,
         candidate.parameter("local_aggregation_size"),
         str(candidate.architecture.id),
     )

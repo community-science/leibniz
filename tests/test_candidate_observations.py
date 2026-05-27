@@ -1,7 +1,7 @@
 import pytest
 
 from leibniz.architecture_candidates import (
-    ArchitectureCandidateFamily,
+    ArchitectureCandidateRecipe,
     ArchitectureCandidateSpace,
     default_architecture_candidate_space,
     generate_architecture_candidates,
@@ -106,14 +106,14 @@ def test_candidate_observations_reject_conflicting_measurement_costs() -> None:
 
 
 def test_candidate_observations_project_sparse_unmeasured_candidates_without_fake_scores() -> None:
-    family = ArchitectureCandidateFamily(
+    recipe = ArchitectureCandidateRecipe(
         kind="local-aggregation-readout",
         local_aggregation_dimension=2,
         local_aggregation_size_minimum=1,
         local_aggregation_size_maximum=2,
     )
     candidates = generate_architecture_candidates(
-        ArchitectureCandidateSpace(families=(family,)),
+        ArchitectureCandidateSpace(recipes=(recipe,)),
         input_shape=(1, 4, 4),
         output_count=3,
     )

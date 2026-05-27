@@ -54,12 +54,6 @@ _proposal_record = RecordSpec(
         "comparable_cost_best_score": FieldSpec(kind="number", required=False),
         "resource_stratum_index": FieldSpec(kind="integer", required=False),
         "resource_stratum_count": FieldSpec(kind="integer", required=False),
-        "capability_family_kind": FieldSpec(kind="string", required=False),
-        "capability_operator_kinds": FieldSpec(
-            kind="sequence",
-            item=FieldSpec(kind="string"),
-            required=False,
-        ),
         "command": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="string"),
@@ -93,8 +87,6 @@ class ExperimentProposal:
     comparable_cost_best_score: float | None = None
     resource_stratum_index: int | None = None
     resource_stratum_count: int | None = None
-    capability_family_kind: str | None = None
-    capability_operator_kinds: tuple[str, ...] = ()
     command: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -151,10 +143,6 @@ class ExperimentProposal:
             raise ExperimentProposalValidationError(
                 "resource_stratum_index must be less than resource_stratum_count"
             )
-        if self.capability_family_kind is not None and not self.capability_family_kind:
-            raise ExperimentProposalValidationError("capability_family_kind must be nonempty")
-        if any(not kind for kind in self.capability_operator_kinds):
-            raise ExperimentProposalValidationError("capability_operator_kinds must be nonempty")
         if any(not argument for argument in self.command):
             raise ExperimentProposalValidationError("command arguments must be nonempty")
 
@@ -213,21 +201,6 @@ class ExperimentProposal:
                 if "resource_stratum_count" in validated
                 else None
             ),
-            capability_family_kind=(
-                _as_string(
-                    validated["capability_family_kind"],
-                    field="capability_family_kind",
-                )
-                if "capability_family_kind" in validated
-                else None
-            ),
-            capability_operator_kinds=tuple(
-                _as_string(kind, field="capability_operator_kinds")
-                for kind in _as_sequence(
-                    validated.get("capability_operator_kinds", ()),
-                    field="capability_operator_kinds",
-                )
-            ),
             command=tuple(
                 _as_string(argument, field="command")
                 for argument in _as_sequence(validated.get("command", ()), field="command")
@@ -264,10 +237,6 @@ class ExperimentProposal:
             record["resource_stratum_index"] = self.resource_stratum_index
         if self.resource_stratum_count is not None:
             record["resource_stratum_count"] = self.resource_stratum_count
-        if self.capability_family_kind is not None:
-            record["capability_family_kind"] = self.capability_family_kind
-        if self.capability_operator_kinds:
-            record["capability_operator_kinds"] = list(self.capability_operator_kinds)
         if self.command:
             record["command"] = list(self.command)
         return record

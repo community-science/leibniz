@@ -227,6 +227,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     propose_results.add_argument("--scale", default=1, type=int)
     propose_results.add_argument("--candidate-budget", default=3, type=int)
+    propose_results.add_argument("--candidate-sample-count", default=64, type=int)
     propose_results.add_argument("--sample-count", default=4, type=int)
     propose_results.add_argument("--evaluation-sample-count", default=None, type=int)
     propose_results.add_argument("--seed", default=101, type=int)
@@ -294,6 +295,7 @@ def _parser() -> argparse.ArgumentParser:
     loop.add_argument("--iterations", default=1, type=int)
     loop.add_argument("--scale", default=1, type=int)
     loop.add_argument("--candidate-budget", default=3, type=int)
+    loop.add_argument("--candidate-sample-count", default=64, type=int)
     loop.add_argument("--sample-count", default=4, type=int)
     loop.add_argument("--evaluation-sample-count", default=None, type=int)
     loop.add_argument("--seed", default=101, type=int)
@@ -354,6 +356,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                     iterations=args.iterations,
                     scale=args.scale,
                     candidate_budget=args.candidate_budget,
+                    candidate_sample_count=args.candidate_sample_count,
                     sample_count=args.sample_count,
                     evaluation_sample_count=args.evaluation_sample_count,
                     seed=args.seed,
@@ -425,6 +428,7 @@ def _results(args: argparse.Namespace) -> int:
                     runs_root=args.runs_root,
                     scale=args.scale,
                     candidate_budget=args.candidate_budget,
+                    candidate_sample_count=args.candidate_sample_count,
                     sample_count=args.sample_count,
                     evaluation_sample_count=args.evaluation_sample_count,
                     seed=args.seed,
