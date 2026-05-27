@@ -28,6 +28,7 @@ import type {
   BenchmarkResultRecord,
   ModelResultRecord,
   ProposalRecord,
+  WorkQueueItemRecord,
 } from './resultViews.ts';
 
 type PlotView = {
@@ -50,8 +51,10 @@ const plotZoomOutFactor = 1.28;
 const plotPanFraction = 0.18;
 
 export function BenchmarkResultDashboard({
+  queueItems = [],
   result,
 }: {
+  queueItems?: WorkQueueItemRecord[];
   result: BenchmarkResultRecord;
 }) {
   const [costAxis, setCostAxis] = useState(result.cost_axes[0]?.key ?? 'parameter_count');
@@ -169,6 +172,7 @@ export function BenchmarkResultDashboard({
       <ProposalCards
         associations={proposalRows}
         onSelect={setSelectedId}
+        queueItems={queueItems}
         selectedId={selectedId}
       />
       <RunHistoryTable
@@ -476,10 +480,12 @@ function BenchmarkFrontierPlot({
 function ProposalCards({
   associations,
   onSelect,
+  queueItems,
   selectedId,
 }: {
   associations: BenchmarkProposalAssociation[];
   onSelect: (id: string) => void;
+  queueItems: WorkQueueItemRecord[];
   selectedId: string | null;
 }) {
   if (associations.length === 0) {
@@ -490,46 +496,88 @@ function ProposalCards({
     <section className="benchmark-result-table-section">
       <h3>Proposals</h3>
       <div className="proposal-card-grid">
-        {associations.map(({ model, proposal }) => (
-          <button
-            className={`proposal-card ${selectedId === proposal.id ? 'selected' : ''}`}
-            key={proposal.id}
-            onClick={() => onSelect(proposal.id)}
-            type="button"
-          >
-            <div className="proposal-card-heading">
-              <span>Rank {proposal.rank}</span>
-              <strong>{scoreLabel(proposal.acquisition_value)}</strong>
-            </div>
-            <dl>
-              <dt>Candidate</dt>
-              <dd>{proposal.candidate_id}</dd>
-              <dt>Prediction</dt>
-              <dd>{scoreLabel(proposal.predicted_score)}</dd>
-              <dt>Uncertainty</dt>
-              <dd>{scoreLabel(proposal.uncertainty)}</dd>
-              <dt>Novelty</dt>
-              <dd>{scoreLabel(proposal.novelty)}</dd>
-              <dt>Improvement</dt>
-              <dd>{scoreLabel(proposal.expected_frontier_improvement)}</dd>
-              <dt>Selector</dt>
-              <dd>{proposal.selector_name ?? 'none'}</dd>
-              <dt>Source Rank</dt>
-              <dd>{proposal.source_candidate_rank ?? 'none'}</dd>
-              <dt>Cost Stratum</dt>
-              <dd>{resourceStratumLabel(proposal)}</dd>
-              <dt>Comparable Score</dt>
-              <dd>{scoreLabel(proposal.comparable_cost_best_score)}</dd>
-              <dt>Matched Model</dt>
-              <dd>{model === undefined ? 'none' : shortDigest(model.architecture_digest)}</dd>
-            </dl>
-            <p>{proposal.rationale}</p>
-            {proposal.command.length === 0 ? null : <code>{proposal.command.join(' ')}</code>}
-          </button>
-        ))}
+        {associations.map(({ model, proposal }) => {
+          const queueItem = queueItems.find((item) => item.proposal_id === proposal.id);
+          return (
+            <button
+              className={`proposal-card ${selectedId === proposal.id ? 'selected' : ''}`}
+              key={proposal.id}
+              onClick={() => onSelect(proposal.id)}
+              type="button"
+            >
+              <div className="proposal-card-heading">
+                <span>Rank {proposal.rank}</span>
+                <strong>{scoreLabel(proposal.acquisition_value)}</strong>
+              </div>
+              <dl>
+                <dt>Candidate</dt>
+                <dd>{proposal.candidate_id}</dd>
+                <dt>Acquisition</dt>
+                <dd>{proposal.acquisition_model ?? 'not recorded'}</dd>
+                <dt>Queue</dt>
+                <dd>{queueItem?.status ?? 'not queued'}</dd>
+                <dt>Prediction</dt>
+                <dd>{scoreLabel(proposal.predicted_score)}</dd>
+                <dt>Uncertainty</dt>
+                <dd>{scoreLabel(proposal.uncertainty)}</dd>
+                <dt>Improvement</dt>
+                <dd>{scoreLabel(proposal.expected_frontier_improvement)}</dd>
+                <dt>Selector</dt>
+                <dd>{proposal.selector_name ?? 'none'}</dd>
+                <dt>Cost Stratum</dt>
+                <dd>{resourceStratumLabel(proposal)}</dd>
+                <dt>Comparable Score</dt>
+                <dd>{scoreLabel(proposal.comparable_cost_best_score)}</dd>
+                <dt>Matched Model</dt>
+                <dd>{model === undefined ? 'none' : shortDigest(model.architecture_digest)}</dd>
+              </dl>
+              <ProposalAcquisitionComponents proposal={proposal} />
+              <p>{proposal.rationale}</p>
+              {proposal.command.length === 0 ? null : (
+                <code className="proposal-card-command">{proposal.command.join(' ')}</code>
+              )}
+            </button>
+          );
+        })}
       </div>
     </section>
   );
+}
+
+function ProposalAcquisitionComponents({ proposal }: { proposal: ProposalRecord }) {
+  const rows = acquisitionComponentRows(proposal);
+  if (rows.length === 0) {
+    return null;
+  }
+  return (
+    <dl className="proposal-acquisition-components">
+      {rows.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{scoreLabel(value)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function acquisitionComponentRows(proposal: ProposalRecord): Array<[string, number]> {
+  const components = proposal.acquisition_components;
+  if (components === undefined) {
+    return [];
+  }
+  return [
+    ['Estimated', componentNumber(components, 'estimated_score')],
+    ['Explore', componentNumber(components, 'exploration_value')],
+    ['Novelty', componentNumber(components, 'resource_novelty')],
+    ['Frontier', componentNumber(components, 'expected_frontier_improvement')],
+    ['Baseline', componentNumber(components, 'comparable_cost_best_score')],
+  ].filter((row): row is [string, number] => row[1] !== undefined);
+}
+
+function componentNumber(components: Record<string, unknown>, key: string): number | undefined {
+  const value = components[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function resourceStratumLabel(proposal: ProposalRecord): string {

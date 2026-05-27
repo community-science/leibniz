@@ -239,6 +239,9 @@ function assertBenchmarkFrontierPlotStructure() {
     'frontier-chart-proposal-guide',
     'frontier-chart-proposal-cap',
     'frontier-chart-tooltip-kicker',
+    'ProposalAcquisitionComponents',
+    'acquisitionComponentRows',
+    'proposal-card-command',
   ];
   for (const marker of requiredDashboardMarkers) {
     if (!dashboard.includes(marker)) {
@@ -268,6 +271,7 @@ function assertBenchmarkFrontierPlotStructure() {
     '--frontier-tooltip-bg',
     '.frontier-chart-legend',
     '.frontier-chart-proposal-guide',
+    '.proposal-acquisition-components',
   ];
   for (const marker of requiredStyleMarkers) {
     if (!styles.includes(marker)) {
