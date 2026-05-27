@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -46,6 +46,24 @@ class _TrainingResult:
     training_run: TrainingRunRecord
 
 
+@dataclass(slots=True)
+class _LearningRateSchedule:
+    scheduler: Any
+    optimizer: Any
+    update_on: str
+
+    def learning_rates(self) -> tuple[float, ...]:
+        return tuple(float(group["lr"]) for group in self.optimizer.param_groups)
+
+    def step_after_optimizer(self) -> None:
+        if self.update_on == "optimizer-step":
+            self.scheduler.step()
+
+    def step_after_validation(self, validation_loss: float) -> None:
+        if self.update_on == "validation-loss":
+            self.scheduler.step(validation_loss)
+
+
 class BenchmarkRunnerError(ValueError):
     """Raised when a local benchmark run cannot be planned or executed."""
 
@@ -62,6 +80,12 @@ class BenchmarkRunPlan:
     seed: int = 101
     train_steps: int = 1
     learning_rate: float = 0.01
+    optimizer: str = "sgd"
+    schedule: str = "none"
+    validation_interval: int = 1
+    convergence_patience: int = 0
+    convergence_min_delta: float = 0.0
+    target_validation_loss: float | None = None
     dry_run: bool = False
 
     def __post_init__(self) -> None:
@@ -75,6 +99,18 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError("train_steps must be a nonnegative integer")
         if self.learning_rate <= 0:
             raise BenchmarkRunnerError("learning_rate must be positive")
+        if self.optimizer not in {"sgd", "adam", "adamw"}:
+            raise BenchmarkRunnerError(f"unsupported optimizer: {self.optimizer}")
+        if self.schedule not in {"none", "cosine", "reduce-on-plateau"}:
+            raise BenchmarkRunnerError(f"unsupported schedule: {self.schedule}")
+        if type(self.validation_interval) is not int or self.validation_interval < 1:
+            raise BenchmarkRunnerError("validation_interval must be a positive integer")
+        if type(self.convergence_patience) is not int or self.convergence_patience < 0:
+            raise BenchmarkRunnerError("convergence_patience must be nonnegative")
+        if self.convergence_min_delta < 0:
+            raise BenchmarkRunnerError("convergence_min_delta must be nonnegative")
+        if self.target_validation_loss is not None and self.target_validation_loss < 0:
+            raise BenchmarkRunnerError("target_validation_loss must be nonnegative")
 
     @property
     def run_slug(self) -> str:
@@ -138,10 +174,19 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
 
     training_result = _train_and_predict(
         architecture=architecture,
-        batch=batch,
+        evaluation_batch=batch,
+        generator=generator,
         outcome_space=outcome_space,
+        scale=plan.scale,
+        sample_count=plan.sample_count,
         train_steps=plan.train_steps,
         learning_rate=float(plan.learning_rate),
+        optimizer_name=plan.optimizer,
+        schedule_name=plan.schedule,
+        validation_interval=plan.validation_interval,
+        convergence_patience=plan.convergence_patience,
+        convergence_min_delta=float(plan.convergence_min_delta),
+        target_validation_loss=plan.target_validation_loss,
         seed=plan.seed,
     )
     measurements = _measurements_for_predictions(
@@ -173,6 +218,11 @@ def run_benchmark(plan: BenchmarkRunPlan) -> BenchmarkRunSummary:
             "seed": plan.seed,
             "train_steps": plan.train_steps,
             "learning_rate": float(plan.learning_rate),
+            "optimizer": plan.optimizer,
+            "schedule": plan.schedule,
+            "validation_interval": plan.validation_interval,
+            "convergence_patience": plan.convergence_patience,
+            "convergence_min_delta": float(plan.convergence_min_delta),
             "training_run": training_result.training_run.to_record(),
             "architecture": model_inspection.architecture.to_record(),
             "cost_summary": model_inspection.cost_summary.to_record(),
@@ -234,87 +284,164 @@ def _validate_architecture_for_batch(
 def _train_and_predict(
     *,
     architecture: ArchitectureManifest,
-    batch: GeneratedObservationBatch,
+    evaluation_batch: GeneratedObservationBatch,
+    generator: ObservationGenerator,
     outcome_space: OutcomeSpace,
+    scale: int,
+    sample_count: int,
     train_steps: int,
     learning_rate: float,
+    optimizer_name: str,
+    schedule_name: str,
+    validation_interval: int,
+    convergence_patience: int,
+    convergence_min_delta: float,
+    target_validation_loss: float | None,
     seed: int,
 ) -> _TrainingResult:
     torch = _torch()
     torch.manual_seed(seed)
     module = ExecutableModelOperator(architecture).torch_module()
-    fields = _batch_tensor(torch=torch, batch=batch)
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    labels = torch.tensor(
-        [outcome_ids.index(sample.outcome_id) for sample in batch.samples],
-        dtype=torch.long,
-    )
     loss_function = torch.nn.CrossEntropyLoss()
-    learning_rates = (float(learning_rate),)
-    validation_history: list[TrainingHistoryPoint] = []
-    initial_loss = _validation_loss(
+    optimizer = _make_optimizer(
+        torch=torch,
+        parameters=module.parameters(),
+        name=optimizer_name,
+        learning_rate=learning_rate,
+    )
+    scheduler = _make_scheduler(
+        torch=torch,
+        optimizer=optimizer,
+        name=schedule_name,
+        max_steps=train_steps,
+        min_delta=convergence_min_delta,
+    )
+
+    def batch_for_seed(batch_seed: int) -> tuple[Any, Any]:
+        generated = generator.sample_batch(
+            scale=scale,
+            sample_count=sample_count,
+            seed=batch_seed,
+        )
+        return _batch_tensors(torch=torch, batch=generated, outcome_ids=outcome_ids)
+
+    validation_history = _train_until_convergence(
         torch=torch,
         module=module,
-        fields=fields,
-        labels=labels,
+        optimizer=optimizer,
+        scheduler=scheduler,
         loss_function=loss_function,
+        train_batch=lambda step: batch_for_seed(seed + step),
+        validation_batch=lambda check: batch_for_seed(seed + 1_000_003 + check),
+        max_steps=train_steps,
+        validation_interval=validation_interval,
+        patience=convergence_patience,
+        min_delta=convergence_min_delta,
+        target_validation_loss=target_validation_loss,
     )
-    validation_history.append(
-        TrainingHistoryPoint(
-            step=0,
-            validation_check=0,
-            validation_loss=initial_loss,
-            best_validation_loss=initial_loss,
-            best_validation_step=0,
-            best_validation_check=0,
-            stale_checks=0,
-            learning_rates=learning_rates,
-        )
+    eval_fields, _eval_labels = _batch_tensors(
+        torch=torch,
+        batch=evaluation_batch,
+        outcome_ids=outcome_ids,
     )
-    if train_steps:
-        optimizer = torch.optim.SGD(module.parameters(), lr=learning_rate)
-        module.train()
-        for _step in range(train_steps):
-            optimizer.zero_grad()
-            loss = loss_function(module(fields), labels)
-            loss.backward()
-            optimizer.step()
-        final_loss = _validation_loss(
-            torch=torch,
-            module=module,
-            fields=fields,
-            labels=labels,
-            loss_function=loss_function,
-        )
-        best_loss = min(initial_loss, final_loss)
-        best_check = 0 if initial_loss <= final_loss else 1
-        best_step = 0 if initial_loss <= final_loss else train_steps
-        validation_history.append(
-            TrainingHistoryPoint(
-                step=train_steps,
-                validation_check=1,
-                validation_loss=final_loss,
-                best_validation_loss=best_loss,
-                best_validation_step=best_step,
-                best_validation_check=best_check,
-                stale_checks=0 if final_loss < initial_loss else 1,
-                learning_rates=learning_rates,
-            )
-        )
     module.eval()
     with torch.no_grad():
-        predictions = torch.softmax(module(fields), dim=1).tolist()
+        predictions = torch.softmax(module(eval_fields), dim=1).tolist()
     training_run = _training_run_record(
         seed=seed,
-        batch_size=len(batch.samples),
+        batch_size=sample_count,
         max_steps=train_steps,
         learning_rate=float(learning_rate),
+        optimizer_name=optimizer_name,
+        schedule_name=schedule_name,
+        validation_interval=validation_interval,
+        convergence_patience=convergence_patience,
+        convergence_min_delta=convergence_min_delta,
         validation_history=tuple(validation_history),
     )
     return _TrainingResult(
         probabilities=tuple(_renormalized_probabilities(row) for row in predictions),
         training_run=training_run,
     )
+
+
+def _train_until_convergence(
+    *,
+    torch: Any,
+    module: Any,
+    optimizer: Any,
+    scheduler: _LearningRateSchedule | None,
+    loss_function: Any,
+    train_batch: Callable[[int], tuple[Any, Any]],
+    validation_batch: Callable[[int], tuple[Any, Any]],
+    max_steps: int,
+    validation_interval: int,
+    patience: int,
+    min_delta: float,
+    target_validation_loss: float | None,
+) -> list[TrainingHistoryPoint]:
+    validation_history: list[TrainingHistoryPoint] = []
+    best_loss = float("inf")
+    best_step = 0
+    best_check = 0
+    stale_checks = 0
+
+    def append_validation(*, step: int, check: int) -> None:
+        nonlocal best_loss, best_step, best_check, stale_checks
+        fields, labels = validation_batch(check)
+        validation_loss = _validation_loss(
+            torch=torch,
+            module=module,
+            fields=fields,
+            labels=labels,
+            loss_function=loss_function,
+        )
+        if validation_loss < best_loss - min_delta:
+            best_loss = validation_loss
+            best_step = step
+            best_check = check
+            stale_checks = 0
+        else:
+            stale_checks += 1
+        if scheduler is not None:
+            scheduler.step_after_validation(validation_loss)
+            learning_rates = scheduler.learning_rates()
+        else:
+            learning_rates = tuple(float(group["lr"]) for group in optimizer.param_groups)
+        validation_history.append(
+            TrainingHistoryPoint(
+                step=step,
+                validation_check=check,
+                validation_loss=validation_loss,
+                best_validation_loss=best_loss,
+                best_validation_step=best_step,
+                best_validation_check=best_check,
+                stale_checks=stale_checks,
+                learning_rates=learning_rates,
+            )
+        )
+
+    append_validation(step=0, check=0)
+    validation_check = 1
+    for step in range(1, max_steps + 1):
+        fields, labels = train_batch(step)
+        module.train()
+        optimizer.zero_grad(set_to_none=True)
+        loss = loss_function(module(fields), labels)
+        loss.backward()
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step_after_optimizer()
+        if step % validation_interval != 0 and step != max_steps:
+            continue
+        append_validation(step=step, check=validation_check)
+        validation_check += 1
+        if target_validation_loss is not None and best_loss <= target_validation_loss:
+            break
+        if patience > 0 and stale_checks >= patience:
+            break
+    return validation_history
 
 
 def _validation_loss(
@@ -340,15 +467,32 @@ def _training_run_record(
     batch_size: int,
     max_steps: int,
     learning_rate: float,
+    optimizer_name: str,
+    schedule_name: str,
+    validation_interval: int,
+    convergence_patience: int,
+    convergence_min_delta: float,
     validation_history: tuple[TrainingHistoryPoint, ...],
 ) -> TrainingRunRecord:
     best = validation_history[-1]
-    stop_reason = "max-steps" if max_steps else "no-training-steps"
-    status = "budget-exhausted" if max_steps else "completed"
+    last_step = validation_history[-1].step
+    last_stale_checks = validation_history[-1].stale_checks
+    if max_steps == 0:
+        stop_reason = "no-training-steps"
+        status = "completed"
+    elif convergence_patience > 0 and last_stale_checks >= convergence_patience:
+        stop_reason = "validation-plateau"
+        status = "converged"
+    elif last_step < max_steps:
+        stop_reason = "target-validation-loss"
+        status = "converged"
+    else:
+        stop_reason = "max-steps"
+        status = "budget-exhausted"
     return TrainingRunRecord(
         status=status,
         stop_reason=stop_reason,
-        steps_run=max_steps,
+        steps_run=last_step,
         validation_checks=len(validation_history),
         best_validation_loss=best.best_validation_loss,
         best_validation_step=best.best_validation_step,
@@ -356,19 +500,83 @@ def _training_run_record(
         protocol=TrainingProtocol(
             kind="fixed-step-local-batch",
             objective="cross-entropy",
-            optimizer="sgd",
+            optimizer=cast(Any, optimizer_name),
             learning_rate=learning_rate,
-            schedule="none",
+            schedule=cast(Any, schedule_name),
             seed=seed,
             batch_size=batch_size,
             max_steps=max_steps,
-            validation_interval=max(1, max_steps),
+            validation_interval=validation_interval,
             validation_sample_count=batch_size,
-            min_delta=0.0,
-            patience=0,
-            validation_source="training-batch",
+            min_delta=convergence_min_delta,
+            patience=convergence_patience,
+            validation_source="generator-resample",
         ),
         validation_history=validation_history,
+    )
+
+
+def _make_optimizer(
+    *,
+    torch: Any,
+    parameters: Any,
+    name: str,
+    learning_rate: float,
+) -> Any:
+    if name == "sgd":
+        return torch.optim.SGD(parameters, lr=learning_rate)
+    if name == "adam":
+        return torch.optim.Adam(parameters, lr=learning_rate)
+    if name == "adamw":
+        return torch.optim.AdamW(parameters, lr=learning_rate)
+    raise BenchmarkRunnerError(f"unsupported optimizer: {name}")
+
+
+def _make_scheduler(
+    *,
+    torch: Any,
+    optimizer: Any,
+    name: str,
+    max_steps: int,
+    min_delta: float,
+) -> _LearningRateSchedule | None:
+    if name == "none":
+        return None
+    if name == "cosine":
+        return _LearningRateSchedule(
+            scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=max(1, max_steps),
+            ),
+            optimizer=optimizer,
+            update_on="optimizer-step",
+        )
+    if name == "reduce-on-plateau":
+        return _LearningRateSchedule(
+            scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="min",
+                threshold=min_delta,
+                threshold_mode="abs",
+            ),
+            optimizer=optimizer,
+            update_on="validation-loss",
+        )
+    raise BenchmarkRunnerError(f"unsupported schedule: {name}")
+
+
+def _batch_tensors(
+    *,
+    torch: Any,
+    batch: GeneratedObservationBatch,
+    outcome_ids: tuple[str, ...],
+) -> tuple[Any, Any]:
+    return (
+        _batch_tensor(torch=torch, batch=batch),
+        torch.tensor(
+            [outcome_ids.index(sample.outcome_id) for sample in batch.samples],
+            dtype=torch.long,
+        ),
     )
 
 

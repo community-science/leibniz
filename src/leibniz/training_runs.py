@@ -193,8 +193,8 @@ class TrainingHistoryPoint:
         _require_nonnegative_int(self.best_validation_check, "best_validation_check")
         _require_nonnegative_int(self.stale_checks, "stale_checks")
         for rate in self.learning_rates:
-            if not _is_positive_finite(rate):
-                raise TrainingRunValidationError("learning_rates must be positive and finite")
+            if not math.isfinite(float(rate)) or rate < 0:
+                raise TrainingRunValidationError("learning_rates must be nonnegative and finite")
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> TrainingHistoryPoint:

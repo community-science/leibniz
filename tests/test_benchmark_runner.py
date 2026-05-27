@@ -88,6 +88,45 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_run.validation_history[-1].step == 1
 
 
+def test_digits_benchmark_runner_records_convergence_protocol_controls(
+    tmp_path: Path,
+) -> None:
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            runs_root=tmp_path / ".runs",
+            sample_count=2,
+            seed=101,
+            train_steps=3,
+            learning_rate=0.005,
+            optimizer="adam",
+            schedule="cosine",
+            validation_interval=2,
+            convergence_patience=2,
+            convergence_min_delta=0.001,
+        )
+    )
+
+    training_summary = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    training_run = TrainingRunRecord.from_record(
+        cast(Mapping[str, object], training_summary["training_run"])
+    )
+
+    assert training_run.protocol.optimizer == "adam"
+    assert training_run.protocol.schedule == "cosine"
+    assert training_run.protocol.learning_rate == 0.005
+    assert training_run.protocol.validation_interval == 2
+    assert training_run.protocol.patience == 2
+    assert training_run.protocol.min_delta == 0.001
+    assert training_run.protocol.validation_source == "generator-resample"
+    assert [point.step for point in training_run.validation_history] == [0, 2, 3]
+    assert training_run.validation_history[-1].learning_rates
+
+
 def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: Path) -> None:
     run_benchmark(
         BenchmarkRunPlan(

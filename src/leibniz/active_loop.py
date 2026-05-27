@@ -42,6 +42,12 @@ class ActiveTrainingLoopPlan:
     seed: int = 101
     train_steps: int = 1
     learning_rate: float = 0.01
+    optimizer: str = "sgd"
+    schedule: str = "none"
+    validation_interval: int = 1
+    convergence_patience: int = 0
+    convergence_min_delta: float = 0.0
+    target_validation_loss: float | None = None
     dry_run: bool = False
 
     def __post_init__(self) -> None:
@@ -59,6 +65,18 @@ class ActiveTrainingLoopPlan:
             raise ActiveTrainingLoopError("train_steps must be nonnegative")
         if self.learning_rate <= 0:
             raise ActiveTrainingLoopError("learning_rate must be positive")
+        if self.optimizer not in {"sgd", "adam", "adamw"}:
+            raise ActiveTrainingLoopError(f"unsupported optimizer: {self.optimizer}")
+        if self.schedule not in {"none", "cosine", "reduce-on-plateau"}:
+            raise ActiveTrainingLoopError(f"unsupported schedule: {self.schedule}")
+        if type(self.validation_interval) is not int or self.validation_interval < 1:
+            raise ActiveTrainingLoopError("validation_interval must be positive")
+        if type(self.convergence_patience) is not int or self.convergence_patience < 0:
+            raise ActiveTrainingLoopError("convergence_patience must be nonnegative")
+        if self.convergence_min_delta < 0:
+            raise ActiveTrainingLoopError("convergence_min_delta must be nonnegative")
+        if self.target_validation_loss is not None and self.target_validation_loss < 0:
+            raise ActiveTrainingLoopError("target_validation_loss must be nonnegative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +130,12 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                 seed=iteration_seed,
                 train_steps=plan.train_steps,
                 learning_rate=plan.learning_rate,
+                optimizer=plan.optimizer,
+                schedule=plan.schedule,
+                validation_interval=plan.validation_interval,
+                convergence_patience=plan.convergence_patience,
+                convergence_min_delta=plan.convergence_min_delta,
+                target_validation_loss=plan.target_validation_loss,
             )
         )
         benchmark_id = proposal_summary.benchmark_id
@@ -133,6 +157,12 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                 seed=iteration_seed,
                 train_steps=plan.train_steps,
                 learning_rate=plan.learning_rate,
+                optimizer=plan.optimizer,
+                schedule=plan.schedule,
+                validation_interval=plan.validation_interval,
+                convergence_patience=plan.convergence_patience,
+                convergence_min_delta=plan.convergence_min_delta,
+                target_validation_loss=plan.target_validation_loss,
             )
         )
         benchmark_summaries.append(benchmark_summary)

@@ -63,6 +63,12 @@ class ProposalGenerationPlan:
     seed: int = 101
     train_steps: int = 1
     learning_rate: float = 0.01
+    optimizer: str = "sgd"
+    schedule: str = "none"
+    validation_interval: int = 1
+    convergence_patience: int = 0
+    convergence_min_delta: float = 0.0
+    target_validation_loss: float | None = None
 
     def __post_init__(self) -> None:
         if type(self.scale) is not int or self.scale < 1:
@@ -77,6 +83,18 @@ class ProposalGenerationPlan:
             raise ProposalGenerationError("train_steps must be nonnegative")
         if self.learning_rate <= 0:
             raise ProposalGenerationError("learning_rate must be positive")
+        if self.optimizer not in {"sgd", "adam", "adamw"}:
+            raise ProposalGenerationError(f"unsupported optimizer: {self.optimizer}")
+        if self.schedule not in {"none", "cosine", "reduce-on-plateau"}:
+            raise ProposalGenerationError(f"unsupported schedule: {self.schedule}")
+        if type(self.validation_interval) is not int or self.validation_interval < 1:
+            raise ProposalGenerationError("validation_interval must be positive")
+        if type(self.convergence_patience) is not int or self.convergence_patience < 0:
+            raise ProposalGenerationError("convergence_patience must be nonnegative")
+        if self.convergence_min_delta < 0:
+            raise ProposalGenerationError("convergence_min_delta must be nonnegative")
+        if self.target_validation_loss is not None and self.target_validation_loss < 0:
+            raise ProposalGenerationError("target_validation_loss must be nonnegative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +233,24 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                     str(plan.train_steps),
                     "--learning-rate",
                     str(float(plan.learning_rate)),
+                    "--optimizer",
+                    plan.optimizer,
+                    "--schedule",
+                    plan.schedule,
+                    "--validation-interval",
+                    str(plan.validation_interval),
+                    "--convergence-patience",
+                    str(plan.convergence_patience),
+                    "--convergence-min-delta",
+                    str(float(plan.convergence_min_delta)),
+                    *(
+                        ()
+                        if plan.target_validation_loss is None
+                        else (
+                            "--target-validation-loss",
+                            str(float(plan.target_validation_loss)),
+                        )
+                    ),
                 ),
             )
         )
