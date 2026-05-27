@@ -497,7 +497,11 @@ function ProposalCards({
       <h3>Proposals</h3>
       <div className="proposal-card-grid">
         {associations.map(({ model, proposal }) => {
-          const queueItem = queueItems.find((item) => item.proposal_id === proposal.id);
+          const queueItem = queueItems.find(
+            (item) =>
+              item.proposal_id === proposal.id &&
+              (item.candidate_id === undefined || item.candidate_id === proposal.candidate_id),
+          );
           return (
             <button
               className={`proposal-card ${selectedId === proposal.id ? 'selected' : ''}`}

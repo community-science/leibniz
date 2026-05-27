@@ -801,6 +801,8 @@ def _validate_work_queue_item(record: Mapping[str, object]) -> None:
     _as_string(record.get("id"), "queue_items.id")
     _as_string(record.get("benchmark_id"), "queue_items.benchmark_id")
     _as_string(record.get("proposal_id"), "queue_items.proposal_id")
+    if "candidate_id" in record:
+        _as_string(record.get("candidate_id"), "queue_items.candidate_id")
     _as_string(record.get("proposal_set_path"), "queue_items.proposal_set_path")
     command = _as_sequence(record.get("command"), "queue_items.command")
     if not all(isinstance(argument, str) and argument for argument in command):

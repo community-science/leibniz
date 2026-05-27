@@ -17,6 +17,7 @@ def test_work_queue_items_round_trip_and_materialize_console_view(tmp_path: Path
         id="iteration-1-rank-1",
         benchmark_id=ProtocolIdentifier.parse("benchmarks.example@0.1.0"),
         proposal_id="proposal-1",
+        candidate_id="architecture.example@0.1.0",
         proposal_set_path=runs_root / "proposals" / "proposal-set.json",
         command=("leibniz", "benchmark", "run"),
         status="pending",
@@ -36,3 +37,4 @@ def test_work_queue_items_round_trip_and_materialize_console_view(tmp_path: Path
     assert view["format"] == "leibniz.console.work-queue"
     queue_items = cast(list[dict[str, object]], view["queue_items"])
     assert queue_items == [item.to_record()]
+    assert queue_items[0]["candidate_id"] == "architecture.example@0.1.0"
