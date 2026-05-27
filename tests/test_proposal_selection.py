@@ -1,6 +1,6 @@
 from leibniz.acquisition import score_candidate_acquisition
 from leibniz.architecture_candidates import (
-    default_architecture_candidate_space,
+    default_architecture_search_distribution,
     generate_architecture_candidates,
 )
 from leibniz.candidate_observations import (
@@ -46,7 +46,7 @@ def test_proposal_selection_does_not_balance_operator_categories() -> None:
 
 def _observations() -> tuple[ArchitectureCandidateObservation, ...]:
     candidates = generate_architecture_candidates(
-        default_architecture_candidate_space(),
+        default_architecture_search_distribution(),
         input_shape=(1, 8, 8),
         output_count=3,
     )[:6]

@@ -1,81 +1,74 @@
-"""Generic architecture candidate spaces for local proposal workflows."""
+"""Generic architecture candidate distributions for local proposal workflows."""
 
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
 from leibniz.architectures import ArchitectureManifest
 from leibniz.model_operators import (
     ModelOperatorPlan,
-    formal_image_classifier_architecture,
+    ModelOperatorSearchPoint,
+    materialize_model_operator_search_point,
     summarize_architecture_operators,
 )
 
 __all__ = [
     "ArchitectureCandidate",
-    "ArchitectureCandidateRecipe",
-    "ArchitectureCandidateSpace",
-    "ArchitectureCandidateSpaceValidationError",
-    "default_architecture_candidate_space",
+    "ArchitectureSearchDistribution",
+    "ArchitectureSearchDistributionValidationError",
+    "default_architecture_search_distribution",
     "generate_architecture_candidates",
     "sample_architecture_candidates",
 ]
 
-_RecipeKind = Literal["local-aggregation-readout"]
 _SizeMaximumKind = Literal["minimum-trailing-input-axis"]
-_local_aggregation_readout: _RecipeKind = "local-aggregation-readout"
 _minimum_trailing_input_axis: _SizeMaximumKind = "minimum-trailing-input-axis"
 
 
-class ArchitectureCandidateSpaceValidationError(ValueError):
-    """Raised when an architecture candidate space is invalid."""
+class ArchitectureSearchDistributionValidationError(ValueError):
+    """Raised when an architecture search distribution is invalid."""
 
 
 @dataclass(frozen=True, slots=True)
-class ArchitectureCandidateRecipe:
-    """One formal construction recipe within an architecture candidate space."""
+class ArchitectureSearchDistribution:
+    """Source-defined semantic search coordinates and resource bounds."""
 
-    kind: _RecipeKind
-    local_aggregation_dimension: int
-    local_aggregation_size_minimum: int
-    local_aggregation_size_maximum: int | None = None
-    local_aggregation_size_maximum_from: _SizeMaximumKind | None = None
+    local_support_dimension: int
+    local_support_size_minimum: int
+    local_support_size_maximum: int | None = None
+    local_support_size_maximum_from: _SizeMaximumKind | None = None
     parameter_count_minimum: int | None = None
     parameter_count_maximum: int | None = None
 
     def __post_init__(self) -> None:
-        if self.kind != _local_aggregation_readout:
-            raise ArchitectureCandidateSpaceValidationError(
-                f"unsupported candidate recipe: {self.kind}"
+        if type(self.local_support_dimension) is not int or self.local_support_dimension < 1:
+            raise ArchitectureSearchDistributionValidationError(
+                "local_support_dimension must be positive"
             )
-        if type(self.local_aggregation_dimension) is not int or (
-            self.local_aggregation_dimension < 1
+        if (
+            type(self.local_support_size_minimum) is not int
+            or self.local_support_size_minimum < 1
         ):
-            raise ArchitectureCandidateSpaceValidationError(
-                "local_aggregation_dimension must be positive"
+            raise ArchitectureSearchDistributionValidationError(
+                "local_support_size.minimum must be positive"
             )
-        if type(self.local_aggregation_size_minimum) is not int or (
-            self.local_aggregation_size_minimum < 1
-        ):
-            raise ArchitectureCandidateSpaceValidationError(
-                "local_aggregation_size.minimum must be positive"
-            )
-        if self.local_aggregation_size_maximum is None:
-            if self.local_aggregation_size_maximum_from != _minimum_trailing_input_axis:
-                raise ArchitectureCandidateSpaceValidationError(
-                    "local_aggregation_size must declare maximum or maximum_from"
+        if self.local_support_size_maximum is None:
+            if self.local_support_size_maximum_from != _minimum_trailing_input_axis:
+                raise ArchitectureSearchDistributionValidationError(
+                    "local_support_size must declare maximum or maximum_from"
                 )
-        elif self.local_aggregation_size_maximum < self.local_aggregation_size_minimum:
-            raise ArchitectureCandidateSpaceValidationError(
-                "local_aggregation_size.maximum must be at least minimum"
+        elif self.local_support_size_maximum < self.local_support_size_minimum:
+            raise ArchitectureSearchDistributionValidationError(
+                "local_support_size.maximum must be at least minimum"
             )
-        if self.local_aggregation_size_maximum_from is not None and (
-            self.local_aggregation_size_maximum_from != _minimum_trailing_input_axis
+        if self.local_support_size_maximum_from is not None and (
+            self.local_support_size_maximum_from != _minimum_trailing_input_axis
         ):
-            raise ArchitectureCandidateSpaceValidationError(
-                "unsupported local_aggregation_size.maximum_from"
+            raise ArchitectureSearchDistributionValidationError(
+                "unsupported local_support_size.maximum_from"
             )
         _require_optional_count(
             self.parameter_count_minimum,
@@ -90,29 +83,35 @@ class ArchitectureCandidateRecipe:
             and self.parameter_count_maximum is not None
             and self.parameter_count_maximum < self.parameter_count_minimum
         ):
-            raise ArchitectureCandidateSpaceValidationError(
+            raise ArchitectureSearchDistributionValidationError(
                 "parameter_count.maximum must be at least minimum"
             )
 
-    def local_aggregation_sizes(self, input_shape: tuple[int, ...]) -> tuple[int, ...]:
-        """Resolve the declared local aggregation size range for an input shape."""
+    def search_points(self, input_shape: tuple[int, ...]) -> tuple[ModelOperatorSearchPoint, ...]:
+        """Resolve the bounded semantic search coordinates for an input shape."""
 
-        minimum, maximum = self.local_aggregation_size_bounds(input_shape)
+        minimum, maximum = self.local_support_size_bounds(input_shape)
         if maximum < minimum:
             return ()
-        return tuple(range(minimum, maximum + 1))
+        return tuple(
+            ModelOperatorSearchPoint(
+                local_support_dimension=self.local_support_dimension,
+                local_support_size=size,
+            )
+            for size in range(minimum, maximum + 1)
+        )
 
-    def local_aggregation_size_bounds(self, input_shape: tuple[int, ...]) -> tuple[int, int]:
-        """Resolve inclusive local aggregation size bounds without enumerating them."""
+    def local_support_size_bounds(self, input_shape: tuple[int, ...]) -> tuple[int, int]:
+        """Resolve inclusive local support size bounds without enumerating them."""
 
-        if self.local_aggregation_size_maximum is None:
+        if self.local_support_size_maximum is None:
             maximum = self._resolved_size_maximum(input_shape)
         else:
-            maximum = self.local_aggregation_size_maximum
-        return self.local_aggregation_size_minimum, maximum
+            maximum = self.local_support_size_maximum
+        return self.local_support_size_minimum, maximum
 
     def includes_plan(self, plan: ModelOperatorPlan) -> bool:
-        """Return whether a summarized architecture satisfies this recipe's cost bounds."""
+        """Return whether a summarized architecture satisfies resource bounds."""
 
         parameter_count = plan.parameter_count
         if parameter_count is None:
@@ -128,24 +127,11 @@ class ArchitectureCandidateRecipe:
         )
 
     def _resolved_size_maximum(self, input_shape: tuple[int, ...]) -> int:
-        if len(input_shape) < self.local_aggregation_dimension:
-            raise ArchitectureCandidateSpaceValidationError(
-                "input_shape rank is smaller than local aggregation dimension"
+        if len(input_shape) < self.local_support_dimension:
+            raise ArchitectureSearchDistributionValidationError(
+                "input_shape rank is smaller than local support dimension"
             )
-        return min(input_shape[-self.local_aggregation_dimension :])
-
-
-@dataclass(frozen=True, slots=True)
-class ArchitectureCandidateSpace:
-    """A source-defined architecture candidate-space declaration."""
-
-    recipes: tuple[ArchitectureCandidateRecipe, ...]
-
-    def __post_init__(self) -> None:
-        if not self.recipes:
-            raise ArchitectureCandidateSpaceValidationError(
-                "candidate space must contain at least one recipe"
-            )
+        return min(input_shape[-self.local_support_dimension :])
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +145,7 @@ class ArchitectureCandidate:
     def __post_init__(self) -> None:
         names = tuple(name for name, _value in self.parameters)
         if len(set(names)) != len(names):
-            raise ArchitectureCandidateSpaceValidationError(
+            raise ArchitectureSearchDistributionValidationError(
                 "candidate parameters must not repeat names"
             )
 
@@ -167,7 +153,7 @@ class ArchitectureCandidate:
     def parameter_count(self) -> int:
         parameter_count = self.operator_plan.parameter_count
         if parameter_count is None:
-            raise ArchitectureCandidateSpaceValidationError(
+            raise ArchitectureSearchDistributionValidationError(
                 "candidate operator plan must have known parameter_count"
             )
         return parameter_count
@@ -176,135 +162,55 @@ class ArchitectureCandidate:
         for key, value in self.parameters:
             if key == name:
                 return value
-        raise ArchitectureCandidateSpaceValidationError(
+        raise ArchitectureSearchDistributionValidationError(
             f"candidate does not include parameter: {name}"
         )
 
 
-def default_architecture_candidate_space() -> ArchitectureCandidateSpace:
-    """Return the generic formal-operator candidate space used by local proposals."""
+def default_architecture_search_distribution() -> ArchitectureSearchDistribution:
+    """Return the generic formal-operator search distribution for local proposals."""
 
-    return ArchitectureCandidateSpace(
-        recipes=(
-            ArchitectureCandidateRecipe(
-                kind=_local_aggregation_readout,
-                local_aggregation_dimension=2,
-                local_aggregation_size_minimum=1,
-                local_aggregation_size_maximum_from=_minimum_trailing_input_axis,
-            ),
-        )
+    return ArchitectureSearchDistribution(
+        local_support_dimension=2,
+        local_support_size_minimum=1,
+        local_support_size_maximum_from=_minimum_trailing_input_axis,
     )
 
 
 def generate_architecture_candidates(
-    space: ArchitectureCandidateSpace,
+    distribution: ArchitectureSearchDistribution,
     *,
     input_shape: tuple[int, ...],
     output_count: int,
 ) -> tuple[ArchitectureCandidate, ...]:
-    """Expand a declared candidate space into concrete architecture manifests."""
+    """Expand a search distribution into concrete architecture manifests."""
 
-    candidates: list[ArchitectureCandidate] = []
-    seen: set[object] = set()
-    for recipe in space.recipes:
-        candidates.extend(
-            _recipe_candidates(
-                recipe,
-                input_shape=input_shape,
-                output_count=output_count,
-            )
+    return _deduplicate_and_sort(
+        _candidate_from_point(
+            point,
+            distribution=distribution,
+            input_shape=input_shape,
+            output_count=output_count,
         )
-    deduplicated: list[ArchitectureCandidate] = []
-    for candidate in candidates:
-        if candidate.architecture.digest in seen:
-            continue
-        seen.add(candidate.architecture.digest)
-        deduplicated.append(candidate)
-    return tuple(sorted(deduplicated, key=_candidate_sort_key))
+        for point in distribution.search_points(input_shape)
+    )
 
 
 def sample_architecture_candidates(
-    space: ArchitectureCandidateSpace,
+    distribution: ArchitectureSearchDistribution,
     *,
     input_shape: tuple[int, ...],
     output_count: int,
     sample_count: int,
     seed: int = 0,
 ) -> tuple[ArchitectureCandidate, ...]:
-    """Draw a deterministic bounded sample from a candidate space."""
+    """Draw a deterministic bounded sample from a search distribution."""
 
     if type(sample_count) is not int or sample_count < 1:
-        raise ArchitectureCandidateSpaceValidationError("sample_count must be positive")
+        raise ArchitectureSearchDistributionValidationError("sample_count must be positive")
     if type(seed) is not int or seed < 0:
-        raise ArchitectureCandidateSpaceValidationError("seed must be nonnegative")
-    candidates: list[ArchitectureCandidate] = []
-    per_recipe = max(1, -(-sample_count // len(space.recipes)))
-    for recipe_index, recipe in enumerate(space.recipes):
-        candidates.extend(
-            _sample_recipe_candidates(
-                recipe,
-                input_shape=input_shape,
-                output_count=output_count,
-                sample_count=per_recipe,
-                seed=seed + recipe_index,
-            )
-        )
-    deduplicated: list[ArchitectureCandidate] = []
-    seen: set[object] = set()
-    for candidate in sorted(candidates, key=_candidate_sort_key):
-        if candidate.architecture.digest in seen:
-            continue
-        seen.add(candidate.architecture.digest)
-        deduplicated.append(candidate)
-        if len(deduplicated) == sample_count:
-            break
-    return tuple(deduplicated)
-
-
-def _recipe_candidates(
-    recipe: ArchitectureCandidateRecipe,
-    *,
-    input_shape: tuple[int, ...],
-    output_count: int,
-) -> tuple[ArchitectureCandidate, ...]:
-    if recipe.kind != _local_aggregation_readout:
-        raise ArchitectureCandidateSpaceValidationError(
-            f"unsupported candidate recipe: {recipe.kind}"
-        )
-    candidates: list[ArchitectureCandidate] = []
-    for size in recipe.local_aggregation_sizes(input_shape):
-        architecture = formal_image_classifier_architecture(
-            input_shape=input_shape,
-            output_count=output_count,
-            local_aggregation_size=size,
-            local_aggregation_dimension=recipe.local_aggregation_dimension,
-        )
-        plan = summarize_architecture_operators(architecture)
-        if not recipe.includes_plan(plan):
-            continue
-        candidates.append(
-            ArchitectureCandidate(
-                architecture=architecture,
-                operator_plan=plan,
-                parameters=(("local_aggregation_size", size),),
-            )
-        )
-    return tuple(candidates)
-
-
-def _sample_recipe_candidates(
-    recipe: ArchitectureCandidateRecipe,
-    *,
-    input_shape: tuple[int, ...],
-    output_count: int,
-    sample_count: int,
-    seed: int,
-) -> tuple[ArchitectureCandidate, ...]:
-    if recipe.kind != _local_aggregation_readout:
-        raise ArchitectureCandidateSpaceValidationError(
-            f"unsupported candidate recipe: {recipe.kind}"
-        )
-    minimum, maximum = recipe.local_aggregation_size_bounds(input_shape)
+        raise ArchitectureSearchDistributionValidationError("seed must be nonnegative")
+    minimum, maximum = distribution.local_support_size_bounds(input_shape)
     if maximum < minimum:
         return ()
     span = maximum - minimum + 1
@@ -312,31 +218,61 @@ def _sample_recipe_candidates(
         sizes = range(minimum, maximum + 1)
     else:
         sizes = sorted(random.Random(seed).sample(range(minimum, maximum + 1), sample_count))
-    candidates: list[ArchitectureCandidate] = []
-    for size in sizes:
-        architecture = formal_image_classifier_architecture(
+    return _deduplicate_and_sort(
+        _candidate_from_point(
+            ModelOperatorSearchPoint(
+                local_support_dimension=distribution.local_support_dimension,
+                local_support_size=size,
+            ),
+            distribution=distribution,
             input_shape=input_shape,
             output_count=output_count,
-            local_aggregation_size=size,
-            local_aggregation_dimension=recipe.local_aggregation_dimension,
         )
-        plan = summarize_architecture_operators(architecture)
-        if not recipe.includes_plan(plan):
+        for size in sizes
+    )[:sample_count]
+
+
+def _candidate_from_point(
+    point: ModelOperatorSearchPoint,
+    *,
+    distribution: ArchitectureSearchDistribution,
+    input_shape: tuple[int, ...],
+    output_count: int,
+) -> ArchitectureCandidate | None:
+    architecture = materialize_model_operator_search_point(
+        input_shape=input_shape,
+        output_count=output_count,
+        point=point,
+    )
+    plan = summarize_architecture_operators(architecture)
+    if not distribution.includes_plan(plan):
+        return None
+    return ArchitectureCandidate(
+        architecture=architecture,
+        operator_plan=plan,
+        parameters=point.to_parameters(),
+    )
+
+
+def _deduplicate_and_sort(
+    candidates: Iterable[ArchitectureCandidate | None],
+) -> tuple[ArchitectureCandidate, ...]:
+    deduplicated: list[ArchitectureCandidate] = []
+    seen: set[object] = set()
+    for candidate in candidates:
+        if candidate is None:
             continue
-        candidates.append(
-            ArchitectureCandidate(
-                architecture=architecture,
-                operator_plan=plan,
-                parameters=(("local_aggregation_size", size),),
-            )
-        )
-    return tuple(candidates)
+        if candidate.architecture.digest in seen:
+            continue
+        seen.add(candidate.architecture.digest)
+        deduplicated.append(candidate)
+    return tuple(sorted(deduplicated, key=_candidate_sort_key))
 
 
 def _candidate_sort_key(candidate: ArchitectureCandidate) -> tuple[int, int, str]:
     return (
         candidate.parameter_count,
-        candidate.parameter("local_aggregation_size"),
+        candidate.parameter("local_support_size"),
         str(candidate.architecture.id),
     )
 
@@ -345,4 +281,4 @@ def _require_optional_count(value: int | None, *, field: str) -> None:
     if value is None:
         return
     if type(value) is not int or value < 0:
-        raise ArchitectureCandidateSpaceValidationError(f"{field} must be nonnegative")
+        raise ArchitectureSearchDistributionValidationError(f"{field} must be nonnegative")

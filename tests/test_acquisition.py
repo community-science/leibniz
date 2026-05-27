@@ -7,7 +7,7 @@ from leibniz.acquisition import (
     score_candidate_acquisition,
 )
 from leibniz.architecture_candidates import (
-    default_architecture_candidate_space,
+    default_architecture_search_distribution,
     generate_architecture_candidates,
 )
 from leibniz.candidate_observations import (
@@ -73,7 +73,7 @@ def _observations(
     measured: tuple[ArchitectureMeasurementEvidence, ...] = (),
 ):
     candidates = generate_architecture_candidates(
-        default_architecture_candidate_space(),
+        default_architecture_search_distribution(),
         input_shape=(1, 4, 4),
         output_count=3,
     )

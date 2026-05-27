@@ -15,8 +15,9 @@ __all__ = [
     "ModelOperatorDescriptor",
     "ModelOperatorExecutionError",
     "ModelOperatorPlan",
+    "ModelOperatorSearchPoint",
     "ModelOperatorSummary",
-    "formal_image_classifier_architecture",
+    "materialize_model_operator_search_point",
     "summarize_architecture_operators",
 ]
 
@@ -211,6 +212,26 @@ class ModelOperatorPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelOperatorSearchPoint:
+    """Semantic coordinates for materializing an executable operator manifest."""
+
+    local_support_dimension: int
+    local_support_size: int
+
+    def __post_init__(self) -> None:
+        if type(self.local_support_dimension) is not int or self.local_support_dimension < 1:
+            raise ModelOperatorExecutionError("local_support_dimension must be positive")
+        if type(self.local_support_size) is not int or self.local_support_size < 1:
+            raise ModelOperatorExecutionError("local_support_size must be positive")
+
+    def to_parameters(self) -> tuple[tuple[str, int], ...]:
+        return (
+            ("local_support_dimension", self.local_support_dimension),
+            ("local_support_size", self.local_support_size),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutableModelOperator:
     """Tiny PyTorch module wrapper for a manifest-backed operator plan."""
 
@@ -297,27 +318,22 @@ def summarize_architecture_operators(
     )
 
 
-def formal_image_classifier_architecture(
+def materialize_model_operator_search_point(
     *,
     input_shape: tuple[int, ...],
     output_count: int,
-    local_aggregation_size: int,
-    local_aggregation_dimension: int = 2,
+    point: ModelOperatorSearchPoint,
 ) -> ArchitectureManifest:
-    """Build a manifest for the first formal image-classifier specialization."""
+    """Materialize semantic search coordinates through supported operator aliases."""
 
     _require_optional_shape(input_shape, field="input_shape")
     if type(output_count) is not int or output_count < 2:
         raise ModelOperatorExecutionError("output_count must be an integer at least 2")
-    if type(local_aggregation_size) is not int or local_aggregation_size < 1:
-        raise ModelOperatorExecutionError("local_aggregation_size must be positive")
-    if type(local_aggregation_dimension) is not int or local_aggregation_dimension < 1:
-        raise ModelOperatorExecutionError("local_aggregation_dimension must be positive")
     if len(input_shape) < 3:
-        raise ModelOperatorExecutionError("image classifier input_shape must have rank at least 3")
-    if local_aggregation_dimension >= len(input_shape) + 1:
+        raise ModelOperatorExecutionError("input_shape must have rank at least 3")
+    if point.local_support_dimension >= len(input_shape) + 1:
         raise ModelOperatorExecutionError(
-            "local_aggregation_dimension must not exceed input rank"
+            "local_support_dimension must not exceed input rank"
         )
     return ArchitectureManifest.from_record(
         {
@@ -327,8 +343,8 @@ def formal_image_classifier_architecture(
                 {
                     "kind": _layer_operator_specializations[0].alias,
                     "parameters": {
-                        "dimension": local_aggregation_dimension,
-                        "size": local_aggregation_size,
+                        "dimension": point.local_support_dimension,
+                        "size": point.local_support_size,
                     },
                 },
                 {

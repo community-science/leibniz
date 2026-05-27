@@ -9,7 +9,7 @@ from pathlib import Path
 from leibniz.acquisition import score_candidate_acquisition
 from leibniz.architecture_candidates import (
     ArchitectureCandidate,
-    default_architecture_candidate_space,
+    default_architecture_search_distribution,
     sample_architecture_candidates,
 )
 from leibniz.architectures import ArchitectureManifest
@@ -175,11 +175,11 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
     sample = generator.sample_batch(scale=plan.scale, sample_count=1, seed=plan.seed).samples[0]
     dataset = _measurement_dataset(plan.runs_root, benchmark_id=manifest.id)
     measured = _measured_architectures(plan.runs_root, benchmark_id=manifest.id)
-    candidate_space = default_architecture_candidate_space()
+    search_distribution = default_architecture_search_distribution()
     candidate_observations = project_architecture_candidate_observations(
         tuple(
             sample_architecture_candidates(
-                candidate_space,
+                search_distribution,
                 input_shape=sample.field.shape,
                 output_count=len(outcome_space.outcomes),
                 sample_count=plan.candidate_sample_count,
