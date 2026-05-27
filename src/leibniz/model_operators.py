@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from leibniz.architectures import ArchitectureLayer, ArchitectureManifest
+from leibniz.operator_semantics import ModelOperatorSemantic, model_operator_semantic_registry
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
@@ -41,9 +42,10 @@ _ProgramEffectKind = Literal[
     "repeat",
     "route",
 ]
-_operator_local_aggregation = "local-aggregation"
-_operator_rank_collapse = "rank-collapse"
-_operator_affine_readout = "affine-readout"
+_operator_registry = model_operator_semantic_registry()
+_operator_local_aggregation = _operator_registry.operators[0].kind
+_operator_rank_collapse = _operator_registry.operators[1].kind
+_operator_affine_readout = _operator_registry.operators[2].kind
 _program_effect_kinds = frozenset(
     ("branch", "identity-path", "merge", "parameter-sharing", "repeat", "route")
 )
@@ -328,72 +330,6 @@ class ModelProgramEffectPlan:
 
 
 @dataclass(frozen=True, slots=True)
-class _LayerOperatorSpecialization:
-    alias: str
-    display_name: str
-    descriptor: ModelOperatorDescriptor
-    parameter_roles: tuple[tuple[str, str, str], ...] = ()
-
-
-_layer_operator_specializations = (
-    _LayerOperatorSpecialization(
-        alias="adaptive-pooling",
-        display_name="Local aggregation",
-        descriptor=ModelOperatorDescriptor(
-            kind=_operator_local_aggregation,
-            tensor_relation="aggregation",
-            state="fixed",
-            support="local-window",
-            projection_law="equal-output-partition",
-            aggregation_law="mean",
-            parameter_sharing="none",
-            shape_law="preserve-prefix-replace-trailing-axes",
-            cost_law="input-elements",
-        ),
-        parameter_roles=(
-            ("dimension", "Support rank", "number of trailing axes aggregated"),
-            ("size", "Output support size", "extent of each aggregated output axis"),
-        ),
-    ),
-    _LayerOperatorSpecialization(
-        alias="flatten",
-        display_name="Rank collapse",
-        descriptor=ModelOperatorDescriptor(
-            kind=_operator_rank_collapse,
-            tensor_relation="shape-transform",
-            state="fixed",
-            support="rank-collapsing",
-            projection_law="row-major-axis-concatenation",
-            aggregation_law="none",
-            parameter_sharing="none",
-            shape_law="product-of-input-axes",
-            cost_law="zero-arithmetic",
-        ),
-    ),
-    _LayerOperatorSpecialization(
-        alias="dense",
-        display_name="Affine readout",
-        descriptor=ModelOperatorDescriptor(
-            kind=_operator_affine_readout,
-            tensor_relation="affine",
-            state="learned",
-            support="global",
-            projection_law="full-input-support",
-            aggregation_law="weighted-sum-plus-bias",
-            parameter_sharing="none",
-            shape_law="rank-1-output",
-            cost_law="multiply-add-per-input-output-pair",
-        ),
-        parameter_roles=(("out", "Output coordinates", "rank-1 output extent"),),
-    ),
-)
-_layer_operator_descriptor_by_alias = {
-    specialization.alias: specialization.descriptor
-    for specialization in _layer_operator_specializations
-}
-
-
-@dataclass(frozen=True, slots=True)
 class ModelOperatorPlan:
     """An executable formal-operator plan for one architecture manifest."""
 
@@ -499,35 +435,11 @@ def model_operator_vocabulary() -> dict[str, object]:
     return {
         "format": "leibniz.model-operator-vocabulary",
         "format_version": 1,
-        "operators": [
-            {
-                "kind": specialization.descriptor.kind,
-                "display_name": specialization.display_name,
-                "descriptor": specialization.descriptor.to_record(),
-                "syntax_aliases": [specialization.alias],
-                "parameter_roles": [
-                    {
-                        "name": name,
-                        "display_name": display_name,
-                        "description": description,
-                        "value_kind": "positive-integer",
-                    }
-                    for name, display_name, description in specialization.parameter_roles
-                ],
-            }
-            for specialization in _layer_operator_specializations
-        ],
-        "descriptor_axis_descriptors": _descriptor_axis_descriptor_records(),
-        "descriptor_axes": _descriptor_axis_records(),
-        "syntax_aliases": [
-            {
-                "alias": specialization.alias,
-                "operator_kind": specialization.descriptor.kind,
-                "display_name": specialization.display_name,
-            }
-            for specialization in _layer_operator_specializations
-        ],
-        "coordinate_descriptors": _coordinate_descriptor_records(),
+        "operators": _operator_registry.operator_records(),
+        "descriptor_axis_descriptors": _operator_registry.descriptor_axis_descriptor_records(),
+        "descriptor_axes": _operator_registry.descriptor_axis_records(),
+        "syntax_aliases": _operator_registry.syntax_alias_records(),
+        "coordinate_descriptors": _operator_registry.coordinate_descriptor_records(),
     }
 
 
@@ -690,17 +602,17 @@ def materialize_model_operator_search_point(
             "output_shape": [output_count],
             "layers": [
                 {
-                    "kind": _layer_operator_specializations[0].alias,
+                    "kind": _operator_registry.operators[0].syntax_aliases[0],
                     "parameters": {
                         "dimension": point.local_support_dimension,
                         "size": point.local_support_size,
                     },
                 },
                 {
-                    "kind": _layer_operator_specializations[1].alias,
+                    "kind": _operator_registry.operators[1].syntax_aliases[0],
                 },
                 {
-                    "kind": _layer_operator_specializations[2].alias,
+                    "kind": _operator_registry.operators[2].syntax_aliases[0],
                     "parameters": {
                         "out": output_count,
                     },
@@ -711,20 +623,28 @@ def materialize_model_operator_search_point(
 
 
 def _descriptor_for_layer(layer: ArchitectureLayer) -> ModelOperatorDescriptor:
-    descriptor = _layer_operator_descriptor_by_alias.get(layer.kind)
-    if descriptor is None:
+    semantic = _operator_registry.semantic_for_alias(layer.kind)
+    if semantic is None:
         raise ModelOperatorExecutionError(f"unsupported operator kind: {layer.kind}")
+    return _descriptor_for_semantic(semantic, aliases=(layer.kind,))
+
+
+def _descriptor_for_semantic(
+    semantic: ModelOperatorSemantic,
+    *,
+    aliases: tuple[str, ...],
+) -> ModelOperatorDescriptor:
     return ModelOperatorDescriptor(
-        kind=descriptor.kind,
-        tensor_relation=descriptor.tensor_relation,
-        state=descriptor.state,
-        support=descriptor.support,
-        projection_law=descriptor.projection_law,
-        aggregation_law=descriptor.aggregation_law,
-        parameter_sharing=descriptor.parameter_sharing,
-        shape_law=descriptor.shape_law,
-        cost_law=descriptor.cost_law,
-        aliases=(layer.kind,),
+        kind=semantic.kind,
+        tensor_relation=cast(_TensorRelationKind, semantic.tensor_relation),
+        state=cast(_OperatorStateKind, semantic.state),
+        support=cast(_OperatorSupportKind, semantic.support),
+        projection_law=semantic.projection_law,
+        aggregation_law=semantic.aggregation_law,
+        parameter_sharing=semantic.parameter_sharing,
+        shape_law=semantic.shape_law,
+        cost_law=semantic.cost_law,
+        aliases=aliases,
     )
 
 
@@ -828,151 +748,6 @@ def _reject_duplicate_coordinate_names(
     names = [coordinate.name for coordinate in coordinates]
     if len(set(names)) != len(names):
         raise ModelOperatorExecutionError("semantic coordinates must have unique names")
-
-
-def _descriptor_axis_records() -> dict[str, list[dict[str, str]]]:
-    return {
-        "tensor_relation": _axis_value_records(
-            {
-                "affine": "Affine",
-                "aggregation": "Aggregation",
-                "identity": "Identity",
-                "shape-transform": "Shape transform",
-            }
-        ),
-        "state": _axis_value_records({"fixed": "Fixed", "learned": "Learned"}),
-        "support": _axis_value_records(
-            {
-                "global": "Global",
-                "local-window": "Local window",
-                "pointwise": "Pointwise",
-                "rank-collapsing": "Rank collapsing",
-            }
-        ),
-        "projection_law": _axis_values_from_descriptors("projection_law"),
-        "aggregation_law": _axis_values_from_descriptors("aggregation_law"),
-        "parameter_sharing": _axis_values_from_descriptors("parameter_sharing"),
-        "shape_law": _axis_values_from_descriptors("shape_law"),
-        "cost_law": _axis_values_from_descriptors("cost_law"),
-    }
-
-
-def _descriptor_axis_descriptor_records() -> list[dict[str, str]]:
-    return [
-        {
-            "name": "tensor_relation",
-            "display_name": "Tensor relation",
-        },
-        {
-            "name": "state",
-            "display_name": "State",
-        },
-        {
-            "name": "support",
-            "display_name": "Support",
-        },
-        {
-            "name": "projection_law",
-            "display_name": "Projection law",
-        },
-        {
-            "name": "aggregation_law",
-            "display_name": "Aggregation law",
-        },
-        {
-            "name": "parameter_sharing",
-            "display_name": "Parameter sharing",
-        },
-        {
-            "name": "shape_law",
-            "display_name": "Shape law",
-        },
-        {
-            "name": "cost_law",
-            "display_name": "Cost law",
-        },
-    ]
-
-
-def _axis_values_from_descriptors(field: str) -> list[dict[str, str]]:
-    values = sorted(
-        {
-            str(getattr(specialization.descriptor, field))
-            for specialization in _layer_operator_specializations
-        }
-    )
-    return [{"value": value, "display_name": _title_from_token(value)} for value in values]
-
-
-def _axis_value_records(values: Mapping[str, str]) -> list[dict[str, str]]:
-    return [
-        {"value": value, "display_name": display_name}
-        for value, display_name in sorted(values.items())
-    ]
-
-
-def _coordinate_descriptor_records() -> list[dict[str, str]]:
-    return [
-        {
-            "name": "input.rank",
-            "display_name": "Input rank",
-            "value_kind": "integer",
-        },
-        {
-            "name": "output.rank",
-            "display_name": "Output rank",
-            "value_kind": "integer",
-        },
-        {
-            "name": "operator.count",
-            "display_name": "Operator count",
-            "value_kind": "integer",
-        },
-        {
-            "name": "operator.{index}.kind",
-            "display_name": "Operator kind",
-            "value_kind": "operator-kind",
-        },
-        {
-            "name": "operator.{index}.tensor_relation",
-            "display_name": "Tensor relation",
-            "value_kind": "descriptor-axis",
-        },
-        {
-            "name": "operator.{index}.support",
-            "display_name": "Support",
-            "value_kind": "descriptor-axis",
-        },
-        {
-            "name": "operator.{index}.local_support_dimension",
-            "display_name": "Local support dimension",
-            "value_kind": "integer",
-        },
-        {
-            "name": "operator.{index}.local_support_size",
-            "display_name": "Local support size",
-            "value_kind": "integer",
-        },
-        {
-            "name": "operator.{index}.output_count",
-            "display_name": "Output count",
-            "value_kind": "integer",
-        },
-        {
-            "name": "resource.parameter_count",
-            "display_name": "Parameter count",
-            "value_kind": "integer",
-        },
-        {
-            "name": "resource.inference_flops",
-            "display_name": "Inference FLOPs",
-            "value_kind": "integer",
-        },
-    ]
-
-
-def _title_from_token(value: str) -> str:
-    return " ".join(part.capitalize() for part in value.replace("_", "-").split("-"))
 
 
 def _program_effect_descriptor(effect: ModelProgramEffect) -> ModelProgramEffectDescriptor:
