@@ -21,6 +21,7 @@ from leibniz.local_results import (
     import_submission_publications,
     load_console_result_view,
     materialize_benchmark_result_views,
+    publish_local_benchmark_results,
 )
 from leibniz.measurements import (
     MeasurementDataset,
@@ -218,6 +219,23 @@ def _parser() -> argparse.ArgumentParser:
         default=Path(".runs"),
         type=Path,
         help="ignored local run-state root; defaults to .runs",
+    )
+    publish_results = results_subcommands.add_parser(
+        "publish",
+        description="write local benchmark runs as publication bundles",
+        help="write local publication bundles",
+    )
+    publish_results.add_argument(
+        "--runs-root",
+        default=Path(".runs"),
+        type=Path,
+        help="ignored local run-state root; defaults to .runs",
+    )
+    publish_results.add_argument(
+        "--output-root",
+        required=True,
+        type=Path,
+        help="local directory for generated publication bundle documents",
     )
     materialize_results = results_subcommands.add_parser(
         "materialize",
@@ -569,6 +587,20 @@ def _results(args: argparse.Namespace) -> int:
                 f"{summary.measurement_count} measurement(s)"
             )
             print(f"view: {summary.view_file}")
+            return 0
+        if results_command == "publish":
+            summary = publish_local_benchmark_results(
+                repository_root=Path.cwd(),
+                runs_root=args.runs_root,
+                output_root=args.output_root,
+            )
+            print(
+                "wrote "
+                f"{summary.publication_bundle_count} publication bundle(s), "
+                f"{summary.measurement_count} measurement(s)"
+            )
+            for publication_file in summary.publication_files:
+                print(f"publication: {publication_file}")
             return 0
         if results_command == "materialize":
             summary = materialize_benchmark_result_views(

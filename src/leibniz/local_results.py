@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from leibniz.architectures import ArchitectureManifest
+from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.content import ContentDigest
 from leibniz.documents import (
@@ -23,16 +23,20 @@ from leibniz.measurements import (
     MeasurementRecord,
 )
 from leibniz.model_inspection import ModelInspectionDocument, ModelInspectionRecord
-from leibniz.publications import SubmissionPublicationDocument
+from leibniz.publications import SubmissionPublicationBundle, SubmissionPublicationDocument
+from leibniz.submissions import SubmissionArtifact, SubmissionPackageManifest
 from leibniz.training_runs import TrainingRunRecord
+from leibniz.views import MeasurementScoreView
 
 __all__ = [
     "LocalBenchmarkResultViewSummary",
+    "LocalPublicationExportSummary",
     "LocalResultImportError",
     "LocalResultImportSummary",
     "import_submission_publications",
     "load_console_result_view",
     "materialize_benchmark_result_views",
+    "publish_local_benchmark_results",
 ]
 
 _console_result_view_format = "leibniz.console.imported-results"
@@ -85,6 +89,65 @@ class LocalBenchmarkResultViewSummary:
             "model_count": self.model_count,
             "run_count": self.run_count,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class LocalPublicationExportSummary:
+    """Summary of publication bundles exported from local benchmark results."""
+
+    source_files: tuple[Path, ...]
+    publication_files: tuple[Path, ...]
+    publication_bundle_count: int
+    measurement_count: int
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "source_files": [path.as_posix() for path in self.source_files],
+            "publication_files": [path.as_posix() for path in self.publication_files],
+            "publication_bundle_count": self.publication_bundle_count,
+            "measurement_count": self.measurement_count,
+        }
+
+
+def publish_local_benchmark_results(
+    *,
+    repository_root: Path | None = None,
+    runs_root: Path = Path(".runs"),
+    output_root: Path,
+) -> LocalPublicationExportSummary:
+    """Write local benchmark runs as publication bundles for explicit import."""
+
+    repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
+    runs_root = _resolve_output_root(repository_root, runs_root)
+    output_root = output_root.resolve()
+    manifests = _known_benchmark_manifests(repository_root)
+    runs = _local_run_records(runs_root)
+    if not runs:
+        raise LocalResultImportError("no local benchmark result records found")
+    output_root.mkdir(parents=True, exist_ok=True)
+    publication_files: list[Path] = []
+    measurement_count = 0
+    for run in runs:
+        manifest = manifests.get(run.benchmark_id)
+        if manifest is None:
+            raise LocalResultImportError(
+                f"unknown benchmark id in local results: {run.benchmark_id}"
+            )
+        bundle = _publication_bundle_for_local_run(
+            manifest=manifest,
+            repository_root=repository_root,
+            run=run,
+        )
+        publication_file = output_root / _bundle_filename(bundle.id, bundle.digest)
+        publication_file.write_bytes(canonical_document_bytes(bundle.to_record()) + b"\n")
+        publication_files.append(publication_file)
+        measurement_count += len(bundle.measurement_dataset.measurements)
+    return LocalPublicationExportSummary(
+        source_files=tuple(run.source_path for run in runs),
+        publication_files=tuple(publication_files),
+        publication_bundle_count=len(publication_files),
+        measurement_count=measurement_count,
+    )
 
 
 def import_submission_publications(
@@ -526,6 +589,78 @@ def _training_artifact_references(run: _BenchmarkRunRecord) -> list[dict[str, ob
     if run.model_inspection_path is not None:
         references[1]["path"] = run.model_inspection_path.as_posix()
     return references
+
+
+def _publication_bundle_for_local_run(
+    *,
+    manifest: BenchmarkManifest,
+    repository_root: Path,
+    run: _BenchmarkRunRecord,
+) -> SubmissionPublicationBundle:
+    identifier_stem = f"{_identifier_atom(run.benchmark_id)}.{run.run_slug}"
+    package = SubmissionPackageManifest(
+        id=ProtocolIdentifier.parse(f"submissions.{identifier_stem}@0.1.0"),
+        benchmark_manifest=manifest,
+        architecture_manifest=_local_run_architecture_manifest(
+            repository_root=repository_root,
+            run=run,
+        ),
+        measurement_dataset=run.measurement_dataset,
+        artifacts=_submission_artifacts_for_local_run(run),
+    )
+    score_view = MeasurementScoreView.from_dataset(
+        id=ProtocolIdentifier.parse(f"views.measurement-scores.{identifier_stem}@0.1.0"),
+        dataset=run.measurement_dataset,
+    )
+    return SubmissionPublicationBundle(
+        id=ProtocolIdentifier.parse(f"publication-bundles.{identifier_stem}@0.1.0"),
+        submission_package=package,
+        measurement_dataset=run.measurement_dataset,
+        measurement_score_view=score_view,
+    )
+
+
+def _local_run_architecture_manifest(
+    *,
+    repository_root: Path,
+    run: _BenchmarkRunRecord,
+) -> ArchitectureManifest:
+    if run.training_summary is None:
+        raise LocalResultImportError("training summary is required for publication")
+    path = Path(_as_string(run.training_summary.get("architecture_path"), "architecture_path"))
+    resolved = path if path.is_absolute() else repository_root / path
+    if not resolved.is_file():
+        raise LocalResultImportError(f"architecture_path does not exist: {path}")
+    return ArchitectureManifestDocument.from_bytes(resolved.read_bytes()).manifest
+
+
+def _submission_artifacts_for_local_run(
+    run: _BenchmarkRunRecord,
+) -> tuple[SubmissionArtifact, ...]:
+    identifier_stem = f"{_identifier_atom(run.benchmark_id)}.{run.run_slug}"
+    artifacts = [
+        SubmissionArtifact(
+            id=ProtocolIdentifier.parse(f"artifacts.{identifier_stem}.measurement-dataset@0.1.0"),
+            digest=run.measurement_dataset_digest,
+            description="measurement dataset",
+        ),
+        SubmissionArtifact(
+            id=ProtocolIdentifier.parse(f"artifacts.{identifier_stem}.model-inspection@0.1.0"),
+            digest=run.model_inspection_digest,
+            description="model inspection",
+        ),
+    ]
+    if run.training_summary is not None:
+        artifacts.append(
+            SubmissionArtifact(
+                id=ProtocolIdentifier.parse(
+                    f"artifacts.{identifier_stem}.training-summary@0.1.0"
+                ),
+                digest=ContentDigest.from_value(run.training_summary),
+                description="training summary",
+            )
+        )
+    return tuple(artifacts)
 
 
 def _inspection_from_architecture(architecture: ArchitectureManifest) -> ModelInspectionRecord:

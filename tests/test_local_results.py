@@ -4,7 +4,9 @@ from typing import cast
 import pytest
 
 from leibniz.architectures import ArchitectureManifestDocument
+from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
 from leibniz.benchmarks import BenchmarkManifestDocument
+from leibniz.cli import main
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
@@ -13,12 +15,17 @@ from leibniz.local_results import (
     import_submission_publications,
     load_console_result_view,
     materialize_benchmark_result_views,
+    publish_local_benchmark_results,
 )
 from leibniz.measurements import MeasurementDataset, MeasurementDocument
 from leibniz.publications import SubmissionPublicationDocument
 from leibniz.views import MeasurementScoreView
 
 _repository_root = Path(__file__).parents[1]
+_digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
+_digits_architecture = (
+    _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool" / "manifest.json"
+)
 
 
 def test_import_submission_publications_materializes_runs_views(tmp_path: Path) -> None:
@@ -120,6 +127,89 @@ def test_materialize_benchmark_result_views_rejects_empty_runs_root(tmp_path: Pa
             repository_root=_repository_root,
             runs_root=tmp_path / ".runs",
         )
+
+
+def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) -> None:
+    local_runs_root = tmp_path / "local-runs"
+    publication_root = tmp_path / "publication"
+    imported_runs_root = tmp_path / "imported-runs"
+    run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            runs_root=local_runs_root,
+            sample_count=1,
+            train_steps=0,
+        )
+    )
+
+    publish_summary = publish_local_benchmark_results(
+        repository_root=_repository_root,
+        runs_root=local_runs_root,
+        output_root=publication_root,
+    )
+    imported_summary = import_submission_publications(
+        (publication_root,),
+        repository_root=_repository_root,
+        runs_root=imported_runs_root,
+    )
+    result_summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        runs_root=imported_runs_root,
+    )
+
+    assert publish_summary.publication_bundle_count == 1
+    assert publish_summary.measurement_count == 1
+    publication_document = SubmissionPublicationDocument.from_bytes(
+        publish_summary.publication_files[0].read_bytes()
+    )
+    assert publication_document.bundle.submission_package.id == ProtocolIdentifier.parse(
+        "submissions.digits.digits-l1-seed101-samples1-steps0@0.1.0"
+    )
+    assert imported_summary.publication_bundle_count == 1
+    assert result_summary.run_count == 1
+    view = load_console_result_view(result_summary.view_file.read_bytes())
+    results = cast(list[dict[str, object]], view["benchmark_results"])
+    history = cast(list[dict[str, object]], results[0]["training_history"])
+    leaderboard = cast(list[dict[str, object]], results[0]["leaderboard"])
+    assert history[0]["source_kind"] == "imported-publication"
+    assert history[0]["measurement_count"] == 1
+    assert leaderboard[0]["run_ids"] == [history[0]["run_id"]]
+
+
+def test_cli_publishes_local_benchmark_results(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs_root = tmp_path / ".runs"
+    publication_root = tmp_path / "publication"
+    run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            runs_root=runs_root,
+            sample_count=1,
+            train_steps=0,
+        )
+    )
+
+    exit_code = main(
+        [
+            "results",
+            "publish",
+            "--runs-root",
+            str(runs_root),
+            "--output-root",
+            str(publication_root),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "wrote 1 publication bundle(s), 1 measurement(s)" in captured.out
+    assert "publication: " in captured.out
+    assert len(tuple(publication_root.glob("*.json"))) == 1
 
 
 def _digits_publication_bundle_record() -> dict[str, object]:
