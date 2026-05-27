@@ -138,6 +138,7 @@ export function BenchmarkResultDashboard({
         hoveredId={hoveredId}
       />
       <ModelResultTable
+        complexityAxis={result.complexity_axis}
         costAxis={costAxis}
         models={frontier}
         onSelect={setSelectedId}
@@ -147,6 +148,7 @@ export function BenchmarkResultDashboard({
         title="Frontier"
       />
       <ModelResultTable
+        complexityAxis={result.complexity_axis}
         costAxis={costAxis}
         models={result.leaderboard}
         onSelect={setSelectedId}
@@ -161,6 +163,7 @@ export function BenchmarkResultDashboard({
         selectedId={selectedId}
       />
       <RunHistoryTable
+        complexityAxis={result.complexity_axis}
         costAxis={costAxis}
         onSelect={setSelectedId}
         rows={runRows}
@@ -491,6 +494,7 @@ function resourceStratumLabel(proposal: ProposalRecord): string {
 }
 
 function ModelResultTable({
+  complexityAxis,
   costAxis,
   models,
   onSelect,
@@ -499,6 +503,7 @@ function ModelResultTable({
   sort,
   title,
 }: {
+  complexityAxis: string | undefined;
   costAxis: string;
   models: ModelResultRecord[];
   onSelect: (id: string) => void;
@@ -534,7 +539,7 @@ function ModelResultTable({
             label="Cost"
             onClick={() => onSort('cost')}
           />
-          <span role="columnheader">C</span>
+          <span role="columnheader">{complexityAxis ?? 'Complexity'}</span>
           <SortHeader
             active={sort.key === 'runs'}
             direction={sort.direction}
@@ -599,12 +604,14 @@ function SortHeader({
 }
 
 function RunHistoryTable({
+  complexityAxis,
   costAxis,
   onSelect,
   rows,
   selectedId,
   selectedRunDetail,
 }: {
+  complexityAxis: string | undefined;
   costAxis: string;
   onSelect: (id: string) => void;
   rows: BenchmarkRunDetail[];
@@ -623,7 +630,7 @@ function RunHistoryTable({
           <span role="columnheader">Run</span>
           <span role="columnheader">Score</span>
           <span role="columnheader">Cost</span>
-          <span role="columnheader">Scale</span>
+          <span role="columnheader">{complexityAxis ?? 'Complexity'}</span>
           <span role="columnheader">Measurements</span>
         </div>
         {rows.map(({ run }) => {
@@ -639,27 +646,36 @@ function RunHistoryTable({
               <span role="cell">{run.run_slug}</span>
               <span role="cell">{run.score.toFixed(4)}</span>
               <span role="cell">{formatCost(costValue(run.cost_summary, costAxis))}</span>
-              <span role="cell">{run.scale ?? 'n/a'}</span>
+              <span role="cell">{run.complexity ?? run.scale ?? 'n/a'}</span>
               <span role="cell">{run.measurement_count}</span>
             </button>
           );
         })}
       </div>
       {selectedRunDetail === undefined ? null : (
-        <RunDetailCard costAxis={costAxis} detail={selectedRunDetail} />
+        <RunDetailCard
+          complexityAxis={complexityAxis}
+          costAxis={costAxis}
+          detail={selectedRunDetail}
+        />
       )}
     </section>
   );
 }
 
 function RunDetailCard({
+  complexityAxis,
   costAxis,
   detail,
 }: {
+  complexityAxis: string | undefined;
   costAxis: string;
   detail: BenchmarkRunDetail;
 }) {
   const { model, run } = detail;
+  const protocol = trainingProtocol(run.training_summary);
+  const validationHistory = trainingValidationHistory(run.training_summary);
+  const sampledCompetence = sampledCompetenceRecord(run);
   return (
     <article className="run-detail-card">
       <div>
@@ -681,12 +697,127 @@ function RunDetailCard({
         <dd>{shortDigest(run.measurement_dataset_digest)}</dd>
         <dt>Source</dt>
         <dd>{run.source_kind}</dd>
+        <dt>Model Inspection</dt>
+        <dd>
+          {run.model_inspection_digest === undefined
+            ? 'none'
+            : shortDigest(run.model_inspection_digest)}
+        </dd>
       </dl>
-      {run.training_summary === undefined ? null : (
-        <pre>{JSON.stringify(run.training_summary, null, 2)}</pre>
+      {sampledCompetence === undefined ? null : (
+        <RunEvidencePanel
+          title="Sampled Competence"
+          entries={[
+            [complexityAxis ?? 'Complexity', numberValue(sampledCompetence.complexity)],
+            ['Samples', numberValue(sampledCompetence.sample_count)],
+            ['Mean Score', numberValue(sampledCompetence.mean_accepted_mass, 4)],
+            ['Sampling', stringValue(sampledCompetence.sampling_rule)],
+          ]}
+        />
+      )}
+      {protocol === undefined ? null : (
+        <RunEvidencePanel
+          title="Training Protocol"
+          entries={[
+            ['Objective', stringValue(protocol.objective)],
+            ['Optimizer', stringValue(protocol.optimizer)],
+            ['Schedule', stringValue(protocol.schedule)],
+            ['Steps', numberValue(protocol.max_steps)],
+            ['Batch', numberValue(protocol.batch_size)],
+            ['Validation', stringValue(protocol.validation_source)],
+          ]}
+        />
+      )}
+      {validationHistory.length === 0 ? null : (
+        <section className="run-evidence-panel">
+          <h5>Validation History</h5>
+          <div className="run-validation-table" role="table" aria-label="Validation history">
+            <div className="run-validation-row header" role="row">
+              <span role="columnheader">Step</span>
+              <span role="columnheader">Loss</span>
+              <span role="columnheader">Best</span>
+              <span role="columnheader">Stale</span>
+            </div>
+            {validationHistory.map((point, index) => (
+              <div className="run-validation-row" key={index} role="row">
+                <span role="cell">{numberValue(point.step)}</span>
+                <span role="cell">{numberValue(point.validation_loss, 4)}</span>
+                <span role="cell">{numberValue(point.best_validation_loss, 4)}</span>
+                <span role="cell">{numberValue(point.stale_checks)}</span>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
     </article>
   );
+}
+
+function RunEvidencePanel({
+  entries,
+  title,
+}: {
+  entries: [string, string][];
+  title: string;
+}) {
+  return (
+    <section className="run-evidence-panel">
+      <h5>{title}</h5>
+      <dl>
+        {entries.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function trainingProtocol(
+  summary: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const trainingRun = recordValue(summary?.training_run);
+  return recordValue(trainingRun?.protocol);
+}
+
+function trainingValidationHistory(
+  summary: Record<string, unknown> | undefined,
+): Record<string, unknown>[] {
+  const trainingRun = recordValue(summary?.training_run);
+  const history = trainingRun?.validation_history;
+  if (!Array.isArray(history)) {
+    return [];
+  }
+  return history.flatMap((item) => {
+    const record = recordValue(item);
+    return record === undefined ? [] : [record];
+  });
+}
+
+function sampledCompetenceRecord(
+  run: BenchmarkRunDetail['run'],
+): Record<string, unknown> | undefined {
+  return run.sampled_competence ?? recordValue(run.training_summary?.sampled_competence);
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' && value.length > 0 ? value : 'unknown';
+}
+
+function numberValue(value: unknown, precision = 0): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 'unknown';
+  }
+  return precision === 0 ? value.toLocaleString() : value.toFixed(precision);
 }
 
 function zoomedView(
