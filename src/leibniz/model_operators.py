@@ -18,18 +18,34 @@ __all__ = [
     "ModelOperatorPlan",
     "ModelOperatorSearchPoint",
     "ModelOperatorSummary",
+    "ModelProgramEffect",
+    "ModelProgramEffectDescriptor",
+    "ModelProgramEffectPlan",
+    "ModelProgramEffectSummary",
     "materialize_model_operator_search_point",
     "model_operator_semantic_coordinates",
     "model_operator_vocabulary",
+    "summarize_model_program_effects",
     "summarize_architecture_operators",
 ]
 
 _OperatorStateKind = Literal["learned", "fixed"]
 _OperatorSupportKind = Literal["global", "local-window", "pointwise", "rank-collapsing"]
 _TensorRelationKind = Literal["affine", "aggregation", "identity", "shape-transform"]
+_ProgramEffectKind = Literal[
+    "branch",
+    "identity-path",
+    "merge",
+    "parameter-sharing",
+    "repeat",
+    "route",
+]
 _operator_local_aggregation = "local-aggregation"
 _operator_rank_collapse = "rank-collapse"
 _operator_affine_readout = "affine-readout"
+_program_effect_kinds = frozenset(
+    ("branch", "identity-path", "merge", "parameter-sharing", "repeat", "route")
+)
 
 
 class ModelOperatorExecutionError(ValueError):
@@ -140,6 +156,173 @@ class ModelOperatorCoordinate:
         return {
             "name": self.name,
             "value": self.value,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ModelProgramEffect:
+    """A higher-order program effect over operator paths."""
+
+    kind: _ProgramEffectKind
+    arity: int = 1
+    repetitions: int = 1
+    parameter_group: str | None = None
+    nested_parameter_count: int = 0
+    nested_inference_flops: int = 0
+
+    def __post_init__(self) -> None:
+        if self.kind not in _program_effect_kinds:
+            raise ModelOperatorExecutionError(f"unsupported program effect kind: {self.kind}")
+        if type(self.arity) is not int or self.arity < 1:
+            raise ModelOperatorExecutionError("program effect arity must be positive")
+        if self.kind in {"branch", "merge", "route", "parameter-sharing"} and self.arity < 2:
+            raise ModelOperatorExecutionError(
+                f"{self.kind} program effect arity must be at least 2"
+            )
+        if self.kind in {"identity-path", "repeat"} and self.arity != 1:
+            raise ModelOperatorExecutionError(f"{self.kind} program effect arity must be 1")
+        if type(self.repetitions) is not int or self.repetitions < 1:
+            raise ModelOperatorExecutionError("program effect repetitions must be positive")
+        if self.kind == "repeat" and self.repetitions < 2:
+            raise ModelOperatorExecutionError(
+                "repeat program effect repetitions must be at least 2"
+            )
+        if self.kind != "repeat" and self.repetitions != 1:
+            raise ModelOperatorExecutionError(f"{self.kind} program effect repetitions must be 1")
+        if self.parameter_group is not None and not self.parameter_group:
+            raise ModelOperatorExecutionError("parameter_group must be nonempty")
+        if self.kind == "parameter-sharing" and self.parameter_group is None:
+            raise ModelOperatorExecutionError("parameter-sharing requires parameter_group")
+        if self.kind != "parameter-sharing" and self.parameter_group is not None:
+            raise ModelOperatorExecutionError(f"{self.kind} must not declare parameter_group")
+        _require_count(self.nested_parameter_count, field="nested_parameter_count")
+        _require_count(self.nested_inference_flops, field="nested_inference_flops")
+        if self.kind != "repeat" and (
+            self.nested_parameter_count != 0 or self.nested_inference_flops != 0
+        ):
+            raise ModelOperatorExecutionError(f"{self.kind} must not declare nested cost")
+
+    def to_record(self) -> dict[str, object]:
+        record: dict[str, object] = {
+            "kind": self.kind,
+            "arity": self.arity,
+        }
+        if self.repetitions != 1:
+            record["repetitions"] = self.repetitions
+        if self.parameter_group is not None:
+            record["parameter_group"] = self.parameter_group
+        if self.nested_parameter_count != 0:
+            record["nested_parameter_count"] = self.nested_parameter_count
+        if self.nested_inference_flops != 0:
+            record["nested_inference_flops"] = self.nested_inference_flops
+        return record
+
+
+@dataclass(frozen=True, slots=True)
+class ModelProgramEffectDescriptor:
+    """Shape, cost, and trace laws for one program effect kind."""
+
+    kind: _ProgramEffectKind
+    input_arity: int
+    output_arity: int
+    shape_law: str
+    cost_law: str
+    trace_law: str
+
+    def __post_init__(self) -> None:
+        if self.kind not in _program_effect_kinds:
+            raise ModelOperatorExecutionError(f"unsupported program effect kind: {self.kind}")
+        if type(self.input_arity) is not int or self.input_arity < 1:
+            raise ModelOperatorExecutionError("input_arity must be positive")
+        if type(self.output_arity) is not int or self.output_arity < 1:
+            raise ModelOperatorExecutionError("output_arity must be positive")
+        if not self.shape_law:
+            raise ModelOperatorExecutionError("shape_law must be nonempty")
+        if not self.cost_law:
+            raise ModelOperatorExecutionError("cost_law must be nonempty")
+        if not self.trace_law:
+            raise ModelOperatorExecutionError("trace_law must be nonempty")
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "input_arity": self.input_arity,
+            "output_arity": self.output_arity,
+            "shape_law": self.shape_law,
+            "cost_law": self.cost_law,
+            "trace_law": self.trace_law,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ModelProgramEffectSummary:
+    """Resolved shape, cost, and trace contribution of one program effect."""
+
+    index: int
+    effect: ModelProgramEffect
+    descriptor: ModelProgramEffectDescriptor
+    input_shapes: tuple[tuple[int, ...], ...]
+    output_shapes: tuple[tuple[int, ...], ...]
+    parameter_count: int
+    inference_flops: int
+    trace: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.index) is not int or self.index < 0:
+            raise ModelOperatorExecutionError("index must be a nonnegative integer")
+        if len(self.input_shapes) != self.descriptor.input_arity:
+            raise ModelOperatorExecutionError("input_shapes length must match input_arity")
+        if len(self.output_shapes) != self.descriptor.output_arity:
+            raise ModelOperatorExecutionError("output_shapes length must match output_arity")
+        for shape in (*self.input_shapes, *self.output_shapes):
+            _require_optional_shape(shape, field="program effect shape")
+        _require_count(self.parameter_count, field="parameter_count")
+        _require_count(self.inference_flops, field="inference_flops")
+        if not self.trace:
+            raise ModelOperatorExecutionError("program effect trace must be nonempty")
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "index": self.index,
+            "effect": self.effect.to_record(),
+            "descriptor": self.descriptor.to_record(),
+            "input_shapes": [list(shape) for shape in self.input_shapes],
+            "output_shapes": [list(shape) for shape in self.output_shapes],
+            "parameter_count": self.parameter_count,
+            "inference_flops": self.inference_flops,
+            "trace": list(self.trace),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ModelProgramEffectPlan:
+    """A resolved higher-order program-effect plan."""
+
+    input_shape: tuple[int, ...]
+    output_shapes: tuple[tuple[int, ...], ...]
+    effects: tuple[ModelProgramEffectSummary, ...]
+
+    @property
+    def output_shape(self) -> tuple[int, ...]:
+        if len(self.output_shapes) != 1:
+            raise ModelOperatorExecutionError("program effect plan has multiple outputs")
+        return self.output_shapes[0]
+
+    @property
+    def parameter_count(self) -> int:
+        return sum(effect.parameter_count for effect in self.effects)
+
+    @property
+    def inference_flops(self) -> int:
+        return sum(effect.inference_flops for effect in self.effects)
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "input_shape": list(self.input_shape),
+            "output_shapes": [list(shape) for shape in self.output_shapes],
+            "parameter_count": self.parameter_count,
+            "inference_flops": self.inference_flops,
+            "effects": [effect.to_record() for effect in self.effects],
         }
 
 
@@ -344,6 +527,45 @@ def model_operator_vocabulary() -> dict[str, object]:
         ],
         "coordinate_descriptors": _coordinate_descriptor_records(),
     }
+
+
+def summarize_model_program_effects(
+    *,
+    input_shape: tuple[int, ...],
+    effects: tuple[ModelProgramEffect, ...],
+) -> ModelProgramEffectPlan:
+    """Resolve generic higher-order program effects into shape, cost, and trace summaries."""
+
+    _require_optional_shape(input_shape, field="input_shape")
+    if not effects:
+        raise ModelOperatorExecutionError("program effects must not be empty")
+    active_shapes = (input_shape,)
+    summaries: list[ModelProgramEffectSummary] = []
+    for index, effect in enumerate(effects):
+        descriptor = _program_effect_descriptor(effect)
+        if len(active_shapes) != descriptor.input_arity:
+            raise ModelOperatorExecutionError(
+                f"{effect.kind} expected {descriptor.input_arity} input path(s), "
+                f"got {len(active_shapes)}"
+            )
+        output_shapes = _program_effect_output_shapes(effect, active_shapes)
+        summary = ModelProgramEffectSummary(
+            index=index,
+            effect=effect,
+            descriptor=descriptor,
+            input_shapes=active_shapes,
+            output_shapes=output_shapes,
+            parameter_count=_program_effect_parameter_count(effect),
+            inference_flops=_program_effect_inference_flops(effect),
+            trace=_program_effect_trace(effect),
+        )
+        summaries.append(summary)
+        active_shapes = output_shapes
+    return ModelProgramEffectPlan(
+        input_shape=input_shape,
+        output_shapes=active_shapes,
+        effects=tuple(summaries),
+    )
 
 
 def summarize_architecture_operators(
@@ -714,6 +936,116 @@ def _title_from_token(value: str) -> str:
     return " ".join(part.capitalize() for part in value.replace("_", "-").split("-"))
 
 
+def _program_effect_descriptor(effect: ModelProgramEffect) -> ModelProgramEffectDescriptor:
+    if effect.kind == "branch":
+        return ModelProgramEffectDescriptor(
+            kind=effect.kind,
+            input_arity=1,
+            output_arity=effect.arity,
+            shape_law="duplicate-input-shape",
+            cost_law="zero-arithmetic",
+            trace_law="fan-out",
+        )
+    if effect.kind == "merge":
+        return ModelProgramEffectDescriptor(
+            kind=effect.kind,
+            input_arity=effect.arity,
+            output_arity=1,
+            shape_law="require-equal-input-shapes",
+            cost_law="zero-arithmetic",
+            trace_law="join-paths",
+        )
+    if effect.kind == "route":
+        return ModelProgramEffectDescriptor(
+            kind=effect.kind,
+            input_arity=effect.arity,
+            output_arity=1,
+            shape_law="select-equal-input-shape",
+            cost_law="control-flow-select",
+            trace_law="select-path",
+        )
+    if effect.kind == "repeat":
+        return ModelProgramEffectDescriptor(
+            kind=effect.kind,
+            input_arity=1,
+            output_arity=1,
+            shape_law="preserve-shape",
+            cost_law="multiply-nested-cost",
+            trace_law="repeat-nested-program",
+        )
+    if effect.kind == "identity-path":
+        return ModelProgramEffectDescriptor(
+            kind=effect.kind,
+            input_arity=1,
+            output_arity=1,
+            shape_law="preserve-shape",
+            cost_law="zero-arithmetic",
+            trace_law="preserve-path",
+        )
+    return ModelProgramEffectDescriptor(
+        kind=effect.kind,
+        input_arity=effect.arity,
+        output_arity=effect.arity,
+        shape_law="preserve-shapes",
+        cost_law="share-state",
+        trace_law="share-parameter-group",
+    )
+
+
+def _program_effect_output_shapes(
+    effect: ModelProgramEffect,
+    input_shapes: tuple[tuple[int, ...], ...],
+) -> tuple[tuple[int, ...], ...]:
+    if effect.kind == "branch":
+        return tuple(input_shapes[0] for _index in range(effect.arity))
+    if effect.kind in {"merge", "route"}:
+        _require_equal_shapes(input_shapes, effect=effect.kind)
+        return (input_shapes[0],)
+    if effect.kind in {"identity-path", "repeat", "parameter-sharing"}:
+        return input_shapes
+    raise ModelOperatorExecutionError(f"unsupported program effect kind: {effect.kind}")
+
+
+def _program_effect_parameter_count(effect: ModelProgramEffect) -> int:
+    if effect.kind == "repeat":
+        return effect.repetitions * effect.nested_parameter_count
+    return 0
+
+
+def _program_effect_inference_flops(effect: ModelProgramEffect) -> int:
+    if effect.kind == "repeat":
+        return effect.repetitions * effect.nested_inference_flops
+    return 0
+
+
+def _program_effect_trace(effect: ModelProgramEffect) -> tuple[str, ...]:
+    if effect.kind == "branch":
+        return (f"branch fan-out={effect.arity}",)
+    if effect.kind == "merge":
+        return (f"merge arity={effect.arity}",)
+    if effect.kind == "route":
+        return (f"route choices={effect.arity}",)
+    if effect.kind == "repeat":
+        return (
+            f"repeat count={effect.repetitions}",
+            f"nested_parameter_count={effect.nested_parameter_count}",
+            f"nested_inference_flops={effect.nested_inference_flops}",
+        )
+    if effect.kind == "identity-path":
+        return ("identity-path",)
+    return (f"parameter-sharing group={effect.parameter_group} arity={effect.arity}",)
+
+
+def _require_equal_shapes(
+    shapes: tuple[tuple[int, ...], ...],
+    *,
+    effect: str,
+) -> None:
+    first = shapes[0]
+    if any(shape != first for shape in shapes):
+        raise ModelOperatorExecutionError(f"{effect} requires equal input shapes")
+
+
 def _positive_int_parameter(parameters: Mapping[str, object], key: str) -> int:
     value = _optional_positive_int_parameter(parameters, key)
     if value is None:
@@ -737,6 +1069,11 @@ def _require_optional_shape(value: tuple[int, ...] | None, *, field: str) -> Non
 
 def _require_optional_count(value: int | None, *, field: str) -> None:
     if value is not None and (type(value) is not int or value < 0):
+        raise ModelOperatorExecutionError(f"{field} must be a nonnegative integer")
+
+
+def _require_count(value: int, *, field: str) -> None:
+    if type(value) is not int or value < 0:
         raise ModelOperatorExecutionError(f"{field} must be a nonnegative integer")
 
 
