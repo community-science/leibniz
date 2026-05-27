@@ -28,6 +28,13 @@ import type {
   GeneratedObservationSampleRecord,
 } from './benchmarkTasks.ts';
 import type { ModelInspectionLayerRecord, ModelInspectionRecord } from './modelInspections.ts';
+import {
+  descriptorValueDisplayName,
+  operatorDisplayName,
+  parameterDisplayName,
+  syntaxAliasDisplayName,
+  type OperatorVocabularyRecord,
+} from './operatorVocabulary.ts';
 import type {
   BenchmarkResultRecord,
   ResultViewRecord,
@@ -75,10 +82,12 @@ const modelValidationPlotBodyHeight =
 
 export function BenchmarksPanel({
   modelInspections,
+  operatorVocabulary,
   resultViews,
   tasks,
 }: {
   modelInspections: ModelInspectionRecord[];
+  operatorVocabulary: OperatorVocabularyRecord;
   resultViews: ResultViewRecord[];
   tasks: BenchmarkTaskRecord[];
 }) {
@@ -172,6 +181,7 @@ export function BenchmarksPanel({
           >
             <BenchmarkPerformancePane
               benchmark={selected}
+              operatorVocabulary={operatorVocabulary}
               queueItems={queueItems}
               resultEntry={selectedResult}
             />
@@ -182,6 +192,7 @@ export function BenchmarksPanel({
               summary={`${modelRows.length} inspected candidates`}
             >
               <BenchmarkModelsPane
+                operatorVocabulary={operatorVocabulary}
                 rows={modelRows}
                 result={result}
               />
@@ -279,10 +290,12 @@ function resultSizeLabel(resultEntry: BenchmarkResultEntry | undefined): string 
 
 function BenchmarkPerformancePane({
   benchmark,
+  operatorVocabulary,
   queueItems,
   resultEntry,
 }: {
   benchmark: BenchmarkTaskRecord;
+  operatorVocabulary: OperatorVocabularyRecord;
   queueItems: WorkQueueItemRecord[];
   resultEntry:
     | BenchmarkResultEntry
@@ -293,6 +306,7 @@ function BenchmarkPerformancePane({
   return (
     <div className="benchmark-task">
       <BenchmarkResultDashboard
+        operatorVocabulary={operatorVocabulary}
         queueItems={queueItems}
         result={result}
       />
@@ -315,9 +329,11 @@ function emptyBenchmarkResult(benchmark: BenchmarkTaskRecord): BenchmarkResultRe
 }
 
 function BenchmarkModelsPane({
+  operatorVocabulary,
   rows,
   result,
 }: {
+  operatorVocabulary: OperatorVocabularyRecord;
   rows: ReturnType<typeof modelComparisonRows>;
   result: BenchmarkResultRecord | undefined;
 }) {
@@ -373,6 +389,7 @@ function BenchmarkModelsPane({
               costAxis={costAxis}
               inspection={selectedRow.inspection}
               model={selectedRow.model}
+              operatorVocabulary={operatorVocabulary}
               runs={runsForModel(result, selectedRow.model)}
             />
           )}
@@ -387,12 +404,14 @@ function BenchmarkModelInspector({
   costAxis,
   inspection,
   model,
+  operatorVocabulary,
   runs,
 }: {
   complexityAxis: string | undefined;
   costAxis: string;
   inspection: ModelInspectionRecord | undefined;
   model: BenchmarkResultRecord['leaderboard'][number];
+  operatorVocabulary: OperatorVocabularyRecord;
   runs: RunResultRecord[];
 }) {
   const [artifactView, setArtifactView] = useState<ModelArtifactView>('model');
@@ -448,7 +467,7 @@ function BenchmarkModelInspector({
             model={model}
           />
           <ModelCostDetail inspection={inspection} model={model} />
-          <ModelLayerTrace inspection={inspection} />
+          <ModelLayerTrace inspection={inspection} operatorVocabulary={operatorVocabulary} />
         </>
       ) : null}
       {artifactView === 'training' ? (
@@ -872,7 +891,13 @@ function ModelCostDetail({
   );
 }
 
-function ModelLayerTrace({ inspection }: { inspection: ModelInspectionRecord | undefined }) {
+function ModelLayerTrace({
+  inspection,
+  operatorVocabulary,
+}: {
+  inspection: ModelInspectionRecord | undefined;
+  operatorVocabulary: OperatorVocabularyRecord;
+}) {
   if (inspection === undefined) {
     return (
       <section className="benchmark-model-detail-section">
@@ -890,8 +915,8 @@ function ModelLayerTrace({ inspection }: { inspection: ModelInspectionRecord | u
             <div className="benchmark-model-layer-heading">
               <span>{layer.index}</span>
               <div>
-                <strong>{operatorSummary(layer)}</strong>
-                <small>{layer.kind}</small>
+                <strong>{operatorSummary(layer, operatorVocabulary)}</strong>
+                <small>{syntaxAliasDisplayName(operatorVocabulary, layer.kind)}</small>
               </div>
             </div>
             <dl className="benchmark-model-layer-shape-grid">
@@ -912,10 +937,12 @@ function ModelLayerTrace({ inspection }: { inspection: ModelInspectionRecord | u
                 <dd>{optionalNumberLabel(layer.inference_flops)}</dd>
               </div>
             </dl>
-            <p className="benchmark-model-layer-config">{recordLabel(layer.parameters)}</p>
-            {operatorEntries(layer).length === 0 ? null : (
+            <p className="benchmark-model-layer-config">
+              {recordLabel(layer.parameters, layer.operator, operatorVocabulary)}
+            </p>
+            {operatorEntries(layer, operatorVocabulary).length === 0 ? null : (
               <dl className="benchmark-model-operator-grid">
-                {operatorEntries(layer).map(([key, value]) => (
+                {operatorEntries(layer, operatorVocabulary).map(([key, value]) => (
                   <div key={key}>
                     <dt>{key}</dt>
                     <dd>{value}</dd>
@@ -1032,30 +1059,77 @@ function unknownLayerLabel(layers: number[] | undefined): string {
   return layers === undefined || layers.length === 0 ? 'none' : layers.join(', ');
 }
 
-function operatorSummary(layer: ModelInspectionLayerRecord): string {
+function operatorSummary(
+  layer: ModelInspectionLayerRecord,
+  vocabulary?: OperatorVocabularyRecord,
+): string {
   const operator = layer.operator;
   if (operator === undefined) {
     return 'unknown';
   }
-  return typeof operator.kind === 'string' ? operator.kind : 'unknown';
+  const kind = typeof operator.kind === 'string' ? operator.kind : undefined;
+  return vocabulary === undefined ? kind ?? 'unknown' : operatorDisplayName(vocabulary, kind);
 }
 
-function operatorEntries(layer: ModelInspectionLayerRecord): [string, string][] {
+function operatorEntries(
+  layer: ModelInspectionLayerRecord,
+  vocabulary?: OperatorVocabularyRecord,
+): [string, string][] {
   const operator = layer.operator;
   if (operator === undefined) {
     return [];
   }
+  const operatorKind = typeof operator.kind === 'string' ? operator.kind : undefined;
   return Object.entries(operator)
     .filter(([key]) => key !== 'kind')
-    .map(([key, value]) => [key, parameterValueLabel(value)]);
+    .map(([key, value]) => [
+      key,
+      vocabulary === undefined
+        ? parameterValueLabel(value)
+        : operatorDescriptorValueLabel(vocabulary, key, value, operatorKind),
+    ]);
 }
 
-function recordLabel(record: Record<string, unknown>): string {
+function recordLabel(
+  record: Record<string, unknown>,
+  operator?: Record<string, unknown>,
+  vocabulary?: OperatorVocabularyRecord,
+): string {
   const entries = Object.entries(record);
   if (entries.length === 0) {
     return 'none';
   }
-  return entries.map(([key, value]) => `${key}: ${parameterValueLabel(value)}`).join(', ');
+  const operatorKind = typeof operator?.kind === 'string' ? operator.kind : undefined;
+  return entries
+    .map(
+      ([key, value]) =>
+        `${vocabulary === undefined ? key : parameterDisplayName(vocabulary, operatorKind, key)}: ${parameterValueLabel(value)}`,
+    )
+    .join(', ');
+}
+
+function operatorDescriptorValueLabel(
+  vocabulary: OperatorVocabularyRecord,
+  key: string,
+  value: unknown,
+  operatorKind: string | undefined,
+): string {
+  if (key === 'aliases') {
+    return Array.isArray(value)
+      ? value
+          .map((entry) =>
+            typeof entry === 'string' ? syntaxAliasDisplayName(vocabulary, entry) : String(entry),
+          )
+          .join(', ')
+      : parameterValueLabel(value);
+  }
+  if (key === 'kind') {
+    return operatorDisplayName(vocabulary, operatorKind);
+  }
+  if (typeof value === 'string') {
+    return descriptorValueDisplayName(vocabulary, key, value);
+  }
+  return parameterValueLabel(value);
 }
 
 function parameterValueLabel(value: unknown): string {

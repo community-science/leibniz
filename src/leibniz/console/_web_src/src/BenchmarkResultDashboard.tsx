@@ -31,6 +31,10 @@ import type {
   ProposalRecord,
   WorkQueueItemRecord,
 } from './resultViews.ts';
+import {
+  coordinateDisplayName,
+  type OperatorVocabularyRecord,
+} from './operatorVocabulary.ts';
 
 type PlotView = {
   xDomain: [number, number];
@@ -60,9 +64,11 @@ const plotAxisSelectorButtonWidth = 84;
 const proposalIntervalCapHalfWidth = 7;
 
 export function BenchmarkResultDashboard({
+  operatorVocabulary,
   queueItems = [],
   result,
 }: {
+  operatorVocabulary: OperatorVocabularyRecord;
   queueItems?: WorkQueueItemRecord[];
   result: BenchmarkResultRecord;
 }) {
@@ -127,6 +133,7 @@ export function BenchmarkResultDashboard({
       <ProposalCards
         associations={proposalRows}
         onSelect={setSelectedId}
+        operatorVocabulary={operatorVocabulary}
         queueItems={queueItems}
         selectedId={selectedId}
       />
@@ -507,11 +514,13 @@ function BenchmarkFrontierPlot({
 function ProposalCards({
   associations,
   onSelect,
+  operatorVocabulary,
   queueItems,
   selectedId,
 }: {
   associations: BenchmarkProposalAssociation[];
   onSelect: (id: string) => void;
+  operatorVocabulary: OperatorVocabularyRecord;
   queueItems: WorkQueueItemRecord[];
   selectedId: string | null;
 }) {
@@ -560,7 +569,7 @@ function ProposalCards({
                 <dt>Search</dt>
                 <dd>{searchDistributionLabel(proposal)}</dd>
                 <dt>Coordinates</dt>
-                <dd>{semanticCoordinateSummary(proposal)}</dd>
+                <dd>{semanticCoordinateSummary(proposal, operatorVocabulary)}</dd>
                 <dt>Nearest Evidence</dt>
                 <dd>{nearestMeasuredSupportLabel(proposal)}</dd>
                 <dt>Comparable Score</dt>
@@ -632,14 +641,18 @@ function searchDistributionLabel(proposal: ProposalRecord): string {
   return typeof value === 'string' ? shortDigest(value) : 'not recorded';
 }
 
-function semanticCoordinateSummary(proposal: ProposalRecord): string {
+function semanticCoordinateSummary(
+  proposal: ProposalRecord,
+  operatorVocabulary: OperatorVocabularyRecord,
+): string {
   const coordinates = proposal.search_diagnostics?.semantic_coordinates;
   if (!Array.isArray(coordinates)) {
     return 'not recorded';
   }
-  const support = coordinateValue(coordinates, 'operator.0.local_support_size');
+  const supportCoordinate = 'operator.0.local_support_size';
+  const support = coordinateValue(coordinates, supportCoordinate);
   if (support !== undefined) {
-    return `${coordinates.length} coordinates, support ${support}`;
+    return `${coordinates.length} coordinates, ${coordinateDisplayName(operatorVocabulary, supportCoordinate)} ${support}`;
   }
   return `${coordinates.length} coordinates`;
 }

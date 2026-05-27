@@ -21,6 +21,7 @@ from leibniz.documents import canonical_document_bytes, document_filename_suffix
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.local_results import LocalResultImportError, load_console_result_view
 from leibniz.model_inspection import ModelInspectionRecord
+from leibniz.model_operators import model_operator_vocabulary
 from leibniz.observation_generation import (
     ObservationGenerator,
     field_to_png_data_url,
@@ -55,6 +56,7 @@ class ConsoleData:
     result_views: tuple[Mapping[str, object], ...]
     model_inspections: tuple[Mapping[str, object], ...]
     benchmark_tasks: tuple[Mapping[str, object], ...]
+    operator_vocabulary: Mapping[str, object]
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -65,6 +67,7 @@ class ConsoleData:
             "result_views": list(self.result_views),
             "model_inspections": list(self.model_inspections),
             "benchmark_tasks": list(self.benchmark_tasks),
+            "operator_vocabulary": dict(self.operator_vocabulary),
         }
 
     def to_bytes(self) -> bytes:
@@ -96,6 +99,7 @@ class ConsoleDataBuilder:
             result_views=result_views,
             model_inspections=model_inspections,
             benchmark_tasks=benchmark_tasks,
+            operator_vocabulary=model_operator_vocabulary(),
         )
 
     def _discover_sources(
