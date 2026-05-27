@@ -53,6 +53,11 @@ def test_experiment_proposal_set_parses_and_canonicalizes() -> None:
                 predicted_score=0.7,
                 uncertainty=0.2,
                 acquisition_value=0.8,
+                acquisition_model="frontier-resource-gap",
+                acquisition_components={
+                    "acquisition_value": 0.8,
+                    "estimated_score": 0.7,
+                },
                 novelty=0.5,
                 expected_frontier_improvement=0.1,
                 selector_name="resource-bootstrap",
@@ -309,6 +314,11 @@ def _proposal_set_record(
                 "predicted_score": 0.7,
                 "uncertainty": 0.2,
                 "acquisition_value": 0.8,
+                "acquisition_model": "frontier-resource-gap",
+                "acquisition_components": {
+                    "acquisition_value": 0.8,
+                    "estimated_score": 0.7,
+                },
                 "novelty": 0.5,
                 "expected_frontier_improvement": 0.1,
                 "selector_name": "resource-bootstrap",
