@@ -162,6 +162,9 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     result = results[0]
     history = cast(list[dict[str, object]], result["training_history"])
     assert history[0]["source_kind"] == "local-run"
+    assert "model_inspection_digest" in history[0]
+    assert "model_inspection_path" in history[0]
+    assert "sampled_competence" in history[0]
     training_summary = cast(dict[str, object], history[0]["training_summary"])
     training_run = cast(dict[str, object], training_summary["training_run"])
     protocol = cast(dict[str, object], training_run["protocol"])
@@ -172,6 +175,11 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert leaderboard[0]["observed_complexities"] == [1.0]
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
     assert points[0]["sample_count"] == 2
+    inspections = cast(list[dict[str, object]], result["model_inspections"])
+    assert len(inspections) == 1
+    assert inspections[0]["source_path"] == history[0]["model_inspection_path"]
+    assert "measurement_dataset" in inspections[0]
+    assert "training_provenance" in inspections[0]
 
 
 def test_digits_benchmark_runner_rejects_unmatched_architecture_shape(tmp_path: Path) -> None:

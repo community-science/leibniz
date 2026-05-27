@@ -79,9 +79,11 @@ const result: BenchmarkResultRecord = {
       source_kinds: ['local'],
     },
   ],
+  model_inspections: [],
   proposals: [
     {
       acquisition_value: 0.2,
+      capability_operator_kinds: [],
       candidate_id: 'model-a',
       candidate_kind: 'architecture',
       command: [],
@@ -180,6 +182,11 @@ assertEqual(
   modelComparisonRows(result, inspections)[0]?.inspection?.id,
   'inspection-a',
   'model inspection match',
+);
+assertEqual(
+  modelComparisonRows({ ...result, model_inspections: inspections }, [])[0]?.inspection?.id,
+  'inspection-a',
+  'result-local model inspection match',
 );
 const plotModel = benchmarkPlotModel(result, 'parameter_count');
 assertEqual(plotModel.points.length, 2, 'plot point count');
