@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 from collections.abc import Iterable, Mapping
@@ -1253,7 +1254,16 @@ def _commit_checkout_if_dirty(
     _git(runs_root, "commit", "-m", message)
     commit = _git(runs_root, "rev-parse", "HEAD").stdout.strip()
     if push:
-        _git(runs_root, "push", "-u", "origin", "HEAD", token=token, endpoint=endpoint)
+        _git(
+            runs_root,
+            "push",
+            "-u",
+            "origin",
+            "HEAD",
+            token=token,
+            endpoint=endpoint,
+            username=_checkout_remote_owner(runs_root),
+        )
     return commit
 
 
@@ -1290,15 +1300,14 @@ def _git(
     *args: str,
     token: str | None = None,
     endpoint: str = _default_hf_endpoint,
+    username: str = "hf_user",
 ) -> subprocess.CompletedProcess[str]:
-    env = _git_auth_env(token=token, endpoint=endpoint)
     try:
-        return subprocess.run(
+        return _run_git_process(
             ["git", "-C", str(path), *args],
-            check=True,
-            capture_output=True,
-            text=True,
-            env=env,
+            token=token,
+            endpoint=endpoint,
+            username=username,
         )
     except subprocess.CalledProcessError as error:
         detail = (error.stderr or error.stdout or "").strip()
@@ -1317,12 +1326,11 @@ def _git_clone(
     endpoint: str,
 ) -> None:
     try:
-        subprocess.run(
+        _run_git_process(
             ["git", "clone", source, str(target)],
-            check=True,
-            capture_output=True,
-            text=True,
-            env=_git_auth_env(token=token, endpoint=endpoint),
+            token=token,
+            endpoint=endpoint,
+            username=_repo_owner_from_url(source) or "hf_user",
         )
     except subprocess.CalledProcessError as error:
         detail = (error.stderr or error.stdout or "").strip()
@@ -1332,14 +1340,71 @@ def _git_clone(
         raise LocalResultImportError(message) from error
 
 
-def _git_auth_env(*, token: str | None, endpoint: str) -> Mapping[str, str] | None:
+def _run_git_process(
+    args: list[str],
+    *,
+    token: str | None,
+    endpoint: str,
+    username: str,
+) -> subprocess.CompletedProcess[str]:
+    env = _git_auth_env(token=token, endpoint=endpoint)
+    if token is None:
+        return subprocess.run(
+            args,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    with tempfile.TemporaryDirectory(prefix="leibniz-git-auth-") as auth_dir:
+        askpass = Path(auth_dir) / "askpass.sh"
+        askpass.write_text(
+            "#!/bin/sh\n"
+            "case \"$1\" in\n"
+            "*Username*) printf '%s\\n' \"$LEIBNIZ_HF_USERNAME\" ;;\n"
+            "*Password*) printf '%s\\n' \"$LEIBNIZ_HF_TOKEN\" ;;\n"
+            "*) printf '\\n' ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        askpass.chmod(0o700)
+        assert env is not None
+        env["GIT_ASKPASS"] = askpass.as_posix()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["LEIBNIZ_HF_TOKEN"] = token
+        env["LEIBNIZ_HF_USERNAME"] = username
+        return subprocess.run(
+            args,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+
+def _git_auth_env(*, token: str | None, endpoint: str) -> dict[str, str] | None:
     if token is None:
         return None
+    del endpoint
     env = os.environ.copy()
-    env["GIT_CONFIG_COUNT"] = "1"
-    env["GIT_CONFIG_KEY_0"] = f"http.{endpoint.rstrip('/')}/.extraheader"
-    env["GIT_CONFIG_VALUE_0"] = f"Authorization: Bearer {token}"
     return env
+
+
+def _checkout_remote_owner(runs_root: Path) -> str:
+    try:
+        url = _git(runs_root, "remote", "get-url", "origin").stdout.strip()
+    except LocalResultImportError:
+        return "hf_user"
+    return _repo_owner_from_url(url) or "hf_user"
+
+
+def _repo_owner_from_url(url: str) -> str | None:
+    marker = "/datasets/"
+    if marker not in url:
+        return None
+    tail = url.split(marker, maxsplit=1)[1]
+    owner = tail.split("/", maxsplit=1)[0].strip()
+    return owner or None
 
 
 def _create_hf_dataset_repo(*, repo_id: str, token: str, endpoint: str) -> bool:
