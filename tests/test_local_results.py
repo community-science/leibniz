@@ -121,6 +121,36 @@ def test_materialize_benchmark_result_views_projects_imported_publications(
     assert "measurement_dataset" in inspections[0]
 
 
+def test_materialize_imported_publications_accepts_numeric_architecture_digest(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "hf-checkout"
+    source_root.mkdir()
+    bundle_path = source_root / "digits_publication.json"
+    bundle_path.write_bytes(
+        canonical_document_bytes(
+            _digits_publication_bundle_record(
+                architecture_manifest=_numeric_digest_architecture_record()
+            )
+        )
+    )
+    import_submission_publications(
+        (source_root,),
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+
+    view = load_console_result_view(summary.view_file.read_bytes())
+    results = cast(list[dict[str, object]], view["benchmark_results"])
+    inspections = cast(list[dict[str, object]], results[0]["model_inspections"])
+    assert inspections[0]["id"] == "model-inspections.imported.sha-057e708d0a213627@0.1.0"
+
+
 def test_materialize_benchmark_result_views_rejects_empty_runs_root(tmp_path: Path) -> None:
     with pytest.raises(LocalResultImportError, match="no benchmark result records"):
         materialize_benchmark_result_views(
@@ -212,14 +242,21 @@ def test_cli_publishes_local_benchmark_results(
     assert len(tuple(publication_root.glob("*.json"))) == 1
 
 
-def _digits_publication_bundle_record() -> dict[str, object]:
+def _digits_publication_bundle_record(
+    *,
+    architecture_manifest: dict[str, object] | None = None,
+) -> dict[str, object]:
     dataset = _digits_dataset()
     return {
         "id": "publication-bundles.digits@0.1.0",
         "submission_package": {
             "id": "submissions.digits-pool@0.1.0",
             "benchmark_manifest": _digits_benchmark().manifest.to_record(),
-            "architecture_manifest": _architecture().manifest.to_record(),
+            "architecture_manifest": (
+                _architecture().manifest.to_record()
+                if architecture_manifest is None
+                else architecture_manifest
+            ),
             "measurement_dataset": dataset.to_record(),
             "artifacts": [
                 {
@@ -291,3 +328,23 @@ def _architecture() -> ArchitectureManifestDocument:
     return ArchitectureManifestDocument.from_bytes(
         manifest_path.read_bytes()
     )
+
+
+def _numeric_digest_architecture_record() -> dict[str, object]:
+    record: dict[str, object] = {
+        "id": (
+            "architecture."
+            "sha-ec44c2854f8e8dae76bbdcc5316fb467ac6cf6613b58dfd1aa692f6d1d3c2f16"
+            "@0.1.0"
+        ),
+        "input_shape": [1, 32, 32],
+        "output_shape": [10],
+        "layers": [
+            {"kind": "adaptive-pooling", "parameters": {"dimension": 1, "size": 3}},
+            {"kind": "flatten", "parameters": {}},
+            {"kind": "dense", "parameters": {"out": 10}},
+        ],
+    }
+    document = ArchitectureManifestDocument.from_bytes(canonical_document_bytes(record))
+    assert str(document.manifest.digest).startswith("sha256:057e708d0a213627")
+    return document.manifest.to_record()

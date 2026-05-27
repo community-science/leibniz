@@ -664,10 +664,10 @@ def _submission_artifacts_for_local_run(
 
 
 def _inspection_from_architecture(architecture: ArchitectureManifest) -> ModelInspectionRecord:
+    digest_atom = str(architecture.digest).split(":", maxsplit=1)[1][:16]
     return ModelInspectionRecord.from_architecture(
         id=ProtocolIdentifier.parse(
-            "model-inspections.imported."
-            f"{str(architecture.digest).split(':', maxsplit=1)[1][:16]}@0.1.0"
+            f"model-inspections.imported.sha-{digest_atom}@0.1.0"
         ),
         architecture_manifest=architecture,
     )
