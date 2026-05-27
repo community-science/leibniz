@@ -63,8 +63,24 @@ export function BenchmarksPanel({
     <section className="benchmark-workbench" aria-label="Benchmarks">
       <div className="benchmark-workbench-content">
         <div className="benchmark-header">
-          <h2>{selected.label}</h2>
-          <p>{selected.source_path}</p>
+          <div>
+            <h2>{selected.label}</h2>
+            <p>{selected.benchmark_id}</p>
+          </div>
+          <dl className="benchmark-header-metrics">
+            <div>
+              <dt>Models</dt>
+              <dd>{result?.leaderboard.length ?? 0}</dd>
+            </div>
+            <div>
+              <dt>Runs</dt>
+              <dd>{result?.training_history.length ?? 0}</dd>
+            </div>
+            <div>
+              <dt>Samples</dt>
+              <dd>{sampleCount}</dd>
+            </div>
+          </dl>
         </div>
 
         <div className="benchmark-selector-row" aria-label="Benchmarks">
@@ -88,12 +104,6 @@ export function BenchmarksPanel({
         />
 
         <div className="benchmark-section-stack">
-          <CollapsibleBenchmarkSection
-            label="Samples"
-            summary={`${selected.batches.length} batches / ${sampleCount} samples`}
-          >
-            <BenchmarkTaskPane task={selected} />
-          </CollapsibleBenchmarkSection>
           <CollapsibleBenchmarkSection
             actions={
               <BenchmarkPerformanceActions
@@ -120,6 +130,12 @@ export function BenchmarksPanel({
               />
             </CollapsibleBenchmarkSection>
           )}
+          <CollapsibleBenchmarkSection
+            label="Samples"
+            summary={`${selected.batches.length} batches / ${sampleCount} samples`}
+          >
+            <BenchmarkTaskPane task={selected} />
+          </CollapsibleBenchmarkSection>
         </div>
       </div>
     </section>
@@ -175,15 +191,11 @@ function BenchmarkStatusRow({
   sampleCount: number;
   task: BenchmarkTaskRecord;
 }) {
-  const status = resultEntry === undefined ? 'o AWAITING RESULTS' : 'o RESULT VIEW LOADED';
+  const status = resultEntry === undefined ? 'Awaiting Results' : 'Result View Loaded';
   return (
     <div className="benchmark-status-row">
       <span>{status}</span>
-      <span>/</span>
       <span>{sampleCount} generated samples</span>
-      <span>/</span>
-      <span>benchmark={task.benchmark_id}</span>
-      <span>/</span>
       <span>{task.source_path}</span>
     </div>
   );
@@ -243,7 +255,7 @@ function ResultSourceStatus({
     <section className="benchmark-result-source" aria-label="Result source">
       <div>
         <span>{status}</span>
-        <p>{resultEntry?.sourcePath ?? 'Materialize benchmark results into .runs/views to populate the frontier.'}</p>
+        <p>{resultEntry?.sourcePath ?? 'No result view loaded'}</p>
       </div>
       <dl>
         <div>
@@ -340,6 +352,7 @@ function BenchmarkModelsPane({
           </aside>
           {selectedRow === undefined ? null : (
             <BenchmarkModelInspector
+              complexityAxis={result?.complexity_axis}
               costAxis={costAxis}
               inspection={selectedRow.inspection}
               model={selectedRow.model}
@@ -352,10 +365,12 @@ function BenchmarkModelsPane({
 }
 
 function BenchmarkModelInspector({
+  complexityAxis,
   costAxis,
   inspection,
   model,
 }: {
+  complexityAxis: string | undefined;
   costAxis: string;
   inspection: ModelInspectionRecord | undefined;
   model: BenchmarkResultRecord['leaderboard'][number];
@@ -398,7 +413,7 @@ function BenchmarkModelInspector({
           <dd>{inspection === undefined ? 'unknown' : shapeLabel(inspection.input_shape)}</dd>
           <dt>Output</dt>
           <dd>{inspection === undefined ? 'unknown' : shapeLabel(inspection.output_shape)}</dd>
-          <dt>Observed C</dt>
+          <dt>Observed {complexityAxis ?? 'Complexity'}</dt>
           <dd>{model.observed_complexities.join(', ') || 'none'}</dd>
           <dt>Sources</dt>
           <dd>{model.source_kinds.join(', ') || 'unknown'}</dd>
