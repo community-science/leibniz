@@ -92,6 +92,20 @@ const result: BenchmarkResultRecord = {
       predicted_score: 0.8,
       rank: 1,
       rationale: 'probe nearby candidate',
+      search_diagnostics: {
+        nearest_measured_support: {
+          architecture_digest: 'sha256:abcd',
+          log_parameter_distance: 0.5,
+          parameter_count: 10,
+          score: 0.75,
+        },
+        sampled_resource_stratum: { count: 2, index: 0 },
+        search_distribution_id: 'architecture-search-distributions.sha-abc@0.1.0',
+        semantic_coordinates: [
+          { name: 'operator.0.support', value: 'local-window' },
+          { name: 'operator.0.local_support_size', value: 2 },
+        ],
+      },
       uncertainty: 0.05,
     },
   ],
@@ -265,6 +279,12 @@ assertEqual(
   selectionForId(result, 'proposal-a').selectedProposal?.candidate_id,
   'model-a',
   'proposal selection',
+);
+assertEqual(
+  selectionForId(result, 'proposal-a').selectedProposal?.search_diagnostics
+    ?.search_distribution_id,
+  'architecture-search-distributions.sha-abc@0.1.0',
+  'proposal search diagnostics',
 );
 assertEqual(
   selectionForId(result, runSelectionId(result.training_history[0]!)).selectedRun?.run_slug,

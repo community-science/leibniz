@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 from leibniz.acquisition import score_candidate_acquisition
 from leibniz.architecture_candidates import (
     ArchitectureCandidate,
+    ArchitectureSearchDistribution,
     default_architecture_search_distribution,
     sample_architecture_candidates,
 )
@@ -164,6 +166,7 @@ class _CandidateArchitecture:
     expected_frontier_improvement: float
     acquisition_model: str
     acquisition_components: Mapping[str, object]
+    search_diagnostics: Mapping[str, object]
 
 
 def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGenerationSummary:
@@ -200,6 +203,8 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
         input_shape=sample.field.shape,
         output_count=len(outcome_space.outcomes),
         candidate_budget=plan.candidate_budget,
+        search_distribution=search_distribution,
+        measured=tuple(measured),
     )
     if not candidates:
         raise ProposalGenerationError("no unmeasured candidate architectures are available")
@@ -234,6 +239,7 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                 expected_frontier_improvement=candidate.expected_frontier_improvement,
                 acquisition_model=candidate.acquisition_model,
                 acquisition_components=candidate.acquisition_components,
+                search_diagnostics=candidate.search_diagnostics,
                 selector_name=candidate.selector_name,
                 source_candidate_rank=candidate.source_candidate_rank,
                 comparable_cost_best_score=candidate.comparable_cost_best_score,
@@ -412,6 +418,8 @@ def _candidate_architectures(
     input_shape: tuple[int, ...],
     output_count: int,
     candidate_budget: int,
+    search_distribution: ArchitectureSearchDistribution,
+    measured: tuple[_MeasuredArchitecture, ...],
 ) -> tuple[_CandidateArchitecture, ...]:
     _require_candidate_shape(
         tuple(observation.candidate for observation in candidate_observations),
@@ -452,9 +460,66 @@ def _candidate_architectures(
                 expected_frontier_improvement=score.expected_frontier_improvement,
                 acquisition_model=score.model_name,
                 acquisition_components=score.to_component_record(),
+                search_diagnostics=_search_diagnostics(
+                    observation,
+                    selection=selection,
+                    search_distribution=search_distribution,
+                    measured=measured,
+                ),
             )
         )
     return tuple(candidates)
+
+
+def _search_diagnostics(
+    observation: ArchitectureCandidateObservation,
+    *,
+    selection: CandidateProposalSelection,
+    search_distribution: ArchitectureSearchDistribution,
+    measured: tuple[_MeasuredArchitecture, ...],
+) -> dict[str, object]:
+    record: dict[str, object] = {
+        "search_distribution_id": str(search_distribution.id),
+        "semantic_coordinates": [
+            coordinate.to_record() for coordinate in observation.semantic_coordinates
+        ],
+    }
+    if (
+        selection.resource_stratum_index is not None
+        and selection.resource_stratum_count is not None
+    ):
+        record["sampled_resource_stratum"] = {
+            "index": selection.resource_stratum_index,
+            "count": selection.resource_stratum_count,
+        }
+    nearest = _nearest_measured_support(observation, measured=measured)
+    if nearest is not None:
+        record["nearest_measured_support"] = nearest
+    return record
+
+
+def _nearest_measured_support(
+    observation: ArchitectureCandidateObservation,
+    *,
+    measured: tuple[_MeasuredArchitecture, ...],
+) -> dict[str, object] | None:
+    if not measured:
+        return None
+    coordinate = math.log1p(observation.parameter_count)
+    nearest = min(
+        measured,
+        key=lambda item: (
+            abs(math.log1p(item.parameter_count) - coordinate),
+            item.parameter_count,
+            item.digest.hex,
+        ),
+    )
+    return {
+        "architecture_digest": f"{nearest.digest.algorithm}:{nearest.digest.hex}",
+        "parameter_count": nearest.parameter_count,
+        "score": nearest.score,
+        "log_parameter_distance": abs(math.log1p(nearest.parameter_count) - coordinate),
+    }
 
 
 def _selection_rationale(selection: CandidateProposalSelection) -> str:

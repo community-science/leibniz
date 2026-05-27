@@ -49,6 +49,7 @@ _proposal_record = RecordSpec(
         "acquisition_value": FieldSpec(kind="number", required=False),
         "acquisition_model": FieldSpec(kind="string", required=False),
         "acquisition_components": FieldSpec(kind="record", required=False),
+        "search_diagnostics": FieldSpec(kind="record", required=False),
         "novelty": FieldSpec(kind="number", required=False),
         "expected_frontier_improvement": FieldSpec(kind="number", required=False),
         "selector_name": FieldSpec(kind="string", required=False),
@@ -84,6 +85,7 @@ class ExperimentProposal:
     acquisition_value: float | None = None
     acquisition_model: str | None = None
     acquisition_components: Mapping[str, object] | None = None
+    search_diagnostics: Mapping[str, object] | None = None
     novelty: float | None = None
     expected_frontier_improvement: float | None = None
     selector_name: str | None = None
@@ -191,6 +193,14 @@ class ExperimentProposal:
                 if "acquisition_components" in validated
                 else None
             ),
+            search_diagnostics=(
+                _as_mapping(
+                    validated["search_diagnostics"],
+                    field="search_diagnostics",
+                )
+                if "search_diagnostics" in validated
+                else None
+            ),
             novelty=_optional_float(validated.get("novelty"), "novelty"),
             expected_frontier_improvement=_optional_float(
                 validated.get("expected_frontier_improvement"),
@@ -246,6 +256,8 @@ class ExperimentProposal:
             record["acquisition_model"] = self.acquisition_model
         if self.acquisition_components is not None:
             record["acquisition_components"] = dict(self.acquisition_components)
+        if self.search_diagnostics is not None:
+            record["search_diagnostics"] = dict(self.search_diagnostics)
         if self.novelty is not None:
             record["novelty"] = self.novelty
         if self.expected_frontier_improvement is not None:

@@ -189,6 +189,7 @@ export type ProposalRecord = {
   acquisition_value?: number;
   acquisition_model?: string;
   acquisition_components?: Record<string, unknown>;
+  search_diagnostics?: Record<string, unknown>;
   novelty?: number;
   expected_frontier_improvement?: number;
   selector_name?: string;
@@ -607,6 +608,10 @@ function parseProposal(value: unknown, path: string): ProposalRecord {
       record.acquisition_components === undefined
         ? undefined
         : requireRecord(record.acquisition_components, `${path}.acquisition_components`),
+    search_diagnostics:
+      record.search_diagnostics === undefined
+        ? undefined
+        : requireRecord(record.search_diagnostics, `${path}.search_diagnostics`),
     novelty: optionalNumber(record.novelty, `${path}.novelty`),
     expected_frontier_improvement: optionalNumber(
       record.expected_frontier_improvement,

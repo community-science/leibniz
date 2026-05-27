@@ -1202,6 +1202,68 @@ def _validate_proposal_result(record: Mapping[str, object]) -> None:
         _as_string(record.get("acquisition_model"), "proposals.acquisition_model")
     if "acquisition_components" in record:
         _as_mapping(record.get("acquisition_components"), "proposals.acquisition_components")
+    if "search_diagnostics" in record:
+        diagnostics = _as_mapping(record.get("search_diagnostics"), "proposals.search_diagnostics")
+        if "search_distribution_id" in diagnostics:
+            _as_string(
+                diagnostics.get("search_distribution_id"),
+                "proposals.search_diagnostics.search_distribution_id",
+            )
+        if "semantic_coordinates" in diagnostics:
+            for index, coordinate in enumerate(
+                _as_sequence(
+                    diagnostics.get("semantic_coordinates"),
+                    "proposals.search_diagnostics.semantic_coordinates",
+                )
+            ):
+                coordinate_record = _as_mapping(
+                    coordinate,
+                    f"proposals.search_diagnostics.semantic_coordinates.{index}",
+                )
+                _as_string(
+                    coordinate_record.get("name"),
+                    f"proposals.search_diagnostics.semantic_coordinates.{index}.name",
+                )
+                value = coordinate_record.get("value")
+                if not isinstance(value, str | int):
+                    raise LocalResultImportError(
+                        "proposals.search_diagnostics.semantic_coordinates.value "
+                        "must be a string or integer"
+                    )
+        if "sampled_resource_stratum" in diagnostics:
+            stratum = _as_mapping(
+                diagnostics.get("sampled_resource_stratum"),
+                "proposals.search_diagnostics.sampled_resource_stratum",
+            )
+            _as_nonnegative_number(
+                stratum.get("index"),
+                "proposals.search_diagnostics.sampled_resource_stratum.index",
+            )
+            _as_nonnegative_number(
+                stratum.get("count"),
+                "proposals.search_diagnostics.sampled_resource_stratum.count",
+            )
+        if "nearest_measured_support" in diagnostics:
+            support = _as_mapping(
+                diagnostics.get("nearest_measured_support"),
+                "proposals.search_diagnostics.nearest_measured_support",
+            )
+            _as_string(
+                support.get("architecture_digest"),
+                "proposals.search_diagnostics.nearest_measured_support.architecture_digest",
+            )
+            _as_nonnegative_number(
+                support.get("parameter_count"),
+                "proposals.search_diagnostics.nearest_measured_support.parameter_count",
+            )
+            _as_nonnegative_number(
+                support.get("score"),
+                "proposals.search_diagnostics.nearest_measured_support.score",
+            )
+            _as_nonnegative_number(
+                support.get("log_parameter_distance"),
+                "proposals.search_diagnostics.nearest_measured_support.log_parameter_distance",
+            )
     if "command" in record:
         command = _as_sequence(record["command"], "proposals.command")
         if not all(isinstance(argument, str) and argument for argument in command):

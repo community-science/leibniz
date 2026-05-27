@@ -51,6 +51,8 @@ def test_search_distribution_applies_generic_cost_bounds_and_deduplicates() -> N
     assert [candidate.parameter("local_support_size") for candidate in candidates] == [2, 3, 4]
     assert [candidate.parameter_count for candidate in candidates] == [50, 100, 170]
     assert len({candidate.architecture.digest for candidate in candidates}) == len(candidates)
+    assert str(distribution.id.name).startswith("architecture-search-distributions.sha-")
+    assert distribution.to_record()["parameter_count_minimum"] == 50
 
 
 def test_search_distribution_is_independent_of_benchmark_identity() -> None:

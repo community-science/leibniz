@@ -69,6 +69,22 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
         document.proposal_set.proposals[0].acquisition_components["acquisition_value"]
         == document.proposal_set.proposals[0].acquisition_value
     )
+    search_diagnostics = document.proposal_set.proposals[0].search_diagnostics
+    assert search_diagnostics is not None
+    assert str(search_diagnostics["search_distribution_id"]).startswith(
+        "architecture-search-distributions.sha-"
+    )
+    semantic_coordinates = cast(list[dict[str, object]], search_diagnostics["semantic_coordinates"])
+    assert any(
+        coordinate["name"] == "operator.0.local_support_size"
+        for coordinate in semantic_coordinates
+    )
+    assert search_diagnostics["sampled_resource_stratum"] == {
+        "index": document.proposal_set.proposals[0].resource_stratum_index,
+        "count": document.proposal_set.proposals[0].resource_stratum_count,
+    }
+    nearest = cast(dict[str, object], search_diagnostics["nearest_measured_support"])
+    assert nearest["parameter_count"] == 50
     assert document.proposal_set.proposals[0].candidate_id in {
         architecture.id for architecture in architectures
     }
@@ -93,6 +109,13 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
     assert cast(dict[str, object], proposals[0]["acquisition_components"])[
         "acquisition_value"
     ] == proposals[0]["acquisition_value"]
+    result_search_diagnostics = cast(dict[str, object], proposals[0]["search_diagnostics"])
+    assert result_search_diagnostics["search_distribution_id"] == search_diagnostics[
+        "search_distribution_id"
+    ]
+    assert result_search_diagnostics["sampled_resource_stratum"] == search_diagnostics[
+        "sampled_resource_stratum"
+    ]
 
 
 def test_cli_generates_experiment_proposals(
