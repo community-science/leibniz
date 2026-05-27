@@ -312,6 +312,7 @@ def _parser() -> argparse.ArgumentParser:
     loop.add_argument("--convergence-min-delta", default=0.0, type=float)
     loop.add_argument("--target-validation-loss", default=None, type=float)
     loop.add_argument("--dry-run", action="store_true")
+    loop.add_argument("--retry-failed", action="store_true")
 
     return parser
 
@@ -369,6 +370,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                     convergence_min_delta=args.convergence_min_delta,
                     target_validation_loss=args.target_validation_loss,
                     dry_run=args.dry_run,
+                    retry_failed=args.retry_failed,
                 )
             )
             prefix = "planned" if summary.dry_run else "completed"

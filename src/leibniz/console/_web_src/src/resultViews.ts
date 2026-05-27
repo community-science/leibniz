@@ -61,6 +61,7 @@ export type WorkQueueItemRecord = {
   id: string;
   benchmark_id: string;
   proposal_id: string;
+  candidate_id?: string;
   proposal_set_path: string;
   command: string[];
   status: WorkQueueItemStatus;
@@ -270,6 +271,10 @@ function parseWorkQueueItem(value: unknown, path: string): WorkQueueItemRecord {
     id: requireString(record.id, `${path}.id`),
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`),
     proposal_id: requireString(record.proposal_id, `${path}.proposal_id`),
+    candidate_id:
+      record.candidate_id === undefined
+        ? undefined
+        : requireString(record.candidate_id, `${path}.candidate_id`),
     proposal_set_path: requireString(record.proposal_set_path, `${path}.proposal_set_path`),
     command: parseStringArray(record.command, `${path}.command`),
     status: parseWorkQueueStatus(record.status, `${path}.status`),

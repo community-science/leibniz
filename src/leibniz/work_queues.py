@@ -44,6 +44,7 @@ class WorkQueueItem:
     command: tuple[str, ...]
     status: _Status
     sequence: int
+    candidate_id: str | None = None
     run_id: str | None = None
     measurement_dataset_path: Path | None = None
     error: str | None = None
@@ -53,6 +54,8 @@ class WorkQueueItem:
             raise WorkQueueError("id must be nonempty")
         if not self.proposal_id:
             raise WorkQueueError("proposal_id must be nonempty")
+        if self.candidate_id is not None and not self.candidate_id:
+            raise WorkQueueError("candidate_id must be nonempty")
         if not self.command or any(not argument for argument in self.command):
             raise WorkQueueError("command must contain nonempty strings")
         if self.status not in {"pending", "reserved", "completed", "failed"}:
@@ -76,6 +79,8 @@ class WorkQueueItem:
             "status": self.status,
             "sequence": self.sequence,
         }
+        if self.candidate_id is not None:
+            record["candidate_id"] = self.candidate_id
         if self.run_id is not None:
             record["run_id"] = self.run_id
         if self.measurement_dataset_path is not None:
@@ -94,6 +99,11 @@ class WorkQueueItem:
             id=_as_string(record.get("id"), "id"),
             benchmark_id=_as_identifier(record.get("benchmark_id"), "benchmark_id"),
             proposal_id=_as_string(record.get("proposal_id"), "proposal_id"),
+            candidate_id=(
+                _as_string(record["candidate_id"], "candidate_id")
+                if "candidate_id" in record
+                else None
+            ),
             proposal_set_path=Path(
                 _as_string(record.get("proposal_set_path"), "proposal_set_path")
             ),

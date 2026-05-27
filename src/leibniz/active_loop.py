@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from leibniz.benchmark_runner import BenchmarkRunPlan, BenchmarkRunSummary, run_benchmark
+from leibniz.content import ContentDigest
 from leibniz.documents import load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import LocalResultImportError, materialize_benchmark_result_views
@@ -18,6 +19,7 @@ from leibniz.proposal_generation import (
 )
 from leibniz.work_queues import (
     WorkQueueItem,
+    load_work_queue_items,
     materialize_work_queue_view,
     write_work_queue_item,
 )
@@ -56,6 +58,7 @@ class ActiveTrainingLoopPlan:
     convergence_min_delta: float = 0.0
     target_validation_loss: float | None = None
     dry_run: bool = False
+    retry_failed: bool = False
 
     def __post_init__(self) -> None:
         if type(self.iterations) is not int or self.iterations < 1:
@@ -98,6 +101,8 @@ class ActiveTrainingLoopPlan:
             raise ActiveTrainingLoopError("convergence_min_delta must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise ActiveTrainingLoopError("target_validation_loss must be nonnegative")
+        if type(self.retry_failed) is not bool:
+            raise ActiveTrainingLoopError("retry_failed must be boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,17 +172,38 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
         proposal = _first_proposal(proposal_summary.proposal_set_path)
         command = _proposal_command(proposal)
         planned_commands.append(command)
-        queue_item = WorkQueueItem(
-            id=f"iteration-{iteration + 1}-rank-{proposal.get('rank', 1)}",
-            benchmark_id=proposal_summary.benchmark_id,
-            proposal_id=str(proposal["id"]),
-            proposal_set_path=proposal_summary.proposal_set_path,
+        queue_item = _queue_item_for_proposal(
+            proposal=proposal,
+            proposal_summary=proposal_summary,
             command=command,
-            status="pending",
-            sequence=iteration,
+            iteration=iteration,
         )
-        write_work_queue_item(plan.runs_root, queue_item)
-        materialize_work_queue_view(plan.runs_root)
+        existing_queue_item = _matching_queue_item(
+            plan.runs_root,
+            benchmark_id=proposal_summary.benchmark_id,
+            command=command,
+        )
+        if existing_queue_item is not None:
+            queue_item = replace(
+                existing_queue_item,
+                candidate_id=_proposal_string(proposal, "candidate_id"),
+                proposal_id=str(proposal["id"]),
+                proposal_set_path=proposal_summary.proposal_set_path,
+                sequence=iteration,
+            )
+        if queue_item.status == "completed":
+            materialize_work_queue_view(plan.runs_root)
+            continue
+        if queue_item.status == "failed" and not plan.retry_failed:
+            materialize_work_queue_view(plan.runs_root)
+            raise ActiveTrainingLoopError(
+                "matching failed queue item requires --retry-failed"
+            )
+        if queue_item.status == "failed":
+            queue_item = replace(queue_item, error=None, status="pending")
+        if queue_item.status == "pending":
+            write_work_queue_item(plan.runs_root, queue_item)
+            materialize_work_queue_view(plan.runs_root)
         if plan.dry_run:
             continue
 
@@ -244,6 +270,46 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
         result_view_path=result_view_path,
         dry_run=plan.dry_run,
     )
+
+
+def _queue_item_for_proposal(
+    *,
+    proposal: Mapping[str, object],
+    proposal_summary: ProposalGenerationSummary,
+    command: tuple[str, ...],
+    iteration: int,
+) -> WorkQueueItem:
+    rank = proposal.get("rank", 1)
+    command_digest = str(ContentDigest.from_value(list(command))).split(":", maxsplit=1)[1][:12]
+    return WorkQueueItem(
+        id=f"iteration-{iteration + 1}-rank-{rank}-{command_digest}",
+        benchmark_id=proposal_summary.benchmark_id,
+        proposal_id=str(proposal["id"]),
+        candidate_id=_proposal_string(proposal, "candidate_id"),
+        proposal_set_path=proposal_summary.proposal_set_path,
+        command=command,
+        status="pending",
+        sequence=iteration,
+    )
+
+
+def _matching_queue_item(
+    runs_root: Path,
+    *,
+    benchmark_id: ProtocolIdentifier,
+    command: tuple[str, ...],
+) -> WorkQueueItem | None:
+    for item in load_work_queue_items(runs_root):
+        if item.benchmark_id == benchmark_id and item.command == command:
+            return item
+    return None
+
+
+def _proposal_string(proposal: Mapping[str, object], field: str) -> str:
+    value = proposal.get(field)
+    if not isinstance(value, str) or not value:
+        raise ActiveTrainingLoopError(f"proposal does not declare {field}")
+    return value
 
 
 def _materialize_if_possible(runs_root: Path) -> Path | None:

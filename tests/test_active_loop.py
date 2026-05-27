@@ -1,12 +1,14 @@
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import cast
 
 import pytest
 
 from leibniz.active_loop import (
+    ActiveTrainingLoopError,
     ActiveTrainingLoopPlan,
     run_active_training_loop,
 )
@@ -14,6 +16,7 @@ from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
 from leibniz.cli import main
 from leibniz.console.data import ConsoleDataBuilder
 from leibniz.local_results import load_console_result_view
+from leibniz.work_queues import load_work_queue_items, write_work_queue_item
 
 _repository_root = Path(__file__).parents[1]
 _benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -71,6 +74,162 @@ def test_active_training_loop_runs_one_iteration_and_refreshes_results(tmp_path:
     assert queue_items[0]["measurement_dataset_path"] == summary.measurement_dataset_paths[
         0
     ].as_posix()
+    assert queue_items[0]["candidate_id"]
+
+
+def test_active_training_loop_resumes_pending_dry_run_work(tmp_path: Path) -> None:
+    dry_run_summary = run_active_training_loop(
+        ActiveTrainingLoopPlan(
+            benchmark_root=_benchmark_root,
+            runs_root=tmp_path / ".runs",
+            dry_run=True,
+            candidate_budget=1,
+            sample_count=1,
+            train_steps=0,
+        )
+    )
+    queue_view = load_console_result_view(
+        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
+    )
+    pending_items = cast(list[dict[str, object]], queue_view["queue_items"])
+
+    run_summary = run_active_training_loop(
+        ActiveTrainingLoopPlan(
+            benchmark_root=_benchmark_root,
+            runs_root=tmp_path / ".runs",
+            candidate_budget=1,
+            sample_count=1,
+            train_steps=0,
+        )
+    )
+
+    queue_view = load_console_result_view(
+        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
+    )
+    completed_items = cast(list[dict[str, object]], queue_view["queue_items"])
+    assert dry_run_summary.planned_commands == run_summary.planned_commands
+    assert [item["id"] for item in completed_items] == [item["id"] for item in pending_items]
+    assert [item["status"] for item in completed_items] == ["completed"]
+
+
+def test_active_training_loop_skips_completed_matching_work(tmp_path: Path) -> None:
+    runs_root = tmp_path / ".runs"
+    run_active_training_loop(
+        ActiveTrainingLoopPlan(
+            benchmark_root=_benchmark_root,
+            runs_root=runs_root,
+            dry_run=True,
+            candidate_budget=1,
+            sample_count=1,
+            train_steps=0,
+        )
+    )
+    pending_item = load_work_queue_items(runs_root)[0]
+    write_work_queue_item(
+        runs_root,
+        replace(
+            pending_item,
+            measurement_dataset_path=runs_root / "measurements" / "existing.json",
+            run_id="existing-run",
+            status="completed",
+        ),
+    )
+
+    summary = run_active_training_loop(
+        ActiveTrainingLoopPlan(
+            benchmark_root=_benchmark_root,
+            runs_root=runs_root,
+            candidate_budget=1,
+            sample_count=1,
+            train_steps=0,
+        )
+    )
+
+    queue_view = load_console_result_view(
+        (runs_root / "views" / "work_queue.json").read_bytes()
+    )
+    queue_items = cast(list[dict[str, object]], queue_view["queue_items"])
+    assert summary.completed_run_count == 0
+    assert not runs_root.joinpath("measurements").is_dir()
+    assert [item["status"] for item in queue_items] == ["completed"]
+
+
+def test_active_training_loop_blocks_failed_work_without_explicit_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_run(_plan: BenchmarkRunPlan):
+        raise RuntimeError("synthetic training failure")
+
+    monkeypatch.setattr("leibniz.active_loop.run_benchmark", fail_run)
+    with pytest.raises(RuntimeError, match="synthetic training failure"):
+        run_active_training_loop(
+            ActiveTrainingLoopPlan(
+                benchmark_root=_benchmark_root,
+                runs_root=tmp_path / ".runs",
+                candidate_budget=1,
+                sample_count=1,
+                train_steps=0,
+            )
+        )
+
+    monkeypatch.setattr("leibniz.active_loop.run_benchmark", run_benchmark)
+    with pytest.raises(ActiveTrainingLoopError, match="requires --retry-failed"):
+        run_active_training_loop(
+            ActiveTrainingLoopPlan(
+                benchmark_root=_benchmark_root,
+                runs_root=tmp_path / ".runs",
+                candidate_budget=1,
+                sample_count=1,
+                train_steps=0,
+            )
+        )
+
+    queue_view = load_console_result_view(
+        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
+    )
+    queue_items = cast(list[dict[str, object]], queue_view["queue_items"])
+    assert [item["status"] for item in queue_items] == ["failed"]
+
+
+def test_active_training_loop_retries_failed_work_when_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_run(_plan: BenchmarkRunPlan):
+        raise RuntimeError("synthetic training failure")
+
+    monkeypatch.setattr("leibniz.active_loop.run_benchmark", fail_run)
+    with pytest.raises(RuntimeError, match="synthetic training failure"):
+        run_active_training_loop(
+            ActiveTrainingLoopPlan(
+                benchmark_root=_benchmark_root,
+                runs_root=tmp_path / ".runs",
+                candidate_budget=1,
+                sample_count=1,
+                train_steps=0,
+            )
+        )
+
+    monkeypatch.setattr("leibniz.active_loop.run_benchmark", run_benchmark)
+    summary = run_active_training_loop(
+        ActiveTrainingLoopPlan(
+            benchmark_root=_benchmark_root,
+            runs_root=tmp_path / ".runs",
+            candidate_budget=1,
+            sample_count=1,
+            train_steps=0,
+            retry_failed=True,
+        )
+    )
+
+    queue_view = load_console_result_view(
+        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
+    )
+    queue_items = cast(list[dict[str, object]], queue_view["queue_items"])
+    assert summary.completed_run_count == 1
+    assert [item["status"] for item in queue_items] == ["completed"]
+    assert "error" not in queue_items[0]
 
 
 def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
