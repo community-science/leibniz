@@ -94,6 +94,8 @@ def test_architecture_manifest_document_loads_fixture_with_digest() -> None:
         "flatten",
         "dense",
     )
+    assert document.manifest.to_record()["input_shape"] == [1, 32, 32]
+    assert document.manifest.to_record()["output_shape"] == [10]
     assert document.digest == ContentDigest.from_value(document.manifest.to_record())
 
 

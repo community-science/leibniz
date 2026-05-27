@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from leibniz.architectures import ArchitectureLayer, ArchitectureManifest
+from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
     "ExecutableModelOperator",
@@ -480,7 +481,7 @@ class ExecutableModelOperator:
                 shape = (*shape[: len(shape) - dimension], size, size)
             elif descriptor.kind == _operator_rank_collapse:
                 modules.append(torch.nn.Flatten())
-                shape = (math.prod(shape),)
+                shape = (TensorShape.from_axes(shape).element_count,)
             elif descriptor.kind == _operator_affine_readout:
                 if len(shape) != 1:
                     raise ModelOperatorExecutionError("affine readout requires rank-1 input")
@@ -735,7 +736,7 @@ def _operator_shape_and_cost(
     if input_shape is None:
         return None, None, None
     if descriptor.kind == _operator_rank_collapse:
-        return (math.prod(input_shape),), 0, 0
+        return (TensorShape.from_axes(input_shape).element_count,), 0, 0
     if descriptor.kind == _operator_affine_readout:
         if len(input_shape) != 1:
             return None, None, None
@@ -1101,8 +1102,10 @@ def _optional_positive_int_parameter(parameters: Mapping[str, object], key: str)
 def _require_optional_shape(value: tuple[int, ...] | None, *, field: str) -> None:
     if value is None:
         return
-    if not value or any(type(axis) is not int or axis < 1 for axis in value):
-        raise ModelOperatorExecutionError(f"{field} must be a positive shape")
+    try:
+        TensorShape.from_axes(value, field=field)
+    except TensorShapeValidationError as error:
+        raise ModelOperatorExecutionError(f"{field} must be a positive shape") from error
 
 
 def _require_optional_count(value: int | None, *, field: str) -> None:
