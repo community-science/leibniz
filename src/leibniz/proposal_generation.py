@@ -13,6 +13,11 @@ from leibniz.architecture_candidates import (
     generate_architecture_candidates,
 )
 from leibniz.architectures import ArchitectureManifest
+from leibniz.candidate_observations import (
+    ArchitectureCandidateObservation,
+    ArchitectureMeasurementEvidence,
+    project_architecture_candidate_observations,
+)
 from leibniz.content import ContentDigest
 from leibniz.documents import (
     canonical_document_bytes,
@@ -102,6 +107,7 @@ class _MeasuredArchitecture:
 class _CandidateArchitecture:
     architecture: ArchitectureManifest
     search_rank: int
+    parameter_count: int
     predicted_score: float
     uncertainty: float
     acquisition_value: float
@@ -119,17 +125,27 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
     dataset = _measurement_dataset(plan.runs_root, benchmark_id=manifest.id)
     measured = _measured_architectures(plan.runs_root, benchmark_id=manifest.id)
     candidate_space = default_architecture_candidate_space()
-    candidates = _candidate_architectures(
-        candidate_space=tuple(
+    candidate_observations = project_architecture_candidate_observations(
+        tuple(
             generate_architecture_candidates(
                 candidate_space,
                 input_shape=sample.field.shape,
                 output_count=len(outcome_space.outcomes),
             )
         ),
+        measured=tuple(
+            ArchitectureMeasurementEvidence(
+                architecture_digest=item.digest,
+                score=item.score,
+                parameter_count=item.parameter_count,
+            )
+            for item in measured
+        ),
+    )
+    candidates = _candidate_architectures(
+        candidate_observations=candidate_observations,
         input_shape=sample.field.shape,
         output_count=len(outcome_space.outcomes),
-        measured=measured,
         candidate_budget=plan.candidate_budget,
     )
     if not candidates:
@@ -315,38 +331,45 @@ def _training_summaries(
 
 def _candidate_architectures(
     *,
-    candidate_space: tuple[ArchitectureCandidate, ...],
+    candidate_observations: tuple[ArchitectureCandidateObservation, ...],
     input_shape: tuple[int, ...],
     output_count: int,
-    measured: tuple[_MeasuredArchitecture, ...],
     candidate_budget: int,
 ) -> tuple[_CandidateArchitecture, ...]:
     _require_candidate_shape(
-        candidate_space,
+        tuple(observation.candidate for observation in candidate_observations),
         input_shape=input_shape,
         output_count=output_count,
     )
-    measured_digests = {item.digest for item in measured}
-    observed_parameters = tuple(item.parameter_count for item in measured)
-    best_score = max((item.score for item in measured), default=0.0)
+    observed_parameters = tuple(
+        observation.parameter_count
+        for observation in candidate_observations
+        if observation.is_measured
+    )
+    best_score = max(
+        (observation.best_measured_score for observation in candidate_observations),
+        default=0.0,
+    )
     candidates: list[_CandidateArchitecture] = []
-    for search_rank, candidate in enumerate(candidate_space, start=1):
-        architecture = candidate.architecture
-        if architecture.digest in measured_digests:
+    for observation in candidate_observations:
+        if observation.is_measured:
             continue
-        parameter_count = candidate.parameter_count
+        candidate = observation.candidate
+        architecture = candidate.architecture
+        parameter_count = observation.parameter_count
         novelty = _novelty(parameter_count, observed_parameters)
         uncertainty = min(1.0, 0.2 + novelty / 2.0)
         predicted_score = min(1.0, max(best_score, 1.0 / output_count) + novelty * 0.05)
         frontier_improvement = max(
             0.0,
-            predicted_score - _best_score_within_cost(measured, parameter_count),
+            predicted_score - observation.best_measured_score_at_or_below_cost,
         )
         acquisition_value = predicted_score + uncertainty * 0.25 + novelty * 0.1
         candidates.append(
             _CandidateArchitecture(
                 architecture=architecture,
-                search_rank=search_rank,
+                search_rank=observation.source_candidate_rank,
+                parameter_count=parameter_count,
                 predicted_score=predicted_score,
                 uncertainty=uncertainty,
                 acquisition_value=acquisition_value,
@@ -358,11 +381,9 @@ def _candidate_architectures(
 
 
 def _candidate_sort_key(candidate: _CandidateArchitecture) -> tuple[float, float, int, str]:
-    plan = summarize_architecture_operators(candidate.architecture)
-    parameter_count = plan.parameter_count if plan.parameter_count is not None else math.inf
     return (
         -candidate.acquisition_value,
-        float(parameter_count),
+        float(candidate.parameter_count),
         candidate.search_rank,
         str(candidate.architecture.id),
     )
@@ -396,16 +417,6 @@ def _novelty(parameter_count: int, observed_parameters: tuple[int, ...]) -> floa
         for observed in observed_parameters
     )
     return min(1.0, min(distances))
-
-
-def _best_score_within_cost(
-    measured: tuple[_MeasuredArchitecture, ...],
-    parameter_count: int,
-) -> float:
-    return max(
-        (item.score for item in measured if item.parameter_count <= parameter_count),
-        default=0.0,
-    )
 
 
 def _mean_score(dataset: MeasurementDataset) -> float:
