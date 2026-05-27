@@ -110,7 +110,6 @@ class ActiveTrainingLoopSummary:
     """Summary of one active benchmark loop invocation."""
 
     benchmark_id: ProtocolIdentifier
-    iteration_count: int
     completed_run_count: int
     planned_commands: tuple[tuple[str, ...], ...]
     proposal_set_paths: tuple[Path, ...]
@@ -121,7 +120,6 @@ class ActiveTrainingLoopSummary:
     def to_record(self) -> dict[str, object]:
         record: dict[str, object] = {
             "benchmark_id": str(self.benchmark_id),
-            "iteration_count": self.iteration_count,
             "completed_run_count": self.completed_run_count,
             "planned_commands": [list(command) for command in self.planned_commands],
             "proposal_set_paths": [path.as_posix() for path in self.proposal_set_paths],
@@ -262,7 +260,6 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
         raise ActiveTrainingLoopError("active loop did not generate proposals")
     return ActiveTrainingLoopSummary(
         benchmark_id=benchmark_id,
-        iteration_count=plan.iterations,
         completed_run_count=len(benchmark_summaries),
         planned_commands=tuple(planned_commands),
         proposal_set_paths=tuple(summary.proposal_set_path for summary in proposal_summaries),

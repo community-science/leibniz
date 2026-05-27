@@ -42,7 +42,7 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
         / ".runs"
         / "measurements"
         / "digits"
-        / "digits-arch-bb0dde9254dc-l1-seed101-samples2-steps1.json"
+        / "digits-arch-bb0dde9254dc-l1-seed101-samples2-steps1-train-824456cc16d4.json"
     )
     assert not summary.measurement_dataset_path.exists()
     assert not (tmp_path / ".runs").exists()
@@ -142,6 +142,29 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert training_run.protocol.validation_source == "generator-resample"
     assert [point.step for point in training_run.validation_history] == [0, 2, 3]
     assert training_run.validation_history[-1].learning_rates
+
+
+def test_digits_benchmark_runner_run_slug_includes_training_controls() -> None:
+    base_plan = BenchmarkRunPlan(
+        architecture_path=_digits_architecture,
+        benchmark_root=_digits_benchmark_root,
+        sample_count=4,
+        seed=401,
+        train_steps=10,
+        optimizer="sgd",
+    )
+    alternate_plan = BenchmarkRunPlan(
+        architecture_path=_digits_architecture,
+        benchmark_root=_digits_benchmark_root,
+        sample_count=4,
+        seed=401,
+        train_steps=10,
+        optimizer="adam",
+    )
+
+    assert base_plan.run_slug.startswith("l1-seed401-samples4-steps10-train-")
+    assert alternate_plan.run_slug.startswith("l1-seed401-samples4-steps10-train-")
+    assert base_plan.run_slug != alternate_plan.run_slug
 
 
 def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: Path) -> None:
@@ -245,6 +268,7 @@ def test_cli_runs_digits_benchmark_dry_run(
     assert exit_code == 0
     assert captured.err == ""
     assert captured.out.startswith(
-        "planned benchmark run digits-arch-bb0dde9254dc-l1-seed101-samples2-steps1"
+        "planned benchmark run "
+        "digits-arch-bb0dde9254dc-l1-seed101-samples2-steps1-train-824456cc16d4"
     )
     assert not (tmp_path / ".runs").exists()

@@ -132,8 +132,25 @@ class BenchmarkRunPlan:
             f"-steps{self.train_steps}"
         )
         if self.resolved_evaluation_sample_count == self.sample_count:
-            return base
-        return f"{base}-eval{self.resolved_evaluation_sample_count}"
+            return f"{base}-{self.training_control_atom}"
+        return f"{base}-eval{self.resolved_evaluation_sample_count}-{self.training_control_atom}"
+
+    @property
+    def training_control_atom(self) -> str:
+        """Return a compact identity atom for training/convergence controls."""
+
+        controls = {
+            "learning_rate": float(self.learning_rate),
+            "optimizer": self.optimizer,
+            "schedule": self.schedule,
+            "validation_interval": self.validation_interval,
+            "convergence_patience": self.convergence_patience,
+            "convergence_min_delta": float(self.convergence_min_delta),
+            "target_validation_loss": (
+                None if self.target_validation_loss is None else float(self.target_validation_loss)
+            ),
+        }
+        return f"train-{ContentDigest.from_value(controls).hex[:12]}"
 
     @property
     def resolved_evaluation_sample_count(self) -> int:
