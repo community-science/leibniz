@@ -13,6 +13,7 @@ from leibniz.active_loop import (
 from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
 from leibniz.cli import main
 from leibniz.console.data import ConsoleDataBuilder
+from leibniz.local_results import load_console_result_view
 
 _repository_root = Path(__file__).parents[1]
 _benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -38,6 +39,11 @@ def test_active_training_loop_dry_run_plans_without_training(tmp_path: Path) -> 
     assert summary.planned_commands[0][:3] == ("leibniz", "benchmark", "run")
     assert summary.proposal_set_paths[0].exists()
     assert not (tmp_path / ".runs" / "measurements").exists()
+    work_queue_view = load_console_result_view(
+        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
+    )
+    queue_items = cast(list[dict[str, object]], work_queue_view["queue_items"])
+    assert [item["status"] for item in queue_items] == ["pending"]
 
 
 def test_active_training_loop_runs_one_iteration_and_refreshes_results(tmp_path: Path) -> None:
@@ -56,6 +62,15 @@ def test_active_training_loop_runs_one_iteration_and_refreshes_results(tmp_path:
     assert summary.measurement_dataset_paths[0].exists()
     assert summary.result_view_path is not None
     assert summary.result_view_path.exists()
+    work_queue_view = load_console_result_view(
+        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
+    )
+    queue_items = cast(list[dict[str, object]], work_queue_view["queue_items"])
+    assert [item["status"] for item in queue_items] == ["completed"]
+    assert queue_items[0]["run_id"]
+    assert queue_items[0]["measurement_dataset_path"] == summary.measurement_dataset_paths[
+        0
+    ].as_posix()
 
 
 def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
@@ -112,6 +127,14 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
     assert benchmark_view["source_path"] == (
         runs_root / "views" / "benchmark_results.json"
     ).as_posix()
+    work_queue_view = next(
+        view for view in result_views if view["format"] == "leibniz.console.work-queue"
+    )
+    queue_items = cast(list[dict[str, object]], work_queue_view["queue_items"])
+    assert work_queue_view["source_path"] == (
+        runs_root / "views" / "work_queue.json"
+    ).as_posix()
+    assert [item["status"] for item in queue_items] == ["completed"]
     training_history = cast(list[dict[str, object]], digits_result["training_history"])
     proposals = cast(list[dict[str, object]], digits_result["proposals"])
     leaderboard = cast(list[dict[str, object]], digits_result["leaderboard"])
@@ -162,6 +185,12 @@ def test_active_training_loop_preserves_existing_measurements_on_run_failure(
         )
 
     assert initial.measurement_dataset_path.read_bytes() == before
+    work_queue_view = load_console_result_view(
+        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
+    )
+    queue_items = cast(list[dict[str, object]], work_queue_view["queue_items"])
+    assert [item["status"] for item in queue_items] == ["failed"]
+    assert queue_items[0]["error"] == "synthetic training failure"
 
 
 def test_cli_runs_active_training_loop_dry_run(

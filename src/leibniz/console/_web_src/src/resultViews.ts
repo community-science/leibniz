@@ -3,7 +3,10 @@ import {
   type ModelInspectionRecord,
 } from './modelInspections.ts';
 
-export type ResultViewRecord = ImportedResultViewRecord | BenchmarkResultViewRecord;
+export type ResultViewRecord =
+  | ImportedResultViewRecord
+  | BenchmarkResultViewRecord
+  | WorkQueueViewRecord;
 
 export type ImportedResultViewRecord = {
   format: 'leibniz.console.imported-results';
@@ -39,6 +42,32 @@ export type BenchmarkResultViewRecord = {
   source_mtime_ms?: number;
   source_size_bytes?: number;
   benchmark_results: BenchmarkResultRecord[];
+};
+
+export type WorkQueueViewRecord = {
+  format: 'leibniz.console.work-queue';
+  format_version: 1;
+  source_path: string;
+  source_mtime_ms?: number;
+  source_size_bytes?: number;
+  queue_items: WorkQueueItemRecord[];
+};
+
+export type WorkQueueItemStatus = 'pending' | 'reserved' | 'completed' | 'failed';
+
+export type WorkQueueItemRecord = {
+  format: 'leibniz.work-queue-item';
+  format_version: 1;
+  id: string;
+  benchmark_id: string;
+  proposal_id: string;
+  proposal_set_path: string;
+  command: string[];
+  status: WorkQueueItemStatus;
+  sequence: number;
+  run_id?: string;
+  measurement_dataset_path?: string;
+  error?: string;
 };
 
 export type BenchmarkResultRecord = {
@@ -138,6 +167,12 @@ export function isImportedResultView(
   return view.format === 'leibniz.console.imported-results';
 }
 
+export function isWorkQueueView(
+  view: ResultViewRecord,
+): view is WorkQueueViewRecord {
+  return view.format === 'leibniz.console.work-queue';
+}
+
 export function parseResultViewRecords(value: unknown): ResultViewRecord[] {
   return requireArray(value, 'result_views').map((view, index) =>
     parseResultViewRecord(view, `result_views.${index}`),
@@ -148,6 +183,9 @@ function parseResultViewRecord(value: unknown, path: string): ResultViewRecord {
   const record = requireRecord(value, path);
   if (record.format === 'leibniz.console.benchmark-results') {
     return parseBenchmarkResultViewRecord(record, path);
+  }
+  if (record.format === 'leibniz.console.work-queue') {
+    return parseWorkQueueViewRecord(record, path);
   }
   return parseImportedResultViewRecord(record, path);
 }
@@ -198,6 +236,64 @@ function parseBenchmarkResultViewRecord(
     source_size_bytes: sourceSizeBytes,
     benchmark_results: benchmarkResults,
   };
+}
+
+function parseWorkQueueViewRecord(
+  record: Record<string, unknown>,
+  path: string,
+): WorkQueueViewRecord {
+  const format = requireLiteral(record.format, `${path}.format`, 'leibniz.console.work-queue');
+  const formatVersion = requireLiteral(record.format_version, `${path}.format_version`, 1);
+  const sourcePath = requireString(record.source_path, `${path}.source_path`);
+  const sourceMtimeMs = optionalNumber(record.source_mtime_ms, `${path}.source_mtime_ms`);
+  const sourceSizeBytes = optionalNumber(record.source_size_bytes, `${path}.source_size_bytes`);
+  const queueItems = requireArray(record.queue_items, `${path}.queue_items`).map((item, index) =>
+    parseWorkQueueItem(item, `${path}.queue_items.${index}`),
+  );
+  return {
+    format,
+    format_version: formatVersion,
+    source_path: sourcePath,
+    source_mtime_ms: sourceMtimeMs,
+    source_size_bytes: sourceSizeBytes,
+    queue_items: queueItems,
+  };
+}
+
+function parseWorkQueueItem(value: unknown, path: string): WorkQueueItemRecord {
+  const record = requireRecord(value, path);
+  return {
+    format: requireLiteral(record.format, `${path}.format`, 'leibniz.work-queue-item'),
+    format_version: requireLiteral(record.format_version, `${path}.format_version`, 1),
+    id: requireString(record.id, `${path}.id`),
+    benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`),
+    proposal_id: requireString(record.proposal_id, `${path}.proposal_id`),
+    proposal_set_path: requireString(record.proposal_set_path, `${path}.proposal_set_path`),
+    command: parseStringArray(record.command, `${path}.command`),
+    status: parseWorkQueueStatus(record.status, `${path}.status`),
+    sequence: requireNumber(record.sequence, `${path}.sequence`),
+    run_id:
+      record.run_id === undefined ? undefined : requireString(record.run_id, `${path}.run_id`),
+    measurement_dataset_path:
+      record.measurement_dataset_path === undefined
+        ? undefined
+        : requireString(record.measurement_dataset_path, `${path}.measurement_dataset_path`),
+    error:
+      record.error === undefined ? undefined : requireString(record.error, `${path}.error`),
+  };
+}
+
+function parseWorkQueueStatus(value: unknown, path: string): WorkQueueItemStatus {
+  const status = requireString(value, path);
+  if (
+    status !== 'pending' &&
+    status !== 'reserved' &&
+    status !== 'completed' &&
+    status !== 'failed'
+  ) {
+    throw new ResultViewTransportError(`${path}: expected work queue status`);
+  }
+  return status;
 }
 
 function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultRecord {
