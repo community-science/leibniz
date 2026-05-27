@@ -3,6 +3,7 @@ from pathlib import Path, PurePosixPath
 
 from leibniz._repository_policy import PolicyViolation, RepositoryPolicy
 from leibniz.console.artifact_index import ConsoleArtifactIndexBuilder
+from leibniz.documents import load_object_document
 
 _repository_root = Path(__file__).parents[1]
 
@@ -101,6 +102,18 @@ def test_benchmark_artifact_tree_contains_only_data_files() -> None:
     assert tracked_files
     assert all(path.suffix == ".json" for path in tracked_files)
     assert not any(path.suffix == ".py" for path in tracked_files)
+
+
+def test_benchmark_artifacts_do_not_declare_architecture_search_space() -> None:
+    benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks"
+
+    search_artifacts: list[str] = []
+    for path in sorted(benchmark_root.rglob("*.json")):
+        record = load_object_document(path.read_bytes(), description=path.as_posix())
+        if record.get("format") == "leibniz.architecture-candidate-space":
+            search_artifacts.append(path.relative_to(_repository_root).as_posix())
+
+    assert search_artifacts == []
 
 
 def test_benchmark_names_are_not_hardcoded_outside_benchmark_artifacts() -> None:
