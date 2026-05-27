@@ -178,6 +178,16 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert diagnostics["validation_checks"] == 2
     assert "final_validation_loss" in diagnostics
     assert len(cast(list[dict[str, object]], diagnostics["validation_history"])) == 2
+    console_view_model = cast(dict[str, object], history[0]["console_view_model"])
+    detail_sections = cast(list[dict[str, object]], console_view_model["detail_sections"])
+    assert [section["title"] for section in detail_sections] == [
+        "Sampled Competence",
+        "Training Protocol",
+        "Training Outcome",
+        "Validation History",
+    ]
+    validation_table = cast(dict[str, object], detail_sections[-1]["table"])
+    assert validation_table["columns"] == ["Step", "Loss", "Best", "Stale"]
     artifact_kinds = {
         artifact["kind"]
         for artifact in cast(list[dict[str, object]], diagnostics["artifacts"])

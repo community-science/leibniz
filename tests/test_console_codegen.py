@@ -33,6 +33,8 @@ def test_generated_console_result_view_records_module_contains_parser_surface() 
     assert "export type BenchmarkResultRecord" in generated
     assert "export function parseResultViewRecords" in generated
     assert "function parseWorkQueueItem" in generated
+    assert "export type RunDetailViewModelRecord" in generated
+    assert "function parseRunDetailViewModel" in generated
 
 
 def test_generated_console_web_modules_are_npm_build_artifacts() -> None:
@@ -97,4 +99,22 @@ def test_handwritten_result_view_source_uses_generated_record_parsers() -> None:
         and any(marker in path.read_text(encoding="utf-8") for marker in migrated_markers)
     )
 
+    assert offenders == ()
+
+
+def test_benchmark_dashboard_renders_python_owned_run_detail_sections() -> None:
+    dashboard = (
+        _web_source_root / "BenchmarkResultDashboard.tsx"
+    ).read_text(encoding="utf-8")
+    migrated_markers = (
+        "sampled_competence",
+        "training_diagnostics",
+        "validation_history",
+        "best_validation_loss",
+        "validation_source",
+    )
+
+    offenders = tuple(marker for marker in migrated_markers if marker in dashboard)
+
+    assert "console_view_model?.detail_sections" in dashboard
     assert offenders == ()

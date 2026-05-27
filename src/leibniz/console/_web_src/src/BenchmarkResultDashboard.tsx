@@ -29,6 +29,7 @@ import type {
   CostAxisRecord,
   ModelResultRecord,
   ProposalRecord,
+  RunDetailSectionRecord,
   WorkQueueItemRecord,
 } from './resultViews.ts';
 import {
@@ -851,7 +852,6 @@ function RunHistoryTable({
       </div>
       {selectedRunDetail === undefined ? null : (
         <RunDetailCard
-          complexityAxis={complexityAxis}
           costAxis={costAxis}
           detail={selectedRunDetail}
         />
@@ -861,19 +861,14 @@ function RunHistoryTable({
 }
 
 function RunDetailCard({
-  complexityAxis,
   costAxis,
   detail,
 }: {
-  complexityAxis: string | undefined;
   costAxis: string;
   detail: BenchmarkRunDetail;
 }) {
   const { model, run } = detail;
-  const diagnostics = run.training_diagnostics;
-  const protocol = diagnostics?.protocol;
-  const validationHistory = diagnostics?.validation_history ?? [];
-  const sampledCompetence = sampledCompetenceRecord(run);
+  const detailSections = run.console_view_model?.detail_sections ?? [];
   return (
     <article className="run-detail-card">
       <div>
@@ -902,107 +897,47 @@ function RunDetailCard({
             : shortDigest(run.model_inspection_digest)}
         </dd>
       </dl>
-      {sampledCompetence === undefined ? null : (
-        <RunEvidencePanel
-          title="Sampled Competence"
-          entries={[
-            [complexityAxis ?? 'Complexity', numberValue(sampledCompetence.complexity)],
-            ['Samples', numberValue(sampledCompetence.sample_count)],
-            ['Mean Score', numberValue(sampledCompetence.mean_accepted_mass, 4)],
-            ['Sampling', stringValue(sampledCompetence.sampling_rule)],
-          ]}
-        />
-      )}
-      {protocol === undefined ? null : (
-        <RunEvidencePanel
-          title="Training Protocol"
-          entries={[
-            ['Objective', stringValue(protocol.objective)],
-            ['Optimizer', stringValue(protocol.optimizer)],
-            ['Schedule', stringValue(protocol.schedule)],
-            ['Learning Rate', numberValue(protocol.learning_rate, 4)],
-            ['Steps', numberValue(protocol.max_steps)],
-            ['Batch', numberValue(protocol.batch_size)],
-            ['Interval', numberValue(protocol.validation_interval)],
-            ['Validation', stringValue(protocol.validation_source)],
-          ]}
-        />
-      )}
-      {diagnostics === undefined ? null : (
-        <RunEvidencePanel
-          title="Training Outcome"
-          entries={[
-            ['Status', stringValue(diagnostics.status)],
-            ['Stop', stringValue(diagnostics.stop_reason)],
-            ['Best Loss', numberValue(diagnostics.best_validation_loss, 4)],
-            ['Best Step', numberValue(diagnostics.best_validation_step)],
-            ['Final Loss', numberValue(diagnostics.final_validation_loss, 4)],
-            ['Checks', numberValue(diagnostics.validation_checks)],
-          ]}
-        />
-      )}
-      {validationHistory.length === 0 ? null : (
-        <section className="run-evidence-panel">
-          <h5>Validation History</h5>
-          <div className="run-validation-table" role="table" aria-label="Validation history">
-            <div className="run-validation-row header" role="row">
-              <span role="columnheader">Step</span>
-              <span role="columnheader">Loss</span>
-              <span role="columnheader">Best</span>
-              <span role="columnheader">Stale</span>
-            </div>
-            {validationHistory.map((point, index) => (
-              <div className="run-validation-row" key={index} role="row">
-                <span role="cell">{numberValue(point.step)}</span>
-                <span role="cell">{numberValue(point.validation_loss, 4)}</span>
-                <span role="cell">{numberValue(point.best_validation_loss, 4)}</span>
-                <span role="cell">{numberValue(point.stale_checks)}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      {detailSections.map((section) => (
+        <RunDetailSection key={section.title} section={section} />
+      ))}
     </article>
   );
 }
 
-function RunEvidencePanel({
-  entries,
-  title,
-}: {
-  entries: [string, string][];
-  title: string;
-}) {
+function RunDetailSection({ section }: { section: RunDetailSectionRecord }) {
+  const entries = section.entries ?? [];
+  const table = section.table;
   return (
     <section className="run-evidence-panel">
-      <h5>{title}</h5>
-      <dl>
-        {entries.map(([label, value]) => (
-          <div key={label}>
-            <dt>{label}</dt>
-            <dd>{value}</dd>
+      <h5>{section.title}</h5>
+      {entries.length === 0 ? null : (
+        <dl>
+          {entries.map((entry) => (
+            <div key={entry.label}>
+              <dt>{entry.label}</dt>
+              <dd>{entry.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {table === undefined ? null : (
+        <div className="run-validation-table" role="table" aria-label={table.aria_label}>
+          <div className="run-validation-row header" role="row">
+            {table.columns.map((column) => (
+              <span key={column} role="columnheader">{column}</span>
+            ))}
           </div>
-        ))}
-      </dl>
+          {table.rows.map((row, index) => (
+            <div className="run-validation-row" key={index} role="row">
+              {row.map((value, valueIndex) => (
+                <span key={`${index}-${valueIndex}`} role="cell">{value}</span>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
-}
-
-function sampledCompetenceRecord(
-  run: BenchmarkRunDetail['run'],
-): Record<string, unknown> | undefined {
-  return run.sampled_competence;
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === 'string' && value.length > 0 ? value : 'unknown';
-}
-
-function numberValue(value: unknown, precision = 0): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return 'unknown';
-  }
-  return precision === 0 ? value.toLocaleString() : value.toFixed(precision);
 }
 
 function zoomedView(
