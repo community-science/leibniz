@@ -16,6 +16,38 @@ protocol with clear artifacts and rigorous design boundaries.
   removed or redesigned.
 - Redesign is allowed and expected when it creates a cleaner protocol boundary.
 
+## Contribution Terms
+
+This repository is dedicated to the public domain under CC0-1.0. By submitting
+a pull request, patch, or other contribution to this repository, you agree that,
+if accepted, your contribution will be released under the same CC0-1.0 public
+domain dedication as the rest of the project. Do not submit contributions that
+you do not have the right to dedicate under those terms.
+
+## Development Environment
+
+The package declares support for Python `>=3.11`. The repository-local
+Miniforge environment is the expected development environment and currently
+uses Python 3.12:
+
+```bash
+bash scripts/setup_environment.sh
+source scripts/activate_environment.sh
+```
+
+Prefer the activated environment over ad hoc `PYTHONPATH` changes. The package
+is installed editable by the environment setup, and CI uses the same
+`environment.yml` and `pyproject.toml` inputs.
+
+## Agent Guidance
+
+Automated coding agents should read `README.md` and `CONTRIBUTING.md` before
+editing, inspect nearby code and tests before choosing an implementation, keep
+changes scoped to the requested boundary, and preserve unrelated worktree
+changes. Agents should run the narrowest meaningful checks while iterating,
+report any skipped validation, and avoid committing local runtime state such as
+`.leibniz/`, `.runs/`, caches, checkpoints, registries, or queues.
+
 ## Required Pull Request Explanation
 
 Each nontrivial pull request should explain:
@@ -28,6 +60,25 @@ Each nontrivial pull request should explain:
 - Rationale: why this should exist in the repository now.
 - Design review: which design choices were considered, kept, changed, or
   rejected.
+
+## Public Surface
+
+Treat these as public surface unless the pull request states otherwise:
+
+- CLI commands, options, exit behavior, and generated output formats.
+- Importable modules, public classes, functions, and typed constants under
+  `src/leibniz/`.
+- Protocol artifact schemas, durable document formats, semantic identifiers,
+  and versioned artifact names.
+- Files intended to be read by other tools, repositories, publication flows, or
+  benchmark runners.
+- Console data contracts and generated data consumed by the embedded web
+  console.
+- Repository policy checks and the set of files they allow or reject.
+
+When changing public surface, state whether the change is additive, breaking,
+or a pre-`1.0.0` redesign, and update tests for the contract that callers or
+artifact consumers depend on.
 
 ## Review Scope
 
@@ -88,6 +139,15 @@ surfaces are introduced. Expected checks include:
 Heavy benchmark training, GPU jobs, and network-dependent federation tests
 should not be required pull-request checks. They belong in scheduled or
 manually triggered workflows with explicit resource expectations.
+
+Use validation tiers deliberately:
+
+- While iterating, run targeted tests or checks that exercise the changed
+  contract.
+- Before review, run the full local check set from `README.md` for
+  non-documentation changes unless the pull request explains a skipped check.
+- For expensive benchmark, GPU, publication, or federation workflows, document
+  the manual validation path instead of making it a routine pull-request gate.
 
 ## Dependency Discipline
 
