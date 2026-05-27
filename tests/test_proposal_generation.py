@@ -69,6 +69,9 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
         architecture.id for architecture in architectures
     }
     assert document.proposal_set.proposals[0].acquisition_value is not None
+    assert "--optimizer" in document.proposal_set.proposals[0].command
+    assert "--schedule" in document.proposal_set.proposals[0].command
+    assert "--validation-interval" in document.proposal_set.proposals[0].command
 
     result_summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
@@ -97,6 +100,16 @@ def test_cli_generates_experiment_proposals(
             str(tmp_path / ".runs"),
             "--candidate-budget",
             "1",
+            "--optimizer",
+            "adamw",
+            "--schedule",
+            "reduce-on-plateau",
+            "--validation-interval",
+            "2",
+            "--convergence-patience",
+            "3",
+            "--convergence-min-delta",
+            "0.001",
         ]
     )
 
