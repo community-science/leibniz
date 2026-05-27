@@ -650,10 +650,9 @@ function semanticCoordinateSummary(
   if (!Array.isArray(coordinates)) {
     return 'not recorded';
   }
-  const supportCoordinate = 'operator.0.local_support_size';
-  const support = coordinateValue(coordinates, supportCoordinate);
-  if (support !== undefined) {
-    return `${coordinates.length} coordinates, ${coordinateDisplayName(operatorVocabulary, supportCoordinate)} ${support}`;
+  const primaryCoordinate = coordinates.find(isNamedCoordinate);
+  if (primaryCoordinate !== undefined) {
+    return `${coordinates.length} coordinates, ${coordinateDisplayName(operatorVocabulary, primaryCoordinate.name)} ${primaryCoordinate.value}`;
   }
   return `${coordinates.length} coordinates`;
 }
@@ -671,24 +670,17 @@ function nearestMeasuredSupportLabel(proposal: ProposalRecord): string {
   return `${formatCost(parameterCount)} params at ${scoreLabel(score)}`;
 }
 
-function coordinateValue(coordinates: unknown[], name: string): string | number | undefined {
-  for (const coordinate of coordinates) {
-    if (!isRecord(coordinate)) {
-      continue;
-    }
-    if (coordinate.name !== name) {
-      continue;
-    }
-    const value = coordinate.value;
-    if (typeof value === 'string' || typeof value === 'number') {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNamedCoordinate(
+  value: unknown,
+): value is { name: string; value: string | number } {
+  if (!isRecord(value) || typeof value.name !== 'string') {
+    return false;
+  }
+  return typeof value.value === 'string' || typeof value.value === 'number';
 }
 
 function ModelResultTable({
