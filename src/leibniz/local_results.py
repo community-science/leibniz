@@ -341,7 +341,7 @@ class _BenchmarkRunRecord:
     sampled_competence: Mapping[str, object] | None = None
     training_summary: Mapping[str, object] | None = None
 
-    def to_record(self) -> dict[str, object]:
+    def to_record(self, *, complexity_axis: str | None = None) -> dict[str, object]:
         record: dict[str, object] = {
             "source_kind": self.source_kind,
             "source_path": self.source_path.as_posix(),
@@ -356,6 +356,10 @@ class _BenchmarkRunRecord:
             "architecture": dict(self.architecture),
             "model_inspection_digest": str(self.model_inspection_digest),
             "measurement_dataset_digest": str(self.measurement_dataset_digest),
+            "console_view_model": _run_console_view_model(
+                run=self,
+                complexity_axis=complexity_axis,
+            ),
         }
         if self.model_inspection_path is not None:
             record["model_inspection_path"] = self.model_inspection_path.as_posix()
@@ -597,6 +601,133 @@ def _training_artifact_references(run: _BenchmarkRunRecord) -> list[dict[str, ob
     return references
 
 
+def _run_console_view_model(
+    *,
+    run: _BenchmarkRunRecord,
+    complexity_axis: str | None,
+) -> Mapping[str, object]:
+    sections: list[Mapping[str, object]] = []
+    if run.sampled_competence is not None:
+        sections.append(
+            _console_detail_entries_section(
+                title="Sampled Competence",
+                entries=(
+                    (
+                        complexity_axis or "Complexity",
+                        _console_number_value(run.sampled_competence.get("complexity")),
+                    ),
+                    ("Samples", _console_number_value(run.sampled_competence.get("sample_count"))),
+                    (
+                        "Mean Score",
+                        _console_number_value(
+                            run.sampled_competence.get("mean_accepted_mass"),
+                            precision=4,
+                        ),
+                    ),
+                    (
+                        "Sampling",
+                        _console_string_value(run.sampled_competence.get("sampling_rule")),
+                    ),
+                ),
+            )
+        )
+    if run.training_summary is not None:
+        diagnostics = _training_diagnostics_record(run)
+        protocol = _as_mapping(diagnostics.get("protocol"), "training_diagnostics.protocol")
+        sections.append(
+            _console_detail_entries_section(
+                title="Training Protocol",
+                entries=(
+                    ("Objective", _console_string_value(protocol.get("objective"))),
+                    ("Optimizer", _console_string_value(protocol.get("optimizer"))),
+                    ("Schedule", _console_string_value(protocol.get("schedule"))),
+                    (
+                        "Learning Rate",
+                        _console_number_value(protocol.get("learning_rate"), precision=4),
+                    ),
+                    ("Steps", _console_number_value(protocol.get("max_steps"))),
+                    ("Batch", _console_number_value(protocol.get("batch_size"))),
+                    ("Interval", _console_number_value(protocol.get("validation_interval"))),
+                    ("Validation", _console_string_value(protocol.get("validation_source"))),
+                ),
+            )
+        )
+        sections.append(
+            _console_detail_entries_section(
+                title="Training Outcome",
+                entries=(
+                    ("Status", _console_string_value(diagnostics.get("status"))),
+                    ("Stop", _console_string_value(diagnostics.get("stop_reason"))),
+                    (
+                        "Best Loss",
+                        _console_number_value(
+                            diagnostics.get("best_validation_loss"),
+                            precision=4,
+                        ),
+                    ),
+                    ("Best Step", _console_number_value(diagnostics.get("best_validation_step"))),
+                    (
+                        "Final Loss",
+                        _console_number_value(
+                            diagnostics.get("final_validation_loss"),
+                            precision=4,
+                        ),
+                    ),
+                    ("Checks", _console_number_value(diagnostics.get("validation_checks"))),
+                ),
+            )
+        )
+        history = _as_sequence(
+            diagnostics.get("validation_history"),
+            "training_diagnostics.validation_history",
+        )
+        if history:
+            sections.append(
+                {
+                    "title": "Validation History",
+                    "table": {
+                        "aria_label": "Validation history",
+                        "columns": ["Step", "Loss", "Best", "Stale"],
+                        "rows": [_console_validation_history_row(point) for point in history],
+                    },
+                }
+            )
+    return {"detail_sections": sections}
+
+
+def _console_detail_entries_section(
+    *,
+    title: str,
+    entries: tuple[tuple[str, str], ...],
+) -> Mapping[str, object]:
+    return {
+        "title": title,
+        "entries": [{"label": label, "value": value} for label, value in entries],
+    }
+
+
+def _console_string_value(value: object) -> str:
+    return value if isinstance(value, str) and value else "unknown"
+
+
+def _console_number_value(value: object, *, precision: int = 0) -> str:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        return "unknown"
+    if precision == 0:
+        return f"{value:,}" if isinstance(value, int) else f"{value:,.0f}"
+    return f"{value:.{precision}f}"
+
+
+def _console_validation_history_row(point: object) -> list[str]:
+    point_record = _as_mapping(point, "validation_history")
+    return [
+        _console_number_value(point_record.get("step")),
+        _console_number_value(point_record.get("validation_loss"), precision=4),
+        _console_number_value(point_record.get("best_validation_loss"), precision=4),
+        _console_number_value(point_record.get("stale_checks")),
+    ]
+
+
 def _publication_bundle_for_local_run(
     *,
     manifest: BenchmarkManifest,
@@ -698,7 +829,9 @@ def _benchmark_result_record(
             axis: _frontier_records(models, cost_axis=axis)
             for axis in ("parameter_count", "inference_flops", "parameter_bytes")
         },
-        "training_history": [run.to_record() for run in runs],
+        "training_history": [
+            run.to_record(complexity_axis=manifest.complexity_coordinate) for run in runs
+        ],
         "model_inspections": _model_inspection_records(runs),
     }
     if proposals:
@@ -1078,6 +1211,65 @@ def _validate_run_result(record: Mapping[str, object]) -> None:
         _validate_training_diagnostics(
             _as_mapping(record.get("training_diagnostics"), "training_diagnostics")
         )
+    if "console_view_model" in record:
+        _validate_run_console_view_model(
+            _as_mapping(record.get("console_view_model"), "console_view_model")
+        )
+
+
+def _validate_run_console_view_model(record: Mapping[str, object]) -> None:
+    sections = _as_sequence(record.get("detail_sections"), "console_view_model.detail_sections")
+    for section_index, section in enumerate(sections):
+        section_record = _as_mapping(
+            section,
+            f"console_view_model.detail_sections.{section_index}",
+        )
+        _as_string(
+            section_record.get("title"),
+            f"console_view_model.detail_sections.{section_index}.title",
+        )
+        if "entries" in section_record:
+            entries = _as_sequence(
+                section_record["entries"],
+                f"console_view_model.detail_sections.{section_index}.entries",
+            )
+            for entry_index, entry in enumerate(entries):
+                entry_record = _as_mapping(
+                    entry,
+                    f"console_view_model.detail_sections.{section_index}.entries.{entry_index}",
+                )
+                _as_string(
+                    entry_record.get("label"),
+                    "console_view_model.detail_sections.entries.label",
+                )
+                _as_string(
+                    entry_record.get("value"),
+                    "console_view_model.detail_sections.entries.value",
+                )
+        if "table" in section_record:
+            table = _as_mapping(
+                section_record["table"],
+                f"console_view_model.detail_sections.{section_index}.table",
+            )
+            _as_string(table.get("aria_label"), "console_view_model.detail_sections.table")
+            columns = _as_sequence(
+                table.get("columns"),
+                f"console_view_model.detail_sections.{section_index}.table.columns",
+            )
+            if not all(isinstance(column, str) and column for column in columns):
+                raise LocalResultImportError("console_view_model table columns must be strings")
+            rows = _as_sequence(
+                table.get("rows"),
+                f"console_view_model.detail_sections.{section_index}.table.rows",
+            )
+            for row in rows:
+                values = _as_sequence(row, "console_view_model.detail_sections.table.rows")
+                if len(values) != len(columns) or not all(
+                    isinstance(value, str) and value for value in values
+                ):
+                    raise LocalResultImportError(
+                        "console_view_model table rows must match columns"
+                    )
 
 
 def _validate_training_diagnostics(record: Mapping[str, object]) -> None:

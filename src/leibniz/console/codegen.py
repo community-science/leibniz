@@ -269,6 +269,28 @@ export type RunResultRecord = {
   measurement_dataset_digest: string;
   sampled_competence?: Record<string, unknown>;
   training_diagnostics?: TrainingDiagnosticsRecord;
+  console_view_model?: RunDetailViewModelRecord;
+};
+
+export type RunDetailViewModelRecord = {
+  detail_sections: RunDetailSectionRecord[];
+};
+
+export type RunDetailSectionRecord = {
+  title: string;
+  entries?: RunDetailEntryRecord[];
+  table?: RunDetailTableRecord;
+};
+
+export type RunDetailEntryRecord = {
+  label: string;
+  value: string;
+};
+
+export type RunDetailTableRecord = {
+  aria_label: string;
+  columns: string[];
+  rows: string[][];
 };
 
 export type TrainingDiagnosticsRecord = {
@@ -644,6 +666,55 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
             record.training_diagnostics,
             `${path}.training_diagnostics`,
           ),
+    console_view_model:
+      record.console_view_model === undefined
+        ? undefined
+        : parseRunDetailViewModel(record.console_view_model, `${path}.console_view_model`),
+  };
+}
+
+function parseRunDetailViewModel(value: unknown, path: string): RunDetailViewModelRecord {
+  const record = requireRecord(value, path);
+  return {
+    detail_sections: requireArray(record.detail_sections, `${path}.detail_sections`).map(
+      (section, index) => parseRunDetailSection(section, `${path}.detail_sections.${index}`),
+    ),
+  };
+}
+
+function parseRunDetailSection(value: unknown, path: string): RunDetailSectionRecord {
+  const record = requireRecord(value, path);
+  return {
+    title: requireString(record.title, `${path}.title`),
+    entries:
+      record.entries === undefined
+        ? undefined
+        : requireArray(record.entries, `${path}.entries`).map((entry, index) =>
+            parseRunDetailEntry(entry, `${path}.entries.${index}`),
+          ),
+    table:
+      record.table === undefined
+        ? undefined
+        : parseRunDetailTable(record.table, `${path}.table`),
+  };
+}
+
+function parseRunDetailEntry(value: unknown, path: string): RunDetailEntryRecord {
+  const record = requireRecord(value, path);
+  return {
+    label: requireString(record.label, `${path}.label`),
+    value: requireString(record.value, `${path}.value`),
+  };
+}
+
+function parseRunDetailTable(value: unknown, path: string): RunDetailTableRecord {
+  const record = requireRecord(value, path);
+  return {
+    aria_label: requireString(record.aria_label, `${path}.aria_label`),
+    columns: parseStringArray(record.columns, `${path}.columns`),
+    rows: requireArray(record.rows, `${path}.rows`).map((row, index) =>
+      parseStringArray(row, `${path}.rows.${index}`),
+    ),
   };
 }
 
