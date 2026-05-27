@@ -302,6 +302,7 @@ def formal_image_classifier_architecture(
     input_shape: tuple[int, ...],
     output_count: int,
     local_aggregation_size: int,
+    local_aggregation_dimension: int = 2,
 ) -> ArchitectureManifest:
     """Build a manifest for the first formal image-classifier specialization."""
 
@@ -310,8 +311,14 @@ def formal_image_classifier_architecture(
         raise ModelOperatorExecutionError("output_count must be an integer at least 2")
     if type(local_aggregation_size) is not int or local_aggregation_size < 1:
         raise ModelOperatorExecutionError("local_aggregation_size must be positive")
+    if type(local_aggregation_dimension) is not int or local_aggregation_dimension < 1:
+        raise ModelOperatorExecutionError("local_aggregation_dimension must be positive")
     if len(input_shape) < 3:
         raise ModelOperatorExecutionError("image classifier input_shape must have rank at least 3")
+    if local_aggregation_dimension >= len(input_shape) + 1:
+        raise ModelOperatorExecutionError(
+            "local_aggregation_dimension must not exceed input rank"
+        )
     return ArchitectureManifest.from_record(
         {
             "input_shape": list(input_shape),
@@ -320,7 +327,7 @@ def formal_image_classifier_architecture(
                 {
                     "kind": _layer_operator_specializations[0].alias,
                     "parameters": {
-                        "dimension": 2,
+                        "dimension": local_aggregation_dimension,
                         "size": local_aggregation_size,
                     },
                 },

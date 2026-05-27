@@ -7,6 +7,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from leibniz.architecture_candidates import (
+    ArchitectureCandidate,
+    default_architecture_candidate_space,
+    generate_architecture_candidates,
+)
 from leibniz.architectures import ArchitectureManifest
 from leibniz.content import ContentDigest
 from leibniz.documents import (
@@ -21,10 +26,7 @@ from leibniz.measurements import (
     MeasurementRecord,
 )
 from leibniz.model_inspection import ModelInspectionDocument
-from leibniz.model_operators import (
-    formal_image_classifier_architecture,
-    summarize_architecture_operators,
-)
+from leibniz.model_operators import summarize_architecture_operators
 from leibniz.observation_generation import load_observation_generator
 from leibniz.proposals import ExperimentProposal, ExperimentProposalSet
 from leibniz.publications import SubmissionPublicationDocument
@@ -99,7 +101,7 @@ class _MeasuredArchitecture:
 @dataclass(frozen=True, slots=True)
 class _CandidateArchitecture:
     architecture: ArchitectureManifest
-    aggregation_size: int
+    search_rank: int
     predicted_score: float
     uncertainty: float
     acquisition_value: float
@@ -116,7 +118,15 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
     sample = generator.sample_batch(scale=plan.scale, sample_count=1, seed=plan.seed).samples[0]
     dataset = _measurement_dataset(plan.runs_root, benchmark_id=manifest.id)
     measured = _measured_architectures(plan.runs_root, benchmark_id=manifest.id)
+    candidate_space = default_architecture_candidate_space()
     candidates = _candidate_architectures(
+        candidate_space=tuple(
+            generate_architecture_candidates(
+                candidate_space,
+                input_shape=sample.field.shape,
+                output_count=len(outcome_space.outcomes),
+            )
+        ),
         input_shape=sample.field.shape,
         output_count=len(outcome_space.outcomes),
         measured=measured,
@@ -305,39 +315,38 @@ def _training_summaries(
 
 def _candidate_architectures(
     *,
+    candidate_space: tuple[ArchitectureCandidate, ...],
     input_shape: tuple[int, ...],
     output_count: int,
     measured: tuple[_MeasuredArchitecture, ...],
     candidate_budget: int,
 ) -> tuple[_CandidateArchitecture, ...]:
+    _require_candidate_shape(
+        candidate_space,
+        input_shape=input_shape,
+        output_count=output_count,
+    )
     measured_digests = {item.digest for item in measured}
     observed_parameters = tuple(item.parameter_count for item in measured)
     best_score = max((item.score for item in measured), default=0.0)
-    max_size = max(1, min(input_shape[-2:]))
     candidates: list[_CandidateArchitecture] = []
-    for aggregation_size in range(1, max_size + 1):
-        architecture = formal_image_classifier_architecture(
-            input_shape=input_shape,
-            output_count=output_count,
-            local_aggregation_size=aggregation_size,
-        )
+    for search_rank, candidate in enumerate(candidate_space, start=1):
+        architecture = candidate.architecture
         if architecture.digest in measured_digests:
             continue
-        plan = summarize_architecture_operators(architecture)
-        if plan.parameter_count is None:
-            continue
-        novelty = _novelty(plan.parameter_count, observed_parameters)
+        parameter_count = candidate.parameter_count
+        novelty = _novelty(parameter_count, observed_parameters)
         uncertainty = min(1.0, 0.2 + novelty / 2.0)
         predicted_score = min(1.0, max(best_score, 1.0 / output_count) + novelty * 0.05)
         frontier_improvement = max(
             0.0,
-            predicted_score - _best_score_within_cost(measured, plan.parameter_count),
+            predicted_score - _best_score_within_cost(measured, parameter_count),
         )
         acquisition_value = predicted_score + uncertainty * 0.25 + novelty * 0.1
         candidates.append(
             _CandidateArchitecture(
                 architecture=architecture,
-                aggregation_size=aggregation_size,
+                search_rank=search_rank,
                 predicted_score=predicted_score,
                 uncertainty=uncertainty,
                 acquisition_value=acquisition_value,
@@ -354,9 +363,29 @@ def _candidate_sort_key(candidate: _CandidateArchitecture) -> tuple[float, float
     return (
         -candidate.acquisition_value,
         float(parameter_count),
-        candidate.aggregation_size,
+        candidate.search_rank,
         str(candidate.architecture.id),
     )
+
+
+def _require_candidate_shape(
+    candidates: tuple[ArchitectureCandidate, ...],
+    *,
+    input_shape: tuple[int, ...],
+    output_count: int,
+) -> None:
+    if not candidates:
+        raise ProposalGenerationError("candidate space did not generate architectures")
+    expected_output_shape = (output_count,)
+    for candidate in candidates:
+        if candidate.architecture.input_shape != input_shape:
+            raise ProposalGenerationError(
+                "candidate architecture input_shape does not match generated observations"
+            )
+        if candidate.architecture.output_shape != expected_output_shape:
+            raise ProposalGenerationError(
+                "candidate architecture output_shape does not match resolved outcomes"
+            )
 
 
 def _novelty(parameter_count: int, observed_parameters: tuple[int, ...]) -> float:
