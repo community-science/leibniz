@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import importlib
-import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from leibniz.architectures import ArchitectureLayer, ArchitectureManifest
+from leibniz.operator_interpretation import interpret_operator_semantic
 from leibniz.operator_semantics import ModelOperatorSemantic, model_operator_semantic_registry
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
@@ -494,27 +494,30 @@ def summarize_architecture_operators(
     shape: tuple[int, ...] | None = architecture.input_shape
     operators: list[ModelOperatorSummary] = []
     for index, layer in enumerate(architecture.layers):
-        descriptor = _descriptor_for_layer(layer)
+        semantic = _semantic_for_layer(layer)
+        descriptor = _descriptor_for_semantic(semantic, aliases=(layer.kind,))
         input_shape = shape
-        output_shape, parameter_count, inference_flops = _operator_shape_and_cost(
-            layer,
-            descriptor,
-            input_shape,
+        interpretation = interpret_operator_semantic(
+            semantic,
+            parameters=layer.parameters,
+            input_shape=input_shape,
         )
         operators.append(
             ModelOperatorSummary(
                 index=index,
                 descriptor=descriptor,
                 input_shape=input_shape,
-                output_shape=output_shape,
-                parameter_count=parameter_count,
+                output_shape=interpretation.output_shape,
+                parameter_count=interpretation.parameter_count,
                 parameter_bytes=(
-                    None if parameter_count is None else parameter_count * scalar_bytes
+                    None
+                    if interpretation.parameter_count is None
+                    else interpretation.parameter_count * scalar_bytes
                 ),
-                inference_flops=inference_flops,
+                inference_flops=interpretation.inference_flops,
             )
         )
-        shape = output_shape
+        shape = interpretation.output_shape
     if shape is not None and shape != architecture.output_shape:
         raise ModelOperatorExecutionError(
             "resolved operator output shape does not match architecture output_shape"
@@ -623,10 +626,15 @@ def materialize_model_operator_search_point(
 
 
 def _descriptor_for_layer(layer: ArchitectureLayer) -> ModelOperatorDescriptor:
+    semantic = _semantic_for_layer(layer)
+    return _descriptor_for_semantic(semantic, aliases=(layer.kind,))
+
+
+def _semantic_for_layer(layer: ArchitectureLayer) -> ModelOperatorSemantic:
     semantic = _operator_registry.semantic_for_alias(layer.kind)
     if semantic is None:
         raise ModelOperatorExecutionError(f"unsupported operator kind: {layer.kind}")
-    return _descriptor_for_semantic(semantic, aliases=(layer.kind,))
+    return semantic
 
 
 def _descriptor_for_semantic(
@@ -646,34 +654,6 @@ def _descriptor_for_semantic(
         cost_law=semantic.cost_law,
         aliases=aliases,
     )
-
-
-def _operator_shape_and_cost(
-    layer: ArchitectureLayer,
-    descriptor: ModelOperatorDescriptor,
-    input_shape: tuple[int, ...] | None,
-) -> tuple[tuple[int, ...] | None, int | None, int | None]:
-    if input_shape is None:
-        return None, None, None
-    if descriptor.kind == _operator_rank_collapse:
-        return (TensorShape.from_axes(input_shape).element_count,), 0, 0
-    if descriptor.kind == _operator_affine_readout:
-        if len(input_shape) != 1:
-            return None, None, None
-        out = _optional_positive_int_parameter(layer.parameters, "out")
-        if out is None:
-            return None, None, None
-        return (out,), (input_shape[0] + 1) * out, (2 * input_shape[0]) * out
-    if descriptor.kind == _operator_local_aggregation:
-        if len(input_shape) < 2:
-            return None, None, None
-        size = _optional_positive_int_parameter(layer.parameters, "size")
-        dimension = _optional_positive_int_parameter(layer.parameters, "dimension")
-        if size is None or dimension is None or dimension >= len(input_shape) + 1:
-            return None, None, None
-        preserved = input_shape[: len(input_shape) - dimension]
-        return (*preserved, *(size for _index in range(dimension))), 0, math.prod(input_shape)
-    return None, None, None
 
 
 def _append_shape_coordinates(
