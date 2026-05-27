@@ -326,9 +326,9 @@ def test_layer_alias_literals_are_defined_only_in_the_operator_registry() -> Non
         alias: [location.split(":", maxsplit=1)[0] for location in locations]
         for alias, locations in observed_locations.items()
     } == {
-        "adaptive-pooling": ["model_operators.py"],
-        "flatten": ["model_operators.py"],
-        "dense": ["model_operators.py"],
+        "adaptive-pooling": ["operator_semantics.py"],
+        "flatten": ["operator_semantics.py"],
+        "dense": ["operator_semantics.py"],
     }
 
 
