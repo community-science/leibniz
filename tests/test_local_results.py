@@ -18,6 +18,7 @@ from leibniz.local_results import (
     load_console_result_view,
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
+    push_publication_checkout,
 )
 from leibniz.measurements import MeasurementDataset, MeasurementDocument
 from leibniz.publications import SubmissionPublicationDocument
@@ -319,6 +320,58 @@ def test_publish_pushes_only_when_requested(tmp_path: Path) -> None:
 
     assert summary.git_pushed is True
     assert _git(remote_root, "rev-parse", "HEAD").stdout.strip() == summary.git_commit
+
+
+def test_push_publication_checkout_pushes_existing_commit(tmp_path: Path) -> None:
+    runs_root = tmp_path / ".runs"
+    remote_root = tmp_path / "remote.git"
+    _git(tmp_path, "init", "--bare", str(remote_root))
+    _init_git(runs_root)
+    _git(runs_root, "remote", "add", "origin", str(remote_root))
+    (runs_root / "README.md").write_text("result checkout\n", encoding="utf-8")
+    _git(runs_root, "add", "README.md")
+    _git(runs_root, "commit", "-m", "Prepare checkout")
+
+    summary = push_publication_checkout(
+        repository_root=_repository_root,
+        runs_root=runs_root,
+    )
+
+    assert summary.pushed_commit == _git(runs_root, "rev-parse", "HEAD").stdout.strip()
+    assert _git(remote_root, "rev-parse", "HEAD").stdout.strip() == summary.pushed_commit
+
+
+def test_cli_pushes_publication_checkout(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs_root = tmp_path / ".runs"
+    remote_root = tmp_path / "remote.git"
+    _git(tmp_path, "init", "--bare", str(remote_root))
+    _init_git(runs_root)
+    _git(runs_root, "remote", "add", "origin", str(remote_root))
+    (runs_root / "README.md").write_text("result checkout\n", encoding="utf-8")
+    _git(runs_root, "add", "README.md")
+    _git(runs_root, "commit", "-m", "Prepare checkout")
+
+    exit_code = main(
+        [
+            "results",
+            "push",
+            "--runs-root",
+            str(runs_root),
+            "--token",
+            "unused-local-token",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "pushed: " in captured.out
+    assert _git(remote_root, "rev-parse", "HEAD").stdout.strip() == _git(
+        runs_root, "rev-parse", "HEAD"
+    ).stdout.strip()
 
 
 def test_initialize_publication_checkout_commits_scaffold_without_push_by_default(
