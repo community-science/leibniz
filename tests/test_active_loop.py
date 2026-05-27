@@ -185,7 +185,12 @@ def test_active_training_loop_blocks_failed_work_without_explicit_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fail_run(_plan: BenchmarkRunPlan):
+    def fail_run(
+        _plan: BenchmarkRunPlan,
+        *,
+        progress_callback: object | None = None,
+    ):
+        del progress_callback
         raise RuntimeError("synthetic training failure")
 
     monkeypatch.setattr("leibniz.active_loop.run_benchmark", fail_run)
@@ -223,7 +228,12 @@ def test_active_training_loop_retries_failed_work_when_requested(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fail_run(_plan: BenchmarkRunPlan):
+    def fail_run(
+        _plan: BenchmarkRunPlan,
+        *,
+        progress_callback: object | None = None,
+    ):
+        del progress_callback
         raise RuntimeError("synthetic training failure")
 
     monkeypatch.setattr("leibniz.active_loop.run_benchmark", fail_run)
@@ -353,7 +363,12 @@ def test_active_training_loop_preserves_existing_measurements_on_run_failure(
     )
     before = initial.measurement_dataset_path.read_bytes()
 
-    def fail_run(_plan: BenchmarkRunPlan):
+    def fail_run(
+        _plan: BenchmarkRunPlan,
+        *,
+        progress_callback: object | None = None,
+    ):
+        del progress_callback
         raise RuntimeError("synthetic training failure")
 
     monkeypatch.setattr("leibniz.active_loop.run_benchmark", fail_run)

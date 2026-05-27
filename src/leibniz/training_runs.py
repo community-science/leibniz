@@ -19,6 +19,7 @@ __all__ = [
 _optimizer_kind = Literal["sgd", "adam", "adamw"]
 _schedule_kind = Literal["none", "cosine", "reduce-on-plateau"]
 _training_status = Literal[
+    "running",
     "completed",
     "converged",
     "budget-exhausted",
@@ -40,6 +41,7 @@ _protocol_record = RecordSpec(
         "validation_sample_count": FieldSpec(kind="integer"),
         "min_delta": FieldSpec(kind="number"),
         "patience": FieldSpec(kind="integer"),
+        "min_steps": FieldSpec(kind="integer", required=False),
         "validation_source": FieldSpec(kind="string"),
     }
 )
@@ -100,6 +102,7 @@ class TrainingProtocol:
     min_delta: float
     patience: int
     validation_source: str
+    min_steps: int = 0
 
     def __post_init__(self) -> None:
         if not self.kind:
@@ -119,6 +122,7 @@ class TrainingProtocol:
         _require_positive_int(self.validation_sample_count, "validation_sample_count")
         _require_nonnegative_finite(self.min_delta, "min_delta")
         _require_nonnegative_int(self.patience, "patience")
+        _require_nonnegative_int(self.min_steps, "min_steps")
         if not self.validation_source:
             raise TrainingRunValidationError("validation_source must be nonempty")
 
@@ -151,10 +155,11 @@ class TrainingProtocol:
                 validated["validation_source"],
                 "validation_source",
             ),
+            min_steps=_as_int(validated.get("min_steps", 0), "min_steps"),
         )
 
     def to_record(self) -> dict[str, object]:
-        return {
+        record: dict[str, object] = {
             "kind": self.kind,
             "objective": self.objective,
             "optimizer": self.optimizer,
@@ -169,6 +174,9 @@ class TrainingProtocol:
             "patience": self.patience,
             "validation_source": self.validation_source,
         }
+        if self.min_steps:
+            record["min_steps"] = self.min_steps
+        return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,6 +264,7 @@ class TrainingRunRecord:
 
     def __post_init__(self) -> None:
         if self.status not in {
+            "running",
             "completed",
             "converged",
             "budget-exhausted",

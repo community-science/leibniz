@@ -1030,6 +1030,7 @@ function trainingProtocolEntries(protocol: TrainingProtocolRecord): [string, str
     ['Schedule', protocol.schedule],
     ['Learning Rate', protocol.learning_rate],
     ['Steps', protocol.max_steps],
+    ['Min Steps', protocol.min_steps],
     ['Batch', protocol.batch_size],
     ['Interval', protocol.validation_interval],
     ['Patience', protocol.patience],

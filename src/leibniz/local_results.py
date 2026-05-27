@@ -422,8 +422,9 @@ def materialize_benchmark_result_views(
     runs_root = _resolve_output_root(repository_root, runs_root)
     manifests = _known_benchmark_manifests(repository_root)
     local_runs = _local_run_records(runs_root)
+    progress_runs = _local_progress_run_records(runs_root)
     imported_runs = _imported_run_records(runs_root)
-    runs = tuple(sorted((*local_runs, *imported_runs), key=_run_sort_key))
+    runs = tuple(sorted((*local_runs, *progress_runs, *imported_runs), key=_run_sort_key))
     if not runs:
         raise LocalResultImportError("no benchmark result records found")
 
@@ -636,6 +637,69 @@ def _local_run_records(runs_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
                 measurement_dataset=dataset,
                 measurement_dataset_digest=dataset.digest,
                 sampled_competence=sampled_competence,
+                training_summary=summary,
+            )
+        )
+    return tuple(records)
+
+
+def _local_progress_run_records(runs_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
+    progress_root = runs_root / "training-progress"
+    if not progress_root.is_dir():
+        return ()
+    records: list[_BenchmarkRunRecord] = []
+    empty_dataset = MeasurementDataset(measurements=())
+    for path in sorted(progress_root.rglob("*" + _document_suffix)):
+        summary = load_object_document(path.read_bytes(), description="training progress")
+        if summary.get("format") != "leibniz.benchmark-training-progress":
+            continue
+        if summary.get("format_version") != 1:
+            raise LocalResultImportError("training progress has unsupported format_version")
+        training_run = TrainingRunRecord.from_record(
+            _as_mapping(summary.get("training_run"), "training_run")
+        )
+        if training_run.status != "running":
+            raise LocalResultImportError("training progress must have running status")
+        inspection = _as_mapping(summary.get("model_inspection"), "model_inspection")
+        architecture = _as_mapping(summary.get("architecture"), "architecture")
+        cost_summary = _as_mapping(summary.get("cost_summary"), "cost_summary")
+        architecture_digest = _as_digest(
+            summary.get("architecture_digest"),
+            field="architecture_digest",
+        )
+        model_inspection_digest = _as_digest(
+            summary.get("model_inspection_digest"),
+            field="model_inspection_digest",
+        )
+        measurement_dataset_digest = empty_dataset.digest
+        records.append(
+            _BenchmarkRunRecord(
+                source_kind="local-progress",
+                source_path=path.resolve(),
+                run_id=_as_string(summary.get("run_slug"), "run_slug"),
+                run_slug=_as_string(summary.get("run_slug"), "run_slug"),
+                benchmark_id=_as_identifier(summary.get("benchmark_id"), "benchmark_id"),
+                architecture_digest=architecture_digest,
+                model_key=str(architecture_digest),
+                scale=_optional_int(summary.get("scale"), "scale"),
+                complexity=None,
+                measurement_count=0,
+                score=_as_nonnegative_number(
+                    summary.get("provisional_score"),
+                    "provisional_score",
+                ),
+                cost_summary=cost_summary,
+                architecture=architecture,
+                model_inspection=_model_inspection_view_record(
+                    inspection=inspection,
+                    source_path=path.resolve(),
+                    measurement_dataset_digest=measurement_dataset_digest,
+                    training_summary=summary,
+                ),
+                model_inspection_digest=model_inspection_digest,
+                model_inspection_path=None,
+                measurement_dataset=empty_dataset,
+                measurement_dataset_digest=measurement_dataset_digest,
                 training_summary=summary,
             )
         )
@@ -1718,6 +1782,7 @@ def _validate_run_console_view_model(record: Mapping[str, object]) -> None:
 def _validate_training_diagnostics(record: Mapping[str, object]) -> None:
     status = _as_string(record.get("status"), "training_diagnostics.status")
     if status not in {
+        "running",
         "completed",
         "converged",
         "budget-exhausted",

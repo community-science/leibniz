@@ -62,16 +62,17 @@ class ProposalGenerationPlan:
     scale: int = 1
     candidate_budget: int = 3
     candidate_sample_count: int = 64
-    sample_count: int = 4
+    sample_count: int = 512
     evaluation_sample_count: int | None = None
     seed: int = 101
-    train_steps: int = 1
+    train_steps: int = 50_000
     learning_rate: float = 0.01
     optimizer: str = "sgd"
     schedule: str = "none"
-    validation_interval: int = 1
-    convergence_patience: int = 0
-    convergence_min_delta: float = 0.0
+    validation_interval: int = 250
+    convergence_patience: int = 12
+    convergence_min_delta: float = 1e-3
+    convergence_min_steps: int = 500
     target_validation_loss: float | None = None
 
     def __post_init__(self) -> None:
@@ -111,6 +112,8 @@ class ProposalGenerationPlan:
             raise ProposalGenerationError("convergence_patience must be nonnegative")
         if self.convergence_min_delta < 0:
             raise ProposalGenerationError("convergence_min_delta must be nonnegative")
+        if type(self.convergence_min_steps) is not int or self.convergence_min_steps < 0:
+            raise ProposalGenerationError("convergence_min_steps must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise ProposalGenerationError("target_validation_loss must be nonnegative")
 
@@ -277,6 +280,8 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                     str(plan.convergence_patience),
                     "--convergence-min-delta",
                     str(float(plan.convergence_min_delta)),
+                    "--convergence-min-steps",
+                    str(plan.convergence_min_steps),
                     *(
                         ()
                         if plan.target_validation_loss is None
