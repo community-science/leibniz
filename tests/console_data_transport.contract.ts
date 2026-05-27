@@ -1,5 +1,12 @@
 import { parseConsoleDataRecord } from '../src/leibniz/console/_web_src/src/consoleData.ts';
 import { detailForArtifact } from '../src/leibniz/console/_web_src/src/artifactDetails.ts';
+import {
+  coordinateDisplayName,
+  descriptorValueDisplayName,
+  operatorDisplayName,
+  parameterDisplayName,
+  syntaxAliasDisplayName,
+} from '../src/leibniz/console/_web_src/src/operatorVocabulary.ts';
 
 declare const consoleDataPayload: unknown;
 
@@ -21,6 +28,36 @@ assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detai
 assertEqual(parsed.result_views.length, 0, 'result view count');
 assertEqual(parsed.model_inspections.length, 1, 'model inspection count');
 assertEqual(parsed.benchmark_tasks.length, 1, 'benchmark task count');
+assertEqual(
+  parsed.operator_vocabulary.operators.map((operator) => operator.kind).join(','),
+  'local-aggregation,rank-collapse,affine-readout',
+  'operator vocabulary order',
+);
+assertEqual(
+  operatorDisplayName(parsed.operator_vocabulary, 'local-aggregation'),
+  'Local aggregation',
+  'operator vocabulary operator display',
+);
+assertEqual(
+  syntaxAliasDisplayName(parsed.operator_vocabulary, 'adaptive-pooling'),
+  'Local aggregation',
+  'operator vocabulary syntax display',
+);
+assertEqual(
+  parameterDisplayName(parsed.operator_vocabulary, 'local-aggregation', 'size'),
+  'Output support size',
+  'operator vocabulary parameter display',
+);
+assertEqual(
+  descriptorValueDisplayName(parsed.operator_vocabulary, 'support', 'local-window'),
+  'Local window',
+  'operator vocabulary descriptor display',
+);
+assertEqual(
+  coordinateDisplayName(parsed.operator_vocabulary, 'operator.0.local_support_size'),
+  'Local support size',
+  'operator vocabulary coordinate display',
+);
 assertEqual('source_modules' in rawConsoleData, false, 'source module transport removed');
 assertEqual(
   artifacts.map((artifact) => `${artifact.kind}:${artifact.source_path}`).join('|'),

@@ -36,6 +36,12 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
 
     assert record["format"] == "leibniz.console-data"
     assert record["format_version"] == 1
+    operator_vocabulary = cast(dict[str, object], record["operator_vocabulary"])
+    assert operator_vocabulary["format"] == "leibniz.model-operator-vocabulary"
+    assert {
+        alias["alias"]
+        for alias in cast(list[dict[str, object]], operator_vocabulary["syntax_aliases"])
+    } == {"adaptive-pooling", "flatten", "dense"}
 
     artifact_index = cast(dict[str, object], record["artifact_index"])
     artifacts = cast(list[dict[str, object]], artifact_index["artifacts"])

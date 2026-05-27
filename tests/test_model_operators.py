@@ -11,11 +11,13 @@ from leibniz.model_operators import (
     ModelOperatorSearchPoint,
     materialize_model_operator_search_point,
     model_operator_semantic_coordinates,
+    model_operator_vocabulary,
     summarize_architecture_operators,
 )
 
 _fixtures_root = Path(__file__).parent / "fixtures"
 _src_root = Path(__file__).parents[1] / "src" / "leibniz"
+_console_src_root = _src_root / "console" / "_web_src" / "src"
 
 
 def test_model_operator_summary_classifies_formal_semantics() -> None:
@@ -138,6 +140,60 @@ def test_model_operator_semantic_coordinates_are_derived_from_operator_summaries
     assert by_name["resource.parameter_count"] == 50
     assert by_name["resource.inference_flops"] == 1104
     assert len(by_name) == len(coordinates)
+
+
+def test_model_operator_vocabulary_exports_registry_metadata() -> None:
+    vocabulary = model_operator_vocabulary()
+
+    assert vocabulary["format"] == "leibniz.model-operator-vocabulary"
+    assert vocabulary["format_version"] == 1
+    operators = cast(list[dict[str, object]], vocabulary["operators"])
+    aliases = cast(list[dict[str, object]], vocabulary["syntax_aliases"])
+    descriptor_axes = cast(dict[str, list[dict[str, str]]], vocabulary["descriptor_axes"])
+    coordinate_descriptors = cast(
+        list[dict[str, str]],
+        vocabulary["coordinate_descriptors"],
+    )
+
+    assert [operator["kind"] for operator in operators] == [
+        "local-aggregation",
+        "rank-collapse",
+        "affine-readout",
+    ]
+    assert [alias["alias"] for alias in aliases] == [
+        "adaptive-pooling",
+        "flatten",
+        "dense",
+    ]
+    assert operators[0]["display_name"] == "Local aggregation"
+    assert descriptor_axes["support"][0] == {
+        "value": "global",
+        "display_name": "Global",
+    }
+    assert {
+        descriptor["name"]: descriptor["display_name"]
+        for descriptor in coordinate_descriptors
+    }["operator.{index}.local_support_size"] == "Local support size"
+
+
+def test_operator_vocabulary_sections_have_console_consumers() -> None:
+    consumer_by_section = {
+        "operators": "operatorDisplayName",
+        "descriptor_axes": "descriptorValueDisplayName",
+        "syntax_aliases": "syntaxAliasDisplayName",
+        "coordinate_descriptors": "coordinateDisplayName",
+    }
+
+    assert set(model_operator_vocabulary()) >= set(consumer_by_section)
+    component_sources = "\n".join(
+        path.read_text()
+        for path in (
+            _console_src_root / "BenchmarkResultDashboard.tsx",
+            _console_src_root / "BenchmarksPanel.tsx",
+        )
+    )
+    for helper in consumer_by_section.values():
+        assert helper in component_sources
 
 
 def test_layer_alias_literals_are_defined_only_in_the_operator_registry() -> None:

@@ -20,6 +20,7 @@ __all__ = [
     "ModelOperatorSummary",
     "materialize_model_operator_search_point",
     "model_operator_semantic_coordinates",
+    "model_operator_vocabulary",
     "summarize_architecture_operators",
 ]
 
@@ -145,12 +146,15 @@ class ModelOperatorCoordinate:
 @dataclass(frozen=True, slots=True)
 class _LayerOperatorSpecialization:
     alias: str
+    display_name: str
     descriptor: ModelOperatorDescriptor
+    parameter_roles: tuple[tuple[str, str, str], ...] = ()
 
 
 _layer_operator_specializations = (
     _LayerOperatorSpecialization(
         alias="adaptive-pooling",
+        display_name="Local aggregation",
         descriptor=ModelOperatorDescriptor(
             kind=_operator_local_aggregation,
             tensor_relation="aggregation",
@@ -162,9 +166,14 @@ _layer_operator_specializations = (
             shape_law="preserve-prefix-replace-trailing-axes",
             cost_law="input-elements",
         ),
+        parameter_roles=(
+            ("dimension", "Support rank", "number of trailing axes aggregated"),
+            ("size", "Output support size", "extent of each aggregated output axis"),
+        ),
     ),
     _LayerOperatorSpecialization(
         alias="flatten",
+        display_name="Rank collapse",
         descriptor=ModelOperatorDescriptor(
             kind=_operator_rank_collapse,
             tensor_relation="shape-transform",
@@ -179,6 +188,7 @@ _layer_operator_specializations = (
     ),
     _LayerOperatorSpecialization(
         alias="dense",
+        display_name="Affine readout",
         descriptor=ModelOperatorDescriptor(
             kind=_operator_affine_readout,
             tensor_relation="affine",
@@ -190,6 +200,7 @@ _layer_operator_specializations = (
             shape_law="rank-1-output",
             cost_law="multiply-add-per-input-output-pair",
         ),
+        parameter_roles=(("out", "Output coordinates", "rank-1 output extent"),),
     ),
 )
 _layer_operator_descriptor_by_alias = {
@@ -296,6 +307,43 @@ class ExecutableModelOperator:
             else:
                 raise ModelOperatorExecutionError(f"unsupported operator kind: {layer.kind}")
         return torch.nn.Sequential(*modules)
+
+
+def model_operator_vocabulary() -> dict[str, object]:
+    """Return the generated console-facing formal operator vocabulary."""
+
+    return {
+        "format": "leibniz.model-operator-vocabulary",
+        "format_version": 1,
+        "operators": [
+            {
+                "kind": specialization.descriptor.kind,
+                "display_name": specialization.display_name,
+                "descriptor": specialization.descriptor.to_record(),
+                "syntax_aliases": [specialization.alias],
+                "parameter_roles": [
+                    {
+                        "name": name,
+                        "display_name": display_name,
+                        "description": description,
+                        "value_kind": "positive-integer",
+                    }
+                    for name, display_name, description in specialization.parameter_roles
+                ],
+            }
+            for specialization in _layer_operator_specializations
+        ],
+        "descriptor_axes": _descriptor_axis_records(),
+        "syntax_aliases": [
+            {
+                "alias": specialization.alias,
+                "operator_kind": specialization.descriptor.kind,
+                "display_name": specialization.display_name,
+            }
+            for specialization in _layer_operator_specializations
+        ],
+        "coordinate_descriptors": _coordinate_descriptor_records(),
+    }
 
 
 def summarize_architecture_operators(
@@ -556,6 +604,114 @@ def _reject_duplicate_coordinate_names(
     names = [coordinate.name for coordinate in coordinates]
     if len(set(names)) != len(names):
         raise ModelOperatorExecutionError("semantic coordinates must have unique names")
+
+
+def _descriptor_axis_records() -> dict[str, list[dict[str, str]]]:
+    return {
+        "tensor_relation": _axis_value_records(
+            {
+                "affine": "Affine",
+                "aggregation": "Aggregation",
+                "identity": "Identity",
+                "shape-transform": "Shape transform",
+            }
+        ),
+        "state": _axis_value_records({"fixed": "Fixed", "learned": "Learned"}),
+        "support": _axis_value_records(
+            {
+                "global": "Global",
+                "local-window": "Local window",
+                "pointwise": "Pointwise",
+                "rank-collapsing": "Rank collapsing",
+            }
+        ),
+        "projection_law": _axis_values_from_descriptors("projection_law"),
+        "aggregation_law": _axis_values_from_descriptors("aggregation_law"),
+        "parameter_sharing": _axis_values_from_descriptors("parameter_sharing"),
+        "shape_law": _axis_values_from_descriptors("shape_law"),
+        "cost_law": _axis_values_from_descriptors("cost_law"),
+    }
+
+
+def _axis_values_from_descriptors(field: str) -> list[dict[str, str]]:
+    values = sorted(
+        {
+            str(getattr(specialization.descriptor, field))
+            for specialization in _layer_operator_specializations
+        }
+    )
+    return [{"value": value, "display_name": _title_from_token(value)} for value in values]
+
+
+def _axis_value_records(values: Mapping[str, str]) -> list[dict[str, str]]:
+    return [
+        {"value": value, "display_name": display_name}
+        for value, display_name in sorted(values.items())
+    ]
+
+
+def _coordinate_descriptor_records() -> list[dict[str, str]]:
+    return [
+        {
+            "name": "input.rank",
+            "display_name": "Input rank",
+            "value_kind": "integer",
+        },
+        {
+            "name": "output.rank",
+            "display_name": "Output rank",
+            "value_kind": "integer",
+        },
+        {
+            "name": "operator.count",
+            "display_name": "Operator count",
+            "value_kind": "integer",
+        },
+        {
+            "name": "operator.{index}.kind",
+            "display_name": "Operator kind",
+            "value_kind": "operator-kind",
+        },
+        {
+            "name": "operator.{index}.tensor_relation",
+            "display_name": "Tensor relation",
+            "value_kind": "descriptor-axis",
+        },
+        {
+            "name": "operator.{index}.support",
+            "display_name": "Support",
+            "value_kind": "descriptor-axis",
+        },
+        {
+            "name": "operator.{index}.local_support_dimension",
+            "display_name": "Local support dimension",
+            "value_kind": "integer",
+        },
+        {
+            "name": "operator.{index}.local_support_size",
+            "display_name": "Local support size",
+            "value_kind": "integer",
+        },
+        {
+            "name": "operator.{index}.output_count",
+            "display_name": "Output count",
+            "value_kind": "integer",
+        },
+        {
+            "name": "resource.parameter_count",
+            "display_name": "Parameter count",
+            "value_kind": "integer",
+        },
+        {
+            "name": "resource.inference_flops",
+            "display_name": "Inference FLOPs",
+            "value_kind": "integer",
+        },
+    ]
+
+
+def _title_from_token(value: str) -> str:
+    return " ".join(part.capitalize() for part in value.replace("_", "-").split("-"))
 
 
 def _positive_int_parameter(parameters: Mapping[str, object], key: str) -> int:

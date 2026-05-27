@@ -8,6 +8,10 @@ import {
 } from './artifactDetails.ts';
 import { parseModelInspectionRecords, type ModelInspectionRecord } from './modelInspections.ts';
 import {
+  parseOperatorVocabularyRecord,
+  type OperatorVocabularyRecord,
+} from './operatorVocabulary.ts';
+import {
   parseResultViewRecords,
   type ResultViewRecord,
 } from './resultViews.ts';
@@ -21,6 +25,7 @@ export type ConsoleDataRecord = {
   result_views: ResultViewRecord[];
   model_inspections: ModelInspectionRecord[];
   benchmark_tasks: BenchmarkTaskRecord[];
+  operator_vocabulary: OperatorVocabularyRecord;
 };
 
 export class ConsoleDataTransportError extends Error {
@@ -39,6 +44,7 @@ export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
   const resultViews = parseResultViewRecords(record.result_views);
   const modelInspections = parseModelInspectionRecords(record.model_inspections);
   const benchmarkTasks = parseBenchmarkTaskRecords(record.benchmark_tasks);
+  const operatorVocabulary = parseOperatorVocabularyRecord(record.operator_vocabulary);
 
   return {
     format,
@@ -48,6 +54,7 @@ export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
     result_views: resultViews,
     model_inspections: modelInspections,
     benchmark_tasks: benchmarkTasks,
+    operator_vocabulary: operatorVocabulary,
   };
 }
 
