@@ -48,6 +48,54 @@ python -m leibniz._repository_policy .
 python -m build --no-isolation
 ```
 
+## Result Publication Workflow
+
+Use a Hugging Face dataset repository as the local run-state checkout. The
+checkout is ignored by this source repository, but it is its own Git repository:
+benchmark runs write dirty state there, and publishing commits that checkout.
+Pushing to Hugging Face is always explicit.
+
+Create a public dataset repository and prepare `.runs` as the checkout:
+
+```bash
+export HF_TOKEN=...
+leibniz results init-publication --repo owner/leibniz-results
+```
+
+Without a Hugging Face account, prepare the same local checkout and skip any
+Hub API or push step:
+
+```bash
+leibniz results init-publication --local-only
+```
+
+Run benchmarks against that checkout:
+
+```bash
+leibniz benchmark shakedown \
+  --benchmark-root src/leibniz/benchmarks/digits
+```
+
+Publish the local dirty state as a commit:
+
+```bash
+leibniz results publish
+```
+
+Push only when you want to update the public Hugging Face repository:
+
+```bash
+leibniz results publish --push
+```
+
+To inspect another publication checkout locally, import its publication bundle
+documents into a separate run root and materialize console views:
+
+```bash
+leibniz results import --source path/to/checkout --runs-root .runs-imported
+leibniz results materialize --runs-root .runs-imported
+```
+
 ## License
 
 This repository is dedicated to the public domain under CC0-1.0. See

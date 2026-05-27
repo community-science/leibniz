@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 from typing import cast
 
@@ -13,6 +14,7 @@ from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import (
     LocalResultImportError,
     import_submission_publications,
+    initialize_publication_checkout,
     load_console_result_view,
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
@@ -161,8 +163,8 @@ def test_materialize_benchmark_result_views_rejects_empty_runs_root(tmp_path: Pa
 
 def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) -> None:
     local_runs_root = tmp_path / "local-runs"
-    publication_root = tmp_path / "publication"
     imported_runs_root = tmp_path / "imported-runs"
+    _init_git(local_runs_root)
     run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
@@ -176,10 +178,9 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
     publish_summary = publish_local_benchmark_results(
         repository_root=_repository_root,
         runs_root=local_runs_root,
-        output_root=publication_root,
     )
     imported_summary = import_submission_publications(
-        (publication_root,),
+        (local_runs_root / "publication_bundles",),
         repository_root=_repository_root,
         runs_root=imported_runs_root,
     )
@@ -212,7 +213,7 @@ def test_cli_publishes_local_benchmark_results(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     runs_root = tmp_path / ".runs"
-    publication_root = tmp_path / "publication"
+    _init_git(runs_root, configure_identity=False)
     run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
@@ -229,8 +230,8 @@ def test_cli_publishes_local_benchmark_results(
             "publish",
             "--runs-root",
             str(runs_root),
-            "--output-root",
-            str(publication_root),
+            "--message",
+            "Publish test results",
         ]
     )
 
@@ -239,7 +240,158 @@ def test_cli_publishes_local_benchmark_results(
     assert captured.err == ""
     assert "wrote 1 publication bundle(s), 1 measurement(s)" in captured.out
     assert "publication: " in captured.out
-    assert len(tuple(publication_root.glob("*.json"))) == 1
+    assert "commit: " in captured.out
+    assert len(tuple((runs_root / "publication_bundles").glob("*.json"))) == 1
+    assert _git(runs_root, "status", "--porcelain").stdout == ""
+
+
+def test_publish_defaults_publication_output_to_runs_root(tmp_path: Path) -> None:
+    runs_root = tmp_path / ".runs"
+    _init_git(runs_root)
+    run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            runs_root=runs_root,
+            sample_count=1,
+            train_steps=0,
+        )
+    )
+
+    summary = publish_local_benchmark_results(
+        repository_root=_repository_root,
+        runs_root=runs_root,
+    )
+
+    assert len(summary.publication_files) == 1
+    assert summary.publication_files[0].parent == runs_root / "publication_bundles"
+
+
+def test_publish_can_commit_runs_root_checkout(tmp_path: Path) -> None:
+    runs_root = tmp_path / ".runs"
+    _init_git(runs_root)
+    run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            runs_root=runs_root,
+            sample_count=1,
+            train_steps=0,
+        )
+    )
+
+    summary = publish_local_benchmark_results(
+        repository_root=_repository_root,
+        runs_root=runs_root,
+        commit_message="Publish test results",
+    )
+
+    assert summary.git_commit == _git(runs_root, "rev-parse", "HEAD").stdout.strip()
+    assert summary.git_pushed is False
+    assert _git(runs_root, "status", "--porcelain").stdout == ""
+    tracked_files = _git(runs_root, "ls-files").stdout.splitlines()
+    assert "views/benchmark_results.json" in tracked_files
+    assert any(path.startswith("publication_bundles/") for path in tracked_files)
+
+
+def test_publish_pushes_only_when_requested(tmp_path: Path) -> None:
+    runs_root = tmp_path / ".runs"
+    remote_root = tmp_path / "remote.git"
+    _git(tmp_path, "init", "--bare", str(remote_root))
+    _init_git(runs_root)
+    _git(runs_root, "remote", "add", "origin", str(remote_root))
+    run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            runs_root=runs_root,
+            sample_count=1,
+            train_steps=0,
+        )
+    )
+
+    summary = publish_local_benchmark_results(
+        repository_root=_repository_root,
+        runs_root=runs_root,
+        push=True,
+        commit_message="Publish test results",
+    )
+
+    assert summary.git_pushed is True
+    assert _git(remote_root, "rev-parse", "HEAD").stdout.strip() == summary.git_commit
+
+
+def test_initialize_publication_checkout_commits_scaffold_without_push_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs_root = tmp_path / ".runs"
+    _init_git(runs_root)
+    calls: list[str] = []
+
+    class _Response:
+        def read(self) -> bytes:
+            return b"{}"
+
+    def _urlopen(request: object, timeout: int) -> _Response:
+        del request, timeout
+        calls.append("create")
+        return _Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+
+    summary = initialize_publication_checkout(
+        repo_id="maximumcats/leibniz-results",
+        token="hf_test",
+        repository_root=_repository_root,
+        runs_root=runs_root,
+    )
+
+    assert calls == ["create"]
+    assert summary.repo_url == "https://huggingface.co/datasets/maximumcats/leibniz-results"
+    assert summary.scaffold_commit == _git(runs_root, "rev-parse", "HEAD").stdout.strip()
+    assert summary.pushed is False
+    assert _git(runs_root, "status", "--porcelain").stdout == ""
+    tracked_files = _git(runs_root, "ls-files").stdout.splitlines()
+    assert "README.md" in tracked_files
+    assert "publication_bundles/.gitkeep" in tracked_files
+
+
+def test_initialize_publication_checkout_supports_local_only_fallback(tmp_path: Path) -> None:
+    runs_root = tmp_path / ".runs"
+
+    summary = initialize_publication_checkout(
+        repo_id=None,
+        token=None,
+        repository_root=_repository_root,
+        runs_root=runs_root,
+        local_only=True,
+    )
+
+    assert summary.repo_id is None
+    assert summary.repo_url is None
+    assert summary.scaffold_commit == _git(runs_root, "rev-parse", "HEAD").stdout.strip()
+    assert summary.pushed is False
+    assert _git(runs_root, "status", "--porcelain").stdout == ""
+    assert (runs_root / "publication_bundles" / ".gitkeep").is_file()
+
+
+def test_cli_initializes_local_publication_checkout_with_default_runs_root(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["results", "init-publication", "--local-only"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "repository: local-only" in captured.out
+    assert "runs root: " in captured.out
+    assert (tmp_path / ".runs" / "publication_bundles" / ".gitkeep").is_file()
+    assert _git(tmp_path / ".runs", "status", "--porcelain").stdout == ""
 
 
 def _digits_publication_bundle_record(
@@ -276,6 +428,23 @@ def _digits_publication_bundle_record(
 
 def _digits_dataset() -> MeasurementDataset:
     return MeasurementDataset.from_record({"measurements": [_digits_measurement().to_record()]})
+
+
+def _git(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(path), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _init_git(path: Path, *, configure_identity: bool = True) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    _git(path, "init")
+    if configure_identity:
+        _git(path, "config", "user.email", "operator@example.test")
+        _git(path, "config", "user.name", "Leibniz Operator")
 
 
 def _digits_measurement():

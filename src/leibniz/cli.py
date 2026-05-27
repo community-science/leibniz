@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -20,6 +21,7 @@ from leibniz.federation_ingest import FederationIngestPlanDocument
 from leibniz.local_results import (
     LocalResultImportError,
     import_submission_publications,
+    initialize_publication_checkout,
     load_console_result_view,
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
@@ -204,9 +206,50 @@ def _parser() -> argparse.ArgumentParser:
     )
     results_subcommands = results.add_subparsers(dest="results_command", required=True)
 
+    init_publication = results_subcommands.add_parser(
+        "init-publication",
+        description="prepare a public Hugging Face dataset checkout for run results",
+        help="prepare a result-publication checkout",
+    )
+    init_publication.add_argument(
+        "--repo",
+        help="Hugging Face dataset repository id in owner/name form",
+    )
+    init_publication.add_argument(
+        "--token",
+        default=None,
+        help="Hugging Face token; defaults to HF_TOKEN",
+    )
+    init_publication.add_argument(
+        "--runs-root",
+        default=Path(".runs"),
+        type=Path,
+        help="local result-publication checkout; defaults to .runs",
+    )
+    init_publication.add_argument(
+        "--endpoint",
+        default="https://huggingface.co",
+        help="Hugging Face Hub endpoint",
+    )
+    init_publication.add_argument(
+        "--push",
+        action="store_true",
+        help="push the scaffold commit after initialization",
+    )
+    init_publication.add_argument(
+        "--local-only",
+        action="store_true",
+        help="prepare a local publication checkout without a Hugging Face account",
+    )
+    init_publication.add_argument(
+        "--message",
+        default="Initialize Leibniz result publication checkout",
+        help="Git commit message for the scaffold commit",
+    )
+
     import_results = results_subcommands.add_parser(
         "import",
-        description="import local publication bundles into ignored run state",
+        description="import local publication bundles into a result checkout",
         help="import local publication bundles",
     )
     import_results.add_argument(
@@ -221,35 +264,44 @@ def _parser() -> argparse.ArgumentParser:
         "--runs-root",
         default=Path(".runs"),
         type=Path,
-        help="ignored local run-state root; defaults to .runs",
+        help="local result checkout; defaults to .runs",
     )
     publish_results = results_subcommands.add_parser(
         "publish",
-        description="write local benchmark runs as publication bundles",
-        help="write local publication bundles",
+        description="commit local benchmark runs as publication state",
+        help="publish local result checkout",
     )
     publish_results.add_argument(
         "--runs-root",
         default=Path(".runs"),
         type=Path,
-        help="ignored local run-state root; defaults to .runs",
+        help="local result-publication checkout; defaults to .runs",
     )
     publish_results.add_argument(
-        "--output-root",
-        required=True,
-        type=Path,
-        help="local directory for generated publication bundle documents",
+        "--token",
+        default=None,
+        help="Hugging Face token for --push; defaults to HF_TOKEN",
+    )
+    publish_results.add_argument(
+        "--push",
+        action="store_true",
+        help="push the runs-root Git checkout after publishing",
+    )
+    publish_results.add_argument(
+        "--message",
+        default="Publish Leibniz benchmark results",
+        help="Git commit message used when publishing",
     )
     materialize_results = results_subcommands.add_parser(
         "materialize",
-        description="derive console result views from ignored run state",
+        description="derive console result views from a result checkout",
         help="materialize local result views",
     )
     materialize_results.add_argument(
         "--runs-root",
         default=Path(".runs"),
         type=Path,
-        help="ignored local run-state root; defaults to .runs",
+        help="local result checkout; defaults to .runs",
     )
     propose_results = results_subcommands.add_parser(
         "propose",
@@ -261,7 +313,7 @@ def _parser() -> argparse.ArgumentParser:
         "--runs-root",
         default=Path(".runs"),
         type=Path,
-        help="ignored local run-state root; defaults to .runs",
+        help="local result checkout; defaults to .runs",
     )
     propose_results.add_argument("--scale", default=1, type=int)
     propose_results.add_argument("--candidate-budget", default=3, type=int)
@@ -299,7 +351,7 @@ def _parser() -> argparse.ArgumentParser:
         "--runs-root",
         default=Path(".runs"),
         type=Path,
-        help="ignored local run-state root; defaults to .runs",
+        help="local result checkout; defaults to .runs",
     )
     run.add_argument("--scale", default=1, type=int)
     run.add_argument("--sample-count", default=4, type=int)
@@ -328,7 +380,7 @@ def _parser() -> argparse.ArgumentParser:
         "--runs-root",
         default=Path(".runs"),
         type=Path,
-        help="ignored local run-state root; defaults to .runs",
+        help="local result checkout; defaults to .runs",
     )
     loop.add_argument("--iterations", default=1, type=int)
     loop.add_argument("--scale", default=1, type=int)
@@ -361,7 +413,7 @@ def _parser() -> argparse.ArgumentParser:
         "--runs-root",
         default=Path(".runs"),
         type=Path,
-        help="ignored local run-state root; defaults to .runs",
+        help="local result checkout; defaults to .runs",
     )
     shakedown.add_argument("--iterations", default=1, type=int)
     shakedown.add_argument("--scale", default=1, type=int)
@@ -619,6 +671,32 @@ def _score_delta(after: float | None, before: float | None) -> str:
 def _results(args: argparse.Namespace) -> int:
     try:
         results_command = str(args.results_command)
+        if results_command == "init-publication":
+            token = args.token or os.environ.get("HF_TOKEN")
+            if not args.local_only and token is None:
+                raise LocalResultImportError("--token or HF_TOKEN is required")
+            summary = initialize_publication_checkout(
+                repo_id=args.repo,
+                token=token,
+                repository_root=Path.cwd(),
+                runs_root=args.runs_root,
+                endpoint=args.endpoint,
+                local_only=args.local_only,
+                push=args.push,
+                commit_message=args.message,
+            )
+            if summary.repo_url is not None:
+                print(f"repository: {summary.repo_url}")
+            else:
+                print("repository: local-only")
+            print(f"runs root: {summary.runs_root}")
+            if summary.scaffold_commit is not None:
+                print(f"commit: {summary.scaffold_commit}")
+            else:
+                print("commit: unchanged")
+            if summary.pushed:
+                print("pushed: yes")
+            return 0
         if results_command == "import":
             summary = import_submission_publications(
                 args.source,
@@ -633,10 +711,15 @@ def _results(args: argparse.Namespace) -> int:
             print(f"view: {summary.view_file}")
             return 0
         if results_command == "publish":
+            token = args.token or os.environ.get("HF_TOKEN")
+            if args.push and token is None:
+                raise LocalResultImportError("--token or HF_TOKEN is required with --push")
             summary = publish_local_benchmark_results(
                 repository_root=Path.cwd(),
                 runs_root=args.runs_root,
-                output_root=args.output_root,
+                push=args.push,
+                token=token,
+                commit_message=args.message,
             )
             print(
                 "wrote "
@@ -645,6 +728,10 @@ def _results(args: argparse.Namespace) -> int:
             )
             for publication_file in summary.publication_files:
                 print(f"publication: {publication_file}")
+            if summary.git_commit is not None:
+                print(f"commit: {summary.git_commit}")
+            if summary.git_pushed:
+                print("pushed: yes")
             return 0
         if results_command == "materialize":
             summary = materialize_benchmark_result_views(
