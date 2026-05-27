@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
@@ -15,6 +15,11 @@ from leibniz.proposal_generation import (
     ProposalGenerationPlan,
     ProposalGenerationSummary,
     generate_experiment_proposals,
+)
+from leibniz.work_queues import (
+    WorkQueueItem,
+    materialize_work_queue_view,
+    write_work_queue_item,
 )
 
 __all__ = [
@@ -133,6 +138,7 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
     planned_commands: list[tuple[str, ...]] = []
     benchmark_id: ProtocolIdentifier | None = None
     result_view_path = _materialize_if_possible(plan.runs_root)
+    materialize_work_queue_view(plan.runs_root)
 
     for iteration in range(plan.iterations):
         iteration_seed = plan.seed + iteration
@@ -161,34 +167,68 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
         proposal = _first_proposal(proposal_summary.proposal_set_path)
         command = _proposal_command(proposal)
         planned_commands.append(command)
+        queue_item = WorkQueueItem(
+            id=f"iteration-{iteration + 1}-rank-{proposal.get('rank', 1)}",
+            benchmark_id=proposal_summary.benchmark_id,
+            proposal_id=str(proposal["id"]),
+            proposal_set_path=proposal_summary.proposal_set_path,
+            command=command,
+            status="pending",
+            sequence=iteration,
+        )
+        write_work_queue_item(plan.runs_root, queue_item)
+        materialize_work_queue_view(plan.runs_root)
         if plan.dry_run:
             continue
 
         architecture_path = _architecture_path_for_command(command)
-        benchmark_summary = run_benchmark(
-            BenchmarkRunPlan(
-                architecture_path=architecture_path,
-                benchmark_root=plan.benchmark_root,
-                runs_root=plan.runs_root,
-                scale=plan.scale,
-                sample_count=plan.sample_count,
-                evaluation_sample_count=plan.evaluation_sample_count,
-                seed=iteration_seed,
-                train_steps=plan.train_steps,
-                learning_rate=plan.learning_rate,
-                optimizer=plan.optimizer,
-                schedule=plan.schedule,
-                validation_interval=plan.validation_interval,
-                convergence_patience=plan.convergence_patience,
-                convergence_min_delta=plan.convergence_min_delta,
-                target_validation_loss=plan.target_validation_loss,
+        write_work_queue_item(
+            plan.runs_root,
+            replace(queue_item, status="reserved"),
+        )
+        materialize_work_queue_view(plan.runs_root)
+        try:
+            benchmark_summary = run_benchmark(
+                BenchmarkRunPlan(
+                    architecture_path=architecture_path,
+                    benchmark_root=plan.benchmark_root,
+                    runs_root=plan.runs_root,
+                    scale=plan.scale,
+                    sample_count=plan.sample_count,
+                    evaluation_sample_count=plan.evaluation_sample_count,
+                    seed=iteration_seed,
+                    train_steps=plan.train_steps,
+                    learning_rate=plan.learning_rate,
+                    optimizer=plan.optimizer,
+                    schedule=plan.schedule,
+                    validation_interval=plan.validation_interval,
+                    convergence_patience=plan.convergence_patience,
+                    convergence_min_delta=plan.convergence_min_delta,
+                    target_validation_loss=plan.target_validation_loss,
+                )
             )
+        except Exception as error:
+            write_work_queue_item(
+                plan.runs_root,
+                replace(queue_item, error=str(error), status="failed"),
+            )
+            materialize_work_queue_view(plan.runs_root)
+            raise
+        write_work_queue_item(
+            plan.runs_root,
+            replace(
+                queue_item,
+                measurement_dataset_path=benchmark_summary.measurement_dataset_path,
+                run_id=benchmark_summary.run_slug,
+                status="completed",
+            ),
         )
         benchmark_summaries.append(benchmark_summary)
         result_view_path = materialize_benchmark_result_views(
             repository_root=Path.cwd(),
             runs_root=plan.runs_root,
         ).view_file
+        materialize_work_queue_view(plan.runs_root)
 
     if benchmark_id is None:
         raise ActiveTrainingLoopError("active loop did not generate proposals")

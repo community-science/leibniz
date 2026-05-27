@@ -28,7 +28,13 @@ import type {
   GeneratedObservationSampleRecord,
 } from './benchmarkTasks.ts';
 import type { ModelInspectionLayerRecord, ModelInspectionRecord } from './modelInspections.ts';
-import type { BenchmarkResultRecord, ResultViewRecord, RunResultRecord } from './resultViews.ts';
+import type {
+  BenchmarkResultRecord,
+  ResultViewRecord,
+  RunResultRecord,
+  WorkQueueItemRecord,
+} from './resultViews.ts';
+import { isWorkQueueView } from './resultViews.ts';
 
 type SampleCardDensity = 'standard' | 'compact';
 type ModelArtifactView = 'model' | 'architecture' | 'training' | 'artifacts';
@@ -83,6 +89,13 @@ export function BenchmarksPanel({
     [resultViews, selected],
   );
   const selectedResult = benchmarkResults[0];
+  const queueItems = useMemo(
+    () =>
+      selected === undefined
+        ? []
+        : workQueueItemsForTask(resultViews, selected.benchmark_id),
+    [resultViews, selected],
+  );
 
   if (selected === undefined) {
     return (
@@ -138,6 +151,7 @@ export function BenchmarksPanel({
         </div>
 
         <BenchmarkStatusRow
+          queueItems={queueItems}
           resultEntry={selectedResult}
           sampleCount={sampleCount}
           task={selected}
@@ -206,10 +220,12 @@ function CollapsibleBenchmarkSection({
 }
 
 function BenchmarkStatusRow({
+  queueItems,
   resultEntry,
   sampleCount,
   task,
 }: {
+  queueItems: WorkQueueItemRecord[];
   resultEntry: BenchmarkResultEntry | undefined;
   sampleCount: number;
   task: BenchmarkTaskRecord;
@@ -218,10 +234,37 @@ function BenchmarkStatusRow({
   return (
     <div className="benchmark-status-row">
       <span>{status}</span>
+      <span>{workQueueStatusLabel(queueItems)}</span>
       <span>{sampleCount} generated samples</span>
       <span>{task.source_path}</span>
     </div>
   );
+}
+
+function workQueueItemsForTask(
+  resultViews: ResultViewRecord[],
+  benchmarkId: string,
+): WorkQueueItemRecord[] {
+  return resultViews
+    .filter(isWorkQueueView)
+    .flatMap((view) => view.queue_items)
+    .filter((item) => item.benchmark_id === benchmarkId)
+    .sort((left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id));
+}
+
+function workQueueStatusLabel(items: WorkQueueItemRecord[]): string {
+  if (items.length === 0) {
+    return 'Queue empty';
+  }
+  const counts = new Map<WorkQueueItemRecord['status'], number>();
+  for (const item of items) {
+    counts.set(item.status, (counts.get(item.status) ?? 0) + 1);
+  }
+  return ['reserved', 'pending', 'completed', 'failed']
+    .map((status) => [status, counts.get(status as WorkQueueItemRecord['status']) ?? 0] as const)
+    .filter(([, count]) => count > 0)
+    .map(([status, count]) => `${count} ${status}`)
+    .join(' / ');
 }
 
 function BenchmarkPerformancePane({

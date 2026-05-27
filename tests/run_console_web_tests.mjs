@@ -160,6 +160,8 @@ function assertBenchmarkWorkbenchStructure() {
     'benchmark-selector-row',
     'benchmark-status-row',
     'benchmark-section-summary',
+    'workQueueItemsForTask',
+    'workQueueStatusLabel',
   ];
   for (const marker of requiredPanelMarkers) {
     if (!panel.includes(marker)) {
@@ -342,6 +344,22 @@ function assertConsoleTextIsUseful() {
 }
 
 function assertConsoleResultRootPolicy() {
+  const resultViews = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/resultViews.ts'),
+    'utf8',
+  );
+  for (const marker of [
+    'WorkQueueViewRecord',
+    'WorkQueueItemRecord',
+    'parseWorkQueueViewRecord',
+    'parseWorkQueueItem',
+    'isWorkQueueView',
+  ]) {
+    if (!resultViews.includes(marker)) {
+      throw new Error(`Result view transport must support work queue marker: ${marker}`);
+    }
+  }
+
   const viteConfig = readFileSync(
     resolve(repositoryRoot, 'src/leibniz/console/_web_src/vite.config.mjs'),
     'utf8',
