@@ -10,6 +10,7 @@ from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.records import FieldSpec, RecordSpec
+from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
     "ArchitectureLayer",
@@ -192,18 +193,14 @@ def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
 
 
 def _as_shape(value: object, *, field: str) -> tuple[int, ...]:
-    axes: list[int] = []
-    for axis in _as_sequence(value, field=field):
-        if not isinstance(axis, int) or isinstance(axis, bool):
-            raise ArchitectureManifestValidationError(f"{field}: expected parsed integer")
-        axes.append(axis)
-    shape = tuple(axes)
-    _require_positive_shape(shape, field=field)
-    return shape
+    try:
+        return TensorShape.from_record(_as_sequence(value, field=field), field=field).axes
+    except TensorShapeValidationError as error:
+        raise ArchitectureManifestValidationError(str(error)) from error
 
 
 def _require_positive_shape(shape: tuple[int, ...], *, field: str) -> None:
-    if not shape:
-        raise ArchitectureManifestValidationError(f"{field} must contain at least one axis")
-    if any(axis <= 0 for axis in shape):
-        raise ArchitectureManifestValidationError(f"{field} axes must be positive integers")
+    try:
+        TensorShape.from_axes(shape, field=field)
+    except TensorShapeValidationError as error:
+        raise ArchitectureManifestValidationError(str(error)) from error

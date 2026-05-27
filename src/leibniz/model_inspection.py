@@ -15,6 +15,7 @@ from leibniz.model_manifests import ModelArtifactManifest
 from leibniz.model_operators import summarize_architecture_operators
 from leibniz.records import FieldSpec, RecordSpec
 from leibniz.submissions import SubmissionPackageManifest
+from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
     "ModelInspectionCostSummary",
@@ -863,9 +864,13 @@ def _optional_int(value: object, *, field: str) -> int | None:
 
 
 def _as_shape(value: object, *, field: str) -> tuple[int, ...]:
-    shape = tuple(_as_int(axis, field=field) for axis in _as_sequence(value, field=field))
-    _require_shape(shape, field=field)
-    return shape
+    try:
+        return TensorShape.from_record(
+            tuple(_as_int(axis, field=field) for axis in _as_sequence(value, field=field)),
+            field=field,
+        ).axes
+    except TensorShapeValidationError as error:
+        raise ModelInspectionValidationError(str(error)) from error
 
 
 def _optional_shape(value: object, *, field: str) -> tuple[int, ...] | None:
@@ -884,7 +889,7 @@ def _require_shape(
         if allow_none:
             return
         raise ModelInspectionValidationError(f"{field} must not be None")
-    if not value:
-        raise ModelInspectionValidationError(f"{field} must contain at least one axis")
-    if any(type(axis) is not int or axis < 1 for axis in value):
-        raise ModelInspectionValidationError(f"{field} axes must be positive integers")
+    try:
+        TensorShape.from_axes(value, field=field)
+    except TensorShapeValidationError as error:
+        raise ModelInspectionValidationError(str(error)) from error
