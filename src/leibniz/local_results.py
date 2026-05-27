@@ -24,6 +24,7 @@ from leibniz.measurements import (
 )
 from leibniz.model_inspection import ModelInspectionDocument, ModelInspectionRecord
 from leibniz.publications import SubmissionPublicationDocument
+from leibniz.training_runs import TrainingRunRecord
 
 __all__ = [
     "LocalBenchmarkResultViewSummary",
@@ -296,7 +297,7 @@ class _BenchmarkRunRecord:
         if self.sampled_competence is not None:
             record["sampled_competence"] = dict(self.sampled_competence)
         if self.training_summary is not None:
-            record["training_summary"] = dict(self.training_summary)
+            record["training_diagnostics"] = _training_diagnostics_record(run=self)
         return record
 
 
@@ -477,6 +478,54 @@ def _model_inspection_view_record(
             }
         ]
     return record
+
+
+def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, object]:
+    if run.training_summary is None:
+        raise LocalResultImportError("training summary is required for diagnostics")
+    training_run = TrainingRunRecord.from_record(
+        _as_mapping(run.training_summary.get("training_run"), "training_run")
+    )
+    history = training_run.validation_history
+    final = history[-1]
+    return {
+        "status": training_run.status,
+        "stop_reason": training_run.stop_reason,
+        "steps_run": training_run.steps_run,
+        "validation_checks": training_run.validation_checks,
+        "best_validation_loss": training_run.best_validation_loss,
+        "best_validation_step": training_run.best_validation_step,
+        "best_validation_check": training_run.best_validation_check,
+        "final_validation_loss": final.validation_loss,
+        "final_validation_step": final.step,
+        "final_validation_check": final.validation_check,
+        "protocol": training_run.protocol.to_record(),
+        "validation_history": [point.to_record() for point in history],
+        "artifacts": _training_artifact_references(run),
+    }
+
+
+def _training_artifact_references(run: _BenchmarkRunRecord) -> list[dict[str, object]]:
+    if run.training_summary is None:
+        raise LocalResultImportError("training summary is required for artifact references")
+    references: list[dict[str, object]] = [
+        {
+            "kind": "measurement-dataset",
+            "digest": str(run.measurement_dataset_digest),
+        },
+        {
+            "kind": "model-inspection",
+            "digest": str(run.model_inspection_digest),
+        },
+        {
+            "kind": "training-summary",
+            "digest": str(ContentDigest.from_value(run.training_summary)),
+            "path": run.source_path.as_posix(),
+        },
+    ]
+    if run.model_inspection_path is not None:
+        references[1]["path"] = run.model_inspection_path.as_posix()
+    return references
 
 
 def _inspection_from_architecture(architecture: ArchitectureManifest) -> ModelInspectionRecord:
@@ -884,6 +933,119 @@ def _validate_run_result(record: Mapping[str, object]) -> None:
     _as_string(record.get("measurement_dataset_digest"), "measurement_dataset_digest")
     if "sampled_competence" in record:
         _as_mapping(record.get("sampled_competence"), "sampled_competence")
+    if "training_diagnostics" in record:
+        _validate_training_diagnostics(
+            _as_mapping(record.get("training_diagnostics"), "training_diagnostics")
+        )
+
+
+def _validate_training_diagnostics(record: Mapping[str, object]) -> None:
+    status = _as_string(record.get("status"), "training_diagnostics.status")
+    if status not in {
+        "completed",
+        "converged",
+        "budget-exhausted",
+        "not-trainable",
+        "failed",
+    }:
+        raise LocalResultImportError(f"unsupported training status: {status}")
+    _as_string(record.get("stop_reason"), "training_diagnostics.stop_reason")
+    _as_nonnegative_number(record.get("steps_run"), "training_diagnostics.steps_run")
+    _as_nonnegative_number(
+        record.get("validation_checks"),
+        "training_diagnostics.validation_checks",
+    )
+    _as_nonnegative_number(
+        record.get("best_validation_loss"),
+        "training_diagnostics.best_validation_loss",
+    )
+    _as_nonnegative_number(
+        record.get("best_validation_step"),
+        "training_diagnostics.best_validation_step",
+    )
+    _as_nonnegative_number(
+        record.get("best_validation_check"),
+        "training_diagnostics.best_validation_check",
+    )
+    _as_nonnegative_number(
+        record.get("final_validation_loss"),
+        "training_diagnostics.final_validation_loss",
+    )
+    _as_nonnegative_number(
+        record.get("final_validation_step"),
+        "training_diagnostics.final_validation_step",
+    )
+    _as_nonnegative_number(
+        record.get("final_validation_check"),
+        "training_diagnostics.final_validation_check",
+    )
+    protocol = _as_mapping(record.get("protocol"), "training_diagnostics.protocol")
+    for field in (
+        "kind",
+        "objective",
+        "optimizer",
+        "schedule",
+        "validation_source",
+    ):
+        _as_string(protocol.get(field), f"training_diagnostics.protocol.{field}")
+    for field in (
+        "learning_rate",
+        "seed",
+        "batch_size",
+        "max_steps",
+        "validation_interval",
+        "validation_sample_count",
+        "min_delta",
+        "patience",
+    ):
+        _as_nonnegative_number(
+            protocol.get(field),
+            f"training_diagnostics.protocol.{field}",
+        )
+    history = _as_sequence(
+        record.get("validation_history"),
+        "training_diagnostics.validation_history",
+    )
+    if not history:
+        raise LocalResultImportError("training_diagnostics.validation_history must not be empty")
+    for index, point in enumerate(history):
+        point_record = _as_mapping(point, f"training_diagnostics.validation_history.{index}")
+        for field in (
+            "step",
+            "validation_check",
+            "validation_loss",
+            "best_validation_loss",
+            "best_validation_step",
+            "best_validation_check",
+            "stale_checks",
+        ):
+            _as_nonnegative_number(
+                point_record.get(field),
+                f"training_diagnostics.validation_history.{index}.{field}",
+            )
+        if "learning_rates" in point_record:
+            for rate in _as_sequence(
+                point_record.get("learning_rates"),
+                f"training_diagnostics.validation_history.{index}.learning_rates",
+            ):
+                _as_nonnegative_number(
+                    rate,
+                    f"training_diagnostics.validation_history.{index}.learning_rates",
+                )
+    for index, artifact in enumerate(
+        _as_sequence(record.get("artifacts"), "training_diagnostics.artifacts")
+    ):
+        artifact_record = _as_mapping(artifact, f"training_diagnostics.artifacts.{index}")
+        _as_string(artifact_record.get("kind"), f"training_diagnostics.artifacts.{index}.kind")
+        _as_string(
+            artifact_record.get("digest"),
+            f"training_diagnostics.artifacts.{index}.digest",
+        )
+        if "path" in artifact_record:
+            _as_string(
+                artifact_record.get("path"),
+                f"training_diagnostics.artifacts.{index}.path",
+            )
 
 
 def _validate_proposal_result(record: Mapping[str, object]) -> None:

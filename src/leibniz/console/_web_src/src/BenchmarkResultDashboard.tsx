@@ -774,8 +774,9 @@ function RunDetailCard({
   detail: BenchmarkRunDetail;
 }) {
   const { model, run } = detail;
-  const protocol = trainingProtocol(run.training_summary);
-  const validationHistory = trainingValidationHistory(run.training_summary);
+  const diagnostics = run.training_diagnostics;
+  const protocol = diagnostics?.protocol;
+  const validationHistory = diagnostics?.validation_history ?? [];
   const sampledCompetence = sampledCompetenceRecord(run);
   return (
     <article className="run-detail-card">
@@ -823,9 +824,24 @@ function RunDetailCard({
             ['Objective', stringValue(protocol.objective)],
             ['Optimizer', stringValue(protocol.optimizer)],
             ['Schedule', stringValue(protocol.schedule)],
+            ['Learning Rate', numberValue(protocol.learning_rate, 4)],
             ['Steps', numberValue(protocol.max_steps)],
             ['Batch', numberValue(protocol.batch_size)],
+            ['Interval', numberValue(protocol.validation_interval)],
             ['Validation', stringValue(protocol.validation_source)],
+          ]}
+        />
+      )}
+      {diagnostics === undefined ? null : (
+        <RunEvidencePanel
+          title="Training Outcome"
+          entries={[
+            ['Status', stringValue(diagnostics.status)],
+            ['Stop', stringValue(diagnostics.stop_reason)],
+            ['Best Loss', numberValue(diagnostics.best_validation_loss, 4)],
+            ['Best Step', numberValue(diagnostics.best_validation_step)],
+            ['Final Loss', numberValue(diagnostics.final_validation_loss, 4)],
+            ['Checks', numberValue(diagnostics.validation_checks)],
           ]}
         />
       )}
@@ -876,38 +892,10 @@ function RunEvidencePanel({
   );
 }
 
-function trainingProtocol(
-  summary: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  const trainingRun = recordValue(summary?.training_run);
-  return recordValue(trainingRun?.protocol);
-}
-
-function trainingValidationHistory(
-  summary: Record<string, unknown> | undefined,
-): Record<string, unknown>[] {
-  const trainingRun = recordValue(summary?.training_run);
-  const history = trainingRun?.validation_history;
-  if (!Array.isArray(history)) {
-    return [];
-  }
-  return history.flatMap((item) => {
-    const record = recordValue(item);
-    return record === undefined ? [] : [record];
-  });
-}
-
 function sampledCompetenceRecord(
   run: BenchmarkRunDetail['run'],
 ): Record<string, unknown> | undefined {
-  return run.sampled_competence ?? recordValue(run.training_summary?.sampled_competence);
-}
-
-function recordValue(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
+  return run.sampled_competence;
 }
 
 function stringValue(value: unknown): string {
