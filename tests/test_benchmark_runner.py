@@ -38,7 +38,11 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     assert summary.dry_run is True
     assert summary.measurement_count == 2
     assert summary.measurement_dataset_path == (
-        tmp_path / ".runs" / "measurements" / "digits" / "digits-l1-seed101-samples2-steps1.json"
+        tmp_path
+        / ".runs"
+        / "measurements"
+        / "digits"
+        / "digits-arch-bb0dde9254dc-l1-seed101-samples2-steps1.json"
     )
     assert not summary.measurement_dataset_path.exists()
     assert not (tmp_path / ".runs").exists()
@@ -230,5 +234,7 @@ def test_cli_runs_digits_benchmark_dry_run(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert captured.out.startswith("planned benchmark run digits-l1-seed101-samples2-steps1")
+    assert captured.out.startswith(
+        "planned benchmark run digits-arch-bb0dde9254dc-l1-seed101-samples2-steps1"
+    )
     assert not (tmp_path / ".runs").exists()
