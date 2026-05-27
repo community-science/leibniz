@@ -51,6 +51,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
             benchmark_root=_digits_benchmark_root,
             runs_root=tmp_path / ".runs",
             sample_count=2,
+            evaluation_sample_count=3,
             seed=101,
             train_steps=1,
         )
@@ -67,7 +68,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     ).manifest
 
     dataset_document.dataset.validate_manifest(manifest, scale=1)
-    assert len(dataset_document.dataset.measurements) == 2
+    assert summary.measurement_count == 3
+    assert len(dataset_document.dataset.measurements) == 3
     assert inspection_document.inspection.cost_summary.parameter_count == 50
     assert inspection_document.inspection.cost_summary.inference_flops == 1104
     assert summary.training_summary_path.exists()
@@ -86,6 +88,17 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_run.validation_checks == 2
     assert training_run.validation_history[0].step == 0
     assert training_run.validation_history[-1].step == 1
+    sampled_competence = cast(dict[str, object], training_summary["sampled_competence"])
+    assert sampled_competence["kind"] == "sampled-complexity-class"
+    assert sampled_competence["sampling_rule"] == "generator-uniform-component-sequence-v1"
+    assert (
+        sampled_competence["difficulty_assumption"]
+        == "approximately-uniform-within-complexity-class"
+    )
+    assert sampled_competence["complexity_axis"] == "C"
+    assert sampled_competence["complexity"] == 1
+    assert sampled_competence["sample_count"] == 3
+    assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
 
 
 def test_digits_benchmark_runner_records_convergence_protocol_controls(
@@ -157,6 +170,8 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert len(cast(list[dict[str, object]], training_run["validation_history"])) == 2
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     assert leaderboard[0]["observed_complexities"] == [1.0]
+    points = cast(list[dict[str, object]], leaderboard[0]["points"])
+    assert points[0]["sample_count"] == 2
 
 
 def test_digits_benchmark_runner_rejects_unmatched_architecture_shape(tmp_path: Path) -> None:

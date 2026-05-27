@@ -254,6 +254,7 @@ class _BenchmarkRunRecord:
     architecture_digest: ContentDigest
     model_key: str
     scale: int | None
+    complexity: float | None
     measurement_count: int
     score: float
     cost_summary: Mapping[str, object]
@@ -279,6 +280,8 @@ class _BenchmarkRunRecord:
         }
         if self.scale is not None:
             record["scale"] = self.scale
+        if self.complexity is not None:
+            record["complexity"] = self.complexity
         if self.training_summary is not None:
             record["training_summary"] = dict(self.training_summary)
         return record
@@ -359,6 +362,7 @@ def _local_run_records(runs_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
                 architecture_digest=_record_digest(inspection.architecture.to_record()),
                 model_key=str(inspection.architecture.record_digest),
                 scale=_optional_int(summary.get("scale"), "scale"),
+                complexity=_sampled_competence_complexity(summary),
                 measurement_count=len(dataset.measurements),
                 score=_mean_accepted_mass(dataset),
                 cost_summary=inspection.cost_summary.to_record(),
@@ -394,6 +398,7 @@ def _imported_run_records(runs_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
                     manifest=package.benchmark_manifest,
                     dataset=bundle.measurement_dataset,
                 ),
+                complexity=None,
                 measurement_count=len(bundle.measurement_dataset.measurements),
                 score=_mean_accepted_mass(bundle.measurement_dataset),
                 cost_summary=inspection.cost_summary.to_record(),
@@ -403,6 +408,14 @@ def _imported_run_records(runs_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
             )
         )
     return tuple(records)
+
+
+def _sampled_competence_complexity(summary: Mapping[str, object]) -> float | None:
+    evidence = summary.get("sampled_competence")
+    if evidence is None:
+        return None
+    record = _as_mapping(evidence, "sampled_competence")
+    return _as_nonnegative_number(record.get("complexity"), "sampled_competence.complexity")
 
 
 def _inspection_from_architecture(architecture: ArchitectureManifest) -> ModelInspectionRecord:
@@ -501,9 +514,12 @@ def _competence_points(
 ) -> tuple[dict[str, object], ...]:
     by_complexity: dict[float, list[_BenchmarkRunRecord]] = {}
     for run in runs:
-        if run.scale is None:
+        complexity = run.complexity
+        if complexity is None and run.scale is not None:
+            complexity = float(run.scale)
+        if complexity is None:
             continue
-        by_complexity.setdefault(float(run.scale), []).append(run)
+        by_complexity.setdefault(complexity, []).append(run)
     points: list[dict[str, object]] = []
     for complexity, complexity_runs in by_complexity.items():
         score = sum(run.score for run in complexity_runs) / len(complexity_runs)
@@ -511,6 +527,7 @@ def _competence_points(
             {
                 "complexity": complexity,
                 "score": score,
+                "sample_count": sum(run.measurement_count for run in complexity_runs),
                 "run_ids": [run.run_id for run in sorted(complexity_runs, key=_run_sort_key)],
             }
         )

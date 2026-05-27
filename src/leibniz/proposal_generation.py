@@ -60,6 +60,7 @@ class ProposalGenerationPlan:
     scale: int = 1
     candidate_budget: int = 3
     sample_count: int = 4
+    evaluation_sample_count: int | None = None
     seed: int = 101
     train_steps: int = 1
     learning_rate: float = 0.01
@@ -77,6 +78,14 @@ class ProposalGenerationPlan:
             raise ProposalGenerationError("candidate_budget must be positive")
         if type(self.sample_count) is not int or self.sample_count < 1:
             raise ProposalGenerationError("sample_count must be positive")
+        if (
+            self.evaluation_sample_count is not None
+            and (
+                type(self.evaluation_sample_count) is not int
+                or self.evaluation_sample_count < 1
+            )
+        ):
+            raise ProposalGenerationError("evaluation_sample_count must be positive")
         if type(self.seed) is not int or self.seed < 0:
             raise ProposalGenerationError("seed must be nonnegative")
         if type(self.train_steps) is not int or self.train_steps < 0:
@@ -95,6 +104,14 @@ class ProposalGenerationPlan:
             raise ProposalGenerationError("convergence_min_delta must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise ProposalGenerationError("target_validation_loss must be nonnegative")
+
+    @property
+    def resolved_evaluation_sample_count(self) -> int:
+        """Return the evaluation sample count encoded into proposal commands."""
+
+        if self.evaluation_sample_count is None:
+            return self.sample_count
+        return self.evaluation_sample_count
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +244,8 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                     str(plan.scale),
                     "--sample-count",
                     str(plan.sample_count),
+                    "--evaluation-sample-count",
+                    str(plan.resolved_evaluation_sample_count),
                     "--seed",
                     str(plan.seed),
                     "--train-steps",
