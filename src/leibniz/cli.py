@@ -541,7 +541,7 @@ def _benchmark(args: argparse.Namespace) -> int:
             prefix = "planned" if summary.dry_run else "completed"
             print(
                 f"{prefix} active benchmark loop for {summary.benchmark_id}: "
-                f"{summary.completed_run_count}/{summary.iteration_count} run(s)"
+                f"{summary.completed_run_count} run(s)"
             )
             for command in summary.planned_commands:
                 print("command: " + " ".join(command))
