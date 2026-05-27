@@ -10,6 +10,7 @@ from leibniz.content import ContentDigest, ContentEncodingError
 from leibniz.documents import (
     canonical_document_bytes,
     document_filename_suffix,
+    document_media_type,
     load_object_document,
 )
 from leibniz.identifiers import ProtocolIdentifier
@@ -124,6 +125,10 @@ def test_canonical_document_bytes_delegate_to_current_format() -> None:
 
 def test_document_filename_suffix_is_defined_at_document_boundary() -> None:
     assert document_filename_suffix() == ".json"
+
+
+def test_document_media_type_is_defined_at_document_boundary() -> None:
+    assert document_media_type() == "application/json"
 
 
 def test_source_mentions_json_only_at_document_format_boundary() -> None:

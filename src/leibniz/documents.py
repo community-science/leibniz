@@ -8,6 +8,7 @@ __all__ = [
     "ContentEncodingError",
     "canonical_document_bytes",
     "document_filename_suffix",
+    "document_media_type",
     "load_object_document",
 ]
 
@@ -26,6 +27,12 @@ def document_filename_suffix() -> str:
     """Return the current source-controlled document filename suffix."""
 
     return ".json"
+
+
+def document_media_type() -> str:
+    """Return the current document HTTP media type."""
+
+    return "application/json"
 
 
 def load_object_document(data: bytes, *, description: str) -> Mapping[str, object]:

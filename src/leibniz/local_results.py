@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import math
+import os
+import subprocess
+import tempfile
+import urllib.error
+import urllib.request
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +23,7 @@ from leibniz.content import ContentDigest
 from leibniz.documents import (
     canonical_document_bytes,
     document_filename_suffix,
+    document_media_type,
     load_object_document,
 )
 from leibniz.identifiers import ProtocolIdentifier
@@ -35,9 +41,11 @@ from leibniz.views import MeasurementScoreView
 __all__ = [
     "LocalBenchmarkResultViewSummary",
     "LocalPublicationExportSummary",
+    "LocalPublicationCheckoutSummary",
     "LocalResultImportError",
     "LocalResultImportSummary",
     "import_submission_publications",
+    "initialize_publication_checkout",
     "load_console_result_view",
     "materialize_benchmark_result_views",
     "publish_local_benchmark_results",
@@ -51,6 +59,17 @@ _work_queue_view_format = _protocol_formats.work_queue_view
 _console_result_view_format_version = _protocol_format_versions.result_view
 _document_suffix = document_filename_suffix()
 _manifest_filename = "manifest" + _document_suffix
+_default_hf_endpoint = "https://huggingface.co"
+_publication_directories = (
+    "imports/publication_bundles",
+    "measurements",
+    "models",
+    "proposals",
+    "publication_bundles",
+    "training",
+    "views",
+    "work-queues",
+)
 
 
 class LocalResultImportError(ValueError):
@@ -105,27 +124,132 @@ class LocalPublicationExportSummary:
     publication_files: tuple[Path, ...]
     publication_bundle_count: int
     measurement_count: int
+    git_commit: str | None = None
+    git_pushed: bool = False
 
     def to_record(self) -> dict[str, object]:
-        return {
+        record: dict[str, object] = {
             "source_files": [path.as_posix() for path in self.source_files],
             "publication_files": [path.as_posix() for path in self.publication_files],
             "publication_bundle_count": self.publication_bundle_count,
             "measurement_count": self.measurement_count,
+            "git_pushed": self.git_pushed,
         }
+        if self.git_commit is not None:
+            record["git_commit"] = self.git_commit
+        return record
+
+
+@dataclass(frozen=True, slots=True)
+class LocalPublicationCheckoutSummary:
+    """Summary of a prepared public result-publication checkout."""
+
+    repo_id: str | None
+    runs_root: Path
+    repo_url: str | None
+    created_or_reused: bool
+    scaffold_commit: str | None
+    pushed: bool
+
+    def to_record(self) -> dict[str, object]:
+        record: dict[str, object] = {
+            "runs_root": self.runs_root.as_posix(),
+            "created_or_reused": self.created_or_reused,
+            "pushed": self.pushed,
+        }
+        if self.repo_id is not None:
+            record["repo_id"] = self.repo_id
+        if self.repo_url is not None:
+            record["repo_url"] = self.repo_url
+        if self.scaffold_commit is not None:
+            record["scaffold_commit"] = self.scaffold_commit
+        return record
+
+
+def initialize_publication_checkout(
+    *,
+    repo_id: str | None,
+    token: str | None,
+    repository_root: Path | None = None,
+    runs_root: Path = Path(".runs"),
+    endpoint: str = _default_hf_endpoint,
+    local_only: bool = False,
+    push: bool = False,
+    commit_message: str = "Initialize Leibniz result publication checkout",
+) -> LocalPublicationCheckoutSummary:
+    """Create or reuse a public Hugging Face dataset checkout for run results."""
+
+    repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
+    runs_root = _resolve_output_root(repository_root, runs_root)
+    endpoint = endpoint.rstrip("/")
+    if local_only:
+        if push:
+            raise LocalResultImportError("--push cannot be used with --local-only")
+        repo_id = None
+        repo_url = None
+        token = None
+        created_or_reused = False
+        _ensure_local_git_checkout(runs_root)
+    else:
+        if repo_id is None:
+            raise LocalResultImportError("--repo is required unless --local-only is used")
+        repo_id = _validate_hf_repo_id(repo_id)
+        token = _validate_token(token)
+        repo_url = f"{endpoint}/datasets/{repo_id}"
+        created_or_reused = _create_hf_dataset_repo(
+            repo_id=repo_id,
+            token=token,
+            endpoint=endpoint,
+        )
+        if runs_root.exists():
+            if not _is_git_checkout(runs_root):
+                raise LocalResultImportError("runs root exists but is not a Git checkout")
+        else:
+            _git_clone(
+                source=repo_url,
+                target=runs_root,
+                token=token,
+                endpoint=endpoint,
+            )
+    _ensure_publication_checkout_structure(runs_root)
+    scaffold_commit = _commit_checkout_if_dirty(
+        runs_root=runs_root,
+        message=commit_message,
+        push=push,
+        token=token,
+        endpoint=endpoint,
+    )
+    return LocalPublicationCheckoutSummary(
+        repo_id=repo_id,
+        runs_root=runs_root,
+        repo_url=repo_url,
+        created_or_reused=created_or_reused,
+        scaffold_commit=scaffold_commit,
+        pushed=push and scaffold_commit is not None,
+    )
 
 
 def publish_local_benchmark_results(
     *,
     repository_root: Path | None = None,
     runs_root: Path = Path(".runs"),
-    output_root: Path,
+    commit: bool = True,
+    push: bool = False,
+    token: str | None = None,
+    commit_message: str = "Publish Leibniz benchmark results",
 ) -> LocalPublicationExportSummary:
-    """Write local benchmark runs as publication bundles for explicit import."""
+    """Write local benchmark runs as publication bundles for explicit import.
+
+    The resolved runs root is treated as the publication checkout. Publication
+    bundles are generated under that checkout, and ``commit`` commits all dirty
+    run-state changes there.
+    """
 
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     runs_root = _resolve_output_root(repository_root, runs_root)
-    output_root = output_root.resolve()
+    output_root = runs_root / "publication_bundles"
+    if push and not commit:
+        raise LocalResultImportError("push requires committing the result checkout")
     manifests = _known_benchmark_manifests(repository_root)
     runs = _local_run_records(runs_root)
     if not runs:
@@ -148,11 +272,21 @@ def publish_local_benchmark_results(
         publication_file.write_bytes(canonical_document_bytes(bundle.to_record()) + b"\n")
         publication_files.append(publication_file)
         measurement_count += len(bundle.measurement_dataset.measurements)
+    materialize_benchmark_result_views(repository_root=repository_root, runs_root=runs_root)
+    git_commit = _commit_runs_checkout(
+        runs_root=runs_root,
+        message=commit_message,
+        push=push,
+        token=token,
+        endpoint=_default_hf_endpoint,
+    ) if commit else None
     return LocalPublicationExportSummary(
         source_files=tuple(run.source_path for run in runs),
         publication_files=tuple(publication_files),
         publication_bundle_count=len(publication_files),
         measurement_count=measurement_count,
+        git_commit=git_commit,
+        git_pushed=push,
     )
 
 
@@ -162,7 +296,7 @@ def import_submission_publications(
     repository_root: Path | None = None,
     runs_root: Path = Path(".runs"),
 ) -> LocalResultImportSummary:
-    """Import local publication bundles into ignored run state and console views."""
+    """Import local publication bundles into a result checkout and console views."""
 
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     runs_root = _resolve_output_root(repository_root, runs_root)
@@ -1076,6 +1210,273 @@ def _resolve_output_root(repository_root: Path, runs_root: Path) -> Path:
     if resolved == repository_root:
         raise LocalResultImportError("runs root must not be the repository root")
     return resolved
+
+
+def _commit_runs_checkout(
+    *,
+    runs_root: Path,
+    message: str,
+    push: bool,
+    token: str | None,
+    endpoint: str,
+) -> str:
+    if not message.strip():
+        raise LocalResultImportError("commit message must not be empty")
+    if not _is_git_checkout(runs_root):
+        raise LocalResultImportError("runs root must be a Git checkout when publishing")
+    commit = _commit_checkout_if_dirty(
+        runs_root=runs_root,
+        message=message,
+        push=push,
+        token=token,
+        endpoint=endpoint,
+    )
+    if commit is None:
+        raise LocalResultImportError("no dirty run-state changes to commit")
+    return commit
+
+
+def _commit_checkout_if_dirty(
+    *,
+    runs_root: Path,
+    message: str,
+    push: bool,
+    token: str | None,
+    endpoint: str,
+) -> str | None:
+    if not message.strip():
+        raise LocalResultImportError("commit message must not be empty")
+    _git(runs_root, "add", "-A")
+    status = _git(runs_root, "status", "--porcelain").stdout.strip()
+    if not status:
+        return None
+    _ensure_git_identity(runs_root)
+    _git(runs_root, "commit", "-m", message)
+    commit = _git(runs_root, "rev-parse", "HEAD").stdout.strip()
+    if push:
+        _git(
+            runs_root,
+            "push",
+            "-u",
+            "origin",
+            "HEAD",
+            token=token,
+            endpoint=endpoint,
+            username=_checkout_remote_owner(runs_root),
+        )
+    return commit
+
+
+def _is_git_checkout(path: Path) -> bool:
+    try:
+        result = _git(path, "rev-parse", "--is-inside-work-tree")
+    except LocalResultImportError:
+        return False
+    return result.stdout.strip() == "true"
+
+
+def _ensure_git_identity(runs_root: Path) -> None:
+    if not _git_config_value(runs_root, "user.email"):
+        _git(runs_root, "config", "user.email", "leibniz@example.invalid")
+    if not _git_config_value(runs_root, "user.name"):
+        _git(runs_root, "config", "user.name", "Leibniz Operator")
+
+
+def _ensure_local_git_checkout(runs_root: Path) -> None:
+    runs_root.mkdir(parents=True, exist_ok=True)
+    if not _is_git_checkout(runs_root):
+        _git(runs_root, "init")
+
+
+def _git_config_value(runs_root: Path, key: str) -> str | None:
+    try:
+        return _git(runs_root, "config", "--get", key).stdout.strip() or None
+    except LocalResultImportError:
+        return None
+
+
+def _git(
+    path: Path,
+    *args: str,
+    token: str | None = None,
+    endpoint: str = _default_hf_endpoint,
+    username: str = "hf_user",
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return _run_git_process(
+            ["git", "-C", str(path), *args],
+            token=token,
+            endpoint=endpoint,
+            username=username,
+        )
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or error.stdout or "").strip()
+        command = " ".join(("git", *args))
+        message = f"{command} failed"
+        if detail:
+            message = f"{message}: {detail}"
+        raise LocalResultImportError(message) from error
+
+
+def _git_clone(
+    *,
+    source: str,
+    target: Path,
+    token: str,
+    endpoint: str,
+) -> None:
+    try:
+        _run_git_process(
+            ["git", "clone", source, str(target)],
+            token=token,
+            endpoint=endpoint,
+            username=_repo_owner_from_url(source) or "hf_user",
+        )
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or error.stdout or "").strip()
+        message = "git clone failed"
+        if detail:
+            message = f"{message}: {detail}"
+        raise LocalResultImportError(message) from error
+
+
+def _run_git_process(
+    args: list[str],
+    *,
+    token: str | None,
+    endpoint: str,
+    username: str,
+) -> subprocess.CompletedProcess[str]:
+    env = _git_auth_env(token=token, endpoint=endpoint)
+    if token is None:
+        return subprocess.run(
+            args,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    with tempfile.TemporaryDirectory(prefix="leibniz-git-auth-") as auth_dir:
+        askpass = Path(auth_dir) / "askpass.sh"
+        askpass.write_text(
+            "#!/bin/sh\n"
+            "case \"$1\" in\n"
+            "*Username*) printf '%s\\n' \"$LEIBNIZ_HF_USERNAME\" ;;\n"
+            "*Password*) printf '%s\\n' \"$LEIBNIZ_HF_TOKEN\" ;;\n"
+            "*) printf '\\n' ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        askpass.chmod(0o700)
+        assert env is not None
+        env["GIT_ASKPASS"] = askpass.as_posix()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["LEIBNIZ_HF_TOKEN"] = token
+        env["LEIBNIZ_HF_USERNAME"] = username
+        return subprocess.run(
+            args,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+
+def _git_auth_env(*, token: str | None, endpoint: str) -> dict[str, str] | None:
+    if token is None:
+        return None
+    del endpoint
+    env = os.environ.copy()
+    return env
+
+
+def _checkout_remote_owner(runs_root: Path) -> str:
+    try:
+        url = _git(runs_root, "remote", "get-url", "origin").stdout.strip()
+    except LocalResultImportError:
+        return "hf_user"
+    return _repo_owner_from_url(url) or "hf_user"
+
+
+def _repo_owner_from_url(url: str) -> str | None:
+    marker = "/datasets/"
+    if marker not in url:
+        return None
+    tail = url.split(marker, maxsplit=1)[1]
+    owner = tail.split("/", maxsplit=1)[0].strip()
+    return owner or None
+
+
+def _create_hf_dataset_repo(*, repo_id: str, token: str, endpoint: str) -> bool:
+    name, organization = _split_hf_repo_id(repo_id)
+    payload = {
+        "name": name,
+        "organization": organization,
+        "type": "dataset",
+        "private": False,
+        "exist_ok": True,
+    }
+    request = urllib.request.Request(
+        f"{endpoint.rstrip('/')}/api/repos/create",
+        data=canonical_document_bytes(payload),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": document_media_type(),
+        },
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(request, timeout=30).read()
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace").strip()
+        message = f"Hugging Face repo create failed ({error.code})"
+        if detail:
+            message = f"{message}: {detail}"
+        raise LocalResultImportError(message) from error
+    except urllib.error.URLError as error:
+        raise LocalResultImportError(f"Hugging Face repo create failed: {error}") from error
+    return True
+
+
+def _ensure_publication_checkout_structure(runs_root: Path) -> None:
+    readme = runs_root / "README.md"
+    if not readme.exists():
+        readme.write_text(
+            "---\n"
+            "license: cc0-1.0\n"
+            "---\n\n"
+            "# Leibniz Result Publication Checkout\n\n"
+            "This dataset repository stores Leibniz benchmark run state and "
+            "publication bundle documents.\n",
+            encoding="utf-8",
+        )
+    for directory in _publication_directories:
+        marker = runs_root / directory / ".gitkeep"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        if not marker.exists():
+            marker.write_text("", encoding="utf-8")
+
+
+def _validate_hf_repo_id(repo_id: str) -> str:
+    value = repo_id.strip()
+    parts = value.split("/")
+    if len(parts) != 2 or not all(parts):
+        raise LocalResultImportError("Hugging Face repo id must have owner/name form")
+    if any(part in {".", ".."} or any(char.isspace() for char in part) for part in parts):
+        raise LocalResultImportError("Hugging Face repo id contains invalid path atoms")
+    return value
+
+
+def _split_hf_repo_id(repo_id: str) -> tuple[str, str]:
+    organization, name = repo_id.split("/", maxsplit=1)
+    return name, organization
+
+
+def _validate_token(token: str | None) -> str:
+    value = "" if token is None else token.strip()
+    if not value:
+        raise LocalResultImportError("Hugging Face token must not be empty")
+    return value
 
 
 def _bundle_filename(bundle_id: ProtocolIdentifier, digest: ContentDigest) -> str:

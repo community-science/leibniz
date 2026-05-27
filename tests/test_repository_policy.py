@@ -1,5 +1,6 @@
 import ast
 import re
+import subprocess
 from pathlib import Path, PurePosixPath
 
 from leibniz._repository_policy import PolicyViolation, RepositoryPolicy
@@ -108,6 +109,43 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
             message="tracked local environment file",
         ),
     )
+
+
+def test_tracked_repository_id_examples_use_neutral_owners() -> None:
+    neutral_owners = frozenset({"operator", "owner"})
+    repository_line_pattern = re.compile(
+        r"""(["']repository["']\s*:|repository(?:_id)?=|--repo\s)"""
+    )
+    repository_pattern = re.compile(
+        r"(?P<owner>[A-Za-z0-9][A-Za-z0-9._-]*)/"
+        r"(?P<repo>[A-Za-z0-9][A-Za-z0-9._-]*)"
+    )
+    tracked_paths = subprocess.run(
+        ["git", "-C", str(_repository_root), "ls-files", "-z"],
+        check=True,
+        capture_output=True,
+        text=False,
+    ).stdout.rstrip(b"\0").split(b"\0")
+
+    offenders: list[str] = []
+    for raw_path in tracked_paths:
+        relative_path = raw_path.decode("utf-8")
+        path = _repository_root / relative_path
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if not repository_line_pattern.search(line):
+                continue
+            if any(marker in line for marker in ("https://", "hf://", ".leibniz/")):
+                continue
+            for match in repository_pattern.finditer(line):
+                owner = match.group("owner").lower()
+                if owner not in neutral_owners and not owner.startswith("example-"):
+                    offenders.append(f"{relative_path}:{line_number}")
+
+    assert offenders == []
 
 
 def test_benchmark_artifact_tree_contains_only_data_files() -> None:

@@ -17,12 +17,12 @@ def test_submission_registry_parses_normalizes_and_canonicalizes() -> None:
             "id": "submission-registries.public-sources@0.1.0",
             "sources": [
                 {
-                    "repository": "MaximumCats/Leibniz-Submissions",
+                    "repository": "Example-Owner/Leibniz-Submissions",
                     "repository_type": "dataset",
                     "enabled": True,
                 },
                 {
-                    "repository": "maximumcats/model-zoo",
+                    "repository": "example-owner/model-zoo",
                     "repository_type": "model",
                     "enabled": False,
                 },
@@ -34,12 +34,12 @@ def test_submission_registry_parses_normalizes_and_canonicalizes() -> None:
         id=ProtocolIdentifier.parse("submission-registries.public-sources@0.1.0"),
         sources=(
             SubmissionRegistrySource(
-                repository="maximumcats/leibniz-submissions",
+                repository="example-owner/leibniz-submissions",
                 repository_type="dataset",
                 enabled=True,
             ),
             SubmissionRegistrySource(
-                repository="maximumcats/model-zoo",
+                repository="example-owner/model-zoo",
                 repository_type="model",
                 enabled=False,
             ),
@@ -49,12 +49,12 @@ def test_submission_registry_parses_normalizes_and_canonicalizes() -> None:
         "id": "submission-registries.public-sources@0.1.0",
         "sources": [
             {
-                "repository": "maximumcats/leibniz-submissions",
+                "repository": "example-owner/leibniz-submissions",
                 "repository_type": "dataset",
                 "enabled": True,
             },
             {
-                "repository": "maximumcats/model-zoo",
+                "repository": "example-owner/model-zoo",
                 "repository_type": "model",
                 "enabled": False,
             },
@@ -78,17 +78,17 @@ def test_submission_registry_sorts_sources_deterministically() -> None:
             "id": "submission-registries.public-sources@0.1.0",
             "sources": [
                 {
-                    "repository": "zeta/source",
+                    "repository": "example-zeta/source",
                     "repository_type": "dataset",
                     "enabled": True,
                 },
                 {
-                    "repository": "alpha/source",
+                    "repository": "example-alpha/source",
                     "repository_type": "space",
                     "enabled": False,
                 },
                 {
-                    "repository": "alpha/source",
+                    "repository": "example-alpha/source",
                     "repository_type": "dataset",
                     "enabled": True,
                 },
@@ -98,17 +98,17 @@ def test_submission_registry_sorts_sources_deterministically() -> None:
 
     assert registry.to_record()["sources"] == [
         {
-            "repository": "alpha/source",
+            "repository": "example-alpha/source",
             "repository_type": "dataset",
             "enabled": True,
         },
         {
-            "repository": "alpha/source",
+            "repository": "example-alpha/source",
             "repository_type": "space",
             "enabled": False,
         },
         {
-            "repository": "zeta/source",
+            "repository": "example-zeta/source",
             "repository_type": "dataset",
             "enabled": True,
         },
@@ -119,19 +119,19 @@ def test_submission_registry_rejects_duplicates() -> None:
     record = _registry_record()
     record["sources"] = [
         {
-            "repository": "MaximumCats/Leibniz-Submissions",
+            "repository": "Example-Owner/Leibniz-Submissions",
             "repository_type": "dataset",
             "enabled": True,
         },
         {
-            "repository": "maximumcats/leibniz-submissions",
+            "repository": "example-owner/leibniz-submissions",
             "repository_type": "dataset",
             "enabled": False,
         },
     ]
 
     assert str(capture_registry_error(lambda: SubmissionRegistry.from_record(record))) == (
-        "duplicate repository source: maximumcats/leibniz-submissions (dataset)"
+        "duplicate repository source: example-owner/leibniz-submissions (dataset)"
     )
 
 
@@ -227,7 +227,7 @@ def _registry_record() -> dict[str, object]:
         "id": "submission-registries.public-sources@0.1.0",
         "sources": [
             {
-                "repository": "maximumcats/leibniz-submissions",
+                "repository": "example-owner/leibniz-submissions",
                 "repository_type": "dataset",
                 "enabled": True,
             }

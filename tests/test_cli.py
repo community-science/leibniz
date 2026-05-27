@@ -654,7 +654,7 @@ def _submission_registry_record() -> dict[str, object]:
         "id": "submission-registries.cli@0.1.0",
         "sources": [
             {
-                "repository": "maximumcats/leibniz-submissions",
+                "repository": "example-owner/leibniz-submissions",
                 "repository_type": "dataset",
                 "enabled": True,
             }
