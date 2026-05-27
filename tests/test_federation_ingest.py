@@ -31,7 +31,7 @@ def test_federation_ingest_plan_derives_from_registry() -> None:
         entries=(
             FederationIngestPlanEntry(
                 source=SubmissionRegistrySource(
-                    repository="maximumcats/disabled-source",
+                    repository="example-owner/disabled-source",
                     repository_type="dataset",
                     enabled=False,
                 ),
@@ -40,7 +40,7 @@ def test_federation_ingest_plan_derives_from_registry() -> None:
             ),
             FederationIngestPlanEntry(
                 source=SubmissionRegistrySource(
-                    repository="maximumcats/leibniz-submissions",
+                    repository="example-owner/leibniz-submissions",
                     repository_type="dataset",
                     enabled=True,
                 ),
@@ -56,14 +56,14 @@ def test_federation_ingest_plan_derives_from_registry() -> None:
         "dry_run": True,
         "entries": [
             {
-                "repository": "maximumcats/disabled-source",
+                "repository": "example-owner/disabled-source",
                 "repository_type": "dataset",
                 "enabled": False,
                 "status": "inactive",
                 "expected_publication_bundles": [],
             },
             {
-                "repository": "maximumcats/leibniz-submissions",
+                "repository": "example-owner/leibniz-submissions",
                 "repository_type": "dataset",
                 "enabled": True,
                 "status": "would-inspect",
@@ -93,7 +93,7 @@ def test_federation_ingest_plan_document_loads_bytes_with_digest() -> None:
 
 def test_federation_ingest_plan_records_discovered_local_publication_bundles() -> None:
     source = SubmissionRegistrySource(
-        repository="maximumcats/leibniz-submissions",
+        repository="example-owner/leibniz-submissions",
         repository_type="dataset",
         enabled=True,
     )
@@ -113,7 +113,7 @@ def test_federation_ingest_plan_records_discovered_local_publication_bundles() -
     )
 
     assert entry.to_record() == {
-        "repository": "maximumcats/leibniz-submissions",
+        "repository": "example-owner/leibniz-submissions",
         "repository_type": "dataset",
         "enabled": True,
         "status": "would-inspect",
@@ -139,7 +139,7 @@ def test_federation_ingest_plan_validates_registry_sources() -> None:
 
     altered_record = plan.to_record()
     entries = list(_entry_records(altered_record))
-    entries[0]["repository"] = "maximumcats/other-source"
+    entries[0]["repository"] = "example-owner/other-source"
     altered_record["entries"] = entries
     assert str(
         capture_ingest_error(
@@ -235,12 +235,12 @@ def _registry() -> SubmissionRegistry:
             "id": "submission-registries.public-sources@0.1.0",
             "sources": [
                 {
-                    "repository": "maximumcats/leibniz-submissions",
+                    "repository": "example-owner/leibniz-submissions",
                     "repository_type": "dataset",
                     "enabled": True,
                 },
                 {
-                    "repository": "maximumcats/disabled-source",
+                    "repository": "example-owner/disabled-source",
                     "repository_type": "dataset",
                     "enabled": False,
                 },
@@ -260,7 +260,7 @@ def _plan_record() -> dict[str, object]:
 def _enabled_entry() -> FederationIngestPlanEntry:
     return FederationIngestPlanEntry(
         source=SubmissionRegistrySource(
-            repository="maximumcats/leibniz-submissions",
+            repository="example-owner/leibniz-submissions",
             repository_type="dataset",
             enabled=True,
         ),
