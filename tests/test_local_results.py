@@ -341,14 +341,14 @@ def test_initialize_publication_checkout_commits_scaffold_without_push_by_defaul
     monkeypatch.setattr("urllib.request.urlopen", _urlopen)
 
     summary = initialize_publication_checkout(
-        repo_id="maximumcats/leibniz-results",
+        repo_id="operator/leibniz-results",
         token="hf_test",
         repository_root=_repository_root,
         runs_root=runs_root,
     )
 
     assert calls == ["create"]
-    assert summary.repo_url == "https://huggingface.co/datasets/maximumcats/leibniz-results"
+    assert summary.repo_url == "https://huggingface.co/datasets/operator/leibniz-results"
     assert summary.scaffold_commit == _git(runs_root, "rev-parse", "HEAD").stdout.strip()
     assert summary.pushed is False
     assert _git(runs_root, "status", "--porcelain").stdout == ""
