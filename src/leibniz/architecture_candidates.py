@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from leibniz.architectures import ArchitectureManifest
+from leibniz.content import ContentDigest
+from leibniz.identifiers import ProtocolIdentifier
 from leibniz.model_operators import (
     ModelOperatorCoordinate,
     ModelOperatorPlan,
@@ -89,6 +91,31 @@ class ArchitectureSearchDistribution:
             raise ArchitectureSearchDistributionValidationError(
                 "parameter_count.maximum must be at least minimum"
             )
+
+    @property
+    def digest(self) -> ContentDigest:
+        return ContentDigest.from_value(self.to_record())
+
+    @property
+    def id(self) -> ProtocolIdentifier:
+        return ProtocolIdentifier.parse(
+            f"architecture-search-distributions.sha-{self.digest.hex}@0.1.0"
+        )
+
+    def to_record(self) -> dict[str, object]:
+        record: dict[str, object] = {
+            "local_support_dimension": self.local_support_dimension,
+            "local_support_size_minimum": self.local_support_size_minimum,
+        }
+        if self.local_support_size_maximum is not None:
+            record["local_support_size_maximum"] = self.local_support_size_maximum
+        if self.local_support_size_maximum_from is not None:
+            record["local_support_size_maximum_from"] = self.local_support_size_maximum_from
+        if self.parameter_count_minimum is not None:
+            record["parameter_count_minimum"] = self.parameter_count_minimum
+        if self.parameter_count_maximum is not None:
+            record["parameter_count_maximum"] = self.parameter_count_maximum
+        return record
 
     def search_points(self, input_shape: tuple[int, ...]) -> tuple[ModelOperatorSearchPoint, ...]:
         """Resolve the bounded semantic search coordinates for an input shape."""

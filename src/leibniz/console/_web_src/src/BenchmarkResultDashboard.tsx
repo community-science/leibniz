@@ -530,6 +530,12 @@ function ProposalCards({
                 <dd>{proposal.selector_name ?? 'none'}</dd>
                 <dt>Cost Stratum</dt>
                 <dd>{resourceStratumLabel(proposal)}</dd>
+                <dt>Search</dt>
+                <dd>{searchDistributionLabel(proposal)}</dd>
+                <dt>Coordinates</dt>
+                <dd>{semanticCoordinateSummary(proposal)}</dd>
+                <dt>Nearest Evidence</dt>
+                <dd>{nearestMeasuredSupportLabel(proposal)}</dd>
                 <dt>Comparable Score</dt>
                 <dd>{scoreLabel(proposal.comparable_cost_best_score)}</dd>
                 <dt>Matched Model</dt>
@@ -592,6 +598,56 @@ function resourceStratumLabel(proposal: ProposalRecord): string {
     return 'none';
   }
   return `${proposal.resource_stratum_index + 1}/${proposal.resource_stratum_count}`;
+}
+
+function searchDistributionLabel(proposal: ProposalRecord): string {
+  const value = proposal.search_diagnostics?.search_distribution_id;
+  return typeof value === 'string' ? shortDigest(value) : 'not recorded';
+}
+
+function semanticCoordinateSummary(proposal: ProposalRecord): string {
+  const coordinates = proposal.search_diagnostics?.semantic_coordinates;
+  if (!Array.isArray(coordinates)) {
+    return 'not recorded';
+  }
+  const support = coordinateValue(coordinates, 'operator.0.local_support_size');
+  if (support !== undefined) {
+    return `${coordinates.length} coordinates, support ${support}`;
+  }
+  return `${coordinates.length} coordinates`;
+}
+
+function nearestMeasuredSupportLabel(proposal: ProposalRecord): string {
+  const support = proposal.search_diagnostics?.nearest_measured_support;
+  if (!isRecord(support)) {
+    return 'none';
+  }
+  const parameterCount = support.parameter_count;
+  const score = support.score;
+  if (typeof parameterCount !== 'number' || typeof score !== 'number') {
+    return 'none';
+  }
+  return `${formatCost(parameterCount)} params at ${scoreLabel(score)}`;
+}
+
+function coordinateValue(coordinates: unknown[], name: string): string | number | undefined {
+  for (const coordinate of coordinates) {
+    if (!isRecord(coordinate)) {
+      continue;
+    }
+    if (coordinate.name !== name) {
+      continue;
+    }
+    const value = coordinate.value;
+    if (typeof value === 'string' || typeof value === 'number') {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function ModelResultTable({

@@ -58,6 +58,20 @@ def test_experiment_proposal_set_parses_and_canonicalizes() -> None:
                     "acquisition_value": 0.8,
                     "estimated_score": 0.7,
                 },
+                search_diagnostics={
+                    "search_distribution_id": "architecture-search-distributions.sha-abc@0.1.0",
+                    "semantic_coordinates": [
+                        {"name": "operator.0.support", "value": "local-window"},
+                        {"name": "operator.0.local_support_size", "value": 2},
+                    ],
+                    "sampled_resource_stratum": {"index": 1, "count": 3},
+                    "nearest_measured_support": {
+                        "architecture_digest": "sha256:1234",
+                        "parameter_count": 50,
+                        "score": 0.5,
+                        "log_parameter_distance": 0.25,
+                    },
+                },
                 novelty=0.5,
                 expected_frontier_improvement=0.1,
                 selector_name="resource-bootstrap",
@@ -318,6 +332,20 @@ def _proposal_set_record(
                 "acquisition_components": {
                     "acquisition_value": 0.8,
                     "estimated_score": 0.7,
+                },
+                "search_diagnostics": {
+                    "search_distribution_id": "architecture-search-distributions.sha-abc@0.1.0",
+                    "semantic_coordinates": [
+                        {"name": "operator.0.support", "value": "local-window"},
+                        {"name": "operator.0.local_support_size", "value": 2},
+                    ],
+                    "sampled_resource_stratum": {"index": 1, "count": 3},
+                    "nearest_measured_support": {
+                        "architecture_digest": "sha256:1234",
+                        "parameter_count": 50,
+                        "score": 0.5,
+                        "log_parameter_distance": 0.25,
+                    },
                 },
                 "novelty": 0.5,
                 "expected_frontier_improvement": 0.1,
