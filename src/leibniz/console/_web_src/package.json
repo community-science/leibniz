@@ -4,10 +4,16 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "generate": "python -m leibniz.console.codegen",
+    "prebuild": "npm run generate",
     "build": "tsc --noEmit && vite build",
+    "precheck": "npm run generate",
     "check": "tsc --noEmit",
+    "predev": "npm run generate",
     "dev": "vite",
+    "pretest": "npm run generate",
     "test": "node ../../../../tests/run_console_web_tests.mjs",
+    "pretypecheck": "npm run generate",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
