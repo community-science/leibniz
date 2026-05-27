@@ -1,27 +1,14 @@
 import {
   BookOpenCheck,
-  Cpu,
   Database,
-  FileJson,
-  FolderTree,
-  Network,
-  ScrollText,
 } from 'lucide-react';
 import { useState } from 'react';
 
 import { ArtifactBrowser } from './ArtifactBrowser';
 import { BenchmarksPanel } from './BenchmarksPanel';
-import { ModelInspectionPanel } from './ModelInspectionPanel';
-import { SourceModuleInventory } from './SourceModuleInventory';
 import consoleData from 'virtual:leibniz-console-data';
 
-type ConsoleSection = {
-  id: string;
-  label: string;
-  description: string;
-};
-
-type TabId = 'home' | 'artifacts' | 'benchmarks' | 'models' | 'source';
+type TabId = 'benchmarks' | 'artifacts';
 
 type ConsoleTab = {
   id: TabId;
@@ -29,43 +16,12 @@ type ConsoleTab = {
 };
 
 const tabs: ConsoleTab[] = [
-  { id: 'home', label: 'Home' },
-  { id: 'artifacts', label: 'Artifacts' },
   { id: 'benchmarks', label: 'Benchmarks' },
-  { id: 'models', label: 'Models' },
-  { id: 'source', label: 'Source' },
-];
-
-const sections: ConsoleSection[] = [
-  {
-    id: 'artifacts',
-    label: 'Artifacts',
-    description: 'Protocol documents, digests, validation status, and references.',
-  },
-  {
-    id: 'dependencies',
-    label: 'Dependencies',
-    description: 'Explicit dependency edges between public artifact references.',
-  },
-  {
-    id: 'documents',
-    label: 'Documents',
-    description: 'Typed views over already-public Leibniz document families.',
-  },
-  {
-    id: 'benchmarks',
-    label: 'Benchmarks',
-    description: 'Benchmark samples, competence views, imported results, proposals, and runs.',
-  },
-  {
-    id: 'models',
-    label: 'Models',
-    description: 'Read-only architecture, dimensionality, cost, and model source inspection.',
-  },
+  { id: 'artifacts', label: 'Artifacts' },
 ];
 
 export function ConsoleShell() {
-  const [currentTab, setCurrentTab] = useState<TabId>('home');
+  const [currentTab, setCurrentTab] = useState<TabId>('benchmarks');
 
   return (
     <main className="mission-control">
@@ -81,16 +37,10 @@ export function ConsoleShell() {
             onClick={() => setCurrentTab(tab.id)}
             type="button"
           >
-            {tab.id === 'home' ? (
-              <ScrollText size={16} />
-            ) : tab.id === 'artifacts' ? (
+            {tab.id === 'artifacts' ? (
               <Database size={16} />
-            ) : tab.id === 'benchmarks' ? (
-              <BookOpenCheck size={16} />
-            ) : tab.id === 'models' ? (
-              <Cpu size={16} />
             ) : (
-              <FolderTree size={16} />
+              <BookOpenCheck size={16} />
             )}
             {tab.label}
           </button>
@@ -98,39 +48,6 @@ export function ConsoleShell() {
       </nav>
 
       <section className="tab-content">
-        <div className="console-overview" hidden={currentTab !== 'home'}>
-          <section className="console-grid" aria-label="Console sections">
-            {sections.map((section) => (
-              <article className="console-section" key={section.id}>
-                <div className="section-icon" aria-hidden="true">
-                  {section.id === 'artifacts' ? (
-                    <Database size={20} />
-                  ) : section.id === 'dependencies' ? (
-                    <Network size={20} />
-                  ) : section.id === 'benchmarks' ? (
-                    <BookOpenCheck size={20} />
-                  ) : section.id === 'models' ? (
-                    <Cpu size={20} />
-                  ) : (
-                    <FileJson size={20} />
-                  )}
-                </div>
-                <div>
-                  <h2>{section.label}</h2>
-                  <p>{section.description}</p>
-                </div>
-              </article>
-            ))}
-          </section>
-        </div>
-
-        <div className="console-overview" hidden={currentTab !== 'artifacts'}>
-          <ArtifactBrowser
-            details={consoleData.artifact_details}
-            index={consoleData.artifact_index}
-          />
-        </div>
-
         <div className="console-overview" hidden={currentTab !== 'benchmarks'}>
           <BenchmarksPanel
             modelInspections={consoleData.model_inspections}
@@ -139,12 +56,11 @@ export function ConsoleShell() {
           />
         </div>
 
-        <div className="console-overview" hidden={currentTab !== 'models'}>
-          <ModelInspectionPanel inspections={consoleData.model_inspections} />
-        </div>
-
-        <div className="console-overview" hidden={currentTab !== 'source'}>
-          <SourceModuleInventory modules={consoleData.source_modules} />
+        <div className="console-overview" hidden={currentTab !== 'artifacts'}>
+          <ArtifactBrowser
+            details={consoleData.artifact_details}
+            index={consoleData.artifact_index}
+          />
         </div>
       </section>
     </main>

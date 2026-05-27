@@ -53,6 +53,7 @@ export function BenchmarksPanel({
   }
 
   const result = selectedResult?.result;
+  const modelRows = modelComparisonRows(result, modelInspections);
   const sampleCount = selected.batches.reduce(
     (total, batch) => total + batch.samples.length,
     0,
@@ -108,15 +109,17 @@ export function BenchmarksPanel({
               resultEntry={selectedResult}
             />
           </CollapsibleBenchmarkSection>
-          <CollapsibleBenchmarkSection
-            label="Models"
-            summary={`${modelComparisonRows(result, modelInspections).length} inspected candidates`}
-          >
-            <BenchmarkModelsPane
-              inspections={modelInspections}
-              result={result}
-            />
-          </CollapsibleBenchmarkSection>
+          {modelRows.length === 0 ? null : (
+            <CollapsibleBenchmarkSection
+              label="Models"
+              summary={`${modelRows.length} inspected candidates`}
+            >
+              <BenchmarkModelsPane
+                rows={modelRows}
+                result={result}
+              />
+            </CollapsibleBenchmarkSection>
+          )}
         </div>
       </div>
     </section>
@@ -173,7 +176,6 @@ function BenchmarkStatusRow({
   task: BenchmarkTaskRecord;
 }) {
   const status = resultEntry === undefined ? 'o AWAITING RESULTS' : 'o RESULT VIEW LOADED';
-  const source = resultEntry?.sourcePath ?? task.source_path;
   return (
     <div className="benchmark-status-row">
       <span>{status}</span>
@@ -182,7 +184,7 @@ function BenchmarkStatusRow({
       <span>/</span>
       <span>benchmark={task.benchmark_id}</span>
       <span>/</span>
-      <span>{source}</span>
+      <span>{task.source_path}</span>
     </div>
   );
 }
@@ -199,7 +201,6 @@ function BenchmarkPerformancePane({
     | undefined;
 }) {
   const result = resultEntry?.result ?? emptyBenchmarkResult(benchmark);
-  const sourcePath = resultEntry?.sourcePath ?? 'No result view loaded';
 
   return (
     <div className="benchmark-task">
@@ -207,7 +208,6 @@ function BenchmarkPerformancePane({
       <BenchmarkResultDashboard
         resetToken={resetToken}
         result={result}
-        sourcePath={sourcePath}
       />
     </div>
   );
@@ -285,25 +285,16 @@ function emptyBenchmarkResult(benchmark: BenchmarkTaskRecord): BenchmarkResultRe
 }
 
 function BenchmarkModelsPane({
-  inspections,
+  rows,
   result,
 }: {
-  inspections: ModelInspectionRecord[];
+  rows: ReturnType<typeof modelComparisonRows>;
   result: BenchmarkResultRecord | undefined;
 }) {
-  const rows = modelComparisonRows(result, inspections);
   const costAxis = result?.cost_axes[0]?.key ?? 'parameter_count';
   const [selectedModelKey, setSelectedModelKey] = useState(rows[0]?.model.model_key ?? '');
   const selectedRow =
     rows.find(({ model }) => model.model_key === selectedModelKey) ?? rows[0];
-
-  if (rows.length === 0) {
-    return (
-      <div className="benchmark-task">
-        <p className="artifact-detail-note">No benchmark model comparisons are available.</p>
-      </div>
-    );
-  }
 
   return (
     <div className="benchmark-task">

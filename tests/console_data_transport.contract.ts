@@ -9,9 +9,6 @@ const artifacts = parsed.artifact_index.artifacts;
 const detailCoverage = artifacts.map((artifact) =>
   detailForArtifact(parsed.artifact_details, artifact),
 );
-const consoleDataSource = parsed.source_modules.find(
-  (sourceModule) => sourceModule.module_name === 'leibniz.console.data',
-);
 const modelInspection = parsed.model_inspections[0];
 if (modelInspection === undefined) {
   throw new Error('expected model inspection fixture');
@@ -24,18 +21,7 @@ assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detai
 assertEqual(parsed.result_views.length, 0, 'result view count');
 assertEqual(parsed.model_inspections.length, 1, 'model inspection count');
 assertEqual(parsed.benchmark_tasks.length, 1, 'benchmark task count');
-assertEqual(parsed.source_modules.length > 20, true, 'source module count');
-assertEqual(consoleDataSource?.source_path, 'src/leibniz/console/data.py', 'console data source path');
-assertEqual(
-  consoleDataSource?.public_exports.join(','),
-  'ConsoleData,ConsoleDataBuilder,ConsoleDataValidationError',
-  'console data exports',
-);
-assertEqual(
-  consoleDataSource?.validation_commands.includes('python -m pytest tests/test_console_data.py'),
-  true,
-  'console data validation command',
-);
+assertEqual('source_modules' in rawConsoleData, false, 'source module transport removed');
 assertEqual(
   artifacts.map((artifact) => `${artifact.kind}:${artifact.source_path}`).join('|'),
   [

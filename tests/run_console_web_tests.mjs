@@ -36,10 +36,12 @@ const generatedPayload = run(
 );
 writeFileSync(generatedPayloadPath, generatedPayload);
 assertShellUsesGeneratedConsoleData();
+assertConsoleShellSurfaceIsConsolidated();
 assertBenchmarkWorkbenchStructure();
 assertBenchmarkSamplePaneStructure();
 assertBenchmarkFrontierPlotStructure();
 assertBenchmarkModelWorkbenchStructure();
+assertConsoleTextIsUseful();
 assertBenchmarkWebSourceIsDataDriven();
 assertConsoleResultRootPolicy();
 
@@ -85,11 +87,38 @@ function assertShellUsesGeneratedConsoleData() {
   if (!shell.includes("{ id: 'benchmarks', label: 'Benchmarks' }")) {
     throw new Error('ConsoleShell must expose a Benchmarks tab');
   }
-  if (shell.includes("{ id: 'data', label: 'Data' }")) {
-    throw new Error('ConsoleShell must not expose a top-level Data tab');
+}
+
+function assertConsoleShellSurfaceIsConsolidated() {
+  const shell = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/ConsoleShell.tsx'),
+    'utf8',
+  );
+  const consoleData = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/consoleData.ts'),
+    'utf8',
+  );
+  const bannedShellMarkers = [
+    "{ id: 'home'",
+    "{ id: 'data'",
+    "{ id: 'performance'",
+    "{ id: 'models'",
+    "{ id: 'source'",
+    'console-grid',
+    'console-section',
+    'ModelInspectionPanel',
+    'SourceModuleInventory',
+  ];
+  for (const marker of bannedShellMarkers) {
+    if (shell.includes(marker)) {
+      throw new Error(`ConsoleShell must not expose retired surface marker: ${marker}`);
+    }
   }
-  if (shell.includes("{ id: 'performance', label: 'Performance' }")) {
-    throw new Error('ConsoleShell must not expose a top-level Performance tab');
+  if (!shell.includes("useState<TabId>('benchmarks')")) {
+    throw new Error('ConsoleShell must default to the Benchmarks tab');
+  }
+  if (consoleData.includes('source_modules') || consoleData.includes('SourceModule')) {
+    throw new Error('consoleData transport must not include Source-only module inventory');
   }
 }
 
@@ -271,6 +300,29 @@ function assertBenchmarkModelWorkbenchStructure() {
   for (const marker of requiredStyleMarkers) {
     if (!styles.includes(marker)) {
       throw new Error(`Console styles must preserve model workbench marker: ${marker}`);
+    }
+  }
+}
+
+function assertConsoleTextIsUseful() {
+  const webRoot = resolve(repositoryRoot, 'src/leibniz/console/_web_src/src');
+  const bannedPatterns = [
+    /fixture/i,
+    /Best-known score by model cost/,
+    /No active proposals are available/,
+    /No training history is available/,
+    /No [^.\n]+ records are available/,
+    /Read-only architecture/,
+    /Protocol documents, digests/,
+    /Typed views over already-public/,
+  ];
+  for (const path of webSourceFiles(webRoot)) {
+    const relativePath = path.slice(webRoot.length + 1);
+    const source = readFileSync(path, 'utf8');
+    for (const pattern of bannedPatterns) {
+      if (pattern.test(source)) {
+        throw new Error(`${relativePath} contains retired explanatory UI copy: ${pattern}`);
+      }
     }
   }
 }
