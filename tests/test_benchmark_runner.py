@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -10,9 +11,11 @@ from leibniz.benchmark_runner import (
 )
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
+from leibniz.documents import load_object_document
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
 from leibniz.measurements import MeasurementDatasetDocument
 from leibniz.model_inspection import ModelInspectionDocument
+from leibniz.training_runs import TrainingRunRecord
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -68,6 +71,21 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert inspection_document.inspection.cost_summary.parameter_count == 50
     assert inspection_document.inspection.cost_summary.inference_flops == 1104
     assert summary.training_summary_path.exists()
+    training_summary = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    training_run = TrainingRunRecord.from_record(
+        cast(Mapping[str, object], training_summary["training_run"])
+    )
+    assert training_run.protocol.optimizer == "sgd"
+    assert training_run.protocol.objective == "cross-entropy"
+    assert training_run.protocol.max_steps == 1
+    assert training_run.protocol.validation_sample_count == 2
+    assert training_run.steps_run == 1
+    assert training_run.validation_checks == 2
+    assert training_run.validation_history[0].step == 0
+    assert training_run.validation_history[-1].step == 1
 
 
 def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: Path) -> None:
@@ -92,6 +110,12 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     result = results[0]
     history = cast(list[dict[str, object]], result["training_history"])
     assert history[0]["source_kind"] == "local-run"
+    training_summary = cast(dict[str, object], history[0]["training_summary"])
+    training_run = cast(dict[str, object], training_summary["training_run"])
+    protocol = cast(dict[str, object], training_run["protocol"])
+    assert protocol["optimizer"] == "sgd"
+    assert protocol["schedule"] == "none"
+    assert len(cast(list[dict[str, object]], training_run["validation_history"])) == 2
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     assert leaderboard[0]["observed_complexities"] == [1.0]
 
