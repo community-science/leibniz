@@ -160,7 +160,6 @@ function assertBenchmarkWorkbenchStructure() {
     'benchmark-selector-row',
     'benchmark-status-row',
     'benchmark-section-summary',
-    'benchmark-section-actions',
   ];
   for (const marker of requiredPanelMarkers) {
     if (!panel.includes(marker)) {
@@ -244,11 +243,21 @@ function assertBenchmarkFrontierPlotStructure() {
       throw new Error(`BenchmarkResultDashboard must expose frontier plot marker: ${marker}`);
     }
   }
-  if (dashboard.includes('Reset</button>')) {
-    throw new Error('Frontier plot reset must live in the benchmark section action slot');
+  const requiredControlMarkers = [
+    'aria-label="Pan left"',
+    'aria-label="Pan right"',
+    'aria-label="Zoom in"',
+    'aria-label="Zoom out"',
+    'aria-label="Reset plot"',
+    'pannedView',
+  ];
+  for (const marker of requiredControlMarkers) {
+    if (!dashboard.includes(marker)) {
+      throw new Error(`BenchmarkResultDashboard must expose plot control marker: ${marker}`);
+    }
   }
-  if (!panel.includes('Reset Zoom') || !panel.includes('resetToken')) {
-    throw new Error('BenchmarksPanel must route frontier reset through section actions');
+  if (panel.includes('Reset Zoom') || panel.includes('resetToken')) {
+    throw new Error('BenchmarksPanel must not route frontier controls through section actions');
   }
 
   const requiredStyleMarkers = [
