@@ -1944,19 +1944,28 @@ p {
   gap: var(--space-sm);
 }
 
-.benchmark-model-artifact-flow div {
+.benchmark-model-artifact-flow button {
   position: relative;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: var(--space-xs);
   min-width: 0;
   border: var(--line-thin) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--control-bg);
+  color: inherit;
+  cursor: pointer;
   padding: var(--space-sm);
+  text-align: left;
 }
 
-.benchmark-model-artifact-flow div:not(:last-child)::after {
+.benchmark-model-artifact-flow button:hover,
+.benchmark-model-artifact-flow button.active {
+  border-color: var(--frontier-accent-border);
+  background: var(--frontier-accent-bg);
+}
+
+.benchmark-model-artifact-flow button:not(:last-child)::after {
   position: absolute;
   top: 50%;
   right: calc(-1 * var(--space-sm));
@@ -1966,12 +1975,88 @@ p {
   content: "";
 }
 
+.benchmark-model-artifact-flow svg {
+  grid-row: span 2;
+  color: var(--frontier-accent);
+}
+
 .benchmark-model-artifact-flow strong {
   overflow-wrap: anywhere;
   color: var(--text-primary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--font-control);
   line-height: var(--line-tight);
+}
+
+.benchmark-model-lineage-graph {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) auto minmax(0, 5fr) auto minmax(0, 5fr);
+  align-items: stretch;
+  gap: var(--space-sm);
+}
+
+.benchmark-model-lineage-column {
+  display: grid;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.benchmark-model-lineage-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  min-width: 0;
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  padding: var(--space-sm);
+}
+
+.benchmark-model-lineage-card.input {
+  border-color: var(--proposal-accent-border);
+}
+
+.benchmark-model-lineage-card.operation {
+  border-color: var(--measured-accent-border);
+}
+
+.benchmark-model-lineage-card.output {
+  border-color: var(--frontier-accent-border);
+}
+
+.benchmark-model-lineage-card span,
+.benchmark-model-validation-legend span {
+  color: var(--text-dim);
+  font-size: var(--font-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.benchmark-model-lineage-card strong {
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: var(--font-control);
+}
+
+.benchmark-model-lineage-card code,
+.benchmark-model-lineage-card em {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-control);
+  font-style: normal;
+}
+
+.benchmark-model-lineage-card em {
+  color: var(--frontier-accent);
+}
+
+.benchmark-model-lineage-arrow {
+  align-self: center;
+  color: var(--measured-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 800;
 }
 
 .benchmark-model-detail-metrics {
@@ -1990,6 +2075,7 @@ p {
 .benchmark-model-detail-metrics dt,
 .benchmark-model-detail-grid dt,
 .benchmark-model-cost-grid dt,
+.benchmark-model-training-grid dt,
 .benchmark-model-layer-shape-grid dt,
 .benchmark-model-operator-grid dt,
 .benchmark-model-source-list dt {
@@ -2003,6 +2089,7 @@ p {
 .benchmark-model-detail-metrics dd,
 .benchmark-model-detail-grid dd,
 .benchmark-model-cost-grid dd,
+.benchmark-model-training-grid dd,
 .benchmark-model-layer-shape-grid dd,
 .benchmark-model-operator-grid dd,
 .benchmark-model-source-list dd {
@@ -2039,6 +2126,93 @@ p {
   min-width: 0;
   border-left: var(--line-accent) solid var(--proposal-accent-border);
   padding-left: var(--space-sm);
+}
+
+.benchmark-model-training-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--metric-min), 1fr));
+  gap: var(--space-sm);
+  margin: 0;
+}
+
+.benchmark-model-training-grid div {
+  min-width: 0;
+  border-left: var(--line-accent) solid var(--measured-accent-border);
+  padding-left: var(--space-sm);
+}
+
+.benchmark-model-validation-chart {
+  position: relative;
+  overflow: hidden;
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+}
+
+.benchmark-model-validation-chart svg {
+  display: block;
+  width: 100%;
+}
+
+.benchmark-model-validation-legend {
+  position: absolute;
+  top: var(--space-sm);
+  right: var(--space-sm);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.benchmark-model-validation-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.benchmark-model-validation-legend i {
+  width: var(--space-sm);
+  height: var(--line-accent);
+}
+
+.benchmark-model-validation-legend i.loss,
+.benchmark-model-validation-loss {
+  stroke: var(--measured-accent);
+}
+
+.benchmark-model-validation-legend i.best,
+.benchmark-model-validation-best {
+  stroke: var(--frontier-accent);
+}
+
+.benchmark-model-validation-legend i.loss {
+  background: var(--measured-accent);
+}
+
+.benchmark-model-validation-legend i.best {
+  background: var(--frontier-accent);
+}
+
+.benchmark-model-validation-frame {
+  fill: var(--frontier-frame-bg);
+  stroke: var(--border-color);
+  stroke-width: var(--line-thin);
+}
+
+.benchmark-model-validation-loss,
+.benchmark-model-validation-best {
+  stroke-width: var(--line-accent);
+}
+
+.benchmark-model-validation-point {
+  fill: var(--measured-accent);
+  stroke: var(--preview-bg);
+  stroke-width: var(--line-thin);
+}
+
+.benchmark-model-validation-tick {
+  fill: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-label);
 }
 
 .benchmark-model-layer-list,

@@ -1,4 +1,13 @@
-import { Activity, ChevronDown, Gauge } from 'lucide-react';
+import {
+  Activity,
+  Boxes,
+  ChevronDown,
+  Fingerprint,
+  Gauge,
+  GitBranch,
+  PackageCheck,
+  type LucideIcon,
+} from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
@@ -19,9 +28,41 @@ import type {
   GeneratedObservationSampleRecord,
 } from './benchmarkTasks.ts';
 import type { ModelInspectionLayerRecord, ModelInspectionRecord } from './modelInspections.ts';
-import type { BenchmarkResultRecord, ResultViewRecord } from './resultViews.ts';
+import type { BenchmarkResultRecord, ResultViewRecord, RunResultRecord } from './resultViews.ts';
 
 type SampleCardDensity = 'standard' | 'compact';
+type ModelArtifactView = 'model' | 'architecture' | 'training' | 'artifacts';
+type ModelArtifactFlowItem = {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  view: ModelArtifactView;
+};
+type ModelLineageNode = {
+  detail?: string;
+  kind: string;
+  role: 'input' | 'operation' | 'output';
+  value: string;
+};
+type ValidationHistoryPoint = {
+  best_validation_loss: number;
+  stale_checks?: number;
+  step: number;
+  validation_loss: number;
+};
+
+const modelValidationPlotWidth = 560;
+const modelValidationPlotHeight = 180;
+const modelValidationPlotMargin = {
+  bottom: 30,
+  left: 46,
+  right: 16,
+  top: 16,
+};
+const modelValidationPlotBodyWidth =
+  modelValidationPlotWidth - modelValidationPlotMargin.left - modelValidationPlotMargin.right;
+const modelValidationPlotBodyHeight =
+  modelValidationPlotHeight - modelValidationPlotMargin.top - modelValidationPlotMargin.bottom;
 
 export function BenchmarksPanel({
   modelInspections,
@@ -335,6 +376,7 @@ function BenchmarkModelsPane({
               costAxis={costAxis}
               inspection={selectedRow.inspection}
               model={selectedRow.model}
+              runs={runsForModel(result, selectedRow.model)}
             />
           )}
         </div>
@@ -348,23 +390,34 @@ function BenchmarkModelInspector({
   costAxis,
   inspection,
   model,
+  runs,
 }: {
   complexityAxis: string | undefined;
   costAxis: string;
   inspection: ModelInspectionRecord | undefined;
   model: BenchmarkResultRecord['leaderboard'][number];
+  runs: RunResultRecord[];
 }) {
+  const [artifactView, setArtifactView] = useState<ModelArtifactView>('model');
   return (
     <article className="benchmark-model-detail">
       <header className="benchmark-model-artifact-hero">
-        <div className="benchmark-model-artifact-mark">M</div>
+        <div className="benchmark-model-artifact-mark" aria-hidden="true">
+          <PackageCheck size={20} />
+        </div>
         <div>
           <span>Model artifact</span>
           <h3>{shortDigest(model.architecture_digest)}</h3>
           <code>{model.model_key}</code>
         </div>
       </header>
-      <ModelArtifactFlow inspection={inspection} model={model} />
+      <ModelArtifactFlow
+        active={artifactView}
+        inspection={inspection}
+        model={model}
+        onSelect={setArtifactView}
+      />
+      <ModelLineageGraph inspection={inspection} model={model} runs={runs} />
       <dl className="benchmark-model-detail-metrics">
         <div>
           <dt>Score</dt>
@@ -383,70 +436,357 @@ function BenchmarkModelInspector({
           <dd>{model.run_ids.length}</dd>
         </div>
       </dl>
-      <section className="benchmark-model-detail-section">
-        <h4>Architecture</h4>
-        <dl className="benchmark-model-detail-grid">
-          <dt>Digest</dt>
-          <dd>{model.architecture_digest}</dd>
-          <dt>Input</dt>
-          <dd>{inspection === undefined ? 'unknown' : shapeLabel(inspection.input_shape)}</dd>
-          <dt>Output</dt>
-          <dd>{inspection === undefined ? 'unknown' : shapeLabel(inspection.output_shape)}</dd>
-          <dt>Observed {complexityAxis ?? 'Complexity'}</dt>
-          <dd>{model.observed_complexities.join(', ') || 'none'}</dd>
-          <dt>Sources</dt>
-          <dd>{model.source_kinds.join(', ') || 'unknown'}</dd>
-        </dl>
-      </section>
-      <ModelCostDetail inspection={inspection} model={model} />
-      <ModelLayerTrace inspection={inspection} />
-      <ModelProvenanceDetail inspection={inspection} />
+      {artifactView === 'model' ? (
+        <ModelManifestDetail
+          complexityAxis={complexityAxis}
+          inspection={inspection}
+          model={model}
+        />
+      ) : null}
+      {artifactView === 'architecture' ? (
+        <>
+          <ModelArchitectureDetail
+            complexityAxis={complexityAxis}
+            inspection={inspection}
+            model={model}
+          />
+          <ModelCostDetail inspection={inspection} model={model} />
+          <ModelLayerTrace inspection={inspection} />
+        </>
+      ) : null}
+      {artifactView === 'training' ? (
+        <ModelTrainingDetail runs={runs} />
+      ) : null}
+      {artifactView === 'artifacts' ? (
+        <ModelProvenanceDetail inspection={inspection} />
+      ) : null}
     </article>
   );
 }
 
 function ModelArtifactFlow({
+  active,
   inspection,
   model,
+  onSelect,
 }: {
+  active: ModelArtifactView;
   inspection: ModelInspectionRecord | undefined;
   model: BenchmarkResultRecord['leaderboard'][number];
+  onSelect: (view: ModelArtifactView) => void;
 }) {
-  const items = [
+  const items: ModelArtifactFlowItem[] = [
     {
+      icon: PackageCheck,
       label: 'Architecture',
       value: inspection === undefined
         ? shortDigest(model.architecture_digest)
         : referenceLabel(inspection.architecture),
+      view: 'architecture',
     },
     {
+      icon: Boxes,
       label: 'Measurements',
       value: inspection?.measurement_dataset === undefined
         ? `${model.measurement_count} records`
         : referenceLabel(inspection.measurement_dataset),
+      view: 'model',
     },
     {
+      icon: GitBranch,
       label: 'Training',
       value: inspection?.training_provenance.length
         ? `${inspection.training_provenance.length} records`
         : `${model.run_ids.length} runs`,
+      view: 'training',
     },
     {
+      icon: Fingerprint,
       label: 'Artifacts',
       value: inspection?.model_artifacts.length
         ? `${inspection.model_artifacts.length} records`
         : 'not recorded',
+      view: 'artifacts',
     },
   ];
   return (
     <section className="benchmark-model-artifact-flow" aria-label="Selected model artifact flow">
-      {items.map((item) => (
-        <div key={item.label}>
-          <span>{item.label}</span>
-          <strong>{item.value}</strong>
-        </div>
-      ))}
+      {items.map((item) => {
+        const Icon = item.icon;
+        return (
+          <button
+            className={active === item.view ? 'active' : ''}
+            key={item.label}
+            onClick={() => onSelect(item.view)}
+            type="button"
+          >
+            <Icon aria-hidden="true" size={15} />
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+          </button>
+        );
+      })}
     </section>
+  );
+}
+
+function ModelLineageGraph({
+  inspection,
+  model,
+  runs,
+}: {
+  inspection: ModelInspectionRecord | undefined;
+  model: BenchmarkResultRecord['leaderboard'][number];
+  runs: RunResultRecord[];
+}) {
+  const inputNodes = [
+    lineageNode('input', 'architecture', model.architecture_digest),
+    inspection?.measurement_dataset === undefined
+      ? lineageNode('input', 'measurements', `${model.measurement_count} records`)
+      : lineageNode('input', inspection.measurement_dataset.kind, referenceLabel(inspection.measurement_dataset)),
+  ];
+  const operationNode = lineageNode(
+    'operation',
+    runs.length === 0 ? 'training' : 'training run',
+    runs[0]?.run_slug ?? `${model.run_ids.length} runs`,
+    runs[0]?.source_kind,
+  );
+  const outputNode = lineageNode(
+    'output',
+    inspection?.model_manifest?.kind ?? 'model',
+    model.model_key,
+    inspection?.model_manifest === undefined ? undefined : referenceLabel(inspection.model_manifest),
+  );
+
+  return (
+    <section className="benchmark-model-lineage-graph" aria-label="Model lineage">
+      <div className="benchmark-model-lineage-column">
+        {inputNodes.map((node) => (
+          <ModelLineageCard key={`${node.kind}:${node.value}`} node={node} />
+        ))}
+      </div>
+      <div className="benchmark-model-lineage-arrow" aria-hidden="true">-&gt;</div>
+      <ModelLineageCard node={operationNode} />
+      <div className="benchmark-model-lineage-arrow" aria-hidden="true">-&gt;</div>
+      <ModelLineageCard node={outputNode} />
+    </section>
+  );
+}
+
+function ModelLineageCard({ node }: { node: ModelLineageNode }) {
+  return (
+    <div className={`benchmark-model-lineage-card ${node.role}`}>
+      <span>{node.role}</span>
+      <strong>{node.kind}</strong>
+      <code>{node.value}</code>
+      {node.detail === undefined ? null : <em>{node.detail}</em>}
+    </div>
+  );
+}
+
+function lineageNode(
+  role: ModelLineageNode['role'],
+  kind: string,
+  value: string,
+  detail?: string,
+): ModelLineageNode {
+  return { detail, kind, role, value };
+}
+
+function ModelManifestDetail({
+  complexityAxis,
+  inspection,
+  model,
+}: {
+  complexityAxis: string | undefined;
+  inspection: ModelInspectionRecord | undefined;
+  model: BenchmarkResultRecord['leaderboard'][number];
+}) {
+  return (
+    <section className="benchmark-model-detail-section">
+      <h4>Model Manifest</h4>
+      <dl className="benchmark-model-detail-grid">
+        <dt>Model Key</dt>
+        <dd>{model.model_key}</dd>
+        <dt>Benchmark</dt>
+        <dd>{model.benchmark_id}</dd>
+        <dt>Architecture</dt>
+        <dd>{model.architecture_digest}</dd>
+        <dt>Observed {complexityAxis ?? 'Complexity'}</dt>
+        <dd>{model.observed_complexities.join(', ') || 'none'}</dd>
+        <dt>Manifest</dt>
+        <dd>{inspection?.model_manifest === undefined ? 'not recorded' : referenceLabel(inspection.model_manifest)}</dd>
+      </dl>
+    </section>
+  );
+}
+
+function ModelArchitectureDetail({
+  complexityAxis,
+  inspection,
+  model,
+}: {
+  complexityAxis: string | undefined;
+  inspection: ModelInspectionRecord | undefined;
+  model: BenchmarkResultRecord['leaderboard'][number];
+}) {
+  return (
+    <section className="benchmark-model-detail-section">
+      <h4>Architecture</h4>
+      <dl className="benchmark-model-detail-grid">
+        <dt>Digest</dt>
+        <dd>{model.architecture_digest}</dd>
+        <dt>Input</dt>
+        <dd>{inspection === undefined ? 'unknown' : shapeLabel(inspection.input_shape)}</dd>
+        <dt>Output</dt>
+        <dd>{inspection === undefined ? 'unknown' : shapeLabel(inspection.output_shape)}</dd>
+        <dt>Observed {complexityAxis ?? 'Complexity'}</dt>
+        <dd>{model.observed_complexities.join(', ') || 'none'}</dd>
+        <dt>Sources</dt>
+        <dd>{model.source_kinds.join(', ') || 'unknown'}</dd>
+      </dl>
+    </section>
+  );
+}
+
+function ModelTrainingDetail({ runs }: { runs: RunResultRecord[] }) {
+  if (runs.length === 0) {
+    return (
+      <section className="benchmark-model-detail-section">
+        <h4>Training History</h4>
+        <p className="artifact-detail-note">No training runs match this model.</p>
+      </section>
+    );
+  }
+  const history = runs.flatMap((run) =>
+    trainingValidationHistory(run.training_summary).map((point) => ({
+      ...point,
+      run,
+    })),
+  );
+  const latestRun = runs[0];
+  const protocol = trainingProtocol(latestRun.training_summary);
+  return (
+    <section className="benchmark-model-detail-section">
+      <h4>Training History</h4>
+      <dl className="benchmark-model-training-grid">
+        <div>
+          <dt>Runs</dt>
+          <dd>{runs.length}</dd>
+        </div>
+        <div>
+          <dt>Latest</dt>
+          <dd>{latestRun.run_slug}</dd>
+        </div>
+        <div>
+          <dt>Score</dt>
+          <dd>{latestRun.score.toFixed(4)}</dd>
+        </div>
+        <div>
+          <dt>Measurements</dt>
+          <dd>{latestRun.measurement_count}</dd>
+        </div>
+      </dl>
+      {protocol === undefined ? null : (
+        <dl className="benchmark-model-training-grid">
+          {trainingProtocolEntries(protocol).map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {history.length === 0 ? null : <ModelValidationChart points={history} />}
+    </section>
+  );
+}
+
+function ModelValidationChart({
+  points,
+}: {
+  points: Array<ValidationHistoryPoint & { run: RunResultRecord }>;
+}) {
+  const steps = points.map((point) => point.step);
+  const losses = points.flatMap((point) => [
+    point.validation_loss,
+    point.best_validation_loss,
+  ]);
+  const xMin = Math.min(...steps);
+  const xMax = Math.max(...steps, xMin + 1);
+  const yMin = 0;
+  const yMax = Math.max(...losses, Number.EPSILON);
+  const x = (step: number) =>
+    modelValidationPlotMargin.left +
+    ((step - xMin) / (xMax - xMin)) * modelValidationPlotBodyWidth;
+  const y = (loss: number) =>
+    modelValidationPlotMargin.top +
+    (1 - (loss - yMin) / (yMax - yMin)) * modelValidationPlotBodyHeight;
+  const line = (key: 'validation_loss' | 'best_validation_loss') =>
+    points.map((point) => `${x(point.step)},${y(point[key])}`).join(' ');
+  return (
+    <div className="benchmark-model-validation-chart">
+      <div className="benchmark-model-validation-legend">
+        <span><i className="loss" />Loss</span>
+        <span><i className="best" />Best</span>
+      </div>
+      <svg
+        aria-label="Validation loss history"
+        role="img"
+        viewBox={`0 0 ${modelValidationPlotWidth} ${modelValidationPlotHeight}`}
+      >
+        <rect
+          className="benchmark-model-validation-frame"
+          height={modelValidationPlotBodyHeight}
+          width={modelValidationPlotBodyWidth}
+          x={modelValidationPlotMargin.left}
+          y={modelValidationPlotMargin.top}
+        />
+        <text
+          className="benchmark-model-validation-tick"
+          textAnchor="end"
+          x={modelValidationPlotMargin.left - 8}
+          y={y(yMax) + 4}
+        >
+          {yMax.toFixed(2)}
+        </text>
+        <text
+          className="benchmark-model-validation-tick"
+          textAnchor="middle"
+          x={modelValidationPlotMargin.left}
+          y={modelValidationPlotHeight - 8}
+        >
+          {xMin}
+        </text>
+        <text
+          className="benchmark-model-validation-tick"
+          textAnchor="middle"
+          x={modelValidationPlotMargin.left + modelValidationPlotBodyWidth}
+          y={modelValidationPlotHeight - 8}
+        >
+          {xMax}
+        </text>
+        <polyline
+          className="benchmark-model-validation-loss"
+          fill="none"
+          points={line('validation_loss')}
+        />
+        <polyline
+          className="benchmark-model-validation-best"
+          fill="none"
+          points={line('best_validation_loss')}
+        />
+        {points.map((point, index) => (
+          <circle
+            className="benchmark-model-validation-point"
+            cx={x(point.step)}
+            cy={y(point.validation_loss)}
+            key={`${point.run.run_id}:${point.step}:${index}`}
+            r={3}
+          />
+        ))}
+      </svg>
+    </div>
   );
 }
 
@@ -588,6 +928,90 @@ function ModelProvenanceDetail({
       </div>
     </section>
   );
+}
+
+function runsForModel(
+  result: BenchmarkResultRecord | undefined,
+  model: BenchmarkResultRecord['leaderboard'][number],
+): RunResultRecord[] {
+  if (result === undefined) {
+    return [];
+  }
+  const runIds = new Set(model.run_ids);
+  return result.training_history.filter(
+    (run) =>
+      run.model_key === model.model_key ||
+      run.architecture_digest === model.architecture_digest ||
+      runIds.has(run.run_id),
+  );
+}
+
+function trainingProtocol(
+  summary: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const trainingRun = recordValue(summary?.training_run);
+  return recordValue(trainingRun?.protocol);
+}
+
+function trainingProtocolEntries(protocol: Record<string, unknown>): [string, string][] {
+  const entries: [string, unknown][] = [
+    ['Objective', protocol.objective],
+    ['Optimizer', protocol.optimizer],
+    ['Schedule', protocol.schedule],
+    ['Steps', protocol.max_steps],
+    ['Batch', protocol.batch_size],
+    ['Validation', protocol.validation_source],
+  ];
+  return entries
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([label, value]) => [label, parameterValueLabel(value)]);
+}
+
+function trainingValidationHistory(
+  summary: Record<string, unknown> | undefined,
+): ValidationHistoryPoint[] {
+  const trainingRun = recordValue(summary?.training_run);
+  const history = trainingRun?.validation_history;
+  if (!Array.isArray(history)) {
+    return [];
+  }
+  return history.flatMap((item) => {
+    const record = recordValue(item);
+    if (record === undefined) {
+      return [];
+    }
+    const step = numberRecordValue(record, 'step');
+    const validationLoss = numberRecordValue(record, 'validation_loss');
+    const bestValidationLoss = numberRecordValue(record, 'best_validation_loss');
+    if (
+      step === undefined ||
+      validationLoss === undefined ||
+      bestValidationLoss === undefined
+    ) {
+      return [];
+    }
+    const staleChecks = numberRecordValue(record, 'stale_checks');
+    return [
+      {
+        best_validation_loss: bestValidationLoss,
+        stale_checks: staleChecks,
+        step,
+        validation_loss: validationLoss,
+      },
+    ];
+  });
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function numberRecordValue(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function shapeLabel(shape: number[]): string {
