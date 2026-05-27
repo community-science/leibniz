@@ -55,6 +55,9 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
     assert measured.digest not in {architecture.digest for architecture in architectures}
     assert [proposal.rank for proposal in document.proposal_set.proposals] == [1, 2]
     assert all(proposal.command for proposal in document.proposal_set.proposals)
+    assert document.proposal_set.proposals[0].rationale.startswith(
+        "resource-bootstrap selected resource stratum "
+    )
     assert document.proposal_set.proposals[0].candidate_id in {
         architecture.id for architecture in architectures
     }
