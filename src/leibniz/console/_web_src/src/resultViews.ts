@@ -99,6 +99,13 @@ export type ProposalRecord = {
   acquisition_value?: number;
   novelty?: number;
   expected_frontier_improvement?: number;
+  selector_name?: string;
+  source_candidate_rank?: number;
+  comparable_cost_best_score?: number;
+  resource_stratum_index?: number;
+  resource_stratum_count?: number;
+  capability_family_kind?: string;
+  capability_operator_kinds: string[];
   command: string[];
 };
 
@@ -302,6 +309,37 @@ function parseProposal(value: unknown, path: string): ProposalRecord {
       record.expected_frontier_improvement,
       `${path}.expected_frontier_improvement`,
     ),
+    selector_name:
+      record.selector_name === undefined
+        ? undefined
+        : requireString(record.selector_name, `${path}.selector_name`),
+    source_candidate_rank: optionalNumber(
+      record.source_candidate_rank,
+      `${path}.source_candidate_rank`,
+    ),
+    comparable_cost_best_score: optionalNumber(
+      record.comparable_cost_best_score,
+      `${path}.comparable_cost_best_score`,
+    ),
+    resource_stratum_index: optionalNumber(
+      record.resource_stratum_index,
+      `${path}.resource_stratum_index`,
+    ),
+    resource_stratum_count: optionalNumber(
+      record.resource_stratum_count,
+      `${path}.resource_stratum_count`,
+    ),
+    capability_family_kind:
+      record.capability_family_kind === undefined
+        ? undefined
+        : requireString(record.capability_family_kind, `${path}.capability_family_kind`),
+    capability_operator_kinds:
+      record.capability_operator_kinds === undefined
+        ? []
+        : parseStringArray(
+            record.capability_operator_kinds,
+            `${path}.capability_operator_kinds`,
+          ),
     command:
       record.command === undefined ? [] : parseStringArray(record.command, `${path}.command`),
   };
