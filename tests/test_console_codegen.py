@@ -20,6 +20,7 @@ _generated_source_root = (
     / "generated"
 )
 _web_source_root = _console_package / "src"
+_web_source_suffixes = frozenset({".ts", ".tsx"})
 
 
 def test_generated_console_protocol_module_contains_python_owned_formats() -> None:
@@ -118,3 +119,75 @@ def test_benchmark_dashboard_renders_python_owned_run_detail_sections() -> None:
 
     assert "console_view_model?.detail_sections" in dashboard
     assert offenders == ()
+
+
+def test_console_artifact_kind_literals_stay_inside_detail_boundary() -> None:
+    artifact_kind_literals = (
+        "architecture-manifest",
+        "benchmark-manifest",
+        "latent-factor-declaration",
+        "materialization-declaration",
+        "materialization-plan",
+        "measurement",
+        "observation-formation-declaration",
+        "observation-showcase",
+    )
+    allowed = {
+        "src/leibniz/console/_web_src/src/ArtifactTypedDetail.tsx",
+        "src/leibniz/console/_web_src/src/artifactDetails.ts",
+    }
+
+    offenders = tuple(
+        path.relative_to(_repository_root).as_posix()
+        for path in _handwritten_web_source_files()
+        if path.relative_to(_repository_root).as_posix() not in allowed
+        and any(
+            _typescript_string_literal(source=path.read_text(encoding="utf-8"), value=literal)
+            for literal in artifact_kind_literals
+        )
+    )
+
+    assert offenders == ()
+
+
+def test_handwritten_console_source_avoids_migrated_protocol_literals() -> None:
+    migrated_literals = (
+        "operator.0.local_support_size",
+        "operator.0.support",
+        "local-aggregation",
+        "rank-collapse",
+        "affine-readout",
+        "adaptive-pooling",
+        "generated-observations",
+        "benchmarks.digits",
+        "benchmarks.digits@0.1.0",
+    )
+    allowed = {
+        "src/leibniz/console/_web_src/src/operatorVocabulary.ts",
+    }
+
+    offenders = tuple(
+        path.relative_to(_repository_root).as_posix()
+        for path in _handwritten_web_source_files()
+        if path.relative_to(_repository_root).as_posix() not in allowed
+        and any(
+            _typescript_string_literal(source=path.read_text(encoding="utf-8"), value=literal)
+            for literal in migrated_literals
+        )
+    )
+
+    assert offenders == ()
+
+
+def _handwritten_web_source_files() -> tuple[Path, ...]:
+    return tuple(
+        path
+        for path in sorted(_web_source_root.rglob("*"))
+        if path.is_file()
+        and path.suffix in _web_source_suffixes
+        and "generated" not in path.parts
+    )
+
+
+def _typescript_string_literal(*, source: str, value: str) -> bool:
+    return f"'{value}'" in source or f'"{value}"' in source
