@@ -17,6 +17,10 @@ from leibniz.console.artifact_index import (
     ConsoleArtifactIndexSource,
     ConsoleArtifactIndexValidationError,
 )
+from leibniz.console.protocol import (
+    console_protocol_format_versions,
+    console_protocol_formats,
+)
 from leibniz.documents import canonical_document_bytes, document_filename_suffix
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.local_results import LocalResultImportError, load_console_result_view
@@ -34,8 +38,10 @@ __all__ = [
     "ConsoleDataValidationError",
 ]
 
-_format = "leibniz.console-data"
-_format_version = 1
+_protocol_formats = console_protocol_formats()
+_protocol_format_versions = console_protocol_format_versions()
+_format = _protocol_formats.console_data
+_format_version = _protocol_format_versions.console_data
 _document_suffix = document_filename_suffix()
 _generated_batch_cache: dict[
     tuple[str, str, int, int, int, str, bool, tuple[tuple[int, ...], ...] | None],

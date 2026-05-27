@@ -10,6 +10,10 @@ from typing import Literal
 from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.artifacts import ArtifactReference
 from leibniz.benchmarks import BenchmarkManifestDocument
+from leibniz.console.protocol import (
+    console_protocol_format_versions,
+    console_protocol_formats,
+)
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
@@ -39,8 +43,10 @@ _LoadedArtifact = tuple[
 ]
 _ArtifactLoader = Callable[[bytes], _LoadedArtifact]
 
-_format = "leibniz.console.artifact-index"
-_format_version = 1
+_protocol_formats = console_protocol_formats()
+_protocol_format_versions = console_protocol_format_versions()
+_format = _protocol_formats.artifact_index
+_format_version = _protocol_format_versions.artifact_index
 _validation_command = "python -m pytest tests/test_console_artifact_index.py"
 
 

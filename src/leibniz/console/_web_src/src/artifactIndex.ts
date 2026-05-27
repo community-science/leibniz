@@ -1,3 +1,8 @@
+import {
+  consoleProtocolFormats,
+  consoleProtocolFormatVersions,
+} from './generated/protocolVocabulary.ts';
+
 export type ArtifactReferenceRecord = {
   kind: string;
   protocol_id?: string;
@@ -18,8 +23,8 @@ export type ConsoleArtifactIndexEntryRecord = {
 };
 
 export type ConsoleArtifactIndexRecord = {
-  format: 'leibniz.console.artifact-index';
-  format_version: 1;
+  format: typeof consoleProtocolFormats.artifactIndex;
+  format_version: typeof consoleProtocolFormatVersions.artifactIndex;
   artifacts: ConsoleArtifactIndexEntryRecord[];
 };
 
@@ -35,9 +40,13 @@ export function parseConsoleArtifactIndexRecord(value: unknown): ConsoleArtifact
   const format = requireLiteral(
     record.format,
     'format',
-    'leibniz.console.artifact-index',
+    consoleProtocolFormats.artifactIndex,
   );
-  const formatVersion = requireLiteral(record.format_version, 'format_version', 1);
+  const formatVersion = requireLiteral(
+    record.format_version,
+    'format_version',
+    consoleProtocolFormatVersions.artifactIndex,
+  );
   const artifacts = requireArray(record.artifacts, 'artifacts').map((artifact, index) =>
     parseEntryRecord(artifact, `artifacts.${index}`),
   );
