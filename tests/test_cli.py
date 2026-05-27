@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import leibniz.cli as cli
 from leibniz.artifacts import ArtifactReference, reference_for_record
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
@@ -57,6 +58,33 @@ def test_cli_validate_help_lists_expanded_artifacts(capsys: pytest.CaptureFixtur
     assert "model-lineage" in output
     assert "submission-registry" in output
     assert "federation-ingest-plan" in output
+
+
+def test_cli_console_dev_runs_npm_dev_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[list[str], Path]] = []
+
+    def run_command(
+        command: list[str],
+        *,
+        check: bool,
+        cwd: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        assert check is False
+        calls.append((command, cwd))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(cli.subprocess, "run", run_command)
+
+    assert main(["console", "dev", "--host", "0.0.0.0", "--port", "5174"]) == 0
+
+    assert calls == [
+        (
+            ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5174"],
+            Path(cli.__file__).parent / "console" / "_web_src",
+        )
+    ]
 
 
 def test_cli_validates_manifest_file(capsys: pytest.CaptureFixture[str]) -> None:
