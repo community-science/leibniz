@@ -49,6 +49,17 @@ _proposal_record = RecordSpec(
         "acquisition_value": FieldSpec(kind="number", required=False),
         "novelty": FieldSpec(kind="number", required=False),
         "expected_frontier_improvement": FieldSpec(kind="number", required=False),
+        "selector_name": FieldSpec(kind="string", required=False),
+        "source_candidate_rank": FieldSpec(kind="integer", required=False),
+        "comparable_cost_best_score": FieldSpec(kind="number", required=False),
+        "resource_stratum_index": FieldSpec(kind="integer", required=False),
+        "resource_stratum_count": FieldSpec(kind="integer", required=False),
+        "capability_family_kind": FieldSpec(kind="string", required=False),
+        "capability_operator_kinds": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="string"),
+            required=False,
+        ),
         "command": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="string"),
@@ -77,6 +88,13 @@ class ExperimentProposal:
     acquisition_value: float | None = None
     novelty: float | None = None
     expected_frontier_improvement: float | None = None
+    selector_name: str | None = None
+    source_candidate_rank: int | None = None
+    comparable_cost_best_score: float | None = None
+    resource_stratum_index: int | None = None
+    resource_stratum_count: int | None = None
+    capability_family_kind: str | None = None
+    capability_operator_kinds: tuple[str, ...] = ()
     command: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -105,6 +123,38 @@ class ExperimentProposal:
             self.expected_frontier_improvement,
             field="expected_frontier_improvement",
         )
+        if self.selector_name is not None and not self.selector_name:
+            raise ExperimentProposalValidationError("selector_name must be nonempty")
+        if self.source_candidate_rank is not None and self.source_candidate_rank <= 0:
+            raise ExperimentProposalValidationError("source_candidate_rank must be positive")
+        _require_optional_probability(
+            self.comparable_cost_best_score,
+            field="comparable_cost_best_score",
+        )
+        _require_optional_nonnegative_int(
+            self.resource_stratum_index,
+            field="resource_stratum_index",
+        )
+        _require_optional_positive_int(
+            self.resource_stratum_count,
+            field="resource_stratum_count",
+        )
+        if (self.resource_stratum_index is None) != (self.resource_stratum_count is None):
+            raise ExperimentProposalValidationError(
+                "resource stratum fields must be provided together"
+            )
+        if (
+            self.resource_stratum_index is not None
+            and self.resource_stratum_count is not None
+            and self.resource_stratum_index >= self.resource_stratum_count
+        ):
+            raise ExperimentProposalValidationError(
+                "resource_stratum_index must be less than resource_stratum_count"
+            )
+        if self.capability_family_kind is not None and not self.capability_family_kind:
+            raise ExperimentProposalValidationError("capability_family_kind must be nonempty")
+        if any(not kind for kind in self.capability_operator_kinds):
+            raise ExperimentProposalValidationError("capability_operator_kinds must be nonempty")
         if any(not argument for argument in self.command):
             raise ExperimentProposalValidationError("command arguments must be nonempty")
 
@@ -139,6 +189,45 @@ class ExperimentProposal:
                 validated.get("expected_frontier_improvement"),
                 "expected_frontier_improvement",
             ),
+            selector_name=(
+                _as_string(validated["selector_name"], field="selector_name")
+                if "selector_name" in validated
+                else None
+            ),
+            source_candidate_rank=(
+                _as_int(validated["source_candidate_rank"], field="source_candidate_rank")
+                if "source_candidate_rank" in validated
+                else None
+            ),
+            comparable_cost_best_score=_optional_float(
+                validated.get("comparable_cost_best_score"),
+                "comparable_cost_best_score",
+            ),
+            resource_stratum_index=(
+                _as_int(validated["resource_stratum_index"], field="resource_stratum_index")
+                if "resource_stratum_index" in validated
+                else None
+            ),
+            resource_stratum_count=(
+                _as_int(validated["resource_stratum_count"], field="resource_stratum_count")
+                if "resource_stratum_count" in validated
+                else None
+            ),
+            capability_family_kind=(
+                _as_string(
+                    validated["capability_family_kind"],
+                    field="capability_family_kind",
+                )
+                if "capability_family_kind" in validated
+                else None
+            ),
+            capability_operator_kinds=tuple(
+                _as_string(kind, field="capability_operator_kinds")
+                for kind in _as_sequence(
+                    validated.get("capability_operator_kinds", ()),
+                    field="capability_operator_kinds",
+                )
+            ),
             command=tuple(
                 _as_string(argument, field="command")
                 for argument in _as_sequence(validated.get("command", ()), field="command")
@@ -165,6 +254,20 @@ class ExperimentProposal:
             record["novelty"] = self.novelty
         if self.expected_frontier_improvement is not None:
             record["expected_frontier_improvement"] = self.expected_frontier_improvement
+        if self.selector_name is not None:
+            record["selector_name"] = self.selector_name
+        if self.source_candidate_rank is not None:
+            record["source_candidate_rank"] = self.source_candidate_rank
+        if self.comparable_cost_best_score is not None:
+            record["comparable_cost_best_score"] = self.comparable_cost_best_score
+        if self.resource_stratum_index is not None:
+            record["resource_stratum_index"] = self.resource_stratum_index
+        if self.resource_stratum_count is not None:
+            record["resource_stratum_count"] = self.resource_stratum_count
+        if self.capability_family_kind is not None:
+            record["capability_family_kind"] = self.capability_family_kind
+        if self.capability_operator_kinds:
+            record["capability_operator_kinds"] = list(self.capability_operator_kinds)
         if self.command:
             record["command"] = list(self.command)
         return record
@@ -374,6 +477,16 @@ def _require_optional_probability(value: float | None, *, field: str) -> None:
     _require_optional_nonnegative(value, field=field)
     if value > 1:
         raise ExperimentProposalValidationError(f"{field} must not exceed 1")
+
+
+def _require_optional_nonnegative_int(value: int | None, *, field: str) -> None:
+    if value is not None and (type(value) is not int or value < 0):
+        raise ExperimentProposalValidationError(f"{field} must be nonnegative")
+
+
+def _require_optional_positive_int(value: int | None, *, field: str) -> None:
+    if value is not None and (type(value) is not int or value < 1):
+        raise ExperimentProposalValidationError(f"{field} must be positive")
 
 
 def _require_optional_nonnegative(value: float | None, *, field: str) -> None:

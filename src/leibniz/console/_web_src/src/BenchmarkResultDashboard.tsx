@@ -20,6 +20,7 @@ import {
 import type {
   BenchmarkResultRecord,
   ModelResultRecord,
+  ProposalRecord,
 } from './resultViews.ts';
 
 type PlotView = {
@@ -457,6 +458,16 @@ function ProposalCards({
               <dd>{scoreLabel(proposal.novelty)}</dd>
               <dt>Improvement</dt>
               <dd>{scoreLabel(proposal.expected_frontier_improvement)}</dd>
+              <dt>Selector</dt>
+              <dd>{proposal.selector_name ?? 'none'}</dd>
+              <dt>Source Rank</dt>
+              <dd>{proposal.source_candidate_rank ?? 'none'}</dd>
+              <dt>Cost Stratum</dt>
+              <dd>{resourceStratumLabel(proposal)}</dd>
+              <dt>Capability</dt>
+              <dd>{proposal.capability_family_kind ?? 'none'}</dd>
+              <dt>Comparable Score</dt>
+              <dd>{scoreLabel(proposal.comparable_cost_best_score)}</dd>
               <dt>Matched Model</dt>
               <dd>{model === undefined ? 'none' : shortDigest(model.architecture_digest)}</dd>
             </dl>
@@ -467,6 +478,16 @@ function ProposalCards({
       </div>
     </section>
   );
+}
+
+function resourceStratumLabel(proposal: ProposalRecord): string {
+  if (
+    proposal.resource_stratum_index === undefined ||
+    proposal.resource_stratum_count === undefined
+  ) {
+    return 'none';
+  }
+  return `${proposal.resource_stratum_index + 1}/${proposal.resource_stratum_count}`;
 }
 
 function ModelResultTable({
