@@ -42,6 +42,7 @@ __all__ = [
     "LocalBenchmarkResultViewSummary",
     "LocalPublicationExportSummary",
     "LocalPublicationCheckoutSummary",
+    "LocalPublicationPushSummary",
     "LocalResultImportError",
     "LocalResultImportSummary",
     "import_submission_publications",
@@ -49,6 +50,7 @@ __all__ = [
     "load_console_result_view",
     "materialize_benchmark_result_views",
     "publish_local_benchmark_results",
+    "push_publication_checkout",
 ]
 
 _protocol_formats = console_protocol_formats()
@@ -166,6 +168,20 @@ class LocalPublicationCheckoutSummary:
         return record
 
 
+@dataclass(frozen=True, slots=True)
+class LocalPublicationPushSummary:
+    """Summary of pushing a result-publication checkout."""
+
+    runs_root: Path
+    pushed_commit: str
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "runs_root": self.runs_root.as_posix(),
+            "pushed_commit": self.pushed_commit,
+        }
+
+
 def initialize_publication_checkout(
     *,
     repo_id: str | None,
@@ -226,6 +242,26 @@ def initialize_publication_checkout(
         created_or_reused=created_or_reused,
         scaffold_commit=scaffold_commit,
         pushed=push and scaffold_commit is not None,
+    )
+
+
+def push_publication_checkout(
+    *,
+    repository_root: Path | None = None,
+    runs_root: Path = Path(".runs"),
+    token: str | None = None,
+    endpoint: str = _default_hf_endpoint,
+) -> LocalPublicationPushSummary:
+    """Push an existing result-publication checkout without creating a commit."""
+
+    repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
+    runs_root = _resolve_output_root(repository_root, runs_root)
+    if not _is_git_checkout(runs_root):
+        raise LocalResultImportError("runs root must be a Git checkout when pushing")
+    pushed_commit = _push_checkout(runs_root=runs_root, token=token, endpoint=endpoint)
+    return LocalPublicationPushSummary(
+        runs_root=runs_root,
+        pushed_commit=pushed_commit,
     )
 
 
@@ -1254,16 +1290,22 @@ def _commit_checkout_if_dirty(
     _git(runs_root, "commit", "-m", message)
     commit = _git(runs_root, "rev-parse", "HEAD").stdout.strip()
     if push:
-        _git(
-            runs_root,
-            "push",
-            "-u",
-            "origin",
-            "HEAD",
-            token=token,
-            endpoint=endpoint,
-            username=_checkout_remote_owner(runs_root),
-        )
+        _push_checkout(runs_root=runs_root, token=token, endpoint=endpoint)
+    return commit
+
+
+def _push_checkout(*, runs_root: Path, token: str | None, endpoint: str) -> str:
+    commit = _git(runs_root, "rev-parse", "HEAD").stdout.strip()
+    _git(
+        runs_root,
+        "push",
+        "-u",
+        "origin",
+        "HEAD",
+        token=token,
+        endpoint=endpoint,
+        username=_checkout_remote_owner(runs_root),
+    )
     return commit
 
 

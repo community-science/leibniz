@@ -25,6 +25,7 @@ from leibniz.local_results import (
     load_console_result_view,
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
+    push_publication_checkout,
 )
 from leibniz.measurements import (
     MeasurementDataset,
@@ -291,6 +292,27 @@ def _parser() -> argparse.ArgumentParser:
         "--message",
         default="Publish Leibniz benchmark results",
         help="Git commit message used when publishing",
+    )
+    push_results = results_subcommands.add_parser(
+        "push",
+        description="push an existing result-publication checkout",
+        help="push result checkout",
+    )
+    push_results.add_argument(
+        "--runs-root",
+        default=Path(".runs"),
+        type=Path,
+        help="local result-publication checkout; defaults to .runs",
+    )
+    push_results.add_argument(
+        "--token",
+        default=None,
+        help="Hugging Face token; defaults to HF_TOKEN",
+    )
+    push_results.add_argument(
+        "--endpoint",
+        default="https://huggingface.co",
+        help="Hugging Face Hub endpoint",
     )
     materialize_results = results_subcommands.add_parser(
         "materialize",
@@ -732,6 +754,19 @@ def _results(args: argparse.Namespace) -> int:
                 print(f"commit: {summary.git_commit}")
             if summary.git_pushed:
                 print("pushed: yes")
+            return 0
+        if results_command == "push":
+            token = args.token or os.environ.get("HF_TOKEN")
+            if token is None:
+                raise LocalResultImportError("--token or HF_TOKEN is required")
+            summary = push_publication_checkout(
+                repository_root=Path.cwd(),
+                runs_root=args.runs_root,
+                token=token,
+                endpoint=args.endpoint,
+            )
+            print(f"pushed: {summary.pushed_commit}")
+            print(f"runs root: {summary.runs_root}")
             return 0
         if results_command == "materialize":
             summary = materialize_benchmark_result_views(
