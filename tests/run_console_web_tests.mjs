@@ -39,6 +39,7 @@ assertShellUsesGeneratedConsoleData();
 assertBenchmarkWorkbenchStructure();
 assertBenchmarkSamplePaneStructure();
 assertBenchmarkFrontierPlotStructure();
+assertBenchmarkModelWorkbenchStructure();
 assertBenchmarkWebSourceIsDataDriven();
 assertConsoleResultRootPolicy();
 
@@ -231,6 +232,45 @@ function assertBenchmarkFrontierPlotStructure() {
   for (const marker of requiredStyleMarkers) {
     if (!styles.includes(marker)) {
       throw new Error(`Console styles must preserve frontier plot marker: ${marker}`);
+    }
+  }
+}
+
+function assertBenchmarkModelWorkbenchStructure() {
+  const panel = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/BenchmarksPanel.tsx'),
+    'utf8',
+  );
+  const styles = readFileSync(
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/styles.css'),
+    'utf8',
+  );
+  const requiredPanelMarkers = [
+    'benchmark-model-workbench',
+    'benchmark-model-rail',
+    'benchmark-model-artifact-hero',
+    'benchmark-model-artifact-flow',
+    'benchmark-model-cost-grid',
+    'benchmark-model-layer-shape-grid',
+  ];
+  for (const marker of requiredPanelMarkers) {
+    if (!panel.includes(marker)) {
+      throw new Error(`BenchmarksPanel must expose model workbench marker: ${marker}`);
+    }
+  }
+  if (panel.includes('benchmark-model-grid')) {
+    throw new Error('BenchmarksPanel must not use the old model card grid');
+  }
+
+  const requiredStyleMarkers = [
+    '--measured-accent-bg',
+    '--measured-accent-border',
+    '.benchmark-model-artifact-flow',
+    '.benchmark-model-layer-shape-grid',
+  ];
+  for (const marker of requiredStyleMarkers) {
+    if (!styles.includes(marker)) {
+      throw new Error(`Console styles must preserve model workbench marker: ${marker}`);
     }
   }
 }
