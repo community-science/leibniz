@@ -9,9 +9,11 @@ from typing import Literal
 
 from leibniz.architectures import ArchitectureManifest
 from leibniz.model_operators import (
+    ModelOperatorCoordinate,
     ModelOperatorPlan,
     ModelOperatorSearchPoint,
     materialize_model_operator_search_point,
+    model_operator_semantic_coordinates,
     summarize_architecture_operators,
 )
 
@@ -140,6 +142,7 @@ class ArchitectureCandidate:
 
     architecture: ArchitectureManifest
     operator_plan: ModelOperatorPlan
+    semantic_coordinates: tuple[ModelOperatorCoordinate, ...]
     parameters: tuple[tuple[str, int], ...]
 
     def __post_init__(self) -> None:
@@ -147,6 +150,15 @@ class ArchitectureCandidate:
         if len(set(names)) != len(names):
             raise ArchitectureSearchDistributionValidationError(
                 "candidate parameters must not repeat names"
+            )
+        coordinate_names = tuple(coordinate.name for coordinate in self.semantic_coordinates)
+        if not coordinate_names:
+            raise ArchitectureSearchDistributionValidationError(
+                "candidate semantic_coordinates must be nonempty"
+            )
+        if len(set(coordinate_names)) != len(coordinate_names):
+            raise ArchitectureSearchDistributionValidationError(
+                "candidate semantic_coordinates must not repeat names"
             )
 
     @property
@@ -164,6 +176,14 @@ class ArchitectureCandidate:
                 return value
         raise ArchitectureSearchDistributionValidationError(
             f"candidate does not include parameter: {name}"
+        )
+
+    def coordinate(self, name: str) -> int | str:
+        for coordinate in self.semantic_coordinates:
+            if coordinate.name == name:
+                return coordinate.value
+        raise ArchitectureSearchDistributionValidationError(
+            f"candidate does not include semantic coordinate: {name}"
         )
 
 
@@ -250,6 +270,7 @@ def _candidate_from_point(
     return ArchitectureCandidate(
         architecture=architecture,
         operator_plan=plan,
+        semantic_coordinates=model_operator_semantic_coordinates(architecture, plan=plan),
         parameters=point.to_parameters(),
     )
 

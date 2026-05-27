@@ -24,6 +24,9 @@ def test_default_search_distribution_expands_formal_operator_architectures() -> 
     assert [candidate.parameter_count for candidate in candidates[:3]] == [20, 50, 100]
     assert all(candidate.architecture.input_shape == (1, 32, 32) for candidate in candidates)
     assert all(candidate.architecture.output_shape == (10,) for candidate in candidates)
+    assert candidates[1].coordinate("operator.0.local_support_size") == 2
+    assert candidates[1].coordinate("operator.0.support") == "local-window"
+    assert candidates[1].coordinate("resource.parameter_count") == 50
     assert {
         operator.descriptor.kind
         for candidate in candidates
