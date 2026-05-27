@@ -89,10 +89,45 @@ def test_candidate_sampler_draws_bounded_deterministic_subsets_without_enumerati
     assert len(sampled) == 8
     assert sampled == repeated
     assert len({candidate.architecture.digest for candidate in sampled}) == len(sampled)
-    assert all(
-        1 <= candidate.parameter("local_support_size") <= 512
-        for candidate in sampled
+    assert [candidate.parameter("local_support_size") for candidate in sampled] == [
+        1,
+        3,
+        10,
+        26,
+        35,
+        120,
+        263,
+        512,
+    ]
+    assert [candidate.parameter_count for candidate in sampled] == [
+        20,
+        100,
+        1010,
+        6770,
+        12260,
+        144010,
+        691700,
+        2621450,
+    ]
+
+
+def test_candidate_sampler_respects_resource_bounds_before_stratifying() -> None:
+    sampled = sample_architecture_candidates(
+        ArchitectureSearchDistribution(
+            local_support_dimension=2,
+            local_support_size_minimum=1,
+            local_support_size_maximum=4,
+            parameter_count_minimum=50,
+            parameter_count_maximum=170,
+        ),
+        input_shape=(1, 8, 8),
+        output_count=10,
+        sample_count=3,
+        seed=17,
     )
+
+    assert [candidate.parameter("local_support_size") for candidate in sampled] == [2, 3, 4]
+    assert [candidate.parameter_count for candidate in sampled] == [50, 100, 170]
 
 
 def test_candidate_generation_does_not_name_layer_aliases_or_fixed_graphs() -> None:

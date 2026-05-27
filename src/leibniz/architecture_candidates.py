@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -230,14 +231,26 @@ def sample_architecture_candidates(
         raise ArchitectureSearchDistributionValidationError("sample_count must be positive")
     if type(seed) is not int or seed < 0:
         raise ArchitectureSearchDistributionValidationError("seed must be nonnegative")
-    minimum, maximum = distribution.local_support_size_bounds(input_shape)
+    minimum, maximum = _sample_support_size_bounds(
+        distribution,
+        input_shape=input_shape,
+        output_count=output_count,
+    )
     if maximum < minimum:
         return ()
     span = maximum - minimum + 1
     if sample_count >= span:
         sizes = range(minimum, maximum + 1)
     else:
-        sizes = sorted(random.Random(seed).sample(range(minimum, maximum + 1), sample_count))
+        sizes = _resource_stratified_support_sizes(
+            distribution,
+            input_shape=input_shape,
+            output_count=output_count,
+            sample_count=sample_count,
+            seed=seed,
+            minimum=minimum,
+            maximum=maximum,
+        )
     return _deduplicate_and_sort(
         _candidate_from_point(
             ModelOperatorSearchPoint(
@@ -273,6 +286,253 @@ def _candidate_from_point(
         semantic_coordinates=model_operator_semantic_coordinates(architecture, plan=plan),
         parameters=point.to_parameters(),
     )
+
+
+def _resource_stratified_support_sizes(
+    distribution: ArchitectureSearchDistribution,
+    *,
+    input_shape: tuple[int, ...],
+    output_count: int,
+    sample_count: int,
+    seed: int,
+    minimum: int,
+    maximum: int,
+) -> tuple[int, ...]:
+    lower_resource = _resource_coordinate_for_support_size(
+        input_shape=input_shape,
+        output_count=output_count,
+        dimension=distribution.local_support_dimension,
+        size=minimum,
+    )
+    upper_resource = _resource_coordinate_for_support_size(
+        input_shape=input_shape,
+        output_count=output_count,
+        dimension=distribution.local_support_dimension,
+        size=maximum,
+    )
+    if upper_resource < lower_resource:
+        lower_resource, upper_resource = upper_resource, lower_resource
+    if sample_count == 1 or lower_resource == upper_resource:
+        return (minimum,)
+
+    rng = random.Random(seed)
+    selected: list[int] = [minimum, maximum]
+    selected_set: set[int] = {minimum, maximum}
+    interior_count = sample_count - 2
+    if interior_count < 1:
+        return tuple(sorted(selected))
+    width = (upper_resource - lower_resource) / (interior_count + 1)
+    for stratum_index in range(interior_count):
+        target = lower_resource + width * (stratum_index + 1 + rng.random() - 0.5)
+        nearest = _nearest_support_size_for_resource(
+            distribution,
+            input_shape=input_shape,
+            output_count=output_count,
+            target=target,
+            minimum=minimum,
+            maximum=maximum,
+        )
+        available = _nearest_available_size(
+            nearest,
+            selected=selected_set,
+            minimum=minimum,
+            maximum=maximum,
+        )
+        if available is None:
+            break
+        selected.append(available)
+        selected_set.add(available)
+    return tuple(sorted(selected))
+
+
+def _nearest_support_size_for_resource(
+    distribution: ArchitectureSearchDistribution,
+    *,
+    input_shape: tuple[int, ...],
+    output_count: int,
+    target: float,
+    minimum: int,
+    maximum: int,
+) -> int:
+    low = minimum
+    high = maximum
+    while low < high:
+        midpoint = (low + high) // 2
+        coordinate = _resource_coordinate_for_support_size(
+            input_shape=input_shape,
+            output_count=output_count,
+            dimension=distribution.local_support_dimension,
+            size=midpoint,
+        )
+        if coordinate < target:
+            low = midpoint + 1
+        else:
+            high = midpoint
+    candidates = [low]
+    if low > minimum:
+        candidates.append(low - 1)
+    if low < maximum:
+        candidates.append(low + 1)
+    return min(
+        candidates,
+        key=lambda size: (
+            abs(
+                _resource_coordinate_for_support_size(
+                    input_shape=input_shape,
+                    output_count=output_count,
+                    dimension=distribution.local_support_dimension,
+                    size=size,
+                )
+                - target
+            ),
+            size,
+        ),
+    )
+
+
+def _nearest_available_size(
+    preferred: int,
+    *,
+    selected: set[int],
+    minimum: int,
+    maximum: int,
+) -> int | None:
+    if preferred not in selected:
+        return preferred
+    for offset in range(1, maximum - minimum + 1):
+        lower = preferred - offset
+        if lower >= minimum and lower not in selected:
+            return lower
+        upper = preferred + offset
+        if upper <= maximum and upper not in selected:
+            return upper
+    return None
+
+
+def _sample_support_size_bounds(
+    distribution: ArchitectureSearchDistribution,
+    *,
+    input_shape: tuple[int, ...],
+    output_count: int,
+) -> tuple[int, int]:
+    minimum, maximum = distribution.local_support_size_bounds(input_shape)
+    if maximum < minimum:
+        return minimum, maximum
+    if distribution.parameter_count_minimum is not None:
+        minimum = _first_size_with_parameter_count_at_least(
+            distribution,
+            input_shape=input_shape,
+            output_count=output_count,
+            minimum=minimum,
+            maximum=maximum,
+            parameter_count=distribution.parameter_count_minimum,
+        )
+    if distribution.parameter_count_maximum is not None:
+        maximum = _last_size_with_parameter_count_at_most(
+            distribution,
+            input_shape=input_shape,
+            output_count=output_count,
+            minimum=minimum,
+            maximum=maximum,
+            parameter_count=distribution.parameter_count_maximum,
+        )
+    return minimum, maximum
+
+
+def _first_size_with_parameter_count_at_least(
+    distribution: ArchitectureSearchDistribution,
+    *,
+    input_shape: tuple[int, ...],
+    output_count: int,
+    minimum: int,
+    maximum: int,
+    parameter_count: int,
+) -> int:
+    low = minimum
+    high = maximum
+    while low < high:
+        midpoint = (low + high) // 2
+        if (
+            _parameter_count_for_support_size(
+                input_shape=input_shape,
+                output_count=output_count,
+                dimension=distribution.local_support_dimension,
+                size=midpoint,
+            )
+            < parameter_count
+        ):
+            low = midpoint + 1
+        else:
+            high = midpoint
+    return low
+
+
+def _last_size_with_parameter_count_at_most(
+    distribution: ArchitectureSearchDistribution,
+    *,
+    input_shape: tuple[int, ...],
+    output_count: int,
+    minimum: int,
+    maximum: int,
+    parameter_count: int,
+) -> int:
+    low = minimum
+    high = maximum
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if (
+            _parameter_count_for_support_size(
+                input_shape=input_shape,
+                output_count=output_count,
+                dimension=distribution.local_support_dimension,
+                size=midpoint,
+            )
+            > parameter_count
+        ):
+            high = midpoint - 1
+        else:
+            low = midpoint
+    return low
+
+
+def _resource_coordinate_for_support_size(
+    *,
+    input_shape: tuple[int, ...],
+    output_count: int,
+    dimension: int,
+    size: int,
+) -> float:
+    return math.log1p(
+        _parameter_count_for_support_size(
+            input_shape=input_shape,
+            output_count=output_count,
+            dimension=dimension,
+            size=size,
+        )
+    )
+
+
+def _parameter_count_for_support_size(
+    *,
+    input_shape: tuple[int, ...],
+    output_count: int,
+    dimension: int,
+    size: int,
+) -> int:
+    architecture = materialize_model_operator_search_point(
+        input_shape=input_shape,
+        output_count=output_count,
+        point=ModelOperatorSearchPoint(
+            local_support_dimension=dimension,
+            local_support_size=size,
+        ),
+    )
+    plan = summarize_architecture_operators(architecture)
+    if plan.parameter_count is None:
+        raise ArchitectureSearchDistributionValidationError(
+            "sampled support size must have known parameter_count"
+        )
+    return plan.parameter_count
 
 
 def _deduplicate_and_sort(
