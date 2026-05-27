@@ -47,6 +47,8 @@ _proposal_record = RecordSpec(
         "predicted_score": FieldSpec(kind="number", required=False),
         "uncertainty": FieldSpec(kind="number", required=False),
         "acquisition_value": FieldSpec(kind="number", required=False),
+        "acquisition_model": FieldSpec(kind="string", required=False),
+        "acquisition_components": FieldSpec(kind="record", required=False),
         "novelty": FieldSpec(kind="number", required=False),
         "expected_frontier_improvement": FieldSpec(kind="number", required=False),
         "selector_name": FieldSpec(kind="string", required=False),
@@ -80,6 +82,8 @@ class ExperimentProposal:
     predicted_score: float | None = None
     uncertainty: float | None = None
     acquisition_value: float | None = None
+    acquisition_model: str | None = None
+    acquisition_components: Mapping[str, object] | None = None
     novelty: float | None = None
     expected_frontier_improvement: float | None = None
     selector_name: str | None = None
@@ -110,6 +114,8 @@ class ExperimentProposal:
         _require_optional_probability(self.predicted_score, field="predicted_score")
         _require_optional_nonnegative(self.uncertainty, field="uncertainty")
         _require_optional_nonnegative(self.acquisition_value, field="acquisition_value")
+        if self.acquisition_model is not None and not self.acquisition_model:
+            raise ExperimentProposalValidationError("acquisition_model must be nonempty")
         _require_optional_nonnegative(self.novelty, field="novelty")
         _require_optional_nonnegative(
             self.expected_frontier_improvement,
@@ -172,6 +178,19 @@ class ExperimentProposal:
                 validated.get("acquisition_value"),
                 "acquisition_value",
             ),
+            acquisition_model=(
+                _as_string(validated["acquisition_model"], field="acquisition_model")
+                if "acquisition_model" in validated
+                else None
+            ),
+            acquisition_components=(
+                _as_mapping(
+                    validated["acquisition_components"],
+                    field="acquisition_components",
+                )
+                if "acquisition_components" in validated
+                else None
+            ),
             novelty=_optional_float(validated.get("novelty"), "novelty"),
             expected_frontier_improvement=_optional_float(
                 validated.get("expected_frontier_improvement"),
@@ -223,6 +242,10 @@ class ExperimentProposal:
             record["uncertainty"] = self.uncertainty
         if self.acquisition_value is not None:
             record["acquisition_value"] = self.acquisition_value
+        if self.acquisition_model is not None:
+            record["acquisition_model"] = self.acquisition_model
+        if self.acquisition_components is not None:
+            record["acquisition_components"] = dict(self.acquisition_components)
         if self.novelty is not None:
             record["novelty"] = self.novelty
         if self.expected_frontier_improvement is not None:

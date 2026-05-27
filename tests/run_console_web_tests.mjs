@@ -354,6 +354,8 @@ function assertConsoleResultRootPolicy() {
     'parseWorkQueueViewRecord',
     'parseWorkQueueItem',
     'isWorkQueueView',
+    'acquisition_model',
+    'acquisition_components',
   ]) {
     if (!resultViews.includes(marker)) {
       throw new Error(`Result view transport must support work queue marker: ${marker}`);

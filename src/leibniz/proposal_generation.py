@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from leibniz.acquisition import score_candidate_acquisition
 from leibniz.architecture_candidates import (
     ArchitectureCandidate,
     default_architecture_candidate_space,
@@ -162,6 +162,8 @@ class _CandidateArchitecture:
     acquisition_value: float
     novelty: float
     expected_frontier_improvement: float
+    acquisition_model: str
+    acquisition_components: Mapping[str, object]
 
 
 def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGenerationSummary:
@@ -230,6 +232,8 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                 acquisition_value=candidate.acquisition_value,
                 novelty=candidate.novelty,
                 expected_frontier_improvement=candidate.expected_frontier_improvement,
+                acquisition_model=candidate.acquisition_model,
+                acquisition_components=candidate.acquisition_components,
                 selector_name=candidate.selector_name,
                 source_candidate_rank=candidate.source_candidate_rank,
                 comparable_cost_best_score=candidate.comparable_cost_best_score,
@@ -414,33 +418,22 @@ def _candidate_architectures(
         input_shape=input_shape,
         output_count=output_count,
     )
-    observed_parameters = tuple(
-        observation.parameter_count
-        for observation in candidate_observations
-        if observation.is_measured
-    )
-    best_score = max(
-        (observation.best_measured_score for observation in candidate_observations),
-        default=0.0,
+    acquisition_scores = score_candidate_acquisition(
+        candidate_observations,
+        output_count=output_count,
     )
     candidates: list[_CandidateArchitecture] = []
     selections = select_candidate_proposals(
         candidate_observations,
         budget=candidate_budget,
+        acquisition_scores=acquisition_scores,
     )
     for selection in selections:
         observation = selection.observation
         candidate = observation.candidate
         architecture = candidate.architecture
         parameter_count = observation.parameter_count
-        novelty = _novelty(parameter_count, observed_parameters)
-        uncertainty = min(1.0, 0.2 + novelty / 2.0)
-        predicted_score = min(1.0, max(best_score, 1.0 / output_count) + novelty * 0.05)
-        frontier_improvement = max(
-            0.0,
-            predicted_score - observation.best_measured_score_at_or_below_cost,
-        )
-        acquisition_value = predicted_score + uncertainty * 0.25 + novelty * 0.1
+        score = selection.acquisition_score
         candidates.append(
             _CandidateArchitecture(
                 architecture=architecture,
@@ -452,11 +445,13 @@ def _candidate_architectures(
                 comparable_cost_best_score=selection.comparable_cost_best_score,
                 resource_stratum_index=selection.resource_stratum_index,
                 resource_stratum_count=selection.resource_stratum_count,
-                predicted_score=predicted_score,
-                uncertainty=uncertainty,
-                acquisition_value=acquisition_value,
-                novelty=novelty,
-                expected_frontier_improvement=frontier_improvement,
+                predicted_score=score.estimated_score,
+                uncertainty=score.uncertainty,
+                acquisition_value=score.acquisition_value,
+                novelty=score.resource_novelty,
+                expected_frontier_improvement=score.expected_frontier_improvement,
+                acquisition_model=score.model_name,
+                acquisition_components=score.to_component_record(),
             )
         )
     return tuple(candidates)
@@ -492,16 +487,6 @@ def _require_candidate_shape(
             raise ProposalGenerationError(
                 "candidate architecture output_shape does not match resolved outcomes"
             )
-
-
-def _novelty(parameter_count: int, observed_parameters: tuple[int, ...]) -> float:
-    if not observed_parameters:
-        return 1.0
-    distances = tuple(
-        abs(math.log1p(parameter_count) - math.log1p(observed))
-        for observed in observed_parameters
-    )
-    return min(1.0, min(distances))
 
 
 def _mean_score(dataset: MeasurementDataset) -> float:

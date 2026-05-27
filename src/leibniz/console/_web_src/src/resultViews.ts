@@ -137,6 +137,8 @@ export type ProposalRecord = {
   predicted_score?: number;
   uncertainty?: number;
   acquisition_value?: number;
+  acquisition_model?: string;
+  acquisition_components?: Record<string, unknown>;
   novelty?: number;
   expected_frontier_improvement?: number;
   selector_name?: string;
@@ -436,6 +438,14 @@ function parseProposal(value: unknown, path: string): ProposalRecord {
     predicted_score: optionalNumber(record.predicted_score, `${path}.predicted_score`),
     uncertainty: optionalNumber(record.uncertainty, `${path}.uncertainty`),
     acquisition_value: optionalNumber(record.acquisition_value, `${path}.acquisition_value`),
+    acquisition_model:
+      record.acquisition_model === undefined
+        ? undefined
+        : requireString(record.acquisition_model, `${path}.acquisition_model`),
+    acquisition_components:
+      record.acquisition_components === undefined
+        ? undefined
+        : requireRecord(record.acquisition_components, `${path}.acquisition_components`),
     novelty: optionalNumber(record.novelty, `${path}.novelty`),
     expected_frontier_improvement: optionalNumber(
       record.expected_frontier_improvement,

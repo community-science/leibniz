@@ -899,6 +899,10 @@ def _validate_proposal_result(record: Mapping[str, object]) -> None:
     ):
         if field in record:
             _as_nonnegative_number(record[field], f"proposals.{field}")
+    if "acquisition_model" in record:
+        _as_string(record.get("acquisition_model"), "proposals.acquisition_model")
+    if "acquisition_components" in record:
+        _as_mapping(record.get("acquisition_components"), "proposals.acquisition_components")
     if "command" in record:
         command = _as_sequence(record["command"], "proposals.command")
         if not all(isinstance(argument, str) and argument for argument in command):

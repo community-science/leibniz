@@ -1,3 +1,4 @@
+from leibniz.acquisition import score_candidate_acquisition
 from leibniz.architecture_candidates import (
     default_architecture_candidate_space,
     generate_architecture_candidates,
@@ -10,7 +11,12 @@ from leibniz.proposal_selection import select_candidate_proposals
 
 
 def test_proposal_selection_covers_resource_axis_without_category_balancing() -> None:
-    selections = select_candidate_proposals(_observations(), budget=3)
+    observations = _observations()
+    selections = select_candidate_proposals(
+        observations,
+        budget=3,
+        acquisition_scores=score_candidate_acquisition(observations, output_count=3),
+    )
 
     assert [selection.selector_name for selection in selections] == [
         "resource-bootstrap",
@@ -23,7 +29,11 @@ def test_proposal_selection_covers_resource_axis_without_category_balancing() ->
 def test_proposal_selection_does_not_balance_operator_categories() -> None:
     observations = _observations()
 
-    selections = select_candidate_proposals(observations, budget=3)
+    selections = select_candidate_proposals(
+        observations,
+        budget=3,
+        acquisition_scores=score_candidate_acquisition(observations, output_count=3),
+    )
 
     assert [selection.selector_name for selection in selections] == [
         "resource-bootstrap",

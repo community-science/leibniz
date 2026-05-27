@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from leibniz.acquisition import CandidateAcquisitionScore
 from leibniz.candidate_observations import ArchitectureCandidateObservation
+from leibniz.identifiers import ProtocolIdentifier
 from leibniz.resource_selection import select_resource_bootstrap_candidates
 
 __all__ = [
@@ -26,6 +28,7 @@ class CandidateProposalSelection:
     selector_name: str
     source_candidate_rank: int
     comparable_cost_best_score: float
+    acquisition_score: CandidateAcquisitionScore
     resource_stratum_index: int | None = None
     resource_stratum_count: int | None = None
 
@@ -53,6 +56,7 @@ def select_candidate_proposals(
     observations: tuple[ArchitectureCandidateObservation, ...],
     *,
     budget: int,
+    acquisition_scores: tuple[CandidateAcquisitionScore, ...],
 ) -> tuple[CandidateProposalSelection, ...]:
     """Compose deterministic selectors into one proposal candidate list."""
 
@@ -60,6 +64,14 @@ def select_candidate_proposals(
         raise ProposalSelectionError("budget must be positive")
     if not observations:
         raise ProposalSelectionError("observations must contain at least one item")
+    scores_by_candidate = _scores_by_candidate(acquisition_scores)
+    missing_scores = tuple(
+        observation.candidate_id
+        for observation in observations
+        if observation.candidate_id not in scores_by_candidate
+    )
+    if missing_scores:
+        raise ProposalSelectionError(f"missing acquisition score: {missing_scores[0]}")
     resource_selections = select_resource_bootstrap_candidates(
         observations,
         budget=budget,
@@ -72,8 +84,23 @@ def select_candidate_proposals(
             comparable_cost_best_score=(
                 selection.observation.best_measured_score_at_or_below_cost
             ),
+            acquisition_score=scores_by_candidate[selection.observation.candidate_id],
             resource_stratum_index=selection.resource_stratum_index,
             resource_stratum_count=selection.resource_stratum_count,
         )
         for selection in resource_selections
     )
+
+
+def _scores_by_candidate(
+    scores: tuple[CandidateAcquisitionScore, ...],
+) -> dict[ProtocolIdentifier, CandidateAcquisitionScore]:
+    if not scores:
+        raise ProposalSelectionError("acquisition_scores must contain at least one item")
+    by_candidate: dict[ProtocolIdentifier, CandidateAcquisitionScore] = {}
+    for score in scores:
+        candidate_id = score.observation.candidate_id
+        if candidate_id in by_candidate:
+            raise ProposalSelectionError(f"duplicate acquisition score: {candidate_id}")
+        by_candidate[candidate_id] = score
+    return by_candidate
