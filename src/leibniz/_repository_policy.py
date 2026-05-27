@@ -15,6 +15,7 @@ _forbidden_names = frozenset(
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",
+        ".runs",
         ".venv",
         ".vite",
         "__pycache__",
