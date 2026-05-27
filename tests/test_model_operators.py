@@ -8,7 +8,8 @@ from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocu
 from leibniz.model_operators import (
     ExecutableModelOperator,
     ModelOperatorExecutionError,
-    formal_image_classifier_architecture,
+    ModelOperatorSearchPoint,
+    materialize_model_operator_search_point,
     summarize_architecture_operators,
 )
 
@@ -98,11 +99,14 @@ def test_torch_instantiation_is_a_minimal_sequential_specialization() -> None:
     assert output.shape == (2, 10)
 
 
-def test_formal_image_classifier_architecture_routes_aliases_through_operator_registry() -> None:
-    manifest = formal_image_classifier_architecture(
+def test_semantic_search_point_materialization_routes_aliases_through_operator_registry() -> None:
+    manifest = materialize_model_operator_search_point(
         input_shape=(1, 32, 32),
         output_count=10,
-        local_aggregation_size=3,
+        point=ModelOperatorSearchPoint(
+            local_support_dimension=2,
+            local_support_size=3,
+        ),
     )
     plan = summarize_architecture_operators(manifest)
 
