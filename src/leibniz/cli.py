@@ -5,16 +5,23 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from leibniz.active_loop import ActiveTrainingLoopPlan, run_active_training_loop
 from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
 from leibniz.authority_indexes import AuthorityIndexDocument
 from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
-from leibniz.documents import load_object_document
+from leibniz.documents import document_filename_suffix, load_object_document
 from leibniz.federation_ingest import FederationIngestPlanDocument
-from leibniz.local_results import import_submission_publications, materialize_benchmark_result_views
+from leibniz.local_results import (
+    LocalResultImportError,
+    import_submission_publications,
+    load_console_result_view,
+    materialize_benchmark_result_views,
+)
 from leibniz.measurements import (
     MeasurementDataset,
     MeasurementDatasetDocument,
@@ -35,6 +42,16 @@ from leibniz.submission_registries import SubmissionRegistry, SubmissionRegistry
 from leibniz.view_manifests import ViewManifestDocument
 
 __all__ = ["main"]
+
+_manifest_filename = "manifest" + document_filename_suffix()
+
+
+@dataclass(frozen=True, slots=True)
+class _FrontierSnapshot:
+    benchmark_id: str
+    best_score: float | None
+    model_count: int
+    run_count: int
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -313,6 +330,38 @@ def _parser() -> argparse.ArgumentParser:
     loop.add_argument("--target-validation-loss", default=None, type=float)
     loop.add_argument("--dry-run", action="store_true")
     loop.add_argument("--retry-failed", action="store_true")
+    shakedown = benchmark_subcommands.add_parser(
+        "shakedown",
+        description="run a small active frontier shakedown",
+        help="run an active frontier shakedown",
+    )
+    shakedown.add_argument("--benchmark-root", type=Path, required=True)
+    shakedown.add_argument(
+        "--runs-root",
+        default=Path(".runs"),
+        type=Path,
+        help="ignored local run-state root; defaults to .runs",
+    )
+    shakedown.add_argument("--iterations", default=1, type=int)
+    shakedown.add_argument("--scale", default=1, type=int)
+    shakedown.add_argument("--candidate-budget", default=1, type=int)
+    shakedown.add_argument("--candidate-sample-count", default=64, type=int)
+    shakedown.add_argument("--sample-count", default=1, type=int)
+    shakedown.add_argument("--evaluation-sample-count", default=None, type=int)
+    shakedown.add_argument("--seed", default=101, type=int)
+    shakedown.add_argument("--train-steps", default=0, type=int)
+    shakedown.add_argument("--learning-rate", default=0.01, type=float)
+    shakedown.add_argument("--optimizer", default="sgd", choices=("sgd", "adam", "adamw"))
+    shakedown.add_argument(
+        "--schedule",
+        default="none",
+        choices=("none", "cosine", "reduce-on-plateau"),
+    )
+    shakedown.add_argument("--validation-interval", default=1, type=int)
+    shakedown.add_argument("--convergence-patience", default=0, type=int)
+    shakedown.add_argument("--convergence-min-delta", default=0.0, type=float)
+    shakedown.add_argument("--target-validation-loss", default=None, type=float)
+    shakedown.add_argument("--retry-failed", action="store_true")
 
     return parser
 
@@ -351,27 +400,7 @@ def _benchmark(args: argparse.Namespace) -> int:
             return 0
         if str(args.benchmark_command) == "loop":
             summary = run_active_training_loop(
-                ActiveTrainingLoopPlan(
-                    benchmark_root=args.benchmark_root,
-                    runs_root=args.runs_root,
-                    iterations=args.iterations,
-                    scale=args.scale,
-                    candidate_budget=args.candidate_budget,
-                    candidate_sample_count=args.candidate_sample_count,
-                    sample_count=args.sample_count,
-                    evaluation_sample_count=args.evaluation_sample_count,
-                    seed=args.seed,
-                    train_steps=args.train_steps,
-                    learning_rate=args.learning_rate,
-                    optimizer=args.optimizer,
-                    schedule=args.schedule,
-                    validation_interval=args.validation_interval,
-                    convergence_patience=args.convergence_patience,
-                    convergence_min_delta=args.convergence_min_delta,
-                    target_validation_loss=args.target_validation_loss,
-                    dry_run=args.dry_run,
-                    retry_failed=args.retry_failed,
-                )
+                _active_training_loop_plan(args, dry_run=args.dry_run)
             )
             prefix = "planned" if summary.dry_run else "completed"
             print(
@@ -380,6 +409,35 @@ def _benchmark(args: argparse.Namespace) -> int:
             )
             for command in summary.planned_commands:
                 print("command: " + " ".join(command))
+            if summary.result_view_path is not None:
+                print(f"view: {summary.result_view_path}")
+            return 0
+        if str(args.benchmark_command) == "shakedown":
+            before = _frontier_snapshot(
+                benchmark_root=args.benchmark_root,
+                runs_root=args.runs_root,
+            )
+            summary = run_active_training_loop(
+                _active_training_loop_plan(args, dry_run=False)
+            )
+            after = _frontier_snapshot(
+                benchmark_root=args.benchmark_root,
+                runs_root=args.runs_root,
+            )
+            print(f"completed active frontier shakedown for {summary.benchmark_id}")
+            print(
+                f"runs: {before.run_count} -> {after.run_count} "
+                f"({_delta(after.run_count, before.run_count)})"
+            )
+            print(
+                f"models: {before.model_count} -> {after.model_count} "
+                f"({_delta(after.model_count, before.model_count)})"
+            )
+            print(
+                "best score: "
+                f"{_score_label(before.best_score)} -> {_score_label(after.best_score)} "
+                f"({_score_delta(after.best_score, before.best_score)})"
+            )
             if summary.result_view_path is not None:
                 print(f"view: {summary.result_view_path}")
             return 0
@@ -392,6 +450,108 @@ def _benchmark(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     return 2
+
+
+def _active_training_loop_plan(
+    args: argparse.Namespace,
+    *,
+    dry_run: bool,
+) -> ActiveTrainingLoopPlan:
+    return ActiveTrainingLoopPlan(
+        benchmark_root=args.benchmark_root,
+        runs_root=args.runs_root,
+        iterations=args.iterations,
+        scale=args.scale,
+        candidate_budget=args.candidate_budget,
+        candidate_sample_count=args.candidate_sample_count,
+        sample_count=args.sample_count,
+        evaluation_sample_count=args.evaluation_sample_count,
+        seed=args.seed,
+        train_steps=args.train_steps,
+        learning_rate=args.learning_rate,
+        optimizer=args.optimizer,
+        schedule=args.schedule,
+        validation_interval=args.validation_interval,
+        convergence_patience=args.convergence_patience,
+        convergence_min_delta=args.convergence_min_delta,
+        target_validation_loss=args.target_validation_loss,
+        dry_run=dry_run,
+        retry_failed=args.retry_failed,
+    )
+
+
+def _frontier_snapshot(*, benchmark_root: Path, runs_root: Path) -> _FrontierSnapshot:
+    manifest = _load_manifest(benchmark_root / _manifest_filename)
+    empty = _FrontierSnapshot(
+        benchmark_id=str(manifest.id),
+        best_score=None,
+        model_count=0,
+        run_count=0,
+    )
+    try:
+        summary = materialize_benchmark_result_views(
+            repository_root=Path.cwd(),
+            runs_root=runs_root,
+        )
+    except LocalResultImportError as error:
+        if "no benchmark result records found" in str(error):
+            return empty
+        raise
+    view = load_console_result_view(summary.view_file.read_bytes())
+    for result in _sequence(view.get("benchmark_results")):
+        if not isinstance(result, dict):
+            continue
+        typed_result = cast(dict[str, object], result)
+        if typed_result.get("benchmark_id") != str(manifest.id):
+            continue
+        leaderboard = tuple(
+            cast(dict[str, object], item)
+            for item in _sequence(typed_result.get("leaderboard"))
+            if isinstance(item, dict)
+        )
+        scores = tuple(
+            score
+            for item in leaderboard
+            for score in [_number(item.get("score"))]
+            if score is not None
+        )
+        return _FrontierSnapshot(
+            benchmark_id=str(manifest.id),
+            best_score=max(scores, default=None),
+            model_count=len(leaderboard),
+            run_count=len(_sequence(typed_result.get("training_history"))),
+        )
+    return empty
+
+
+def _sequence(value: object) -> tuple[object, ...]:
+    if isinstance(value, tuple):
+        return cast(tuple[object, ...], value)
+    if isinstance(value, list):
+        return tuple(cast(list[object], value))
+    return ()
+
+
+def _number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _delta(after: int, before: int) -> str:
+    difference = after - before
+    return f"+{difference}" if difference >= 0 else str(difference)
+
+
+def _score_label(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.4f}"
+
+
+def _score_delta(after: float | None, before: float | None) -> str:
+    if after is None or before is None:
+        return "n/a"
+    difference = after - before
+    return f"+{difference:.4f}" if difference >= 0 else f"{difference:.4f}"
 
 
 def _results(args: argparse.Namespace) -> int:
