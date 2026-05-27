@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -67,6 +68,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _results(args)
     if command == "benchmark":
         return _benchmark(args)
+    if command == "console":
+        return _console(args)
     parser.print_help(sys.stderr)
     return 2
 
@@ -381,7 +384,48 @@ def _parser() -> argparse.ArgumentParser:
     shakedown.add_argument("--target-validation-loss", default=None, type=float)
     shakedown.add_argument("--retry-failed", action="store_true")
 
+    console = subcommands.add_parser(
+        "console",
+        description="run console web workflows",
+        help="run console web workflows",
+    )
+    console_subcommands = console.add_subparsers(dest="console_command", required=True)
+    dev = console_subcommands.add_parser(
+        "dev",
+        description="start the console development server",
+        help="start the console dev server",
+    )
+    dev.add_argument("--host", default="127.0.0.1")
+    dev.add_argument("--port", default=None, type=int)
+
     return parser
+
+
+def _console(args: argparse.Namespace) -> int:
+    if str(args.console_command) == "dev":
+        command = _console_dev_command(args)
+        try:
+            return subprocess.run(
+                command,
+                check=False,
+                cwd=_console_web_source_root(),
+            ).returncode
+        except OSError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+    print(f"error: unsupported console command {args.console_command!r}", file=sys.stderr)
+    return 2
+
+
+def _console_dev_command(args: argparse.Namespace) -> list[str]:
+    command = ["npm", "run", "dev", "--", "--host", str(args.host)]
+    if args.port is not None:
+        command.extend(("--port", str(args.port)))
+    return command
+
+
+def _console_web_source_root() -> Path:
+    return Path(__file__).parent / "console" / "_web_src"
 
 
 def _benchmark(args: argparse.Namespace) -> int:
