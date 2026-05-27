@@ -157,11 +157,12 @@ function assertBenchmarkWorkbenchStructure() {
   );
   const requiredPanelMarkers = [
     'benchmark-workbench',
-    'benchmark-selector-row',
-    'benchmark-status-row',
+    'benchmark-title-select',
     'benchmark-section-summary',
     'workQueueItemsForTask',
     'workQueueStatusLabel',
+    'resultUpdatedLabel',
+    'resultSizeLabel',
   ];
   for (const marker of requiredPanelMarkers) {
     if (!panel.includes(marker)) {
@@ -170,6 +171,9 @@ function assertBenchmarkWorkbenchStructure() {
   }
   if (panel.includes('benchmark-sidebar') || panel.includes('benchmark-list-item')) {
     throw new Error('BenchmarksPanel must not use the old sidebar benchmark layout');
+  }
+  if (panel.includes('benchmark-selector-row')) {
+    throw new Error('BenchmarksPanel must keep benchmark selection in the header');
   }
 
   const requiredThemeTokens = [
@@ -263,6 +267,11 @@ function assertBenchmarkFrontierPlotStructure() {
   }
   if (panel.includes('Reset Zoom') || panel.includes('resetToken')) {
     throw new Error('BenchmarksPanel must not route frontier controls through section actions');
+  }
+  for (const marker of ['Frontier Plot', 'performance-metrics', 'title="Frontier"']) {
+    if (dashboard.includes(marker)) {
+      throw new Error(`BenchmarkResultDashboard must not preserve retired frontier summary UI: ${marker}`);
+    }
   }
 
   const requiredStyleMarkers = [

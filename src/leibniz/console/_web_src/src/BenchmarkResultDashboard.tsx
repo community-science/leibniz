@@ -26,6 +26,7 @@ import {
 } from './benchmarkDashboardModel.ts';
 import type {
   BenchmarkResultRecord,
+  CostAxisRecord,
   ModelResultRecord,
   ProposalRecord,
   WorkQueueItemRecord,
@@ -49,6 +50,14 @@ const plotBodyHeight = plotHeight - plotMargin.top - plotMargin.bottom;
 const plotZoomInFactor = 0.72;
 const plotZoomOutFactor = 1.28;
 const plotPanFraction = 0.18;
+const plotTickOffset = 18;
+const plotYTickLabelOffset = 10;
+const plotTickLabelBaselineOffset = 4;
+const plotAxisSelectorTopOffset = 31;
+const plotAxisSelectorHeight = 25;
+const plotAxisSelectorMinWidth = 264;
+const plotAxisSelectorButtonWidth = 84;
+const proposalIntervalCapHalfWidth = 7;
 
 export function BenchmarkResultDashboard({
   queueItems = [],
@@ -61,16 +70,10 @@ export function BenchmarkResultDashboard({
   const [plotView, setPlotView] = useState<PlotView | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [frontierSort, setFrontierSort] = useState<ModelResultSort>({
-    key: 'cost',
-    direction: 'ascending',
-  });
   const [leaderboardSort, setLeaderboardSort] = useState<ModelResultSort>({
     key: 'score',
     direction: 'descending',
   });
-  const frontier = result.frontiers[costAxis] ?? [];
-  const topModel = result.leaderboard[0];
   const plot = benchmarkPlotModel(result, costAxis);
   const selection = selectionForId(result, selectedId);
   const proposalRows = proposalAssociations(result);
@@ -92,54 +95,16 @@ export function BenchmarkResultDashboard({
 
   return (
     <section className="performance-section benchmark-result-dashboard">
-      <div className="benchmark-result-heading">
-        <div>
-          <h3>Frontier</h3>
-        </div>
-        <div className="benchmark-result-axis" aria-label="Cost axis">
-          <span>Cost Axis</span>
-          <div className="benchmark-axis-segments">
-            {result.cost_axes.map((axis) => (
-              <button
-                className={axis.key === costAxis ? 'active' : ''}
-                key={axis.key}
-                onClick={() => {
-                  setCostAxis(axis.key);
-                  setPlotView(null);
-                  setHoveredId(null);
-                  setSelectedId(null);
-                }}
-                type="button"
-              >
-                {axis.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-      {topModel === undefined ? null : (
-        <dl className="performance-metrics">
-          <div>
-            <dt>Benchmark</dt>
-            <dd>{result.benchmark_id}</dd>
-          </div>
-          <div>
-            <dt>Best Score</dt>
-            <dd>{topModel.score.toFixed(4)}</dd>
-          </div>
-          <div>
-            <dt>Models</dt>
-            <dd>{result.leaderboard.length}</dd>
-          </div>
-          <div>
-            <dt>Runs</dt>
-            <dd>{result.training_history.length}</dd>
-          </div>
-        </dl>
-      )}
       <BenchmarkFrontierPlot
+        costAxes={result.cost_axes}
         costAxis={costAxis}
         model={plot}
+        onCostAxisChange={(axis) => {
+          setCostAxis(axis);
+          setPlotView(null);
+          setHoveredId(null);
+          setSelectedId(null);
+        }}
         onHover={setHoveredId}
         onPan={(direction) => setPlotView(pannedView(activeView, direction, plot))}
         onReset={() => setPlotView(null)}
@@ -148,16 +113,6 @@ export function BenchmarkResultDashboard({
         selectedId={selectedId}
         view={activeView}
         hoveredId={hoveredId}
-      />
-      <ModelResultTable
-        complexityAxis={result.complexity_axis}
-        costAxis={costAxis}
-        models={frontier}
-        onSelect={setSelectedId}
-        onSort={(key) => setFrontierSort((current) => nextModelResultSort(current, key))}
-        selectedModelKey={selectedModelKey}
-        sort={frontierSort}
-        title="Frontier"
       />
       <ModelResultTable
         complexityAxis={result.complexity_axis}
@@ -188,9 +143,11 @@ export function BenchmarkResultDashboard({
 }
 
 function BenchmarkFrontierPlot({
+  costAxes,
   costAxis,
   hoveredId,
   model,
+  onCostAxisChange,
   onHover,
   onPan,
   onReset,
@@ -199,9 +156,11 @@ function BenchmarkFrontierPlot({
   selectedId,
   view,
 }: {
+  costAxes: CostAxisRecord[];
   costAxis: string;
   hoveredId: string | null;
   model: ReturnType<typeof benchmarkPlotModel>;
+  onCostAxisChange: (axis: string) => void;
   onHover: (id: string | null) => void;
   onPan: (direction: 'left' | 'right') => void;
   onReset: () => void;
@@ -237,12 +196,18 @@ function BenchmarkFrontierPlot({
     model.points.find((point) => point.id === hoveredId) ??
     model.proposals.find((proposal) => proposal.id === hoveredId);
   const activePoint = hoveredPoint ?? selectedPoint;
+  const axisSelectorWidth = Math.min(
+    plotBodyWidth,
+    Math.max(plotAxisSelectorMinWidth, costAxes.length * plotAxisSelectorButtonWidth),
+  );
+  const axisSelectorX = plotMargin.left + plotBodyWidth / 2 - axisSelectorWidth / 2;
+  const axisSelectorY = plotMargin.top + plotBodyHeight + plotAxisSelectorTopOffset;
 
   return (
     <section className="benchmark-result-table-section">
       <div className="benchmark-plot-heading">
         <div>
-          <h3>Frontier Plot</h3>
+          <h3>Measurements Plot</h3>
         </div>
         <div className="benchmark-plot-actions">
           <button
@@ -288,13 +253,13 @@ function BenchmarkFrontierPlot({
         </div>
       </div>
       <div className="frontier-chart">
-        <div className="frontier-chart-legend" aria-label="Frontier plot legend">
+        <div className="frontier-chart-legend" aria-label="Measurements plot legend">
           <span><i className="frontier" />Frontier</span>
           <span><i className="measured" />Measured</span>
           <span><i className="proposal" />Proposal</span>
         </div>
         <svg
-          aria-label={`Frontier score by ${costAxis}`}
+          aria-label={`Measurements by ${costAxis}`}
           className="frontier-chart-svg"
           role="img"
           viewBox={`0 0 ${plotWidth} ${plotHeight}`}
@@ -307,14 +272,31 @@ function BenchmarkFrontierPlot({
               x={plotMargin.left}
               y={plotMargin.top}
             />
-            {model.xTicks.map((tick) => {
+            {model.xMinorTicks.map((tick) => {
               const logTick = Math.log2(tick);
               if (logTick < view.xDomain[0] || logTick > view.xDomain[1]) {
                 return null;
               }
               const tickX = x(logTick);
               return (
-                <g key={`x-${tick}`}>
+                <line
+                  className="frontier-chart-grid frontier-chart-grid-minor"
+                  key={`x-minor-${tick}`}
+                  x1={tickX}
+                  x2={tickX}
+                  y1={plotMargin.top}
+                  y2={plotMargin.top + plotBodyHeight}
+                />
+              );
+            })}
+            {model.xMajorTicks.map((tick) => {
+              const logTick = Math.log2(tick);
+              if (logTick < view.xDomain[0] || logTick > view.xDomain[1]) {
+                return null;
+              }
+              const tickX = x(logTick);
+              return (
+                <g key={`x-major-${tick}`}>
                   <line
                     className="frontier-chart-grid"
                     x1={tickX}
@@ -322,8 +304,20 @@ function BenchmarkFrontierPlot({
                     y1={plotMargin.top}
                     y2={plotMargin.top + plotBodyHeight}
                   />
-                  <text className="frontier-chart-tick" textAnchor="middle" x={tickX} y={plotHeight - 22}>
-                    2^{Math.round(logTick)}
+                  <line
+                    className="frontier-chart-axis-tick"
+                    x1={tickX}
+                    x2={tickX}
+                    y1={plotMargin.top + plotBodyHeight}
+                    y2={plotMargin.top + plotBodyHeight + 5}
+                  />
+                  <text
+                    className="frontier-chart-tick"
+                    textAnchor="middle"
+                    x={tickX}
+                    y={plotMargin.top + plotBodyHeight + plotTickOffset}
+                  >
+                    2<tspan dy="-5" fontSize="0.72em">{Math.round(logTick)}</tspan><tspan dy="5"> </tspan>
                   </text>
                 </g>
               );
@@ -342,7 +336,19 @@ function BenchmarkFrontierPlot({
                     y1={tickY}
                     y2={tickY}
                   />
-                  <text className="frontier-chart-tick" textAnchor="end" x={plotMargin.left - 10} y={tickY + 4}>
+                  <line
+                    className="frontier-chart-axis-tick"
+                    x1={plotMargin.left - 4}
+                    x2={plotMargin.left}
+                    y1={tickY}
+                    y2={tickY}
+                  />
+                  <text
+                    className="frontier-chart-tick"
+                    textAnchor="end"
+                    x={plotMargin.left - plotYTickLabelOffset}
+                    y={tickY + plotTickLabelBaselineOffset}
+                  >
                     {tick.toFixed(2)}
                   </text>
                 </g>
@@ -372,15 +378,15 @@ function BenchmarkFrontierPlot({
                       />
                       <line
                         className="frontier-chart-proposal-cap"
-                        x1={proposalX - 7}
-                        x2={proposalX + 7}
+                        x1={proposalX - proposalIntervalCapHalfWidth}
+                        x2={proposalX + proposalIntervalCapHalfWidth}
                         y1={y(proposal.predictedScore - uncertainty)}
                         y2={y(proposal.predictedScore - uncertainty)}
                       />
                       <line
                         className="frontier-chart-proposal-cap"
-                        x1={proposalX - 7}
-                        x2={proposalX + 7}
+                        x1={proposalX - proposalIntervalCapHalfWidth}
+                        x2={proposalX + proposalIntervalCapHalfWidth}
                         y1={y(proposal.predictedScore + uncertainty)}
                         y2={y(proposal.predictedScore + uncertainty)}
                       />
@@ -432,9 +438,30 @@ function BenchmarkFrontierPlot({
                 r={point.frontier ? 5 : 3}
               />
             ))}
-            <text className="frontier-chart-axis-label" textAnchor="middle" x={plotMargin.left + plotBodyWidth / 2} y={plotHeight - 6}>
-              {costAxis}
-            </text>
+            <foreignObject
+              height={plotAxisSelectorHeight}
+              width={axisSelectorWidth}
+              x={axisSelectorX}
+              y={axisSelectorY}
+            >
+              <div className="frontier-chart-axis-selector">
+                {costAxes.map((axis) => (
+                  <button
+                    aria-pressed={axis.key === costAxis}
+                    className={axis.key === costAxis ? 'active' : ''}
+                    key={axis.key}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onCostAxisChange(axis.key);
+                    }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    type="button"
+                  >
+                    {axis.label}
+                  </button>
+                ))}
+              </div>
+            </foreignObject>
             <text
               className="frontier-chart-axis-label"
               textAnchor="middle"
@@ -458,7 +485,7 @@ function BenchmarkFrontierPlot({
         {activePoint === undefined ? null : (
           <div className="frontier-chart-tooltip">
             <span className="frontier-chart-tooltip-kicker">
-              {'predictedScore' in activePoint ? 'Proposal' : activePoint.frontier ? 'Frontier model' : 'Measured model'}
+              {'predictedScore' in activePoint ? 'Proposal' : activePoint.frontier ? 'Frontier highlight' : 'Measured model'}
             </span>
             <strong>{activePoint.label}</strong>
             <span>{formatCost(activePoint.cost)} cost</span>
