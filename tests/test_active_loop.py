@@ -377,3 +377,38 @@ def test_cli_runs_active_training_loop_dry_run(
     assert captured.err == ""
     assert "planned active benchmark loop" in captured.out
     assert "command: leibniz benchmark run" in captured.out
+
+
+def test_cli_runs_active_frontier_shakedown(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs_root = tmp_path / ".runs"
+
+    exit_code = main(
+        [
+            "benchmark",
+            "shakedown",
+            "--benchmark-root",
+            str(_benchmark_root),
+            "--runs-root",
+            str(runs_root),
+            "--candidate-budget",
+            "1",
+            "--sample-count",
+            "1",
+            "--train-steps",
+            "0",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "completed active frontier shakedown for benchmarks.digits@0.1.0" in captured.out
+    assert "runs: 0 -> 1 (+1)" in captured.out
+    assert "models: 0 -> 1 (+1)" in captured.out
+    assert "best score: n/a -> " in captured.out
+    assert "view: " in captured.out
+    assert runs_root.joinpath("views", "benchmark_results.json").is_file()
+    assert runs_root.joinpath("views", "work_queue.json").is_file()
