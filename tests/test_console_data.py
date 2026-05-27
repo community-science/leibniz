@@ -94,6 +94,16 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         ("flatten", [4]),
         ("dense", [10]),
     ]
+    trace = cast(dict[str, object], model_inspection["architecture_trace"])
+    trace_stages = cast(list[dict[str, object]], trace["stages"])
+    assert [(stage["operator_kind"], stage["syntax_alias"]) for stage in trace_stages] == [
+        ("local-aggregation", "adaptive-pooling"),
+        ("rank-collapse", "flatten"),
+        ("affine-readout", "dense"),
+    ]
+    assert cast(dict[str, object], trace_stages[0]["descriptor_axes"])["support"] == (
+        "local-window"
+    )
     assert [layer["operator"] for layer in model_layers] == [
         {
             "kind": "local-aggregation",

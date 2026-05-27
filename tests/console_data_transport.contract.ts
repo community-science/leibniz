@@ -102,6 +102,16 @@ assertEqual(
   'local-aggregation,rank-collapse,affine-readout',
   'model operator summaries',
 );
+assertEqual(
+  modelInspection.architecture_trace.stages.map((stage) => stage.operator_kind).join(','),
+  'local-aggregation,rank-collapse,affine-readout',
+  'model architecture trace stages',
+);
+assertEqual(
+  modelInspection.architecture_trace.stages[0]?.descriptor_axes.support,
+  'local-window',
+  'model architecture trace support axis',
+);
 const benchmarkTask = parsed.benchmark_tasks[0];
 if (benchmarkTask === undefined) {
   throw new Error('expected benchmark task');

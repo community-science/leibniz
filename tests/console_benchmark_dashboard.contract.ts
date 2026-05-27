@@ -217,6 +217,33 @@ const inspections: ModelInspectionRecord[] = [
     },
     id: 'inspection-a',
     input_shape: [1],
+    architecture_trace: {
+      input_shape: [1],
+      output_shape: [2],
+      stages: [
+        {
+          cost_law: 'zero-arithmetic',
+          descriptor_axes: {
+            aggregation_law: 'none',
+            parameter_sharing: 'none',
+            projection_law: 'identity',
+            state: 'fixed',
+            support: 'global',
+            tensor_relation: 'identity',
+          },
+          index: 0,
+          inference_flops: 0,
+          input_shape: [1],
+          kind: 'operator',
+          operator_kind: 'identity',
+          output_shape: [2],
+          parameter_count: 0,
+          shape_law: 'fixture-shape',
+          syntax_alias: 'operator',
+        },
+      ],
+      program_effects: [],
+    },
     layers: [
       {
         index: 0,

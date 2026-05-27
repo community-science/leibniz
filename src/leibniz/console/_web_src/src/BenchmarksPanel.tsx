@@ -27,7 +27,10 @@ import type {
   GeneratedObservationBatchRecord,
   GeneratedObservationSampleRecord,
 } from './benchmarkTasks.ts';
-import type { ModelInspectionLayerRecord, ModelInspectionRecord } from './modelInspections.ts';
+import type {
+  ModelInspectionRecord,
+  ModelInspectionTraceStageRecord,
+} from './modelInspections.ts';
 import {
   descriptorValueDisplayName,
   operatorDisplayName,
@@ -910,48 +913,53 @@ function ModelLayerTrace({
     <section className="benchmark-model-detail-section">
       <h4>Layer Trace</h4>
       <div className="benchmark-model-layer-list">
-        {inspection.layers.map((layer) => (
-          <article className="benchmark-model-layer" key={layer.index}>
-            <div className="benchmark-model-layer-heading">
-              <span>{layer.index}</span>
-              <div>
-                <strong>{operatorSummary(layer, operatorVocabulary)}</strong>
-                <small>{syntaxAliasDisplayName(operatorVocabulary, layer.kind)}</small>
+        {inspection.architecture_trace.stages.map((stage) => {
+          const layer = inspection.layers[stage.index];
+          return (
+            <article className="benchmark-model-layer" key={stage.index}>
+              <div className="benchmark-model-layer-heading">
+                <span>{stage.index}</span>
+                <div>
+                  <strong>{operatorDisplayName(operatorVocabulary, stage.operator_kind)}</strong>
+                  <small>{syntaxAliasDisplayName(operatorVocabulary, stage.syntax_alias)}</small>
+                </div>
               </div>
-            </div>
-            <dl className="benchmark-model-layer-shape-grid">
-              <div>
-                <dt>Input</dt>
-                <dd>{optionalShapeLabel(layer.input_shape)}</dd>
-              </div>
-              <div>
-                <dt>Output</dt>
-                <dd>{optionalShapeLabel(layer.output_shape)}</dd>
-              </div>
-              <div>
-                <dt>Parameters</dt>
-                <dd>{optionalNumberLabel(layer.parameter_count)}</dd>
-              </div>
-              <div>
-                <dt>FLOPs</dt>
-                <dd>{optionalNumberLabel(layer.inference_flops)}</dd>
-              </div>
-            </dl>
-            <p className="benchmark-model-layer-config">
-              {recordLabel(layer.parameters, layer.operator, operatorVocabulary)}
-            </p>
-            {operatorEntries(layer, operatorVocabulary).length === 0 ? null : (
-              <dl className="benchmark-model-operator-grid">
-                {operatorEntries(layer, operatorVocabulary).map(([key, value]) => (
-                  <div key={key}>
-                    <dt>{key}</dt>
-                    <dd>{value}</dd>
-                  </div>
-                ))}
+              <dl className="benchmark-model-layer-shape-grid">
+                <div>
+                  <dt>Input</dt>
+                  <dd>{shapeLabel(stage.input_shape)}</dd>
+                </div>
+                <div>
+                  <dt>Output</dt>
+                  <dd>{shapeLabel(stage.output_shape)}</dd>
+                </div>
+                <div>
+                  <dt>Parameters</dt>
+                  <dd>{optionalNumberLabel(stage.parameter_count)}</dd>
+                </div>
+                <div>
+                  <dt>FLOPs</dt>
+                  <dd>{optionalNumberLabel(stage.inference_flops)}</dd>
+                </div>
               </dl>
-            )}
-          </article>
-        ))}
+              <p className="benchmark-model-layer-config">
+                {layer === undefined
+                  ? 'none'
+                  : recordLabel(layer.parameters, layer.operator, operatorVocabulary)}
+              </p>
+              {traceStageEntries(stage, operatorVocabulary).length === 0 ? null : (
+                <dl className="benchmark-model-operator-grid">
+                  {traceStageEntries(stage, operatorVocabulary).map(([key, value]) => (
+                    <div key={key}>
+                      <dt>{key}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </article>
+          );
+        })}
       </div>
     </section>
   );
@@ -1047,10 +1055,6 @@ function shapeLabel(shape: number[]): string {
   return shape.join(' x ');
 }
 
-function optionalShapeLabel(shape: number[] | undefined): string {
-  return shape === undefined ? 'unknown' : shapeLabel(shape);
-}
-
 function optionalNumberLabel(value: number | undefined): string {
   return value === undefined ? 'unknown' : value.toLocaleString();
 }
@@ -1059,35 +1063,24 @@ function unknownLayerLabel(layers: number[] | undefined): string {
   return layers === undefined || layers.length === 0 ? 'none' : layers.join(', ');
 }
 
-function operatorSummary(
-  layer: ModelInspectionLayerRecord,
-  vocabulary?: OperatorVocabularyRecord,
-): string {
-  const operator = layer.operator;
-  if (operator === undefined) {
-    return 'unknown';
-  }
-  const kind = typeof operator.kind === 'string' ? operator.kind : undefined;
-  return vocabulary === undefined ? kind ?? 'unknown' : operatorDisplayName(vocabulary, kind);
-}
-
-function operatorEntries(
-  layer: ModelInspectionLayerRecord,
-  vocabulary?: OperatorVocabularyRecord,
+function traceStageEntries(
+  stage: ModelInspectionTraceStageRecord,
+  vocabulary: OperatorVocabularyRecord,
 ): [string, string][] {
-  const operator = layer.operator;
-  if (operator === undefined) {
-    return [];
-  }
-  const operatorKind = typeof operator.kind === 'string' ? operator.kind : undefined;
-  return Object.entries(operator)
-    .filter(([key]) => key !== 'kind')
-    .map(([key, value]) => [
-      key,
-      vocabulary === undefined
-        ? parameterValueLabel(value)
-        : operatorDescriptorValueLabel(vocabulary, key, value, operatorKind),
-    ]);
+  return [
+    [
+      'Tensor relation',
+      descriptorValueDisplayName(
+        vocabulary,
+        'tensor_relation',
+        stage.descriptor_axes.tensor_relation,
+      ),
+    ],
+    ['Support', descriptorValueDisplayName(vocabulary, 'support', stage.descriptor_axes.support)],
+    ['State', descriptorValueDisplayName(vocabulary, 'state', stage.descriptor_axes.state)],
+    ['Shape law', descriptorValueDisplayName(vocabulary, 'shape_law', stage.shape_law)],
+    ['Cost law', descriptorValueDisplayName(vocabulary, 'cost_law', stage.cost_law)],
+  ].filter((entry): entry is [string, string] => entry[1] !== undefined && entry[1] !== '');
 }
 
 function recordLabel(
@@ -1106,30 +1099,6 @@ function recordLabel(
         `${vocabulary === undefined ? key : parameterDisplayName(vocabulary, operatorKind, key)}: ${parameterValueLabel(value)}`,
     )
     .join(', ');
-}
-
-function operatorDescriptorValueLabel(
-  vocabulary: OperatorVocabularyRecord,
-  key: string,
-  value: unknown,
-  operatorKind: string | undefined,
-): string {
-  if (key === 'aliases') {
-    return Array.isArray(value)
-      ? value
-          .map((entry) =>
-            typeof entry === 'string' ? syntaxAliasDisplayName(vocabulary, entry) : String(entry),
-          )
-          .join(', ')
-      : parameterValueLabel(value);
-  }
-  if (key === 'kind') {
-    return operatorDisplayName(vocabulary, operatorKind);
-  }
-  if (typeof value === 'string') {
-    return descriptorValueDisplayName(vocabulary, key, value);
-  }
-  return parameterValueLabel(value);
 }
 
 function parameterValueLabel(value: unknown): string {

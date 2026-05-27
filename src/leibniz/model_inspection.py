@@ -21,6 +21,8 @@ __all__ = [
     "ModelInspectionDocument",
     "ModelInspectionLayer",
     "ModelInspectionRecord",
+    "ModelInspectionTrace",
+    "ModelInspectionTraceStage",
     "ModelInspectionValidationError",
 ]
 
@@ -58,6 +60,33 @@ _cost_summary_record = RecordSpec(
         ),
     }
 )
+_trace_stage_record = RecordSpec(
+    fields={
+        "index": FieldSpec(kind="integer"),
+        "kind": FieldSpec(kind="string"),
+        "syntax_alias": FieldSpec(kind="string"),
+        "operator_kind": FieldSpec(kind="string"),
+        "input_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
+        "output_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
+        "descriptor_axes": FieldSpec(kind="record"),
+        "shape_law": FieldSpec(kind="string"),
+        "cost_law": FieldSpec(kind="string"),
+        "parameter_count": FieldSpec(kind="integer", required=False),
+        "inference_flops": FieldSpec(kind="integer", required=False),
+    }
+)
+_trace_record = RecordSpec(
+    fields={
+        "input_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
+        "output_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
+        "stages": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
+        "program_effects": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="record"),
+            required=False,
+        ),
+    }
+)
 _inspection_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
@@ -66,6 +95,7 @@ _inspection_record = RecordSpec(
         "output_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
         "layers": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
         "cost_summary": FieldSpec(kind="record"),
+        "architecture_trace": FieldSpec(kind="record"),
         "model_manifest": FieldSpec(kind="record", required=False),
         "submission_package": FieldSpec(kind="record", required=False),
         "benchmark_manifest": FieldSpec(kind="record", required=False),
@@ -265,6 +295,161 @@ class ModelInspectionCostSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelInspectionTraceStage:
+    """One data-driven architecture trace stage for console presentation."""
+
+    index: int
+    kind: str
+    syntax_alias: str
+    operator_kind: str
+    input_shape: tuple[int, ...]
+    output_shape: tuple[int, ...]
+    descriptor_axes: Mapping[str, str]
+    shape_law: str
+    cost_law: str
+    parameter_count: int | None = None
+    inference_flops: int | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.index) is not int or self.index < 0:
+            raise ModelInspectionValidationError("trace stage index must be nonnegative")
+        if self.kind != "operator":
+            raise ModelInspectionValidationError("trace stage kind must be operator")
+        if not self.syntax_alias:
+            raise ModelInspectionValidationError("trace stage syntax_alias must be nonempty")
+        if not self.operator_kind:
+            raise ModelInspectionValidationError("trace stage operator_kind must be nonempty")
+        _require_shape(self.input_shape, field="trace stage input_shape")
+        _require_shape(self.output_shape, field="trace stage output_shape")
+        if not self.descriptor_axes:
+            raise ModelInspectionValidationError("trace stage descriptor_axes must not be empty")
+        for axis, value in self.descriptor_axes.items():
+            if not axis or not value:
+                raise ModelInspectionValidationError(
+                    "trace stage descriptor axes must be nonempty"
+                )
+        if not self.shape_law:
+            raise ModelInspectionValidationError("trace stage shape_law must be nonempty")
+        if not self.cost_law:
+            raise ModelInspectionValidationError("trace stage cost_law must be nonempty")
+        if self.parameter_count is not None and self.parameter_count < 0:
+            raise ModelInspectionValidationError("trace stage parameter_count must be nonnegative")
+        if self.inference_flops is not None and self.inference_flops < 0:
+            raise ModelInspectionValidationError("trace stage inference_flops must be nonnegative")
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ModelInspectionTraceStage:
+        try:
+            validated = _trace_stage_record.validate(record)
+        except ValueError as error:
+            raise ModelInspectionValidationError(str(error)) from error
+        return cls(
+            index=_as_int(validated["index"], field="index"),
+            kind=_as_string(validated["kind"], field="kind"),
+            syntax_alias=_as_string(validated["syntax_alias"], field="syntax_alias"),
+            operator_kind=_as_string(validated["operator_kind"], field="operator_kind"),
+            input_shape=_as_shape(validated["input_shape"], field="input_shape"),
+            output_shape=_as_shape(validated["output_shape"], field="output_shape"),
+            descriptor_axes=_string_mapping(
+                validated["descriptor_axes"],
+                field="descriptor_axes",
+            ),
+            shape_law=_as_string(validated["shape_law"], field="shape_law"),
+            cost_law=_as_string(validated["cost_law"], field="cost_law"),
+            parameter_count=_optional_int(
+                validated.get("parameter_count"),
+                field="parameter_count",
+            ),
+            inference_flops=_optional_int(
+                validated.get("inference_flops"),
+                field="inference_flops",
+            ),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        record: dict[str, object] = {
+            "index": self.index,
+            "kind": self.kind,
+            "syntax_alias": self.syntax_alias,
+            "operator_kind": self.operator_kind,
+            "input_shape": list(self.input_shape),
+            "output_shape": list(self.output_shape),
+            "descriptor_axes": dict(sorted(self.descriptor_axes.items())),
+            "shape_law": self.shape_law,
+            "cost_law": self.cost_law,
+        }
+        if self.parameter_count is not None:
+            record["parameter_count"] = self.parameter_count
+        if self.inference_flops is not None:
+            record["inference_flops"] = self.inference_flops
+        return record
+
+
+@dataclass(frozen=True, slots=True)
+class ModelInspectionTrace:
+    """A data-driven architecture trace for model inspection."""
+
+    input_shape: tuple[int, ...]
+    output_shape: tuple[int, ...]
+    stages: tuple[ModelInspectionTraceStage, ...]
+    program_effects: tuple[Mapping[str, object], ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_shape(self.input_shape, field="trace input_shape")
+        _require_shape(self.output_shape, field="trace output_shape")
+        if not self.stages:
+            raise ModelInspectionValidationError("trace stages must not be empty")
+        expected_indexes = tuple(range(len(self.stages)))
+        actual_indexes = tuple(stage.index for stage in self.stages)
+        if actual_indexes != expected_indexes:
+            raise ModelInspectionValidationError("trace stage indexes must be contiguous")
+        if self.stages[0].input_shape != self.input_shape:
+            raise ModelInspectionValidationError("trace first input_shape does not match")
+        if self.stages[-1].output_shape != self.output_shape:
+            raise ModelInspectionValidationError("trace final output_shape does not match")
+        for previous, current in zip(self.stages, self.stages[1:], strict=False):
+            if previous.output_shape != current.input_shape:
+                raise ModelInspectionValidationError("trace stage shapes must compose")
+        for effect in self.program_effects:
+            try:
+                ContentDigest.from_value(effect)
+            except ContentEncodingError as error:
+                raise ModelInspectionValidationError(str(error)) from error
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ModelInspectionTrace:
+        try:
+            validated = _trace_record.validate(record)
+        except ValueError as error:
+            raise ModelInspectionValidationError(str(error)) from error
+        return cls(
+            input_shape=_as_shape(validated["input_shape"], field="input_shape"),
+            output_shape=_as_shape(validated["output_shape"], field="output_shape"),
+            stages=tuple(
+                ModelInspectionTraceStage.from_record(_as_mapping(stage, field="stages"))
+                for stage in _as_sequence(validated["stages"], field="stages")
+            ),
+            program_effects=tuple(
+                _as_mapping(effect, field="program_effects")
+                for effect in _as_sequence(
+                    validated.get("program_effects", ()),
+                    field="program_effects",
+                )
+            ),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        record: dict[str, object] = {
+            "input_shape": list(self.input_shape),
+            "output_shape": list(self.output_shape),
+            "stages": [stage.to_record() for stage in self.stages],
+        }
+        if self.program_effects:
+            record["program_effects"] = [dict(effect) for effect in self.program_effects]
+        return record
+
+
+@dataclass(frozen=True, slots=True)
 class ModelInspectionRecord:
     """A normalized read-only inspection record for public model artifacts."""
 
@@ -274,6 +459,7 @@ class ModelInspectionRecord:
     output_shape: tuple[int, ...]
     layers: tuple[ModelInspectionLayer, ...]
     cost_summary: ModelInspectionCostSummary
+    architecture_trace: ModelInspectionTrace
     model_manifest: ArtifactReference | None = None
     submission_package: ArtifactReference | None = None
     benchmark_manifest: ArtifactReference | None = None
@@ -302,6 +488,17 @@ class ModelInspectionRecord:
             raise ModelInspectionValidationError("layer indexes must be contiguous")
         if self.cost_summary.layer_count != len(self.layers):
             raise ModelInspectionValidationError("cost_summary layer_count does not match layers")
+        if self.architecture_trace.input_shape != self.input_shape:
+            raise ModelInspectionValidationError("architecture_trace input_shape does not match")
+        if self.architecture_trace.output_shape != self.output_shape:
+            raise ModelInspectionValidationError("architecture_trace output_shape does not match")
+        if len(self.architecture_trace.stages) != len(self.layers):
+            raise ModelInspectionValidationError("architecture_trace stages do not match layers")
+        for layer, stage in zip(self.layers, self.architecture_trace.stages, strict=True):
+            if layer.index != stage.index or layer.kind != stage.syntax_alias:
+                raise ModelInspectionValidationError(
+                    "architecture_trace stage does not match layer"
+                )
         _require_reference_kind(
             self.model_manifest,
             kind="model-manifest",
@@ -340,7 +537,7 @@ class ModelInspectionRecord:
         id: ProtocolIdentifier,
         architecture_manifest: ArchitectureManifest,
     ) -> ModelInspectionRecord:
-        layers, cost_summary = _architecture_layers(architecture_manifest)
+        layers, cost_summary, architecture_trace = _architecture_layers(architecture_manifest)
         return cls(
             id=id,
             architecture=reference_for_record(
@@ -351,6 +548,7 @@ class ModelInspectionRecord:
             output_shape=architecture_manifest.output_shape,
             layers=layers,
             cost_summary=cost_summary,
+            architecture_trace=architecture_trace,
         )
 
     @classmethod
@@ -373,6 +571,7 @@ class ModelInspectionRecord:
             output_shape=record.output_shape,
             layers=record.layers,
             cost_summary=record.cost_summary,
+            architecture_trace=record.architecture_trace,
             model_manifest=reference_for_record(
                 kind="model-manifest",
                 record=model_manifest.to_record(),
@@ -399,6 +598,7 @@ class ModelInspectionRecord:
             output_shape=record.output_shape,
             layers=record.layers,
             cost_summary=record.cost_summary,
+            architecture_trace=record.architecture_trace,
             submission_package=reference_for_record(
                 kind="submission-package",
                 record=submission_package.to_record(),
@@ -442,6 +642,9 @@ class ModelInspectionRecord:
             cost_summary=ModelInspectionCostSummary.from_record(
                 _as_mapping(validated["cost_summary"], field="cost_summary")
             ),
+            architecture_trace=ModelInspectionTrace.from_record(
+                _as_mapping(validated["architecture_trace"], field="architecture_trace")
+            ),
             model_manifest=_optional_reference(validated.get("model_manifest"), "model_manifest"),
             submission_package=_optional_reference(
                 validated.get("submission_package"),
@@ -483,6 +686,7 @@ class ModelInspectionRecord:
             "output_shape": list(self.output_shape),
             "layers": [layer.to_record() for layer in self.layers],
             "cost_summary": self.cost_summary.to_record(),
+            "architecture_trace": self.architecture_trace.to_record(),
         }
         if self.model_manifest is not None:
             record["model_manifest"] = self.model_manifest.to_record()
@@ -520,10 +724,12 @@ class ModelInspectionDocument:
 
 def _architecture_layers(
     architecture_manifest: ArchitectureManifest,
-) -> tuple[tuple[ModelInspectionLayer, ...], ModelInspectionCostSummary]:
+) -> tuple[tuple[ModelInspectionLayer, ...], ModelInspectionCostSummary, ModelInspectionTrace]:
     layers: list[ModelInspectionLayer] = []
+    stages: list[ModelInspectionTraceStage] = []
     plan = summarize_architecture_operators(architecture_manifest)
     for layer, operator in zip(architecture_manifest.layers, plan.operators, strict=True):
+        descriptor = operator.descriptor
         layers.append(
             ModelInspectionLayer(
                 index=operator.index,
@@ -531,12 +737,35 @@ def _architecture_layers(
                 parameters=layer.parameters,
                 input_shape=operator.input_shape,
                 output_shape=operator.output_shape,
-                operator=operator.descriptor.to_record(),
+                operator=descriptor.to_record(),
                 parameter_count=operator.parameter_count,
                 parameter_bytes=operator.parameter_bytes,
                 inference_flops=operator.inference_flops,
             )
         )
+        if operator.input_shape is not None and operator.output_shape is not None:
+            stages.append(
+                ModelInspectionTraceStage(
+                    index=operator.index,
+                    kind="operator",
+                    syntax_alias=layer.kind,
+                    operator_kind=descriptor.kind,
+                    input_shape=operator.input_shape,
+                    output_shape=operator.output_shape,
+                    descriptor_axes={
+                        "tensor_relation": descriptor.tensor_relation,
+                        "state": descriptor.state,
+                        "support": descriptor.support,
+                        "projection_law": descriptor.projection_law,
+                        "aggregation_law": descriptor.aggregation_law,
+                        "parameter_sharing": descriptor.parameter_sharing,
+                    },
+                    shape_law=descriptor.shape_law,
+                    cost_law=descriptor.cost_law,
+                    parameter_count=operator.parameter_count,
+                    inference_flops=operator.inference_flops,
+                )
+            )
     return (
         tuple(layers),
         ModelInspectionCostSummary(
@@ -546,6 +775,11 @@ def _architecture_layers(
             inference_flops=plan.inference_flops,
             unknown_parameter_layers=plan.unknown_parameter_layers,
             unknown_flop_layers=plan.unknown_flop_layers,
+        ),
+        ModelInspectionTrace(
+            input_shape=architecture_manifest.input_shape,
+            output_shape=architecture_manifest.output_shape,
+            stages=tuple(stages),
         ),
     )
 
@@ -592,6 +826,16 @@ def _optional_mapping(value: object, *, field: str) -> Mapping[str, object] | No
     if value is None:
         return None
     return _as_mapping(value, field=field)
+
+
+def _string_mapping(value: object, *, field: str) -> Mapping[str, str]:
+    mapping = _as_mapping(value, field=field)
+    result: dict[str, str] = {}
+    for key, item in mapping.items():
+        if not isinstance(item, str):
+            raise ModelInspectionValidationError(f"{field}: expected string mapping")
+        result[key] = item
+    return result
 
 
 def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:

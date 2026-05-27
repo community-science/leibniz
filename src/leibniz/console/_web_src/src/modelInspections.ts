@@ -8,6 +8,7 @@ export type ModelInspectionRecord = {
   output_shape: number[];
   layers: ModelInspectionLayerRecord[];
   cost_summary: ModelInspectionCostSummaryRecord;
+  architecture_trace: ModelInspectionTraceRecord;
   model_manifest?: ArtifactReferenceRecord;
   submission_package?: ArtifactReferenceRecord;
   benchmark_manifest?: ArtifactReferenceRecord;
@@ -35,6 +36,27 @@ export type ModelInspectionCostSummaryRecord = {
   inference_flops?: number;
   unknown_parameter_layers: number[];
   unknown_flop_layers: number[];
+};
+
+export type ModelInspectionTraceRecord = {
+  input_shape: number[];
+  output_shape: number[];
+  stages: ModelInspectionTraceStageRecord[];
+  program_effects: Record<string, unknown>[];
+};
+
+export type ModelInspectionTraceStageRecord = {
+  index: number;
+  kind: 'operator';
+  syntax_alias: string;
+  operator_kind: string;
+  input_shape: number[];
+  output_shape: number[];
+  descriptor_axes: Record<string, string>;
+  shape_law: string;
+  cost_law: string;
+  parameter_count?: number;
+  inference_flops?: number;
 };
 
 export class ModelInspectionError extends Error {
@@ -65,6 +87,7 @@ export function parseModelInspectionRecord(
       parseLayer(layer, `${path}.layers.${index}`),
     ),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
+    architecture_trace: parseTrace(record.architecture_trace, `${path}.architecture_trace`),
     model_manifest: parseOptionalReference(record.model_manifest, `${path}.model_manifest`),
     submission_package: parseOptionalReference(
       record.submission_package,
@@ -84,6 +107,45 @@ export function parseModelInspectionRecord(
       `${path}.training_provenance`,
     ),
   };
+}
+
+function parseTrace(value: unknown, path: string): ModelInspectionTraceRecord {
+  const record = requireRecord(value, path);
+  return {
+    input_shape: parseIntegerArray(record.input_shape, `${path}.input_shape`),
+    output_shape: parseIntegerArray(record.output_shape, `${path}.output_shape`),
+    stages: requireArray(record.stages, `${path}.stages`).map((stage, index) =>
+      parseTraceStage(stage, `${path}.stages.${index}`),
+    ),
+    program_effects:
+      record.program_effects === undefined
+        ? []
+        : requireArray(record.program_effects, `${path}.program_effects`).map((effect, index) =>
+            requireRecord(effect, `${path}.program_effects.${index}`),
+          ),
+  };
+}
+
+function parseTraceStage(value: unknown, path: string): ModelInspectionTraceStageRecord {
+  const record = requireRecord(value, path);
+  const stage: ModelInspectionTraceStageRecord = {
+    index: requireInteger(record.index, `${path}.index`),
+    kind: requireLiteral(record.kind, `${path}.kind`, 'operator'),
+    syntax_alias: requireString(record.syntax_alias, `${path}.syntax_alias`),
+    operator_kind: requireString(record.operator_kind, `${path}.operator_kind`),
+    input_shape: parseIntegerArray(record.input_shape, `${path}.input_shape`),
+    output_shape: parseIntegerArray(record.output_shape, `${path}.output_shape`),
+    descriptor_axes: parseStringRecord(record.descriptor_axes, `${path}.descriptor_axes`),
+    shape_law: requireString(record.shape_law, `${path}.shape_law`),
+    cost_law: requireString(record.cost_law, `${path}.cost_law`),
+  };
+  if (record.parameter_count !== undefined) {
+    stage.parameter_count = requireInteger(record.parameter_count, `${path}.parameter_count`);
+  }
+  if (record.inference_flops !== undefined) {
+    stage.inference_flops = requireInteger(record.inference_flops, `${path}.inference_flops`);
+  }
+  return stage;
 }
 
 function parseLayer(value: unknown, path: string): ModelInspectionLayerRecord {
@@ -112,6 +174,13 @@ function parseLayer(value: unknown, path: string): ModelInspectionLayerRecord {
     layer.inference_flops = requireInteger(record.inference_flops, `${path}.inference_flops`);
   }
   return layer;
+}
+
+function parseStringRecord(value: unknown, path: string): Record<string, string> {
+  const record = requireRecord(value, path);
+  return Object.fromEntries(
+    Object.entries(record).map(([key, item]) => [key, requireString(item, `${path}.${key}`)]),
+  );
 }
 
 function parseCostSummary(value: unknown, path: string): ModelInspectionCostSummaryRecord {
@@ -206,6 +275,17 @@ function requireInteger(value: unknown, path: string): number {
     throw new ModelInspectionError(`${path}: expected integer`);
   }
   return number;
+}
+
+function requireLiteral<const Literal extends string>(
+  value: unknown,
+  path: string,
+  expected: Literal,
+): Literal {
+  if (value !== expected) {
+    throw new ModelInspectionError(`${path}: expected ${expected}`);
+  }
+  return expected;
 }
 
 function requireString(value: unknown, path: string): string {
