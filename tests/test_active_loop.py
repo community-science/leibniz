@@ -304,6 +304,8 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert result.stderr == ""
+    assert "training " in result.stdout
+    assert "validation_loss=" in result.stdout
     assert "completed active benchmark loop" in result.stdout
 
     record = ConsoleDataBuilder(_repository_root).discover(

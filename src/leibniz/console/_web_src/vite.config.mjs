@@ -51,7 +51,7 @@ function leibnizConsoleData() {
       ].join('\n');
     },
     configureServer(server) {
-      const roots = consoleResultRoots();
+      const roots = consoleResultWatchRoots();
       if (roots.length === 0) {
         return;
       }
@@ -68,6 +68,15 @@ function leibnizConsoleData() {
       });
     },
   };
+}
+
+export function consoleResultWatchRoots(env = process.env, root = repositoryRoot) {
+  const raw = env.LEIBNIZ_CONSOLE_RESULT_ROOTS ?? '';
+  if (raw.trim() === '') {
+    const runsRoot = resolve(root, '.runs');
+    return existingDirectories([runsRoot]);
+  }
+  return consoleResultRoots(env, root);
 }
 
 export function consoleResultRoots(env = process.env, root = repositoryRoot) {

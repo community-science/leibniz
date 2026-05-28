@@ -2,6 +2,7 @@ import type { ModelInspectionRecord } from './modelInspections.ts';
 import {
   isBenchmarkResultView,
   type BenchmarkResultRecord,
+  type CostAxisRecord,
   type ModelResultRecord,
   type ProposalRecord,
   type ResultViewRecord,
@@ -57,6 +58,11 @@ const fallbackLogCostDomain: [number, number] = [0, 20];
 const fallbackScoreDomain: [number, number] = [0, 1.05];
 const scoreTickTarget = 6;
 const denseLogTickThreshold = 14;
+const standardCostAxes: CostAxisRecord[] = [
+  { key: 'parameter_count', label: 'Parameters' },
+  { key: 'inference_flops', label: 'FLOPs' },
+  { key: 'parameter_bytes', label: 'Storage' },
+];
 
 export type ModelResultSortKey = 'score' | 'cost' | 'model' | 'runs' | 'measurements';
 export type SortDirection = 'ascending' | 'descending';
@@ -81,6 +87,33 @@ export type BenchmarkSelection = {
   selectedProposal?: ProposalRecord;
   selectedRun?: RunResultRecord;
 };
+
+export function benchmarkCostAxes(
+  result: BenchmarkResultRecord | undefined,
+): CostAxisRecord[] {
+  const axes = result?.cost_axes ?? [];
+  const seen = new Set(axes.map((axis) => axis.key));
+  return [
+    ...axes,
+    ...standardCostAxes.filter((axis) => !seen.has(axis.key)),
+  ];
+}
+
+export function benchmarkCostAxis(
+  selectedAxis: string,
+  axes: CostAxisRecord[],
+): string {
+  if (axes.some((axis) => axis.key === selectedAxis)) {
+    return selectedAxis;
+  }
+  return axes[0]?.key ?? standardCostAxes[0]!.key;
+}
+
+export function emptyFrontiersForCostAxes(
+  axes: CostAxisRecord[],
+): Record<string, ModelResultRecord[]> {
+  return Object.fromEntries(axes.map((axis) => [axis.key, []]));
+}
 
 export function benchmarkResultsForTask(
   resultViews: ResultViewRecord[],

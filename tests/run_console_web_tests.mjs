@@ -5,11 +5,16 @@ import { delimiter, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   consoleResultRoots,
+  consoleResultWatchRoots,
   resultRootArguments,
 } from '../src/leibniz/console/_web_src/vite.config.mjs';
 
 const testsRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(testsRoot, '..');
+const consoleWebBinPath = resolve(
+  repositoryRoot,
+  'src/leibniz/console/_web_src/node_modules/.bin',
+);
 const generatedPayloadPath = resolve(tmpdir(), 'leibniz-console-data.contract.json');
 const pythonPath = [resolve(repositoryRoot, 'src'), process.env.PYTHONPATH]
   .filter((path) => path !== undefined && path !== '')
@@ -386,6 +391,13 @@ function assertConsoleResultRootPolicy() {
   const tempRoot = mkdtempSync(resolve(tmpdir(), 'leibniz-console-roots-'));
   try {
     assertEqual(consoleResultRoots({}, tempRoot).length, 0, 'missing default result root');
+    assertEqual(consoleResultWatchRoots({}, tempRoot).length, 0, 'missing default watch root');
+    mkdirSync(resolve(tempRoot, '.runs'), { recursive: true });
+    assertEqual(
+      consoleResultWatchRoots({}, tempRoot)[0],
+      resolve(tempRoot, '.runs'),
+      'default watch root',
+    );
     const defaultRoot = resolve(tempRoot, '.runs/views');
     mkdirSync(defaultRoot, { recursive: true });
     assertEqual(consoleResultRoots({}, tempRoot)[0], defaultRoot, 'default result root');
@@ -399,6 +411,11 @@ function assertConsoleResultRootPolicy() {
       consoleResultRoots(env, tempRoot).join('|'),
       [explicitRoot, explicitMissingRoot].join('|'),
       'explicit result roots',
+    );
+    assertEqual(
+      consoleResultWatchRoots(env, tempRoot).join('|'),
+      [explicitRoot, explicitMissingRoot].join('|'),
+      'explicit watch roots',
     );
     assertEqual(
       resultRootArguments([explicitRoot]).join('|'),
@@ -433,6 +450,7 @@ function run(command, args, options = {}) {
     cwd: repositoryRoot,
     env: {
       ...process.env,
+      PATH: [consoleWebBinPath, process.env.PATH].filter(Boolean).join(delimiter),
       ...options.env,
     },
     stdio: options.captureOutput === true ? ['ignore', 'pipe', 'inherit'] : 'inherit',

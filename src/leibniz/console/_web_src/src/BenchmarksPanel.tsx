@@ -14,8 +14,10 @@ import { useMemo, useState } from 'react';
 import { BenchmarkResultDashboard } from './BenchmarkResultDashboard.tsx';
 import {
   type BenchmarkResultEntry,
+  benchmarkCostAxes,
   benchmarkResultsForTask,
   costValue,
+  emptyFrontiersForCostAxes,
   formatCost,
   modelComparisonRows,
   scoreLabel,
@@ -319,11 +321,12 @@ function BenchmarkPerformancePane({
 }
 
 function emptyBenchmarkResult(benchmark: BenchmarkTaskRecord): BenchmarkResultRecord {
+  const costAxes = benchmarkCostAxes(undefined);
   return {
     benchmark_id: benchmark.benchmark_id,
     complexity_axis: benchmark.complexity_axis,
-    cost_axes: [{ key: 'parameter_count', label: 'Parameters' }],
-    frontiers: {},
+    cost_axes: costAxes,
+    frontiers: emptyFrontiersForCostAxes(costAxes),
     leaderboard: [],
     model_inspections: [],
     proposals: [],
@@ -341,7 +344,7 @@ function BenchmarkModelsPane({
   rows: ReturnType<typeof modelComparisonRows>;
   result: BenchmarkResultRecord | undefined;
 }) {
-  const costAxis = result?.cost_axes[0]?.key ?? 'parameter_count';
+  const costAxis = benchmarkCostAxes(result)[0]?.key ?? 'parameter_count';
   const [selectedModelKey, setSelectedModelKey] = useState(rows[0]?.model.model_key ?? '');
   const selectedRow =
     rows.find(({ model }) => model.model_key === selectedModelKey) ?? rows[0];

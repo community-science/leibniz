@@ -9,6 +9,8 @@ import { useState } from 'react';
 
 import {
   benchmarkPlotModel,
+  benchmarkCostAxes,
+  benchmarkCostAxis,
   costValue,
   formatCost,
   nextModelResultSort,
@@ -73,7 +75,9 @@ export function BenchmarkResultDashboard({
   queueItems?: WorkQueueItemRecord[];
   result: BenchmarkResultRecord;
 }) {
-  const [costAxis, setCostAxis] = useState(result.cost_axes[0]?.key ?? 'parameter_count');
+  const costAxes = benchmarkCostAxes(result);
+  const [selectedCostAxis, setSelectedCostAxis] = useState(costAxes[0]?.key ?? 'parameter_count');
+  const costAxis = benchmarkCostAxis(selectedCostAxis, costAxes);
   const [plotView, setPlotView] = useState<PlotView | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -103,11 +107,11 @@ export function BenchmarkResultDashboard({
   return (
     <section className="performance-section benchmark-result-dashboard">
       <BenchmarkFrontierPlot
-        costAxes={result.cost_axes}
+        costAxes={costAxes}
         costAxis={costAxis}
         model={plot}
         onCostAxisChange={(axis) => {
-          setCostAxis(axis);
+          setSelectedCostAxis(axis);
           setPlotView(null);
           setHoveredId(null);
           setSelectedId(null);
