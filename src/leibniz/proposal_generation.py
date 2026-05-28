@@ -38,6 +38,11 @@ from leibniz.observation_generation import load_observation_generator
 from leibniz.proposal_selection import CandidateProposalSelection, select_candidate_proposals
 from leibniz.proposals import ExperimentProposal, ExperimentProposalSet
 from leibniz.publications import SubmissionPublicationDocument
+from leibniz.tensor_runtime import (
+    TensorRuntimeDevice,
+    TensorRuntimeError,
+    validate_tensor_runtime_device,
+)
 
 __all__ = [
     "ProposalGenerationError",
@@ -74,6 +79,7 @@ class ProposalGenerationPlan:
     convergence_min_delta: float = 1e-3
     convergence_min_steps: int = 500
     target_validation_loss: float | None = None
+    tensor_device: TensorRuntimeDevice = "auto"
 
     def __post_init__(self) -> None:
         if type(self.scale) is not int or self.scale < 1:
@@ -116,6 +122,10 @@ class ProposalGenerationPlan:
             raise ProposalGenerationError("convergence_min_steps must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise ProposalGenerationError("target_validation_loss must be nonnegative")
+        try:
+            validate_tensor_runtime_device(self.tensor_device)
+        except TensorRuntimeError as error:
+            raise ProposalGenerationError(str(error)) from error
 
     @property
     def resolved_evaluation_sample_count(self) -> int:
@@ -282,6 +292,8 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                     str(float(plan.convergence_min_delta)),
                     "--convergence-min-steps",
                     str(plan.convergence_min_steps),
+                    "--device",
+                    plan.tensor_device,
                     *(
                         ()
                         if plan.target_validation_loss is None

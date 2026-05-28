@@ -28,6 +28,8 @@ def test_training_run_record_round_trips_protocol_and_history() -> None:
         "validation_sample_count": 2,
         "min_delta": 0.0,
         "patience": 0,
+        "tensor_runtime": "pytorch",
+        "tensor_device": "cpu",
         "validation_source": "training-batch",
     }
     assert record["validation_history"] == [

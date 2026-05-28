@@ -17,6 +17,11 @@ from leibniz.proposal_generation import (
     ProposalGenerationSummary,
     generate_experiment_proposals,
 )
+from leibniz.tensor_runtime import (
+    TensorRuntimeDevice,
+    TensorRuntimeError,
+    validate_tensor_runtime_device,
+)
 from leibniz.work_queues import (
     WorkQueueItem,
     load_work_queue_items,
@@ -58,6 +63,7 @@ class ActiveTrainingLoopPlan:
     convergence_min_delta: float = 1e-3
     convergence_min_steps: int = 500
     target_validation_loss: float | None = None
+    tensor_device: TensorRuntimeDevice = "auto"
     dry_run: bool = False
     retry_failed: bool = False
     progress_callback: Callable[[BenchmarkRunSummary], None] | None = None
@@ -105,6 +111,10 @@ class ActiveTrainingLoopPlan:
             raise ActiveTrainingLoopError("convergence_min_steps must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise ActiveTrainingLoopError("target_validation_loss must be nonnegative")
+        try:
+            validate_tensor_runtime_device(self.tensor_device)
+        except TensorRuntimeError as error:
+            raise ActiveTrainingLoopError(str(error)) from error
         if type(self.retry_failed) is not bool:
             raise ActiveTrainingLoopError("retry_failed must be boolean")
 
@@ -168,6 +178,7 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                 convergence_min_delta=plan.convergence_min_delta,
                 convergence_min_steps=plan.convergence_min_steps,
                 target_validation_loss=plan.target_validation_loss,
+                tensor_device=plan.tensor_device,
             )
         )
         benchmark_id = proposal_summary.benchmark_id
@@ -246,6 +257,7 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                         convergence_min_delta=plan.convergence_min_delta,
                         convergence_min_steps=plan.convergence_min_steps,
                         target_validation_loss=plan.target_validation_loss,
+                        tensor_device=plan.tensor_device,
                     ),
                     progress_callback=refresh_progress,
                 )

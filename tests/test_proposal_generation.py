@@ -29,6 +29,7 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
             sample_count=2,
             seed=101,
             train_steps=1,
+            tensor_device="cpu",
         )
     )
     measured = ArchitectureManifestDocument.from_bytes(_architecture_path.read_bytes()).manifest
@@ -93,6 +94,9 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
     assert "--schedule" in document.proposal_set.proposals[0].command
     assert "--validation-interval" in document.proposal_set.proposals[0].command
     assert "--evaluation-sample-count" in document.proposal_set.proposals[0].command
+    assert "--device" in document.proposal_set.proposals[0].command
+    command = document.proposal_set.proposals[0].command
+    assert command[command.index("--device") + 1] == "auto"
 
     result_summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
@@ -144,6 +148,8 @@ def test_cli_generates_experiment_proposals(
             "3",
             "--convergence-min-delta",
             "0.001",
+            "--device",
+            "cpu",
         ]
     )
 
