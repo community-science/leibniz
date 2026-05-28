@@ -795,7 +795,7 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
     )
     history = training_run.validation_history
     final = history[-1]
-    return {
+    record: dict[str, object] = {
         "status": training_run.status,
         "stop_reason": training_run.stop_reason,
         "steps_run": training_run.steps_run,
@@ -810,6 +810,10 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
         "validation_history": [point.to_record() for point in history],
         "artifacts": _training_artifact_references(run),
     }
+    throughput = run.training_summary.get("throughput")
+    if isinstance(throughput, Mapping):
+        record["throughput"] = dict(cast(Mapping[str, object], throughput))
+    return record
 
 
 def _training_artifact_references(run: _BenchmarkRunRecord) -> list[dict[str, object]]:
@@ -911,6 +915,40 @@ def _run_console_view_model(
                 ),
             )
         )
+        throughput = diagnostics.get("throughput")
+        if isinstance(throughput, Mapping):
+            throughput_record = cast(Mapping[str, object], throughput)
+            training_throughput = _as_mapping(
+                throughput_record.get("training"),
+                "training_diagnostics.throughput.training",
+            )
+            evaluation_throughput = _as_mapping(
+                throughput_record.get("evaluation"),
+                "training_diagnostics.throughput.evaluation",
+            )
+            roofline_comparison = _as_mapping(
+                throughput_record.get("roofline_comparison"),
+                "training_diagnostics.throughput.roofline_comparison",
+            )
+            sections.append(
+                _console_detail_entries_section(
+                    title="Throughput",
+                    entries=(
+                        (
+                            "Training",
+                            _console_samples_per_second(training_throughput),
+                        ),
+                        (
+                            "Evaluation",
+                            _console_samples_per_second(evaluation_throughput),
+                        ),
+                        (
+                            "Roofline",
+                            _console_string_value(roofline_comparison.get("status")),
+                        ),
+                    ),
+                )
+            )
         history = _as_sequence(
             diagnostics.get("validation_history"),
             "training_diagnostics.validation_history",
@@ -950,6 +988,13 @@ def _console_number_value(value: object, *, precision: int = 0) -> str:
     if precision == 0:
         return f"{value:,}" if isinstance(value, int) else f"{value:,.0f}"
     return f"{value:.{precision}f}"
+
+
+def _console_samples_per_second(record: Mapping[str, object]) -> str:
+    value = record.get("samples_per_second")
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        return "unknown"
+    return f"{float(value):,.1f}/s"
 
 
 def _console_validation_history_row(point: object) -> list[str]:
@@ -1887,6 +1932,51 @@ def _validate_training_diagnostics(record: Mapping[str, object]) -> None:
                 artifact_record.get("path"),
                 f"training_diagnostics.artifacts.{index}.path",
             )
+    if "throughput" in record:
+        _validate_throughput_record(
+            _as_mapping(record.get("throughput"), "training_diagnostics.throughput")
+        )
+
+
+def _validate_throughput_record(record: Mapping[str, object]) -> None:
+    _as_string(record.get("kind"), "training_diagnostics.throughput.kind")
+    _as_string(
+        record.get("tensor_runtime"),
+        "training_diagnostics.throughput.tensor_runtime",
+    )
+    _as_string(record.get("tensor_device"), "training_diagnostics.throughput.tensor_device")
+    for name in ("training", "validation", "evaluation"):
+        phase = _as_mapping(
+            record.get(name),
+            f"training_diagnostics.throughput.{name}",
+        )
+        _as_string(phase.get("kind"), f"training_diagnostics.throughput.{name}.kind")
+        _as_nonnegative_number(
+            phase.get("sample_count"),
+            f"training_diagnostics.throughput.{name}.sample_count",
+        )
+        _as_nonnegative_number(
+            phase.get("seconds"),
+            f"training_diagnostics.throughput.{name}.seconds",
+        )
+        _as_nonnegative_number(
+            phase.get("samples_per_second"),
+            f"training_diagnostics.throughput.{name}.samples_per_second",
+        )
+    roofline = _as_mapping(
+        record.get("roofline"),
+        "training_diagnostics.throughput.roofline",
+    )
+    _as_string(roofline.get("kind"), "training_diagnostics.throughput.roofline.kind")
+    _as_string(roofline.get("status"), "training_diagnostics.throughput.roofline.status")
+    comparison = _as_mapping(
+        record.get("roofline_comparison"),
+        "training_diagnostics.throughput.roofline_comparison",
+    )
+    _as_string(
+        comparison.get("status"),
+        "training_diagnostics.throughput.roofline_comparison.status",
+    )
 
 
 def _validate_proposal_result(record: Mapping[str, object]) -> None:

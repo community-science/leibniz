@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import math
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
@@ -17,11 +18,13 @@ __all__ = [
     "TensorRuntimeError",
     "TensorRuntimeDevice",
     "resolve_tensor_runtime",
+    "runtime_roofline_record",
     "validate_tensor_runtime_device",
 ]
 
 TensorRuntimeDevice = Literal["auto", "cpu", "cuda", "mps"]
 _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
+_roofline_cache: dict[str, dict[str, object]] = {}
 
 
 class TensorRuntimeError(ValueError):
@@ -299,6 +302,83 @@ def resolve_tensor_runtime(requested_device: TensorRuntimeDevice = "auto") -> Te
         device=torch.device(device_kind),
         device_kind=device_kind,
     )
+
+
+def runtime_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
+    """Return best-effort local hardware roofline metadata for a tensor runtime."""
+
+    key = str(runtime.device)
+    cached = _roofline_cache.get(key)
+    if cached is not None:
+        return dict(cached)
+    record = _calibrated_roofline_record(runtime)
+    _roofline_cache[key] = record
+    return dict(record)
+
+
+def _calibrated_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
+    record: dict[str, object] = {
+        "kind": "system-roofline",
+        "status": "unavailable",
+        "tensor_runtime": "pytorch",
+        "tensor_device": runtime.device_kind,
+        "method": "dense-matmul-calibration",
+    }
+    try:
+        torch = runtime.torch
+        size = 512
+        first = torch.randn((size, size), dtype=torch.float32, device=runtime.device)
+        second = torch.randn((size, size), dtype=torch.float32, device=runtime.device)
+        _synchronize_runtime(runtime)
+        with torch.no_grad():
+            for _ in range(1):
+                _ = first @ second
+        _synchronize_runtime(runtime)
+        repeats = 1
+        seconds = 0.0
+        while repeats <= 64 and seconds < 0.02:
+            started = _monotonic_seconds()
+            with torch.no_grad():
+                for _ in range(repeats):
+                    _ = first @ second
+            _synchronize_runtime(runtime)
+            seconds = _monotonic_seconds() - started
+            if seconds < 0.02:
+                repeats *= 2
+    except Exception as error:  # pragma: no cover - hardware/runtime dependent
+        record["reason"] = f"roofline calibration failed: {error}"
+        return record
+    if seconds <= 0:
+        record["reason"] = "roofline calibration completed too quickly to measure"
+        return record
+    record.update(
+        {
+            "status": "calibrated",
+            "calibration_seconds": seconds,
+            "calibration_matrix_size": size,
+            "calibration_repeats": repeats,
+            "peak_flops_per_second": (2.0 * size * size * size * repeats) / seconds,
+        }
+    )
+    if runtime.device_kind == "cuda":
+        cuda = getattr(runtime.torch, "cuda", None)
+        get_device_name = getattr(cuda, "get_device_name", None)
+        if callable(get_device_name):
+            record["device_name"] = str(get_device_name(runtime.device))
+    return record
+
+
+def _synchronize_runtime(runtime: TensorRuntime) -> None:
+    if runtime.device_kind == "cuda":
+        runtime.torch.cuda.synchronize(runtime.device)
+    elif runtime.device_kind == "mps":
+        synchronize = getattr(runtime.torch.mps, "synchronize", None)
+        if callable(synchronize):
+            synchronize()
+
+
+def _monotonic_seconds() -> float:
+    return time.perf_counter()
 
 
 def _resolve_device_kind(

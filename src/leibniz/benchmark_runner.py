@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,7 @@ from leibniz.tensor_runtime import (
     TensorRuntimeDevice,
     TensorRuntimeError,
     resolve_tensor_runtime,
+    runtime_roofline_record,
     validate_tensor_runtime_device,
 )
 from leibniz.training_runs import TrainingHistoryPoint, TrainingProtocol, TrainingRunRecord
@@ -60,6 +62,28 @@ _default_convergence_min_steps = 500
 class _TrainingResult:
     probabilities: tuple[tuple[float, ...], ...]
     training_run: TrainingRunRecord
+    throughput: Mapping[str, object]
+
+
+@dataclass(slots=True)
+class _ThroughputCounter:
+    seconds: float = 0.0
+    samples: int = 0
+
+    def add(self, *, seconds: float, samples: int) -> None:
+        self.seconds += max(0.0, float(seconds))
+        self.samples += samples
+
+    def to_record(self, *, kind: str) -> dict[str, object]:
+        record: dict[str, object] = {
+            "kind": kind,
+            "sample_count": self.samples,
+            "seconds": self.seconds,
+        }
+        record["samples_per_second"] = (
+            self.samples / self.seconds if self.samples > 0 and self.seconds > 0 else 0.0
+        )
+        return record
 
 
 @dataclass(slots=True)
@@ -243,12 +267,22 @@ def run_benchmark(
         benchmark_id=generator.benchmark_manifest.id,
         architecture_digest=architecture.digest,
     )
+    model_inspection = ModelInspectionRecord.from_architecture(
+        id=ProtocolIdentifier.parse(
+            f"model-inspections.{_identifier_atom(generator.benchmark_manifest.id)}."
+            f"{summary.run_slug}@0.1.0"
+        ),
+        architecture_manifest=architecture,
+    )
     if plan.dry_run:
         return summary
 
     progress_path = _training_progress_path(summary)
 
-    def publish_progress(training_run: TrainingRunRecord) -> None:
+    def publish_progress(
+        training_run: TrainingRunRecord,
+        throughput: Mapping[str, object],
+    ) -> None:
         _write_document_atomic(
             progress_path,
             _training_progress_record(
@@ -257,6 +291,7 @@ def run_benchmark(
                 architecture=architecture,
                 outcome_space=outcome_space,
                 training_run=training_run,
+                throughput=throughput,
             ),
         )
         if progress_callback is not None:
@@ -279,6 +314,7 @@ def run_benchmark(
         convergence_min_steps=plan.convergence_min_steps,
         target_validation_loss=plan.target_validation_loss,
         tensor_device=plan.tensor_device,
+        inference_flops=model_inspection.cost_summary.inference_flops,
         seed=plan.seed,
         progress_callback=publish_progress,
     )
@@ -291,14 +327,6 @@ def run_benchmark(
     )
     dataset = MeasurementDataset(measurements=measurements)
     dataset.validate_manifest(generator.benchmark_manifest, scale=plan.scale)
-    model_inspection = ModelInspectionRecord.from_architecture(
-        id=ProtocolIdentifier.parse(
-            f"model-inspections.{_identifier_atom(generator.benchmark_manifest.id)}."
-            f"{summary.run_slug}@0.1.0"
-        ),
-        architecture_manifest=architecture,
-    )
-
     _write_document(summary.measurement_dataset_path, dataset.to_record())
     _write_document(summary.model_inspection_path, model_inspection.to_record())
     _write_document(
@@ -321,6 +349,7 @@ def run_benchmark(
             "tensor_runtime": "pytorch",
             "tensor_device": training_result.training_run.protocol.tensor_device,
             "training_run": training_result.training_run.to_record(),
+            "throughput": training_result.throughput,
             "sampled_competence": _sampled_competence_record(
                 generator=generator,
                 batch=evaluation_batch,
@@ -413,8 +442,9 @@ def _train_and_predict(
     convergence_min_steps: int,
     target_validation_loss: float | None,
     tensor_device: TensorRuntimeDevice,
+    inference_flops: int | None,
     seed: int,
-    progress_callback: Callable[[TrainingRunRecord], None] | None = None,
+    progress_callback: Callable[[TrainingRunRecord, Mapping[str, object]], None] | None = None,
 ) -> _TrainingResult:
     try:
         runtime = resolve_tensor_runtime(tensor_device)
@@ -439,6 +469,9 @@ def _train_and_predict(
         max_steps=train_steps,
         min_delta=convergence_min_delta,
     )
+    training_counter = _ThroughputCounter()
+    validation_counter = _ThroughputCounter()
+    evaluation_counter = _ThroughputCounter()
 
     def batch_for_seed(batch_seed: int) -> tuple[Any, Any]:
         generated = generator.sample_formation_batch(
@@ -462,6 +495,9 @@ def _train_and_predict(
         min_delta=convergence_min_delta,
         min_steps=convergence_min_steps,
         target_validation_loss=target_validation_loss,
+        batch_size=sample_count,
+        training_counter=training_counter,
+        validation_counter=validation_counter,
         on_validation=lambda history: (
             progress_callback(
                 _running_training_run_record(
@@ -477,12 +513,21 @@ def _train_and_predict(
                     convergence_min_steps=convergence_min_steps,
                     tensor_device=runtime.device_kind,
                     validation_history=tuple(history),
-                )
+                ),
+                _throughput_record(
+                    runtime_device=runtime.device_kind,
+                    training_counter=training_counter,
+                    validation_counter=validation_counter,
+                    evaluation_counter=evaluation_counter,
+                    roofline=runtime_roofline_record(runtime),
+                    inference_flops=inference_flops,
+                ),
             )
             if progress_callback is not None
             else None
         ),
     )
+    evaluation_started = time.perf_counter()
     eval_fields, _eval_labels = _batch_tensors(
         torch=torch,
         batch=evaluation_batch,
@@ -492,6 +537,10 @@ def _train_and_predict(
     module.eval()
     with torch.no_grad():
         predictions = torch.softmax(module(eval_fields), dim=1).tolist()
+    evaluation_counter.add(
+        seconds=time.perf_counter() - evaluation_started,
+        samples=len(evaluation_batch.samples),
+    )
     training_run = _training_run_record(
         seed=seed,
         batch_size=sample_count,
@@ -509,6 +558,14 @@ def _train_and_predict(
     return _TrainingResult(
         probabilities=tuple(_renormalized_probabilities(row) for row in predictions),
         training_run=training_run,
+        throughput=_throughput_record(
+            runtime_device=runtime.device_kind,
+            training_counter=training_counter,
+            validation_counter=validation_counter,
+            evaluation_counter=evaluation_counter,
+            roofline=runtime_roofline_record(runtime),
+            inference_flops=inference_flops,
+        ),
     )
 
 
@@ -527,6 +584,9 @@ def _train_until_convergence(
     min_delta: float,
     min_steps: int,
     target_validation_loss: float | None,
+    batch_size: int,
+    training_counter: _ThroughputCounter,
+    validation_counter: _ThroughputCounter,
     on_validation: Callable[[tuple[TrainingHistoryPoint, ...]], None] | None = None,
 ) -> list[TrainingHistoryPoint]:
     validation_history: list[TrainingHistoryPoint] = []
@@ -537,6 +597,7 @@ def _train_until_convergence(
 
     def append_validation(*, step: int, check: int) -> None:
         nonlocal best_loss, best_step, best_check, stale_checks
+        validation_started = time.perf_counter()
         fields, labels = validation_batch(check)
         validation_loss = _validation_loss(
             torch=torch,
@@ -557,6 +618,10 @@ def _train_until_convergence(
             learning_rates = scheduler.learning_rates()
         else:
             learning_rates = tuple(float(group["lr"]) for group in optimizer.param_groups)
+        validation_counter.add(
+            seconds=time.perf_counter() - validation_started,
+            samples=batch_size,
+        )
         validation_history.append(
             TrainingHistoryPoint(
                 step=step,
@@ -575,6 +640,7 @@ def _train_until_convergence(
     append_validation(step=0, check=0)
     validation_check = 1
     for step in range(1, max_steps + 1):
+        training_started = time.perf_counter()
         fields, labels = train_batch(step)
         module.train()
         optimizer.zero_grad(set_to_none=True)
@@ -583,6 +649,10 @@ def _train_until_convergence(
         optimizer.step()
         if scheduler is not None:
             scheduler.step_after_optimizer()
+        training_counter.add(
+            seconds=time.perf_counter() - training_started,
+            samples=batch_size,
+        )
         if step % validation_interval != 0 and step != max_steps:
             continue
         append_validation(step=step, check=validation_check)
@@ -728,6 +798,7 @@ def _training_progress_record(
     architecture: ArchitectureManifest,
     outcome_space: OutcomeSpace,
     training_run: TrainingRunRecord,
+    throughput: Mapping[str, object],
 ) -> Mapping[str, object]:
     inspection = ModelInspectionRecord.from_architecture(
         id=ProtocolIdentifier.parse(
@@ -763,6 +834,7 @@ def _training_progress_record(
             else float(plan.target_validation_loss)
         ),
         "training_run": training_run.to_record(),
+        "throughput": throughput,
         "architecture": inspection.architecture.to_record(),
         "cost_summary": inspection.cost_summary.to_record(),
         "model_inspection": inspection.to_record(),
@@ -780,6 +852,96 @@ def _validation_competence(*, best_validation_loss: float, outcome_count: int) -
     if reference_cross_entropy <= 0:
         return 0.0
     return max(0.0, min(1.0, 1.0 - best_validation_loss / reference_cross_entropy))
+
+
+def _throughput_record(
+    *,
+    runtime_device: str,
+    training_counter: _ThroughputCounter,
+    validation_counter: _ThroughputCounter,
+    evaluation_counter: _ThroughputCounter,
+    roofline: Mapping[str, object],
+    inference_flops: int | None,
+) -> dict[str, object]:
+    training = training_counter.to_record(kind="training-throughput")
+    validation = validation_counter.to_record(kind="validation-throughput")
+    evaluation = evaluation_counter.to_record(kind="evaluation-throughput")
+    return {
+        "kind": "benchmark-throughput",
+        "tensor_runtime": "pytorch",
+        "tensor_device": runtime_device,
+        "training": training,
+        "validation": validation,
+        "evaluation": evaluation,
+        "roofline": dict(roofline),
+        "roofline_comparison": _roofline_comparison(
+            training=training,
+            validation=validation,
+            evaluation=evaluation,
+            roofline=roofline,
+            inference_flops=inference_flops,
+        ),
+    }
+
+
+def _roofline_comparison(
+    *,
+    training: Mapping[str, object],
+    validation: Mapping[str, object],
+    evaluation: Mapping[str, object],
+    roofline: Mapping[str, object],
+    inference_flops: int | None,
+) -> dict[str, object]:
+    peak = roofline.get("peak_flops_per_second")
+    if (
+        not isinstance(peak, int | float)
+        or not math.isfinite(float(peak))
+        or peak <= 0
+        or inference_flops is None
+        or inference_flops <= 0
+    ):
+        return {
+            "status": "unavailable",
+            "reason": roofline.get(
+                "reason",
+                "system roofline or per-sample work estimate is unavailable",
+            ),
+        }
+    peak_value = float(peak)
+    inference_flops_value = float(inference_flops)
+    training_flops_per_sample = 3.0 * inference_flops_value
+    return {
+        "status": "available",
+        "peak_flops_per_second": peak_value,
+        "inference_flops_per_sample": inference_flops_value,
+        "training_flops_per_sample_estimate": training_flops_per_sample,
+        "training_fraction_of_roofline": _throughput_fraction(
+            training,
+            peak_value,
+            training_flops_per_sample,
+        ),
+        "validation_fraction_of_roofline": _throughput_fraction(
+            validation,
+            peak_value,
+            inference_flops_value,
+        ),
+        "evaluation_fraction_of_roofline": _throughput_fraction(
+            evaluation,
+            peak_value,
+            inference_flops_value,
+        ),
+    }
+
+
+def _throughput_fraction(
+    record: Mapping[str, object],
+    peak_flops_per_second: float,
+    flops_per_sample: float,
+) -> float:
+    measured = record.get("samples_per_second")
+    if not isinstance(measured, int | float) or not math.isfinite(float(measured)):
+        return 0.0
+    return max(0.0, (float(measured) * flops_per_sample) / peak_flops_per_second)
 
 
 def _make_optimizer(

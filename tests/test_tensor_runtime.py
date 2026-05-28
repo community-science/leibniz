@@ -14,6 +14,7 @@ from leibniz.tensor_runtime import (
     FormationTensorCache,
     TensorRuntimeError,
     resolve_tensor_runtime,
+    runtime_roofline_record,
     validate_tensor_runtime_device,
 )
 
@@ -54,6 +55,18 @@ def test_resolve_tensor_runtime_rejects_unavailable_explicit_device() -> None:
     else:
         with pytest.raises(TensorRuntimeError, match="cuda is not available"):
             resolve_tensor_runtime("cuda")
+
+
+def test_runtime_roofline_record_calibrates_cpu_ceiling() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+
+    record = runtime_roofline_record(runtime)
+
+    assert record["kind"] == "system-roofline"
+    assert record["status"] == "calibrated"
+    assert record["tensor_runtime"] == "pytorch"
+    assert record["tensor_device"] == "cpu"
+    assert cast(float, record["peak_flops_per_second"]) > 0
 
 
 def test_formation_tensor_cache_matches_unvaried_pure_digits_formation() -> None:
