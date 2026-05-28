@@ -5,6 +5,7 @@ import pytest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlanDocument
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
+from leibniz.observation_generation import sample_variation_transform_coordinates
 from leibniz.tensor_runtime import (
     FormationTensorCache,
     TensorRuntimeError,
@@ -77,6 +78,48 @@ def test_formation_tensor_cache_matches_unvaried_pure_digits_formation() -> None
     assert tuple(tensor.reshape(-1).cpu().tolist()) == pure.field.values
 
 
+def test_formation_tensor_cache_matches_varied_pure_digits_formation() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    declaration = ObservationFormationDeclarationDocument.from_bytes(
+        (_digits_benchmark_root / "observation_formation.json").read_bytes()
+    ).declaration
+    plan = MaterializationPlanDocument.from_bytes(
+        (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
+    ).plan
+    sequence = (1, 2, 3)
+    resolution = plan.resolution_assignment.require_axis(declaration.resolution_axis)
+    coordinates = tuple(
+        sample_variation_transform_coordinates(
+            transform=declaration.variation_transform,
+            seed=plan.seed,
+            sample_index=7,
+            slot_index=slot_index,
+        )
+        for slot_index in range(len(sequence))
+    )
+    cache = FormationTensorCache(runtime=runtime, formation=declaration)
+
+    pure = declaration.form_observation(
+        id=ProtocolIdentifier.parse("benchmarks.digits.observations.tensor-varied@0.1.0"),
+        plan=plan,
+        component_sequence=sequence,
+        variation_coordinates=coordinates,
+    )
+    tensor = cache.varied_component_sequence_tensor(
+        resolution=resolution,
+        component_sequence=sequence,
+        variation_coordinates=coordinates,
+    )
+
+    pure_tensor = runtime.torch.tensor(
+        pure.field.values,
+        dtype=runtime.torch.float32,
+        device=runtime.device,
+    ).reshape(pure.field.shape)
+    assert tensor.shape == pure.field.shape
+    assert runtime.torch.allclose(tensor, pure_tensor, atol=2e-5)
+
+
 def test_formation_tensor_cache_reuses_component_tensors() -> None:
     runtime = resolve_tensor_runtime("cpu")
     declaration = ObservationFormationDeclarationDocument.from_bytes(
@@ -122,4 +165,31 @@ def test_formation_tensor_cache_rejects_invalid_component_requests() -> None:
             slot_count=3,
             slot_index=0,
             component_index=len(declaration.components),
+        )
+
+
+def test_formation_tensor_cache_rejects_invalid_variation_coordinates() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    declaration = ObservationFormationDeclarationDocument.from_bytes(
+        (_digits_benchmark_root / "observation_formation.json").read_bytes()
+    ).declaration
+    cache = FormationTensorCache(runtime=runtime, formation=declaration)
+
+    with pytest.raises(TensorRuntimeError, match="length must match slot count"):
+        cache.varied_component_sequence_tensor(
+            resolution=96,
+            component_sequence=(1, 2),
+            variation_coordinates=(),
+        )
+    coordinate = sample_variation_transform_coordinates(
+        transform=declaration.variation_transform,
+        seed=101,
+        sample_index=0,
+        slot_index=1,
+    )
+    with pytest.raises(TensorRuntimeError, match="slot_index must match"):
+        cache.varied_component_sequence_tensor(
+            resolution=96,
+            component_sequence=(1,),
+            variation_coordinates=(coordinate,),
         )

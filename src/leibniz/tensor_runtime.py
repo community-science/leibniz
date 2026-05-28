@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Sequence
+import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -67,6 +68,73 @@ class FormationTensorCache:
             for slot_index, component_index in enumerate(sequence)
         ]
         return self.runtime.torch.stack(tensors).amax(dim=0)
+
+    def varied_component_sequence_tensor(
+        self,
+        *,
+        resolution: int,
+        component_sequence: Sequence[int],
+        variation_coordinates: Sequence[Mapping[str, object]],
+    ) -> Any:
+        """Return a formed-field tensor with recorded per-slot variation applied."""
+
+        _require_positive_integer(resolution, "resolution")
+        sequence = tuple(component_sequence)
+        if not sequence:
+            raise TensorRuntimeError("component_sequence must not be empty")
+        coordinates = tuple(variation_coordinates)
+        if len(coordinates) != len(sequence):
+            raise TensorRuntimeError("variation_coordinates length must match slot count")
+        source_tensors: list[Any] = []
+        affine_rows: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
+        value_scales: list[float] = []
+        for slot_index, component_index in enumerate(sequence):
+            coordinate = _variation_coordinate(
+                coordinates[slot_index],
+                expected_slot_index=slot_index,
+            )
+            source_tensors.append(
+                self.component_tensor(
+                    resolution=resolution,
+                    slot_count=len(sequence),
+                    slot_index=slot_index,
+                    component_index=component_index,
+                )
+            )
+            affine_rows.append(
+                _affine_grid_row(
+                    coordinate=coordinate,
+                    slot_count=len(sequence),
+                    slot_index=slot_index,
+                    slot_axis=self.formation.slot_composition.slot_axis,
+                )
+            )
+            value_scales.append(coordinate.value_scale)
+        torch = self.runtime.torch
+        sources = torch.stack(source_tensors)
+        theta = torch.tensor(
+            affine_rows,
+            dtype=torch.float32,
+            device=self.runtime.device,
+        )
+        grid = torch.nn.functional.affine_grid(
+            theta,
+            sources.shape,
+            align_corners=False,
+        )
+        transformed = torch.nn.functional.grid_sample(
+            sources,
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=False,
+        )
+        scales = torch.tensor(
+            value_scales,
+            dtype=torch.float32,
+            device=self.runtime.device,
+        ).reshape((len(value_scales), 1, 1, 1))
+        return torch.clamp(transformed * scales, min=0.0, max=1.0).amax(dim=0)
 
     def component_tensor(
         self,
@@ -196,3 +264,154 @@ def _require_positive_integer(value: int, name: str) -> None:
 def _require_slot_index(*, slot_index: int, slot_count: int) -> None:
     if type(slot_index) is not int or slot_index < 0 or slot_index >= slot_count:
         raise TensorRuntimeError("slot_index must be within slot_count")
+
+
+@dataclass(frozen=True, slots=True)
+class _VariationCoordinate:
+    slot_index: int
+    translation: tuple[float, float]
+    scale: tuple[float, float]
+    rotation_degrees: float
+    shear_degrees: float
+    value_scale: float
+
+
+def _variation_coordinate(
+    record: Mapping[str, object],
+    *,
+    expected_slot_index: int,
+) -> _VariationCoordinate:
+    if str(record.get("kind")) != "field-variation-transform-coordinate":
+        raise TensorRuntimeError(
+            "variation coordinate kind must be field-variation-transform-coordinate"
+        )
+    slot_index = _integer(record.get("slot_index"), "slot_index")
+    if slot_index != expected_slot_index:
+        raise TensorRuntimeError("variation coordinate slot_index must match coordinate position")
+    spatial = _mapping(record.get("spatial_affine"), "spatial_affine")
+    if str(spatial.get("kind")) != "spatial-affine-coordinate":
+        raise TensorRuntimeError("spatial_affine kind must be spatial-affine-coordinate")
+    if str(spatial.get("coordinate_system")) != "normalized-field":
+        raise TensorRuntimeError("spatial_affine coordinate_system must be normalized-field")
+    value_scale = _mapping(record.get("value_scale"), "value_scale")
+    if str(value_scale.get("kind")) != "value-scale-coordinate":
+        raise TensorRuntimeError("value_scale kind must be value-scale-coordinate")
+    scale = _pair(spatial.get("scale"), "spatial_affine.scale")
+    if scale[0] <= 0.0 or scale[1] <= 0.0:
+        raise TensorRuntimeError("spatial_affine.scale values must be positive")
+    scale_value = _number(value_scale.get("scale"), "value_scale.scale")
+    if scale_value <= 0.0:
+        raise TensorRuntimeError("value_scale.scale must be positive")
+    return _VariationCoordinate(
+        slot_index=slot_index,
+        translation=_pair(spatial.get("translation"), "spatial_affine.translation"),
+        scale=scale,
+        rotation_degrees=_single_number(
+            spatial.get("rotation_degrees"),
+            "spatial_affine.rotation_degrees",
+        ),
+        shear_degrees=_single_number(
+            spatial.get("shear_degrees"),
+            "spatial_affine.shear_degrees",
+        ),
+        value_scale=scale_value,
+    )
+
+
+def _affine_grid_row(
+    *,
+    coordinate: _VariationCoordinate,
+    slot_count: int,
+    slot_index: int,
+    slot_axis: str,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    inverse = _inverse_affine_matrix(coordinate)
+    center = _slot_center(slot_count=slot_count, slot_index=slot_index, axis=slot_axis)
+    center_x = 2.0 * center[0] - 1.0
+    center_y = 2.0 * center[1] - 1.0
+    translation_x = 2.0 * coordinate.translation[0]
+    translation_y = 2.0 * coordinate.translation[1]
+    return (
+        (
+            inverse[0][0],
+            inverse[0][1],
+            center_x
+            - inverse[0][0] * (center_x + translation_x)
+            - inverse[0][1] * (center_y + translation_y),
+        ),
+        (
+            inverse[1][0],
+            inverse[1][1],
+            center_y
+            - inverse[1][0] * (center_x + translation_x)
+            - inverse[1][1] * (center_y + translation_y),
+        ),
+    )
+
+
+def _inverse_affine_matrix(
+    coordinate: _VariationCoordinate,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    angle = math.radians(coordinate.rotation_degrees)
+    shear = math.tan(math.radians(coordinate.shear_degrees))
+    scale_x, scale_y = coordinate.scale
+    cos_angle = math.cos(angle)
+    sin_angle = math.sin(angle)
+    a = cos_angle * scale_x
+    b = (cos_angle * shear - sin_angle) * scale_y
+    c = sin_angle * scale_x
+    d = (sin_angle * shear + cos_angle) * scale_y
+    determinant = a * d - b * c
+    if not math.isfinite(determinant) or determinant == 0.0:
+        raise TensorRuntimeError("variation affine transform is singular")
+    return ((d / determinant, -b / determinant), (-c / determinant, a / determinant))
+
+
+def _slot_center(
+    *,
+    slot_count: int,
+    slot_index: int,
+    axis: str,
+) -> tuple[float, float]:
+    if axis == "x":
+        return ((slot_index + 0.5) / slot_count, 0.5)
+    return (0.5, (slot_index + 0.5) / slot_count)
+
+
+def _mapping(value: object, name: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise TensorRuntimeError(f"{name} must be a record")
+    return cast(Mapping[str, object], value)
+
+
+def _pair(value: object, name: str) -> tuple[float, float]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        raise TensorRuntimeError(f"{name} must contain two values")
+    sequence = cast(Sequence[object], value)
+    if len(sequence) != 2:
+        raise TensorRuntimeError(f"{name} must contain two values")
+    return (_number(sequence[0], f"{name}.0"), _number(sequence[1], f"{name}.1"))
+
+
+def _single_number(value: object, name: str) -> float:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        raise TensorRuntimeError(f"{name} must contain one value")
+    sequence = cast(Sequence[object], value)
+    if len(sequence) != 1:
+        raise TensorRuntimeError(f"{name} must contain one value")
+    return _number(sequence[0], f"{name}.0")
+
+
+def _number(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TensorRuntimeError(f"{name} must be a number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise TensorRuntimeError(f"{name} must be finite")
+    return number
+
+
+def _integer(value: object, name: str) -> int:
+    if type(value) is not int:
+        raise TensorRuntimeError(f"{name} must be an integer")
+    return value
