@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import random
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 
 from leibniz.artifacts import ArtifactReference
@@ -19,11 +19,14 @@ __all__ = [
     "ComponentMark",
     "FieldObservation",
     "FormedObservation",
+    "NuisanceTransformDeclaration",
     "ObservationComponent",
     "ObservationFormationDeclaration",
     "ObservationFormationDeclarationDocument",
     "ObservationFormationValidationError",
     "SlotComposition",
+    "SpatialAffineNuisance",
+    "ValueScaleNuisance",
 ]
 
 _interpreter = "field-mark-composition@0.1.0"
@@ -61,6 +64,44 @@ _output_field_record = RecordSpec(
         "resolution_axis": FieldSpec(kind="string"),
     }
 )
+_spatial_affine_nuisance_record = RecordSpec(
+    fields={
+        "kind": FieldSpec(kind="string"),
+        "coordinate_system": FieldSpec(kind="string"),
+        "spatial_rank": FieldSpec(kind="integer"),
+        "translation": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="sequence", item=FieldSpec(kind="number")),
+        ),
+        "scale": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="sequence", item=FieldSpec(kind="number")),
+        ),
+        "rotation_degrees": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="number"),
+            required=False,
+        ),
+        "shear_degrees": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="number"),
+            required=False,
+        ),
+    }
+)
+_value_scale_nuisance_record = RecordSpec(
+    fields={
+        "kind": FieldSpec(kind="string"),
+        "scale": FieldSpec(kind="sequence", item=FieldSpec(kind="number")),
+    }
+)
+_nuisance_transform_record = RecordSpec(
+    fields={
+        "kind": FieldSpec(kind="string"),
+        "spatial_affine": FieldSpec(kind="record", required=False),
+        "value_scale": FieldSpec(kind="record", required=False),
+    }
+)
 _observation_formation_declaration_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
@@ -68,6 +109,7 @@ _observation_formation_declaration_record = RecordSpec(
         "interpreter": FieldSpec(kind="string"),
         "output_field": FieldSpec(kind="record"),
         "slot_composition": FieldSpec(kind="record"),
+        "nuisance_transform": FieldSpec(kind="record", required=False),
         "components": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
     }
 )
@@ -211,6 +253,203 @@ class SlotComposition:
 
 
 @dataclass(frozen=True, slots=True)
+class SpatialAffineNuisance:
+    """Declared spatial affine nuisance bounds in normalized field coordinates."""
+
+    kind: str
+    coordinate_system: str
+    spatial_rank: int
+    translation: tuple[tuple[float, float], ...]
+    scale: tuple[tuple[float, float], ...]
+    rotation_degrees: tuple[float, ...] = ()
+    shear_degrees: tuple[float, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.kind != "spatial-affine":
+            raise ObservationFormationValidationError(
+                f"unsupported spatial affine nuisance kind: {self.kind}"
+            )
+        if self.coordinate_system != "normalized-field":
+            raise ObservationFormationValidationError(
+                "spatial affine coordinate_system must be normalized-field"
+            )
+        if type(self.spatial_rank) is not int or self.spatial_rank < 1:
+            raise ObservationFormationValidationError("spatial_rank must be positive")
+        if len(self.translation) != self.spatial_rank:
+            raise ObservationFormationValidationError(
+                "translation bounds length must equal spatial_rank"
+            )
+        if len(self.scale) != self.spatial_rank:
+            raise ObservationFormationValidationError(
+                "scale bounds length must equal spatial_rank"
+            )
+        for index, bounds in enumerate(self.translation):
+            _validate_interval(bounds, field=f"translation.{index}")
+        for index, bounds in enumerate(self.scale):
+            _validate_interval(bounds, field=f"scale.{index}", positive=True)
+        plane_count = self.spatial_rank * (self.spatial_rank - 1) // 2
+        if len(self.rotation_degrees) != plane_count:
+            raise ObservationFormationValidationError(
+                "rotation_degrees length must match spatial coordinate plane count"
+            )
+        if len(self.shear_degrees) != plane_count:
+            raise ObservationFormationValidationError(
+                "shear_degrees length must match spatial coordinate plane count"
+            )
+        for index, value in enumerate((*self.rotation_degrees, *self.shear_degrees)):
+            if not math.isfinite(value) or value < 0:
+                field = (
+                    "rotation_degrees"
+                    if index < len(self.rotation_degrees)
+                    else "shear_degrees"
+                )
+                raise ObservationFormationValidationError(
+                    f"{field} values must be finite nonnegative numbers"
+                )
+
+    @classmethod
+    def identity(cls, *, spatial_rank: int) -> SpatialAffineNuisance:
+        return cls(
+            kind="spatial-affine",
+            coordinate_system="normalized-field",
+            spatial_rank=spatial_rank,
+            translation=tuple((0.0, 0.0) for _axis in range(spatial_rank)),
+            scale=tuple((1.0, 1.0) for _axis in range(spatial_rank)),
+            rotation_degrees=tuple(
+                0.0 for _plane in range(spatial_rank * (spatial_rank - 1) // 2)
+            ),
+            shear_degrees=tuple(
+                0.0 for _plane in range(spatial_rank * (spatial_rank - 1) // 2)
+            ),
+        )
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> SpatialAffineNuisance:
+        try:
+            validated = _spatial_affine_nuisance_record.validate(record)
+        except ValueError as error:
+            raise ObservationFormationValidationError(str(error)) from error
+        spatial_rank = _as_int(validated["spatial_rank"], field="spatial_rank")
+        plane_count = spatial_rank * (spatial_rank - 1) // 2
+        return cls(
+            kind=str(validated["kind"]),
+            coordinate_system=str(validated["coordinate_system"]),
+            spatial_rank=spatial_rank,
+            translation=_interval_sequence(validated["translation"], field="translation"),
+            scale=_interval_sequence(validated["scale"], field="scale"),
+            rotation_degrees=_number_sequence(
+                validated.get("rotation_degrees", tuple(0.0 for _plane in range(plane_count))),
+                field="rotation_degrees",
+            ),
+            shear_degrees=_number_sequence(
+                validated.get("shear_degrees", tuple(0.0 for _plane in range(plane_count))),
+                field="shear_degrees",
+            ),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "coordinate_system": self.coordinate_system,
+            "spatial_rank": self.spatial_rank,
+            "translation": [list(bounds) for bounds in self.translation],
+            "scale": [list(bounds) for bounds in self.scale],
+            "rotation_degrees": list(self.rotation_degrees),
+            "shear_degrees": list(self.shear_degrees),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ValueScaleNuisance:
+    """Declared scalar intensity nuisance bounds."""
+
+    kind: str
+    scale: tuple[float, float]
+
+    def __post_init__(self) -> None:
+        if self.kind != "value-scale":
+            raise ObservationFormationValidationError(
+                f"unsupported value scale nuisance kind: {self.kind}"
+            )
+        _validate_interval(self.scale, field="value_scale.scale", positive=True)
+
+    @classmethod
+    def identity(cls) -> ValueScaleNuisance:
+        return cls(kind="value-scale", scale=(1.0, 1.0))
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ValueScaleNuisance:
+        try:
+            validated = _value_scale_nuisance_record.validate(record)
+        except ValueError as error:
+            raise ObservationFormationValidationError(str(error)) from error
+        return cls(
+            kind=str(validated["kind"]),
+            scale=_interval(validated["scale"], field="value_scale.scale"),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "scale": list(self.scale),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class NuisanceTransformDeclaration:
+    """Declared nuisance transforms available to observation formation."""
+
+    kind: str
+    spatial_affine: SpatialAffineNuisance
+    value_scale: ValueScaleNuisance
+
+    def __post_init__(self) -> None:
+        if self.kind != "field-nuisance-transform":
+            raise ObservationFormationValidationError(
+                f"unsupported nuisance transform kind: {self.kind}"
+            )
+
+    @classmethod
+    def identity(cls, *, spatial_rank: int = 2) -> NuisanceTransformDeclaration:
+        return cls(
+            kind="field-nuisance-transform",
+            spatial_affine=SpatialAffineNuisance.identity(spatial_rank=spatial_rank),
+            value_scale=ValueScaleNuisance.identity(),
+        )
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> NuisanceTransformDeclaration:
+        try:
+            validated = _nuisance_transform_record.validate(record)
+        except ValueError as error:
+            raise ObservationFormationValidationError(str(error)) from error
+        return cls(
+            kind=str(validated["kind"]),
+            spatial_affine=(
+                SpatialAffineNuisance.identity(spatial_rank=2)
+                if "spatial_affine" not in validated
+                else SpatialAffineNuisance.from_record(
+                    _as_mapping(validated["spatial_affine"], field="spatial_affine")
+                )
+            ),
+            value_scale=(
+                ValueScaleNuisance.identity()
+                if "value_scale" not in validated
+                else ValueScaleNuisance.from_record(
+                    _as_mapping(validated["value_scale"], field="value_scale")
+                )
+            ),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "spatial_affine": self.spatial_affine.to_record(),
+            "value_scale": self.value_scale.to_record(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class FieldObservation:
     """A formed dense scalar field in channel-first square layout."""
 
@@ -302,6 +541,9 @@ class ObservationFormationDeclaration:
     resolution_axis: str
     slot_composition: SlotComposition
     components: tuple[ObservationComponent, ...]
+    nuisance_transform: NuisanceTransformDeclaration = field(
+        default_factory=NuisanceTransformDeclaration.identity
+    )
 
     def __post_init__(self) -> None:
         try:
@@ -354,6 +596,13 @@ class ObservationFormationDeclaration:
             components=tuple(
                 ObservationComponent.from_record(_as_mapping(component, field="components"))
                 for component in _as_sequence(validated["components"], field="components")
+            ),
+            nuisance_transform=(
+                NuisanceTransformDeclaration.identity()
+                if "nuisance_transform" not in validated
+                else NuisanceTransformDeclaration.from_record(
+                    _as_mapping(validated["nuisance_transform"], field="nuisance_transform")
+                )
             ),
         )
 
@@ -425,6 +674,7 @@ class ObservationFormationDeclaration:
                 "resolution_axis": self.resolution_axis,
             },
             "slot_composition": self.slot_composition.to_record(),
+            "nuisance_transform": self.nuisance_transform.to_record(),
             "components": [component.to_record() for component in self.components],
         }
 
@@ -598,6 +848,45 @@ def _point(value: object, *, field: str) -> tuple[float, float]:
         _as_float(sequence[0], field=f"{field}.0"),
         _as_float(sequence[1], field=f"{field}.1"),
     )
+
+
+def _interval(value: object, *, field: str) -> tuple[float, float]:
+    sequence = _as_sequence(value, field=field)
+    if len(sequence) != 2:
+        raise ObservationFormationValidationError(f"{field}: expected two bounds")
+    return (
+        _as_float(sequence[0], field=f"{field}.0"),
+        _as_float(sequence[1], field=f"{field}.1"),
+    )
+
+
+def _interval_sequence(value: object, *, field: str) -> tuple[tuple[float, float], ...]:
+    return tuple(
+        _interval(item, field=f"{field}.{index}")
+        for index, item in enumerate(_as_sequence(value, field=field))
+    )
+
+
+def _number_sequence(value: object, *, field: str) -> tuple[float, ...]:
+    return tuple(
+        _as_float(item, field=f"{field}.{index}")
+        for index, item in enumerate(_as_sequence(value, field=field))
+    )
+
+
+def _validate_interval(
+    interval: tuple[float, float],
+    *,
+    field: str,
+    positive: bool = False,
+) -> None:
+    low, high = interval
+    if not math.isfinite(low) or not math.isfinite(high):
+        raise ObservationFormationValidationError(f"{field} bounds must be finite")
+    if low > high:
+        raise ObservationFormationValidationError(f"{field} lower bound must not exceed upper")
+    if positive and low <= 0:
+        raise ObservationFormationValidationError(f"{field} bounds must be positive")
 
 
 def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
