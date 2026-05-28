@@ -147,22 +147,83 @@ class FormationTensorCache:
 
         if not outcome_ids:
             raise TensorRuntimeError("outcome_ids must not be empty")
-        fields = self.runtime.torch.stack(
-            [
-                self.varied_component_sequence_tensor(
-                    resolution=sample.resolution,
-                    component_sequence=sample.component_sequence,
-                    variation_coordinates=sample.variation_coordinates,
-                )
-                for sample in batch.samples
-            ]
-        )
+        fields = self._varied_batch_tensor(batch=batch)
         labels = self.runtime.torch.tensor(
             [outcome_ids.index(sample.outcome_id) for sample in batch.samples],
             dtype=self.runtime.torch.long,
             device=self.runtime.device,
         )
         return fields, labels
+
+    def _varied_batch_tensor(self, *, batch: GeneratedFormationBatch) -> Any:
+        sample_count = len(batch.samples)
+        if sample_count < 1:
+            raise TensorRuntimeError("batch samples must not be empty")
+        resolution = batch.samples[0].resolution
+        slot_count = len(batch.samples[0].component_sequence)
+        if slot_count < 1:
+            raise TensorRuntimeError("component_sequence must not be empty")
+        source_tensors: list[Any] = []
+        affine_rows: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
+        value_scales: list[float] = []
+        for sample in batch.samples:
+            if sample.resolution != resolution:
+                raise TensorRuntimeError("batch sample resolutions must match")
+            if len(sample.component_sequence) != slot_count:
+                raise TensorRuntimeError("batch sample slot counts must match")
+            if len(sample.variation_coordinates) != slot_count:
+                raise TensorRuntimeError("variation_coordinates length must match slot count")
+            for slot_index, component_index in enumerate(sample.component_sequence):
+                coordinate = _variation_coordinate(
+                    sample.variation_coordinates[slot_index],
+                    expected_slot_index=slot_index,
+                )
+                source_tensors.append(
+                    self.component_tensor(
+                        resolution=resolution,
+                        slot_count=slot_count,
+                        slot_index=slot_index,
+                        component_index=component_index,
+                    )
+                )
+                affine_rows.append(
+                    _affine_grid_row(
+                        coordinate=coordinate,
+                        slot_count=slot_count,
+                        slot_index=slot_index,
+                        slot_axis=self.formation.slot_composition.slot_axis,
+                    )
+                )
+                value_scales.append(coordinate.value_scale)
+        torch = self.runtime.torch
+        sources = torch.stack(source_tensors)
+        theta = torch.tensor(
+            affine_rows,
+            dtype=torch.float32,
+            device=self.runtime.device,
+        )
+        grid = torch.nn.functional.affine_grid(
+            theta,
+            sources.shape,
+            align_corners=False,
+        )
+        transformed = torch.nn.functional.grid_sample(
+            sources,
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=False,
+        )
+        scales = torch.tensor(
+            value_scales,
+            dtype=torch.float32,
+            device=self.runtime.device,
+        ).reshape((len(value_scales), 1, 1, 1))
+        transformed = torch.clamp(transformed * scales, min=0.0, max=1.0)
+        channels, height, width = transformed.shape[1:]
+        return transformed.reshape(
+            (sample_count, slot_count, channels, height, width)
+        ).amax(dim=1)
 
     def component_tensor(
         self,

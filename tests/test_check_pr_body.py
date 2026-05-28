@@ -55,7 +55,7 @@ def test_pr_body_validator_rejects_unchanged_placeholder_text() -> None:
     assert "section ## Tests still contains only template placeholder text" in errors
 
 
-def test_pr_body_validator_requires_contribution_terms() -> None:
+def test_pr_body_validator_requires_verbatim_contribution_terms() -> None:
     template = _module._sections(
         (_repository_root / ".github" / "pull_request_template.md").read_text(
             encoding="utf-8"
@@ -66,7 +66,25 @@ def test_pr_body_validator_requires_contribution_terms() -> None:
     errors = _module.validate_pr_body(template=template, body=body)
 
     assert errors == [
-        "section ## Contribution Terms must include the template contribution terms"
+        "section ## Contribution Terms must match the template contribution terms exactly"
+    ]
+
+
+def test_pr_body_validator_rejects_extra_contribution_terms_text() -> None:
+    template = _module._sections(
+        (_repository_root / ".github" / "pull_request_template.md").read_text(
+            encoding="utf-8"
+        )
+    )
+    body = _completed_body().replace(
+        "public domain dedication.",
+        "public domain dedication.\n\nAdditional contribution language.",
+    )
+
+    errors = _module.validate_pr_body(template=template, body=body)
+
+    assert errors == [
+        "section ## Contribution Terms must match the template contribution terms exactly"
     ]
 
 

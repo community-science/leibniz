@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -147,6 +148,45 @@ def test_formation_tensor_cache_batch_tensors_match_pure_observation_batch() -> 
         outcome_ids.index(sample.outcome_id)
         for sample in observation_batch.samples
     ]
+
+
+def test_formation_tensor_cache_batches_grid_sampling_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    generator = load_observation_generator(_digits_benchmark_root)
+    formation_batch = generator.sample_formation_batch(scale=2, sample_count=3, seed=515)
+    outcome_ids = tuple(
+        outcome.id
+        for outcome in generator.benchmark_manifest.resolve_outcome_space(scale=2).outcomes
+    )
+    cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
+    calls = {"affine_grid": 0, "grid_sample": 0}
+    original_affine_grid = runtime.torch.nn.functional.affine_grid
+    original_grid_sample = runtime.torch.nn.functional.grid_sample
+
+    def count_affine_grid(*args: Any, **kwargs: Any) -> Any:
+        calls["affine_grid"] += 1
+        return original_affine_grid(*args, **kwargs)
+
+    def count_grid_sample(*args: Any, **kwargs: Any) -> Any:
+        calls["grid_sample"] += 1
+        return original_grid_sample(*args, **kwargs)
+
+    monkeypatch.setattr(
+        runtime.torch.nn.functional,
+        "affine_grid",
+        cast(Any, count_affine_grid),
+    )
+    monkeypatch.setattr(
+        runtime.torch.nn.functional,
+        "grid_sample",
+        cast(Any, count_grid_sample),
+    )
+
+    cache.batch_tensors(batch=formation_batch, outcome_ids=outcome_ids)
+
+    assert calls == {"affine_grid": 1, "grid_sample": 1}
 
 
 def test_formation_tensor_cache_reuses_component_tensors() -> None:

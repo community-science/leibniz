@@ -9,6 +9,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 _heading_pattern = re.compile(r"^## (?P<title>.+?)\s*$", re.MULTILINE)
 
@@ -63,9 +64,10 @@ def validate_pr_body(*, template: tuple[TemplateSection, ...], body: str) -> lis
             continue
         template_content = _normalized_section_body(template_by_title[title].body)
         if title == "Contribution Terms":
-            if template_content not in content:
+            if content != template_content:
                 errors.append(
-                    "section ## Contribution Terms must include the template contribution terms"
+                    "section ## Contribution Terms must match the template "
+                    "contribution terms exactly"
                 )
             continue
         if content == template_content:
@@ -78,10 +80,11 @@ def _body_from_args(*, body_file: Path | None, event_path: Path | None) -> str:
         return body_file.read_text(encoding="utf-8")
     if event_path is None:
         raise ValueError("event_path is required when body_file is absent")
-    event = json.loads(event_path.read_text(encoding="utf-8"))
-    pull_request = event.get("pull_request")
-    if not isinstance(pull_request, dict):
+    event = cast(dict[str, Any], json.loads(event_path.read_text(encoding="utf-8")))
+    pull_request_value = event.get("pull_request")
+    if not isinstance(pull_request_value, dict):
         raise ValueError("event payload does not contain a pull_request object")
+    pull_request = cast(dict[str, object], pull_request_value)
     body = pull_request.get("body")
     return "" if body is None else str(body)
 
