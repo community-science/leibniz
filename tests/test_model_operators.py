@@ -160,6 +160,7 @@ def test_model_operator_vocabulary_exports_registry_metadata() -> None:
         list[dict[str, str]],
         vocabulary["coordinate_descriptors"],
     )
+    program_effects = cast(list[dict[str, str]], vocabulary["program_effects"])
 
     assert [operator["kind"] for operator in operators] == [
         "local-aggregation",
@@ -184,6 +185,14 @@ def test_model_operator_vocabulary_exports_registry_metadata() -> None:
         descriptor["name"]: descriptor["display_name"]
         for descriptor in coordinate_descriptors
     }["operator.{index}.local_support_size"] == "Local support size"
+    assert program_effects[0] == {
+        "kind": "branch",
+        "input_arity_law": "one",
+        "output_arity_law": "effect-arity",
+        "shape_law": "duplicate-input-shape",
+        "cost_law": "zero-arithmetic",
+        "trace_law": "fan-out",
+    }
 
 
 def test_program_effect_summary_resolves_branch_share_and_merge_trace() -> None:
@@ -290,6 +299,7 @@ def test_operator_vocabulary_sections_have_console_consumers() -> None:
         "descriptor_axes": "descriptorValueDisplayName",
         "syntax_aliases": "syntaxAliasDisplayName",
         "coordinate_descriptors": "coordinateDisplayName",
+        "program_effects": "parseProgramEffect",
     }
 
     assert set(model_operator_vocabulary()) >= set(consumer_by_section)
@@ -298,6 +308,7 @@ def test_operator_vocabulary_sections_have_console_consumers() -> None:
         for path in (
             _console_src_root / "BenchmarkResultDashboard.tsx",
             _console_src_root / "BenchmarksPanel.tsx",
+            _console_src_root / "operatorVocabulary.ts",
         )
     )
     for helper in consumer_by_section.values():

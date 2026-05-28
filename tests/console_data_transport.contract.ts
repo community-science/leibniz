@@ -35,6 +35,11 @@ assertEqual(
   'operator vocabulary order',
 );
 assertEqual(
+  parsed.operator_vocabulary.program_effects.map((effect) => effect.kind).join(','),
+  'branch,merge,route,repeat,identity-path,parameter-sharing',
+  'program effect vocabulary order',
+);
+assertEqual(
   operatorDisplayName(parsed.operator_vocabulary, 'local-aggregation'),
   'Local aggregation',
   'operator vocabulary operator display',

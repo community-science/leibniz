@@ -442,6 +442,7 @@ def model_operator_vocabulary() -> dict[str, object]:
         "descriptor_axes": _operator_registry.descriptor_axis_records(),
         "syntax_aliases": _operator_registry.syntax_alias_records(),
         "coordinate_descriptors": _operator_registry.coordinate_descriptor_records(),
+        "program_effects": _program_effect_registry.effect_records(),
     }
 
 
