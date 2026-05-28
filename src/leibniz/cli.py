@@ -18,8 +18,13 @@ from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
 from leibniz.authority_indexes import AuthorityIndexDocument
 from leibniz.benchmark_runner import BenchmarkRunPlan, BenchmarkRunSummary, run_benchmark
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
-from leibniz.documents import document_filename_suffix, load_object_document
+from leibniz.documents import (
+    canonical_document_bytes,
+    document_filename_suffix,
+    load_object_document,
+)
 from leibniz.federation_ingest import FederationIngestPlanDocument
+from leibniz.formation_timing import FormationTimingPlan, time_formation_paths
 from leibniz.local_results import (
     LocalResultImportError,
     import_submission_publications,
@@ -494,6 +499,23 @@ def _parser() -> argparse.ArgumentParser:
         help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
     )
     shakedown.add_argument("--retry-failed", action="store_true")
+    time_formation = benchmark_subcommands.add_parser(
+        "time-formation",
+        description="time local benchmark observation formation paths",
+        help="time benchmark formation paths",
+    )
+    time_formation.add_argument("--benchmark-root", type=Path, required=True)
+    time_formation.add_argument("--scale", default=1, type=int)
+    time_formation.add_argument("--sample-count", default=64, type=int)
+    time_formation.add_argument("--seed", default=101, type=int)
+    time_formation.add_argument("--repeats", default=3, type=int)
+    time_formation.add_argument("--warmup-repeats", default=1, type=int)
+    time_formation.add_argument(
+        "--device",
+        default="auto",
+        choices=("auto", "cpu", "cuda", "mps"),
+        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
+    )
 
     console = subcommands.add_parser(
         "console",
@@ -619,6 +641,20 @@ def _benchmark(args: argparse.Namespace) -> int:
             )
             if summary.result_view_path is not None:
                 print(f"view: {summary.result_view_path}")
+            return 0
+        if str(args.benchmark_command) == "time-formation":
+            summary = time_formation_paths(
+                FormationTimingPlan(
+                    benchmark_root=args.benchmark_root,
+                    scale=args.scale,
+                    sample_count=args.sample_count,
+                    seed=args.seed,
+                    repeats=args.repeats,
+                    warmup_repeats=args.warmup_repeats,
+                    tensor_device=args.device,
+                )
+            )
+            print(canonical_document_bytes(summary.to_record()).decode("utf-8"))
             return 0
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
