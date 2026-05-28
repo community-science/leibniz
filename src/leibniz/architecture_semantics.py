@@ -1,0 +1,70 @@
+"""Semantic validation for architecture manifests."""
+
+from __future__ import annotations
+
+from leibniz.architectures import ArchitectureManifest
+from leibniz.model_operators import (
+    ModelOperatorExecutionError,
+    ModelOperatorPlan,
+    summarize_architecture_operators,
+)
+from leibniz.operator_semantics import model_operator_semantic_registry
+
+__all__ = [
+    "ArchitectureSemanticValidationError",
+    "validate_architecture_semantics",
+]
+
+
+class ArchitectureSemanticValidationError(ValueError):
+    """Raised when an architecture manifest fails semantic validation."""
+
+
+def validate_architecture_semantics(
+    architecture: ArchitectureManifest,
+) -> ModelOperatorPlan:
+    """Validate an architecture against declared operator semantics."""
+
+    _validate_layer_parameters(architecture)
+    try:
+        plan = summarize_architecture_operators(architecture)
+    except ModelOperatorExecutionError as error:
+        raise ArchitectureSemanticValidationError(str(error)) from error
+    for summary, layer in zip(plan.operators, architecture.layers, strict=True):
+        if summary.output_shape is None:
+            raise ArchitectureSemanticValidationError(
+                f"layer {summary.index} ({layer.kind}): "
+                "semantic interpretation could not resolve output_shape"
+            )
+        if summary.parameter_count is None:
+            raise ArchitectureSemanticValidationError(
+                f"layer {summary.index} ({layer.kind}): "
+                "semantic interpretation could not resolve parameter_count"
+            )
+        if summary.inference_flops is None:
+            raise ArchitectureSemanticValidationError(
+                f"layer {summary.index} ({layer.kind}): "
+                "semantic interpretation could not resolve inference_flops"
+            )
+    return plan
+
+
+def _validate_layer_parameters(architecture: ArchitectureManifest) -> None:
+    registry = model_operator_semantic_registry()
+    for index, layer in enumerate(architecture.layers):
+        semantic = registry.semantic_for_alias(layer.kind)
+        if semantic is None:
+            raise ArchitectureSemanticValidationError(
+                f"layer {index} ({layer.kind}): unsupported operator kind"
+            )
+        for role in semantic.parameter_roles:
+            if role.name not in layer.parameters:
+                raise ArchitectureSemanticValidationError(
+                    f"layer {index} ({layer.kind}): missing required parameter {role.name}"
+                )
+            value = layer.parameters[role.name]
+            if type(value) is not int or value < 1:
+                raise ArchitectureSemanticValidationError(
+                    f"layer {index} ({layer.kind}): "
+                    f"parameter {role.name} must be a positive integer"
+                )

@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import cast
 
 from leibniz.active_loop import ActiveTrainingLoopPlan, run_active_training_loop
+from leibniz.architecture_semantics import validate_architecture_semantics
+from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
 from leibniz.authority_indexes import AuthorityIndexDocument
 from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
@@ -150,6 +152,13 @@ def _parser() -> argparse.ArgumentParser:
         help="validate a model artifact manifest document",
     )
     model_manifest.add_argument("path", type=Path)
+
+    architecture = validate_subcommands.add_parser(
+        "architecture",
+        help="validate an architecture manifest document",
+    )
+    architecture.add_argument("path", type=Path)
+    architecture.add_argument("--semantic", action="store_true")
 
     model_operation = validate_subcommands.add_parser(
         "model-operation",
@@ -873,6 +882,12 @@ def _validate(args: argparse.Namespace) -> int:
         if artifact == "model-manifest":
             document = ModelArtifactManifestDocument.from_bytes(args.path.read_bytes())
             print(f"valid model manifest {document.manifest.id}")
+            return 0
+        if artifact == "architecture":
+            document = ArchitectureManifestDocument.from_bytes(args.path.read_bytes())
+            if bool(getattr(args, "semantic", False)):
+                validate_architecture_semantics(document.manifest)
+            print(f"valid architecture {document.manifest.id}")
             return 0
         if artifact == "model-operation":
             document = ModelOperationDocument.from_bytes(args.path.read_bytes())
