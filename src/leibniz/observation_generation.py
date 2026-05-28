@@ -7,6 +7,7 @@ import random
 import struct
 import zlib
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -33,6 +34,7 @@ from leibniz.observation_formation import (
     ObservationFormationDeclarationDocument,
     VariationTransformDeclaration,
 )
+from leibniz.timing import TimingCollector
 
 __all__ = [
     "GeneratedFormationBatch",
@@ -179,39 +181,64 @@ class ObservationGenerator:
         sample_count: int,
         seed: int,
         component_sequences: Iterable[Sequence[int]] | None = None,
+        timing: TimingCollector | None = None,
+        timing_prefix: str = "",
     ) -> GeneratedObservationBatch:
         """Generate a deterministic batch at one scale."""
 
-        formation_batch = self.sample_formation_batch(
-            scale=scale,
-            sample_count=sample_count,
-            seed=seed,
-            component_sequences=component_sequences,
-        )
-        scaled_factors = tuple(self._scaled_sample_factors(scale))
+        with _timing_span(timing, f"{timing_prefix}formation_batch", samples=sample_count):
+            formation_batch = self.sample_formation_batch(
+                scale=scale,
+                sample_count=sample_count,
+                seed=seed,
+                component_sequences=component_sequences,
+                timing=timing,
+                timing_prefix=f"{timing_prefix}formation_batch.",
+            )
+        with _timing_span(timing, f"{timing_prefix}scaled_factors"):
+            scaled_factors = tuple(self._scaled_sample_factors(scale))
         samples: list[GeneratedObservationSample] = []
-        for spec in formation_batch.samples:
-            observation = self.formation.form_observation(
-                id=self._observation_id(scale=scale, seed=seed, index=spec.index),
-                plan=spec.materialization_plan,
-                component_sequence=spec.component_sequence,
-                variation_coordinates=spec.variation_coordinates,
-            )
-            samples.append(
-                GeneratedObservationSample(
-                    index=spec.index,
-                    materialization_plan=spec.materialization_plan,
-                    observation=observation,
-                    outcome_id=spec.outcome_id,
-                    complexity=spec.complexity,
-                    latent_coordinates=self._latent_coordinates(
-                        sequence=spec.component_sequence,
-                        scaled_factors=scaled_factors,
-                        plan=spec.materialization_plan,
-                        variation_values=spec.variation_values,
-                    ),
+        with _timing_span(
+            timing,
+            f"{timing_prefix}materialized_observation",
+            samples=sample_count,
+        ):
+            observations = tuple(
+                self.formation.form_observation(
+                    id=self._observation_id(scale=scale, seed=seed, index=spec.index),
+                    plan=spec.materialization_plan,
+                    component_sequence=spec.component_sequence,
+                    variation_coordinates=spec.variation_coordinates,
                 )
+                for spec in formation_batch.samples
             )
+        with _timing_span(timing, f"{timing_prefix}latent_coordinates", samples=sample_count):
+            latent_coordinate_samples = tuple(
+                self._latent_coordinates(
+                    sequence=spec.component_sequence,
+                    scaled_factors=scaled_factors,
+                    plan=spec.materialization_plan,
+                    variation_values=spec.variation_values,
+                )
+                for spec in formation_batch.samples
+            )
+        with _timing_span(timing, f"{timing_prefix}sample_assembly", samples=sample_count):
+            for spec, observation, latent_coordinates in zip(
+                formation_batch.samples,
+                observations,
+                latent_coordinate_samples,
+                strict=True,
+            ):
+                samples.append(
+                    GeneratedObservationSample(
+                        index=spec.index,
+                        materialization_plan=spec.materialization_plan,
+                        observation=observation,
+                        outcome_id=spec.outcome_id,
+                        complexity=spec.complexity,
+                        latent_coordinates=latent_coordinates,
+                    )
+                )
 
         return GeneratedObservationBatch(
             benchmark_id=self.benchmark_manifest.id,
@@ -227,6 +254,8 @@ class ObservationGenerator:
         sample_count: int,
         seed: int,
         component_sequences: Iterable[Sequence[int]] | None = None,
+        timing: TimingCollector | None = None,
+        timing_prefix: str = "",
     ) -> GeneratedFormationBatch:
         """Generate deterministic formation specs without materializing fields."""
 
@@ -234,49 +263,81 @@ class ObservationGenerator:
             raise ObservationGenerationError("sample_count must be a positive integer")
         if type(seed) is not int or seed < 0:
             raise ObservationGenerationError("seed must be a nonnegative integer")
-        scaled_factors = tuple(self._scaled_sample_factors(scale))
-        complexity = self._complexity(scaled_factors)
-        complexity_axis = self._complexity_axis()
-        sequences = tuple(component_sequences) if component_sequences is not None else ()
+        with _timing_span(timing, f"{timing_prefix}scaled_factors"):
+            scaled_factors = tuple(self._scaled_sample_factors(scale))
+        with _timing_span(timing, f"{timing_prefix}complexity"):
+            complexity = self._complexity(scaled_factors)
+            complexity_axis = self._complexity_axis()
+        with _timing_span(timing, f"{timing_prefix}component_sequences"):
+            sequences = tuple(component_sequences) if component_sequences is not None else ()
         if sequences and len(sequences) != sample_count:
             raise ObservationGenerationError(
                 "component_sequences length must match sample_count"
             )
 
-        samples: list[GeneratedFormationSample] = []
-        for index in range(sample_count):
-            plan = self._materialization_plan(
-                scale=scale,
-                seed=seed,
-                index=index,
-                complexity_axis=complexity_axis,
-                complexity=complexity,
-            )
-            sequence = (
-                tuple(sequences[index])
-                if sequences
-                else self.formation.sample_component_sequence(plan=plan, sample_index=index)
-            )
-            variation_values = _variation_transform_values(
-                transform=self.formation.variation_transform,
-                seed=plan.seed,
-                sample_index=index,
-                slot_count=len(sequence),
-            )
-            samples.append(
-                GeneratedFormationSample(
+        with _timing_span(
+            timing,
+            f"{timing_prefix}materialization_plan",
+            samples=sample_count,
+        ):
+            plans = tuple(
+                self._materialization_plan(
+                    scale=scale,
+                    seed=seed,
                     index=index,
-                    materialization_plan=plan,
-                    resolution=plan.resolution_assignment.require_axis(
-                        self.formation.resolution_axis
-                    ),
-                    component_sequence=sequence,
-                    variation_coordinates=_variation_coordinates_from_values(variation_values),
-                    variation_values=variation_values,
-                    outcome_id=self._outcome_id(sequence),
+                    complexity_axis=complexity_axis,
                     complexity=complexity,
                 )
+                for index in range(sample_count)
             )
+        with _timing_span(timing, f"{timing_prefix}component_sequence", samples=sample_count):
+            sequence_samples = tuple(
+                (
+                    tuple(sequences[index])
+                    if sequences
+                    else self.formation.sample_component_sequence(
+                        plan=plans[index],
+                        sample_index=index,
+                    )
+                )
+                for index in range(sample_count)
+            )
+        variation_samples: list[tuple[Mapping[str, object], tuple[Mapping[str, object], ...]]] = []
+        with _timing_span(timing, f"{timing_prefix}variation_coordinates", samples=sample_count):
+            for index, sequence in enumerate(sequence_samples):
+                variation_values = _variation_transform_values(
+                    transform=self.formation.variation_transform,
+                    seed=plans[index].seed,
+                    sample_index=index,
+                    slot_count=len(sequence),
+                )
+                variation_samples.append(
+                    (variation_values, _variation_coordinates_from_values(variation_values))
+                )
+        samples: list[GeneratedFormationSample] = []
+        with _timing_span(timing, f"{timing_prefix}sample_assembly", samples=sample_count):
+            for index, plan, sequence, variation_sample in zip(
+                range(sample_count),
+                plans,
+                sequence_samples,
+                variation_samples,
+                strict=True,
+            ):
+                variation_values, variation_coordinates = variation_sample
+                samples.append(
+                    GeneratedFormationSample(
+                        index=index,
+                        materialization_plan=plan,
+                        resolution=plan.resolution_assignment.require_axis(
+                            self.formation.resolution_axis
+                        ),
+                        component_sequence=sequence,
+                        variation_coordinates=variation_coordinates,
+                        variation_values=variation_values,
+                        outcome_id=self._outcome_id(sequence),
+                        complexity=complexity,
+                    )
+                )
 
         return GeneratedFormationBatch(
             benchmark_id=self.benchmark_manifest.id,
@@ -460,6 +521,17 @@ def sample_variation_transform_coordinates(
             "scale": _sample_interval(generator, transform.value_scale.scale),
         },
     }
+
+
+def _timing_span(
+    timing: TimingCollector | None,
+    phase: str,
+    *,
+    samples: int = 0,
+) -> AbstractContextManager[None]:
+    if timing is None:
+        return nullcontext()
+    return timing.span(phase, samples=samples)
 
 
 def field_to_png_bytes(field: FieldObservation) -> bytes:
