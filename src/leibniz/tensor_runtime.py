@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
+from leibniz.observation_formation import ObservationFormationDeclaration
+
 __all__ = [
+    "FormationTensorCache",
     "TensorRuntime",
     "TensorRuntimeError",
     "TensorRuntimeDevice",
@@ -29,6 +33,93 @@ class TensorRuntime:
     torch: Any
     device: Any
     device_kind: Literal["cpu", "cuda", "mps"]
+
+
+@dataclass(slots=True)
+class FormationTensorCache:
+    """Cache declaration-backed unvaried component fields as runtime tensors."""
+
+    runtime: TensorRuntime
+    formation: ObservationFormationDeclaration
+    _component_tensors: dict[tuple[int, int, int, int], Any] = field(
+        default_factory=lambda: cast(dict[tuple[int, int, int, int], Any], {})
+    )
+
+    def component_sequence_tensor(
+        self,
+        *,
+        resolution: int,
+        component_sequence: Sequence[int],
+    ) -> Any:
+        """Return an unvaried formed-field tensor for a component sequence."""
+
+        _require_positive_integer(resolution, "resolution")
+        sequence = tuple(component_sequence)
+        if not sequence:
+            raise TensorRuntimeError("component_sequence must not be empty")
+        tensors = [
+            self.component_tensor(
+                resolution=resolution,
+                slot_count=len(sequence),
+                slot_index=slot_index,
+                component_index=component_index,
+            )
+            for slot_index, component_index in enumerate(sequence)
+        ]
+        return self.runtime.torch.stack(tensors).amax(dim=0)
+
+    def component_tensor(
+        self,
+        *,
+        resolution: int,
+        slot_count: int,
+        slot_index: int,
+        component_index: int,
+    ) -> Any:
+        """Return a cached tensor for one component drawn into one slot."""
+
+        _require_positive_integer(resolution, "resolution")
+        _require_positive_integer(slot_count, "slot_count")
+        _require_slot_index(slot_index=slot_index, slot_count=slot_count)
+        if (
+            type(component_index) is not int
+            or component_index < 0
+            or component_index >= len(self.formation.components)
+        ):
+            raise TensorRuntimeError("component_index is outside component vocabulary")
+        key = (resolution, slot_count, slot_index, component_index)
+        cached = self._component_tensors.get(key)
+        if cached is not None:
+            return cached
+        tensor = self._build_component_tensor(
+            resolution=resolution,
+            slot_count=slot_count,
+            slot_index=slot_index,
+            component_index=component_index,
+        )
+        self._component_tensors[key] = tensor
+        return tensor
+
+    def _build_component_tensor(
+        self,
+        *,
+        resolution: int,
+        slot_count: int,
+        slot_index: int,
+        component_index: int,
+    ) -> Any:
+        field = self.formation.component_field(
+            resolution=resolution,
+            slot_count=slot_count,
+            slot_index=slot_index,
+            component_index=component_index,
+        )
+        tensor = self.runtime.torch.tensor(
+            field.values,
+            dtype=self.runtime.torch.float32,
+            device=self.runtime.device,
+        )
+        return tensor.reshape(field.shape)
 
 
 def validate_tensor_runtime_device(value: str) -> TensorRuntimeDevice:
@@ -95,3 +186,13 @@ def _torch() -> Any:
         raise TensorRuntimeError(
             "PyTorch is required to run benchmark training"
         ) from error
+
+
+def _require_positive_integer(value: int, name: str) -> None:
+    if type(value) is not int or value < 1:
+        raise TensorRuntimeError(f"{name} must be a positive integer")
+
+
+def _require_slot_index(*, slot_index: int, slot_count: int) -> None:
+    if type(slot_index) is not int or slot_index < 0 or slot_index >= slot_count:
+        raise TensorRuntimeError("slot_index must be within slot_count")
