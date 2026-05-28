@@ -12,6 +12,7 @@ from leibniz.observation_generation import (
     load_observation_generator,
     sample_variation_transform_coordinates,
 )
+from leibniz.timing import TimingCollector
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -79,6 +80,37 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
         )
         for sample in observation_batch.samples
     ]
+
+
+def test_digits_observation_generator_records_optional_timing() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+    timing = TimingCollector()
+
+    generator.sample_batch(
+        scale=2,
+        sample_count=2,
+        seed=303,
+        timing=timing,
+        timing_prefix="digits.",
+    )
+
+    record = timing.to_record(kind="test-timing")
+    phases = cast(dict[str, object], record["phases"])
+    materialization = cast(
+        dict[str, object],
+        phases["digits.formation_batch.materialization_plan"],
+    )
+    variation = cast(
+        dict[str, object],
+        phases["digits.formation_batch.variation_coordinates"],
+    )
+    observation = cast(dict[str, object], phases["digits.materialized_observation"])
+    assert record["kind"] == "test-timing"
+    assert materialization["calls"] == 1
+    assert materialization["sample_count"] == 2
+    assert variation["sample_count"] == 2
+    assert observation["sample_count"] == 2
+    assert cast(float, observation["seconds"]) > 0
 
 
 def test_digits_observation_generator_scales_resolution_and_complexity() -> None:

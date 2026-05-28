@@ -38,6 +38,7 @@ from leibniz.tensor_runtime import (
     runtime_roofline_record,
     validate_tensor_runtime_device,
 )
+from leibniz.timing import TimingCollector
 from leibniz.training_runs import TrainingHistoryPoint, TrainingProtocol, TrainingRunRecord
 
 __all__ = [
@@ -84,49 +85,6 @@ class _ThroughputCounter:
             self.samples / self.seconds if self.samples > 0 and self.seconds > 0 else 0.0
         )
         return record
-
-
-@dataclass(slots=True)
-class _PhaseTimingCounter:
-    seconds: float = 0.0
-    calls: int = 0
-    samples: int = 0
-
-    def add(self, *, seconds: float, samples: int = 0) -> None:
-        self.seconds += max(0.0, float(seconds))
-        self.calls += 1
-        self.samples += samples
-
-    def to_record(self, *, name: str) -> dict[str, object]:
-        return {
-            "kind": "phase-timing",
-            "phase": name,
-            "calls": self.calls,
-            "sample_count": self.samples,
-            "seconds": self.seconds,
-            "seconds_per_call": self.seconds / self.calls if self.calls else 0.0,
-            "samples_per_second": (
-                self.samples / self.seconds if self.samples > 0 and self.seconds > 0 else 0.0
-            ),
-        }
-
-
-@dataclass(slots=True)
-class _TrainingPhaseTimings:
-    counters: dict[str, _PhaseTimingCounter]
-
-    def add(self, phase: str, *, seconds: float, samples: int = 0) -> None:
-        counter = self.counters.setdefault(phase, _PhaseTimingCounter())
-        counter.add(seconds=seconds, samples=samples)
-
-    def to_record(self) -> dict[str, object]:
-        return {
-            "kind": "benchmark-phase-timing",
-            "phases": {
-                phase: counter.to_record(name=phase)
-                for phase, counter in sorted(self.counters.items())
-            },
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -534,7 +492,7 @@ def _train_and_predict(
     training_counter = _ThroughputCounter()
     validation_counter = _ThroughputCounter()
     evaluation_counter = _ThroughputCounter()
-    phase_timings = _TrainingPhaseTimings(counters={})
+    phase_timings = TimingCollector()
 
     def batch_for_seed(
         batch_seed: int,
@@ -542,24 +500,16 @@ def _train_and_predict(
         generation_phase: str,
         tensor_phase: str,
     ) -> tuple[Any, Any]:
-        generation_started = time.perf_counter()
-        generated = generator.sample_formation_batch(
-            scale=scale,
-            sample_count=sample_count,
-            seed=batch_seed,
-        )
-        phase_timings.add(
-            generation_phase,
-            seconds=time.perf_counter() - generation_started,
-            samples=sample_count,
-        )
-        tensor_started = time.perf_counter()
-        tensors = formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
-        phase_timings.add(
-            tensor_phase,
-            seconds=time.perf_counter() - tensor_started,
-            samples=sample_count,
-        )
+        with phase_timings.span(generation_phase, samples=sample_count):
+            generated = generator.sample_formation_batch(
+                scale=scale,
+                sample_count=sample_count,
+                seed=batch_seed,
+                timing=phase_timings,
+                timing_prefix=f"{generation_phase}.",
+            )
+        with phase_timings.span(tensor_phase, samples=sample_count):
+            tensors = formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
         return tensors
 
     validation_history = _train_until_convergence(
@@ -619,27 +569,19 @@ def _train_and_predict(
         ),
     )
     evaluation_started = time.perf_counter()
-    evaluation_tensor_started = time.perf_counter()
-    eval_fields, _eval_labels = _batch_tensors(
-        torch=torch,
-        batch=evaluation_batch,
-        outcome_ids=outcome_ids,
-        device=runtime.device,
-    )
-    phase_timings.add(
-        "evaluation_tensorization",
-        seconds=time.perf_counter() - evaluation_tensor_started,
-        samples=len(evaluation_batch.samples),
-    )
+    with phase_timings.span("evaluation_tensorization", samples=len(evaluation_batch.samples)):
+        eval_fields, _eval_labels = _batch_tensors(
+            torch=torch,
+            batch=evaluation_batch,
+            outcome_ids=outcome_ids,
+            device=runtime.device,
+        )
     module.eval()
-    evaluation_forward_started = time.perf_counter()
-    with torch.no_grad():
+    with (
+        phase_timings.span("evaluation_forward", samples=len(evaluation_batch.samples)),
+        torch.no_grad(),
+    ):
         predictions = torch.softmax(module(eval_fields), dim=1).tolist()
-    phase_timings.add(
-        "evaluation_forward",
-        seconds=time.perf_counter() - evaluation_forward_started,
-        samples=len(evaluation_batch.samples),
-    )
     evaluation_counter.add(
         seconds=time.perf_counter() - evaluation_started,
         samples=len(evaluation_batch.samples),
@@ -691,7 +633,7 @@ def _train_until_convergence(
     batch_size: int,
     training_counter: _ThroughputCounter,
     validation_counter: _ThroughputCounter,
-    phase_timings: _TrainingPhaseTimings,
+    phase_timings: TimingCollector,
     on_validation: Callable[[tuple[TrainingHistoryPoint, ...]], None] | None = None,
 ) -> list[TrainingHistoryPoint]:
     validation_history: list[TrainingHistoryPoint] = []
@@ -704,19 +646,14 @@ def _train_until_convergence(
         nonlocal best_loss, best_step, best_check, stale_checks
         validation_started = time.perf_counter()
         fields, labels = validation_batch(check)
-        validation_forward_started = time.perf_counter()
-        validation_loss = _validation_loss(
-            torch=torch,
-            module=module,
-            fields=fields,
-            labels=labels,
-            loss_function=loss_function,
-        )
-        phase_timings.add(
-            "validation_forward_loss",
-            seconds=time.perf_counter() - validation_forward_started,
-            samples=batch_size,
-        )
+        with phase_timings.span("validation_forward_loss", samples=batch_size):
+            validation_loss = _validation_loss(
+                torch=torch,
+                module=module,
+                fields=fields,
+                labels=labels,
+                loss_function=loss_function,
+            )
         if validation_loss < best_loss - min_delta:
             best_loss = validation_loss
             best_step = step
@@ -754,36 +691,17 @@ def _train_until_convergence(
         training_started = time.perf_counter()
         fields, labels = train_batch(step)
         module.train()
-        zero_grad_started = time.perf_counter()
-        optimizer.zero_grad(set_to_none=True)
-        phase_timings.add("training_zero_grad", seconds=time.perf_counter() - zero_grad_started)
-        forward_started = time.perf_counter()
-        loss = loss_function(module(fields), labels)
-        phase_timings.add(
-            "training_forward_loss",
-            seconds=time.perf_counter() - forward_started,
-            samples=batch_size,
-        )
-        backward_started = time.perf_counter()
-        loss.backward()
-        phase_timings.add(
-            "training_backward",
-            seconds=time.perf_counter() - backward_started,
-            samples=batch_size,
-        )
-        optimizer_started = time.perf_counter()
-        optimizer.step()
-        phase_timings.add(
-            "training_optimizer_step",
-            seconds=time.perf_counter() - optimizer_started,
-        )
+        with phase_timings.span("training_zero_grad"):
+            optimizer.zero_grad(set_to_none=True)
+        with phase_timings.span("training_forward_loss", samples=batch_size):
+            loss = loss_function(module(fields), labels)
+        with phase_timings.span("training_backward", samples=batch_size):
+            loss.backward()
+        with phase_timings.span("training_optimizer_step"):
+            optimizer.step()
         if scheduler is not None:
-            scheduler_started = time.perf_counter()
-            scheduler.step_after_optimizer()
-            phase_timings.add(
-                "training_scheduler_step",
-                seconds=time.perf_counter() - scheduler_started,
-            )
+            with phase_timings.span("training_scheduler_step"):
+                scheduler.step_after_optimizer()
         training_counter.add(
             seconds=time.perf_counter() - training_started,
             samples=batch_size,
@@ -997,7 +915,7 @@ def _throughput_record(
     evaluation_counter: _ThroughputCounter,
     roofline: Mapping[str, object],
     work_estimates: _TrainingWorkEstimates | None,
-    phase_timings: _TrainingPhaseTimings,
+    phase_timings: TimingCollector,
 ) -> dict[str, object]:
     training = training_counter.to_record(kind="training-throughput")
     validation = validation_counter.to_record(kind="validation-throughput")
@@ -1009,7 +927,7 @@ def _throughput_record(
         "training": training,
         "validation": validation,
         "evaluation": evaluation,
-        "phase_timing": phase_timings.to_record(),
+        "phase_timing": phase_timings.to_record(kind="benchmark-phase-timing"),
         "roofline": dict(roofline),
         "roofline_comparison": _roofline_comparison(
             training=training,
