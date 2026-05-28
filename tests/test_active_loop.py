@@ -58,6 +58,7 @@ def test_active_training_loop_runs_one_iteration_and_refreshes_results(tmp_path:
             candidate_budget=1,
             sample_count=1,
             train_steps=0,
+            tensor_device="cpu",
         )
     )
 
@@ -87,6 +88,7 @@ def test_active_training_loop_runs_bounded_proposal_batch(tmp_path: Path) -> Non
             candidate_sample_count=8,
             sample_count=1,
             train_steps=0,
+            tensor_device="cpu",
         )
     )
 
@@ -113,6 +115,7 @@ def test_active_training_loop_resumes_pending_dry_run_work(tmp_path: Path) -> No
             candidate_budget=1,
             sample_count=1,
             train_steps=0,
+            tensor_device="cpu",
         )
     )
     queue_view = load_console_result_view(
@@ -127,6 +130,7 @@ def test_active_training_loop_resumes_pending_dry_run_work(tmp_path: Path) -> No
             candidate_budget=1,
             sample_count=1,
             train_steps=0,
+            tensor_device="cpu",
         )
     )
 
@@ -202,6 +206,7 @@ def test_active_training_loop_blocks_failed_work_without_explicit_retry(
                 candidate_budget=1,
                 sample_count=1,
                 train_steps=0,
+                tensor_device="cpu",
             )
         )
 
@@ -214,6 +219,7 @@ def test_active_training_loop_blocks_failed_work_without_explicit_retry(
                 candidate_budget=1,
                 sample_count=1,
                 train_steps=0,
+                tensor_device="cpu",
             )
         )
 
@@ -245,6 +251,7 @@ def test_active_training_loop_retries_failed_work_when_requested(
                 candidate_budget=1,
                 sample_count=1,
                 train_steps=0,
+                tensor_device="cpu",
             )
         )
 
@@ -257,6 +264,7 @@ def test_active_training_loop_retries_failed_work_when_requested(
             sample_count=1,
             train_steps=0,
             retry_failed=True,
+            tensor_device="cpu",
         )
     )
 
@@ -294,6 +302,8 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
             "1",
             "--train-steps",
             "0",
+            "--device",
+            "cpu",
         ],
         capture_output=True,
         check=False,
@@ -361,6 +371,7 @@ def test_active_training_loop_preserves_existing_measurements_on_run_failure(
             runs_root=tmp_path / ".runs",
             sample_count=1,
             train_steps=0,
+            tensor_device="cpu",
         )
     )
     before = initial.measurement_dataset_path.read_bytes()
@@ -443,6 +454,8 @@ def test_cli_runs_active_frontier_shakedown(
             "1",
             "--train-steps",
             "0",
+            "--device",
+            "cpu",
         ]
     )
 

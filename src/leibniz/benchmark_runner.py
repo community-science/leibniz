@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -16,7 +15,7 @@ from leibniz.documents import canonical_document_bytes, document_filename_suffix
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDataset, MeasurementRecord
 from leibniz.model_inspection import ModelInspectionRecord
-from leibniz.model_operators import ExecutableModelOperator, ModelOperatorExecutionError
+from leibniz.model_operators import ExecutableModelOperator
 from leibniz.observation_generation import (
     GeneratedObservationBatch,
     GeneratedObservationSample,
@@ -29,6 +28,12 @@ from leibniz.outcomes import (
     OutcomeSpace,
     ProbabilityMass,
     RawScoringEvidence,
+)
+from leibniz.tensor_runtime import (
+    TensorRuntimeDevice,
+    TensorRuntimeError,
+    resolve_tensor_runtime,
+    validate_tensor_runtime_device,
 )
 from leibniz.training_runs import TrainingHistoryPoint, TrainingProtocol, TrainingRunRecord
 
@@ -98,6 +103,7 @@ class BenchmarkRunPlan:
     convergence_min_delta: float = _default_convergence_min_delta
     convergence_min_steps: int = _default_convergence_min_steps
     target_validation_loss: float | None = None
+    tensor_device: TensorRuntimeDevice = "auto"
     dry_run: bool = False
 
     def __post_init__(self) -> None:
@@ -133,6 +139,10 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError("convergence_min_steps must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise BenchmarkRunnerError("target_validation_loss must be nonnegative")
+        try:
+            validate_tensor_runtime_device(self.tensor_device)
+        except TensorRuntimeError as error:
+            raise BenchmarkRunnerError(str(error)) from error
 
     @property
     def run_slug(self) -> str:
@@ -161,6 +171,7 @@ class BenchmarkRunPlan:
             "target_validation_loss": (
                 None if self.target_validation_loss is None else float(self.target_validation_loss)
             ),
+            "tensor_device": self.tensor_device,
         }
         return f"train-{ContentDigest.from_value(controls).hex[:12]}"
 
@@ -266,6 +277,7 @@ def run_benchmark(
         convergence_min_delta=float(plan.convergence_min_delta),
         convergence_min_steps=plan.convergence_min_steps,
         target_validation_loss=plan.target_validation_loss,
+        tensor_device=plan.tensor_device,
         seed=plan.seed,
         progress_callback=publish_progress,
     )
@@ -305,6 +317,8 @@ def run_benchmark(
             "convergence_patience": plan.convergence_patience,
             "convergence_min_delta": float(plan.convergence_min_delta),
             "convergence_min_steps": plan.convergence_min_steps,
+            "tensor_runtime": "pytorch",
+            "tensor_device": training_result.training_run.protocol.tensor_device,
             "training_run": training_result.training_run.to_record(),
             "sampled_competence": _sampled_competence_record(
                 generator=generator,
@@ -397,12 +411,17 @@ def _train_and_predict(
     convergence_min_delta: float,
     convergence_min_steps: int,
     target_validation_loss: float | None,
+    tensor_device: TensorRuntimeDevice,
     seed: int,
     progress_callback: Callable[[TrainingRunRecord], None] | None = None,
 ) -> _TrainingResult:
-    torch = _torch()
+    try:
+        runtime = resolve_tensor_runtime(tensor_device)
+    except TensorRuntimeError as error:
+        raise BenchmarkRunnerError(str(error)) from error
+    torch = runtime.torch
     torch.manual_seed(seed)
-    module = ExecutableModelOperator(architecture).torch_module()
+    module = ExecutableModelOperator(architecture).torch_module().to(runtime.device)
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     loss_function = torch.nn.CrossEntropyLoss()
     optimizer = _make_optimizer(
@@ -425,7 +444,12 @@ def _train_and_predict(
             sample_count=sample_count,
             seed=batch_seed,
         )
-        return _batch_tensors(torch=torch, batch=generated, outcome_ids=outcome_ids)
+        return _batch_tensors(
+            torch=torch,
+            batch=generated,
+            outcome_ids=outcome_ids,
+            device=runtime.device,
+        )
 
     validation_history = _train_until_convergence(
         torch=torch,
@@ -454,6 +478,7 @@ def _train_and_predict(
                     convergence_patience=convergence_patience,
                     convergence_min_delta=convergence_min_delta,
                     convergence_min_steps=convergence_min_steps,
+                    tensor_device=runtime.device_kind,
                     validation_history=tuple(history),
                 )
             )
@@ -465,6 +490,7 @@ def _train_and_predict(
         torch=torch,
         batch=evaluation_batch,
         outcome_ids=outcome_ids,
+        device=runtime.device,
     )
     module.eval()
     with torch.no_grad():
@@ -480,6 +506,7 @@ def _train_and_predict(
         convergence_patience=convergence_patience,
         convergence_min_delta=convergence_min_delta,
         convergence_min_steps=convergence_min_steps,
+        tensor_device=runtime.device_kind,
         validation_history=tuple(validation_history),
     )
     return _TrainingResult(
@@ -603,6 +630,7 @@ def _training_run_record(
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
+    tensor_device: str,
     validation_history: tuple[TrainingHistoryPoint, ...],
 ) -> TrainingRunRecord:
     best = validation_history[-1]
@@ -643,6 +671,8 @@ def _training_run_record(
             patience=convergence_patience,
             validation_source="generator-resample",
             min_steps=convergence_min_steps,
+            tensor_runtime="pytorch",
+            tensor_device=tensor_device,
         ),
         validation_history=validation_history,
     )
@@ -660,6 +690,7 @@ def _running_training_run_record(
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
+    tensor_device: str,
     validation_history: tuple[TrainingHistoryPoint, ...],
 ) -> TrainingRunRecord:
     best = validation_history[-1]
@@ -686,6 +717,8 @@ def _running_training_run_record(
             patience=convergence_patience,
             validation_source="generator-resample",
             min_steps=convergence_min_steps,
+            tensor_runtime="pytorch",
+            tensor_device=tensor_device,
         ),
         validation_history=validation_history,
     )
@@ -725,6 +758,8 @@ def _training_progress_record(
         "convergence_patience": plan.convergence_patience,
         "convergence_min_delta": float(plan.convergence_min_delta),
         "convergence_min_steps": plan.convergence_min_steps,
+        "tensor_runtime": "pytorch",
+        "tensor_device": training_run.protocol.tensor_device,
         "target_validation_loss": (
             None
             if plan.target_validation_loss is None
@@ -804,22 +839,21 @@ def _batch_tensors(
     torch: Any,
     batch: GeneratedObservationBatch,
     outcome_ids: tuple[str, ...],
+    device: Any,
 ) -> tuple[Any, Any]:
     return (
-        _batch_tensor(torch=torch, batch=batch),
+        _batch_tensor(torch=torch, batch=batch, device=device),
         torch.tensor(
             [outcome_ids.index(sample.outcome_id) for sample in batch.samples],
             dtype=torch.long,
+            device=device,
         ),
     )
 
 
-def _batch_tensor(*, torch: Any, batch: GeneratedObservationBatch) -> Any:
-    values = [
-        list(sample.field.values)
-        for sample in batch.samples
-    ]
-    fields = torch.tensor(values, dtype=torch.float32)
+def _batch_tensor(*, torch: Any, batch: GeneratedObservationBatch, device: Any) -> Any:
+    values = [list(sample.field.values) for sample in batch.samples]
+    fields = torch.tensor(values, dtype=torch.float32, device=device)
     return fields.reshape((len(batch.samples), *batch.samples[0].field.shape))
 
 
@@ -956,15 +990,6 @@ def _write_document_atomic(path: Path, record: object) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_bytes(canonical_document_bytes(record))
     temporary.replace(path)
-
-
-def _torch() -> Any:
-    try:
-        return cast(Any, importlib.import_module("torch"))
-    except ImportError as error:
-        raise ModelOperatorExecutionError(
-            "PyTorch is required to run benchmark training"
-        ) from error
 
 
 def _identifier_atom(identifier: ProtocolIdentifier) -> str:

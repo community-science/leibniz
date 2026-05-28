@@ -63,6 +63,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
             evaluation_sample_count=3,
             seed=101,
             train_steps=1,
+            tensor_device="cpu",
         )
     )
 
@@ -91,8 +92,12 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     )
     assert training_run.protocol.optimizer == "sgd"
     assert training_run.protocol.objective == "cross-entropy"
+    assert training_run.protocol.tensor_runtime == "pytorch"
+    assert training_run.protocol.tensor_device == "cpu"
     assert training_run.protocol.max_steps == 1
     assert training_run.protocol.validation_sample_count == 2
+    assert training_summary["tensor_runtime"] == "pytorch"
+    assert training_summary["tensor_device"] == "cpu"
     assert training_run.steps_run == 1
     assert training_run.validation_checks == 2
     assert training_run.validation_history[0].step == 0
@@ -127,6 +132,7 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
             validation_interval=2,
             convergence_patience=2,
             convergence_min_delta=0.001,
+            tensor_device="cpu",
         )
     )
 
@@ -181,6 +187,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
             sample_count=2,
             seed=101,
             train_steps=1,
+            tensor_device="cpu",
         )
     )
 
@@ -261,6 +268,7 @@ def test_digits_benchmark_runner_materializes_running_training_history(
             convergence_patience=0,
             convergence_min_delta=0.0,
             convergence_min_steps=0,
+            tensor_device="cpu",
         ),
         progress_callback=refresh_progress,
     )
@@ -307,6 +315,7 @@ def test_digits_benchmark_runner_rejects_unmatched_architecture_shape(tmp_path: 
                 runs_root=tmp_path / ".runs",
                 scale=2,
                 sample_count=1,
+                tensor_device="cpu",
             )
         )
 

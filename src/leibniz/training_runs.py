@@ -42,6 +42,8 @@ _protocol_record = RecordSpec(
         "min_delta": FieldSpec(kind="number"),
         "patience": FieldSpec(kind="integer"),
         "min_steps": FieldSpec(kind="integer", required=False),
+        "tensor_runtime": FieldSpec(kind="string", required=False),
+        "tensor_device": FieldSpec(kind="string", required=False),
         "validation_source": FieldSpec(kind="string"),
     }
 )
@@ -103,6 +105,8 @@ class TrainingProtocol:
     patience: int
     validation_source: str
     min_steps: int = 0
+    tensor_runtime: str = "pytorch"
+    tensor_device: str = "cpu"
 
     def __post_init__(self) -> None:
         if not self.kind:
@@ -123,6 +127,10 @@ class TrainingProtocol:
         _require_nonnegative_finite(self.min_delta, "min_delta")
         _require_nonnegative_int(self.patience, "patience")
         _require_nonnegative_int(self.min_steps, "min_steps")
+        if not self.tensor_runtime:
+            raise TrainingRunValidationError("tensor_runtime must be nonempty")
+        if not self.tensor_device:
+            raise TrainingRunValidationError("tensor_device must be nonempty")
         if not self.validation_source:
             raise TrainingRunValidationError("validation_source must be nonempty")
 
@@ -156,6 +164,14 @@ class TrainingProtocol:
                 "validation_source",
             ),
             min_steps=_as_int(validated.get("min_steps", 0), "min_steps"),
+            tensor_runtime=_as_string(
+                validated.get("tensor_runtime", "pytorch"),
+                "tensor_runtime",
+            ),
+            tensor_device=_as_string(
+                validated.get("tensor_device", "cpu"),
+                "tensor_device",
+            ),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -172,6 +188,8 @@ class TrainingProtocol:
             "validation_sample_count": self.validation_sample_count,
             "min_delta": self.min_delta,
             "patience": self.patience,
+            "tensor_runtime": self.tensor_runtime,
+            "tensor_device": self.tensor_device,
             "validation_source": self.validation_source,
         }
         if self.min_steps:

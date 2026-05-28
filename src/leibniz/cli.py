@@ -365,6 +365,12 @@ def _parser() -> argparse.ArgumentParser:
     propose_results.add_argument("--convergence-min-delta", default=1e-3, type=float)
     propose_results.add_argument("--convergence-min-steps", default=500, type=int)
     propose_results.add_argument("--target-validation-loss", default=None, type=float)
+    propose_results.add_argument(
+        "--device",
+        default="auto",
+        choices=("auto", "cpu", "cuda", "mps"),
+        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
+    )
 
     benchmark = subcommands.add_parser(
         "benchmark",
@@ -402,6 +408,12 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--convergence-min-delta", default=1e-3, type=float)
     run.add_argument("--convergence-min-steps", default=500, type=int)
     run.add_argument("--target-validation-loss", default=None, type=float)
+    run.add_argument(
+        "--device",
+        default="auto",
+        choices=("auto", "cpu", "cuda", "mps"),
+        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
+    )
     run.add_argument("--dry-run", action="store_true")
     loop = benchmark_subcommands.add_parser(
         "loop",
@@ -435,6 +447,12 @@ def _parser() -> argparse.ArgumentParser:
     loop.add_argument("--convergence-min-delta", default=1e-3, type=float)
     loop.add_argument("--convergence-min-steps", default=500, type=int)
     loop.add_argument("--target-validation-loss", default=None, type=float)
+    loop.add_argument(
+        "--device",
+        default="auto",
+        choices=("auto", "cpu", "cuda", "mps"),
+        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
+    )
     loop.add_argument("--dry-run", action="store_true")
     loop.add_argument("--retry-failed", action="store_true")
     shakedown = benchmark_subcommands.add_parser(
@@ -469,6 +487,12 @@ def _parser() -> argparse.ArgumentParser:
     shakedown.add_argument("--convergence-min-delta", default=0.0, type=float)
     shakedown.add_argument("--convergence-min-steps", default=0, type=int)
     shakedown.add_argument("--target-validation-loss", default=None, type=float)
+    shakedown.add_argument(
+        "--device",
+        default="auto",
+        choices=("auto", "cpu", "cuda", "mps"),
+        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
+    )
     shakedown.add_argument("--retry-failed", action="store_true")
 
     console = subcommands.add_parser(
@@ -536,6 +560,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                     convergence_min_delta=args.convergence_min_delta,
                     convergence_min_steps=args.convergence_min_steps,
                     target_validation_loss=args.target_validation_loss,
+                    tensor_device=args.device,
                     dry_run=args.dry_run,
                 )
             )
@@ -631,6 +656,7 @@ def _active_training_loop_plan(
         convergence_min_delta=args.convergence_min_delta,
         convergence_min_steps=args.convergence_min_steps,
         target_validation_loss=args.target_validation_loss,
+        tensor_device=args.device,
         dry_run=dry_run,
         retry_failed=args.retry_failed,
         progress_callback=progress_callback,
@@ -858,6 +884,7 @@ def _results(args: argparse.Namespace) -> int:
                     convergence_min_delta=args.convergence_min_delta,
                     convergence_min_steps=args.convergence_min_steps,
                     target_validation_loss=args.target_validation_loss,
+                    tensor_device=args.device,
                 )
             )
             print(
