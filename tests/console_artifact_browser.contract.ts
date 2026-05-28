@@ -169,7 +169,7 @@ assertEqual(
     : '',
   [
     'benchmarks.digits.sample.digit-identity:content',
-    'benchmarks.digits.sample.field-nuisance-transform:nuisance',
+    'benchmarks.digits.sample.field-variation-transform:variation',
     'benchmarks.digits.materialization.canvas-side:materialization',
   ].join(','),
   'digits latent sample factors',

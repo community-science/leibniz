@@ -19,14 +19,14 @@ __all__ = [
     "ComponentMark",
     "FieldObservation",
     "FormedObservation",
-    "NuisanceTransformDeclaration",
+    "VariationTransformDeclaration",
     "ObservationComponent",
     "ObservationFormationDeclaration",
     "ObservationFormationDeclarationDocument",
     "ObservationFormationValidationError",
     "SlotComposition",
-    "SpatialAffineNuisance",
-    "ValueScaleNuisance",
+    "SpatialAffineVariation",
+    "ValueScaleVariation",
 ]
 
 _interpreter = "field-mark-composition@0.1.0"
@@ -64,7 +64,7 @@ _output_field_record = RecordSpec(
         "resolution_axis": FieldSpec(kind="string"),
     }
 )
-_spatial_affine_nuisance_record = RecordSpec(
+_spatial_affine_variation_record = RecordSpec(
     fields={
         "kind": FieldSpec(kind="string"),
         "coordinate_system": FieldSpec(kind="string"),
@@ -89,13 +89,13 @@ _spatial_affine_nuisance_record = RecordSpec(
         ),
     }
 )
-_value_scale_nuisance_record = RecordSpec(
+_value_scale_variation_record = RecordSpec(
     fields={
         "kind": FieldSpec(kind="string"),
         "scale": FieldSpec(kind="sequence", item=FieldSpec(kind="number")),
     }
 )
-_nuisance_transform_record = RecordSpec(
+_variation_transform_record = RecordSpec(
     fields={
         "kind": FieldSpec(kind="string"),
         "spatial_affine": FieldSpec(kind="record", required=False),
@@ -109,7 +109,7 @@ _observation_formation_declaration_record = RecordSpec(
         "interpreter": FieldSpec(kind="string"),
         "output_field": FieldSpec(kind="record"),
         "slot_composition": FieldSpec(kind="record"),
-        "nuisance_transform": FieldSpec(kind="record", required=False),
+        "variation_transform": FieldSpec(kind="record", required=False),
         "components": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
     }
 )
@@ -117,6 +117,22 @@ _observation_formation_declaration_record = RecordSpec(
 
 class ObservationFormationValidationError(ValueError):
     """Raised when observation formation records are invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class _SpatialAffineCoordinate:
+    coordinate_system: str
+    translation: tuple[float, float]
+    scale: tuple[float, float]
+    rotation_degrees: float
+    shear_degrees: float
+
+
+@dataclass(frozen=True, slots=True)
+class _VariationCoordinate:
+    slot_index: int
+    spatial_affine: _SpatialAffineCoordinate
+    value_scale: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,8 +269,8 @@ class SlotComposition:
 
 
 @dataclass(frozen=True, slots=True)
-class SpatialAffineNuisance:
-    """Declared spatial affine nuisance bounds in normalized field coordinates."""
+class SpatialAffineVariation:
+    """Declared spatial affine variation bounds in normalized field coordinates."""
 
     kind: str
     coordinate_system: str
@@ -267,7 +283,7 @@ class SpatialAffineNuisance:
     def __post_init__(self) -> None:
         if self.kind != "spatial-affine":
             raise ObservationFormationValidationError(
-                f"unsupported spatial affine nuisance kind: {self.kind}"
+                f"unsupported spatial affine variation kind: {self.kind}"
             )
         if self.coordinate_system != "normalized-field":
             raise ObservationFormationValidationError(
@@ -308,7 +324,7 @@ class SpatialAffineNuisance:
                 )
 
     @classmethod
-    def identity(cls, *, spatial_rank: int) -> SpatialAffineNuisance:
+    def identity(cls, *, spatial_rank: int) -> SpatialAffineVariation:
         return cls(
             kind="spatial-affine",
             coordinate_system="normalized-field",
@@ -324,9 +340,9 @@ class SpatialAffineNuisance:
         )
 
     @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> SpatialAffineNuisance:
+    def from_record(cls, record: Mapping[str, object]) -> SpatialAffineVariation:
         try:
-            validated = _spatial_affine_nuisance_record.validate(record)
+            validated = _spatial_affine_variation_record.validate(record)
         except ValueError as error:
             raise ObservationFormationValidationError(str(error)) from error
         spatial_rank = _as_int(validated["spatial_rank"], field="spatial_rank")
@@ -360,8 +376,8 @@ class SpatialAffineNuisance:
 
 
 @dataclass(frozen=True, slots=True)
-class ValueScaleNuisance:
-    """Declared scalar intensity nuisance bounds."""
+class ValueScaleVariation:
+    """Declared scalar intensity variation bounds."""
 
     kind: str
     scale: tuple[float, float]
@@ -369,18 +385,18 @@ class ValueScaleNuisance:
     def __post_init__(self) -> None:
         if self.kind != "value-scale":
             raise ObservationFormationValidationError(
-                f"unsupported value scale nuisance kind: {self.kind}"
+                f"unsupported value scale variation kind: {self.kind}"
             )
         _validate_interval(self.scale, field="value_scale.scale", positive=True)
 
     @classmethod
-    def identity(cls) -> ValueScaleNuisance:
+    def identity(cls) -> ValueScaleVariation:
         return cls(kind="value-scale", scale=(1.0, 1.0))
 
     @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> ValueScaleNuisance:
+    def from_record(cls, record: Mapping[str, object]) -> ValueScaleVariation:
         try:
-            validated = _value_scale_nuisance_record.validate(record)
+            validated = _value_scale_variation_record.validate(record)
         except ValueError as error:
             raise ObservationFormationValidationError(str(error)) from error
         return cls(
@@ -396,46 +412,46 @@ class ValueScaleNuisance:
 
 
 @dataclass(frozen=True, slots=True)
-class NuisanceTransformDeclaration:
-    """Declared nuisance transforms available to observation formation."""
+class VariationTransformDeclaration:
+    """Declared variation transforms available to observation formation."""
 
     kind: str
-    spatial_affine: SpatialAffineNuisance
-    value_scale: ValueScaleNuisance
+    spatial_affine: SpatialAffineVariation
+    value_scale: ValueScaleVariation
 
     def __post_init__(self) -> None:
-        if self.kind != "field-nuisance-transform":
+        if self.kind != "field-variation-transform":
             raise ObservationFormationValidationError(
-                f"unsupported nuisance transform kind: {self.kind}"
+                f"unsupported variation transform kind: {self.kind}"
             )
 
     @classmethod
-    def identity(cls, *, spatial_rank: int = 2) -> NuisanceTransformDeclaration:
+    def identity(cls, *, spatial_rank: int = 2) -> VariationTransformDeclaration:
         return cls(
-            kind="field-nuisance-transform",
-            spatial_affine=SpatialAffineNuisance.identity(spatial_rank=spatial_rank),
-            value_scale=ValueScaleNuisance.identity(),
+            kind="field-variation-transform",
+            spatial_affine=SpatialAffineVariation.identity(spatial_rank=spatial_rank),
+            value_scale=ValueScaleVariation.identity(),
         )
 
     @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> NuisanceTransformDeclaration:
+    def from_record(cls, record: Mapping[str, object]) -> VariationTransformDeclaration:
         try:
-            validated = _nuisance_transform_record.validate(record)
+            validated = _variation_transform_record.validate(record)
         except ValueError as error:
             raise ObservationFormationValidationError(str(error)) from error
         return cls(
             kind=str(validated["kind"]),
             spatial_affine=(
-                SpatialAffineNuisance.identity(spatial_rank=2)
+                SpatialAffineVariation.identity(spatial_rank=2)
                 if "spatial_affine" not in validated
-                else SpatialAffineNuisance.from_record(
+                else SpatialAffineVariation.from_record(
                     _as_mapping(validated["spatial_affine"], field="spatial_affine")
                 )
             ),
             value_scale=(
-                ValueScaleNuisance.identity()
+                ValueScaleVariation.identity()
                 if "value_scale" not in validated
-                else ValueScaleNuisance.from_record(
+                else ValueScaleVariation.from_record(
                     _as_mapping(validated["value_scale"], field="value_scale")
                 )
             ),
@@ -541,8 +557,8 @@ class ObservationFormationDeclaration:
     resolution_axis: str
     slot_composition: SlotComposition
     components: tuple[ObservationComponent, ...]
-    nuisance_transform: NuisanceTransformDeclaration = field(
-        default_factory=NuisanceTransformDeclaration.identity
+    variation_transform: VariationTransformDeclaration = field(
+        default_factory=VariationTransformDeclaration.identity
     )
 
     def __post_init__(self) -> None:
@@ -597,11 +613,11 @@ class ObservationFormationDeclaration:
                 ObservationComponent.from_record(_as_mapping(component, field="components"))
                 for component in _as_sequence(validated["components"], field="components")
             ),
-            nuisance_transform=(
-                NuisanceTransformDeclaration.identity()
-                if "nuisance_transform" not in validated
-                else NuisanceTransformDeclaration.from_record(
-                    _as_mapping(validated["nuisance_transform"], field="nuisance_transform")
+            variation_transform=(
+                VariationTransformDeclaration.identity()
+                if "variation_transform" not in validated
+                else VariationTransformDeclaration.from_record(
+                    _as_mapping(validated["variation_transform"], field="variation_transform")
                 )
             ),
         )
@@ -626,6 +642,7 @@ class ObservationFormationDeclaration:
         id: ProtocolIdentifier,
         plan: MaterializationPlan,
         component_sequence: Sequence[int],
+        variation_coordinates: Sequence[Mapping[str, object]] | None = None,
     ) -> FormedObservation:
         if plan.benchmark_id != self.benchmark_id:
             raise ObservationFormationValidationError(
@@ -642,7 +659,15 @@ class ObservationFormationDeclaration:
             raise ObservationFormationValidationError(
                 "component_sequence index is outside component vocabulary"
             )
-        field = self._form_field(sequence=sequence, resolution=resolution)
+        coordinates = self._variation_coordinates(
+            slot_count=slots,
+            variation_coordinates=variation_coordinates,
+        )
+        field = self._form_field(
+            sequence=sequence,
+            resolution=resolution,
+            variation_coordinates=coordinates,
+        )
         return FormedObservation(
             id=id,
             benchmark_id=self.benchmark_id,
@@ -674,25 +699,68 @@ class ObservationFormationDeclaration:
                 "resolution_axis": self.resolution_axis,
             },
             "slot_composition": self.slot_composition.to_record(),
-            "nuisance_transform": self.nuisance_transform.to_record(),
+            "variation_transform": self.variation_transform.to_record(),
             "components": [component.to_record() for component in self.components],
         }
 
-    def _form_field(self, *, sequence: tuple[int, ...], resolution: int) -> FieldObservation:
+    def _variation_coordinates(
+        self,
+        *,
+        slot_count: int,
+        variation_coordinates: Sequence[Mapping[str, object]] | None,
+    ) -> tuple[_VariationCoordinate, ...] | None:
+        if variation_coordinates is None:
+            return None
+        coordinates = tuple(variation_coordinates)
+        if len(coordinates) != slot_count:
+            raise ObservationFormationValidationError(
+                "variation_coordinates length must match slot count"
+            )
+        parsed_coordinates: list[_VariationCoordinate] = []
+        for slot_index, coordinate in enumerate(coordinates):
+            parsed = _parse_variation_coordinate(coordinate, field="variation_coordinates")
+            if parsed.slot_index != slot_index:
+                raise ObservationFormationValidationError(
+                    "variation coordinate slot_index must match coordinate position"
+                )
+            parsed_coordinates.append(parsed)
+        return tuple(parsed_coordinates)
+
+    def _form_field(
+        self,
+        *,
+        sequence: tuple[int, ...],
+        resolution: int,
+        variation_coordinates: tuple[_VariationCoordinate, ...] | None = None,
+    ) -> FieldObservation:
         if resolution < 1:
             raise ObservationFormationValidationError("resolution must be positive")
         values = [0.0] * (self.channel_count * resolution * resolution)
         for slot_index, component_index in enumerate(sequence):
+            target_values = values
+            if variation_coordinates is not None:
+                target_values = [0.0] * len(values)
             component = self.components[component_index]
             for mark in component.marks:
                 _draw_mark(
-                    values=values,
+                    values=target_values,
                     channel_count=self.channel_count,
                     resolution=resolution,
                     slot_count=len(sequence),
                     slot_index=slot_index,
                     slot_axis=self.slot_composition.slot_axis,
                     mark=mark,
+                )
+            if variation_coordinates is not None:
+                _merge_transformed_slot(
+                    values=values,
+                    source_values=target_values,
+                    channel_count=self.channel_count,
+                    resolution=resolution,
+                    slot_count=len(sequence),
+                    slot_index=slot_index,
+                    slot_axis=self.slot_composition.slot_axis,
+                    coordinate=variation_coordinates[slot_index],
                 )
         return FieldObservation(
             shape=(self.channel_count, resolution, resolution),
@@ -753,6 +821,138 @@ def _draw_mark(
                     + x_index
                 )
                 values[value_index] = max(values[value_index], mark.value)
+
+
+def _merge_transformed_slot(
+    *,
+    values: list[float],
+    source_values: list[float],
+    channel_count: int,
+    resolution: int,
+    slot_count: int,
+    slot_index: int,
+    slot_axis: str,
+    coordinate: _VariationCoordinate,
+) -> None:
+    if coordinate.spatial_affine.coordinate_system != "normalized-field":
+        raise ObservationFormationValidationError(
+            "variation coordinate coordinate_system must be normalized-field"
+        )
+    if _is_identity_variation_coordinate(coordinate):
+        for index, value in enumerate(source_values):
+            if value > values[index]:
+                values[index] = value
+        return
+    center = _slot_center(slot_count=slot_count, slot_index=slot_index, axis=slot_axis)
+    inverse = _inverse_affine_matrix(coordinate.spatial_affine)
+    for channel in range(channel_count):
+        channel_offset = channel * resolution * resolution
+        for y_index in range(resolution):
+            y = (y_index + 0.5) / resolution
+            for x_index in range(resolution):
+                x = (x_index + 0.5) / resolution
+                source_x, source_y = _inverse_transform_point(
+                    (x, y),
+                    center=center,
+                    translation=coordinate.spatial_affine.translation,
+                    inverse_matrix=inverse,
+                )
+                value = _bilinear_sample(
+                    source_values,
+                    channel_offset=channel_offset,
+                    resolution=resolution,
+                    x=source_x,
+                    y=source_y,
+                )
+                if value <= 0.0:
+                    continue
+                target_index = channel_offset + y_index * resolution + x_index
+                values[target_index] = max(
+                    values[target_index],
+                    min(1.0, value * coordinate.value_scale),
+                )
+
+
+def _is_identity_variation_coordinate(coordinate: _VariationCoordinate) -> bool:
+    return (
+        coordinate.spatial_affine.translation == (0.0, 0.0)
+        and coordinate.spatial_affine.scale == (1.0, 1.0)
+        and coordinate.spatial_affine.rotation_degrees == 0.0
+        and coordinate.spatial_affine.shear_degrees == 0.0
+        and coordinate.value_scale == 1.0
+    )
+
+
+def _slot_center(
+    *,
+    slot_count: int,
+    slot_index: int,
+    axis: str,
+) -> tuple[float, float]:
+    if axis == "x":
+        return ((slot_index + 0.5) / slot_count, 0.5)
+    return (0.5, (slot_index + 0.5) / slot_count)
+
+
+def _inverse_affine_matrix(
+    coordinate: _SpatialAffineCoordinate,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    angle = math.radians(coordinate.rotation_degrees)
+    shear = math.tan(math.radians(coordinate.shear_degrees))
+    scale_x, scale_y = coordinate.scale
+    cos_angle = math.cos(angle)
+    sin_angle = math.sin(angle)
+    # Forward matrix is rotation * x-shear * axis scale.
+    a = cos_angle * scale_x
+    b = (cos_angle * shear - sin_angle) * scale_y
+    c = sin_angle * scale_x
+    d = (sin_angle * shear + cos_angle) * scale_y
+    determinant = a * d - b * c
+    if not math.isfinite(determinant) or determinant == 0.0:
+        raise ObservationFormationValidationError("variation affine transform is singular")
+    return ((d / determinant, -b / determinant), (-c / determinant, a / determinant))
+
+
+def _inverse_transform_point(
+    point: tuple[float, float],
+    *,
+    center: tuple[float, float],
+    translation: tuple[float, float],
+    inverse_matrix: tuple[tuple[float, float], tuple[float, float]],
+) -> tuple[float, float]:
+    dx = point[0] - center[0] - translation[0]
+    dy = point[1] - center[1] - translation[1]
+    return (
+        center[0] + inverse_matrix[0][0] * dx + inverse_matrix[0][1] * dy,
+        center[1] + inverse_matrix[1][0] * dx + inverse_matrix[1][1] * dy,
+    )
+
+
+def _bilinear_sample(
+    values: Sequence[float],
+    *,
+    channel_offset: int,
+    resolution: int,
+    x: float,
+    y: float,
+) -> float:
+    pixel_x = x * resolution - 0.5
+    pixel_y = y * resolution - 0.5
+    if pixel_x < 0 or pixel_y < 0 or pixel_x > resolution - 1 or pixel_y > resolution - 1:
+        return 0.0
+    left = math.floor(pixel_x)
+    top = math.floor(pixel_y)
+    right = min(resolution - 1, left + 1)
+    bottom = min(resolution - 1, top + 1)
+    x_weight = pixel_x - left
+    y_weight = pixel_y - top
+    top_left = values[channel_offset + top * resolution + left]
+    top_right = values[channel_offset + top * resolution + right]
+    bottom_left = values[channel_offset + bottom * resolution + left]
+    bottom_right = values[channel_offset + bottom * resolution + right]
+    top_value = (1.0 - x_weight) * top_left + x_weight * top_right
+    bottom_value = (1.0 - x_weight) * bottom_left + x_weight * bottom_right
+    return (1.0 - y_weight) * top_value + y_weight * bottom_value
 
 
 def _pixel_range(lower: float, upper: float, *, resolution: int) -> range:
@@ -848,6 +1048,87 @@ def _point(value: object, *, field: str) -> tuple[float, float]:
         _as_float(sequence[0], field=f"{field}.0"),
         _as_float(sequence[1], field=f"{field}.1"),
     )
+
+
+def _parse_variation_coordinate(
+    value: Mapping[str, object],
+    *,
+    field: str,
+) -> _VariationCoordinate:
+    if str(value.get("kind")) != "field-variation-transform-coordinate":
+        raise ObservationFormationValidationError(
+            f"{field}: expected field-variation-transform-coordinate"
+        )
+    spatial = _as_mapping(value.get("spatial_affine"), field=f"{field}.spatial_affine")
+    if str(spatial.get("kind")) != "spatial-affine-coordinate":
+        raise ObservationFormationValidationError(
+            f"{field}.spatial_affine: expected spatial-affine-coordinate"
+        )
+    value_scale = _as_mapping(value.get("value_scale"), field=f"{field}.value_scale")
+    if str(value_scale.get("kind")) != "value-scale-coordinate":
+        raise ObservationFormationValidationError(
+            f"{field}.value_scale: expected value-scale-coordinate"
+        )
+    translation = _coordinate_pair(
+        spatial.get("translation"),
+        field=f"{field}.spatial_affine.translation",
+    )
+    scale = _coordinate_pair(spatial.get("scale"), field=f"{field}.spatial_affine.scale")
+    if scale[0] <= 0.0 or scale[1] <= 0.0:
+        raise ObservationFormationValidationError(
+            f"{field}.spatial_affine.scale values must be positive"
+        )
+    value_scale_number = _as_float(value_scale.get("scale"), field=f"{field}.value_scale.scale")
+    if not math.isfinite(value_scale_number) or value_scale_number <= 0.0:
+        raise ObservationFormationValidationError(
+            f"{field}.value_scale.scale must be finite and positive"
+        )
+    return _VariationCoordinate(
+        slot_index=_as_int(value.get("slot_index"), field=f"{field}.slot_index"),
+        spatial_affine=_SpatialAffineCoordinate(
+            coordinate_system=str(spatial.get("coordinate_system")),
+            translation=translation,
+            scale=scale,
+            rotation_degrees=_single_coordinate_number(
+                spatial.get("rotation_degrees"),
+                field=f"{field}.spatial_affine.rotation_degrees",
+            ),
+            shear_degrees=_single_coordinate_number(
+                spatial.get("shear_degrees"),
+                field=f"{field}.spatial_affine.shear_degrees",
+            ),
+        ),
+        value_scale=value_scale_number,
+    )
+
+
+def _coordinate_pair(value: object, *, field: str) -> tuple[float, float]:
+    sequence = _coordinate_sequence(value, field=field)
+    if len(sequence) != 2:
+        raise ObservationFormationValidationError(f"{field}: expected two values")
+    first = _as_float(sequence[0], field=f"{field}.0")
+    second = _as_float(sequence[1], field=f"{field}.1")
+    if not math.isfinite(first) or not math.isfinite(second):
+        raise ObservationFormationValidationError(f"{field} values must be finite")
+    return (first, second)
+
+
+def _single_coordinate_number(value: object, *, field: str) -> float:
+    sequence = _coordinate_sequence(value, field=field)
+    if len(sequence) != 1:
+        raise ObservationFormationValidationError(f"{field}: expected one value")
+    number = _as_float(sequence[0], field=f"{field}.0")
+    if not math.isfinite(number):
+        raise ObservationFormationValidationError(f"{field} value must be finite")
+    return number
+
+
+def _coordinate_sequence(value: object, *, field: str) -> tuple[object, ...]:
+    if isinstance(value, tuple):
+        return cast(tuple[object, ...], value)
+    if isinstance(value, list):
+        return tuple(cast(list[object], value))
+    raise ObservationFormationValidationError(f"{field}: expected sequence")
 
 
 def _interval(value: object, *, field: str) -> tuple[float, float]:

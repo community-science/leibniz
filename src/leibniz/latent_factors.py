@@ -24,14 +24,14 @@ __all__ = [
     "SampleLatentFactor",
 ]
 
-LatentFactorRole: TypeAlias = Literal["content", "nuisance", "materialization"]
+LatentFactorRole: TypeAlias = Literal["content", "variation", "materialization"]
 _degree_measure_kinds = (
     "constant-count",
     "discrete-choice",
     "scalar",
     "vector-dimension",
 )
-_latent_factor_roles = ("content", "nuisance", "materialization")
+_latent_factor_roles = ("content", "variation", "materialization")
 _resolution_bases = ("declared-minimum", "analytic-bound", "certified-search")
 
 _degree_measure_record = RecordSpec(

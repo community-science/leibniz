@@ -44,15 +44,15 @@ def test_degree_measure_validates_supported_kinds() -> None:
     ) == "discrete-choice degree measure requires domain_size"
 
 
-def test_complexity_projection_counts_content_and_excludes_nuisance() -> None:
+def test_complexity_projection_counts_content_and_excludes_variation() -> None:
     declaration = _digits_declaration(sequence_length=3)
 
     assert declaration.evaluate_complexity("C") == 3.0
     assert [
         factor.name
         for factor in declaration.sample_factors
-        if factor.role == "nuisance"
-    ] == [ProtocolName.parse("benchmarks.digits.sample.field-nuisance-transform")]
+        if factor.role == "variation"
+    ] == [ProtocolName.parse("benchmarks.digits.sample.field-variation-transform")]
     assert declaration.construction_factors == (
         GeneratorConstructionFactor(
             name=ProtocolName.parse("benchmarks.digits.construction.stroke-basis"),
@@ -163,8 +163,8 @@ def _digits_declaration(sequence_length: int) -> LatentFactorDeclaration:
                 multiplicity=sequence_length,
             ),
             SampleLatentFactor(
-                name=ProtocolName.parse("benchmarks.digits.sample.field-nuisance-transform"),
-                role="nuisance",
+                name=ProtocolName.parse("benchmarks.digits.sample.field-variation-transform"),
+                role="variation",
                 degree_measure=DegreeMeasure.vector_dimension(7),
                 multiplicity=sequence_length,
             ),

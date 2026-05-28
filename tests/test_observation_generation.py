@@ -4,12 +4,13 @@ from typing import cast
 
 import pytest
 
+from leibniz.identifiers import ProtocolIdentifier
 from leibniz.observation_generation import (
     ObservationGenerationError,
     field_to_png_bytes,
     field_to_png_data_url,
     load_observation_generator,
-    sample_nuisance_transform_coordinates,
+    sample_variation_transform_coordinates,
 )
 
 _repository_root = Path(__file__).parents[1]
@@ -31,21 +32,21 @@ def test_digits_observation_generator_is_deterministic() -> None:
     assert _coordinate(left.samples[0].latent_coordinates, role="content")["values"] == list(
         left.samples[0].observation.component_sequence
     )
-    nuisance = _coordinate(left.samples[0].latent_coordinates, role="nuisance")
-    assert nuisance["multiplicity"] == 3
-    assert nuisance["name"] == "benchmarks.digits.sample.field-nuisance-transform"
-    assert nuisance["degree_measure"] == {"kind": "vector-dimension", "count": 7.0}
-    nuisance_values = cast(dict[str, object], nuisance["values"])
-    assert nuisance_values["kind"] == "field-nuisance-transform-samples"
-    assert cast(dict[str, object], nuisance_values["bounds"]) == (
-        generator.formation.nuisance_transform.to_record()
+    variation = _coordinate(left.samples[0].latent_coordinates, role="variation")
+    assert variation["multiplicity"] == 3
+    assert variation["name"] == "benchmarks.digits.sample.field-variation-transform"
+    assert variation["degree_measure"] == {"kind": "vector-dimension", "count": 7.0}
+    variation_values = cast(dict[str, object], variation["values"])
+    assert variation_values["kind"] == "field-variation-transform-samples"
+    assert cast(dict[str, object], variation_values["bounds"]) == (
+        generator.formation.variation_transform.to_record()
     )
-    coordinates = cast(list[dict[str, object]], nuisance_values["coordinates"])
+    coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
     assert [coordinate["slot_index"] for coordinate in coordinates] == [0, 1, 2]
     assert len(coordinates) == 3
     assert _within_transform_bounds(
         coordinates[0],
-        bounds=generator.formation.nuisance_transform.to_record(),
+        bounds=generator.formation.variation_transform.to_record(),
     )
 
 
@@ -68,6 +69,36 @@ def test_digits_observation_generator_scales_resolution_and_complexity() -> None
     assert sample.outcome_id == "digit-1-2-3-4"
 
 
+def test_digits_observation_generator_applies_recorded_variation_coordinates() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+    sample = generator.sample_batch(
+        scale=2,
+        sample_count=1,
+        seed=909,
+        component_sequences=((1, 2),),
+    ).samples[0]
+    variation = _coordinate(sample.latent_coordinates, role="variation")
+    variation_values = cast(dict[str, object], variation["values"])
+    direct = generator.formation.form_observation(
+        id=ProtocolIdentifier.parse("benchmarks.digits.observations.direct@0.1.0"),
+        plan=sample.materialization_plan,
+        component_sequence=sample.observation.component_sequence,
+        variation_coordinates=cast(
+            list[Mapping[str, object]],
+            variation_values["coordinates"],
+        ),
+    )
+    untransformed = generator.formation.form_observation(
+        id=ProtocolIdentifier.parse("benchmarks.digits.observations.untransformed@0.1.0"),
+        plan=sample.materialization_plan,
+        component_sequence=sample.observation.component_sequence,
+    )
+
+    assert sample.observation.field == direct.field
+    assert sample.observation.field != untransformed.field
+    assert all(0.0 <= value <= 1.0 for value in sample.field.values)
+
+
 def test_generated_observation_records_can_include_fields() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
     batch = generator.sample_batch(scale=1, sample_count=1, seed=303)
@@ -81,29 +112,29 @@ def test_generated_observation_records_can_include_fields() -> None:
     assert "field" in expanded_sample
 
 
-def test_nuisance_transform_sampling_is_deterministic_and_declaration_driven() -> None:
+def test_variation_transform_sampling_is_deterministic_and_declaration_driven() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
-    transform = generator.formation.nuisance_transform
+    transform = generator.formation.variation_transform
 
-    left = sample_nuisance_transform_coordinates(
+    left = sample_variation_transform_coordinates(
         transform=transform,
         seed=707,
         sample_index=2,
         slot_index=1,
     )
-    right = sample_nuisance_transform_coordinates(
+    right = sample_variation_transform_coordinates(
         transform=transform,
         seed=707,
         sample_index=2,
         slot_index=1,
     )
-    other = sample_nuisance_transform_coordinates(
+    other = sample_variation_transform_coordinates(
         transform=transform,
         seed=707,
         sample_index=3,
         slot_index=1,
     )
-    other_slot = sample_nuisance_transform_coordinates(
+    other_slot = sample_variation_transform_coordinates(
         transform=transform,
         seed=707,
         sample_index=2,

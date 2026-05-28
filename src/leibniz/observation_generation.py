@@ -9,6 +9,7 @@ import zlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.content import ContentDigest
@@ -28,9 +29,9 @@ from leibniz.materialization import (
 from leibniz.observation_formation import (
     FieldObservation,
     FormedObservation,
-    NuisanceTransformDeclaration,
     ObservationFormationDeclaration,
     ObservationFormationDeclarationDocument,
+    VariationTransformDeclaration,
 )
 
 __all__ = [
@@ -41,7 +42,7 @@ __all__ = [
     "field_to_png_bytes",
     "field_to_png_data_url",
     "load_observation_generator",
-    "sample_nuisance_transform_coordinates",
+    "sample_variation_transform_coordinates",
 ]
 
 _document_suffix = document_filename_suffix()
@@ -174,10 +175,17 @@ class ObservationGenerator:
                 if sequences
                 else self.formation.sample_component_sequence(plan=plan, sample_index=index)
             )
+            variation_values = _variation_transform_values(
+                transform=self.formation.variation_transform,
+                seed=plan.seed,
+                sample_index=index,
+                slot_count=len(sequence),
+            )
             observation = self.formation.form_observation(
                 id=self._observation_id(scale=scale, seed=seed, index=index),
                 plan=plan,
                 component_sequence=sequence,
+                variation_coordinates=_variation_coordinates_from_values(variation_values),
             )
             samples.append(
                 GeneratedObservationSample(
@@ -190,7 +198,7 @@ class ObservationGenerator:
                         sequence=sequence,
                         scaled_factors=scaled_factors,
                         plan=plan,
-                        sample_index=index,
+                        variation_values=variation_values,
                     ),
                 )
             )
@@ -215,7 +223,7 @@ class ObservationGenerator:
 
         factors: list[SampleLatentFactor] = []
         for factor in self.latent_factors.sample_factors:
-            if factor.role in {"content", "nuisance"} and factor.multiplicity == 1:
+            if factor.role in {"content", "variation"} and factor.multiplicity == 1:
                 factors.append(
                     SampleLatentFactor(
                         name=factor.name,
@@ -275,7 +283,7 @@ class ObservationGenerator:
         sequence: tuple[int, ...],
         scaled_factors: tuple[SampleLatentFactor, ...],
         plan: MaterializationPlan,
-        sample_index: int,
+        variation_values: Mapping[str, object],
     ) -> tuple[Mapping[str, object], ...]:
         records: list[Mapping[str, object]] = []
         for factor in scaled_factors:
@@ -284,12 +292,7 @@ class ObservationGenerator:
             elif factor.role == "materialization":
                 values = dict(plan.resolution_assignment.values)
             else:
-                values = _nuisance_transform_values(
-                    transform=self.formation.nuisance_transform,
-                    seed=plan.seed,
-                    sample_index=sample_index,
-                    slot_count=factor.multiplicity,
-                )
+                values = variation_values
             records.append(
                 {
                     "name": str(factor.name),
@@ -333,14 +336,14 @@ def load_observation_generator(benchmark_root: Path) -> ObservationGenerator:
     )
 
 
-def sample_nuisance_transform_coordinates(
+def sample_variation_transform_coordinates(
     *,
-    transform: NuisanceTransformDeclaration,
+    transform: VariationTransformDeclaration,
     seed: int,
     sample_index: int,
     slot_index: int,
 ) -> Mapping[str, object]:
-    """Sample one deterministic per-slot nuisance transform coordinate."""
+    """Sample one deterministic per-slot variation transform coordinate."""
 
     if type(seed) is not int or seed < 0:
         raise ObservationGenerationError("seed must be a nonnegative integer")
@@ -360,7 +363,7 @@ def sample_nuisance_transform_coordinates(
     )
     spatial = transform.spatial_affine
     return {
-        "kind": "field-nuisance-transform-coordinate",
+        "kind": "field-variation-transform-coordinate",
         "slot_index": slot_index,
         "spatial_affine": {
             "kind": "spatial-affine-coordinate",
@@ -414,9 +417,9 @@ def field_to_png_data_url(field: FieldObservation) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def _nuisance_transform_values(
+def _variation_transform_values(
     *,
-    transform: NuisanceTransformDeclaration,
+    transform: VariationTransformDeclaration,
     seed: int,
     sample_index: int,
     slot_count: int,
@@ -424,11 +427,11 @@ def _nuisance_transform_values(
     if slot_count < 1:
         raise ObservationGenerationError("slot_count must be positive")
     return {
-        "kind": "field-nuisance-transform-samples",
+        "kind": "field-variation-transform-samples",
         "bounds": transform.to_record(),
         "coordinates": [
             dict(
-                sample_nuisance_transform_coordinates(
+                sample_variation_transform_coordinates(
                     transform=transform,
                     seed=seed,
                     sample_index=sample_index,
@@ -438,6 +441,23 @@ def _nuisance_transform_values(
             for slot_index in range(slot_count)
         ],
     }
+
+
+def _variation_coordinates_from_values(
+    values: Mapping[str, object],
+) -> tuple[Mapping[str, object], ...]:
+    raw_coordinates = values.get("coordinates")
+    if not isinstance(raw_coordinates, Sequence) or isinstance(
+        raw_coordinates, (str, bytes)
+    ):
+        raise ObservationGenerationError("variation values coordinates must be a sequence")
+    parsed: list[Mapping[str, object]] = []
+    coordinates = cast(Sequence[object], raw_coordinates)
+    for coordinate in coordinates:
+        if not isinstance(coordinate, Mapping):
+            raise ObservationGenerationError("variation coordinate must be a record")
+        parsed.append(cast(Mapping[str, object], coordinate))
+    return tuple(parsed)
 
 
 def _sample_interval(

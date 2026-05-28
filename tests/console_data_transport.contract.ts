@@ -157,7 +157,7 @@ assertEqual(canonicalSample.outcome_id.startsWith('digit-'), true, 'sample outco
 assertEqual(canonicalSample.field_shape.join('x'), '1x32x32', 'sample field shape');
 assertEqual(
   canonicalSample.latent_coordinates.map((coordinate) => coordinate.role).join(','),
-  'content,nuisance,materialization',
+  'content,variation,materialization',
   'sample latent roles',
 );
 assertEqual(
