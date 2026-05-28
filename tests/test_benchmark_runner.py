@@ -101,12 +101,21 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     throughput = cast(dict[str, object], training_summary["throughput"])
     training_throughput = cast(dict[str, object], throughput["training"])
     evaluation_throughput = cast(dict[str, object], throughput["evaluation"])
+    phase_timing = cast(dict[str, object], throughput["phase_timing"])
+    timing_phases = cast(dict[str, object], phase_timing["phases"])
+    tensor_batch_timing = cast(dict[str, object], timing_phases["training_tensor_batch"])
+    forward_timing = cast(dict[str, object], timing_phases["training_forward_loss"])
     roofline = cast(dict[str, object], throughput["roofline"])
     roofline_comparison = cast(dict[str, object], throughput["roofline_comparison"])
     phases = cast(dict[str, object], roofline_comparison["phases"])
     training_phase = cast(dict[str, object], phases["training"])
     assert throughput["tensor_runtime"] == "pytorch"
     assert throughput["tensor_device"] == "cpu"
+    assert phase_timing["kind"] == "benchmark-phase-timing"
+    assert tensor_batch_timing["sample_count"] == 2
+    assert cast(float, tensor_batch_timing["seconds"]) > 0
+    assert forward_timing["sample_count"] == 2
+    assert cast(float, forward_timing["seconds"]) > 0
     assert cast(float, roofline["peak_bytes_per_second"]) > 0
     assert training_throughput["sample_count"] == 2
     assert cast(float, training_throughput["samples_per_second"]) > 0
@@ -227,6 +236,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     diagnostics = cast(dict[str, object], history[0]["training_diagnostics"])
     protocol = cast(dict[str, object], diagnostics["protocol"])
     throughput = cast(dict[str, object], diagnostics["throughput"])
+    phase_timing = cast(dict[str, object], throughput["phase_timing"])
     roofline_comparison = cast(dict[str, object], throughput["roofline_comparison"])
     assert protocol["optimizer"] == "sgd"
     assert protocol["schedule"] == "none"
@@ -234,6 +244,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert diagnostics["steps_run"] == 1
     assert diagnostics["validation_checks"] == 2
     assert "final_validation_loss" in diagnostics
+    assert "training_tensor_batch" in cast(dict[str, object], phase_timing["phases"])
     assert roofline_comparison["status"] == "available"
     assert roofline_comparison["model"] == "operational-intensity"
     assert len(cast(list[dict[str, object]], diagnostics["validation_history"])) == 2

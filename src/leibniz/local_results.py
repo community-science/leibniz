@@ -926,6 +926,14 @@ def _run_console_view_model(
                 throughput_record.get("evaluation"),
                 "training_diagnostics.throughput.evaluation",
             )
+            phase_timing = (
+                _as_mapping(
+                    throughput_record.get("phase_timing"),
+                    "training_diagnostics.throughput.phase_timing",
+                )
+                if "phase_timing" in throughput_record
+                else None
+            )
             roofline_comparison = _as_mapping(
                 throughput_record.get("roofline_comparison"),
                 "training_diagnostics.throughput.roofline_comparison",
@@ -945,6 +953,10 @@ def _run_console_view_model(
                         (
                             "Roofline",
                             _console_string_value(roofline_comparison.get("status")),
+                        ),
+                        (
+                            "Slowest Phase",
+                            _slowest_phase_label(phase_timing),
                         ),
                     ),
                 )
@@ -995,6 +1007,33 @@ def _console_samples_per_second(record: Mapping[str, object]) -> str:
     if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
         return "unknown"
     return f"{float(value):,.1f}/s"
+
+
+def _slowest_phase_label(record: Mapping[str, object] | None) -> str:
+    if record is None:
+        return "unknown"
+    phases = record.get("phases")
+    if not isinstance(phases, Mapping):
+        return "unknown"
+    phase_map = cast(Mapping[object, object], phases)
+    slowest_name = ""
+    slowest_seconds = -1.0
+    for name, phase in phase_map.items():
+        if not isinstance(name, str) or not isinstance(phase, Mapping):
+            continue
+        phase_record = cast(Mapping[str, object], phase)
+        seconds = phase_record.get("seconds")
+        if (
+            isinstance(seconds, int | float)
+            and not isinstance(seconds, bool)
+            and math.isfinite(float(seconds))
+            and float(seconds) > slowest_seconds
+        ):
+            slowest_name = name
+            slowest_seconds = float(seconds)
+    if not slowest_name:
+        return "unknown"
+    return slowest_name.replace("_", " ")
 
 
 def _console_validation_history_row(point: object) -> list[str]:
@@ -1963,6 +2002,13 @@ def _validate_throughput_record(record: Mapping[str, object]) -> None:
             phase.get("samples_per_second"),
             f"training_diagnostics.throughput.{name}.samples_per_second",
         )
+    if "phase_timing" in record:
+        _validate_phase_timing_record(
+            _as_mapping(
+                record.get("phase_timing"),
+                "training_diagnostics.throughput.phase_timing",
+            )
+        )
     roofline = _as_mapping(
         record.get("roofline"),
         "training_diagnostics.throughput.roofline",
@@ -2014,6 +2060,38 @@ def _validate_roofline_phase(record: Mapping[str, object], *, path: str) -> None
     ):
         _as_nonnegative_number(record.get(field), f"{path}.{field}")
     _as_string(record.get("limiting_resource"), f"{path}.limiting_resource")
+
+
+def _validate_phase_timing_record(record: Mapping[str, object]) -> None:
+    _as_string(record.get("kind"), "training_diagnostics.throughput.phase_timing.kind")
+    phases = _as_mapping(
+        record.get("phases"),
+        "training_diagnostics.throughput.phase_timing.phases",
+    )
+    for name, phase in phases.items():
+        phase_record = _as_mapping(
+            phase,
+            f"training_diagnostics.throughput.phase_timing.phases.{name}",
+        )
+        _as_string(
+            phase_record.get("kind"),
+            f"training_diagnostics.throughput.phase_timing.phases.{name}.kind",
+        )
+        _as_string(
+            phase_record.get("phase"),
+            f"training_diagnostics.throughput.phase_timing.phases.{name}.phase",
+        )
+        for field in (
+            "calls",
+            "sample_count",
+            "seconds",
+            "seconds_per_call",
+            "samples_per_second",
+        ):
+            _as_nonnegative_number(
+                phase_record.get(field),
+                f"training_diagnostics.throughput.phase_timing.phases.{name}.{field}",
+            )
 
 
 def _validate_proposal_result(record: Mapping[str, object]) -> None:
