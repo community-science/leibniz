@@ -11,6 +11,22 @@
     "resolution_axis": "N",
     "slot_axis": "x"
   },
+  "nuisance_transform": {
+    "kind": "field-nuisance-transform",
+    "spatial_affine": {
+      "kind": "spatial-affine",
+      "coordinate_system": "normalized-field",
+      "spatial_rank": 2,
+      "translation": [[-0.08, 0.08], [-0.08, 0.08]],
+      "scale": [[0.9, 1.1], [0.9, 1.1]],
+      "rotation_degrees": [8.0],
+      "shear_degrees": [5.0]
+    },
+    "value_scale": {
+      "kind": "value-scale",
+      "scale": [0.85, 1.15]
+    }
+  },
   "components": [
     {
       "id": "digit-0",

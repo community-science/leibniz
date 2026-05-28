@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -8,9 +9,12 @@ from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment, MaterializationPlan, MaterializationPlanDocument
 from leibniz.observation_formation import (
     FieldObservation,
+    NuisanceTransformDeclaration,
     ObservationFormationDeclaration,
     ObservationFormationDeclarationDocument,
     ObservationFormationValidationError,
+    SpatialAffineNuisance,
+    ValueScaleNuisance,
 )
 
 _repository_root = Path(__file__).parents[1]
@@ -31,6 +35,18 @@ def test_digits_observation_formation_declaration_loads_source_artifact() -> Non
     assert declaration.channel_count == 1
     assert declaration.resolution_axis == "N"
     assert declaration.slot_composition.count_axis == "L"
+    assert declaration.nuisance_transform.spatial_affine.coordinate_system == "normalized-field"
+    assert declaration.nuisance_transform.spatial_affine.translation == (
+        (-0.08, 0.08),
+        (-0.08, 0.08),
+    )
+    assert declaration.nuisance_transform.spatial_affine.scale == (
+        (0.9, 1.1),
+        (0.9, 1.1),
+    )
+    assert declaration.nuisance_transform.spatial_affine.rotation_degrees == (8.0,)
+    assert declaration.nuisance_transform.spatial_affine.shear_degrees == (5.0,)
+    assert declaration.nuisance_transform.value_scale.scale == (0.85, 1.15)
     assert [component.id for component in declaration.components] == [
         f"digit-{digit}" for digit in range(10)
     ]
@@ -129,6 +145,61 @@ def test_observation_formation_preserves_explicit_zero_mark_values() -> None:
 
     assert declaration.components[0].marks[0].value == 0.0
     assert declaration.components[0].marks[0].to_record()["value"] == 0.0
+    assert declaration.nuisance_transform == NuisanceTransformDeclaration.identity()
+
+
+def test_nuisance_transform_declaration_round_trips_canonically() -> None:
+    transform = NuisanceTransformDeclaration.from_record(_nuisance_transform_record())
+
+    assert transform.to_record() == _canonical_nuisance_transform_record()
+    assert SpatialAffineNuisance.identity(spatial_rank=2).to_record() == {
+        "kind": "spatial-affine",
+        "coordinate_system": "normalized-field",
+        "spatial_rank": 2,
+        "translation": [[0.0, 0.0], [0.0, 0.0]],
+        "scale": [[1.0, 1.0], [1.0, 1.0]],
+        "rotation_degrees": [0.0],
+        "shear_degrees": [0.0],
+    }
+    assert ValueScaleNuisance.identity().to_record() == {
+        "kind": "value-scale",
+        "scale": [1.0, 1.0],
+    }
+
+
+def test_nuisance_transform_declaration_rejects_invalid_bounds() -> None:
+    record = _nuisance_transform_record()
+    spatial = dict(cast(dict[str, object], record["spatial_affine"]))
+    spatial["spatial_rank"] = 3
+    record["spatial_affine"] = spatial
+    assert str(
+        capture_observation_error(lambda: NuisanceTransformDeclaration.from_record(record))
+    ) == "translation bounds length must equal spatial_rank"
+
+    record = _nuisance_transform_record()
+    spatial = dict(cast(dict[str, object], record["spatial_affine"]))
+    spatial["scale"] = [[0.0, 1.0], [1.0, 1.0]]
+    record["spatial_affine"] = spatial
+    assert str(
+        capture_observation_error(lambda: NuisanceTransformDeclaration.from_record(record))
+    ) == "scale.0 bounds must be positive"
+
+    record = _nuisance_transform_record()
+    value_scale = dict(cast(dict[str, object], record["value_scale"]))
+    value_scale["scale"] = [1.2, 0.8]
+    record["value_scale"] = value_scale
+    assert str(
+        capture_observation_error(lambda: NuisanceTransformDeclaration.from_record(record))
+    ) == "value_scale.scale lower bound must not exceed upper"
+
+
+def test_nuisance_transform_declaration_rejects_unsupported_kinds() -> None:
+    record = _nuisance_transform_record()
+    record["kind"] = "other-transform"
+
+    assert str(
+        capture_observation_error(lambda: NuisanceTransformDeclaration.from_record(record))
+    ) == "unsupported nuisance transform kind: other-transform"
 
 
 def test_non_digits_declaration_uses_same_interpreter_path() -> None:
@@ -199,6 +270,44 @@ def _digits_declaration() -> ObservationFormationDeclaration:
     return ObservationFormationDeclarationDocument.from_bytes(
         (_digits_benchmark_root / "observation_formation.json").read_bytes()
     ).declaration
+
+
+def _nuisance_transform_record() -> dict[str, object]:
+    return {
+        "kind": "field-nuisance-transform",
+        "spatial_affine": {
+            "kind": "spatial-affine",
+            "coordinate_system": "normalized-field",
+            "spatial_rank": 2,
+            "translation": [[-0.1, 0.1], [-0.2, 0.2]],
+            "scale": [[0.9, 1.1], [0.8, 1.2]],
+            "rotation_degrees": [12],
+            "shear_degrees": [5],
+        },
+        "value_scale": {
+            "kind": "value-scale",
+            "scale": [0.75, 1.25],
+        },
+    }
+
+
+def _canonical_nuisance_transform_record() -> dict[str, object]:
+    return {
+        "kind": "field-nuisance-transform",
+        "spatial_affine": {
+            "kind": "spatial-affine",
+            "coordinate_system": "normalized-field",
+            "spatial_rank": 2,
+            "translation": [[-0.1, 0.1], [-0.2, 0.2]],
+            "scale": [[0.9, 1.1], [0.8, 1.2]],
+            "rotation_degrees": [12.0],
+            "shear_degrees": [5.0],
+        },
+        "value_scale": {
+            "kind": "value-scale",
+            "scale": [0.75, 1.25],
+        },
+    }
 
 
 def _nonzero_count(field: FieldObservation, *, x_start: int, x_stop: int) -> int:
