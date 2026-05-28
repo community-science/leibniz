@@ -56,6 +56,7 @@ def test_cli_validate_help_lists_expanded_artifacts(capsys: pytest.CaptureFixtur
     assert "artifact-reference" in output
     assert "model-manifest" in output
     assert "model-lineage" in output
+    assert "architecture" in output
     assert "submission-registry" in output
     assert "federation-ingest-plan" in output
 
@@ -102,6 +103,24 @@ def test_cli_validates_measurement_file(capsys: pytest.CaptureFixture[str]) -> N
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.out == "valid measurement core.boolean-evidence@0.1.0\n"
+    assert captured.err == ""
+
+
+def test_cli_validates_architecture_manifest_with_semantics(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = main(
+        [
+            "validate",
+            "architecture",
+            str(_fixtures_root / "architecture" / "digits_pool" / "manifest.json"),
+            "--semantic",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out.startswith("valid architecture architecture.sha-")
     assert captured.err == ""
 
 
