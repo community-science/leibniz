@@ -1969,6 +1969,16 @@ def _validate_throughput_record(record: Mapping[str, object]) -> None:
     )
     _as_string(roofline.get("kind"), "training_diagnostics.throughput.roofline.kind")
     _as_string(roofline.get("status"), "training_diagnostics.throughput.roofline.status")
+    if "peak_flops_per_second" in roofline:
+        _as_nonnegative_number(
+            roofline.get("peak_flops_per_second"),
+            "training_diagnostics.throughput.roofline.peak_flops_per_second",
+        )
+    if "peak_bytes_per_second" in roofline:
+        _as_nonnegative_number(
+            roofline.get("peak_bytes_per_second"),
+            "training_diagnostics.throughput.roofline.peak_bytes_per_second",
+        )
     comparison = _as_mapping(
         record.get("roofline_comparison"),
         "training_diagnostics.throughput.roofline_comparison",
@@ -1977,6 +1987,33 @@ def _validate_throughput_record(record: Mapping[str, object]) -> None:
         comparison.get("status"),
         "training_diagnostics.throughput.roofline_comparison.status",
     )
+    if comparison.get("status") == "available":
+        phases = _as_mapping(
+            comparison.get("phases"),
+            "training_diagnostics.throughput.roofline_comparison.phases",
+        )
+        for name in ("training", "validation", "evaluation"):
+            _validate_roofline_phase(
+                _as_mapping(
+                    phases.get(name),
+                    f"training_diagnostics.throughput.roofline_comparison.phases.{name}",
+                ),
+                path=f"training_diagnostics.throughput.roofline_comparison.phases.{name}",
+            )
+
+
+def _validate_roofline_phase(record: Mapping[str, object], *, path: str) -> None:
+    for field in (
+        "flops_per_sample",
+        "bytes_per_sample",
+        "arithmetic_intensity_flops_per_byte",
+        "expected_roofline_flops_per_second",
+        "observed_flops_per_second",
+        "fraction_of_roofline",
+        "samples_per_second",
+    ):
+        _as_nonnegative_number(record.get(field), f"{path}.{field}")
+    _as_string(record.get("limiting_resource"), f"{path}.limiting_resource")
 
 
 def _validate_proposal_result(record: Mapping[str, object]) -> None:

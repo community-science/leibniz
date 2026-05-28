@@ -101,15 +101,23 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     throughput = cast(dict[str, object], training_summary["throughput"])
     training_throughput = cast(dict[str, object], throughput["training"])
     evaluation_throughput = cast(dict[str, object], throughput["evaluation"])
+    roofline = cast(dict[str, object], throughput["roofline"])
     roofline_comparison = cast(dict[str, object], throughput["roofline_comparison"])
+    phases = cast(dict[str, object], roofline_comparison["phases"])
+    training_phase = cast(dict[str, object], phases["training"])
     assert throughput["tensor_runtime"] == "pytorch"
     assert throughput["tensor_device"] == "cpu"
+    assert cast(float, roofline["peak_bytes_per_second"]) > 0
     assert training_throughput["sample_count"] == 2
     assert cast(float, training_throughput["samples_per_second"]) > 0
     assert evaluation_throughput["sample_count"] == 3
     assert cast(float, evaluation_throughput["samples_per_second"]) > 0
     assert roofline_comparison["status"] == "available"
+    assert roofline_comparison["model"] == "operational-intensity"
     assert cast(float, roofline_comparison["training_fraction_of_roofline"]) > 0
+    assert training_phase["limiting_resource"] in {"compute", "memory-bandwidth"}
+    assert cast(float, training_phase["arithmetic_intensity_flops_per_byte"]) > 0
+    assert cast(float, training_phase["expected_roofline_flops_per_second"]) > 0
     assert training_run.steps_run == 1
     assert training_run.validation_checks == 2
     assert training_run.validation_history[0].step == 0
@@ -219,13 +227,15 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     diagnostics = cast(dict[str, object], history[0]["training_diagnostics"])
     protocol = cast(dict[str, object], diagnostics["protocol"])
     throughput = cast(dict[str, object], diagnostics["throughput"])
+    roofline_comparison = cast(dict[str, object], throughput["roofline_comparison"])
     assert protocol["optimizer"] == "sgd"
     assert protocol["schedule"] == "none"
     assert diagnostics["stop_reason"] == "max-steps"
     assert diagnostics["steps_run"] == 1
     assert diagnostics["validation_checks"] == 2
     assert "final_validation_loss" in diagnostics
-    assert cast(dict[str, object], throughput["roofline_comparison"])["status"] == "available"
+    assert roofline_comparison["status"] == "available"
+    assert roofline_comparison["model"] == "operational-intensity"
     assert len(cast(list[dict[str, object]], diagnostics["validation_history"])) == 2
     console_view_model = cast(dict[str, object], history[0]["console_view_model"])
     detail_sections = cast(list[dict[str, object]], console_view_model["detail_sections"])
