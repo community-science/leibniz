@@ -685,6 +685,43 @@ class ObservationFormationDeclaration:
             field=field,
         )
 
+    def component_field(
+        self,
+        *,
+        resolution: int,
+        slot_count: int,
+        slot_index: int,
+        component_index: int,
+    ) -> FieldObservation:
+        """Form one unvaried component in one slot of the output field."""
+
+        if resolution < 1:
+            raise ObservationFormationValidationError("resolution must be positive")
+        if slot_count < 1:
+            raise ObservationFormationValidationError("slot_count must be positive")
+        if slot_index < 0 or slot_index >= slot_count:
+            raise ObservationFormationValidationError("slot_index must be within slot_count")
+        if component_index < 0 or component_index >= len(self.components):
+            raise ObservationFormationValidationError(
+                "component_index is outside component vocabulary"
+            )
+        values = [0.0] * (self.channel_count * resolution * resolution)
+        component = self.components[component_index]
+        for mark in component.marks:
+            _draw_mark(
+                values=values,
+                channel_count=self.channel_count,
+                resolution=resolution,
+                slot_count=slot_count,
+                slot_index=slot_index,
+                slot_axis=self.slot_composition.slot_axis,
+                mark=mark,
+            )
+        return FieldObservation(
+            shape=(self.channel_count, resolution, resolution),
+            values=tuple(values),
+        )
+
     @property
     def digest(self) -> ContentDigest:
         return ContentDigest.from_value(self.to_record())
