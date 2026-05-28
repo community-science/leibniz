@@ -30,6 +30,7 @@ from leibniz.outcomes import (
     RawScoringEvidence,
 )
 from leibniz.tensor_runtime import (
+    FormationTensorCache,
     TensorRuntimeDevice,
     TensorRuntimeError,
     resolve_tensor_runtime,
@@ -423,6 +424,7 @@ def _train_and_predict(
     torch.manual_seed(seed)
     module = ExecutableModelOperator(architecture).torch_module().to(runtime.device)
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    formation_cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
     loss_function = torch.nn.CrossEntropyLoss()
     optimizer = _make_optimizer(
         torch=torch,
@@ -439,17 +441,12 @@ def _train_and_predict(
     )
 
     def batch_for_seed(batch_seed: int) -> tuple[Any, Any]:
-        generated = generator.sample_batch(
+        generated = generator.sample_formation_batch(
             scale=scale,
             sample_count=sample_count,
             seed=batch_seed,
         )
-        return _batch_tensors(
-            torch=torch,
-            batch=generated,
-            outcome_ids=outcome_ids,
-            device=runtime.device,
-        )
+        return formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
 
     validation_history = _train_until_convergence(
         torch=torch,

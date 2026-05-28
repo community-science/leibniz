@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 from leibniz.observation_formation import ObservationFormationDeclaration
+from leibniz.observation_generation import GeneratedFormationBatch
 
 __all__ = [
     "FormationTensorCache",
@@ -135,6 +136,33 @@ class FormationTensorCache:
             device=self.runtime.device,
         ).reshape((len(value_scales), 1, 1, 1))
         return torch.clamp(transformed * scales, min=0.0, max=1.0).amax(dim=0)
+
+    def batch_tensors(
+        self,
+        *,
+        batch: GeneratedFormationBatch,
+        outcome_ids: tuple[str, ...],
+    ) -> tuple[Any, Any]:
+        """Return field and label tensors for a generated formation batch."""
+
+        if not outcome_ids:
+            raise TensorRuntimeError("outcome_ids must not be empty")
+        fields = self.runtime.torch.stack(
+            [
+                self.varied_component_sequence_tensor(
+                    resolution=sample.resolution,
+                    component_sequence=sample.component_sequence,
+                    variation_coordinates=sample.variation_coordinates,
+                )
+                for sample in batch.samples
+            ]
+        )
+        labels = self.runtime.torch.tensor(
+            [outcome_ids.index(sample.outcome_id) for sample in batch.samples],
+            dtype=self.runtime.torch.long,
+            device=self.runtime.device,
+        )
+        return fields, labels
 
     def component_tensor(
         self,
