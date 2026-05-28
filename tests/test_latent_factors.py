@@ -52,7 +52,7 @@ def test_complexity_projection_counts_content_and_excludes_nuisance() -> None:
         factor.name
         for factor in declaration.sample_factors
         if factor.role == "nuisance"
-    ] == [ProtocolName.parse("benchmarks.digits.sample.translation")]
+    ] == [ProtocolName.parse("benchmarks.digits.sample.field-nuisance-transform")]
     assert declaration.construction_factors == (
         GeneratorConstructionFactor(
             name=ProtocolName.parse("benchmarks.digits.construction.stroke-basis"),
@@ -163,9 +163,9 @@ def _digits_declaration(sequence_length: int) -> LatentFactorDeclaration:
                 multiplicity=sequence_length,
             ),
             SampleLatentFactor(
-                name=ProtocolName.parse("benchmarks.digits.sample.translation"),
+                name=ProtocolName.parse("benchmarks.digits.sample.field-nuisance-transform"),
                 role="nuisance",
-                degree_measure=DegreeMeasure.vector_dimension(2),
+                degree_measure=DegreeMeasure.vector_dimension(7),
                 multiplicity=sequence_length,
             ),
             SampleLatentFactor(

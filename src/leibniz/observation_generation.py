@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
+from leibniz.content import ContentDigest
 from leibniz.documents import document_filename_suffix
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.latent_factors import (
@@ -27,6 +28,7 @@ from leibniz.materialization import (
 from leibniz.observation_formation import (
     FieldObservation,
     FormedObservation,
+    NuisanceTransformDeclaration,
     ObservationFormationDeclaration,
     ObservationFormationDeclarationDocument,
 )
@@ -39,6 +41,7 @@ __all__ = [
     "field_to_png_bytes",
     "field_to_png_data_url",
     "load_observation_generator",
+    "sample_nuisance_transform_coordinates",
 ]
 
 _document_suffix = document_filename_suffix()
@@ -281,11 +284,11 @@ class ObservationGenerator:
             elif factor.role == "materialization":
                 values = dict(plan.resolution_assignment.values)
             else:
-                values = _nuisance_values(
+                values = _nuisance_transform_values(
+                    transform=self.formation.nuisance_transform,
                     seed=plan.seed,
                     sample_index=sample_index,
-                    factor_name=str(factor.name),
-                    count=int(factor.contribution),
+                    slot_count=factor.multiplicity,
                 )
             records.append(
                 {
@@ -330,6 +333,57 @@ def load_observation_generator(benchmark_root: Path) -> ObservationGenerator:
     )
 
 
+def sample_nuisance_transform_coordinates(
+    *,
+    transform: NuisanceTransformDeclaration,
+    seed: int,
+    sample_index: int,
+    slot_index: int,
+) -> Mapping[str, object]:
+    """Sample one deterministic per-slot nuisance transform coordinate."""
+
+    if type(seed) is not int or seed < 0:
+        raise ObservationGenerationError("seed must be a nonnegative integer")
+    if type(sample_index) is not int or sample_index < 0:
+        raise ObservationGenerationError("sample_index must be a nonnegative integer")
+    if type(slot_index) is not int or slot_index < 0:
+        raise ObservationGenerationError("slot_index must be a nonnegative integer")
+    generator = random.Random(
+        ":".join(
+            (
+                str(seed),
+                str(sample_index),
+                str(slot_index),
+                str(ContentDigest.from_value(transform.to_record())),
+            )
+        )
+    )
+    spatial = transform.spatial_affine
+    return {
+        "kind": "field-nuisance-transform-coordinate",
+        "slot_index": slot_index,
+        "spatial_affine": {
+            "kind": "spatial-affine-coordinate",
+            "coordinate_system": spatial.coordinate_system,
+            "translation": [
+                _sample_interval(generator, bounds) for bounds in spatial.translation
+            ],
+            "scale": [_sample_interval(generator, bounds) for bounds in spatial.scale],
+            "rotation_degrees": [
+                _sample_symmetric(generator, bound)
+                for bound in spatial.rotation_degrees
+            ],
+            "shear_degrees": [
+                _sample_symmetric(generator, bound) for bound in spatial.shear_degrees
+            ],
+        },
+        "value_scale": {
+            "kind": "value-scale-coordinate",
+            "scale": _sample_interval(generator, transform.value_scale.scale),
+        },
+    }
+
+
 def field_to_png_bytes(field: FieldObservation) -> bytes:
     """Encode a one-channel field as a grayscale PNG image."""
 
@@ -360,15 +414,42 @@ def field_to_png_data_url(field: FieldObservation) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def _nuisance_values(
+def _nuisance_transform_values(
     *,
+    transform: NuisanceTransformDeclaration,
     seed: int,
     sample_index: int,
-    factor_name: str,
-    count: int,
-) -> list[float]:
-    generator = random.Random(f"{seed}:{sample_index}:{factor_name}")
-    return [generator.uniform(-0.5, 0.5) for _item in range(count)]
+    slot_count: int,
+) -> Mapping[str, object]:
+    if slot_count < 1:
+        raise ObservationGenerationError("slot_count must be positive")
+    return {
+        "kind": "field-nuisance-transform-samples",
+        "bounds": transform.to_record(),
+        "coordinates": [
+            dict(
+                sample_nuisance_transform_coordinates(
+                    transform=transform,
+                    seed=seed,
+                    sample_index=sample_index,
+                    slot_index=slot_index,
+                )
+            )
+            for slot_index in range(slot_count)
+        ],
+    }
+
+
+def _sample_interval(
+    generator: random.Random,
+    bounds: tuple[float, float],
+) -> float:
+    low, high = bounds
+    return generator.uniform(low, high)
+
+
+def _sample_symmetric(generator: random.Random, bound: float) -> float:
+    return generator.uniform(-bound, bound)
 
 
 def _child_identifier(parent: ProtocolIdentifier, suffix: str) -> ProtocolIdentifier:
