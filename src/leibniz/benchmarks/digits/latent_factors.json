@@ -21,8 +21,8 @@
       }
     },
     {
-      "name": "benchmarks.digits.sample.field-nuisance-transform",
-      "role": "nuisance",
+      "name": "benchmarks.digits.sample.field-variation-transform",
+      "role": "variation",
       "degree_measure": {
         "kind": "vector-dimension",
         "count": 7

@@ -1305,7 +1305,7 @@ function BenchmarkSampleCoordinateInspector({
   task: BenchmarkTaskRecord;
 }) {
   const content = sample.latent_coordinates.find((coordinate) => coordinate.role === 'content');
-  const nuisance = sample.latent_coordinates.find((coordinate) => coordinate.role === 'nuisance');
+  const variation = sample.latent_coordinates.find((coordinate) => coordinate.role === 'variation');
   const entries: [string, string][] = [
     ['Outcome', sample.outcome_id],
     ['Components', sample.component_sequence.join('')],
@@ -1315,7 +1315,7 @@ function BenchmarkSampleCoordinateInspector({
     ['Sample', `${sample.index + 1} / ${batch.sample_count}`],
     ['Field', sample.field_shape.join(' x ')],
     ['Content DOF', String(content?.multiplicity ?? 'n/a')],
-    ['Nuisance DOF', String(nuisance?.multiplicity ?? 'n/a')],
+    ['Variation DOF', String(variation?.multiplicity ?? 'n/a')],
   ];
   return (
     <section

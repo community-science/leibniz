@@ -11,8 +11,8 @@
     "resolution_axis": "N",
     "slot_axis": "x"
   },
-  "nuisance_transform": {
-    "kind": "field-nuisance-transform",
+  "variation_transform": {
+    "kind": "field-variation-transform",
     "spatial_affine": {
       "kind": "spatial-affine",
       "coordinate_system": "normalized-field",

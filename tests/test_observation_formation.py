@@ -9,12 +9,12 @@ from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment, MaterializationPlan, MaterializationPlanDocument
 from leibniz.observation_formation import (
     FieldObservation,
-    NuisanceTransformDeclaration,
     ObservationFormationDeclaration,
     ObservationFormationDeclarationDocument,
     ObservationFormationValidationError,
-    SpatialAffineNuisance,
-    ValueScaleNuisance,
+    SpatialAffineVariation,
+    ValueScaleVariation,
+    VariationTransformDeclaration,
 )
 
 _repository_root = Path(__file__).parents[1]
@@ -35,18 +35,18 @@ def test_digits_observation_formation_declaration_loads_source_artifact() -> Non
     assert declaration.channel_count == 1
     assert declaration.resolution_axis == "N"
     assert declaration.slot_composition.count_axis == "L"
-    assert declaration.nuisance_transform.spatial_affine.coordinate_system == "normalized-field"
-    assert declaration.nuisance_transform.spatial_affine.translation == (
+    assert declaration.variation_transform.spatial_affine.coordinate_system == "normalized-field"
+    assert declaration.variation_transform.spatial_affine.translation == (
         (-0.08, 0.08),
         (-0.08, 0.08),
     )
-    assert declaration.nuisance_transform.spatial_affine.scale == (
+    assert declaration.variation_transform.spatial_affine.scale == (
         (0.9, 1.1),
         (0.9, 1.1),
     )
-    assert declaration.nuisance_transform.spatial_affine.rotation_degrees == (8.0,)
-    assert declaration.nuisance_transform.spatial_affine.shear_degrees == (5.0,)
-    assert declaration.nuisance_transform.value_scale.scale == (0.85, 1.15)
+    assert declaration.variation_transform.spatial_affine.rotation_degrees == (8.0,)
+    assert declaration.variation_transform.spatial_affine.shear_degrees == (5.0,)
+    assert declaration.variation_transform.value_scale.scale == (0.85, 1.15)
     assert [component.id for component in declaration.components] == [
         f"digit-{digit}" for digit in range(10)
     ]
@@ -145,14 +145,100 @@ def test_observation_formation_preserves_explicit_zero_mark_values() -> None:
 
     assert declaration.components[0].marks[0].value == 0.0
     assert declaration.components[0].marks[0].to_record()["value"] == 0.0
-    assert declaration.nuisance_transform == NuisanceTransformDeclaration.identity()
+    assert declaration.variation_transform == VariationTransformDeclaration.identity()
 
 
-def test_nuisance_transform_declaration_round_trips_canonically() -> None:
-    transform = NuisanceTransformDeclaration.from_record(_nuisance_transform_record())
+def test_variation_identity_coordinates_preserve_observation_field() -> None:
+    declaration = _digits_declaration()
+    plan = MaterializationPlanDocument.from_bytes(
+        (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
+    ).plan
+    sequence = declaration.sample_component_sequence(plan=plan, sample_index=0)
 
-    assert transform.to_record() == _canonical_nuisance_transform_record()
-    assert SpatialAffineNuisance.identity(spatial_rank=2).to_record() == {
+    untransformed = declaration.form_observation(
+        id=ProtocolIdentifier.parse("benchmarks.digits.observations.identity-left@0.1.0"),
+        plan=plan,
+        component_sequence=sequence,
+    )
+    transformed = declaration.form_observation(
+        id=ProtocolIdentifier.parse("benchmarks.digits.observations.identity-right@0.1.0"),
+        plan=plan,
+        component_sequence=sequence,
+        variation_coordinates=tuple(
+            _variation_coordinate(slot_index=slot_index)
+            for slot_index in range(len(sequence))
+        ),
+    )
+
+    assert transformed.field == untransformed.field
+
+
+def test_variation_coordinates_apply_value_scale() -> None:
+    declaration = _synthetic_mark_declaration()
+    plan = _synthetic_plan()
+
+    observation = declaration.form_observation(
+        id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.scaled@0.1.0"),
+        plan=plan,
+        component_sequence=(0,),
+        variation_coordinates=(_variation_coordinate(value_scale=0.5),),
+    )
+
+    assert max(observation.field.values) == 0.5
+
+
+def test_variation_coordinates_apply_spatial_translation() -> None:
+    declaration = _synthetic_mark_declaration()
+    plan = _synthetic_plan()
+    identity = declaration.form_observation(
+        id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.base@0.1.0"),
+        plan=plan,
+        component_sequence=(0,),
+        variation_coordinates=(_variation_coordinate(),),
+    )
+    shifted = declaration.form_observation(
+        id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.shifted@0.1.0"),
+        plan=plan,
+        component_sequence=(0,),
+        variation_coordinates=(_variation_coordinate(translation=(0.25, 0.0)),),
+    )
+
+    assert _weighted_x_mean(shifted.field) > _weighted_x_mean(identity.field) + 0.2
+    assert all(0.0 <= value <= 1.0 for value in shifted.field.values)
+
+
+def test_observation_formation_rejects_variation_coordinate_mismatch() -> None:
+    declaration = _synthetic_mark_declaration()
+    plan = _synthetic_plan()
+
+    assert str(
+        capture_observation_error(
+            lambda: declaration.form_observation(
+                id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.bad@0.1.0"),
+                plan=plan,
+                component_sequence=(0,),
+                variation_coordinates=(),
+            )
+        )
+    ) == "variation_coordinates length must match slot count"
+
+    assert str(
+        capture_observation_error(
+            lambda: declaration.form_observation(
+                id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.bad@0.1.0"),
+                plan=plan,
+                component_sequence=(0,),
+                variation_coordinates=(_variation_coordinate(slot_index=1),),
+            )
+        )
+    ) == "variation coordinate slot_index must match coordinate position"
+
+
+def test_variation_transform_declaration_round_trips_canonically() -> None:
+    transform = VariationTransformDeclaration.from_record(_variation_transform_record())
+
+    assert transform.to_record() == _canonical_variation_transform_record()
+    assert SpatialAffineVariation.identity(spatial_rank=2).to_record() == {
         "kind": "spatial-affine",
         "coordinate_system": "normalized-field",
         "spatial_rank": 2,
@@ -161,45 +247,45 @@ def test_nuisance_transform_declaration_round_trips_canonically() -> None:
         "rotation_degrees": [0.0],
         "shear_degrees": [0.0],
     }
-    assert ValueScaleNuisance.identity().to_record() == {
+    assert ValueScaleVariation.identity().to_record() == {
         "kind": "value-scale",
         "scale": [1.0, 1.0],
     }
 
 
-def test_nuisance_transform_declaration_rejects_invalid_bounds() -> None:
-    record = _nuisance_transform_record()
+def test_variation_transform_declaration_rejects_invalid_bounds() -> None:
+    record = _variation_transform_record()
     spatial = dict(cast(dict[str, object], record["spatial_affine"]))
     spatial["spatial_rank"] = 3
     record["spatial_affine"] = spatial
     assert str(
-        capture_observation_error(lambda: NuisanceTransformDeclaration.from_record(record))
+        capture_observation_error(lambda: VariationTransformDeclaration.from_record(record))
     ) == "translation bounds length must equal spatial_rank"
 
-    record = _nuisance_transform_record()
+    record = _variation_transform_record()
     spatial = dict(cast(dict[str, object], record["spatial_affine"]))
     spatial["scale"] = [[0.0, 1.0], [1.0, 1.0]]
     record["spatial_affine"] = spatial
     assert str(
-        capture_observation_error(lambda: NuisanceTransformDeclaration.from_record(record))
+        capture_observation_error(lambda: VariationTransformDeclaration.from_record(record))
     ) == "scale.0 bounds must be positive"
 
-    record = _nuisance_transform_record()
+    record = _variation_transform_record()
     value_scale = dict(cast(dict[str, object], record["value_scale"]))
     value_scale["scale"] = [1.2, 0.8]
     record["value_scale"] = value_scale
     assert str(
-        capture_observation_error(lambda: NuisanceTransformDeclaration.from_record(record))
+        capture_observation_error(lambda: VariationTransformDeclaration.from_record(record))
     ) == "value_scale.scale lower bound must not exceed upper"
 
 
-def test_nuisance_transform_declaration_rejects_unsupported_kinds() -> None:
-    record = _nuisance_transform_record()
+def test_variation_transform_declaration_rejects_unsupported_kinds() -> None:
+    record = _variation_transform_record()
     record["kind"] = "other-transform"
 
     assert str(
-        capture_observation_error(lambda: NuisanceTransformDeclaration.from_record(record))
-    ) == "unsupported nuisance transform kind: other-transform"
+        capture_observation_error(lambda: VariationTransformDeclaration.from_record(record))
+    ) == "unsupported variation transform kind: other-transform"
 
 
 def test_non_digits_declaration_uses_same_interpreter_path() -> None:
@@ -272,9 +358,9 @@ def _digits_declaration() -> ObservationFormationDeclaration:
     ).declaration
 
 
-def _nuisance_transform_record() -> dict[str, object]:
+def _variation_transform_record() -> dict[str, object]:
     return {
-        "kind": "field-nuisance-transform",
+        "kind": "field-variation-transform",
         "spatial_affine": {
             "kind": "spatial-affine",
             "coordinate_system": "normalized-field",
@@ -291,9 +377,9 @@ def _nuisance_transform_record() -> dict[str, object]:
     }
 
 
-def _canonical_nuisance_transform_record() -> dict[str, object]:
+def _canonical_variation_transform_record() -> dict[str, object]:
     return {
-        "kind": "field-nuisance-transform",
+        "kind": "field-variation-transform",
         "spatial_affine": {
             "kind": "spatial-affine",
             "coordinate_system": "normalized-field",
@@ -310,6 +396,78 @@ def _canonical_nuisance_transform_record() -> dict[str, object]:
     }
 
 
+def _synthetic_mark_declaration() -> ObservationFormationDeclaration:
+    return ObservationFormationDeclaration.from_record(
+        {
+            "id": "benchmarks.synthetic-marks.observation-formation@0.1.0",
+            "benchmark_id": "benchmarks.synthetic-marks@0.1.0",
+            "interpreter": "field-mark-composition@0.1.0",
+            "output_field": {"channel_count": 1, "resolution_axis": "N"},
+            "slot_composition": {
+                "count_axis": "S",
+                "resolution_axis": "N",
+                "slot_axis": "x",
+            },
+            "components": [
+                {
+                    "id": "mark",
+                    "marks": [
+                        {
+                            "kind": "bezier-curve",
+                            "channel": 0,
+                            "degree": 1,
+                            "control_points": [[0.35, 0.5], [0.65, 0.5]],
+                            "width": 4,
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+
+def _synthetic_plan() -> MaterializationPlan:
+    return MaterializationPlan(
+        id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.materialization-plan@0.1.0"),
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.synthetic-marks@0.1.0"),
+        materialization_declaration=ArtifactReference(
+            kind="materialization-declaration",
+            protocol_id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.materialization@0.1.0"),
+        ),
+        scale_assignment=AxisAssignment(values={"S": 1}),
+        complexity_assignment=AxisAssignment(values={"C": 1}),
+        resolution_assignment=AxisAssignment(values={"N": 32}),
+        seed=101,
+    )
+
+
+def _variation_coordinate(
+    *,
+    slot_index: int = 0,
+    translation: tuple[float, float] = (0.0, 0.0),
+    scale: tuple[float, float] = (1.0, 1.0),
+    rotation_degrees: float = 0.0,
+    shear_degrees: float = 0.0,
+    value_scale: float = 1.0,
+) -> dict[str, object]:
+    return {
+        "kind": "field-variation-transform-coordinate",
+        "slot_index": slot_index,
+        "spatial_affine": {
+            "kind": "spatial-affine-coordinate",
+            "coordinate_system": "normalized-field",
+            "translation": list(translation),
+            "scale": list(scale),
+            "rotation_degrees": [rotation_degrees],
+            "shear_degrees": [shear_degrees],
+        },
+        "value_scale": {
+            "kind": "value-scale-coordinate",
+            "scale": value_scale,
+        },
+    }
+
+
 def _nonzero_count(field: FieldObservation, *, x_start: int, x_stop: int) -> int:
     _channels, height, width = field.shape
     count = 0
@@ -318,6 +476,20 @@ def _nonzero_count(field: FieldObservation, *, x_start: int, x_stop: int) -> int
             if field.values[y * width + x] > 0:
                 count += 1
     return count
+
+
+def _weighted_x_mean(field: FieldObservation) -> float:
+    _channels, height, width = field.shape
+    weighted_sum = 0.0
+    total = 0.0
+    for y in range(height):
+        for x in range(width):
+            value = field.values[y * width + x]
+            weighted_sum += ((x + 0.5) / width) * value
+            total += value
+    if total == 0.0:
+        raise AssertionError("expected nonzero field")
+    return weighted_sum / total
 
 
 def capture_observation_error(
