@@ -1,6 +1,9 @@
 import {
+  benchmarkCostAxes,
+  benchmarkCostAxis,
   benchmarkPlotModel,
   benchmarkResultsForTask,
+  emptyFrontiersForCostAxes,
   modelComparisonRows,
   nextModelResultSort,
   proposalAssociations,
@@ -18,6 +21,22 @@ import type {
 const targetBenchmark = 'benchmarks.target@0.1.0';
 const otherBenchmark = 'benchmarks.other@0.1.0';
 const architectureDigest = 'sha256:abcdef1234567890';
+
+const standardAxes = benchmarkCostAxes(undefined);
+assertEqual(standardAxes.map((axis) => axis.key).join(','),
+  'parameter_count,inference_flops,parameter_bytes',
+  'standard cost axes',
+);
+assertEqual(
+  Object.keys(emptyFrontiersForCostAxes(standardAxes)).join(','),
+  'parameter_count,inference_flops,parameter_bytes',
+  'empty frontier axes',
+);
+assertEqual(
+  benchmarkCostAxis('missing_axis', standardAxes),
+  'parameter_count',
+  'missing cost axis fallback',
+);
 
 const result: BenchmarkResultRecord = {
   benchmark_id: targetBenchmark,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
@@ -60,6 +60,7 @@ class ActiveTrainingLoopPlan:
     target_validation_loss: float | None = None
     dry_run: bool = False
     retry_failed: bool = False
+    progress_callback: Callable[[BenchmarkRunSummary], None] | None = None
 
     def __post_init__(self) -> None:
         if type(self.iterations) is not int or self.iterations < 1:
@@ -224,6 +225,8 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                         runs_root=plan.runs_root,
                     )
                     materialize_work_queue_view(plan.runs_root)
+                    if plan.progress_callback is not None:
+                        plan.progress_callback(_summary)
 
                 benchmark_summary = run_benchmark(
                     BenchmarkRunPlan(

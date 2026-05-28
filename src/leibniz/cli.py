@@ -6,7 +6,7 @@ import argparse
 import os
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -16,7 +16,7 @@ from leibniz.architecture_semantics import validate_architecture_semantics
 from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
 from leibniz.authority_indexes import AuthorityIndexDocument
-from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
+from leibniz.benchmark_runner import BenchmarkRunPlan, BenchmarkRunSummary, run_benchmark
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.documents import document_filename_suffix, load_object_document
 from leibniz.federation_ingest import FederationIngestPlanDocument
@@ -550,7 +550,11 @@ def _benchmark(args: argparse.Namespace) -> int:
             return 0
         if str(args.benchmark_command) == "loop":
             summary = run_active_training_loop(
-                _active_training_loop_plan(args, dry_run=args.dry_run)
+                _active_training_loop_plan(
+                    args,
+                    dry_run=args.dry_run,
+                    progress_callback=_print_active_training_progress,
+                )
             )
             prefix = "planned" if summary.dry_run else "completed"
             print(
@@ -606,6 +610,7 @@ def _active_training_loop_plan(
     args: argparse.Namespace,
     *,
     dry_run: bool,
+    progress_callback: Callable[[BenchmarkRunSummary], None] | None = None,
 ) -> ActiveTrainingLoopPlan:
     return ActiveTrainingLoopPlan(
         benchmark_root=args.benchmark_root,
@@ -628,7 +633,44 @@ def _active_training_loop_plan(
         target_validation_loss=args.target_validation_loss,
         dry_run=dry_run,
         retry_failed=args.retry_failed,
+        progress_callback=progress_callback,
     )
+
+
+def _print_active_training_progress(summary: BenchmarkRunSummary) -> None:
+    progress_path = (
+        summary.training_summary_path.parent.parent.parent
+        / "training-progress"
+        / summary.training_summary_path.parent.name
+        / summary.training_summary_path.name
+    )
+    if not progress_path.exists():
+        return
+    progress_record = load_object_document(
+        progress_path.read_bytes(),
+        description="training progress",
+    )
+    training_run = cast(Mapping[str, object], progress_record.get("training_run", {}))
+    history = cast(Sequence[Mapping[str, object]], training_run.get("validation_history", ()))
+    if not history:
+        return
+    last = history[-1]
+    protocol = cast(Mapping[str, object], training_run.get("protocol", {}))
+    max_steps = protocol.get("max_steps", "?")
+    print(
+        f"training {summary.run_slug}: "
+        f"step {last.get('step', '?')}/{max_steps} "
+        f"validation_loss={_format_progress_number(last.get('validation_loss'))} "
+        f"best={_format_progress_number(training_run.get('best_validation_loss'))} "
+        f"stale_checks={last.get('stale_checks', '?')}",
+        flush=True,
+    )
+
+
+def _format_progress_number(value: object) -> str:
+    if isinstance(value, int | float):
+        return f"{float(value):.4f}"
+    return "?"
 
 
 def _frontier_snapshot(*, benchmark_root: Path, runs_root: Path) -> _FrontierSnapshot:
