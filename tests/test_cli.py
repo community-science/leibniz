@@ -10,7 +10,7 @@ from leibniz.artifacts import ArtifactReference, reference_for_record
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
 from leibniz.content import ContentDigest
-from leibniz.documents import canonical_document_bytes
+from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.federation_ingest import plan_federation_ingest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDocument
@@ -19,6 +19,8 @@ from leibniz.submission_registries import SubmissionRegistry
 
 _fixtures_root = Path(__file__).parent / "fixtures"
 _finite_fixture = _fixtures_root / "finite_outcome"
+_repository_root = Path(__file__).parents[1]
+_digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
 
 
 def test_cli_help_text(capsys: pytest.CaptureFixture[str]) -> None:
@@ -453,6 +455,35 @@ def test_cli_reports_model_interface_pairing_failure(
         "error: outcome_space_id core.boolean-outcome@0.1.0 does not match "
         "core.other-outcome@0.1.0\n"
     )
+
+
+def test_cli_times_benchmark_formation_paths(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = main(
+        [
+            "benchmark",
+            "time-formation",
+            "--benchmark-root",
+            str(_digits_benchmark_root),
+            "--sample-count",
+            "1",
+            "--repeats",
+            "1",
+            "--warmup-repeats",
+            "0",
+            "--device",
+            "cpu",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    record = load_object_document(captured.out.encode("utf-8"), description="timing")
+    assert exit_code == 0
+    assert captured.err == ""
+    assert record["format"] == "leibniz.formation-timing"
+    assert record["tensor_device"] == "cpu"
+    assert record["sample_count"] == 1
 
 
 def _dataset_path(tmp_path: Path) -> Path:
