@@ -21,11 +21,11 @@
       }
     },
     {
-      "name": "benchmarks.digits.sample.translation",
+      "name": "benchmarks.digits.sample.field-nuisance-transform",
       "role": "nuisance",
       "degree_measure": {
         "kind": "vector-dimension",
-        "count": 2
+        "count": 7
       }
     },
     {
