@@ -50,6 +50,37 @@ def test_digits_observation_generator_is_deterministic() -> None:
     )
 
 
+def test_digits_observation_generator_samples_formation_batch_without_fields() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    observation_batch = generator.sample_batch(scale=3, sample_count=2, seed=101)
+    formation_batch = generator.sample_formation_batch(scale=3, sample_count=2, seed=101)
+
+    assert formation_batch.benchmark_id == observation_batch.benchmark_id
+    assert formation_batch.scale == observation_batch.scale
+    assert formation_batch.seed == observation_batch.seed
+    assert [sample.resolution for sample in formation_batch.samples] == [96, 96]
+    assert [sample.component_sequence for sample in formation_batch.samples] == [
+        sample.observation.component_sequence
+        for sample in observation_batch.samples
+    ]
+    assert [sample.outcome_id for sample in formation_batch.samples] == [
+        sample.outcome_id for sample in observation_batch.samples
+    ]
+    assert [sample.variation_coordinates for sample in formation_batch.samples] == [
+        tuple(
+            cast(
+                list[Mapping[str, object]],
+                cast(
+                    Mapping[str, object],
+                    _coordinate(sample.latent_coordinates, role="variation")["values"],
+                )["coordinates"],
+            )
+        )
+        for sample in observation_batch.samples
+    ]
+
+
 def test_digits_observation_generator_scales_resolution_and_complexity() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 

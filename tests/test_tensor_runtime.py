@@ -5,7 +5,10 @@ import pytest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlanDocument
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
-from leibniz.observation_generation import sample_variation_transform_coordinates
+from leibniz.observation_generation import (
+    load_observation_generator,
+    sample_variation_transform_coordinates,
+)
 from leibniz.tensor_runtime import (
     FormationTensorCache,
     TensorRuntimeError,
@@ -118,6 +121,32 @@ def test_formation_tensor_cache_matches_varied_pure_digits_formation() -> None:
     ).reshape(pure.field.shape)
     assert tensor.shape == pure.field.shape
     assert runtime.torch.allclose(tensor, pure_tensor, atol=2e-5)
+
+
+def test_formation_tensor_cache_batch_tensors_match_pure_observation_batch() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    generator = load_observation_generator(_digits_benchmark_root)
+    observation_batch = generator.sample_batch(scale=2, sample_count=3, seed=515)
+    formation_batch = generator.sample_formation_batch(scale=2, sample_count=3, seed=515)
+    outcome_ids = tuple(
+        outcome.id
+        for outcome in generator.benchmark_manifest.resolve_outcome_space(scale=2).outcomes
+    )
+    cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
+
+    fields, labels = cache.batch_tensors(batch=formation_batch, outcome_ids=outcome_ids)
+
+    pure_fields = runtime.torch.tensor(
+        [list(sample.field.values) for sample in observation_batch.samples],
+        dtype=runtime.torch.float32,
+        device=runtime.device,
+    ).reshape((len(observation_batch.samples), *observation_batch.samples[0].field.shape))
+    assert fields.shape == pure_fields.shape
+    assert runtime.torch.allclose(fields, pure_fields, atol=2e-5)
+    assert labels.cpu().tolist() == [
+        outcome_ids.index(sample.outcome_id)
+        for sample in observation_batch.samples
+    ]
 
 
 def test_formation_tensor_cache_reuses_component_tensors() -> None:

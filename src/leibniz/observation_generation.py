@@ -35,6 +35,8 @@ from leibniz.observation_formation import (
 )
 
 __all__ = [
+    "GeneratedFormationBatch",
+    "GeneratedFormationSample",
     "GeneratedObservationBatch",
     "GeneratedObservationSample",
     "ObservationGenerator",
@@ -114,6 +116,38 @@ class GeneratedObservationBatch:
 
 
 @dataclass(frozen=True, slots=True)
+class GeneratedFormationSample:
+    """One generated formation specification without materializing the field."""
+
+    index: int
+    materialization_plan: MaterializationPlan
+    resolution: int
+    component_sequence: tuple[int, ...]
+    variation_coordinates: tuple[Mapping[str, object], ...]
+    variation_values: Mapping[str, object]
+    outcome_id: str
+    complexity: float
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedFormationBatch:
+    """A deterministic batch of formation specifications."""
+
+    benchmark_id: ProtocolIdentifier
+    scale: int
+    seed: int
+    samples: tuple[GeneratedFormationSample, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.scale) is not int or self.scale < 1:
+            raise ObservationGenerationError("scale must be a positive integer")
+        if type(self.seed) is not int or self.seed < 0:
+            raise ObservationGenerationError("seed must be a nonnegative integer")
+        if not self.samples:
+            raise ObservationGenerationError("samples must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class ObservationGenerator:
     """Generate observations from manifest, latent, materialization, and formation records."""
 
@@ -148,6 +182,54 @@ class ObservationGenerator:
     ) -> GeneratedObservationBatch:
         """Generate a deterministic batch at one scale."""
 
+        formation_batch = self.sample_formation_batch(
+            scale=scale,
+            sample_count=sample_count,
+            seed=seed,
+            component_sequences=component_sequences,
+        )
+        scaled_factors = tuple(self._scaled_sample_factors(scale))
+        samples: list[GeneratedObservationSample] = []
+        for spec in formation_batch.samples:
+            observation = self.formation.form_observation(
+                id=self._observation_id(scale=scale, seed=seed, index=spec.index),
+                plan=spec.materialization_plan,
+                component_sequence=spec.component_sequence,
+                variation_coordinates=spec.variation_coordinates,
+            )
+            samples.append(
+                GeneratedObservationSample(
+                    index=spec.index,
+                    materialization_plan=spec.materialization_plan,
+                    observation=observation,
+                    outcome_id=spec.outcome_id,
+                    complexity=spec.complexity,
+                    latent_coordinates=self._latent_coordinates(
+                        sequence=spec.component_sequence,
+                        scaled_factors=scaled_factors,
+                        plan=spec.materialization_plan,
+                        variation_values=spec.variation_values,
+                    ),
+                )
+            )
+
+        return GeneratedObservationBatch(
+            benchmark_id=self.benchmark_manifest.id,
+            scale=scale,
+            seed=seed,
+            samples=tuple(samples),
+        )
+
+    def sample_formation_batch(
+        self,
+        *,
+        scale: int,
+        sample_count: int,
+        seed: int,
+        component_sequences: Iterable[Sequence[int]] | None = None,
+    ) -> GeneratedFormationBatch:
+        """Generate deterministic formation specs without materializing fields."""
+
         if type(sample_count) is not int or sample_count < 1:
             raise ObservationGenerationError("sample_count must be a positive integer")
         if type(seed) is not int or seed < 0:
@@ -161,7 +243,7 @@ class ObservationGenerator:
                 "component_sequences length must match sample_count"
             )
 
-        samples: list[GeneratedObservationSample] = []
+        samples: list[GeneratedFormationSample] = []
         for index in range(sample_count):
             plan = self._materialization_plan(
                 scale=scale,
@@ -181,29 +263,22 @@ class ObservationGenerator:
                 sample_index=index,
                 slot_count=len(sequence),
             )
-            observation = self.formation.form_observation(
-                id=self._observation_id(scale=scale, seed=seed, index=index),
-                plan=plan,
-                component_sequence=sequence,
-                variation_coordinates=_variation_coordinates_from_values(variation_values),
-            )
             samples.append(
-                GeneratedObservationSample(
+                GeneratedFormationSample(
                     index=index,
                     materialization_plan=plan,
-                    observation=observation,
+                    resolution=plan.resolution_assignment.require_axis(
+                        self.formation.resolution_axis
+                    ),
+                    component_sequence=sequence,
+                    variation_coordinates=_variation_coordinates_from_values(variation_values),
+                    variation_values=variation_values,
                     outcome_id=self._outcome_id(sequence),
                     complexity=complexity,
-                    latent_coordinates=self._latent_coordinates(
-                        sequence=sequence,
-                        scaled_factors=scaled_factors,
-                        plan=plan,
-                        variation_values=variation_values,
-                    ),
                 )
             )
 
-        return GeneratedObservationBatch(
+        return GeneratedFormationBatch(
             benchmark_id=self.benchmark_manifest.id,
             scale=scale,
             seed=seed,
