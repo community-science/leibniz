@@ -322,42 +322,77 @@ def _calibrated_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
         "status": "unavailable",
         "tensor_runtime": "pytorch",
         "tensor_device": runtime.device_kind,
-        "method": "dense-matmul-calibration",
+        "method": "dense-matmul-and-copy-calibration",
     }
     try:
         torch = runtime.torch
-        size = 512
-        first = torch.randn((size, size), dtype=torch.float32, device=runtime.device)
-        second = torch.randn((size, size), dtype=torch.float32, device=runtime.device)
+        matrix_size = 512
+        first = torch.randn(
+            (matrix_size, matrix_size),
+            dtype=torch.float32,
+            device=runtime.device,
+        )
+        second = torch.randn(
+            (matrix_size, matrix_size),
+            dtype=torch.float32,
+            device=runtime.device,
+        )
         _synchronize_runtime(runtime)
         with torch.no_grad():
             for _ in range(1):
                 _ = first @ second
         _synchronize_runtime(runtime)
-        repeats = 1
-        seconds = 0.0
-        while repeats <= 64 and seconds < 0.02:
+        matmul_repeats = 1
+        matmul_seconds = 0.0
+        while matmul_repeats <= 64 and matmul_seconds < 0.02:
             started = _monotonic_seconds()
             with torch.no_grad():
-                for _ in range(repeats):
+                for _ in range(matmul_repeats):
                     _ = first @ second
             _synchronize_runtime(runtime)
-            seconds = _monotonic_seconds() - started
-            if seconds < 0.02:
-                repeats *= 2
+            matmul_seconds = _monotonic_seconds() - started
+            if matmul_seconds < 0.02:
+                matmul_repeats *= 2
+
+        element_count = 8 * 1024 * 1024
+        source = torch.randn((element_count,), dtype=torch.float32, device=runtime.device)
+        target = torch.empty_like(source)
+        _synchronize_runtime(runtime)
+        with torch.no_grad():
+            target.copy_(source)
+        _synchronize_runtime(runtime)
+        copy_repeats = 1
+        copy_seconds = 0.0
+        while copy_repeats <= 128 and copy_seconds < 0.02:
+            started = _monotonic_seconds()
+            with torch.no_grad():
+                for _ in range(copy_repeats):
+                    target.copy_(source)
+            _synchronize_runtime(runtime)
+            copy_seconds = _monotonic_seconds() - started
+            if copy_seconds < 0.02:
+                copy_repeats *= 2
     except Exception as error:  # pragma: no cover - hardware/runtime dependent
         record["reason"] = f"roofline calibration failed: {error}"
         return record
-    if seconds <= 0:
+    if matmul_seconds <= 0 or copy_seconds <= 0:
         record["reason"] = "roofline calibration completed too quickly to measure"
         return record
+    copy_bytes = 2.0 * element_count * 4 * copy_repeats
     record.update(
         {
             "status": "calibrated",
-            "calibration_seconds": seconds,
-            "calibration_matrix_size": size,
-            "calibration_repeats": repeats,
-            "peak_flops_per_second": (2.0 * size * size * size * repeats) / seconds,
+            "flop_calibration_seconds": matmul_seconds,
+            "flop_calibration_matrix_size": matrix_size,
+            "flop_calibration_repeats": matmul_repeats,
+            "peak_flops_per_second": (
+                2.0 * matrix_size * matrix_size * matrix_size * matmul_repeats
+            )
+            / matmul_seconds,
+            "bandwidth_calibration_seconds": copy_seconds,
+            "bandwidth_calibration_bytes": copy_bytes,
+            "bandwidth_calibration_repeats": copy_repeats,
+            "peak_bytes_per_second": copy_bytes / copy_seconds,
         }
     )
     if runtime.device_kind == "cuda":

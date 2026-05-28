@@ -67,6 +67,8 @@ def test_runtime_roofline_record_calibrates_cpu_ceiling() -> None:
     assert record["tensor_runtime"] == "pytorch"
     assert record["tensor_device"] == "cpu"
     assert cast(float, record["peak_flops_per_second"]) > 0
+    assert cast(float, record["peak_bytes_per_second"]) > 0
+    assert record["method"] == "dense-matmul-and-copy-calibration"
 
 
 def test_formation_tensor_cache_matches_unvaried_pure_digits_formation() -> None:
