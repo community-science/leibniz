@@ -5,6 +5,7 @@ from typing import cast
 import pytest
 
 from leibniz.identifiers import ProtocolIdentifier
+from leibniz.materialization import AxisAssignment, MaterializationPlan
 from leibniz.observation_generation import (
     ObservationGenerationError,
     field_to_png_bytes,
@@ -80,6 +81,22 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
         )
         for sample in observation_batch.samples
     ]
+    direct_plan = MaterializationPlan.resolve(
+        id=formation_batch.samples[0].materialization_plan.id,
+        declaration=generator.materialization,
+        scale_assignment=AxisAssignment(values={"L": 3}),
+        complexity_assignment=AxisAssignment(values={"C": 3}),
+        seed=101,
+    )
+    assert formation_batch.samples[0].materialization_plan == direct_plan
+    assert formation_batch.samples[0].variation_coordinates[0] == (
+        sample_variation_transform_coordinates(
+            transform=generator.formation.variation_transform,
+            seed=101,
+            sample_index=0,
+            slot_index=0,
+        )
+    )
 
 
 def test_digits_observation_generator_records_optional_timing() -> None:
