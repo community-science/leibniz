@@ -10,6 +10,7 @@ from typing import Any, Literal, cast
 from leibniz.architectures import ArchitectureLayer, ArchitectureManifest
 from leibniz.operator_interpretation import interpret_operator_semantic
 from leibniz.operator_semantics import ModelOperatorSemantic, model_operator_semantic_registry
+from leibniz.program_effect_semantics import program_effect_semantic_registry
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
@@ -46,8 +47,9 @@ _operator_registry = model_operator_semantic_registry()
 _operator_local_aggregation = _operator_registry.operators[0].kind
 _operator_rank_collapse = _operator_registry.operators[1].kind
 _operator_affine_readout = _operator_registry.operators[2].kind
+_program_effect_registry = program_effect_semantic_registry()
 _program_effect_kinds = frozenset(
-    ("branch", "identity-path", "merge", "parameter-sharing", "repeat", "route")
+    effect.kind for effect in _program_effect_registry.effects
 )
 
 
@@ -731,58 +733,16 @@ def _reject_duplicate_coordinate_names(
 
 
 def _program_effect_descriptor(effect: ModelProgramEffect) -> ModelProgramEffectDescriptor:
-    if effect.kind == "branch":
-        return ModelProgramEffectDescriptor(
-            kind=effect.kind,
-            input_arity=1,
-            output_arity=effect.arity,
-            shape_law="duplicate-input-shape",
-            cost_law="zero-arithmetic",
-            trace_law="fan-out",
-        )
-    if effect.kind == "merge":
-        return ModelProgramEffectDescriptor(
-            kind=effect.kind,
-            input_arity=effect.arity,
-            output_arity=1,
-            shape_law="require-equal-input-shapes",
-            cost_law="zero-arithmetic",
-            trace_law="join-paths",
-        )
-    if effect.kind == "route":
-        return ModelProgramEffectDescriptor(
-            kind=effect.kind,
-            input_arity=effect.arity,
-            output_arity=1,
-            shape_law="select-equal-input-shape",
-            cost_law="control-flow-select",
-            trace_law="select-path",
-        )
-    if effect.kind == "repeat":
-        return ModelProgramEffectDescriptor(
-            kind=effect.kind,
-            input_arity=1,
-            output_arity=1,
-            shape_law="preserve-shape",
-            cost_law="multiply-nested-cost",
-            trace_law="repeat-nested-program",
-        )
-    if effect.kind == "identity-path":
-        return ModelProgramEffectDescriptor(
-            kind=effect.kind,
-            input_arity=1,
-            output_arity=1,
-            shape_law="preserve-shape",
-            cost_law="zero-arithmetic",
-            trace_law="preserve-path",
-        )
+    semantic = _program_effect_registry.semantic_for_kind(effect.kind)
+    if semantic is None:
+        raise ModelOperatorExecutionError(f"unsupported program effect kind: {effect.kind}")
     return ModelProgramEffectDescriptor(
         kind=effect.kind,
-        input_arity=effect.arity,
-        output_arity=effect.arity,
-        shape_law="preserve-shapes",
-        cost_law="share-state",
-        trace_law="share-parameter-group",
+        input_arity=semantic.input_arity(effect.arity),
+        output_arity=semantic.output_arity(effect.arity),
+        shape_law=semantic.shape_law,
+        cost_law=semantic.cost_law,
+        trace_law=semantic.trace_law,
     )
 
 
