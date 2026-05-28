@@ -1372,8 +1372,12 @@ function BenchmarkSampleDetail({
                     <dd>{coordinate.multiplicity}</dd>
                     <dt>Measure</dt>
                     <dd>{recordLabel(coordinate.degree_measure)}</dd>
-                    <dt>Values</dt>
-                    <dd>{parameterValueLabel(coordinate.values)}</dd>
+                    {latentValueEntries(coordinate.values).map(([label, value]) => (
+                      <div key={label}>
+                        <dt>{label}</dt>
+                        <dd title={value}>{value}</dd>
+                      </div>
+                    ))}
                   </dl>
                 ))}
             </article>
@@ -1400,6 +1404,107 @@ function materializationEntries(sample: GeneratedObservationSampleRecord): [stri
     ['Resolution', assignmentLabel(sample.materialization_plan.resolution_assignment)],
     ['Seed', recordString(sample.materialization_plan, 'seed')],
   ];
+}
+
+function latentValueEntries(value: unknown): [string, string][] {
+  const record = optionalRecord(value);
+  if (record?.kind === 'field-variation-transform-samples') {
+    return [
+      ['Values', variationCoordinateCountLabel(record.coordinates)],
+      ['Bounds', variationBoundsLabel(record.bounds)],
+      ['Coordinates', variationCoordinatesLabel(record.coordinates)],
+    ];
+  }
+  return [['Values', parameterValueLabel(value)]];
+}
+
+function variationCoordinateCountLabel(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return 'unknown';
+  }
+  return `${value.length} slot ${value.length === 1 ? 'transform' : 'transforms'}`;
+}
+
+function variationBoundsLabel(value: unknown): string {
+  const bounds = optionalRecord(value);
+  const spatial = optionalRecord(bounds?.spatial_affine);
+  const valueScale = optionalRecord(bounds?.value_scale);
+  return [
+    labeledValue('translation', intervalListLabel(spatial?.translation)),
+    labeledValue('scale', intervalListLabel(spatial?.scale)),
+    labeledValue('rotation', symmetricBoundsLabel(spatial?.rotation_degrees)),
+    labeledValue('shear', symmetricBoundsLabel(spatial?.shear_degrees)),
+    labeledValue('value', intervalLabel(valueScale?.scale)),
+  ]
+    .filter((entry): entry is string => entry !== null)
+    .join('; ') || 'unknown';
+}
+
+function variationCoordinatesLabel(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return 'unknown';
+  }
+  return (
+    value
+      .map((item) => {
+        const coordinate = optionalRecord(item);
+        const spatial = optionalRecord(coordinate?.spatial_affine);
+        const valueScale = optionalRecord(coordinate?.value_scale);
+        return [
+          `${parameterValueLabel(coordinate?.slot_index)}:`,
+          `t=${numberListLabel(spatial?.translation)}`,
+          `s=${numberListLabel(spatial?.scale)}`,
+          `r=${numberListLabel(spatial?.rotation_degrees)}`,
+          `sh=${numberListLabel(spatial?.shear_degrees)}`,
+          `v=${numberLabel(valueScale?.scale)}`,
+        ].join(' ');
+      })
+      .join(' | ') || 'none'
+  );
+}
+
+function labeledValue(label: string, value: string): string | null {
+  return value === 'unknown' ? null : `${label} ${value}`;
+}
+
+function intervalListLabel(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return 'unknown';
+  }
+  return value.map((item) => intervalLabel(item)).join(' x ');
+}
+
+function intervalLabel(value: unknown): string {
+  if (!Array.isArray(value) || value.length !== 2) {
+    return 'unknown';
+  }
+  return `[${numberLabel(value[0])}, ${numberLabel(value[1])}]`;
+}
+
+function symmetricBoundsLabel(value: unknown): string {
+  if (!Array.isArray(value) || value.length === 0) {
+    return 'unknown';
+  }
+  return value.map((item) => `+/-${numberLabel(item)}`).join(', ');
+}
+
+function numberListLabel(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return 'unknown';
+  }
+  return `(${value.map((item) => numberLabel(item)).join(', ')})`;
+}
+
+function numberLabel(value: unknown): string {
+  return typeof value === 'number'
+    ? new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 }).format(value)
+    : parameterValueLabel(value);
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function assignmentLabel(value: unknown): string {

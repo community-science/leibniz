@@ -165,6 +165,25 @@ assertEqual(
   1,
   'sample content multiplicity',
 );
+const variationCoordinate = canonicalSample.latent_coordinates.find(
+  (coordinate) => coordinate.role === 'variation',
+);
+const variationValues = variationCoordinate?.values as Record<string, unknown> | undefined;
+assertEqual(
+  variationValues?.kind,
+  'field-variation-transform-samples',
+  'sample variation values kind',
+);
+assertEqual(
+  (variationValues?.bounds as Record<string, unknown> | undefined)?.kind,
+  'field-variation-transform',
+  'sample variation bounds kind',
+);
+assertEqual(
+  Array.isArray(variationValues?.coordinates) ? variationValues.coordinates.length : 0,
+  1,
+  'sample variation coordinate count',
+);
 const materializationPlan = canonicalSample.materialization_plan as Record<string, unknown>;
 assertEqual(assignmentLabel(materializationPlan.scale_assignment), 'L=1', 'sample scale assignment');
 assertEqual(
