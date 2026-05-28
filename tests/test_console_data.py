@@ -175,6 +175,17 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     ]
     assert str(symbol_samples[0]["image_data_url"]).startswith("data:image/png;base64,")
     assert symbol_samples[0]["field_shape"] == [1, 32, 32]
+    latent_coordinates = cast(list[dict[str, object]], symbol_samples[0]["latent_coordinates"])
+    variation = next(
+        coordinate for coordinate in latent_coordinates if coordinate["role"] == "variation"
+    )
+    variation_values = cast(dict[str, object], variation["values"])
+    assert variation_values["kind"] == "field-variation-transform-samples"
+    variation_bounds = cast(dict[str, object], variation_values["bounds"])
+    assert variation_bounds["kind"] == "field-variation-transform"
+    variation_coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
+    assert len(variation_coordinates) == 1
+    assert variation_coordinates[0]["kind"] == "field-variation-transform-coordinate"
     sweep_presentation = cast(dict[str, object], batches[5]["presentation"])
     assert sweep_presentation == {
         "sample_card_density": "standard",
