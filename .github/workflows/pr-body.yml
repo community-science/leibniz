@@ -1,0 +1,17 @@
+name: Pull request body
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+jobs:
+  template:
+    name: Template
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check pull request body
+        run: python scripts/check_pr_body.py --event-path "$GITHUB_EVENT_PATH"
