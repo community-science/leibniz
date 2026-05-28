@@ -6,6 +6,7 @@ export type OperatorVocabularyRecord = {
   descriptor_axes: Record<string, OperatorDescriptorAxisValue[]>;
   syntax_aliases: OperatorSyntaxAlias[];
   coordinate_descriptors: OperatorCoordinateDescriptor[];
+  program_effects: ProgramEffectVocabularyEntry[];
 };
 
 export type OperatorVocabularyEntry = {
@@ -43,6 +44,15 @@ export type OperatorCoordinateDescriptor = {
   name: string;
   display_name: string;
   value_kind: string;
+};
+
+export type ProgramEffectVocabularyEntry = {
+  kind: string;
+  input_arity_law: string;
+  output_arity_law: string;
+  shape_law: string;
+  cost_law: string;
+  trace_law: string;
 };
 
 export class OperatorVocabularyError extends Error {
@@ -85,6 +95,9 @@ export function parseOperatorVocabularyRecord(value: unknown): OperatorVocabular
       'operator vocabulary.coordinate_descriptors',
     ).map((descriptor, index) =>
       parseCoordinateDescriptor(descriptor, `operator vocabulary.coordinate_descriptors.${index}`),
+    ),
+    program_effects: requireArray(record.program_effects, 'operator vocabulary.program_effects').map(
+      (effect, index) => parseProgramEffect(effect, `operator vocabulary.program_effects.${index}`),
     ),
   };
 }
@@ -231,6 +244,18 @@ function parseCoordinateDescriptor(value: unknown, path: string): OperatorCoordi
     name: requireString(record.name, `${path}.name`),
     display_name: requireString(record.display_name, `${path}.display_name`),
     value_kind: requireString(record.value_kind, `${path}.value_kind`),
+  };
+}
+
+function parseProgramEffect(value: unknown, path: string): ProgramEffectVocabularyEntry {
+  const record = requireRecord(value, path);
+  return {
+    kind: requireString(record.kind, `${path}.kind`),
+    input_arity_law: requireString(record.input_arity_law, `${path}.input_arity_law`),
+    output_arity_law: requireString(record.output_arity_law, `${path}.output_arity_law`),
+    shape_law: requireString(record.shape_law, `${path}.shape_law`),
+    cost_law: requireString(record.cost_law, `${path}.cost_law`),
+    trace_law: requireString(record.trace_law, `${path}.trace_law`),
   };
 }
 
