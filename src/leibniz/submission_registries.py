@@ -10,7 +10,11 @@ from typing import Literal, TypeAlias, cast
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import (
+    FieldSpec,
+    RecordExtractor,
+    RecordSpec,
+)
 
 __all__ = [
     "SubmissionRegistry",
@@ -43,6 +47,9 @@ class SubmissionRegistryValidationError(ValueError):
     """Raised when a submission registry record is invalid."""
 
 
+_record = RecordExtractor(SubmissionRegistryValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class SubmissionRegistrySource:
     """One configured external repository source."""
@@ -65,12 +72,12 @@ class SubmissionRegistrySource:
         except ValueError as error:
             raise SubmissionRegistryValidationError(str(error)) from error
         return cls(
-            repository=_as_string(validated["repository"], field="repository"),
+            repository=_record.string(validated["repository"], "repository"),
             repository_type=cast(
                 _RepositoryType,
-                _as_string(validated["repository_type"], field="repository_type"),
+                _record.string(validated["repository_type"], "repository_type"),
             ),
-            enabled=_as_boolean(validated["enabled"], field="enabled"),
+            enabled=_record.boolean(validated["enabled"], "enabled"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -123,13 +130,13 @@ class SubmissionRegistry:
         try:
             validated = _submission_registry_record.validate(record)
             sources = tuple(
-                SubmissionRegistrySource.from_record(_as_mapping(item, field="sources"))
-                for item in _as_sequence(validated["sources"], field="sources")
+                SubmissionRegistrySource.from_record(_record.mapping(item, "sources"))
+                for item in _record.sequence(validated["sources"], "sources")
             )
         except ValueError as error:
             raise SubmissionRegistryValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_record.identifier(validated["id"], "id"),
             sources=sources,
         )
 
@@ -179,36 +186,6 @@ def _normalize_repository(repository: str) -> str:
     if _repo_part.fullmatch(owner) is None or _repo_part.fullmatch(name) is None:
         raise SubmissionRegistryValidationError("repository must be a stable owner/name")
     return f"{owner.lower()}/{name.lower()}"
-
-
-def _as_string(value: object, *, field: str) -> str:
-    if not isinstance(value, str):
-        raise SubmissionRegistryValidationError(f"{field}: expected string")
-    return value
-
-
-def _as_boolean(value: object, *, field: str) -> bool:
-    if not isinstance(value, bool):
-        raise SubmissionRegistryValidationError(f"{field}: expected boolean")
-    return value
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise SubmissionRegistryValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise SubmissionRegistryValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise SubmissionRegistryValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
 
 
 def _first_duplicate(values: tuple[tuple[str, str], ...]) -> tuple[str, str] | None:

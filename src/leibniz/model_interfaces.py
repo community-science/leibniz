@@ -19,7 +19,7 @@ from leibniz.prediction_spaces import (
     PredictionSpaceValidationError,
     parse_prediction_space,
 )
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "ModelInterface",
@@ -48,6 +48,9 @@ _model_interface_record = RecordSpec(
 
 class ModelInterfaceValidationError(ValueError):
     """Raised when a model interface declaration is invalid."""
+
+
+_record = RecordExtractor(ModelInterfaceValidationError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +107,7 @@ class ModelInterface:
             raise ModelInterfaceValidationError(str(error)) from error
         try:
             prediction_space = parse_prediction_space(
-                _as_mapping(validated["prediction_space"], field="prediction_space")
+                _record.mapping(validated["prediction_space"], "prediction_space")
             )
         except PredictionSpaceValidationError as error:
             raise ModelInterfaceValidationError(str(error)) from error
@@ -113,7 +116,7 @@ class ModelInterface:
                 "direct-finite-probability-measure requires finite-outcome-space prediction_space"
             )
         interface = cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_record.identifier(validated["id"], "id"),
             prediction_space=prediction_space,
             prediction_kind=cast(_PredictionKind, validated["prediction_kind"]),
             output_encoding=cast(_OutputEncoding, validated["output_encoding"]),
@@ -173,15 +176,3 @@ class ModelInterfaceDocument:
             raise ModelInterfaceValidationError(str(error)) from error
         interface = ModelInterface.from_record(record, outcome_space=outcome_space)
         return cls(interface=interface, digest=interface.digest)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ModelInterfaceValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ModelInterfaceValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)

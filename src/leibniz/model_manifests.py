@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from leibniz.architectures import ArchitectureManifest
 from leibniz.artifacts import ArtifactReference
@@ -12,7 +11,11 @@ from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
 from leibniz.model_interfaces import ModelInterface
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import (
+    FieldSpec,
+    RecordExtractor,
+    RecordSpec,
+)
 
 __all__ = [
     "ModelArtifactManifest",
@@ -49,6 +52,9 @@ _model_artifact_manifest_record = RecordSpec(
 
 class ModelArtifactManifestValidationError(ValueError):
     """Raised when a model artifact manifest is invalid."""
+
+
+_record = RecordExtractor(ModelArtifactManifestValidationError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,31 +175,28 @@ class ModelArtifactManifest:
         try:
             validated = _model_artifact_manifest_record.validate(record)
             model_artifacts = tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="model_artifacts"))
-                for item in _as_sequence(
-                    validated["model_artifacts"],
-                    field="model_artifacts",
-                )
+                ArtifactReference.from_record(_record.mapping(item, "model_artifacts"))
+                for item in _record.sequence(validated["model_artifacts"], "model_artifacts")
             )
             training_provenance = tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="training_provenance"))
-                for item in _as_sequence(
+                ArtifactReference.from_record(_record.mapping(item, "training_provenance"))
+                for item in _record.sequence(
                     validated.get("training_provenance", ()),
-                    field="training_provenance",
+                    "training_provenance",
                 )
             )
         except ValueError as error:
             raise ModelArtifactManifestValidationError(str(error)) from error
         manifest = cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_record.identifier(validated["id"], "id"),
             architecture=ArtifactReference.from_record(
-                _as_mapping(validated["architecture"], field="architecture")
+                _record.mapping(validated["architecture"], "architecture")
             ),
             interface=ArtifactReference.from_record(
-                _as_mapping(validated["interface"], field="interface")
+                _record.mapping(validated["interface"], "interface")
             ),
             execution_family=ModelExecutionFamily.from_record(
-                _as_mapping(validated["execution_family"], field="execution_family")
+                _record.mapping(validated["execution_family"], "execution_family")
             ),
             model_artifacts=model_artifacts,
             training_provenance=training_provenance,
@@ -260,24 +263,6 @@ class ModelArtifactManifestDocument:
             model_interface=model_interface,
         )
         return cls(manifest=manifest, digest=manifest.digest)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ModelArtifactManifestValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ModelArtifactManifestValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ModelArtifactManifestValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
 
 
 def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:

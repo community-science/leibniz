@@ -1,13 +1,32 @@
+import ast
 import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from leibniz.documents import load_object_document
+from leibniz.records import (
+    ContractRuntimeSupport,
+    FieldSpec,
+    RecordExtractor,
+    RecordSpec,
+    RecordViolation,
+)
 
 _repository_root = Path(__file__).parents[1]
 _status_path = _repository_root / "CONTRACT_GENERATION_STATUS.json"
 _generated_web_root = Path("src/leibniz/console/_web_src/src/generated")
 _source_implementation_suffixes = frozenset({".css", ".html", ".mjs", ".py", ".ts", ".tsx"})
+_excluded_line_budget_bases = frozenset(
+    {
+        "authored-data",
+        "build-configuration",
+        "contract-runtime",
+        "inventory",
+        "package-metadata",
+        "repository-automation",
+        "tests",
+    }
+)
 _coverage_keys = frozenset(
     {
         "authored_contract",
@@ -67,11 +86,43 @@ def test_contract_generation_status_categorizes_tracked_code() -> None:
     code_inventory = status["code_inventory"]
     tracked_paths = _tracked_inventory_paths(code_inventory["tracked_roots"])
     line_budget = code_inventory["line_budget"]
+    graph_projection = code_inventory["graph_projection"]
 
     assert line_budget["metric"] == "handwritten_implementation_lines"
     assert line_budget["maximum"] > 0
     assert line_budget["tracked_roots"] == ["src/leibniz"]
     assert line_budget["counting"]
+    assert set(graph_projection["node_kinds"]) == {
+        "category",
+        "contract-surface",
+        "generated-output",
+        "path",
+        "structural-marker",
+        "test",
+    }
+    assert set(graph_projection["edge_kinds"]) == {
+        "categorizes",
+        "generated-by",
+        "has-structural-marker",
+        "owns-record-spec-module",
+        "tested-by",
+        "uses-runtime",
+    }
+    assert _contract_runtime_paths(code_inventory["categories"]) == [
+        "src/leibniz/records.py"
+    ]
+    assert _contract_runtime_types() == {
+        "FieldSpec",
+        "RecordExtractor",
+        "RecordSpec",
+        "RecordViolation",
+    }
+    assert _contract_runtime_roles() == {
+        "field-spec",
+        "record-extractor",
+        "record-spec",
+        "record-violation",
+    }
 
     category_names: set[str] = set()
     patterns_by_category: dict[str, tuple[str, ...]] = {}
@@ -88,6 +139,13 @@ def test_contract_generation_status_categorizes_tracked_code() -> None:
             "mixed-hand-maintained-and-generated-consumer",
         }
         assert category["line_budget"] in {"excluded", "handwritten-implementation"}
+        assert category["line_budget_basis"]
+        if category["line_budget"] == "handwritten-implementation":
+            assert category["line_budget_basis"] == "domain-implementation"
+        else:
+            assert category["line_budget_basis"] in _excluded_line_budget_bases
+        if category["line_budget_basis"] == "contract-runtime":
+            assert category["structural_marker"] == "leibniz.records.ContractRuntimeSupport"
         assert category["ratchet_next"]
         patterns = tuple(category["path_patterns"])
         assert patterns
@@ -163,7 +221,17 @@ def _record_spec_modules() -> list[str]:
     return sorted(
         path.relative_to(_repository_root).as_posix()
         for path in (_repository_root / "src" / "leibniz").rglob("*.py")
-        if "RecordSpec(" in path.read_text(encoding="utf-8")
+        if _contains_record_spec_call(path)
+    )
+
+
+def _contains_record_spec_call(path: Path) -> bool:
+    syntax_tree = ast.parse(path.read_text(encoding="utf-8"))
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "RecordSpec"
+        for node in ast.walk(syntax_tree)
     )
 
 
@@ -214,6 +282,34 @@ def _handwritten_implementation_paths(
             continue
         budgeted_paths.append(relative_path)
     return budgeted_paths
+
+
+def _contract_runtime_paths(categories: list[dict[str, Any]]) -> list[str]:
+    paths: list[str] = []
+    for category in categories:
+        if category["name"] == "python-contract-runtime":
+            paths.extend(category["path_patterns"])
+    return sorted(paths)
+
+
+def _contract_runtime_types() -> set[str]:
+    contract_runtime_types = {
+        FieldSpec,
+        RecordExtractor,
+        RecordSpec,
+        RecordViolation,
+    }
+    assert all(issubclass(type_, ContractRuntimeSupport) for type_ in contract_runtime_types)
+    return {type_.__name__ for type_ in contract_runtime_types}
+
+
+def _contract_runtime_roles() -> set[str]:
+    return {
+        FieldSpec(kind="string").contract_runtime_role,
+        RecordExtractor().contract_runtime_role,
+        RecordSpec(fields={}).contract_runtime_role,
+        RecordViolation(path=(), message="example").contract_runtime_role,
+    }
 
 
 def _nonblank_line_count(path: Path) -> int:
