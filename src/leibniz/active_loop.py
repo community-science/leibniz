@@ -64,6 +64,8 @@ class ActiveTrainingLoopPlan:
     convergence_min_steps: int = 500
     target_validation_loss: float | None = None
     tensor_device: TensorRuntimeDevice = "auto"
+    scale_curriculum: bool = False
+    curriculum_max_scale: int | None = None
     dry_run: bool = False
     retry_failed: bool = False
     progress_callback: Callable[[BenchmarkRunSummary], None] | None = None
@@ -123,6 +125,12 @@ class ActiveTrainingLoopPlan:
             raise ActiveTrainingLoopError("convergence_min_steps must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise ActiveTrainingLoopError("target_validation_loss must be nonnegative")
+        if type(self.scale_curriculum) is not bool:
+            raise ActiveTrainingLoopError("scale_curriculum must be boolean")
+        if self.curriculum_max_scale is not None and (
+            type(self.curriculum_max_scale) is not int or self.curriculum_max_scale < self.scale
+        ):
+            raise ActiveTrainingLoopError("curriculum_max_scale must be at least scale")
         try:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
@@ -191,6 +199,8 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                 convergence_min_steps=plan.convergence_min_steps,
                 target_validation_loss=plan.target_validation_loss,
                 tensor_device=plan.tensor_device,
+                scale_curriculum=plan.scale_curriculum,
+                curriculum_max_scale=plan.curriculum_max_scale,
             )
         )
         benchmark_id = proposal_summary.benchmark_id
@@ -270,6 +280,8 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                         convergence_min_steps=plan.convergence_min_steps,
                         target_validation_loss=plan.target_validation_loss,
                         tensor_device=plan.tensor_device,
+                        scale_curriculum=plan.scale_curriculum,
+                        curriculum_max_scale=plan.curriculum_max_scale,
                     ),
                     progress_callback=refresh_progress,
                 )

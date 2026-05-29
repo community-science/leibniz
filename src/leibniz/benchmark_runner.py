@@ -24,12 +24,20 @@ from leibniz.observation_generation import (
     ObservationGenerator,
     load_observation_generator,
 )
+from leibniz.operator_semantics import model_operator_semantic_registry
 from leibniz.outcomes import (
     AcceptedEvent,
     FiniteProbabilityMeasure,
     OutcomeSpace,
     ProbabilityMass,
     RawScoringEvidence,
+)
+from leibniz.scale_evaluation import (
+    AdaptiveScaleEvaluation,
+    PerScaleScore,
+    ScaleAxis,
+    ScaleEvaluationLevel,
+    ScaleEvaluationTrace,
 )
 from leibniz.tensor_runtime import (
     FormationTensorCache,
@@ -61,6 +69,7 @@ _default_validation_interval = 250
 _default_convergence_patience = 12
 _default_convergence_min_delta = 1e-3
 _default_convergence_min_steps = 500
+_adaptive_pooling_alias = model_operator_semantic_registry().operators[0].syntax_aliases[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +157,8 @@ class BenchmarkRunPlan:
     convergence_min_steps: int = _default_convergence_min_steps
     target_validation_loss: float | None = None
     tensor_device: TensorRuntimeDevice = "auto"
+    scale_curriculum: bool = False
+    curriculum_max_scale: int | None = None
     dry_run: bool = False
 
     def __post_init__(self) -> None:
@@ -195,6 +206,12 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError("convergence_min_steps must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise BenchmarkRunnerError("target_validation_loss must be nonnegative")
+        if type(self.scale_curriculum) is not bool:
+            raise BenchmarkRunnerError("scale_curriculum must be boolean")
+        if self.curriculum_max_scale is not None and (
+            type(self.curriculum_max_scale) is not int or self.curriculum_max_scale < self.scale
+        ):
+            raise BenchmarkRunnerError("curriculum_max_scale must be at least scale")
         try:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
@@ -229,6 +246,10 @@ class BenchmarkRunPlan:
             ),
             "tensor_device": self.tensor_device,
         }
+        if self.scale_curriculum:
+            controls["scale_curriculum"] = True
+        if self.curriculum_max_scale is not None:
+            controls["curriculum_max_scale"] = self.curriculum_max_scale
         return f"train-{ContentDigest.from_value(controls).hex[:12]}"
 
     @property
@@ -361,6 +382,17 @@ def run_benchmark(
         probabilities=training_result.probabilities,
         run_slug=summary.run_slug,
     )
+    scale_evaluation_trace = (
+        _scale_evaluation_trace(
+            plan=plan,
+            generator=generator,
+            architecture=architecture,
+            training_run=training_result.training_run,
+            outcome_space=outcome_space,
+        )
+        if plan.scale_curriculum
+        else None
+    )
     dataset = MeasurementDataset(measurements=measurements)
     dataset.validate_manifest(generator.benchmark_manifest, scale=plan.scale)
     _write_document(summary.measurement_dataset_path, dataset.to_record())
@@ -384,8 +416,15 @@ def run_benchmark(
             "convergence_min_steps": plan.convergence_min_steps,
             "tensor_runtime": "pytorch",
             "tensor_device": training_result.training_run.protocol.tensor_device,
+            "scale_curriculum": plan.scale_curriculum,
+            "curriculum_max_scale": plan.curriculum_max_scale,
             "training_run": training_result.training_run.to_record(),
             "throughput": training_result.throughput,
+            **(
+                {}
+                if scale_evaluation_trace is None
+                else {"scale_evaluation_trace": scale_evaluation_trace.to_record()}
+            ),
             "sampled_competence": _sampled_competence_record(
                 generator=generator,
                 batch=evaluation_batch,
@@ -458,6 +497,163 @@ def _validate_architecture_for_batch(
             f"architecture output_shape {architecture.output_shape} does not match "
             f"{outcome_count} resolved benchmark outcomes"
         )
+
+
+def _scale_evaluation_trace(
+    *,
+    plan: BenchmarkRunPlan,
+    generator: ObservationGenerator,
+    architecture: ArchitectureManifest,
+    training_run: TrainingRunRecord,
+    outcome_space: OutcomeSpace,
+) -> ScaleEvaluationTrace:
+    if generator.benchmark_manifest.scale_parameter is None:
+        raise BenchmarkRunnerError("scale curriculum requires a benchmark scale parameter")
+    axis = ScaleAxis(
+        symbol=generator.benchmark_manifest.scale_parameter.symbol,
+        minimum=generator.benchmark_manifest.scale_parameter.minimum,
+        maximum=plan.curriculum_max_scale,
+    )
+    score = PerScaleScore()
+    evaluation = AdaptiveScaleEvaluation(
+        axis_symbol=axis.symbol,
+        stopping_window=1,
+        marginal_score_epsilon=float(plan.convergence_min_delta),
+    )
+    levels = [
+        ScaleEvaluationLevel(
+            scale=plan.scale,
+            competence=_validation_competence(
+                best_validation_loss=training_run.best_validation_loss,
+                outcome_count=len(outcome_space.outcomes),
+            ),
+            resources={
+                "training_steps": training_run.steps_run,
+                "validation_checks": training_run.validation_checks,
+                "sample_count": plan.sample_count,
+            },
+        )
+    ]
+    next_scale = plan.scale + 1
+    max_scale = plan.curriculum_max_scale if plan.curriculum_max_scale is not None else next_scale
+    if next_scale <= max_scale:
+        boundary_reason = _direct_prediction_boundary_reason(
+            generator=generator,
+            architecture=architecture,
+            scale=next_scale,
+            sample_count=plan.resolved_evaluation_sample_count,
+            seed=plan.seed + 20_000_039,
+        )
+        if boundary_reason is not None:
+            levels.append(
+                ScaleEvaluationLevel(
+                    scale=next_scale,
+                    competence=0.0,
+                    boundary_reason=boundary_reason,
+                )
+            )
+            return ScaleEvaluationTrace(
+                axis=axis,
+                score=score,
+                evaluation=evaluation,
+                levels=tuple(levels),
+                stop_reason="model-scale-boundary",
+            )
+    return ScaleEvaluationTrace(
+        axis=axis,
+        score=score,
+        evaluation=evaluation,
+        levels=tuple(levels),
+        stop_reason="fixed-scale-run-completed",
+    )
+
+
+def _direct_prediction_boundary_reason(
+    *,
+    generator: ObservationGenerator,
+    architecture: ArchitectureManifest,
+    scale: int,
+    sample_count: int,
+    seed: int,
+) -> str | None:
+    batch = generator.sample_batch(scale=scale, sample_count=sample_count, seed=seed)
+    input_reason = _input_shape_boundary_reason(
+        architecture=architecture,
+        sample_shape=batch.samples[0].field.shape,
+    )
+    if input_reason is not None:
+        return input_reason
+    outcome_count = len(generator.benchmark_manifest.resolve_outcome_space(scale=scale).outcomes)
+    if architecture.output_shape != (outcome_count,):
+        return (
+            f"architecture output_shape {architecture.output_shape} does not match "
+            f"{outcome_count} resolved benchmark sequence outcomes at scale {scale}"
+        )
+    return None
+
+
+def _input_shape_boundary_reason(
+    *,
+    architecture: ArchitectureManifest,
+    sample_shape: tuple[int, ...],
+) -> str | None:
+    if architecture.input_shape == sample_shape:
+        return None
+    contract = architecture.model_scale_contract
+    if contract is not None:
+        if _shape_matches_scale_contract(contract=contract, sample_shape=sample_shape):
+            return None
+        return (
+            f"architecture model_scale_contract does not accept generated "
+            f"observation shape {sample_shape}"
+        )
+    if _adaptive_pooling_input_compatible(architecture=architecture, sample_shape=sample_shape):
+        return None
+    return (
+        f"architecture input_shape {architecture.input_shape} does not match "
+        f"generated observation shape {sample_shape}"
+    )
+
+
+def _shape_matches_scale_contract(
+    *,
+    contract: Any,
+    sample_shape: tuple[int, ...],
+) -> bool:
+    if len(contract.axes) != len(sample_shape):
+        return False
+    scaled_values: list[int] = []
+    for axis in contract.axes:
+        index = cast(int, axis["index"])
+        if axis["kind"] == "fixed":
+            if sample_shape[index] != cast(int, axis["size"]):
+                return False
+        else:
+            scaled_values.append(sample_shape[index])
+    return bool(scaled_values) and len(set(scaled_values)) == 1 and contract.accepts_scale(
+        scaled_values[0]
+    )
+
+
+def _adaptive_pooling_input_compatible(
+    *,
+    architecture: ArchitectureManifest,
+    sample_shape: tuple[int, ...],
+) -> bool:
+    if not architecture.layers or architecture.layers[0].kind != _adaptive_pooling_alias:
+        return False
+    if len(architecture.input_shape) != len(sample_shape) or len(sample_shape) < 3:
+        return False
+    dimension_value = architecture.layers[0].parameters.get("dimension")
+    size_value = architecture.layers[0].parameters.get("size")
+    if type(dimension_value) is not int or type(size_value) is not int:
+        return False
+    if dimension_value != 2 or size_value < 1:
+        return False
+    fixed_prefix = len(sample_shape) - dimension_value
+    return architecture.input_shape[:fixed_prefix] == sample_shape[:fixed_prefix] and all(
+        axis >= size_value for axis in sample_shape[-dimension_value:]
+    )
 
 
 def _train_and_predict(

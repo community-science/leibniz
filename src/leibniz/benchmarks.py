@@ -137,6 +137,35 @@ class BenchmarkOutcomeSequence:
             raise BenchmarkManifestValidationError("scale must be positive")
         return self.atom_count**scale
 
+    def outcome_index(self, atoms: Sequence[int]) -> int:
+        """Return the lexicographic outcome index for a token sequence."""
+
+        atom_values = tuple(_as_int(atom, field="atoms") for atom in atoms)
+        if not atom_values:
+            raise BenchmarkManifestValidationError("outcome sequence must not be empty")
+        index = 0
+        for atom in atom_values:
+            if atom < 0 or atom >= self.atom_count:
+                raise BenchmarkManifestValidationError(
+                    f"outcome atom {atom} is outside 0..{self.atom_count - 1}"
+                )
+            index = index * self.atom_count + atom
+        return index
+
+    def atoms_for_outcome_index(self, *, index: int, length: int) -> tuple[int, ...]:
+        """Return the token sequence at one lexicographic outcome index."""
+
+        if isinstance(length, bool) or length < 1:
+            raise BenchmarkManifestValidationError("length must be positive")
+        if type(index) is not int or index < 0 or index >= self.outcome_count(length):
+            raise BenchmarkManifestValidationError("outcome index is outside sequence space")
+        atoms = [0] * length
+        cursor = index
+        for position in range(length - 1, -1, -1):
+            atoms[position] = cursor % self.atom_count
+            cursor //= self.atom_count
+        return tuple(atoms)
+
     def outcome_id(self, atoms: Sequence[int]) -> str:
         atom_values = tuple(_as_int(atom, field="atoms") for atom in atoms)
         if not atom_values:

@@ -82,6 +82,8 @@ class ProposalGenerationPlan:
     convergence_min_steps: int = 500
     target_validation_loss: float | None = None
     tensor_device: TensorRuntimeDevice = "auto"
+    scale_curriculum: bool = False
+    curriculum_max_scale: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.scale) is not int or self.scale < 1:
@@ -136,6 +138,12 @@ class ProposalGenerationPlan:
             raise ProposalGenerationError("convergence_min_steps must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise ProposalGenerationError("target_validation_loss must be nonnegative")
+        if type(self.scale_curriculum) is not bool:
+            raise ProposalGenerationError("scale_curriculum must be boolean")
+        if self.curriculum_max_scale is not None and (
+            type(self.curriculum_max_scale) is not int or self.curriculum_max_scale < self.scale
+        ):
+            raise ProposalGenerationError("curriculum_max_scale must be at least scale")
         try:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
@@ -318,6 +326,16 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                     str(plan.convergence_min_steps),
                     "--device",
                     plan.tensor_device,
+                    *(
+                        ("--scale-curriculum",)
+                        if plan.scale_curriculum
+                        else ()
+                    ),
+                    *(
+                        ()
+                        if plan.curriculum_max_scale is None
+                        else ("--curriculum-max-scale", str(plan.curriculum_max_scale))
+                    ),
                     *(
                         ()
                         if plan.target_validation_loss is None
