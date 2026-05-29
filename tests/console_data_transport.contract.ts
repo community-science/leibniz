@@ -104,12 +104,12 @@ assertEqual(
   'model inspection flops',
 );
 assertEqual(
-  modelInspection.layers.map((layer) => layer.kind).join(','),
+  modelInspection.components.map((component) => component.kind).join(','),
   'adaptive-pooling,flatten,dense',
-  'model inspection layers',
+  'model inspection components',
 );
 assertEqual(
-  modelInspection.layers.map((layer) => layer.operator?.kind).join(','),
+  modelInspection.components.map((component) => component.operator?.kind).join(','),
   'local-aggregation,rank-collapse,affine-readout',
   'model operator summaries',
 );
@@ -217,9 +217,9 @@ assertDataError(
   () =>
     parseConsoleDataRecord({
       ...rawConsoleData,
-      model_inspections: [{ ...modelInspection, layers: [{ index: '0' }] }],
+      model_inspections: [{ ...modelInspection, components: [{ index: '0' }] }],
     }),
-  'model inspections.0.layers.0.index: expected number',
+  'model inspections.0.components.0.index: expected number',
 );
 assertDataError(
   () =>

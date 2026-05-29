@@ -228,11 +228,11 @@ const inspections: ModelInspectionRecord[] = [
     },
     cost_summary: {
       inference_flops: 20,
-      layer_count: 1,
+      component_count: 1,
       parameter_bytes: 40,
       parameter_count: 10,
-      unknown_flop_layers: [],
-      unknown_parameter_layers: [],
+      unknown_flop_components: [],
+      unknown_parameter_components: [],
     },
     id: 'inspection-a',
     input_shape: [1],
@@ -277,7 +277,7 @@ const inspections: ModelInspectionRecord[] = [
       ],
       program_effects: [],
     },
-    layers: [
+    components: [
       {
         index: 0,
         kind: 'operator',

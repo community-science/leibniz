@@ -10,9 +10,7 @@ from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDatasetDocument, MeasurementDocument
 from leibniz.model_inspection import (
-    ModelInspectionComponent,
     ModelInspectionDocument,
-    ModelInspectionLayer,
     ModelInspectionRecord,
     ModelInspectionValidationError,
 )
@@ -24,7 +22,7 @@ from leibniz.submissions import SubmissionPackageManifest
 _fixtures_root = Path(__file__).parent / "fixtures"
 
 
-def test_model_inspection_derives_architecture_layers_and_costs() -> None:
+def test_model_inspection_derives_architecture_components_and_costs() -> None:
     inspection = ModelInspectionRecord.from_architecture(
         id=ProtocolIdentifier.parse("model-inspections.digits-pool@0.1.0"),
         architecture_manifest=_architecture_manifest(),
@@ -32,37 +30,36 @@ def test_model_inspection_derives_architecture_layers_and_costs() -> None:
 
     assert inspection.input_shape == (1, 32, 32)
     assert inspection.output_shape == (10,)
-    assert tuple(layer.kind for layer in inspection.layers) == (
+    assert tuple(component.kind for component in inspection.components) == (
         "adaptive-pooling",
         "flatten",
         "dense",
     )
-    assert inspection.layers[0].input_shape == (1, 32, 32)
-    assert inspection.layers[0].output_shape == (1, 2, 2)
-    assert inspection.layers[0].operator is not None
-    assert inspection.layers[0].operator["kind"] == "local-aggregation"
-    assert inspection.layers[0].operator["aliases"] == ["adaptive-pooling"]
-    assert inspection.layers[0].parameter_count == 0
-    assert inspection.layers[0].inference_flops == 1024
-    assert inspection.layers[1].input_shape == (1, 2, 2)
-    assert inspection.layers[1].output_shape == (4,)
-    assert inspection.layers[1].operator is not None
-    assert inspection.layers[1].operator["kind"] == "rank-collapse"
-    assert inspection.layers[1].parameter_count == 0
-    assert inspection.layers[2].input_shape == (4,)
-    assert inspection.layers[2].output_shape == (10,)
-    assert inspection.layers[2].operator is not None
-    assert inspection.layers[2].operator["kind"] == "affine-readout"
-    assert inspection.layers[2].parameter_count == 50
-    assert inspection.layers[2].parameter_bytes == 200
-    assert inspection.layers[2].inference_flops == 80
-    assert inspection.cost_summary.layer_count == 3
+    assert inspection.components[0].input_shape == (1, 32, 32)
+    assert inspection.components[0].output_shape == (1, 2, 2)
+    assert inspection.components[0].operator is not None
+    assert inspection.components[0].operator["kind"] == "local-aggregation"
+    assert inspection.components[0].operator["aliases"] == ["adaptive-pooling"]
+    assert inspection.components[0].parameter_count == 0
+    assert inspection.components[0].inference_flops == 1024
+    assert inspection.components[1].input_shape == (1, 2, 2)
+    assert inspection.components[1].output_shape == (4,)
+    assert inspection.components[1].operator is not None
+    assert inspection.components[1].operator["kind"] == "rank-collapse"
+    assert inspection.components[1].parameter_count == 0
+    assert inspection.components[2].input_shape == (4,)
+    assert inspection.components[2].output_shape == (10,)
+    assert inspection.components[2].operator is not None
+    assert inspection.components[2].operator["kind"] == "affine-readout"
+    assert inspection.components[2].parameter_count == 50
+    assert inspection.components[2].parameter_bytes == 200
+    assert inspection.components[2].inference_flops == 80
     assert inspection.cost_summary.component_count == 3
     assert inspection.cost_summary.parameter_count == 50
     assert inspection.cost_summary.parameter_bytes == 200
     assert inspection.cost_summary.inference_flops == 1104
-    assert inspection.cost_summary.unknown_parameter_layers == ()
-    assert inspection.cost_summary.unknown_flop_layers == ()
+    assert inspection.cost_summary.unknown_parameter_components == ()
+    assert inspection.cost_summary.unknown_flop_components == ()
     assert inspection.architecture_trace.input_shape == (1, 32, 32)
     assert inspection.architecture_trace.output_shape == (10,)
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
@@ -99,8 +96,6 @@ def test_model_inspection_derives_architecture_layers_and_costs() -> None:
         "flatten",
         "dense",
     )
-    assert inspection.components == inspection.layers
-    assert ModelInspectionLayer is ModelInspectionComponent
     assert inspection.digest == ContentDigest.from_value(inspection.to_record())
 
 
@@ -203,11 +198,11 @@ def test_model_inspection_rejects_malformed_records() -> None:
     )
 
     record = inspection.to_record()
-    layers = list(record["layers"])  # type: ignore[arg-type]
-    layers[1] = {**layers[1], "index": 7}  # type: ignore[index]
-    record["layers"] = layers
+    components = list(record["components"])  # type: ignore[arg-type]
+    components[1] = {**components[1], "index": 7}  # type: ignore[index]
+    record["components"] = components
     error = capture_model_inspection_error(lambda: ModelInspectionRecord.from_record(record))
-    assert str(error) == "layer indexes must be contiguous"
+    assert str(error) == "component indexes must be contiguous"
 
     record = inspection.to_record()
     trace = dict(cast(dict[str, object], record["architecture_trace"]))
@@ -226,7 +221,7 @@ def test_model_inspection_rejects_malformed_records() -> None:
     graph["nodes"] = nodes
     record["architecture_graph"] = graph
     error = capture_model_inspection_error(lambda: ModelInspectionRecord.from_record(record))
-    assert str(error) == "architecture_graph node does not match layer"
+    assert str(error) == "architecture_graph node does not match component"
 
 
 def _model_manifest_record() -> dict[str, object]:
