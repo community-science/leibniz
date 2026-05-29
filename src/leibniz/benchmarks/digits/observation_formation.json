@@ -15,7 +15,7 @@
     "kind": "field-variation-transform",
     "spatial_affine": {
       "kind": "spatial-affine",
-      "coordinate_system": "normalized-field",
+      "coordinate_system": "normalized-slot",
       "spatial_rank": 2,
       "translation": [[-0.08, 0.08], [-0.08, 0.08]],
       "scale": [[0.9, 1.1], [0.9, 1.1]],

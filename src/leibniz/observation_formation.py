@@ -285,9 +285,9 @@ class SpatialAffineVariation:
             raise ObservationFormationValidationError(
                 f"unsupported spatial affine variation kind: {self.kind}"
             )
-        if self.coordinate_system != "normalized-field":
+        if self.coordinate_system != "normalized-slot":
             raise ObservationFormationValidationError(
-                "spatial affine coordinate_system must be normalized-field"
+                "spatial affine coordinate_system must be normalized-slot"
             )
         if type(self.spatial_rank) is not int or self.spatial_rank < 1:
             raise ObservationFormationValidationError("spatial_rank must be positive")
@@ -327,7 +327,7 @@ class SpatialAffineVariation:
     def identity(cls, *, spatial_rank: int) -> SpatialAffineVariation:
         return cls(
             kind="spatial-affine",
-            coordinate_system="normalized-field",
+            coordinate_system="normalized-slot",
             spatial_rank=spatial_rank,
             translation=tuple((0.0, 0.0) for _axis in range(spatial_rank)),
             scale=tuple((1.0, 1.0) for _axis in range(spatial_rank)),
@@ -871,9 +871,9 @@ def _merge_transformed_slot(
     slot_axis: str,
     coordinate: _VariationCoordinate,
 ) -> None:
-    if coordinate.spatial_affine.coordinate_system != "normalized-field":
+    if coordinate.spatial_affine.coordinate_system != "normalized-slot":
         raise ObservationFormationValidationError(
-            "variation coordinate coordinate_system must be normalized-field"
+            "variation coordinate coordinate_system must be normalized-slot"
         )
     if _is_identity_variation_coordinate(coordinate):
         for index, value in enumerate(source_values):
@@ -882,6 +882,11 @@ def _merge_transformed_slot(
         return
     center = _slot_center(slot_count=slot_count, slot_index=slot_index, axis=slot_axis)
     inverse = _inverse_affine_matrix(coordinate.spatial_affine)
+    translation = _slot_relative_translation(
+        coordinate.spatial_affine.translation,
+        slot_count=slot_count,
+        slot_axis=slot_axis,
+    )
     for channel in range(channel_count):
         channel_offset = channel * resolution * resolution
         for y_index in range(resolution):
@@ -891,7 +896,7 @@ def _merge_transformed_slot(
                 source_x, source_y = _inverse_transform_point(
                     (x, y),
                     center=center,
-                    translation=coordinate.spatial_affine.translation,
+                    translation=translation,
                     inverse_matrix=inverse,
                 )
                 value = _bilinear_sample(
@@ -929,6 +934,17 @@ def _slot_center(
     if axis == "x":
         return ((slot_index + 0.5) / slot_count, 0.5)
     return (0.5, (slot_index + 0.5) / slot_count)
+
+
+def _slot_relative_translation(
+    translation: tuple[float, float],
+    *,
+    slot_count: int,
+    slot_axis: str,
+) -> tuple[float, float]:
+    if slot_axis == "x":
+        return (translation[0] / slot_count, translation[1])
+    return (translation[0], translation[1] / slot_count)
 
 
 def _inverse_affine_matrix(
