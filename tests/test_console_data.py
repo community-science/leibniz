@@ -108,6 +108,15 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         ("flatten", [4]),
         ("dense", [10]),
     ]
+    inspection_graph = cast(dict[str, object], model_inspection["architecture_graph"])
+    assert [
+        node["id"] for node in cast(list[dict[str, object]], inspection_graph["nodes"])
+    ] == [
+        "component-0",
+        "component-1",
+        "component-2",
+    ]
+    assert len(cast(list[dict[str, object]], inspection_graph["edges"])) == 2
     trace = cast(dict[str, object], model_inspection["architecture_trace"])
     trace_stages = cast(list[dict[str, object]], trace["stages"])
     assert [(stage["operator_kind"], stage["syntax_alias"]) for stage in trace_stages] == [

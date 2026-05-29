@@ -236,6 +236,20 @@ const inspections: ModelInspectionRecord[] = [
     },
     id: 'inspection-a',
     input_shape: [1],
+    architecture_graph: {
+      edges: [],
+      input_node_ids: ['component-0'],
+      nodes: [
+        {
+          component: {
+            kind: 'operator',
+            parameters: {},
+          },
+          id: 'component-0',
+        },
+      ],
+      output_node_ids: ['component-0'],
+    },
     architecture_trace: {
       input_shape: [1],
       output_shape: [2],

@@ -82,6 +82,23 @@ def test_model_inspection_derives_architecture_layers_and_costs() -> None:
         "preserve-prefix-replace-trailing-axes"
     )
     assert inspection.architecture_trace.stages[2].parameter_count == 50
+    assert [node.id for node in inspection.architecture_graph.nodes] == [
+        "component-0",
+        "component-1",
+        "component-2",
+    ]
+    assert [
+        (edge.source_node_id, edge.target_node_id, edge.kind)
+        for edge in inspection.architecture_graph.edges
+    ] == [
+        ("component-0", "component-1", "data-flow"),
+        ("component-1", "component-2", "data-flow"),
+    ]
+    assert tuple(node.component.kind for node in inspection.architecture_graph.nodes) == (
+        "adaptive-pooling",
+        "flatten",
+        "dense",
+    )
     assert inspection.components == inspection.layers
     assert ModelInspectionLayer is ModelInspectionComponent
     assert inspection.digest == ContentDigest.from_value(inspection.to_record())
@@ -198,6 +215,18 @@ def test_model_inspection_rejects_malformed_records() -> None:
     record["architecture_trace"] = trace
     error = capture_model_inspection_error(lambda: ModelInspectionRecord.from_record(record))
     assert str(error) == "trace final output_shape does not match"
+
+    record = inspection.to_record()
+    graph = dict(cast(dict[str, object], record["architecture_graph"]))
+    nodes = list(graph["nodes"])  # type: ignore[arg-type]
+    nodes[1] = {
+        **cast(dict[str, object], nodes[1]),
+        "component": {"kind": "other", "parameters": {}},
+    }
+    graph["nodes"] = nodes
+    record["architecture_graph"] = graph
+    error = capture_model_inspection_error(lambda: ModelInspectionRecord.from_record(record))
+    assert str(error) == "architecture_graph node does not match layer"
 
 
 def _model_manifest_record() -> dict[str, object]:

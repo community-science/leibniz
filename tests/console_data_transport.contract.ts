@@ -114,6 +114,11 @@ assertEqual(
   'model operator summaries',
 );
 assertEqual(
+  `${modelInspection.architecture_graph.nodes.length}:${modelInspection.architecture_graph.edges.length}`,
+  '3:2',
+  'model inspection architecture graph',
+);
+assertEqual(
   modelInspection.architecture_trace.stages.map((stage) => stage.operator_kind).join(','),
   'local-aggregation,rank-collapse,affine-readout',
   'model architecture trace stages',
