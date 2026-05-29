@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from typing import cast
 
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes
@@ -9,6 +10,11 @@ from leibniz.model_interfaces import (
     ModelInterfaceValidationError,
 )
 from leibniz.outcomes import OutcomeSpace
+from leibniz.prediction_spaces import (
+    FiniteOutcomeSpace,
+    FiniteTokenSequenceSpace,
+    FiniteTokenVocabulary,
+)
 
 
 def test_model_interface_declares_finite_probability_measure_outputs() -> None:
@@ -18,7 +24,7 @@ def test_model_interface_declares_finite_probability_measure_outputs() -> None:
 
     assert interface == ModelInterface(
         id=ProtocolIdentifier.parse("model-interfaces.boolean@0.1.0"),
-        outcome_space_id=outcome_space.id,
+        prediction_space=FiniteOutcomeSpace.from_outcome_space(outcome_space),
     )
     assert interface.to_record() == _model_interface_record()
     assert interface.digest == ContentDigest.from_value(interface.to_record())
@@ -33,6 +39,29 @@ def test_model_interface_from_outcome_space_canonicalizes() -> None:
     )
 
     assert interface.to_record() == _model_interface_record()
+
+
+def test_model_interface_can_record_finite_token_sequence_source_space() -> None:
+    sequence_space = FiniteTokenSequenceSpace(
+        vocabulary=FiniteTokenVocabulary(token_count=2, token_name="bit"),
+        length=1,
+    )
+    outcome_space = sequence_space.outcome_space(
+        id=ProtocolIdentifier.parse("core.boolean-outcome@0.1.0")
+    )
+
+    interface = ModelInterface.from_outcome_space(
+        id=ProtocolIdentifier.parse("model-interfaces.boolean@0.1.0"),
+        outcome_space=outcome_space,
+        source_space=sequence_space.to_record(),
+    )
+
+    assert interface.to_record()["prediction_space"] == {
+        "kind": "finite-outcome-space",
+        "outcome_space_id": "core.boolean-outcome@0.1.0",
+        "outcome_count": 2,
+        "source_space": sequence_space.to_record(),
+    }
 
 
 def test_model_interface_document_loads_bytes_with_digest() -> None:
@@ -52,7 +81,9 @@ def test_model_interface_document_loads_bytes_with_digest() -> None:
 
 def test_model_interface_rejects_unknown_outcome_space() -> None:
     record = _model_interface_record()
-    record["outcome_space_id"] = "core.other-outcome@0.1.0"
+    prediction_space = dict(cast(dict[str, object], record["prediction_space"]))
+    prediction_space["outcome_space_id"] = "core.other-outcome@0.1.0"
+    record["prediction_space"] = prediction_space
 
     assert str(
         capture_model_interface_error(
@@ -63,12 +94,12 @@ def test_model_interface_rejects_unknown_outcome_space() -> None:
 
 def test_model_interface_rejects_unsupported_prediction_contracts() -> None:
     record = _model_interface_record()
-    record["prediction_semantics"] = "logits"
+    record["prediction_kind"] = "logits"
     assert str(
         capture_model_interface_error(
             lambda: ModelInterface.from_record(record, outcome_space=_outcome_space())
         )
-    ) == "prediction_semantics: expected literal 'finite-probability-measure'"
+    ) == "prediction_kind: expected literal 'direct-finite-probability-measure'"
 
     record = _model_interface_record()
     record["output_encoding"] = "tensor"
@@ -124,8 +155,12 @@ def test_model_interface_rejects_invalid_ids_and_documents() -> None:
 def _model_interface_record() -> dict[str, object]:
     return {
         "id": "model-interfaces.boolean@0.1.0",
-        "outcome_space_id": "core.boolean-outcome@0.1.0",
-        "prediction_semantics": "finite-probability-measure",
+        "prediction_space": {
+            "kind": "finite-outcome-space",
+            "outcome_space_id": "core.boolean-outcome@0.1.0",
+            "outcome_count": 2,
+        },
+        "prediction_kind": "direct-finite-probability-measure",
         "output_encoding": "probability-mass-sequence",
     }
 
