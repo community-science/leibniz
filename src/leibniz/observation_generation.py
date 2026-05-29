@@ -10,7 +10,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
@@ -291,6 +290,7 @@ class ObservationGenerator:
             protocol_id=self.materialization.id,
             record_digest=self.materialization.digest,
         )
+        slot_count = scale_assignment.require_axis(self.formation.slot_composition.count_axis)
         variation_transform_record = self.formation.variation_transform.to_record()
         variation_transform_digest = str(ContentDigest.from_value(variation_transform_record))
 
@@ -316,9 +316,11 @@ class ObservationGenerator:
                 (
                     tuple(sequences[index])
                     if sequences
-                    else self.formation.sample_component_sequence(
-                        plan=plans[index],
+                    else _sample_component_sequence(
+                        seed=seed,
                         sample_index=index,
+                        slot_count=slot_count,
+                        component_count=len(self.formation.components),
                     )
                 )
                 for index in range(sample_count)
@@ -326,17 +328,14 @@ class ObservationGenerator:
         variation_samples: list[tuple[Mapping[str, object], tuple[Mapping[str, object], ...]]] = []
         with _timing_span(timing, f"{timing_prefix}variation_coordinates", samples=sample_count):
             for index, sequence in enumerate(sequence_samples):
-                variation_values = _variation_transform_values(
+                variation_samples.append(_variation_transform_values_and_coordinates(
                     transform=self.formation.variation_transform,
                     transform_record=variation_transform_record,
                     transform_digest=variation_transform_digest,
                     seed=plans[index].seed,
                     sample_index=index,
                     slot_count=len(sequence),
-                )
-                variation_samples.append(
-                    (variation_values, _variation_coordinates_from_values(variation_values))
-                )
+                ))
         samples: list[GeneratedFormationSample] = []
         with _timing_span(timing, f"{timing_prefix}sample_assembly", samples=sample_count):
             for index, plan, sequence, variation_sample in zip(
@@ -628,56 +627,50 @@ def field_to_png_data_url(field: FieldObservation) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def _variation_transform_values(
+def _variation_transform_values_and_coordinates(
     *,
     transform: VariationTransformDeclaration,
-    transform_record: Mapping[str, object] | None = None,
-    transform_digest: str | None = None,
+    transform_record: Mapping[str, object],
+    transform_digest: str,
     seed: int,
     sample_index: int,
     slot_count: int,
-) -> Mapping[str, object]:
+) -> tuple[Mapping[str, object], tuple[Mapping[str, object], ...]]:
     if slot_count < 1:
         raise ObservationGenerationError("slot_count must be positive")
-    bounds = transform.to_record() if transform_record is None else transform_record
-    digest = (
-        str(ContentDigest.from_value(bounds))
-        if transform_digest is None
-        else transform_digest
-    )
-    return {
-        "kind": "field-variation-transform-samples",
-        "bounds": bounds,
-        "coordinates": [
-            dict(
-                _sample_variation_transform_coordinates(
-                    transform=transform,
-                    transform_digest=digest,
-                    seed=seed,
-                    sample_index=sample_index,
-                    slot_index=slot_index,
-                )
+    coordinates = [
+        dict(
+            _sample_variation_transform_coordinates(
+                transform=transform,
+                transform_digest=transform_digest,
+                seed=seed,
+                sample_index=sample_index,
+                slot_index=slot_index,
             )
-            for slot_index in range(slot_count)
-        ],
-    }
+        )
+        for slot_index in range(slot_count)
+    ]
+    return (
+        {
+            "kind": "field-variation-transform-samples",
+            "bounds": transform_record,
+            "coordinates": coordinates,
+        },
+        tuple(coordinates),
+    )
 
 
-def _variation_coordinates_from_values(
-    values: Mapping[str, object],
-) -> tuple[Mapping[str, object], ...]:
-    raw_coordinates = values.get("coordinates")
-    if not isinstance(raw_coordinates, Sequence) or isinstance(
-        raw_coordinates, (str, bytes)
-    ):
-        raise ObservationGenerationError("variation values coordinates must be a sequence")
-    parsed: list[Mapping[str, object]] = []
-    coordinates = cast(Sequence[object], raw_coordinates)
-    for coordinate in coordinates:
-        if not isinstance(coordinate, Mapping):
-            raise ObservationGenerationError("variation coordinate must be a record")
-        parsed.append(cast(Mapping[str, object], coordinate))
-    return tuple(parsed)
+def _sample_component_sequence(
+    *,
+    seed: int,
+    sample_index: int,
+    slot_count: int,
+    component_count: int,
+) -> tuple[int, ...]:
+    if slot_count < 1:
+        raise ObservationGenerationError("slot count must be positive")
+    generator = random.Random(seed + sample_index)
+    return tuple(generator.randrange(component_count) for _slot in range(slot_count))
 
 
 def _sample_interval(

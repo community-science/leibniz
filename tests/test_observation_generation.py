@@ -97,6 +97,12 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
             slot_index=0,
         )
     )
+    assert formation_batch.samples[1].component_sequence == (
+        generator.formation.sample_component_sequence(
+            plan=formation_batch.samples[1].materialization_plan,
+            sample_index=1,
+        )
+    )
 
 
 def test_digits_observation_generator_records_optional_timing() -> None:
