@@ -9,6 +9,7 @@ from leibniz.architectures import (
 )
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes
+from leibniz.model_scale_contracts import ModelScaleContract
 
 _fixtures_root = Path(__file__).parent / "fixtures"
 
@@ -46,6 +47,22 @@ def test_architecture_manifest_accepts_matching_explicit_id() -> None:
     assert ArchitectureManifest.from_record(record) == manifest
 
 
+def test_architecture_manifest_accepts_model_scale_contract() -> None:
+    record = _architecture_record()
+    contract = ModelScaleContract.variable_input_shape(
+        (1, 32, 32),
+        minimum=32,
+        axis_symbol="W",
+        scale_axis_indices=(2,),
+    )
+    record["model_scale_contract"] = contract.to_record()
+
+    manifest = ArchitectureManifest.from_record(record)
+
+    assert manifest.model_scale_contract == contract
+    assert manifest.to_record()["model_scale_contract"] == contract.to_record()
+
+
 def test_architecture_manifest_rejects_invalid_ids_shapes_and_layers() -> None:
     record = _architecture_record()
     record["id"] = "architecture.sha-wrong@0.1.0"
@@ -63,6 +80,18 @@ def test_architecture_manifest_rejects_invalid_ids_shapes_and_layers() -> None:
     record["layers"] = []
     assert str(capture_architecture_error(lambda: ArchitectureManifest.from_record(record))) == (
         "layers must contain at least one layer"
+    )
+
+    record = _architecture_record()
+    contract = ModelScaleContract.variable_input_shape(
+        (1, 32, 64),
+        minimum=64,
+        axis_symbol="W",
+        scale_axis_indices=(2,),
+    )
+    record["model_scale_contract"] = contract.to_record()
+    assert str(capture_architecture_error(lambda: ArchitectureManifest.from_record(record))) == (
+        "model_scale_contract anchor_shape must match input_shape"
     )
 
     record = _architecture_record()
