@@ -14,6 +14,7 @@ from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.federation_ingest import plan_federation_ingest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDocument
+from leibniz.model_manifests import ModelExecutionFamily
 from leibniz.model_operations import ModelOperation
 from leibniz.submission_registries import SubmissionRegistry
 
@@ -588,6 +589,7 @@ def _model_manifest_record() -> dict[str, object]:
             kind="model-interface",
             record=_model_interface_record(),
         ).to_record(),
+        "execution_family": ModelExecutionFamily.reference_runner_pytorch_sequential().to_record(),
         "model_artifacts": [
             {
                 "kind": "model-checkpoint",

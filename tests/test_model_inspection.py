@@ -15,7 +15,7 @@ from leibniz.model_inspection import (
     ModelInspectionValidationError,
 )
 from leibniz.model_interfaces import ModelInterface
-from leibniz.model_manifests import ModelArtifactManifest
+from leibniz.model_manifests import ModelArtifactManifest, ModelExecutionFamily
 from leibniz.outcomes import OutcomeSpace
 from leibniz.submissions import SubmissionPackageManifest
 
@@ -253,6 +253,7 @@ def _model_manifest_record() -> dict[str, object]:
             kind="model-interface",
             record=_model_interface().to_record(),
         ).to_record(),
+        "execution_family": ModelExecutionFamily.reference_runner_pytorch_sequential().to_record(),
         "model_artifacts": [_checkpoint_reference().to_record()],
         "training_provenance": [_training_reference().to_record()],
     }

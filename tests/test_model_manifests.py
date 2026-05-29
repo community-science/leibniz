@@ -11,6 +11,7 @@ from leibniz.model_manifests import (
     ModelArtifactManifest,
     ModelArtifactManifestDocument,
     ModelArtifactManifestValidationError,
+    ModelExecutionFamily,
 )
 from leibniz.outcomes import OutcomeSpace
 
@@ -28,6 +29,7 @@ def test_model_artifact_manifest_parses_and_canonicalizes() -> None:
         id=ProtocolIdentifier.parse("model-manifests.boolean-digits-pool@0.1.0"),
         architecture=_architecture_reference(),
         interface=_interface_reference(),
+        execution_family=ModelExecutionFamily.reference_runner_pytorch_sequential(),
         model_artifacts=(_checkpoint_reference(),),
         training_provenance=(_training_reference(),),
     )
@@ -123,6 +125,22 @@ def test_model_artifact_manifest_rejects_missing_and_malformed_references() -> N
     ) == "interface reference must have kind model-interface"
 
     record = _model_manifest_record()
+    del record["execution_family"]
+    assert str(
+        capture_model_manifest_error(lambda: ModelArtifactManifest.from_record(record))
+    ) == "execution_family: missing required field"
+
+    record = _model_manifest_record()
+    record["execution_family"] = {
+        "kind": "reference-runner-pytorch-sequential",
+        "runtime": "onnx",
+        "architecture_family": "sequential-architecture-components",
+    }
+    assert str(
+        capture_model_manifest_error(lambda: ModelArtifactManifest.from_record(record))
+    ) == "reference-runner-pytorch-sequential requires runtime pytorch"
+
+    record = _model_manifest_record()
     record["model_artifacts"] = []
     assert str(
         capture_model_manifest_error(lambda: ModelArtifactManifest.from_record(record))
@@ -172,6 +190,7 @@ def _model_manifest_record() -> dict[str, object]:
         "id": "model-manifests.boolean-digits-pool@0.1.0",
         "architecture": _architecture_reference().to_record(),
         "interface": _interface_reference().to_record(),
+        "execution_family": ModelExecutionFamily.reference_runner_pytorch_sequential().to_record(),
         "model_artifacts": [_checkpoint_reference().to_record()],
         "training_provenance": [_training_reference().to_record()],
     }

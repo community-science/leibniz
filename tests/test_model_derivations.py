@@ -13,7 +13,7 @@ from leibniz.model_derivations import (
     ParameterMappingSummary,
 )
 from leibniz.model_interfaces import ModelInterface
-from leibniz.model_manifests import ModelArtifactManifest
+from leibniz.model_manifests import ModelArtifactManifest, ModelExecutionFamily
 from leibniz.outcomes import OutcomeSpace
 
 _fixtures_root = Path(__file__).parent / "fixtures"
@@ -283,6 +283,9 @@ def _source_model_manifest() -> ModelArtifactManifest:
             "id": "model-manifests.boolean-source@0.1.0",
             "architecture": _target_architecture_reference().to_record(),
             "interface": _target_interface_reference().to_record(),
+            "execution_family": (
+                ModelExecutionFamily.reference_runner_pytorch_sequential().to_record()
+            ),
             "model_artifacts": [
                 {
                     "kind": "model-checkpoint",
@@ -299,6 +302,9 @@ def _alternate_source_model_manifest() -> ModelArtifactManifest:
             "id": "model-manifests.boolean-other@0.1.0",
             "architecture": _target_architecture_reference().to_record(),
             "interface": _target_interface_reference().to_record(),
+            "execution_family": (
+                ModelExecutionFamily.reference_runner_pytorch_sequential().to_record()
+            ),
             "model_artifacts": [
                 {
                     "kind": "model-checkpoint",
