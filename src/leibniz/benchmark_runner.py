@@ -373,6 +373,7 @@ def run_benchmark(
             plan=plan,
             generator=generator,
             architecture=architecture,
+            model_inspection=model_inspection,
             training_run=training_result.training_run,
             outcome_space=outcome_space,
         )
@@ -488,6 +489,7 @@ def _scale_evaluation_trace(
     plan: BenchmarkRunPlan,
     generator: ObservationGenerator,
     architecture: ArchitectureManifest,
+    model_inspection: ModelInspectionRecord,
     training_run: TrainingRunRecord,
     outcome_space: OutcomeSpace,
 ) -> ScaleEvaluationTrace:
@@ -511,6 +513,10 @@ def _scale_evaluation_trace(
                 best_validation_loss=training_run.best_validation_loss,
                 outcome_count=len(outcome_space.outcomes),
             ),
+            score_weight=_scale_score_weight(
+                generator=generator,
+                scale=_initial_scale,
+            ),
             resources={
                 "training_steps": training_run.steps_run,
                 "validation_checks": training_run.validation_checks,
@@ -518,36 +524,107 @@ def _scale_evaluation_trace(
             },
         )
     ]
+    marginal_scores: list[float] = []
     next_scale = _initial_scale + 1
-    boundary_reason = _direct_prediction_boundary_reason(
-        generator=generator,
-        architecture=architecture,
-        scale=next_scale,
-        sample_count=plan.resolved_evaluation_sample_count,
-        seed=plan.seed + 20_000_039,
-    )
-    if boundary_reason is not None:
+    while True:
+        boundary_reason = _direct_prediction_boundary_reason(
+            generator=generator,
+            architecture=architecture,
+            scale=next_scale,
+            sample_count=plan.resolved_evaluation_sample_count,
+            seed=plan.seed + 20_000_039 + next_scale,
+        )
+        score_weight = _scale_score_weight(generator=generator, scale=next_scale)
+        if boundary_reason is not None:
+            levels.append(
+                ScaleEvaluationLevel(
+                    scale=next_scale,
+                    competence=0.0,
+                    score_weight=score_weight,
+                    boundary_reason=boundary_reason,
+                )
+            )
+            return ScaleEvaluationTrace(
+                axis=axis,
+                score=score,
+                evaluation=evaluation,
+                levels=tuple(levels),
+                stop_reason="model-scale-boundary",
+            )
+        next_outcome_space = generator.benchmark_manifest.resolve_outcome_space(
+            scale=next_scale
+        )
+        next_evaluation_batch = generator.sample_batch(
+            scale=next_scale,
+            sample_count=plan.resolved_evaluation_sample_count,
+            seed=plan.seed + 20_000_039 + next_scale,
+        )
+        next_training = _train_and_predict(
+            architecture=architecture,
+            evaluation_batch=next_evaluation_batch,
+            generator=generator,
+            outcome_space=next_outcome_space,
+            scale=next_scale,
+            sample_count=plan.sample_count,
+            train_steps=plan.train_steps,
+            learning_rate=float(plan.learning_rate),
+            optimizer_name=plan.optimizer,
+            schedule_name=plan.schedule,
+            validation_interval=plan.validation_interval,
+            convergence_patience=plan.convergence_patience,
+            convergence_min_delta=float(plan.convergence_min_delta),
+            convergence_min_steps=plan.convergence_min_steps,
+            target_validation_loss=plan.target_validation_loss,
+            tensor_device=plan.tensor_device,
+            work_estimates=_training_work_estimates(
+                architecture=architecture,
+                inference_flops=model_inspection.cost_summary.inference_flops,
+                parameter_bytes=model_inspection.cost_summary.parameter_bytes,
+                batch_size=plan.sample_count,
+            ),
+            seed=plan.seed + 10_000_019 * next_scale,
+        )
+        competence = _validation_competence(
+            best_validation_loss=next_training.training_run.best_validation_loss,
+            outcome_count=len(next_outcome_space.outcomes),
+        )
         levels.append(
             ScaleEvaluationLevel(
                 scale=next_scale,
-                competence=0.0,
-                boundary_reason=boundary_reason,
+                competence=competence,
+                score_weight=score_weight,
+                resources={
+                    "training_steps": next_training.training_run.steps_run,
+                    "validation_checks": next_training.training_run.validation_checks,
+                    "sample_count": plan.sample_count,
+                },
             )
         )
-        return ScaleEvaluationTrace(
-            axis=axis,
-            score=score,
-            evaluation=evaluation,
-            levels=tuple(levels),
-            stop_reason="model-scale-boundary",
-        )
-    return ScaleEvaluationTrace(
-        axis=axis,
-        score=score,
-        evaluation=evaluation,
-        levels=tuple(levels),
-        stop_reason="fixed-scale-run-completed",
+        marginal_scores.append(competence * score_weight)
+        if evaluation.should_stop(marginal_scores):
+            return ScaleEvaluationTrace(
+                axis=axis,
+                score=score,
+                evaluation=evaluation,
+                levels=tuple(levels),
+                stop_reason="zero-marginal-score",
+            )
+        next_scale += 1
+
+
+def _scale_score_weight(
+    *,
+    generator: ObservationGenerator,
+    scale: int,
+) -> float:
+    baseline_count = len(
+        generator.benchmark_manifest.resolve_outcome_space(scale=_initial_scale).outcomes
     )
+    outcome_count = len(generator.benchmark_manifest.resolve_outcome_space(scale=scale).outcomes)
+    baseline_entropy = math.log(baseline_count)
+    if baseline_entropy <= 0:
+        return 1.0
+    return math.log(outcome_count) / baseline_entropy
 
 
 def _direct_prediction_boundary_reason(
