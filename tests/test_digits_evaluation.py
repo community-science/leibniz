@@ -88,6 +88,19 @@ def test_digits_length_three_measurements_use_resolved_sequence_outcome_space() 
     ]
 
 
+def test_digits_outcome_sequence_encodes_lexicographic_token_indices() -> None:
+    manifest = _digits_manifest()
+    assert manifest.outcome_sequence is not None
+
+    assert manifest.outcome_sequence.outcome_count(3) == 1000
+    assert manifest.outcome_sequence.outcome_index((1, 2, 3)) == 123
+    assert manifest.outcome_sequence.atoms_for_outcome_index(index=123, length=3) == (
+        1,
+        2,
+        3,
+    )
+
+
 def test_digits_competence_integral_uses_materialization_complexity_assignments() -> None:
     length_one = _measurement_for_sequence(
         sequence=(7,),

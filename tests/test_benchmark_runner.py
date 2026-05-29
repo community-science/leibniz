@@ -471,6 +471,33 @@ def test_digits_benchmark_runner_rejects_unmatched_architecture_shape(tmp_path: 
         )
 
 
+def test_digits_benchmark_runner_records_scale_curriculum_boundary(tmp_path: Path) -> None:
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            runs_root=tmp_path / ".runs",
+            sample_count=2,
+            train_steps=0,
+            tensor_device="cpu",
+            scale_curriculum=True,
+        )
+    )
+
+    training_summary = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    trace = cast(Mapping[str, object], training_summary["scale_evaluation_trace"])
+    levels = cast(list[Mapping[str, object]], trace["levels"])
+
+    assert trace["stop_reason"] == "model-scale-boundary"
+    assert levels[0]["scale"] == 1
+    assert levels[1]["scale"] == 2
+    assert levels[1]["competence"] == 0.0
+    assert "output_shape" in cast(str, levels[1]["boundary_reason"])
+
+
 def test_cli_runs_digits_benchmark_dry_run(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
