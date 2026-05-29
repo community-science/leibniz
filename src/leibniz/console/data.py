@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
 
-from leibniz.architectures import ArchitectureManifestDocument
+from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.console.artifact_index import (
     ConsoleArtifactIndex,
     ConsoleArtifactIndexBuilder,
@@ -173,10 +173,12 @@ class ConsoleDataBuilder:
         record: Mapping[str, object],
     ) -> Mapping[str, object]:
         if kind == "architecture-manifest":
+            graph = ArchitectureManifest.from_record(record).graph
             return {
                 "input_shape": record["input_shape"],
                 "output_shape": record["output_shape"],
                 "layers": record["layers"],
+                "architecture_graph": graph.to_record(),
             }
         if kind == "benchmark-manifest":
             summary: dict[str, object] = {

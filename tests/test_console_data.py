@@ -67,6 +67,20 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert [(detail["kind"], detail["source_path"]) for detail in details] == [
         (artifact["kind"], artifact["source_path"]) for artifact in artifacts
     ]
+    architecture_detail = details[0]
+    architecture_graph = cast(dict[str, object], architecture_detail["architecture_graph"])
+    assert [node["id"] for node in cast(list[dict[str, object]], architecture_graph["nodes"])] == [
+        "component-0",
+        "component-1",
+        "component-2",
+    ]
+    assert [
+        (edge["source_node_id"], edge["target_node_id"])
+        for edge in cast(list[dict[str, object]], architecture_graph["edges"])
+    ] == [
+        ("component-0", "component-1"),
+        ("component-1", "component-2"),
+    ]
     assert {artifact["validation_status"] for artifact in artifacts} == {"valid"}
 
     assert "observation_inspections" not in record

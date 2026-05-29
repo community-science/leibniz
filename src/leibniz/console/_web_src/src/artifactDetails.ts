@@ -7,6 +7,7 @@ export type ArchitectureManifestDetailRecord = {
   input_shape: number[];
   output_shape: number[];
   layers: LayerSummaryRecord[];
+  architecture_graph: ArchitectureGraphRecord;
 };
 
 export type BenchmarkManifestDetailRecord = {
@@ -111,6 +112,24 @@ export type ConsoleArtifactDetailMap = ReadonlyMap<string, ConsoleArtifactDetail
 type LayerSummaryRecord = {
   kind: string;
   parameters?: Record<string, string | number | boolean>;
+};
+
+type ArchitectureGraphRecord = {
+  nodes: ArchitectureGraphNodeRecord[];
+  edges: ArchitectureGraphEdgeRecord[];
+  input_node_ids: string[];
+  output_node_ids: string[];
+};
+
+type ArchitectureGraphNodeRecord = {
+  id: string;
+  component: LayerSummaryRecord;
+};
+
+type ArchitectureGraphEdgeRecord = {
+  source_node_id: string;
+  target_node_id: string;
+  kind: string;
 };
 
 type OutcomeSpaceSummaryRecord = {
@@ -264,6 +283,10 @@ function parseDetailRecord(value: unknown, path: string): ConsoleArtifactDetailR
       output_shape: parseNumberArray(record.output_shape, `${path}.output_shape`),
       layers: requireArray(record.layers, `${path}.layers`).map((layer, index) =>
         parseLayerSummary(layer, `${path}.layers.${index}`),
+      ),
+      architecture_graph: parseArchitectureGraph(
+        record.architecture_graph,
+        `${path}.architecture_graph`,
       ),
     };
   }
@@ -452,6 +475,37 @@ function parseLayerSummary(value: unknown, path: string): LayerSummaryRecord {
     layer.parameters = parseParameters(record.parameters, `${path}.parameters`);
   }
   return layer;
+}
+
+function parseArchitectureGraph(value: unknown, path: string): ArchitectureGraphRecord {
+  const record = requireRecord(value, path);
+  return {
+    nodes: requireArray(record.nodes, `${path}.nodes`).map((node, index) =>
+      parseArchitectureGraphNode(node, `${path}.nodes.${index}`),
+    ),
+    edges: requireArray(record.edges, `${path}.edges`).map((edge, index) =>
+      parseArchitectureGraphEdge(edge, `${path}.edges.${index}`),
+    ),
+    input_node_ids: parseStringArray(record.input_node_ids, `${path}.input_node_ids`),
+    output_node_ids: parseStringArray(record.output_node_ids, `${path}.output_node_ids`),
+  };
+}
+
+function parseArchitectureGraphNode(value: unknown, path: string): ArchitectureGraphNodeRecord {
+  const record = requireRecord(value, path);
+  return {
+    id: requireString(record.id, `${path}.id`),
+    component: parseLayerSummary(record.component, `${path}.component`),
+  };
+}
+
+function parseArchitectureGraphEdge(value: unknown, path: string): ArchitectureGraphEdgeRecord {
+  const record = requireRecord(value, path);
+  return {
+    source_node_id: requireString(record.source_node_id, `${path}.source_node_id`),
+    target_node_id: requireString(record.target_node_id, `${path}.target_node_id`),
+    kind: requireString(record.kind, `${path}.kind`),
+  };
 }
 
 function parseOutcomeSpace(value: unknown, path: string): OutcomeSpaceSummaryRecord {

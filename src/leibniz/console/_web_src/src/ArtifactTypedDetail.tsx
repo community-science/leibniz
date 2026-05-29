@@ -32,13 +32,22 @@ export function ArtifactTypedDetail({
       <DetailSection title="Architecture">
         <DetailItem label="Input Shape" value={shapeLabel(detail.input_shape)} />
         <DetailItem label="Output Shape" value={shapeLabel(detail.output_shape)} />
-        <DetailItem label="Layers" value={String(detail.layers.length)} />
+        <DetailItem label="Components" value={String(detail.architecture_graph.nodes.length)} />
+        <DetailItem label="Graph Edges" value={String(detail.architecture_graph.edges.length)} />
+        <DetailItem
+          label="Graph Inputs"
+          value={detail.architecture_graph.input_node_ids.join(', ')}
+        />
+        <DetailItem
+          label="Graph Outputs"
+          value={detail.architecture_graph.output_node_ids.join(', ')}
+        />
         <ul className="artifact-detail-list">
-          {detail.layers.map((layer, index) => (
-            <li key={`${index}:${layer.kind}`}>
-              <span>{layer.kind}</span>
-              {layer.parameters === undefined ? null : (
-                <small>{parameterLabel(layer.parameters)}</small>
+          {detail.architecture_graph.nodes.map((node) => (
+            <li key={node.id}>
+              <span>{node.component.kind}</span>
+              {node.component.parameters === undefined ? null : (
+                <small>{`${node.id}, ${parameterLabel(node.component.parameters)}`}</small>
               )}
             </li>
           ))}

@@ -1,8 +1,12 @@
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import cast
 
 from leibniz.architectures import (
     ArchitectureComponent,
+    ArchitectureGraph,
+    ArchitectureGraphEdge,
+    ArchitectureGraphNode,
     ArchitectureLayer,
     ArchitectureManifest,
     ArchitectureManifestDocument,
@@ -35,6 +39,7 @@ def test_architecture_manifest_derives_content_addressed_id() -> None:
     )
     assert ArchitectureLayer is ArchitectureComponent
     assert manifest.components == manifest.layers
+    assert manifest.graph == ArchitectureGraph.sequential(manifest.components)
     assert manifest.to_record() == {
         "id": str(manifest.id),
         **_expanded_architecture_body(),
@@ -64,6 +69,98 @@ def test_architecture_manifest_accepts_model_scale_contract() -> None:
 
     assert manifest.model_scale_contract == contract
     assert manifest.to_record()["model_scale_contract"] == contract.to_record()
+
+
+def test_architecture_graph_lowers_sequential_layers_to_single_path() -> None:
+    manifest = ArchitectureManifest.from_record(_architecture_record())
+    graph = manifest.graph
+
+    assert graph.nodes == (
+        ArchitectureGraphNode(id="component-0", component=manifest.components[0]),
+        ArchitectureGraphNode(id="component-1", component=manifest.components[1]),
+        ArchitectureGraphNode(id="component-2", component=manifest.components[2]),
+    )
+    assert graph.edges == (
+        ArchitectureGraphEdge(
+            source_node_id="component-0",
+            target_node_id="component-1",
+        ),
+        ArchitectureGraphEdge(
+            source_node_id="component-1",
+            target_node_id="component-2",
+        ),
+    )
+    assert graph.input_node_ids == ("component-0",)
+    assert graph.output_node_ids == ("component-2",)
+    assert graph.to_record() == {
+        "nodes": [
+            {
+                "id": "component-0",
+                "component": {
+                    "kind": "adaptive-pooling",
+                    "parameters": {"dimension": 2, "size": 2},
+                },
+            },
+            {
+                "id": "component-1",
+                "component": {"kind": "flatten", "parameters": {}},
+            },
+            {
+                "id": "component-2",
+                "component": {"kind": "dense", "parameters": {"out": 10}},
+            },
+        ],
+        "edges": [
+            {
+                "source_node_id": "component-0",
+                "target_node_id": "component-1",
+                "kind": "data-flow",
+            },
+            {
+                "source_node_id": "component-1",
+                "target_node_id": "component-2",
+                "kind": "data-flow",
+            },
+        ],
+        "input_node_ids": ["component-0"],
+        "output_node_ids": ["component-2"],
+    }
+    assert ArchitectureGraph.from_record(graph.to_record()) == graph
+
+
+def test_architecture_graph_rejects_invalid_references_and_cycles() -> None:
+    graph = ArchitectureManifest.from_record(_architecture_record()).graph
+    record = graph.to_record()
+    record["edges"] = [
+        {
+            "source_node_id": "component-0",
+            "target_node_id": "missing",
+            "kind": "data-flow",
+        }
+    ]
+    assert str(capture_architecture_error(lambda: ArchitectureGraph.from_record(record))) == (
+        "edge target_node_id 'missing' is not a graph node"
+    )
+
+    record = graph.to_record()
+    record["input_node_ids"] = ["missing"]
+    assert str(capture_architecture_error(lambda: ArchitectureGraph.from_record(record))) == (
+        "input_node_ids contains unknown node id 'missing'"
+    )
+
+    record = graph.to_record()
+    graph_edges = cast(list[dict[str, object]], graph.to_record()["edges"])
+    record["edges"] = [
+        *graph_edges,
+        {
+            "source_node_id": "component-2",
+            "target_node_id": "component-0",
+            "kind": "data-flow",
+        },
+    ]
+    assert str(capture_architecture_error(lambda: ArchitectureGraph.from_record(record))) == (
+        "architecture graph must be acyclic"
+    )
 
 
 def test_architecture_manifest_rejects_invalid_ids_shapes_and_layers() -> None:
