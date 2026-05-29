@@ -69,6 +69,8 @@ def test_generated_console_web_modules_are_npm_build_artifacts() -> None:
     assert "detached: process.platform !== 'win32'" in browser_smoke
     assert "process.kill(-child.pid, signal)" in browser_smoke
     assert "killProcessGroup(child, 'SIGKILL')" in browser_smoke
+    assert "headless console browser smoke test timed out" in browser_smoke
+    assert "process.exit(0)" in browser_smoke
 
     console_contract_runner = (
         _repository_root / "tests" / "run_console_web_tests.mjs"

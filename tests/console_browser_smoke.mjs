@@ -14,6 +14,10 @@ const host = '127.0.0.1';
 const port = await freePort();
 const consolePackageRoot = new URL('../src/leibniz/console/_web_src', import.meta.url);
 const resultRoot = mkdtempSync(resolve(tmpdir(), 'leibniz-console-browser-results-'));
+const smokeTimeout = setTimeout(() => {
+  console.error('headless console browser smoke test timed out');
+  process.exit(1);
+}, 60_000);
 const testEnv = {
   ...process.env,
   LEIBNIZ_CONSOLE_RESULT_ROOTS: resultRoot,
@@ -65,6 +69,9 @@ try {
   }
   rmSync(resultRoot, { force: true, recursive: true });
 }
+
+clearTimeout(smokeTimeout);
+process.exit(0);
 
 function spawnConsoleCommand(command, args, options = {}) {
   const executable = process.platform === 'win32' ? `${command}.cmd` : command;
