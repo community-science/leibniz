@@ -11,6 +11,7 @@ from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.records import FieldSpec, RecordSpec
 
 __all__ = [
+    "FiniteOutcomeSpace",
     "FiniteTokenSequenceSpace",
     "FiniteTokenVocabulary",
     "PredictionSpaceValidationError",
@@ -40,6 +41,14 @@ _real_vector_space_record = RecordSpec(
         "dimension": FieldSpec(kind="integer"),
         "coordinate_name": FieldSpec(kind="string"),
         "measure": FieldSpec(kind="literal", literal="lebesgue"),
+    }
+)
+_finite_outcome_space_record = RecordSpec(
+    fields={
+        "kind": FieldSpec(kind="literal", literal="finite-outcome-space"),
+        "outcome_space_id": FieldSpec(kind="identifier"),
+        "outcome_count": FieldSpec(kind="integer"),
+        "source_space": FieldSpec(kind="record", required=False),
     }
 )
 
@@ -162,6 +171,15 @@ class FiniteTokenSequenceSpace:
             ),
         )
 
+    def finite_outcome_space(self, *, id: ProtocolIdentifier) -> FiniteOutcomeSpace:
+        """Return the finite outcome prediction space induced by this sequence space."""
+
+        return FiniteOutcomeSpace(
+            outcome_space_id=id,
+            outcome_count=self.cardinality,
+            source_space=self.to_record(),
+        )
+
     def to_record(self) -> dict[str, object]:
         return {
             "kind": "finite-token-sequence",
@@ -169,6 +187,78 @@ class FiniteTokenSequenceSpace:
             "length": self.length,
             "sequence_boundary": self.sequence_boundary,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class FiniteOutcomeSpace:
+    """A finite prediction target space with explicitly enumerated outcomes."""
+
+    outcome_space_id: ProtocolIdentifier
+    outcome_count: int
+    source_space: Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        try:
+            self.outcome_space_id.require_unreleased()
+        except ValueError as error:
+            raise PredictionSpaceValidationError(str(error)) from error
+        if type(self.outcome_count) is not int or self.outcome_count < 1:
+            raise PredictionSpaceValidationError("outcome_count must be a positive integer")
+        if self.source_space is not None:
+            _validate_source_space(self.source_space)
+
+    @classmethod
+    def from_outcome_space(
+        cls,
+        outcome_space: OutcomeSpace,
+        *,
+        source_space: Mapping[str, object] | None = None,
+    ) -> FiniteOutcomeSpace:
+        return cls(
+            outcome_space_id=outcome_space.id,
+            outcome_count=len(outcome_space.outcomes),
+            source_space=source_space,
+        )
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> FiniteOutcomeSpace:
+        try:
+            validated = _finite_outcome_space_record.validate(record)
+        except ValueError as error:
+            raise PredictionSpaceValidationError(str(error)) from error
+        return cls(
+            outcome_space_id=_as_identifier(
+                validated["outcome_space_id"],
+                field="outcome_space_id",
+            ),
+            outcome_count=_as_int(validated["outcome_count"], field="outcome_count"),
+            source_space=(
+                None
+                if "source_space" not in validated
+                else _as_mapping(validated["source_space"], field="source_space")
+            ),
+        )
+
+    def validate_outcome_space(self, outcome_space: OutcomeSpace) -> None:
+        if self.outcome_space_id != outcome_space.id:
+            raise PredictionSpaceValidationError(
+                f"outcome_space_id {self.outcome_space_id} does not match {outcome_space.id}"
+            )
+        if self.outcome_count != len(outcome_space.outcomes):
+            raise PredictionSpaceValidationError(
+                f"outcome_count {self.outcome_count} does not match "
+                f"{len(outcome_space.outcomes)} outcomes"
+            )
+
+    def to_record(self) -> dict[str, object]:
+        record: dict[str, object] = {
+            "kind": "finite-outcome-space",
+            "outcome_space_id": str(self.outcome_space_id),
+            "outcome_count": self.outcome_count,
+        }
+        if self.source_space is not None:
+            record["source_space"] = dict(self.source_space)
+        return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,7 +304,21 @@ def _as_int(value: object, *, field: str) -> int:
     return value
 
 
+def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
+    if not isinstance(value, ProtocolIdentifier):
+        raise PredictionSpaceValidationError(f"{field}: expected parsed identifier")
+    return value
+
+
 def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise PredictionSpaceValidationError(f"{field}: expected record")
     return cast(Mapping[str, object], value)
+
+
+def _validate_source_space(record: Mapping[str, object]) -> None:
+    kind = record.get("kind")
+    if kind == "finite-token-sequence":
+        FiniteTokenSequenceSpace.from_record(record)
+        return
+    raise PredictionSpaceValidationError("source_space kind is unsupported")

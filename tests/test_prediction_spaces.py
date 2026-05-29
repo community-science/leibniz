@@ -2,6 +2,7 @@ import pytest
 
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.prediction_spaces import (
+    FiniteOutcomeSpace,
     FiniteTokenSequenceSpace,
     FiniteTokenVocabulary,
     RealVectorSpace,
@@ -36,6 +37,11 @@ def test_finite_token_sequence_space_resolves_finite_outcomes() -> None:
         "bit-1-0",
         "bit-1-1",
     ]
+    assert space.finite_outcome_space(id=outcome_space.id) == FiniteOutcomeSpace(
+        outcome_space_id=outcome_space.id,
+        outcome_count=4,
+        source_space=space.to_record(),
+    )
 
 
 def test_finite_token_sequence_space_requires_exact_length() -> None:
@@ -58,3 +64,20 @@ def test_real_vector_space_records_continuous_prediction_targets() -> None:
         "coordinate_name": "position",
         "measure": "lebesgue",
     }
+
+
+def test_finite_outcome_space_validates_outcome_count() -> None:
+    space = FiniteTokenSequenceSpace(
+        vocabulary=FiniteTokenVocabulary(token_count=2, token_name="bit"),
+        length=2,
+    )
+    outcome_space = space.outcome_space(
+        id=ProtocolIdentifier.parse("benchmarks.bits.outcomes.l2@0.1.0")
+    )
+    prediction_space = FiniteOutcomeSpace.from_outcome_space(
+        outcome_space,
+        source_space=space.to_record(),
+    )
+
+    prediction_space.validate_outcome_space(outcome_space)
+    assert FiniteOutcomeSpace.from_record(prediction_space.to_record()) == prediction_space

@@ -570,8 +570,12 @@ def _resource_report_set_record() -> dict[str, object]:
 def _model_interface_record() -> dict[str, object]:
     return {
         "id": "model-interfaces.cli@0.1.0",
-        "outcome_space_id": "core.boolean-outcome@0.1.0",
-        "prediction_semantics": "finite-probability-measure",
+        "prediction_space": {
+            "kind": "finite-outcome-space",
+            "outcome_space_id": "core.boolean-outcome@0.1.0",
+            "outcome_count": 2,
+        },
+        "prediction_kind": "direct-finite-probability-measure",
         "output_encoding": "probability-mass-sequence",
     }
 

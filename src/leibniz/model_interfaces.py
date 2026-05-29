@@ -10,6 +10,10 @@ from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
 from leibniz.outcomes import OutcomeSpace
+from leibniz.prediction_spaces import (
+    FiniteOutcomeSpace,
+    PredictionSpaceValidationError,
+)
 from leibniz.records import FieldSpec, RecordSpec
 
 __all__ = [
@@ -18,16 +22,16 @@ __all__ = [
     "ModelInterfaceValidationError",
 ]
 
-_PredictionSemantics: TypeAlias = Literal["finite-probability-measure"]
+_PredictionKind: TypeAlias = Literal["direct-finite-probability-measure"]
 _OutputEncoding: TypeAlias = Literal["probability-mass-sequence"]
 
 _model_interface_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
-        "outcome_space_id": FieldSpec(kind="identifier"),
-        "prediction_semantics": FieldSpec(
+        "prediction_space": FieldSpec(kind="record"),
+        "prediction_kind": FieldSpec(
             kind="literal",
-            literal="finite-probability-measure",
+            literal="direct-finite-probability-measure",
         ),
         "output_encoding": FieldSpec(
             kind="literal",
@@ -43,24 +47,23 @@ class ModelInterfaceValidationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ModelInterface:
-    """A model-output contract over a public finite outcome space."""
+    """A model-output contract over a prediction target space."""
 
     id: ProtocolIdentifier
-    outcome_space_id: ProtocolIdentifier
-    prediction_semantics: _PredictionSemantics = "finite-probability-measure"
+    prediction_space: FiniteOutcomeSpace
+    prediction_kind: _PredictionKind = "direct-finite-probability-measure"
     output_encoding: _OutputEncoding = "probability-mass-sequence"
 
     def __post_init__(self) -> None:
         try:
             self.id.require_unreleased()
-            self.outcome_space_id.require_unreleased()
         except IdentifierSyntaxError as error:
             raise ModelInterfaceValidationError(str(error)) from error
         if not str(self.id.name).startswith("model-interfaces."):
             raise ModelInterfaceValidationError("id must be a valid model interface id")
-        if self.prediction_semantics != "finite-probability-measure":
+        if self.prediction_kind != "direct-finite-probability-measure":
             raise ModelInterfaceValidationError(
-                f"unsupported prediction_semantics: {self.prediction_semantics}"
+                f"unsupported prediction_kind: {self.prediction_kind}"
             )
         if self.output_encoding != "probability-mass-sequence":
             raise ModelInterfaceValidationError(
@@ -73,8 +76,15 @@ class ModelInterface:
         *,
         id: ProtocolIdentifier,
         outcome_space: OutcomeSpace,
+        source_space: Mapping[str, object] | None = None,
     ) -> ModelInterface:
-        return cls(id=id, outcome_space_id=outcome_space.id)
+        return cls(
+            id=id,
+            prediction_space=FiniteOutcomeSpace.from_outcome_space(
+                outcome_space,
+                source_space=source_space,
+            ),
+        )
 
     @classmethod
     def from_record(
@@ -87,16 +97,16 @@ class ModelInterface:
             validated = _model_interface_record.validate(record)
         except ValueError as error:
             raise ModelInterfaceValidationError(str(error)) from error
+        try:
+            prediction_space = FiniteOutcomeSpace.from_record(
+                _as_mapping(validated["prediction_space"], field="prediction_space")
+            )
+        except PredictionSpaceValidationError as error:
+            raise ModelInterfaceValidationError(str(error)) from error
         interface = cls(
             id=_as_identifier(validated["id"], field="id"),
-            outcome_space_id=_as_identifier(
-                validated["outcome_space_id"],
-                field="outcome_space_id",
-            ),
-            prediction_semantics=cast(
-                _PredictionSemantics,
-                validated["prediction_semantics"],
-            ),
+            prediction_space=prediction_space,
+            prediction_kind=cast(_PredictionKind, validated["prediction_kind"]),
             output_encoding=cast(_OutputEncoding, validated["output_encoding"]),
         )
         interface.validate_outcome_space(outcome_space)
@@ -107,16 +117,16 @@ class ModelInterface:
         return ContentDigest.from_value(self.to_record())
 
     def validate_outcome_space(self, outcome_space: OutcomeSpace) -> None:
-        if self.outcome_space_id != outcome_space.id:
-            raise ModelInterfaceValidationError(
-                f"outcome_space_id {self.outcome_space_id} does not match {outcome_space.id}"
-            )
+        try:
+            self.prediction_space.validate_outcome_space(outcome_space)
+        except PredictionSpaceValidationError as error:
+            raise ModelInterfaceValidationError(str(error)) from error
 
     def to_record(self) -> dict[str, object]:
         return {
             "id": str(self.id),
-            "outcome_space_id": str(self.outcome_space_id),
-            "prediction_semantics": self.prediction_semantics,
+            "prediction_space": self.prediction_space.to_record(),
+            "prediction_kind": self.prediction_kind,
             "output_encoding": self.output_encoding,
         }
 
@@ -147,3 +157,9 @@ def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
     if not isinstance(value, ProtocolIdentifier):
         raise ModelInterfaceValidationError(f"{field}: expected parsed identifier")
     return value
+
+
+def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ModelInterfaceValidationError(f"{field}: expected record")
+    return cast(Mapping[str, object], value)
