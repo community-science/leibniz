@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
-from leibniz.architectures import ArchitectureManifest
+from leibniz.architectures import ArchitectureGraph, ArchitectureManifest
 from leibniz.artifacts import ArtifactReference, reference_for_record
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
@@ -98,6 +98,7 @@ _inspection_record = RecordSpec(
         "layers": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
         "cost_summary": FieldSpec(kind="record"),
         "architecture_trace": FieldSpec(kind="record"),
+        "architecture_graph": FieldSpec(kind="record"),
         "model_manifest": FieldSpec(kind="record", required=False),
         "submission_package": FieldSpec(kind="record", required=False),
         "benchmark_manifest": FieldSpec(kind="record", required=False),
@@ -471,6 +472,7 @@ class ModelInspectionRecord:
     layers: tuple[ModelInspectionLayer, ...]
     cost_summary: ModelInspectionCostSummary
     architecture_trace: ModelInspectionTrace
+    architecture_graph: ArchitectureGraph
     model_manifest: ArtifactReference | None = None
     submission_package: ArtifactReference | None = None
     benchmark_manifest: ArtifactReference | None = None
@@ -509,6 +511,15 @@ class ModelInspectionRecord:
             if layer.index != stage.index or layer.kind != stage.syntax_alias:
                 raise ModelInspectionValidationError(
                     "architecture_trace stage does not match layer"
+                )
+        if len(self.architecture_graph.nodes) != len(self.layers):
+            raise ModelInspectionValidationError("architecture_graph nodes do not match layers")
+        for layer, node in zip(self.layers, self.architecture_graph.nodes, strict=True):
+            if layer.kind != node.component.kind or dict(layer.parameters) != dict(
+                node.component.parameters
+            ):
+                raise ModelInspectionValidationError(
+                    "architecture_graph node does not match layer"
                 )
         _require_reference_kind(
             self.model_manifest,
@@ -560,6 +571,7 @@ class ModelInspectionRecord:
             layers=layers,
             cost_summary=cost_summary,
             architecture_trace=architecture_trace,
+            architecture_graph=architecture_manifest.graph,
         )
 
     @classmethod
@@ -583,6 +595,7 @@ class ModelInspectionRecord:
             layers=record.layers,
             cost_summary=record.cost_summary,
             architecture_trace=record.architecture_trace,
+            architecture_graph=record.architecture_graph,
             model_manifest=reference_for_record(
                 kind="model-manifest",
                 record=model_manifest.to_record(),
@@ -610,6 +623,7 @@ class ModelInspectionRecord:
             layers=record.layers,
             cost_summary=record.cost_summary,
             architecture_trace=record.architecture_trace,
+            architecture_graph=record.architecture_graph,
             submission_package=reference_for_record(
                 kind="submission-package",
                 record=submission_package.to_record(),
@@ -656,6 +670,9 @@ class ModelInspectionRecord:
             architecture_trace=ModelInspectionTrace.from_record(
                 _as_mapping(validated["architecture_trace"], field="architecture_trace")
             ),
+            architecture_graph=ArchitectureGraph.from_record(
+                _as_mapping(validated["architecture_graph"], field="architecture_graph")
+            ),
             model_manifest=_optional_reference(validated.get("model_manifest"), "model_manifest"),
             submission_package=_optional_reference(
                 validated.get("submission_package"),
@@ -698,6 +715,7 @@ class ModelInspectionRecord:
             "layers": [layer.to_record() for layer in self.layers],
             "cost_summary": self.cost_summary.to_record(),
             "architecture_trace": self.architecture_trace.to_record(),
+            "architecture_graph": self.architecture_graph.to_record(),
         }
         if self.model_manifest is not None:
             record["model_manifest"] = self.model_manifest.to_record()

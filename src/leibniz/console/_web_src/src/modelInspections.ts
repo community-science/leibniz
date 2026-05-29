@@ -9,6 +9,7 @@ export type ModelInspectionRecord = {
   layers: ModelInspectionLayerRecord[];
   cost_summary: ModelInspectionCostSummaryRecord;
   architecture_trace: ModelInspectionTraceRecord;
+  architecture_graph: ModelInspectionArchitectureGraphRecord;
   model_manifest?: ArtifactReferenceRecord;
   submission_package?: ArtifactReferenceRecord;
   benchmark_manifest?: ArtifactReferenceRecord;
@@ -27,6 +28,27 @@ export type ModelInspectionLayerRecord = {
   parameter_count?: number;
   parameter_bytes?: number;
   inference_flops?: number;
+};
+
+export type ModelInspectionArchitectureGraphRecord = {
+  nodes: ModelInspectionArchitectureGraphNodeRecord[];
+  edges: ModelInspectionArchitectureGraphEdgeRecord[];
+  input_node_ids: string[];
+  output_node_ids: string[];
+};
+
+export type ModelInspectionArchitectureGraphNodeRecord = {
+  id: string;
+  component: {
+    kind: string;
+    parameters?: Record<string, string | number | boolean>;
+  };
+};
+
+export type ModelInspectionArchitectureGraphEdgeRecord = {
+  source_node_id: string;
+  target_node_id: string;
+  kind: string;
 };
 
 export type ModelInspectionCostSummaryRecord = {
@@ -88,6 +110,10 @@ export function parseModelInspectionRecord(
     ),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
     architecture_trace: parseTrace(record.architecture_trace, `${path}.architecture_trace`),
+    architecture_graph: parseArchitectureGraph(
+      record.architecture_graph,
+      `${path}.architecture_graph`,
+    ),
     model_manifest: parseOptionalReference(record.model_manifest, `${path}.model_manifest`),
     submission_package: parseOptionalReference(
       record.submission_package,
@@ -148,6 +174,60 @@ function parseTraceStage(value: unknown, path: string): ModelInspectionTraceStag
   return stage;
 }
 
+function parseArchitectureGraph(
+  value: unknown,
+  path: string,
+): ModelInspectionArchitectureGraphRecord {
+  const record = requireRecord(value, path);
+  return {
+    nodes: requireArray(record.nodes, `${path}.nodes`).map((node, index) =>
+      parseArchitectureGraphNode(node, `${path}.nodes.${index}`),
+    ),
+    edges: requireArray(record.edges, `${path}.edges`).map((edge, index) =>
+      parseArchitectureGraphEdge(edge, `${path}.edges.${index}`),
+    ),
+    input_node_ids: parseStringArray(record.input_node_ids, `${path}.input_node_ids`),
+    output_node_ids: parseStringArray(record.output_node_ids, `${path}.output_node_ids`),
+  };
+}
+
+function parseArchitectureGraphNode(
+  value: unknown,
+  path: string,
+): ModelInspectionArchitectureGraphNodeRecord {
+  const record = requireRecord(value, path);
+  return {
+    id: requireString(record.id, `${path}.id`),
+    component: parseArchitectureGraphComponent(record.component, `${path}.component`),
+  };
+}
+
+function parseArchitectureGraphComponent(
+  value: unknown,
+  path: string,
+): ModelInspectionArchitectureGraphNodeRecord['component'] {
+  const record = requireRecord(value, path);
+  const component: ModelInspectionArchitectureGraphNodeRecord['component'] = {
+    kind: requireString(record.kind, `${path}.kind`),
+  };
+  if (record.parameters !== undefined) {
+    component.parameters = parseParameters(record.parameters, `${path}.parameters`);
+  }
+  return component;
+}
+
+function parseArchitectureGraphEdge(
+  value: unknown,
+  path: string,
+): ModelInspectionArchitectureGraphEdgeRecord {
+  const record = requireRecord(value, path);
+  return {
+    source_node_id: requireString(record.source_node_id, `${path}.source_node_id`),
+    target_node_id: requireString(record.target_node_id, `${path}.target_node_id`),
+    kind: requireString(record.kind, `${path}.kind`),
+  };
+}
+
 function parseLayer(value: unknown, path: string): ModelInspectionLayerRecord {
   const record = requireRecord(value, path);
   const layer: ModelInspectionLayerRecord = {
@@ -174,6 +254,22 @@ function parseLayer(value: unknown, path: string): ModelInspectionLayerRecord {
     layer.inference_flops = requireInteger(record.inference_flops, `${path}.inference_flops`);
   }
   return layer;
+}
+
+function parseParameters(
+  value: unknown,
+  path: string,
+): Record<string, string | number | boolean> {
+  const record = requireRecord(value, path);
+  const parsed: Record<string, string | number | boolean> = {};
+  for (const [key, item] of Object.entries(record)) {
+    if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+      parsed[key] = item;
+      continue;
+    }
+    throw new ModelInspectionError(`${path}.${key}: expected string, number, or boolean`);
+  }
+  return parsed;
 }
 
 function parseStringRecord(value: unknown, path: string): Record<string, string> {
@@ -246,6 +342,10 @@ function parseReference(value: unknown, path: string): ArtifactReferenceRecord {
 
 function parseIntegerArray(value: unknown, path: string): number[] {
   return requireArray(value, path).map((item, index) => requireInteger(item, `${path}.${index}`));
+}
+
+function parseStringArray(value: unknown, path: string): string[] {
+  return requireArray(value, path).map((item, index) => requireString(item, `${path}.${index}`));
 }
 
 function requireRecord(value: unknown, path: string): Record<string, unknown> {

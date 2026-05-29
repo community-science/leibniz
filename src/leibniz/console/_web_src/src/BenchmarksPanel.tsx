@@ -874,6 +874,14 @@ function ModelCostDetail({
           <dd>{summary.layer_count}</dd>
         </div>
         <div>
+          <dt>Components</dt>
+          <dd>{inspection?.architecture_graph.nodes.length ?? summary.layer_count}</dd>
+        </div>
+        <div>
+          <dt>Graph Edges</dt>
+          <dd>{inspection?.architecture_graph.edges.length ?? 'none'}</dd>
+        </div>
+        <div>
           <dt>Parameters</dt>
           <dd>{optionalNumberLabel(summary.parameter_count)}</dd>
         </div>
