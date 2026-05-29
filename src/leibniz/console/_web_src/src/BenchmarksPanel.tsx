@@ -1116,7 +1116,7 @@ function modelComponentCount(
   inspection: ModelInspectionRecord | undefined,
   model: BenchmarkResultRecord['leaderboard'][number],
 ): number {
-  return inspection?.architecture_summary.component_count ?? model.cost_summary.layer_count;
+  return inspection?.architecture_summary.component_count ?? model.cost_summary.component_count;
 }
 
 function unknownComponentLabel(components: number[] | undefined): string {

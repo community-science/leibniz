@@ -367,11 +367,11 @@ export type ProposalRecord = {
 };
 
 export type CostSummaryRecord = {
-  layer_count: number;
+  component_count: number;
   parameter_count: number;
   parameter_bytes: number;
   inference_flops: number;
-  unknown_parameter_layers?: string[];
+  unknown_parameter_components?: number[];
 };
 
 export function isBenchmarkResultView(
@@ -891,15 +891,15 @@ function parseProposal(value: unknown, path: string): ProposalRecord {
 function parseCostSummary(value: unknown, path: string): CostSummaryRecord {
   const record = requireRecord(value, path);
   const costSummary: CostSummaryRecord = {
-    layer_count: requireNumber(record.layer_count, `${path}.layer_count`),
+    component_count: requireNumber(record.component_count, `${path}.component_count`),
     parameter_count: requireNumber(record.parameter_count, `${path}.parameter_count`),
     parameter_bytes: requireNumber(record.parameter_bytes, `${path}.parameter_bytes`),
     inference_flops: requireNumber(record.inference_flops, `${path}.inference_flops`),
   };
-  if (record.unknown_parameter_layers !== undefined) {
-    costSummary.unknown_parameter_layers = parseStringArray(
-      record.unknown_parameter_layers,
-      `${path}.unknown_parameter_layers`,
+  if (record.unknown_parameter_components !== undefined) {
+    costSummary.unknown_parameter_components = parseNumberArray(
+      record.unknown_parameter_components,
+      `${path}.unknown_parameter_components`,
     );
   }
   return costSummary;
