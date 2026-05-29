@@ -8,6 +8,7 @@ data being checked against those rules.
 from __future__ import annotations
 
 import math
+from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast
@@ -20,8 +21,10 @@ from leibniz.identifiers import (
 )
 
 __all__ = [
+    "ContractRuntimeSupport",
     "FieldKind",
     "FieldSpec",
+    "RecordExtractor",
     "RecordSpec",
     "RecordValidationError",
     "RecordValue",
@@ -44,6 +47,15 @@ ValidatedRecord: TypeAlias = Mapping[str, RecordValue]
 _unset = object()
 
 
+class ContractRuntimeSupport(ABC):
+    """Marker base for generic handwritten record contract runtime support."""
+
+    @property
+    @abstractmethod
+    def contract_runtime_role(self) -> str:
+        """Return the generic record-runtime role this object serves."""
+
+
 class RecordValidationError(ValueError):
     """Raised when a data object does not satisfy a record specification."""
 
@@ -54,11 +66,15 @@ class RecordValidationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class RecordViolation:
+class RecordViolation(ContractRuntimeSupport):
     """A single failure found while checking a data object."""
 
     path: tuple[str, ...]
     message: str
+
+    @property
+    def contract_runtime_role(self) -> str:
+        return "record-violation"
 
     def format(self) -> str:
         location = ".".join(self.path) if self.path else "<record>"
@@ -66,7 +82,7 @@ class RecordViolation:
 
 
 @dataclass(frozen=True, slots=True)
-class FieldSpec:
+class FieldSpec(ContractRuntimeSupport):
     """Validation rule for one field in a mapping-shaped data object."""
 
     kind: FieldKind
@@ -75,13 +91,21 @@ class FieldSpec:
     item: FieldSpec | None = None
     record: RecordSpec | None = None
 
+    @property
+    def contract_runtime_role(self) -> str:
+        return "field-spec"
+
 
 @dataclass(frozen=True, slots=True)
-class RecordSpec:
+class RecordSpec(ContractRuntimeSupport):
     """A structural contract for a mapping-shaped data object."""
 
     fields: Mapping[str, FieldSpec]
     allow_unknown: bool = False
+
+    @property
+    def contract_runtime_role(self) -> str:
+        return "record-spec"
 
     def validate(self, record: Mapping[str, object]) -> ValidatedRecord:
         """Validate a data object against this record specification."""
@@ -96,6 +120,32 @@ class RecordSpec:
 
         _, violations = _validate_record(record=record, spec=self, path=())
         return violations
+
+
+@dataclass(frozen=True, slots=True)
+class RecordExtractor(ContractRuntimeSupport):
+    """Typed accessors for values already checked by record validation."""
+
+    error_type: type[ValueError] = ValueError
+
+    @property
+    def contract_runtime_role(self) -> str:
+        return "record-extractor"
+
+    def string(self, value: object, field: str) -> str:
+        return _require_string(value, field=field, error_type=self.error_type)
+
+    def boolean(self, value: object, field: str) -> bool:
+        return _require_boolean(value, field=field, error_type=self.error_type)
+
+    def identifier(self, value: object, field: str) -> ProtocolIdentifier:
+        return _require_identifier(value, field=field, error_type=self.error_type)
+
+    def mapping(self, value: object, field: str) -> Mapping[str, object]:
+        return _require_mapping(value, field=field, error_type=self.error_type)
+
+    def sequence(self, value: object, field: str) -> tuple[object, ...]:
+        return _require_sequence(value, field=field, error_type=self.error_type)
 
 
 def _validate_record(
@@ -263,3 +313,58 @@ def _parse_sequence(
         if not item_violations:
             parsed.append(item_value)
     return tuple(parsed), tuple(violations)
+
+
+def _require_string(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> str:
+    if not isinstance(value, str):
+        raise error_type(f"{field}: expected string")
+    return value
+
+
+def _require_boolean(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> bool:
+    if not isinstance(value, bool):
+        raise error_type(f"{field}: expected boolean")
+    return value
+
+
+def _require_identifier(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> ProtocolIdentifier:
+    if not isinstance(value, ProtocolIdentifier):
+        raise error_type(f"{field}: expected parsed identifier")
+    return value
+
+
+def _require_mapping(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise error_type(f"{field}: expected record")
+    return cast(Mapping[str, object], value)
+
+
+def _require_sequence(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> tuple[object, ...]:
+    if not isinstance(value, tuple):
+        raise error_type(f"{field}: expected parsed sequence")
+    return cast(tuple[object, ...], value)

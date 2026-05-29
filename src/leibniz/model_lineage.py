@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
 from leibniz.model_operations import ModelOperation
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import (
+    FieldSpec,
+    RecordExtractor,
+    RecordSpec,
+)
 
 __all__ = [
     "ModelLineageDocument",
@@ -36,6 +39,9 @@ _model_lineage_record = RecordSpec(
 
 class ModelLineageValidationError(ValueError):
     """Raised when a model lineage document is invalid."""
+
+
+_record = RecordExtractor(ModelLineageValidationError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,17 +89,17 @@ class ModelLineageGraph:
         try:
             validated = _model_lineage_record.validate(record)
             artifacts = tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="artifacts"))
-                for item in _as_sequence(validated["artifacts"], field="artifacts")
+                ArtifactReference.from_record(_record.mapping(item, "artifacts"))
+                for item in _record.sequence(validated["artifacts"], "artifacts")
             )
             operations = tuple(
-                ModelOperation.from_record(_as_mapping(item, field="operations"))
-                for item in _as_sequence(validated["operations"], field="operations")
+                ModelOperation.from_record(_record.mapping(item, "operations"))
+                for item in _record.sequence(validated["operations"], "operations")
             )
         except ValueError as error:
             raise ModelLineageValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_record.identifier(validated["id"], "id"),
             artifacts=artifacts,
             operations=operations,
         )
@@ -179,24 +185,6 @@ def _has_cycle(
     visiting.remove(key)
     visited.add(key)
     return False
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ModelLineageValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ModelLineageValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ModelLineageValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
 
 
 def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:

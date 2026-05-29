@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDataset
 from leibniz.proposals import ExperimentProposalSet
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 from leibniz.submissions import SubmissionPackageManifest
 from leibniz.surrogates import ArchitectureSurrogateRecord
 from leibniz.views import MeasurementScoreView
@@ -36,6 +35,9 @@ _publication_bundle_record = RecordSpec(
 
 class SubmissionPublicationValidationError(ValueError):
     """Raised when a submission publication bundle is invalid."""
+
+
+_record = RecordExtractor(SubmissionPublicationValidationError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,18 +67,21 @@ class SubmissionPublicationBundle:
         try:
             validated = _publication_bundle_record.validate(record)
             measurement_dataset = MeasurementDataset.from_record(
-                _as_mapping(validated["measurement_dataset"], field="measurement_dataset")
+                _record.mapping(validated["measurement_dataset"], "measurement_dataset")
             )
             submission_package = SubmissionPackageManifest.from_record(
-                _as_mapping(validated["submission_package"], field="submission_package")
+                _record.mapping(validated["submission_package"], "submission_package")
             )
             measurement_score_view = MeasurementScoreView.from_record(
-                _as_mapping(validated["measurement_score_view"], field="measurement_score_view"),
+                _record.mapping(
+                    validated["measurement_score_view"],
+                    "measurement_score_view",
+                ),
                 dataset=measurement_dataset,
             )
             proposal_set = (
                 ExperimentProposalSet.from_record(
-                    _as_mapping(validated["proposal_set"], field="proposal_set"),
+                    _record.mapping(validated["proposal_set"], "proposal_set"),
                     dataset=measurement_dataset,
                     architectures=(submission_package.architecture_manifest,),
                     submission_packages=(submission_package,),
@@ -86,9 +91,9 @@ class SubmissionPublicationBundle:
             )
             architecture_surrogate = (
                 ArchitectureSurrogateRecord.from_record(
-                    _as_mapping(
+                    _record.mapping(
                         validated["architecture_surrogate"],
-                        field="architecture_surrogate",
+                        "architecture_surrogate",
                     ),
                     dataset=measurement_dataset,
                 )
@@ -98,7 +103,7 @@ class SubmissionPublicationBundle:
         except ValueError as error:
             raise SubmissionPublicationValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_record.identifier(validated["id"], "id"),
             submission_package=submission_package,
             measurement_dataset=measurement_dataset,
             measurement_score_view=measurement_score_view,
@@ -167,15 +172,3 @@ class SubmissionPublicationDocument:
             raise SubmissionPublicationValidationError(str(error)) from error
         bundle = SubmissionPublicationBundle.from_record(record)
         return cls(bundle=bundle, digest=bundle.digest)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise SubmissionPublicationValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise SubmissionPublicationValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)

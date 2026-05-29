@@ -21,8 +21,27 @@
       "tracked_roots": [
         "src/leibniz"
       ],
-      "maximum": 33283,
-      "counting": "Tracked nonblank source implementation lines under src/leibniz in categories marked handwritten-implementation. Contract files, tests, fixtures, package metadata, lockfiles, build configuration, generated outputs, and repository automation are excluded."
+      "maximum": 33023,
+      "counting": "Tracked nonblank source implementation lines under src/leibniz in categories marked handwritten-implementation. Contract-runtime support, contract files, tests, fixtures, package metadata, lockfiles, build configuration, generated outputs, and repository automation are excluded."
+    },
+    "graph_projection": {
+      "description": "The inventory is intended to project to a source graph: path nodes are categorized by category nodes, contract-surface nodes own runtime/test/generated-output paths, and structural-marker nodes justify excluded implementation-adjacent runtime support.",
+      "node_kinds": [
+        "category",
+        "contract-surface",
+        "generated-output",
+        "path",
+        "structural-marker",
+        "test"
+      ],
+      "edge_kinds": [
+        "categorizes",
+        "generated-by",
+        "has-structural-marker",
+        "owns-record-spec-module",
+        "tested-by",
+        "uses-runtime"
+      ]
     },
     "categories": [
       {
@@ -33,6 +52,7 @@
         ],
         "status": "hand-authored-contract-inventory",
         "line_budget": "excluded",
+        "line_budget_basis": "inventory",
         "ratchet_next": "Replace inventory-only tracking with authored contracts that can generate Python, TypeScript, and conformance tests."
       },
       {
@@ -47,11 +67,12 @@
         ],
         "status": "hand-maintained",
         "line_budget": "excluded",
+        "line_budget_basis": "repository-automation",
         "ratchet_next": "Keep repository policy executable and add generated checks when contracts become the source of truth."
       },
       {
         "name": "python-foundation",
-        "scope": "Package identity, document IO, identifiers, generic record validation, content addressing, timing, tensor shape helpers, and repository policy primitives.",
+        "scope": "Package identity, document IO, identifiers, content addressing, timing, tensor shape helpers, and repository policy primitives.",
         "path_patterns": [
           "src/leibniz/__init__.py",
           "src/leibniz/_formats/*.py",
@@ -59,13 +80,25 @@
           "src/leibniz/content.py",
           "src/leibniz/documents.py",
           "src/leibniz/identifiers.py",
-          "src/leibniz/records.py",
           "src/leibniz/tensor_shapes.py",
           "src/leibniz/timing.py"
         ],
         "status": "hand-maintained",
         "line_budget": "handwritten-implementation",
+        "line_budget_basis": "domain-implementation",
         "ratchet_next": "Constrain this layer to stable primitives consumed by generated contract runtimes."
+      },
+      {
+        "name": "python-contract-runtime",
+        "scope": "Generic handwritten runtime support for validating and extracting values from authored record contracts.",
+        "path_patterns": [
+          "src/leibniz/records.py"
+        ],
+        "status": "hand-maintained",
+        "line_budget": "excluded",
+        "line_budget_basis": "contract-runtime",
+        "structural_marker": "leibniz.records.ContractRuntimeSupport",
+        "ratchet_next": "Keep this layer narrow and contract-generic while domain record declarations move toward authored contracts and generated runtimes."
       },
       {
         "name": "python-package-metadata",
@@ -75,6 +108,7 @@
         ],
         "status": "hand-maintained",
         "line_budget": "excluded",
+        "line_budget_basis": "package-metadata",
         "ratchet_next": "Keep packaging markers explicit and outside implementation-line accounting."
       },
       {
@@ -90,6 +124,7 @@
         ],
         "status": "hand-maintained",
         "line_budget": "handwritten-implementation",
+        "line_budget_basis": "domain-implementation",
         "ratchet_next": "Move exchange records in this category to authored contracts and generate validators."
       },
       {
@@ -105,6 +140,7 @@
         ],
         "status": "hand-maintained",
         "line_budget": "handwritten-implementation",
+        "line_budget_basis": "domain-implementation",
         "ratchet_next": "Separate authored mathematical observation contracts from runtime sampling and tensor execution code."
       },
       {
@@ -115,6 +151,7 @@
         ],
         "status": "hand-authored-data",
         "line_budget": "excluded",
+        "line_budget_basis": "authored-data",
         "ratchet_next": "Validate benchmark artifacts against generated schemas derived from authored contracts."
       },
       {
@@ -129,6 +166,7 @@
         ],
         "status": "hand-maintained",
         "line_budget": "handwritten-implementation",
+        "line_budget_basis": "domain-implementation",
         "ratchet_next": "Make architecture graph and operator contracts explicit enough to generate validators, UI records, and conformance fixtures."
       },
       {
@@ -147,6 +185,7 @@
         ],
         "status": "hand-maintained",
         "line_budget": "handwritten-implementation",
+        "line_budget_basis": "domain-implementation",
         "ratchet_next": "Generate prediction and scoring records from benchmark-independent contracts."
       },
       {
@@ -171,6 +210,7 @@
         ],
         "status": "hand-maintained",
         "line_budget": "handwritten-implementation",
+        "line_budget_basis": "domain-implementation",
         "ratchet_next": "Reduce handwritten transport plumbing by generating workflow records from authored contracts."
       },
       {
@@ -181,6 +221,7 @@
         ],
         "status": "mixed-hand-maintained-and-codegen",
         "line_budget": "handwritten-implementation",
+        "line_budget_basis": "domain-implementation",
         "ratchet_next": "Keep console generation centralized while moving declarations into authored contracts."
       },
       {
@@ -195,6 +236,7 @@
         ],
         "status": "mixed-hand-maintained-and-generated-consumer",
         "line_budget": "handwritten-implementation",
+        "line_budget_basis": "domain-implementation",
         "ratchet_next": "Replace handwritten transport decoders with generated TypeScript while keeping UI composition handwritten."
       },
       {
@@ -208,6 +250,7 @@
         ],
         "status": "hand-maintained",
         "line_budget": "excluded",
+        "line_budget_basis": "build-configuration",
         "ratchet_next": "Keep build configuration explicit while excluding package metadata and lockfile churn from implementation-line accounting."
       },
       {
@@ -218,6 +261,7 @@
         ],
         "status": "hand-maintained",
         "line_budget": "excluded",
+        "line_budget_basis": "tests",
         "ratchet_next": "Add generated conformance cases beside handwritten tests as contracts become executable."
       },
       {
@@ -229,6 +273,7 @@
         ],
         "status": "hand-maintained",
         "line_budget": "excluded",
+        "line_budget_basis": "tests",
         "ratchet_next": "Generate transport conformance fixtures from authored console contracts."
       },
       {
@@ -240,6 +285,7 @@
         ],
         "status": "hand-authored-data",
         "line_budget": "excluded",
+        "line_budget_basis": "authored-data",
         "ratchet_next": "Validate fixture records against generated schemas and derive simple fixtures from contracts where possible."
       }
     ]
