@@ -41,6 +41,8 @@ from leibniz.publications import SubmissionPublicationDocument
 from leibniz.tensor_runtime import (
     TensorRuntimeDevice,
     TensorRuntimeError,
+    architecture_supported_by_tensor_runtime,
+    preferred_tensor_runtime_device_kind,
     validate_tensor_runtime_device,
 )
 
@@ -192,16 +194,23 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
     dataset = _measurement_dataset(plan.runs_root, benchmark_id=manifest.id)
     measured = _measured_architectures(plan.runs_root, benchmark_id=manifest.id)
     search_distribution = default_architecture_search_distribution()
+    preferred_device = preferred_tensor_runtime_device_kind(plan.tensor_device)
+    sampled_candidates = tuple(
+        candidate
+        for candidate in sample_architecture_candidates(
+            search_distribution,
+            input_shape=sample.field.shape,
+            output_count=len(outcome_space.outcomes),
+            sample_count=plan.candidate_sample_count,
+            seed=plan.seed,
+        )
+        if architecture_supported_by_tensor_runtime(
+            candidate.architecture,
+            device_kind=preferred_device,
+        )
+    )
     candidate_observations = project_architecture_candidate_observations(
-        tuple(
-            sample_architecture_candidates(
-                search_distribution,
-                input_shape=sample.field.shape,
-                output_count=len(outcome_space.outcomes),
-                sample_count=plan.candidate_sample_count,
-                seed=plan.seed,
-            )
-        ),
+        sampled_candidates,
         measured=tuple(
             ArchitectureMeasurementEvidence(
                 architecture_digest=item.digest,

@@ -1,9 +1,10 @@
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
+import leibniz.benchmark_runner as benchmark_runner
 from leibniz.benchmark_runner import (
     BenchmarkRunnerError,
     BenchmarkRunPlan,
@@ -16,6 +17,11 @@ from leibniz.documents import load_object_document
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
 from leibniz.measurements import MeasurementDatasetDocument
 from leibniz.model_inspection import ModelInspectionDocument
+from leibniz.tensor_runtime import (
+    TensorRuntime,
+    TensorRuntimeDeviceKind,
+    resolve_tensor_runtime,
+)
 from leibniz.training_runs import TrainingRunRecord
 
 _repository_root = Path(__file__).parents[1]
@@ -192,6 +198,73 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert training_run.protocol.validation_source == "generator-resample"
     assert [point.step for point in training_run.validation_history] == [0, 2, 3]
     assert training_run.validation_history[-1].learning_rates
+
+
+def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cpu_runtime = resolve_tensor_runtime("cpu")
+    calls: list[str] = []
+    module_calls = 0
+
+    def fake_device_kinds(_requested: object) -> tuple[TensorRuntimeDeviceKind, ...]:
+        return ("mps", "cpu")
+
+    def fake_resolve_tensor_runtime(requested: object) -> TensorRuntime:
+        device_kind = cast(str, requested)
+        calls.append(device_kind)
+        return TensorRuntime(
+            torch=cpu_runtime.torch,
+            device=cpu_runtime.device,
+            device_kind=cast(Any, device_kind),
+        )
+
+    original_torch_module = benchmark_runner.ExecutableModelOperator.torch_module
+
+    def flaky_torch_module(self: object) -> object:
+        nonlocal module_calls
+        module_calls += 1
+        if module_calls == 1:
+            raise RuntimeError("MPS backend failed to compile adaptive pooling")
+        return original_torch_module(cast(Any, self))
+
+    monkeypatch.setattr(benchmark_runner, "tensor_runtime_device_kinds", fake_device_kinds)
+    monkeypatch.setattr(benchmark_runner, "resolve_tensor_runtime", fake_resolve_tensor_runtime)
+    monkeypatch.setattr(
+        benchmark_runner.ExecutableModelOperator,
+        "torch_module",
+        flaky_torch_module,
+    )
+
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            runs_root=tmp_path / ".runs",
+            sample_count=2,
+            train_steps=1,
+            tensor_device="auto",
+        )
+    )
+
+    training_summary = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    throughput = cast(dict[str, object], training_summary["throughput"])
+    fallbacks = cast(list[dict[str, object]], throughput["runtime_fallbacks"])
+
+    assert calls == ["mps", "cpu"]
+    assert training_summary["tensor_device"] == "cpu"
+    assert throughput["tensor_device"] == "cpu"
+    assert fallbacks == [
+        {
+            "from_device": "mps",
+            "to_device": "cpu",
+            "reason": "MPS backend failed to compile adaptive pooling",
+        }
+    ]
 
 
 def test_digits_benchmark_runner_run_slug_includes_training_controls() -> None:

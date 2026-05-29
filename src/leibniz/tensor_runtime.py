@@ -9,20 +9,28 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
+from leibniz.architectures import ArchitectureManifest
+from leibniz.model_operators import summarize_architecture_operators
 from leibniz.observation_formation import ObservationFormationDeclaration
 from leibniz.observation_generation import GeneratedFormationBatch
 
 __all__ = [
+    "architecture_tensor_runtime_issue",
+    "architecture_supported_by_tensor_runtime",
     "FormationTensorCache",
+    "preferred_tensor_runtime_device_kind",
     "TensorRuntime",
     "TensorRuntimeError",
     "TensorRuntimeDevice",
+    "TensorRuntimeDeviceKind",
+    "tensor_runtime_device_kinds",
     "resolve_tensor_runtime",
     "runtime_roofline_record",
     "validate_tensor_runtime_device",
 ]
 
 TensorRuntimeDevice = Literal["auto", "cpu", "cuda", "mps"]
+TensorRuntimeDeviceKind = Literal["cpu", "cuda", "mps"]
 _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
 _roofline_cache: dict[str, dict[str, object]] = {}
 
@@ -291,12 +299,69 @@ def resolve_tensor_runtime(requested_device: TensorRuntimeDevice = "auto") -> Te
     """Resolve the PyTorch-backed tensor runtime for local benchmark execution."""
 
     torch = _torch()
-    device_kind = _resolve_device_kind(torch=torch, requested_device=requested_device)
+    device_kind = _resolve_device_kinds(torch=torch, requested_device=requested_device)[0]
     return TensorRuntime(
         torch=torch,
         device=torch.device(device_kind),
         device_kind=device_kind,
     )
+
+
+def tensor_runtime_device_kinds(
+    requested_device: TensorRuntimeDevice = "auto",
+) -> tuple[TensorRuntimeDeviceKind, ...]:
+    """Return available runtime device kinds in fallback order."""
+
+    return _resolve_device_kinds(torch=_torch(), requested_device=requested_device)
+
+
+def preferred_tensor_runtime_device_kind(
+    requested_device: TensorRuntimeDevice = "auto",
+) -> TensorRuntimeDeviceKind:
+    """Return the first device kind that would be used for a request."""
+
+    return tensor_runtime_device_kinds(requested_device)[0]
+
+
+def architecture_supported_by_tensor_runtime(
+    architecture: ArchitectureManifest,
+    *,
+    device_kind: TensorRuntimeDeviceKind,
+) -> bool:
+    """Return whether an architecture is eligible for a resolved tensor device."""
+
+    return architecture_tensor_runtime_issue(
+        architecture,
+        device_kind=device_kind,
+    ) is None
+
+
+def architecture_tensor_runtime_issue(
+    architecture: ArchitectureManifest,
+    *,
+    device_kind: TensorRuntimeDeviceKind,
+) -> str | None:
+    """Return the first known runtime-specific architecture incompatibility."""
+
+    if device_kind != "mps":
+        return None
+    for operator in summarize_architecture_operators(architecture).operators:
+        if operator.descriptor.kind != "local-aggregation":
+            continue
+        input_shape = operator.input_shape
+        output_shape = operator.output_shape
+        if input_shape is None or output_shape is None:
+            continue
+        if len(input_shape) < 2 or len(output_shape) < 2:
+            continue
+        input_height, input_width = input_shape[-2:]
+        output_height, output_width = output_shape[-2:]
+        if input_height % output_height != 0 or input_width % output_width != 0:
+            return (
+                "mps adaptive pooling requires trailing input axes to be divisible "
+                "by the requested output axes"
+            )
+    return None
 
 
 def runtime_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
@@ -411,26 +476,28 @@ def _monotonic_seconds() -> float:
     return time.perf_counter()
 
 
-def _resolve_device_kind(
+def _resolve_device_kinds(
     *,
     torch: Any,
     requested_device: TensorRuntimeDevice,
-) -> Literal["cpu", "cuda", "mps"]:
+) -> tuple[TensorRuntimeDeviceKind, ...]:
     if requested_device == "cpu":
-        return "cpu"
+        return ("cpu",)
     if requested_device == "cuda":
         if _cuda_available(torch):
-            return "cuda"
+            return ("cuda",)
         raise TensorRuntimeError("requested tensor runtime device cuda is not available")
     if requested_device == "mps":
         if _mps_available(torch):
-            return "mps"
+            return ("mps",)
         raise TensorRuntimeError("requested tensor runtime device mps is not available")
+    device_kinds: list[TensorRuntimeDeviceKind] = []
     if _cuda_available(torch):
-        return "cuda"
+        device_kinds.append("cuda")
     if _mps_available(torch):
-        return "mps"
-    return "cpu"
+        device_kinds.append("mps")
+    device_kinds.append("cpu")
+    return tuple(device_kinds)
 
 
 def _cuda_available(torch: Any) -> bool:

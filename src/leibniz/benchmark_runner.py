@@ -33,9 +33,11 @@ from leibniz.outcomes import (
 from leibniz.tensor_runtime import (
     FormationTensorCache,
     TensorRuntimeDevice,
+    TensorRuntimeDeviceKind,
     TensorRuntimeError,
     resolve_tensor_runtime,
     runtime_roofline_record,
+    tensor_runtime_device_kinds,
     validate_tensor_runtime_device,
 )
 from leibniz.timing import TimingCollector
@@ -466,6 +468,65 @@ def _train_and_predict(
     seed: int,
     progress_callback: Callable[[TrainingRunRecord, Mapping[str, object]], None] | None = None,
 ) -> _TrainingResult:
+    fallback_errors: list[tuple[str, str]] = []
+    try:
+        device_kinds = tensor_runtime_device_kinds(tensor_device)
+    except TensorRuntimeError as error:
+        raise BenchmarkRunnerError(str(error)) from error
+    for index, device_kind in enumerate(device_kinds):
+        try:
+            return _train_and_predict_on_device(
+                architecture=architecture,
+                evaluation_batch=evaluation_batch,
+                generator=generator,
+                outcome_space=outcome_space,
+                scale=scale,
+                sample_count=sample_count,
+                train_steps=train_steps,
+                learning_rate=learning_rate,
+                optimizer_name=optimizer_name,
+                schedule_name=schedule_name,
+                validation_interval=validation_interval,
+                convergence_patience=convergence_patience,
+                convergence_min_delta=convergence_min_delta,
+                convergence_min_steps=convergence_min_steps,
+                target_validation_loss=target_validation_loss,
+                tensor_device=device_kind,
+                work_estimates=work_estimates,
+                seed=seed,
+                progress_callback=progress_callback,
+                fallback_errors=tuple(fallback_errors),
+            )
+        except RuntimeError as error:
+            if tensor_device != "auto" or index == len(device_kinds) - 1:
+                raise
+            fallback_errors.append((device_kind, str(error)))
+    raise BenchmarkRunnerError("no tensor runtime device could execute benchmark training")
+
+
+def _train_and_predict_on_device(
+    *,
+    architecture: ArchitectureManifest,
+    evaluation_batch: GeneratedObservationBatch,
+    generator: ObservationGenerator,
+    outcome_space: OutcomeSpace,
+    scale: int,
+    sample_count: int,
+    train_steps: int,
+    learning_rate: float,
+    optimizer_name: str,
+    schedule_name: str,
+    validation_interval: int,
+    convergence_patience: int,
+    convergence_min_delta: float,
+    convergence_min_steps: int,
+    target_validation_loss: float | None,
+    tensor_device: TensorRuntimeDeviceKind,
+    work_estimates: _TrainingWorkEstimates | None,
+    seed: int,
+    progress_callback: Callable[[TrainingRunRecord, Mapping[str, object]], None] | None = None,
+    fallback_errors: tuple[tuple[str, str], ...] = (),
+) -> _TrainingResult:
     try:
         runtime = resolve_tensor_runtime(tensor_device)
     except TensorRuntimeError as error:
@@ -562,6 +623,7 @@ def _train_and_predict(
                     roofline=runtime_roofline_record(runtime),
                     work_estimates=work_estimates,
                     phase_timings=phase_timings,
+                    fallback_errors=fallback_errors,
                 ),
             )
             if progress_callback is not None
@@ -611,6 +673,7 @@ def _train_and_predict(
             roofline=runtime_roofline_record(runtime),
             work_estimates=work_estimates,
             phase_timings=phase_timings,
+            fallback_errors=fallback_errors,
         ),
     )
 
@@ -916,11 +979,12 @@ def _throughput_record(
     roofline: Mapping[str, object],
     work_estimates: _TrainingWorkEstimates | None,
     phase_timings: TimingCollector,
+    fallback_errors: tuple[tuple[str, str], ...] = (),
 ) -> dict[str, object]:
     training = training_counter.to_record(kind="training-throughput")
     validation = validation_counter.to_record(kind="validation-throughput")
     evaluation = evaluation_counter.to_record(kind="evaluation-throughput")
-    return {
+    record: dict[str, object] = {
         "kind": "benchmark-throughput",
         "tensor_runtime": "pytorch",
         "tensor_device": runtime_device,
@@ -937,6 +1001,16 @@ def _throughput_record(
             work_estimates=work_estimates,
         ),
     }
+    if fallback_errors:
+        record["runtime_fallbacks"] = [
+            {
+                "from_device": device_kind,
+                "to_device": runtime_device,
+                "reason": reason,
+            }
+            for device_kind, reason in fallback_errors
+        ]
+    return record
 
 
 def _roofline_comparison(

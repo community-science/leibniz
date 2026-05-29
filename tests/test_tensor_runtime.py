@@ -6,6 +6,10 @@ import pytest
 import leibniz.tensor_runtime as tensor_runtime
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlanDocument
+from leibniz.model_operators import (
+    ModelOperatorSearchPoint,
+    materialize_model_operator_search_point,
+)
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
 from leibniz.observation_generation import (
     load_observation_generator,
@@ -14,8 +18,11 @@ from leibniz.observation_generation import (
 from leibniz.tensor_runtime import (
     FormationTensorCache,
     TensorRuntimeError,
+    architecture_supported_by_tensor_runtime,
+    architecture_tensor_runtime_issue,
     resolve_tensor_runtime,
     runtime_roofline_record,
+    tensor_runtime_device_kinds,
     validate_tensor_runtime_device,
 )
 
@@ -47,6 +54,7 @@ def test_resolve_tensor_runtime_auto_uses_available_device() -> None:
     runtime = resolve_tensor_runtime("auto")
 
     assert runtime.device_kind in {"cpu", "cuda", "mps"}
+    assert tensor_runtime_device_kinds("auto")[-1] == "cpu"
 
 
 def test_resolve_tensor_runtime_rejects_unavailable_explicit_device() -> None:
@@ -56,6 +64,27 @@ def test_resolve_tensor_runtime_rejects_unavailable_explicit_device() -> None:
     else:
         with pytest.raises(TensorRuntimeError, match="cuda is not available"):
             resolve_tensor_runtime("cuda")
+
+
+def test_mps_architecture_support_rejects_nondivisible_adaptive_pooling() -> None:
+    supported = materialize_model_operator_search_point(
+        input_shape=(1, 32, 32),
+        output_count=10,
+        point=ModelOperatorSearchPoint(local_support_dimension=2, local_support_size=16),
+    )
+    unsupported = materialize_model_operator_search_point(
+        input_shape=(1, 32, 32),
+        output_count=10,
+        point=ModelOperatorSearchPoint(local_support_dimension=2, local_support_size=31),
+    )
+
+    assert architecture_supported_by_tensor_runtime(supported, device_kind="mps")
+    assert architecture_supported_by_tensor_runtime(unsupported, device_kind="cpu")
+    assert not architecture_supported_by_tensor_runtime(unsupported, device_kind="mps")
+    assert architecture_tensor_runtime_issue(unsupported, device_kind="mps") == (
+        "mps adaptive pooling requires trailing input axes to be divisible "
+        "by the requested output axes"
+    )
 
 
 def test_runtime_roofline_record_calibrates_cpu_ceiling() -> None:
