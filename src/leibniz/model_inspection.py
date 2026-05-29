@@ -21,14 +21,13 @@ __all__ = [
     "ModelInspectionComponent",
     "ModelInspectionCostSummary",
     "ModelInspectionDocument",
-    "ModelInspectionLayer",
     "ModelInspectionRecord",
     "ModelInspectionTrace",
     "ModelInspectionTraceStage",
     "ModelInspectionValidationError",
 ]
 
-_layer_record = RecordSpec(
+_component_record = RecordSpec(
     fields={
         "index": FieldSpec(kind="integer"),
         "kind": FieldSpec(kind="string"),
@@ -47,15 +46,15 @@ _layer_record = RecordSpec(
 )
 _cost_summary_record = RecordSpec(
     fields={
-        "layer_count": FieldSpec(kind="integer"),
+        "component_count": FieldSpec(kind="integer"),
         "parameter_count": FieldSpec(kind="integer", required=False),
         "parameter_bytes": FieldSpec(kind="integer", required=False),
         "inference_flops": FieldSpec(kind="integer", required=False),
-        "unknown_parameter_layers": FieldSpec(
+        "unknown_parameter_components": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="integer"),
         ),
-        "unknown_flop_layers": FieldSpec(
+        "unknown_flop_components": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="integer"),
             required=False,
@@ -95,7 +94,7 @@ _inspection_record = RecordSpec(
         "architecture": FieldSpec(kind="record"),
         "input_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
         "output_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
-        "layers": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
+        "components": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
         "cost_summary": FieldSpec(kind="record"),
         "architecture_trace": FieldSpec(kind="record"),
         "architecture_graph": FieldSpec(kind="record"),
@@ -163,7 +162,7 @@ class ModelInspectionComponent:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ModelInspectionComponent:
         try:
-            validated = _layer_record.validate(record)
+            validated = _component_record.validate(record)
         except ValueError as error:
             raise ModelInspectionValidationError(str(error)) from error
         return cls(
@@ -207,52 +206,48 @@ class ModelInspectionComponent:
             record["inference_flops"] = self.inference_flops
         return record
 
-
-ModelInspectionLayer = ModelInspectionComponent
-
-
 @dataclass(frozen=True, slots=True)
 class ModelInspectionCostSummary:
     """Conservative model cost summary derived from public architecture structure."""
 
-    layer_count: int
+    component_count: int
     parameter_count: int | None
     parameter_bytes: int | None = None
     inference_flops: int | None = None
-    unknown_parameter_layers: tuple[int, ...] = ()
-    unknown_flop_layers: tuple[int, ...] = ()
+    unknown_parameter_components: tuple[int, ...] = ()
+    unknown_flop_components: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
-        if type(self.layer_count) is not int or self.layer_count < 0:
-            raise ModelInspectionValidationError("layer_count must be a nonnegative integer")
+        if type(self.component_count) is not int or self.component_count < 0:
+            raise ModelInspectionValidationError("component_count must be a nonnegative integer")
         if self.parameter_count is not None and self.parameter_count < 0:
             raise ModelInspectionValidationError("parameter_count must be nonnegative")
         if self.parameter_bytes is not None and self.parameter_bytes < 0:
             raise ModelInspectionValidationError("parameter_bytes must be nonnegative")
         if self.inference_flops is not None and self.inference_flops < 0:
             raise ModelInspectionValidationError("inference_flops must be nonnegative")
-        if any(type(index) is not int or index < 0 for index in self.unknown_parameter_layers):
+        if any(
+            type(index) is not int or index < 0 for index in self.unknown_parameter_components
+        ):
             raise ModelInspectionValidationError(
-                "unknown_parameter_layers must contain nonnegative integers"
+                "unknown_parameter_components must contain nonnegative integers"
             )
-        if self.unknown_parameter_layers != tuple(sorted(set(self.unknown_parameter_layers))):
-            raise ModelInspectionValidationError("unknown_parameter_layers must be sorted unique")
-        if any(type(index) is not int or index < 0 for index in self.unknown_flop_layers):
+        if self.unknown_parameter_components != tuple(
+            sorted(set(self.unknown_parameter_components))
+        ):
             raise ModelInspectionValidationError(
-                "unknown_flop_layers must contain nonnegative integers"
+                "unknown_parameter_components must be sorted unique"
             )
-        if self.unknown_flop_layers != tuple(sorted(set(self.unknown_flop_layers))):
-            raise ModelInspectionValidationError("unknown_flop_layers must be sorted unique")
-        if self.parameter_count is None and not self.unknown_parameter_layers:
+        if any(type(index) is not int or index < 0 for index in self.unknown_flop_components):
             raise ModelInspectionValidationError(
-                "unknown parameter_count requires unknown_parameter_layers"
+                "unknown_flop_components must contain nonnegative integers"
             )
-
-    @property
-    def component_count(self) -> int:
-        """Return the number of architecture components covered by this summary."""
-
-        return self.layer_count
+        if self.unknown_flop_components != tuple(sorted(set(self.unknown_flop_components))):
+            raise ModelInspectionValidationError("unknown_flop_components must be sorted unique")
+        if self.parameter_count is None and not self.unknown_parameter_components:
+            raise ModelInspectionValidationError(
+                "unknown parameter_count requires unknown_parameter_components"
+            )
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ModelInspectionCostSummary:
@@ -261,7 +256,7 @@ class ModelInspectionCostSummary:
         except ValueError as error:
             raise ModelInspectionValidationError(str(error)) from error
         return cls(
-            layer_count=_as_int(validated["layer_count"], field="layer_count"),
+            component_count=_as_int(validated["component_count"], field="component_count"),
             parameter_count=_optional_int(
                 validated.get("parameter_count"),
                 field="parameter_count",
@@ -274,26 +269,26 @@ class ModelInspectionCostSummary:
                 validated.get("inference_flops"),
                 field="inference_flops",
             ),
-            unknown_parameter_layers=tuple(
-                _as_int(index, field="unknown_parameter_layers")
+            unknown_parameter_components=tuple(
+                _as_int(index, field="unknown_parameter_components")
                 for index in _as_sequence(
-                    validated["unknown_parameter_layers"],
-                    field="unknown_parameter_layers",
+                    validated["unknown_parameter_components"],
+                    field="unknown_parameter_components",
                 )
             ),
-            unknown_flop_layers=tuple(
-                _as_int(index, field="unknown_flop_layers")
+            unknown_flop_components=tuple(
+                _as_int(index, field="unknown_flop_components")
                 for index in _as_sequence(
-                    validated.get("unknown_flop_layers", ()),
-                    field="unknown_flop_layers",
+                    validated.get("unknown_flop_components", ()),
+                    field="unknown_flop_components",
                 )
             ),
         )
 
     def to_record(self) -> dict[str, object]:
         record: dict[str, object] = {
-            "layer_count": self.layer_count,
-            "unknown_parameter_layers": list(self.unknown_parameter_layers),
+            "component_count": self.component_count,
+            "unknown_parameter_components": list(self.unknown_parameter_components),
         }
         if self.parameter_count is not None:
             record["parameter_count"] = self.parameter_count
@@ -301,8 +296,8 @@ class ModelInspectionCostSummary:
             record["parameter_bytes"] = self.parameter_bytes
         if self.inference_flops is not None:
             record["inference_flops"] = self.inference_flops
-        if self.unknown_flop_layers:
-            record["unknown_flop_layers"] = list(self.unknown_flop_layers)
+        if self.unknown_flop_components:
+            record["unknown_flop_components"] = list(self.unknown_flop_components)
         return record
 
 
@@ -469,7 +464,7 @@ class ModelInspectionRecord:
     architecture: ArtifactReference
     input_shape: tuple[int, ...]
     output_shape: tuple[int, ...]
-    layers: tuple[ModelInspectionLayer, ...]
+    components: tuple[ModelInspectionComponent, ...]
     cost_summary: ModelInspectionCostSummary
     architecture_trace: ModelInspectionTrace
     architecture_graph: ArchitectureGraph
@@ -493,33 +488,43 @@ class ModelInspectionRecord:
             )
         _require_shape(self.input_shape, field="input_shape")
         _require_shape(self.output_shape, field="output_shape")
-        if not self.layers:
-            raise ModelInspectionValidationError("layers must not be empty")
-        expected_indexes = tuple(range(len(self.layers)))
-        actual_indexes = tuple(layer.index for layer in self.layers)
+        if not self.components:
+            raise ModelInspectionValidationError("components must not be empty")
+        expected_indexes = tuple(range(len(self.components)))
+        actual_indexes = tuple(component.index for component in self.components)
         if actual_indexes != expected_indexes:
-            raise ModelInspectionValidationError("layer indexes must be contiguous")
-        if self.cost_summary.layer_count != len(self.layers):
-            raise ModelInspectionValidationError("cost_summary layer_count does not match layers")
+            raise ModelInspectionValidationError("component indexes must be contiguous")
+        if self.cost_summary.component_count != len(self.components):
+            raise ModelInspectionValidationError(
+                "cost_summary component_count does not match components"
+            )
         if self.architecture_trace.input_shape != self.input_shape:
             raise ModelInspectionValidationError("architecture_trace input_shape does not match")
         if self.architecture_trace.output_shape != self.output_shape:
             raise ModelInspectionValidationError("architecture_trace output_shape does not match")
-        if len(self.architecture_trace.stages) != len(self.layers):
-            raise ModelInspectionValidationError("architecture_trace stages do not match layers")
-        for layer, stage in zip(self.layers, self.architecture_trace.stages, strict=True):
-            if layer.index != stage.index or layer.kind != stage.syntax_alias:
+        if len(self.architecture_trace.stages) != len(self.components):
+            raise ModelInspectionValidationError(
+                "architecture_trace stages do not match components"
+            )
+        for component, stage in zip(
+            self.components,
+            self.architecture_trace.stages,
+            strict=True,
+        ):
+            if component.index != stage.index or component.kind != stage.syntax_alias:
                 raise ModelInspectionValidationError(
-                    "architecture_trace stage does not match layer"
+                    "architecture_trace stage does not match component"
                 )
-        if len(self.architecture_graph.nodes) != len(self.layers):
-            raise ModelInspectionValidationError("architecture_graph nodes do not match layers")
-        for layer, node in zip(self.layers, self.architecture_graph.nodes, strict=True):
-            if layer.kind != node.component.kind or dict(layer.parameters) != dict(
+        if len(self.architecture_graph.nodes) != len(self.components):
+            raise ModelInspectionValidationError(
+                "architecture_graph nodes do not match components"
+            )
+        for component, node in zip(self.components, self.architecture_graph.nodes, strict=True):
+            if component.kind != node.component.kind or dict(component.parameters) != dict(
                 node.component.parameters
             ):
                 raise ModelInspectionValidationError(
-                    "architecture_graph node does not match layer"
+                    "architecture_graph node does not match component"
                 )
         _require_reference_kind(
             self.model_manifest,
@@ -559,7 +564,9 @@ class ModelInspectionRecord:
         id: ProtocolIdentifier,
         architecture_manifest: ArchitectureManifest,
     ) -> ModelInspectionRecord:
-        layers, cost_summary, architecture_trace = _architecture_layers(architecture_manifest)
+        components, cost_summary, architecture_trace = _architecture_components(
+            architecture_manifest
+        )
         return cls(
             id=id,
             architecture=reference_for_record(
@@ -568,7 +575,7 @@ class ModelInspectionRecord:
             ),
             input_shape=architecture_manifest.input_shape,
             output_shape=architecture_manifest.output_shape,
-            layers=layers,
+            components=components,
             cost_summary=cost_summary,
             architecture_trace=architecture_trace,
             architecture_graph=architecture_manifest.graph,
@@ -592,7 +599,7 @@ class ModelInspectionRecord:
             architecture=record.architecture,
             input_shape=record.input_shape,
             output_shape=record.output_shape,
-            layers=record.layers,
+            components=record.components,
             cost_summary=record.cost_summary,
             architecture_trace=record.architecture_trace,
             architecture_graph=record.architecture_graph,
@@ -620,7 +627,7 @@ class ModelInspectionRecord:
             architecture=record.architecture,
             input_shape=record.input_shape,
             output_shape=record.output_shape,
-            layers=record.layers,
+            components=record.components,
             cost_summary=record.cost_summary,
             architecture_trace=record.architecture_trace,
             architecture_graph=record.architecture_graph,
@@ -650,9 +657,11 @@ class ModelInspectionRecord:
     def from_record(cls, record: Mapping[str, object]) -> ModelInspectionRecord:
         try:
             validated = _inspection_record.validate(record)
-            layers = tuple(
-                ModelInspectionLayer.from_record(_as_mapping(layer, field="layers"))
-                for layer in _as_sequence(validated["layers"], field="layers")
+            components = tuple(
+                ModelInspectionComponent.from_record(
+                    _as_mapping(component, field="components")
+                )
+                for component in _as_sequence(validated["components"], field="components")
             )
         except ValueError as error:
             raise ModelInspectionValidationError(str(error)) from error
@@ -663,7 +672,7 @@ class ModelInspectionRecord:
             ),
             input_shape=_as_shape(validated["input_shape"], field="input_shape"),
             output_shape=_as_shape(validated["output_shape"], field="output_shape"),
-            layers=layers,
+            components=components,
             cost_summary=ModelInspectionCostSummary.from_record(
                 _as_mapping(validated["cost_summary"], field="cost_summary")
             ),
@@ -712,7 +721,7 @@ class ModelInspectionRecord:
             "architecture": self.architecture.to_record(),
             "input_shape": list(self.input_shape),
             "output_shape": list(self.output_shape),
-            "layers": [layer.to_record() for layer in self.layers],
+            "components": [component.to_record() for component in self.components],
             "cost_summary": self.cost_summary.to_record(),
             "architecture_trace": self.architecture_trace.to_record(),
             "architecture_graph": self.architecture_graph.to_record(),
@@ -733,13 +742,6 @@ class ModelInspectionRecord:
             ]
         return record
 
-    @property
-    def components(self) -> tuple[ModelInspectionComponent, ...]:
-        """Return the inspected architecture components in manifest order."""
-
-        return self.layers
-
-
 @dataclass(frozen=True, slots=True)
 class ModelInspectionDocument:
     """A loaded model inspection record and its canonical digest."""
@@ -757,19 +759,19 @@ class ModelInspectionDocument:
         return cls(inspection=inspection, digest=inspection.digest)
 
 
-def _architecture_layers(
+def _architecture_components(
     architecture_manifest: ArchitectureManifest,
-) -> tuple[tuple[ModelInspectionLayer, ...], ModelInspectionCostSummary, ModelInspectionTrace]:
-    layers: list[ModelInspectionLayer] = []
+) -> tuple[tuple[ModelInspectionComponent, ...], ModelInspectionCostSummary, ModelInspectionTrace]:
+    components: list[ModelInspectionComponent] = []
     stages: list[ModelInspectionTraceStage] = []
     plan = summarize_architecture_operators(architecture_manifest)
-    for layer, operator in zip(architecture_manifest.layers, plan.operators, strict=True):
+    for component, operator in zip(architecture_manifest.components, plan.operators, strict=True):
         descriptor = operator.descriptor
-        layers.append(
-            ModelInspectionLayer(
+        components.append(
+            ModelInspectionComponent(
                 index=operator.index,
-                kind=layer.kind,
-                parameters=layer.parameters,
+                kind=component.kind,
+                parameters=component.parameters,
                 input_shape=operator.input_shape,
                 output_shape=operator.output_shape,
                 operator=descriptor.to_record(),
@@ -783,7 +785,7 @@ def _architecture_layers(
                 ModelInspectionTraceStage(
                     index=operator.index,
                     kind="operator",
-                    syntax_alias=layer.kind,
+                    syntax_alias=component.kind,
                     operator_kind=descriptor.kind,
                     input_shape=operator.input_shape,
                     output_shape=operator.output_shape,
@@ -802,14 +804,14 @@ def _architecture_layers(
                 )
             )
     return (
-        tuple(layers),
+        tuple(components),
         ModelInspectionCostSummary(
-            layer_count=len(layers),
+            component_count=len(components),
             parameter_count=plan.parameter_count,
             parameter_bytes=plan.parameter_bytes,
             inference_flops=plan.inference_flops,
-            unknown_parameter_layers=plan.unknown_parameter_layers,
-            unknown_flop_layers=plan.unknown_flop_layers,
+            unknown_parameter_components=plan.unknown_parameter_layers,
+            unknown_flop_components=plan.unknown_flop_layers,
         ),
         ModelInspectionTrace(
             input_shape=architecture_manifest.input_shape,

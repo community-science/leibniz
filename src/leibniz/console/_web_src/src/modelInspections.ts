@@ -6,7 +6,7 @@ export type ModelInspectionRecord = {
   architecture: ArtifactReferenceRecord;
   input_shape: number[];
   output_shape: number[];
-  layers: ModelInspectionLayerRecord[];
+  components: ModelInspectionComponentRecord[];
   cost_summary: ModelInspectionCostSummaryRecord;
   architecture_trace: ModelInspectionTraceRecord;
   architecture_graph: ModelInspectionArchitectureGraphRecord;
@@ -18,7 +18,7 @@ export type ModelInspectionRecord = {
   training_provenance: ArtifactReferenceRecord[];
 };
 
-export type ModelInspectionLayerRecord = {
+export type ModelInspectionComponentRecord = {
   index: number;
   kind: string;
   parameters: Record<string, unknown>;
@@ -52,12 +52,12 @@ export type ModelInspectionArchitectureGraphEdgeRecord = {
 };
 
 export type ModelInspectionCostSummaryRecord = {
-  layer_count: number;
+  component_count: number;
   parameter_count?: number;
   parameter_bytes?: number;
   inference_flops?: number;
-  unknown_parameter_layers: number[];
-  unknown_flop_layers: number[];
+  unknown_parameter_components: number[];
+  unknown_flop_components: number[];
 };
 
 export type ModelInspectionTraceRecord = {
@@ -105,8 +105,8 @@ export function parseModelInspectionRecord(
     architecture: parseReference(record.architecture, `${path}.architecture`),
     input_shape: parseIntegerArray(record.input_shape, `${path}.input_shape`),
     output_shape: parseIntegerArray(record.output_shape, `${path}.output_shape`),
-    layers: requireArray(record.layers, `${path}.layers`).map((layer, index) =>
-      parseLayer(layer, `${path}.layers.${index}`),
+    components: requireArray(record.components, `${path}.components`).map(
+      (component, index) => parseComponent(component, `${path}.components.${index}`),
     ),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
     architecture_trace: parseTrace(record.architecture_trace, `${path}.architecture_trace`),
@@ -228,32 +228,32 @@ function parseArchitectureGraphEdge(
   };
 }
 
-function parseLayer(value: unknown, path: string): ModelInspectionLayerRecord {
+function parseComponent(value: unknown, path: string): ModelInspectionComponentRecord {
   const record = requireRecord(value, path);
-  const layer: ModelInspectionLayerRecord = {
+  const component: ModelInspectionComponentRecord = {
     index: requireInteger(record.index, `${path}.index`),
     kind: requireString(record.kind, `${path}.kind`),
     parameters: requireRecord(record.parameters, `${path}.parameters`),
   };
   if (record.input_shape !== undefined) {
-    layer.input_shape = parseIntegerArray(record.input_shape, `${path}.input_shape`);
+    component.input_shape = parseIntegerArray(record.input_shape, `${path}.input_shape`);
   }
   if (record.output_shape !== undefined) {
-    layer.output_shape = parseIntegerArray(record.output_shape, `${path}.output_shape`);
+    component.output_shape = parseIntegerArray(record.output_shape, `${path}.output_shape`);
   }
   if (record.operator !== undefined) {
-    layer.operator = requireRecord(record.operator, `${path}.operator`);
+    component.operator = requireRecord(record.operator, `${path}.operator`);
   }
   if (record.parameter_count !== undefined) {
-    layer.parameter_count = requireInteger(record.parameter_count, `${path}.parameter_count`);
+    component.parameter_count = requireInteger(record.parameter_count, `${path}.parameter_count`);
   }
   if (record.parameter_bytes !== undefined) {
-    layer.parameter_bytes = requireInteger(record.parameter_bytes, `${path}.parameter_bytes`);
+    component.parameter_bytes = requireInteger(record.parameter_bytes, `${path}.parameter_bytes`);
   }
   if (record.inference_flops !== undefined) {
-    layer.inference_flops = requireInteger(record.inference_flops, `${path}.inference_flops`);
+    component.inference_flops = requireInteger(record.inference_flops, `${path}.inference_flops`);
   }
-  return layer;
+  return component;
 }
 
 function parseParameters(
@@ -282,15 +282,18 @@ function parseStringRecord(value: unknown, path: string): Record<string, string>
 function parseCostSummary(value: unknown, path: string): ModelInspectionCostSummaryRecord {
   const record = requireRecord(value, path);
   const summary: ModelInspectionCostSummaryRecord = {
-    layer_count: requireInteger(record.layer_count, `${path}.layer_count`),
-    unknown_parameter_layers: parseIntegerArray(
-      record.unknown_parameter_layers,
-      `${path}.unknown_parameter_layers`,
+    component_count: requireInteger(record.component_count, `${path}.component_count`),
+    unknown_parameter_components: parseIntegerArray(
+      record.unknown_parameter_components,
+      `${path}.unknown_parameter_components`,
     ),
-    unknown_flop_layers:
-      record.unknown_flop_layers === undefined
+    unknown_flop_components:
+      record.unknown_flop_components === undefined
         ? []
-        : parseIntegerArray(record.unknown_flop_layers, `${path}.unknown_flop_layers`),
+        : parseIntegerArray(
+            record.unknown_flop_components,
+            `${path}.unknown_flop_components`,
+          ),
   };
   if (record.parameter_count !== undefined) {
     summary.parameter_count = requireInteger(record.parameter_count, `${path}.parameter_count`);

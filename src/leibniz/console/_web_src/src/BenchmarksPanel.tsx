@@ -891,11 +891,11 @@ function ModelCostDetail({
         </div>
         <div>
           <dt>Unknown Parameter Components</dt>
-          <dd>{unknownComponentLabel(inspection?.cost_summary.unknown_parameter_layers)}</dd>
+          <dd>{unknownComponentLabel(inspection?.cost_summary.unknown_parameter_components)}</dd>
         </div>
         <div>
           <dt>Unknown FLOP Components</dt>
-          <dd>{unknownComponentLabel(inspection?.cost_summary.unknown_flop_layers)}</dd>
+          <dd>{unknownComponentLabel(inspection?.cost_summary.unknown_flop_components)}</dd>
         </div>
       </dl>
     </section>
@@ -922,7 +922,7 @@ function ModelGraphOperations({
       <h4>Graph Operations</h4>
       <div className="benchmark-model-operation-list">
         {inspection.architecture_trace.stages.map((stage) => {
-          const component = inspection.layers[stage.index];
+          const component = inspection.components[stage.index];
           const graphNode = inspection.architecture_graph.nodes[stage.index];
           return (
             <article className="benchmark-model-operation" key={stage.index}>

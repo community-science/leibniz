@@ -96,14 +96,16 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert model_inspection["input_shape"] == [1, 32, 32]
     assert model_inspection["output_shape"] == [10]
     assert model_inspection["cost_summary"] == {
-        "layer_count": 3,
+        "component_count": 3,
         "parameter_count": 50,
         "parameter_bytes": 200,
         "inference_flops": 1104,
-        "unknown_parameter_layers": [],
+        "unknown_parameter_components": [],
     }
-    model_layers = cast(list[dict[str, object]], model_inspection["layers"])
-    assert [(layer["kind"], layer.get("output_shape")) for layer in model_layers] == [
+    model_components = cast(list[dict[str, object]], model_inspection["components"])
+    assert [
+        (component["kind"], component.get("output_shape")) for component in model_components
+    ] == [
         ("adaptive-pooling", [1, 2, 2]),
         ("flatten", [4]),
         ("dense", [10]),
@@ -127,7 +129,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert cast(dict[str, object], trace_stages[0]["descriptor_axes"])["support"] == (
         "local-window"
     )
-    assert [layer["operator"] for layer in model_layers] == [
+    assert [component["operator"] for component in model_components] == [
         {
             "kind": "local-aggregation",
             "tensor_relation": "aggregation",
