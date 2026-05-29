@@ -241,6 +241,7 @@ export type ModelResultRecord = {
   run_ids: string[];
   measurement_count: number;
   source_kinds: string[];
+  console_view_model?: RunDetailViewModelRecord;
 };
 
 export type CompetencePointRecord = {
@@ -608,6 +609,10 @@ function parseModelResult(value: unknown, path: string): ModelResultRecord {
     run_ids: parseStringArray(record.run_ids, `${path}.run_ids`),
     measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`),
     source_kinds: parseStringArray(record.source_kinds, `${path}.source_kinds`),
+    console_view_model:
+      record.console_view_model === undefined
+        ? undefined
+        : parseRunDetailViewModel(record.console_view_model, `${path}.console_view_model`),
   };
 }
 

@@ -44,6 +44,7 @@ import {
 import type {
   BenchmarkResultRecord,
   ResultViewRecord,
+  RunDetailSectionRecord,
   RunResultRecord,
   TrainingHistoryPointRecord,
   TrainingProtocolRecord,
@@ -625,9 +626,17 @@ function ModelManifestDetail({
   inspection: ModelInspectionRecord | undefined;
   model: BenchmarkResultRecord['leaderboard'][number];
 }) {
+  const sections = model.console_view_model?.detail_sections ?? [];
   return (
     <section className="benchmark-model-detail-section">
       <h4>Model Manifest</h4>
+      {sections.length === 0 ? null : (
+        <div className="benchmark-model-generated-summary">
+          {sections.map((section) => (
+            <ModelGeneratedSummarySection key={section.title} section={section} />
+          ))}
+        </div>
+      )}
       <dl className="benchmark-model-detail-grid">
         <dt>Model Key</dt>
         <dd>{model.model_key}</dd>
@@ -639,6 +648,26 @@ function ModelManifestDetail({
         <dd>{model.observed_complexities.join(', ') || 'none'}</dd>
         <dt>Manifest</dt>
         <dd>{inspection?.model_manifest === undefined ? 'not recorded' : referenceLabel(inspection.model_manifest)}</dd>
+      </dl>
+    </section>
+  );
+}
+
+function ModelGeneratedSummarySection({ section }: { section: RunDetailSectionRecord }) {
+  const entries = section.entries ?? [];
+  if (entries.length === 0) {
+    return null;
+  }
+  return (
+    <section className="run-evidence-panel">
+      <h5>{section.title}</h5>
+      <dl>
+        {entries.map((entry) => (
+          <div key={entry.label}>
+            <dt>{entry.label}</dt>
+            <dd>{entry.value}</dd>
+          </div>
+        ))}
       </dl>
     </section>
   );
