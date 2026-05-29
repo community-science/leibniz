@@ -54,7 +54,7 @@ class ActiveTrainingLoopPlan:
     sample_count: int = 512
     evaluation_sample_count: int | None = None
     seed: int = 101
-    train_steps: int = 50_000
+    train_steps: int | None = None
     learning_rate: float = 0.01
     optimizer: str = "sgd"
     schedule: str = "none"
@@ -93,8 +93,20 @@ class ActiveTrainingLoopPlan:
             raise ActiveTrainingLoopError("evaluation_sample_count must be positive")
         if type(self.seed) is not int or self.seed < 0:
             raise ActiveTrainingLoopError("seed must be nonnegative")
-        if type(self.train_steps) is not int or self.train_steps < 0:
+        if self.train_steps is not None and (
+            type(self.train_steps) is not int or self.train_steps < 0
+        ):
             raise ActiveTrainingLoopError("train_steps must be nonnegative")
+        if self.train_steps is None and self.schedule == "cosine":
+            raise ActiveTrainingLoopError("cosine schedule requires train_steps")
+        if (
+            self.train_steps is None
+            and self.convergence_patience == 0
+            and self.target_validation_loss is None
+        ):
+            raise ActiveTrainingLoopError(
+                "uncapped training requires convergence_patience or target_validation_loss"
+            )
         if self.learning_rate <= 0:
             raise ActiveTrainingLoopError("learning_rate must be positive")
         if self.optimizer not in {"sgd", "adam", "adamw"}:

@@ -36,7 +36,7 @@ _protocol_record = RecordSpec(
         "schedule": FieldSpec(kind="string"),
         "seed": FieldSpec(kind="integer"),
         "batch_size": FieldSpec(kind="integer"),
-        "max_steps": FieldSpec(kind="integer"),
+        "max_steps": FieldSpec(kind="integer", required=False),
         "validation_interval": FieldSpec(kind="integer"),
         "validation_sample_count": FieldSpec(kind="integer"),
         "min_delta": FieldSpec(kind="number"),
@@ -98,7 +98,7 @@ class TrainingProtocol:
     schedule: _schedule_kind
     seed: int
     batch_size: int
-    max_steps: int
+    max_steps: int | None
     validation_interval: int
     validation_sample_count: int
     min_delta: float
@@ -121,7 +121,8 @@ class TrainingProtocol:
             raise TrainingRunValidationError(f"unsupported schedule: {self.schedule}")
         _require_nonnegative_int(self.seed, "seed")
         _require_positive_int(self.batch_size, "batch_size")
-        _require_nonnegative_int(self.max_steps, "max_steps")
+        if self.max_steps is not None:
+            _require_nonnegative_int(self.max_steps, "max_steps")
         _require_positive_int(self.validation_interval, "validation_interval")
         _require_positive_int(self.validation_sample_count, "validation_sample_count")
         _require_nonnegative_finite(self.min_delta, "min_delta")
@@ -148,7 +149,11 @@ class TrainingProtocol:
             schedule=cast(_schedule_kind, _as_string(validated["schedule"], "schedule")),
             seed=_as_int(validated["seed"], "seed"),
             batch_size=_as_int(validated["batch_size"], "batch_size"),
-            max_steps=_as_int(validated["max_steps"], "max_steps"),
+            max_steps=(
+                None
+                if "max_steps" not in validated
+                else _as_int(validated["max_steps"], "max_steps")
+            ),
             validation_interval=_as_int(
                 validated["validation_interval"],
                 "validation_interval",
@@ -183,7 +188,6 @@ class TrainingProtocol:
             "schedule": self.schedule,
             "seed": self.seed,
             "batch_size": self.batch_size,
-            "max_steps": self.max_steps,
             "validation_interval": self.validation_interval,
             "validation_sample_count": self.validation_sample_count,
             "min_delta": self.min_delta,
@@ -192,6 +196,8 @@ class TrainingProtocol:
             "tensor_device": self.tensor_device,
             "validation_source": self.validation_source,
         }
+        if self.max_steps is not None:
+            record["max_steps"] = self.max_steps
         if self.min_steps:
             record["min_steps"] = self.min_steps
         return record

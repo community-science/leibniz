@@ -317,7 +317,7 @@ export type TrainingProtocolRecord = {
   schedule: string;
   seed: number;
   batch_size: number;
-  max_steps: number;
+  max_steps?: number;
   validation_interval: number;
   validation_sample_count: number;
   min_delta: number;
@@ -770,7 +770,10 @@ function parseTrainingProtocol(value: unknown, path: string): TrainingProtocolRe
     schedule: requireString(record.schedule, `${path}.schedule`),
     seed: requireNumber(record.seed, `${path}.seed`),
     batch_size: requireNumber(record.batch_size, `${path}.batch_size`),
-    max_steps: requireNumber(record.max_steps, `${path}.max_steps`),
+    max_steps:
+      record.max_steps === undefined
+        ? undefined
+        : requireNumber(record.max_steps, `${path}.max_steps`),
     validation_interval: requireNumber(
       record.validation_interval,
       `${path}.validation_interval`,

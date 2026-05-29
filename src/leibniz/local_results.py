@@ -1917,7 +1917,6 @@ def _validate_training_diagnostics(record: Mapping[str, object]) -> None:
         "learning_rate",
         "seed",
         "batch_size",
-        "max_steps",
         "validation_interval",
         "validation_sample_count",
         "min_delta",
@@ -1926,6 +1925,11 @@ def _validate_training_diagnostics(record: Mapping[str, object]) -> None:
         _as_nonnegative_number(
             protocol.get(field),
             f"training_diagnostics.protocol.{field}",
+        )
+    if "max_steps" in protocol:
+        _as_nonnegative_number(
+            protocol.get("max_steps"),
+            "training_diagnostics.protocol.max_steps",
         )
     history = _as_sequence(
         record.get("validation_history"),

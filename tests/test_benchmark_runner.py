@@ -22,7 +22,7 @@ from leibniz.tensor_runtime import (
     TensorRuntimeDeviceKind,
     resolve_tensor_runtime,
 )
-from leibniz.training_runs import TrainingRunRecord
+from leibniz.training_runs import TrainingHistoryPoint, TrainingRunRecord
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -198,6 +198,34 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert training_run.protocol.validation_source == "generator-resample"
     assert [point.step for point in training_run.validation_history] == [0, 2, 3]
     assert training_run.validation_history[-1].learning_rates
+
+
+def test_windowed_plateau_ignores_tiny_recent_best_loss_resets() -> None:
+    history = (
+        _history_point(check=0, step=0, loss=1.0, best=1.0),
+        _history_point(check=1, step=250, loss=1.01, best=1.0, stale_checks=1),
+        _history_point(check=2, step=500, loss=0.9995, best=0.9995),
+    )
+
+    assert benchmark_runner.has_windowed_validation_plateau(
+        history,
+        window_checks=2,
+        min_delta=0.001,
+    )
+
+
+def test_windowed_plateau_continues_after_material_best_loss_improvement() -> None:
+    history = (
+        _history_point(check=0, step=0, loss=1.0, best=1.0),
+        _history_point(check=1, step=250, loss=1.01, best=1.0, stale_checks=1),
+        _history_point(check=2, step=500, loss=0.998, best=0.998),
+    )
+
+    assert not benchmark_runner.has_windowed_validation_plateau(
+        history,
+        window_checks=2,
+        min_delta=0.001,
+    )
 
 
 def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
@@ -468,6 +496,25 @@ def test_cli_runs_digits_benchmark_dry_run(
     assert captured.err == ""
     assert captured.out.startswith(
         "planned benchmark run "
-        "digits-arch-bb0dde9254dc-l1-seed101-samples2-steps50000-train-"
+        "digits-arch-bb0dde9254dc-l1-seed101-samples2-stepsconverge-train-"
     )
     assert not (tmp_path / ".runs").exists()
+
+
+def _history_point(
+    *,
+    check: int,
+    step: int,
+    loss: float,
+    best: float,
+    stale_checks: int = 0,
+) -> TrainingHistoryPoint:
+    return TrainingHistoryPoint(
+        step=step,
+        validation_check=check,
+        validation_loss=loss,
+        best_validation_loss=best,
+        best_validation_step=step,
+        best_validation_check=check,
+        stale_checks=stale_checks,
+    )

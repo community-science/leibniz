@@ -357,7 +357,7 @@ def _parser() -> argparse.ArgumentParser:
     propose_results.add_argument("--sample-count", default=512, type=int)
     propose_results.add_argument("--evaluation-sample-count", default=None, type=int)
     propose_results.add_argument("--seed", default=101, type=int)
-    propose_results.add_argument("--train-steps", default=50_000, type=int)
+    propose_results.add_argument("--train-steps", default=None, type=int)
     propose_results.add_argument("--learning-rate", default=0.01, type=float)
     propose_results.add_argument("--optimizer", default="sgd", choices=("sgd", "adam", "adamw"))
     propose_results.add_argument(
@@ -400,7 +400,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--sample-count", default=512, type=int)
     run.add_argument("--evaluation-sample-count", default=None, type=int)
     run.add_argument("--seed", default=101, type=int)
-    run.add_argument("--train-steps", default=50_000, type=int)
+    run.add_argument("--train-steps", default=None, type=int)
     run.add_argument("--learning-rate", default=0.01, type=float)
     run.add_argument("--optimizer", default="sgd", choices=("sgd", "adam", "adamw"))
     run.add_argument(
@@ -439,7 +439,7 @@ def _parser() -> argparse.ArgumentParser:
     loop.add_argument("--sample-count", default=512, type=int)
     loop.add_argument("--evaluation-sample-count", default=None, type=int)
     loop.add_argument("--seed", default=101, type=int)
-    loop.add_argument("--train-steps", default=50_000, type=int)
+    loop.add_argument("--train-steps", default=None, type=int)
     loop.add_argument("--learning-rate", default=0.01, type=float)
     loop.add_argument("--optimizer", default="sgd", choices=("sgd", "adam", "adamw"))
     loop.add_argument(
@@ -718,7 +718,7 @@ def _print_active_training_progress(summary: BenchmarkRunSummary) -> None:
         return
     last = history[-1]
     protocol = cast(Mapping[str, object], training_run.get("protocol", {}))
-    max_steps = protocol.get("max_steps", "?")
+    max_steps = protocol.get("max_steps", "convergence")
     print(
         f"training {summary.run_slug}: "
         f"step {last.get('step', '?')}/{max_steps} "
