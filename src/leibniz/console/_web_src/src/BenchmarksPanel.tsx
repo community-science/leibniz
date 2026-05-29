@@ -375,8 +375,8 @@ function BenchmarkModelsPane({
                     <dd>{formatCost(costValue(model.cost_summary, costAxis))}</dd>
                   </div>
                   <div>
-                    <dt>Layers</dt>
-                    <dd>{inspection?.layers.length ?? model.cost_summary.layer_count}</dd>
+                    <dt>Components</dt>
+                    <dd>{modelComponentCount(inspection, model)}</dd>
                   </div>
                   <div>
                     <dt>Runs</dt>
@@ -474,7 +474,7 @@ function BenchmarkModelInspector({
             model={model}
           />
           <ModelCostDetail inspection={inspection} model={model} />
-          <ModelLayerTrace inspection={inspection} operatorVocabulary={operatorVocabulary} />
+          <ModelGraphOperations inspection={inspection} operatorVocabulary={operatorVocabulary} />
         </>
       ) : null}
       {artifactView === 'training' ? (
@@ -870,12 +870,8 @@ function ModelCostDetail({
       <h4>Cost Summary</h4>
       <dl className="benchmark-model-cost-grid">
         <div>
-          <dt>Layers</dt>
-          <dd>{summary.layer_count}</dd>
-        </div>
-        <div>
           <dt>Components</dt>
-          <dd>{inspection?.architecture_graph.nodes.length ?? summary.layer_count}</dd>
+          <dd>{modelComponentCount(inspection, model)}</dd>
         </div>
         <div>
           <dt>Graph Edges</dt>
@@ -894,19 +890,19 @@ function ModelCostDetail({
           <dd>{optionalNumberLabel(summary.inference_flops)}</dd>
         </div>
         <div>
-          <dt>Unknown Parameters</dt>
-          <dd>{unknownLayerLabel(inspection?.cost_summary.unknown_parameter_layers)}</dd>
+          <dt>Unknown Parameter Components</dt>
+          <dd>{unknownComponentLabel(inspection?.cost_summary.unknown_parameter_layers)}</dd>
         </div>
         <div>
-          <dt>Unknown FLOPs</dt>
-          <dd>{unknownLayerLabel(inspection?.cost_summary.unknown_flop_layers)}</dd>
+          <dt>Unknown FLOP Components</dt>
+          <dd>{unknownComponentLabel(inspection?.cost_summary.unknown_flop_layers)}</dd>
         </div>
       </dl>
     </section>
   );
 }
 
-function ModelLayerTrace({
+function ModelGraphOperations({
   inspection,
   operatorVocabulary,
 }: {
@@ -916,27 +912,28 @@ function ModelLayerTrace({
   if (inspection === undefined) {
     return (
       <section className="benchmark-model-detail-section">
-        <h4>Layer Trace</h4>
+        <h4>Graph Operations</h4>
         <p className="artifact-detail-note">No model inspection record matches this model.</p>
       </section>
     );
   }
   return (
     <section className="benchmark-model-detail-section">
-      <h4>Layer Trace</h4>
-      <div className="benchmark-model-layer-list">
+      <h4>Graph Operations</h4>
+      <div className="benchmark-model-operation-list">
         {inspection.architecture_trace.stages.map((stage) => {
-          const layer = inspection.layers[stage.index];
+          const component = inspection.layers[stage.index];
+          const graphNode = inspection.architecture_graph.nodes[stage.index];
           return (
-            <article className="benchmark-model-layer" key={stage.index}>
-              <div className="benchmark-model-layer-heading">
-                <span>{stage.index}</span>
+            <article className="benchmark-model-operation" key={stage.index}>
+              <div className="benchmark-model-operation-heading">
+                <span>{graphNode?.id ?? stage.index}</span>
                 <div>
                   <strong>{operatorDisplayName(operatorVocabulary, stage.operator_kind)}</strong>
                   <small>{syntaxAliasDisplayName(operatorVocabulary, stage.syntax_alias)}</small>
                 </div>
               </div>
-              <dl className="benchmark-model-layer-shape-grid">
+              <dl className="benchmark-model-operation-shape-grid">
                 <div>
                   <dt>Input</dt>
                   <dd>{shapeLabel(stage.input_shape)}</dd>
@@ -954,10 +951,10 @@ function ModelLayerTrace({
                   <dd>{optionalNumberLabel(stage.inference_flops)}</dd>
                 </div>
               </dl>
-              <p className="benchmark-model-layer-config">
-                {layer === undefined
+              <p className="benchmark-model-operation-config">
+                {component === undefined
                   ? 'none'
-                  : recordLabel(layer.parameters, layer.operator, operatorVocabulary)}
+                  : recordLabel(component.parameters, component.operator, operatorVocabulary)}
               </p>
               {traceStageEntries(stage, operatorVocabulary).length === 0 ? null : (
                 <dl className="benchmark-model-operator-grid">
@@ -1072,8 +1069,15 @@ function optionalNumberLabel(value: number | undefined): string {
   return value === undefined ? 'unknown' : value.toLocaleString();
 }
 
-function unknownLayerLabel(layers: number[] | undefined): string {
-  return layers === undefined || layers.length === 0 ? 'none' : layers.join(', ');
+function modelComponentCount(
+  inspection: ModelInspectionRecord | undefined,
+  model: BenchmarkResultRecord['leaderboard'][number],
+): number {
+  return inspection?.architecture_graph.nodes.length ?? model.cost_summary.layer_count;
+}
+
+function unknownComponentLabel(components: number[] | undefined): string {
+  return components === undefined || components.length === 0 ? 'none' : components.join(', ');
 }
 
 function traceStageEntries(
