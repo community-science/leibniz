@@ -2,6 +2,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from leibniz.architectures import (
+    ArchitectureComponent,
     ArchitectureLayer,
     ArchitectureManifest,
     ArchitectureManifestDocument,
@@ -24,14 +25,16 @@ def test_architecture_manifest_derives_content_addressed_id() -> None:
         input_shape=(1, 32, 32),
         output_shape=(10,),
         layers=(
-            ArchitectureLayer(
+            ArchitectureComponent(
                 kind="adaptive-pooling",
                 parameters={"dimension": 2, "size": 2},
             ),
-            ArchitectureLayer(kind="flatten", parameters={}),
-            ArchitectureLayer(kind="dense", parameters={"out": 10}),
+            ArchitectureComponent(kind="flatten", parameters={}),
+            ArchitectureComponent(kind="dense", parameters={"out": 10}),
         ),
     )
+    assert ArchitectureLayer is ArchitectureComponent
+    assert manifest.components == manifest.layers
     assert manifest.to_record() == {
         "id": str(manifest.id),
         **_expanded_architecture_body(),
@@ -99,7 +102,7 @@ def test_architecture_manifest_rejects_invalid_ids_shapes_and_layers() -> None:
     layers[0] = {"kind": ""}
     record["layers"] = layers
     assert str(capture_architecture_error(lambda: ArchitectureManifest.from_record(record))) == (
-        "layer kind must be nonempty"
+        "component kind must be nonempty"
     )
 
     record = _architecture_record()

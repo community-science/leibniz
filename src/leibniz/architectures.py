@@ -17,6 +17,7 @@ from leibniz.records import FieldSpec, RecordSpec
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
+    "ArchitectureComponent",
     "ArchitectureLayer",
     "ArchitectureManifest",
     "ArchitectureManifestDocument",
@@ -54,22 +55,22 @@ class ArchitectureManifestValidationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class ArchitectureLayer:
-    """One opaque model-structure layer record."""
+class ArchitectureComponent:
+    """One opaque model-structure component record."""
 
     kind: str
     parameters: Mapping[str, object]
 
     def __post_init__(self) -> None:
         if not self.kind:
-            raise ArchitectureManifestValidationError("layer kind must be nonempty")
+            raise ArchitectureManifestValidationError("component kind must be nonempty")
         try:
             ContentDigest.from_value(self.to_record())
         except ContentEncodingError as error:
             raise ArchitectureManifestValidationError(str(error)) from error
 
     @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> ArchitectureLayer:
+    def from_record(cls, record: Mapping[str, object]) -> ArchitectureComponent:
         try:
             validated = _architecture_layer_record.validate(record)
         except ValueError as error:
@@ -84,6 +85,9 @@ class ArchitectureLayer:
             "kind": self.kind,
             "parameters": dict(self.parameters),
         }
+
+
+ArchitectureLayer = ArchitectureComponent
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +163,12 @@ class ArchitectureManifest:
             "id": str(self.id),
             **self._content_record(),
         }
+
+    @property
+    def components(self) -> tuple[ArchitectureComponent, ...]:
+        """Return the model-structure components in manifest order."""
+
+        return self.layers
 
     def _content_record(self) -> dict[str, object]:
         return _architecture_content_record(

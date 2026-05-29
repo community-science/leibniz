@@ -10,6 +10,10 @@ from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
 from leibniz.outcomes import OutcomeSpace
+from leibniz.prediction_results import (
+    DirectFiniteProbabilityPrediction,
+    PredictionResultValidationError,
+)
 from leibniz.prediction_spaces import (
     FiniteOutcomeSpace,
     PredictionSpaceValidationError,
@@ -120,6 +124,26 @@ class ModelInterface:
         try:
             self.prediction_space.validate_outcome_space(outcome_space)
         except PredictionSpaceValidationError as error:
+            raise ModelInterfaceValidationError(str(error)) from error
+
+    def validate_prediction_result(
+        self,
+        prediction: DirectFiniteProbabilityPrediction,
+    ) -> None:
+        try:
+            if prediction.prediction_space != self.prediction_space:
+                raise PredictionResultValidationError(
+                    "prediction_space does not match model interface"
+                )
+            if prediction.prediction_kind != self.prediction_kind:
+                raise PredictionResultValidationError(
+                    "prediction_kind does not match model interface"
+                )
+            if prediction.output_encoding != self.output_encoding:
+                raise PredictionResultValidationError(
+                    "output_encoding does not match model interface"
+                )
+        except PredictionResultValidationError as error:
             raise ModelInterfaceValidationError(str(error)) from error
 
     def to_record(self) -> dict[str, object]:
