@@ -119,6 +119,16 @@ assertEqual(
   'model inspection architecture graph',
 );
 assertEqual(
+  `${modelInspection.architecture_summary.component_count}:${modelInspection.architecture_summary.edge_count}`,
+  '3:2',
+  'model inspection graph summary',
+);
+assertEqual(
+  modelInspection.architecture_summary.component_kinds.join(','),
+  'adaptive-pooling,flatten,dense',
+  'model inspection graph summary components',
+);
+assertEqual(
   modelInspection.architecture_trace.stages.map((stage) => stage.operator_kind).join(','),
   'local-aggregation,rank-collapse,affine-readout',
   'model architecture trace stages',

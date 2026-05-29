@@ -21,6 +21,7 @@ __all__ = [
     "ModelInspectionComponent",
     "ModelInspectionCostSummary",
     "ModelInspectionDocument",
+    "ModelInspectionGraphSummary",
     "ModelInspectionRecord",
     "ModelInspectionTrace",
     "ModelInspectionTraceStage",
@@ -88,6 +89,25 @@ _trace_record = RecordSpec(
         ),
     }
 )
+_graph_summary_record = RecordSpec(
+    fields={
+        "component_count": FieldSpec(kind="integer"),
+        "edge_count": FieldSpec(kind="integer"),
+        "input_count": FieldSpec(kind="integer"),
+        "output_count": FieldSpec(kind="integer"),
+        "input_node_ids": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
+        "output_node_ids": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
+        "component_kinds": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
+        "unsupported_parameter_components": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="integer"),
+        ),
+        "unsupported_flop_components": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="integer"),
+        ),
+    }
+)
 _inspection_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
@@ -98,6 +118,7 @@ _inspection_record = RecordSpec(
         "cost_summary": FieldSpec(kind="record"),
         "architecture_trace": FieldSpec(kind="record"),
         "architecture_graph": FieldSpec(kind="record"),
+        "architecture_summary": FieldSpec(kind="record"),
         "model_manifest": FieldSpec(kind="record", required=False),
         "submission_package": FieldSpec(kind="record", required=False),
         "benchmark_manifest": FieldSpec(kind="record", required=False),
@@ -457,6 +478,131 @@ class ModelInspectionTrace:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelInspectionGraphSummary:
+    """Graph-derived model architecture summary independent of execution traces."""
+
+    component_count: int
+    edge_count: int
+    input_count: int
+    output_count: int
+    input_node_ids: tuple[str, ...]
+    output_node_ids: tuple[str, ...]
+    component_kinds: tuple[str, ...]
+    unsupported_parameter_components: tuple[int, ...] = ()
+    unsupported_flop_components: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if type(self.component_count) is not int or self.component_count <= 0:
+            raise ModelInspectionValidationError("component_count must be a positive integer")
+        if type(self.edge_count) is not int or self.edge_count < 0:
+            raise ModelInspectionValidationError("edge_count must be a nonnegative integer")
+        if type(self.input_count) is not int or self.input_count <= 0:
+            raise ModelInspectionValidationError("input_count must be a positive integer")
+        if type(self.output_count) is not int or self.output_count <= 0:
+            raise ModelInspectionValidationError("output_count must be a positive integer")
+        if len(self.input_node_ids) != self.input_count:
+            raise ModelInspectionValidationError("input_count does not match input_node_ids")
+        if len(self.output_node_ids) != self.output_count:
+            raise ModelInspectionValidationError("output_count does not match output_node_ids")
+        if len(self.component_kinds) != self.component_count:
+            raise ModelInspectionValidationError("component_count does not match component_kinds")
+        if any(not node_id for node_id in self.input_node_ids + self.output_node_ids):
+            raise ModelInspectionValidationError("graph summary node ids must be nonempty")
+        if any(not kind for kind in self.component_kinds):
+            raise ModelInspectionValidationError("component_kinds must be nonempty")
+        _require_index_set(
+            self.unsupported_parameter_components,
+            component_count=self.component_count,
+            field="unsupported_parameter_components",
+        )
+        _require_index_set(
+            self.unsupported_flop_components,
+            component_count=self.component_count,
+            field="unsupported_flop_components",
+        )
+
+    @classmethod
+    def from_graph(
+        cls,
+        *,
+        graph: ArchitectureGraph,
+        cost_summary: ModelInspectionCostSummary,
+    ) -> ModelInspectionGraphSummary:
+        return cls(
+            component_count=len(graph.nodes),
+            edge_count=len(graph.edges),
+            input_count=len(graph.input_node_ids),
+            output_count=len(graph.output_node_ids),
+            input_node_ids=graph.input_node_ids,
+            output_node_ids=graph.output_node_ids,
+            component_kinds=tuple(node.component.kind for node in graph.nodes),
+            unsupported_parameter_components=cost_summary.unknown_parameter_components,
+            unsupported_flop_components=cost_summary.unknown_flop_components,
+        )
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ModelInspectionGraphSummary:
+        try:
+            validated = _graph_summary_record.validate(record)
+        except ValueError as error:
+            raise ModelInspectionValidationError(str(error)) from error
+        return cls(
+            component_count=_as_int(validated["component_count"], field="component_count"),
+            edge_count=_as_int(validated["edge_count"], field="edge_count"),
+            input_count=_as_int(validated["input_count"], field="input_count"),
+            output_count=_as_int(validated["output_count"], field="output_count"),
+            input_node_ids=tuple(
+                _as_string(node_id, field="input_node_ids")
+                for node_id in _as_sequence(
+                    validated["input_node_ids"],
+                    field="input_node_ids",
+                )
+            ),
+            output_node_ids=tuple(
+                _as_string(node_id, field="output_node_ids")
+                for node_id in _as_sequence(
+                    validated["output_node_ids"],
+                    field="output_node_ids",
+                )
+            ),
+            component_kinds=tuple(
+                _as_string(kind, field="component_kinds")
+                for kind in _as_sequence(
+                    validated["component_kinds"],
+                    field="component_kinds",
+                )
+            ),
+            unsupported_parameter_components=tuple(
+                _as_int(index, field="unsupported_parameter_components")
+                for index in _as_sequence(
+                    validated["unsupported_parameter_components"],
+                    field="unsupported_parameter_components",
+                )
+            ),
+            unsupported_flop_components=tuple(
+                _as_int(index, field="unsupported_flop_components")
+                for index in _as_sequence(
+                    validated["unsupported_flop_components"],
+                    field="unsupported_flop_components",
+                )
+            ),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "component_count": self.component_count,
+            "edge_count": self.edge_count,
+            "input_count": self.input_count,
+            "output_count": self.output_count,
+            "input_node_ids": list(self.input_node_ids),
+            "output_node_ids": list(self.output_node_ids),
+            "component_kinds": list(self.component_kinds),
+            "unsupported_parameter_components": list(self.unsupported_parameter_components),
+            "unsupported_flop_components": list(self.unsupported_flop_components),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ModelInspectionRecord:
     """A normalized read-only inspection record for public model artifacts."""
 
@@ -468,6 +614,7 @@ class ModelInspectionRecord:
     cost_summary: ModelInspectionCostSummary
     architecture_trace: ModelInspectionTrace
     architecture_graph: ArchitectureGraph
+    architecture_summary: ModelInspectionGraphSummary
     model_manifest: ArtifactReference | None = None
     submission_package: ArtifactReference | None = None
     benchmark_manifest: ArtifactReference | None = None
@@ -526,6 +673,12 @@ class ModelInspectionRecord:
                 raise ModelInspectionValidationError(
                     "architecture_graph node does not match component"
                 )
+        expected_summary = ModelInspectionGraphSummary.from_graph(
+            graph=self.architecture_graph,
+            cost_summary=self.cost_summary,
+        )
+        if self.architecture_summary != expected_summary:
+            raise ModelInspectionValidationError("architecture_summary does not match graph")
         _require_reference_kind(
             self.model_manifest,
             kind="model-manifest",
@@ -579,6 +732,10 @@ class ModelInspectionRecord:
             cost_summary=cost_summary,
             architecture_trace=architecture_trace,
             architecture_graph=architecture_manifest.graph,
+            architecture_summary=ModelInspectionGraphSummary.from_graph(
+                graph=architecture_manifest.graph,
+                cost_summary=cost_summary,
+            ),
         )
 
     @classmethod
@@ -603,6 +760,7 @@ class ModelInspectionRecord:
             cost_summary=record.cost_summary,
             architecture_trace=record.architecture_trace,
             architecture_graph=record.architecture_graph,
+            architecture_summary=record.architecture_summary,
             model_manifest=reference_for_record(
                 kind="model-manifest",
                 record=model_manifest.to_record(),
@@ -631,6 +789,7 @@ class ModelInspectionRecord:
             cost_summary=record.cost_summary,
             architecture_trace=record.architecture_trace,
             architecture_graph=record.architecture_graph,
+            architecture_summary=record.architecture_summary,
             submission_package=reference_for_record(
                 kind="submission-package",
                 record=submission_package.to_record(),
@@ -682,6 +841,9 @@ class ModelInspectionRecord:
             architecture_graph=ArchitectureGraph.from_record(
                 _as_mapping(validated["architecture_graph"], field="architecture_graph")
             ),
+            architecture_summary=ModelInspectionGraphSummary.from_record(
+                _as_mapping(validated["architecture_summary"], field="architecture_summary")
+            ),
             model_manifest=_optional_reference(validated.get("model_manifest"), "model_manifest"),
             submission_package=_optional_reference(
                 validated.get("submission_package"),
@@ -725,6 +887,7 @@ class ModelInspectionRecord:
             "cost_summary": self.cost_summary.to_record(),
             "architecture_trace": self.architecture_trace.to_record(),
             "architecture_graph": self.architecture_graph.to_record(),
+            "architecture_summary": self.architecture_summary.to_record(),
         }
         if self.model_manifest is not None:
             record["model_manifest"] = self.model_manifest.to_record()
@@ -829,6 +992,20 @@ def _require_reference_kind(
 ) -> None:
     if reference is not None and reference.kind != kind:
         raise ModelInspectionValidationError(f"{field} reference must have kind {kind}")
+
+
+def _require_index_set(
+    indexes: tuple[int, ...],
+    *,
+    component_count: int,
+    field: str,
+) -> None:
+    if any(type(index) is not int or index < 0 for index in indexes):
+        raise ModelInspectionValidationError(f"{field} must contain nonnegative integers")
+    if indexes != tuple(sorted(set(indexes))):
+        raise ModelInspectionValidationError(f"{field} must be sorted unique")
+    if any(index >= component_count for index in indexes):
+        raise ModelInspectionValidationError(f"{field} indexes must reference components")
 
 
 def _optional_reference(value: object, field: str) -> ArtifactReference | None:

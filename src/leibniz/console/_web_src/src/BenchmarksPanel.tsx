@@ -875,7 +875,15 @@ function ModelCostDetail({
         </div>
         <div>
           <dt>Graph Edges</dt>
-          <dd>{inspection?.architecture_graph.edges.length ?? 'none'}</dd>
+          <dd>{optionalNumberLabel(inspection?.architecture_summary.edge_count)}</dd>
+        </div>
+        <div>
+          <dt>Graph Inputs</dt>
+          <dd>{optionalNumberLabel(inspection?.architecture_summary.input_count)}</dd>
+        </div>
+        <div>
+          <dt>Graph Outputs</dt>
+          <dd>{optionalNumberLabel(inspection?.architecture_summary.output_count)}</dd>
         </div>
         <div>
           <dt>Parameters</dt>
@@ -891,11 +899,17 @@ function ModelCostDetail({
         </div>
         <div>
           <dt>Unknown Parameter Components</dt>
-          <dd>{unknownComponentLabel(inspection?.cost_summary.unknown_parameter_components)}</dd>
+          <dd>
+            {unknownComponentLabel(
+              inspection?.architecture_summary.unsupported_parameter_components,
+            )}
+          </dd>
         </div>
         <div>
           <dt>Unknown FLOP Components</dt>
-          <dd>{unknownComponentLabel(inspection?.cost_summary.unknown_flop_components)}</dd>
+          <dd>
+            {unknownComponentLabel(inspection?.architecture_summary.unsupported_flop_components)}
+          </dd>
         </div>
       </dl>
     </section>
@@ -1073,7 +1087,7 @@ function modelComponentCount(
   inspection: ModelInspectionRecord | undefined,
   model: BenchmarkResultRecord['leaderboard'][number],
 ): number {
-  return inspection?.architecture_graph.nodes.length ?? model.cost_summary.layer_count;
+  return inspection?.architecture_summary.component_count ?? model.cost_summary.layer_count;
 }
 
 function unknownComponentLabel(components: number[] | undefined): string {

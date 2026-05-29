@@ -119,6 +119,17 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         "component-2",
     ]
     assert len(cast(list[dict[str, object]], inspection_graph["edges"])) == 2
+    assert model_inspection["architecture_summary"] == {
+        "component_count": 3,
+        "edge_count": 2,
+        "input_count": 1,
+        "output_count": 1,
+        "input_node_ids": ["component-0"],
+        "output_node_ids": ["component-2"],
+        "component_kinds": ["adaptive-pooling", "flatten", "dense"],
+        "unsupported_parameter_components": [],
+        "unsupported_flop_components": [],
+    }
     trace = cast(dict[str, object], model_inspection["architecture_trace"])
     trace_stages = cast(list[dict[str, object]], trace["stages"])
     assert [(stage["operator_kind"], stage["syntax_alias"]) for stage in trace_stages] == [
