@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const consoleDataModuleId = 'virtual:leibniz-console-data';
 const resolvedConsoleDataModuleId = `\0${consoleDataModuleId}`;
+const consoleDataUpdateEvent = 'leibniz-console-data:update';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const defaultResultRoot = '.runs/views';
 
@@ -28,26 +29,20 @@ function leibnizConsoleData() {
       if (id !== resolvedConsoleDataModuleId) {
         return null;
       }
-      const roots = consoleResultRoots();
-      const resultRootArgs = resultRootArguments(roots);
-      const payload = execFileSync(
-        'python',
-        [
-          '-m',
-          'leibniz.console.data',
-          ...resultRootArgs,
-          'tests/fixtures',
-          'src/leibniz/benchmarks',
-        ],
-        {
-          cwd: repositoryRoot,
-          encoding: 'utf8',
-        },
-      );
+      const payload = loadConsoleDataPayload();
       return [
         "import { parseConsoleDataRecord } from '/src/consoleData.ts';",
         `const payload = ${payload};`,
-        'export default parseConsoleDataRecord(payload);',
+        'const consoleData = parseConsoleDataRecord(payload);',
+        'export default consoleData;',
+        'export function subscribeConsoleData(callback) {',
+        '  if (import.meta.hot === undefined) {',
+        '    return () => {};',
+        '  }',
+        `  const listener = (payload) => callback(parseConsoleDataRecord(payload));`,
+        `  import.meta.hot.on('${consoleDataUpdateEvent}', listener);`,
+        `  return () => import.meta.hot?.off('${consoleDataUpdateEvent}', listener);`,
+        '}',
       ].join('\n');
     },
     configureServer(server) {
@@ -64,10 +59,37 @@ function leibnizConsoleData() {
         if (module !== undefined) {
           server.moduleGraph.invalidateModule(module);
         }
-        server.ws.send({ type: 'full-reload' });
+        try {
+          server.ws.send({
+            type: 'custom',
+            event: consoleDataUpdateEvent,
+            data: JSON.parse(loadConsoleDataPayload()),
+          });
+        } catch (error) {
+          server.config.logger.error(`failed to refresh Leibniz console data: ${error}`);
+        }
       });
     },
   };
+}
+
+function loadConsoleDataPayload() {
+  const roots = consoleResultRoots();
+  const resultRootArgs = resultRootArguments(roots);
+  return execFileSync(
+    'python',
+    [
+      '-m',
+      'leibniz.console.data',
+      ...resultRootArgs,
+      'tests/fixtures',
+      'src/leibniz/benchmarks',
+    ],
+    {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+    },
+  );
 }
 
 export function consoleResultWatchRoots(env = process.env, root = repositoryRoot) {

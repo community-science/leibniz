@@ -86,6 +86,9 @@ function assertShellUsesGeneratedConsoleData() {
   if (!shell.includes("from 'virtual:leibniz-console-data'")) {
     throw new Error('ConsoleShell must import generated console data');
   }
+  if (!shell.includes('subscribeConsoleData')) {
+    throw new Error('ConsoleShell must subscribe to console data updates');
+  }
   if (shell.includes('demoArtifact')) {
     throw new Error('ConsoleShell must not import handwritten demo artifact data');
   }
@@ -386,6 +389,15 @@ function assertConsoleResultRootPolicy() {
   );
   if (viteConfig.includes('addWatchFile')) {
     throw new Error('Console result roots must be watched through the dev-server watcher');
+  }
+  if (viteConfig.includes("type: 'full-reload'")) {
+    throw new Error('Console result polling must update console data without a full page reload');
+  }
+  if (
+    !viteConfig.includes("type: 'custom'") ||
+    !viteConfig.includes('leibniz-console-data:update')
+  ) {
+    throw new Error('Console result polling must send a custom console data update event');
   }
 
   const tempRoot = mkdtempSync(resolve(tmpdir(), 'leibniz-console-roots-'));
