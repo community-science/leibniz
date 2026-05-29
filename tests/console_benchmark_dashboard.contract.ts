@@ -47,8 +47,8 @@ const result: BenchmarkResultRecord = {
         architecture_digest: architectureDigest,
         benchmark_id: targetBenchmark,
         cost_summary: {
+          component_count: 1,
           inference_flops: 20,
-          layer_count: 1,
           parameter_bytes: 40,
           parameter_count: 10,
         },
@@ -67,8 +67,8 @@ const result: BenchmarkResultRecord = {
       architecture_digest: architectureDigest,
       benchmark_id: targetBenchmark,
       cost_summary: {
+        component_count: 1,
         inference_flops: 20,
-        layer_count: 1,
         parameter_bytes: 40,
         parameter_count: 10,
       },
@@ -84,8 +84,8 @@ const result: BenchmarkResultRecord = {
       architecture_digest: 'sha256:fedcba9876543210',
       benchmark_id: targetBenchmark,
       cost_summary: {
+        component_count: 2,
         inference_flops: 80,
-        layer_count: 2,
         parameter_bytes: 160,
         parameter_count: 40,
       },
@@ -134,8 +134,8 @@ const result: BenchmarkResultRecord = {
       architecture_digest: architectureDigest,
       benchmark_id: targetBenchmark,
       cost_summary: {
+        component_count: 1,
         inference_flops: 20,
-        layer_count: 1,
         parameter_bytes: 40,
         parameter_count: 10,
       },

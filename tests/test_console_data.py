@@ -287,11 +287,11 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
           "observed_complexities": [1.0],
           "points": [{"complexity": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
           "cost_summary": {
-            "layer_count": 1,
+            "component_count": 1,
             "parameter_count": 10,
             "parameter_bytes": 40,
             "inference_flops": 20,
-            "unknown_parameter_layers": []
+            "unknown_parameter_components": []
           },
           "run_ids": ["run-1"],
           "measurement_count": 1,
@@ -316,11 +316,11 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
           "measurement_count": 1,
           "score": 1.0,
           "cost_summary": {
-            "layer_count": 1,
+            "component_count": 1,
             "parameter_count": 10,
             "parameter_bytes": 40,
             "inference_flops": 20,
-            "unknown_parameter_layers": []
+            "unknown_parameter_components": []
           },
           "architecture": {"kind": "architecture-manifest"},
           "measurement_dataset_digest": "sha256:dataset"
