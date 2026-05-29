@@ -18,6 +18,9 @@ from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
     "ArchitectureComponent",
+    "ArchitectureGraph",
+    "ArchitectureGraphEdge",
+    "ArchitectureGraphNode",
     "ArchitectureLayer",
     "ArchitectureManifest",
     "ArchitectureManifestDocument",
@@ -46,6 +49,33 @@ _architecture_layer_record = RecordSpec(
     fields={
         "kind": FieldSpec(kind="string"),
         "parameters": FieldSpec(kind="record", required=False),
+    }
+)
+_architecture_graph_node_record = RecordSpec(
+    fields={
+        "id": FieldSpec(kind="string"),
+        "component": FieldSpec(kind="record"),
+    }
+)
+_architecture_graph_edge_record = RecordSpec(
+    fields={
+        "source_node_id": FieldSpec(kind="string"),
+        "target_node_id": FieldSpec(kind="string"),
+        "kind": FieldSpec(kind="string"),
+    }
+)
+_architecture_graph_record = RecordSpec(
+    fields={
+        "nodes": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="record", record=_architecture_graph_node_record),
+        ),
+        "edges": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="record", record=_architecture_graph_edge_record),
+        ),
+        "input_node_ids": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
+        "output_node_ids": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
     }
 )
 
@@ -88,6 +118,173 @@ class ArchitectureComponent:
 
 
 ArchitectureLayer = ArchitectureComponent
+
+
+@dataclass(frozen=True, slots=True)
+class ArchitectureGraphNode:
+    """One node in a declarative model-architecture graph."""
+
+    id: str
+    component: ArchitectureComponent
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            raise ArchitectureManifestValidationError("graph node id must be nonempty")
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ArchitectureGraphNode:
+        try:
+            validated = _architecture_graph_node_record.validate(record)
+        except ValueError as error:
+            raise ArchitectureManifestValidationError(str(error)) from error
+        return cls(
+            id=str(validated["id"]),
+            component=ArchitectureComponent.from_record(
+                _as_mapping(validated["component"], field="component")
+            ),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "component": self.component.to_record(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ArchitectureGraphEdge:
+    """One dependency edge in a declarative model-architecture graph."""
+
+    source_node_id: str
+    target_node_id: str
+    kind: str = "data-flow"
+
+    def __post_init__(self) -> None:
+        if not self.source_node_id:
+            raise ArchitectureManifestValidationError("edge source_node_id must be nonempty")
+        if not self.target_node_id:
+            raise ArchitectureManifestValidationError("edge target_node_id must be nonempty")
+        if not self.kind:
+            raise ArchitectureManifestValidationError("edge kind must be nonempty")
+        if self.source_node_id == self.target_node_id:
+            raise ArchitectureManifestValidationError("edge must not be a self-loop")
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ArchitectureGraphEdge:
+        try:
+            validated = _architecture_graph_edge_record.validate(record)
+        except ValueError as error:
+            raise ArchitectureManifestValidationError(str(error)) from error
+        return cls(
+            source_node_id=str(validated["source_node_id"]),
+            target_node_id=str(validated["target_node_id"]),
+            kind=str(validated["kind"]),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "source_node_id": self.source_node_id,
+            "target_node_id": self.target_node_id,
+            "kind": self.kind,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ArchitectureGraph:
+    """A graph-shaped model architecture over general components."""
+
+    nodes: tuple[ArchitectureGraphNode, ...]
+    edges: tuple[ArchitectureGraphEdge, ...]
+    input_node_ids: tuple[str, ...]
+    output_node_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.nodes:
+            raise ArchitectureManifestValidationError("graph nodes must not be empty")
+        node_ids = tuple(node.id for node in self.nodes)
+        if len(set(node_ids)) != len(node_ids):
+            raise ArchitectureManifestValidationError("graph node ids must be unique")
+        known_node_ids = frozenset(node_ids)
+        _require_known_node_ids(
+            self.input_node_ids,
+            known_node_ids=known_node_ids,
+            field="input_node_ids",
+        )
+        _require_known_node_ids(
+            self.output_node_ids,
+            known_node_ids=known_node_ids,
+            field="output_node_ids",
+        )
+        for edge in self.edges:
+            if edge.source_node_id not in known_node_ids:
+                raise ArchitectureManifestValidationError(
+                    f"edge source_node_id {edge.source_node_id!r} is not a graph node"
+                )
+            if edge.target_node_id not in known_node_ids:
+                raise ArchitectureManifestValidationError(
+                    f"edge target_node_id {edge.target_node_id!r} is not a graph node"
+                )
+        _require_acyclic_graph(nodes=node_ids, edges=self.edges)
+
+    @classmethod
+    def sequential(cls, components: tuple[ArchitectureComponent, ...]) -> ArchitectureGraph:
+        nodes = tuple(
+            ArchitectureGraphNode(id=f"component-{index}", component=component)
+            for index, component in enumerate(components)
+        )
+        if not nodes:
+            raise ArchitectureManifestValidationError("graph nodes must not be empty")
+        return cls(
+            nodes=nodes,
+            edges=tuple(
+                ArchitectureGraphEdge(
+                    source_node_id=nodes[index].id,
+                    target_node_id=nodes[index + 1].id,
+                )
+                for index in range(len(nodes) - 1)
+            ),
+            input_node_ids=(nodes[0].id,),
+            output_node_ids=(nodes[-1].id,),
+        )
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ArchitectureGraph:
+        try:
+            validated = _architecture_graph_record.validate(record)
+        except ValueError as error:
+            raise ArchitectureManifestValidationError(str(error)) from error
+        return cls(
+            nodes=tuple(
+                ArchitectureGraphNode.from_record(_as_mapping(node, field="nodes"))
+                for node in _as_sequence(validated["nodes"], field="nodes")
+            ),
+            edges=tuple(
+                ArchitectureGraphEdge.from_record(_as_mapping(edge, field="edges"))
+                for edge in _as_sequence(validated["edges"], field="edges")
+            ),
+            input_node_ids=tuple(
+                str(node_id)
+                for node_id in _as_sequence(
+                    validated["input_node_ids"],
+                    field="input_node_ids",
+                )
+            ),
+            output_node_ids=tuple(
+                str(node_id)
+                for node_id in _as_sequence(
+                    validated["output_node_ids"],
+                    field="output_node_ids",
+                )
+            ),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "nodes": [node.to_record() for node in self.nodes],
+            "edges": [edge.to_record() for edge in self.edges],
+            "input_node_ids": list(self.input_node_ids),
+            "output_node_ids": list(self.output_node_ids),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +366,12 @@ class ArchitectureManifest:
         """Return the model-structure components in manifest order."""
 
         return self.layers
+
+    @property
+    def graph(self) -> ArchitectureGraph:
+        """Return this sequential manifest as a single-path component graph."""
+
+        return ArchitectureGraph.sequential(self.components)
 
     def _content_record(self) -> dict[str, object]:
         return _architecture_content_record(
@@ -257,3 +460,48 @@ def _require_positive_shape(shape: tuple[int, ...], *, field: str) -> None:
         TensorShape.from_axes(shape, field=field)
     except TensorShapeValidationError as error:
         raise ArchitectureManifestValidationError(str(error)) from error
+
+
+def _require_known_node_ids(
+    node_ids: tuple[str, ...],
+    *,
+    known_node_ids: frozenset[str],
+    field: str,
+) -> None:
+    if not node_ids:
+        raise ArchitectureManifestValidationError(f"{field} must not be empty")
+    if len(set(node_ids)) != len(node_ids):
+        raise ArchitectureManifestValidationError(f"{field} must be unique")
+    for node_id in node_ids:
+        if not node_id:
+            raise ArchitectureManifestValidationError(f"{field} must not contain empty ids")
+        if node_id not in known_node_ids:
+            raise ArchitectureManifestValidationError(
+                f"{field} contains unknown node id {node_id!r}"
+            )
+
+
+def _require_acyclic_graph(
+    *,
+    nodes: tuple[str, ...],
+    edges: tuple[ArchitectureGraphEdge, ...],
+) -> None:
+    outgoing: dict[str, list[str]] = {node: [] for node in nodes}
+    for edge in edges:
+        outgoing[edge.source_node_id].append(edge.target_node_id)
+    temporary: set[str] = set()
+    permanent: set[str] = set()
+
+    def visit(node: str) -> None:
+        if node in permanent:
+            return
+        if node in temporary:
+            raise ArchitectureManifestValidationError("architecture graph must be acyclic")
+        temporary.add(node)
+        for target in outgoing[node]:
+            visit(target)
+        temporary.remove(node)
+        permanent.add(node)
+
+    for node in nodes:
+        visit(node)

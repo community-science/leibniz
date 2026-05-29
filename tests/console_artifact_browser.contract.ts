@@ -19,6 +19,7 @@ const consoleData = parseConsoleDataRecord(consoleDataPayload);
 const artifacts = consoleData.artifact_index.artifacts;
 const details = consoleData.artifact_details;
 const kinds = artifactKinds(artifacts);
+const architectureDetail = detailForArtifact(details, artifacts[0]);
 const dependencyCount = artifacts.reduce(
   (count, artifact) => count + artifact.dependencies.length,
   0,
@@ -208,6 +209,20 @@ assertEqual(
     : '',
   'Single digit 7,Three digit sequence 123',
   'digits observation showcase samples',
+);
+assertEqual(
+  architectureDetail?.kind === 'architecture-manifest'
+    ? `${architectureDetail.architecture_graph.nodes.length}:${architectureDetail.architecture_graph.edges.length}`
+    : '',
+  '3:2',
+  'architecture graph size',
+);
+assertEqual(
+  architectureDetail?.kind === 'architecture-manifest'
+    ? architectureDetail.architecture_graph.nodes.map((node) => node.component.kind).join(',')
+    : '',
+  'adaptive-pooling,flatten,dense',
+  'architecture graph components',
 );
 assertEqual(
   detailForArtifact(details, artifacts[0])?.kind,
