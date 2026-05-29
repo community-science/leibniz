@@ -60,6 +60,17 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
     assert inspection.cost_summary.inference_flops == 1104
     assert inspection.cost_summary.unknown_parameter_components == ()
     assert inspection.cost_summary.unknown_flop_components == ()
+    assert inspection.architecture_summary.component_count == 3
+    assert inspection.architecture_summary.edge_count == 2
+    assert inspection.architecture_summary.input_node_ids == ("component-0",)
+    assert inspection.architecture_summary.output_node_ids == ("component-2",)
+    assert inspection.architecture_summary.component_kinds == (
+        "adaptive-pooling",
+        "flatten",
+        "dense",
+    )
+    assert inspection.architecture_summary.unsupported_parameter_components == ()
+    assert inspection.architecture_summary.unsupported_flop_components == ()
     assert inspection.architecture_trace.input_shape == (1, 32, 32)
     assert inspection.architecture_trace.output_shape == (10,)
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
@@ -222,6 +233,13 @@ def test_model_inspection_rejects_malformed_records() -> None:
     record["architecture_graph"] = graph
     error = capture_model_inspection_error(lambda: ModelInspectionRecord.from_record(record))
     assert str(error) == "architecture_graph node does not match component"
+
+    record = inspection.to_record()
+    summary = dict(cast(dict[str, object], record["architecture_summary"]))
+    summary["edge_count"] = 7
+    record["architecture_summary"] = summary
+    error = capture_model_inspection_error(lambda: ModelInspectionRecord.from_record(record))
+    assert str(error) == "architecture_summary does not match graph"
 
 
 def _model_manifest_record() -> dict[str, object]:

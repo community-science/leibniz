@@ -10,6 +10,7 @@ export type ModelInspectionRecord = {
   cost_summary: ModelInspectionCostSummaryRecord;
   architecture_trace: ModelInspectionTraceRecord;
   architecture_graph: ModelInspectionArchitectureGraphRecord;
+  architecture_summary: ModelInspectionGraphSummaryRecord;
   model_manifest?: ArtifactReferenceRecord;
   submission_package?: ArtifactReferenceRecord;
   benchmark_manifest?: ArtifactReferenceRecord;
@@ -58,6 +59,18 @@ export type ModelInspectionCostSummaryRecord = {
   inference_flops?: number;
   unknown_parameter_components: number[];
   unknown_flop_components: number[];
+};
+
+export type ModelInspectionGraphSummaryRecord = {
+  component_count: number;
+  edge_count: number;
+  input_count: number;
+  output_count: number;
+  input_node_ids: string[];
+  output_node_ids: string[];
+  component_kinds: string[];
+  unsupported_parameter_components: number[];
+  unsupported_flop_components: number[];
 };
 
 export type ModelInspectionTraceRecord = {
@@ -114,6 +127,10 @@ export function parseModelInspectionRecord(
       record.architecture_graph,
       `${path}.architecture_graph`,
     ),
+    architecture_summary: parseGraphSummary(
+      record.architecture_summary,
+      `${path}.architecture_summary`,
+    ),
     model_manifest: parseOptionalReference(record.model_manifest, `${path}.model_manifest`),
     submission_package: parseOptionalReference(
       record.submission_package,
@@ -131,6 +148,27 @@ export function parseModelInspectionRecord(
     training_provenance: parseOptionalReferenceArray(
       record.training_provenance,
       `${path}.training_provenance`,
+    ),
+  };
+}
+
+function parseGraphSummary(value: unknown, path: string): ModelInspectionGraphSummaryRecord {
+  const record = requireRecord(value, path);
+  return {
+    component_count: requireInteger(record.component_count, `${path}.component_count`),
+    edge_count: requireInteger(record.edge_count, `${path}.edge_count`),
+    input_count: requireInteger(record.input_count, `${path}.input_count`),
+    output_count: requireInteger(record.output_count, `${path}.output_count`),
+    input_node_ids: parseStringArray(record.input_node_ids, `${path}.input_node_ids`),
+    output_node_ids: parseStringArray(record.output_node_ids, `${path}.output_node_ids`),
+    component_kinds: parseStringArray(record.component_kinds, `${path}.component_kinds`),
+    unsupported_parameter_components: parseIntegerArray(
+      record.unsupported_parameter_components,
+      `${path}.unsupported_parameter_components`,
+    ),
+    unsupported_flop_components: parseIntegerArray(
+      record.unsupported_flop_components,
+      `${path}.unsupported_flop_components`,
     ),
   };
 }

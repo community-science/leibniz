@@ -250,6 +250,17 @@ const inspections: ModelInspectionRecord[] = [
       ],
       output_node_ids: ['component-0'],
     },
+    architecture_summary: {
+      component_count: 1,
+      component_kinds: ['operator'],
+      edge_count: 0,
+      input_count: 1,
+      input_node_ids: ['component-0'],
+      output_count: 1,
+      output_node_ids: ['component-0'],
+      unsupported_flop_components: [],
+      unsupported_parameter_components: [],
+    },
     architecture_trace: {
       input_shape: [1],
       output_shape: [2],
