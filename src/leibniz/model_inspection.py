@@ -18,6 +18,7 @@ from leibniz.submissions import SubmissionPackageManifest
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
+    "ModelInspectionComponent",
     "ModelInspectionCostSummary",
     "ModelInspectionDocument",
     "ModelInspectionLayer",
@@ -120,8 +121,8 @@ class ModelInspectionValidationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class ModelInspectionLayer:
-    """One layer summary for read-only model inspection."""
+class ModelInspectionComponent:
+    """One component summary for read-only model inspection."""
 
     index: int
     kind: str
@@ -159,7 +160,7 @@ class ModelInspectionLayer:
             raise ModelInspectionValidationError(str(error)) from error
 
     @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> ModelInspectionLayer:
+    def from_record(cls, record: Mapping[str, object]) -> ModelInspectionComponent:
         try:
             validated = _layer_record.validate(record)
         except ValueError as error:
@@ -206,6 +207,9 @@ class ModelInspectionLayer:
         return record
 
 
+ModelInspectionLayer = ModelInspectionComponent
+
+
 @dataclass(frozen=True, slots=True)
 class ModelInspectionCostSummary:
     """Conservative model cost summary derived from public architecture structure."""
@@ -242,6 +246,12 @@ class ModelInspectionCostSummary:
             raise ModelInspectionValidationError(
                 "unknown parameter_count requires unknown_parameter_layers"
             )
+
+    @property
+    def component_count(self) -> int:
+        """Return the number of architecture components covered by this summary."""
+
+        return self.layer_count
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ModelInspectionCostSummary:
@@ -704,6 +714,12 @@ class ModelInspectionRecord:
                 artifact.to_record() for artifact in self.training_provenance
             ]
         return record
+
+    @property
+    def components(self) -> tuple[ModelInspectionComponent, ...]:
+        """Return the inspected architecture components in manifest order."""
+
+        return self.layers
 
 
 @dataclass(frozen=True, slots=True)

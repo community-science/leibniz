@@ -10,6 +10,7 @@ from leibniz.model_interfaces import (
     ModelInterfaceValidationError,
 )
 from leibniz.outcomes import OutcomeSpace
+from leibniz.prediction_results import DirectFiniteProbabilityPrediction
 from leibniz.prediction_spaces import (
     FiniteOutcomeSpace,
     FiniteTokenSequenceSpace,
@@ -62,6 +63,35 @@ def test_model_interface_can_record_finite_token_sequence_source_space() -> None
         "outcome_count": 2,
         "source_space": sequence_space.to_record(),
     }
+
+
+def test_model_interface_validates_direct_finite_prediction_results() -> None:
+    outcome_space = _outcome_space()
+    interface = ModelInterface.from_record(_model_interface_record(), outcome_space=outcome_space)
+    prediction = DirectFiniteProbabilityPrediction.from_probabilities(
+        id=ProtocolIdentifier.parse("core.boolean-prediction@0.1.0"),
+        prediction_space=interface.prediction_space,
+        probabilities=(0.25, 0.75),
+    )
+
+    interface.validate_prediction_result(prediction)
+
+    other_space = OutcomeSpace.from_record(
+        {
+            "id": "core.other-outcome@0.1.0",
+            "outcomes": [{"id": "yes"}, {"id": "no"}],
+        }
+    )
+    mismatched_prediction = DirectFiniteProbabilityPrediction.from_probabilities(
+        id=ProtocolIdentifier.parse("core.other-prediction@0.1.0"),
+        prediction_space=FiniteOutcomeSpace.from_outcome_space(other_space),
+        probabilities=(0.25, 0.75),
+    )
+    assert str(
+        capture_model_interface_error(
+            lambda: interface.validate_prediction_result(mismatched_prediction)
+        )
+    ) == "prediction_space does not match model interface"
 
 
 def test_model_interface_document_loads_bytes_with_digest() -> None:

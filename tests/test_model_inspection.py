@@ -10,7 +10,9 @@ from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDatasetDocument, MeasurementDocument
 from leibniz.model_inspection import (
+    ModelInspectionComponent,
     ModelInspectionDocument,
+    ModelInspectionLayer,
     ModelInspectionRecord,
     ModelInspectionValidationError,
 )
@@ -55,6 +57,7 @@ def test_model_inspection_derives_architecture_layers_and_costs() -> None:
     assert inspection.layers[2].parameter_bytes == 200
     assert inspection.layers[2].inference_flops == 80
     assert inspection.cost_summary.layer_count == 3
+    assert inspection.cost_summary.component_count == 3
     assert inspection.cost_summary.parameter_count == 50
     assert inspection.cost_summary.parameter_bytes == 200
     assert inspection.cost_summary.inference_flops == 1104
@@ -79,6 +82,8 @@ def test_model_inspection_derives_architecture_layers_and_costs() -> None:
         "preserve-prefix-replace-trailing-axes"
     )
     assert inspection.architecture_trace.stages[2].parameter_count == 50
+    assert inspection.components == inspection.layers
+    assert ModelInspectionLayer is ModelInspectionComponent
     assert inspection.digest == ContentDigest.from_value(inspection.to_record())
 
 
