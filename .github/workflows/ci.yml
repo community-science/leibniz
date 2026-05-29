@@ -122,6 +122,51 @@ jobs:
       - name: Run repository policy checks
         run: python -m leibniz._repository_policy .
 
+  console:
+    name: Console build and browser tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Cache conda packages
+        uses: actions/cache@v4
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml', 'pyproject.toml') }}
+
+      - name: Set up Miniforge environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: leibniz-dev
+          environment-file: environment.yml
+          auto-activate-base: false
+          use-only-tar-bz2: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/leibniz/console/_web_src/package-lock.json
+
+      - name: Install console dependencies
+        run: npm ci
+        working-directory: src/leibniz/console/_web_src
+
+      - name: Install headless browser
+        run: npx playwright install --with-deps chromium
+        working-directory: src/leibniz/console/_web_src
+
+      - name: Run console workflow tests
+        run: npm test
+        working-directory: src/leibniz/console/_web_src
+
   package:
     name: Build and import package
     runs-on: ubuntu-latest

@@ -50,8 +50,21 @@ def test_generated_console_web_modules_are_npm_build_artifacts() -> None:
 
     package = (_console_package / "package.json").read_text(encoding="utf-8")
     assert '"generate": "python -m leibniz.console.codegen"' in package
+    assert (
+        '"test": "node ../../../../tests/run_console_web_tests.mjs && npm run browser-smoke"'
+        in package
+    )
+    assert '"browser-smoke": "node ../../../../tests/console_browser_smoke.mjs"' in package
+    assert '"playwright":' in package
     for lifecycle in ("prebuild", "precheck", "predev", "pretest", "pretypecheck"):
         assert f'"{lifecycle}": "npm run generate"' in package
+
+    browser_smoke = (_repository_root / "tests" / "console_browser_smoke.mjs").read_text(
+        encoding="utf-8"
+    )
+    assert "LEIBNIZ_CONSOLE_RESULT_ROOTS" in browser_smoke
+    assert "await runConsoleCommand('npm', ['run', 'build']" in browser_smoke
+    assert "chromium.launch({ headless: true })" in browser_smoke
 
 
 def test_handwritten_web_source_uses_generated_protocol_formats() -> None:
