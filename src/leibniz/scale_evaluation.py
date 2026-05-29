@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import cast
 
 from leibniz.records import FieldSpec, RecordSpec
 
@@ -374,13 +375,13 @@ def _as_float(value: object, field: str) -> float:
 def _as_sequence(value: object, field: str) -> tuple[object, ...]:
     if not isinstance(value, tuple):
         raise ScaleEvaluationValidationError(f"{field}: expected parsed sequence")
-    return value
+    return cast(tuple[object, ...], value)
 
 
 def _as_mapping(value: object, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise ScaleEvaluationValidationError(f"{field}: expected parsed record")
-    return value
+    return cast(Mapping[str, object], value)
 
 
 def _validate_scalar_mapping(value: Mapping[str, object], field: str) -> None:
