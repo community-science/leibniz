@@ -9,6 +9,10 @@ from typing import cast
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
+from leibniz.model_scale_contracts import (
+    ModelScaleContract,
+    ModelScaleContractValidationError,
+)
 from leibniz.records import FieldSpec, RecordSpec
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
@@ -34,6 +38,7 @@ _architecture_manifest_record = RecordSpec(
             kind="sequence",
             item=FieldSpec(kind="record"),
         ),
+        "model_scale_contract": FieldSpec(kind="record", required=False),
     }
 )
 _architecture_layer_record = RecordSpec(
@@ -89,6 +94,7 @@ class ArchitectureManifest:
     input_shape: tuple[int, ...]
     output_shape: tuple[int, ...]
     layers: tuple[ArchitectureLayer, ...]
+    model_scale_contract: ModelScaleContract | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -103,6 +109,12 @@ class ArchitectureManifest:
         _require_positive_shape(self.output_shape, field="output_shape")
         if not self.layers:
             raise ArchitectureManifestValidationError("layers must contain at least one layer")
+        if self.model_scale_contract is not None and (
+            self.model_scale_contract.anchor_shape != self.input_shape
+        ):
+            raise ArchitectureManifestValidationError(
+                "model_scale_contract anchor_shape must match input_shape"
+            )
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ArchitectureManifest:
@@ -114,21 +126,25 @@ class ArchitectureManifest:
                 ArchitectureLayer.from_record(_as_mapping(layer, field="layers"))
                 for layer in _as_sequence(validated["layers"], field="layers")
             )
+            scale_contract = _optional_scale_contract(
+                validated.get("model_scale_contract")
+            )
         except ValueError as error:
             raise ArchitectureManifestValidationError(str(error)) from error
-        derived_id = _architecture_id(
-            {
-                "input_shape": list(input_shape),
-                "output_shape": list(output_shape),
-                "layers": [layer.to_record() for layer in layers],
-            }
+        content_record = _architecture_content_record(
+            input_shape=input_shape,
+            output_shape=output_shape,
+            layers=layers,
+            model_scale_contract=scale_contract,
         )
+        derived_id = _architecture_id(content_record)
         identifier = validated.get("id", derived_id)
         return cls(
             id=_as_identifier(identifier, field="id"),
             input_shape=input_shape,
             output_shape=output_shape,
             layers=layers,
+            model_scale_contract=scale_contract,
         )
 
     @property
@@ -145,11 +161,12 @@ class ArchitectureManifest:
         }
 
     def _content_record(self) -> dict[str, object]:
-        return {
-            "input_shape": list(self.input_shape),
-            "output_shape": list(self.output_shape),
-            "layers": [layer.to_record() for layer in self.layers],
-        }
+        return _architecture_content_record(
+            input_shape=self.input_shape,
+            output_shape=self.output_shape,
+            layers=self.layers,
+            model_scale_contract=self.model_scale_contract,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +189,32 @@ class ArchitectureManifestDocument:
 def _architecture_id(content_record: Mapping[str, object]) -> ProtocolIdentifier:
     digest = ContentDigest.from_value(content_record)
     return ProtocolIdentifier.parse(f"architecture.sha-{digest.hex}@0.1.0")
+
+
+def _architecture_content_record(
+    *,
+    input_shape: tuple[int, ...],
+    output_shape: tuple[int, ...],
+    layers: tuple[ArchitectureLayer, ...],
+    model_scale_contract: ModelScaleContract | None,
+) -> dict[str, object]:
+    record: dict[str, object] = {
+        "input_shape": list(input_shape),
+        "output_shape": list(output_shape),
+        "layers": [layer.to_record() for layer in layers],
+    }
+    if model_scale_contract is not None:
+        record["model_scale_contract"] = model_scale_contract.to_record()
+    return record
+
+
+def _optional_scale_contract(value: object) -> ModelScaleContract | None:
+    if value is None:
+        return None
+    try:
+        return ModelScaleContract.from_record(_as_mapping(value, field="model_scale_contract"))
+    except ModelScaleContractValidationError as error:
+        raise ArchitectureManifestValidationError(str(error)) from error
 
 
 def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
