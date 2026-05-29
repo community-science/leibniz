@@ -1,7 +1,7 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { execFileSync } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { delimiter, relative } from 'node:path';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,10 @@ const resolvedConsoleDataModuleId = `\0${consoleDataModuleId}`;
 const consoleDataUpdateEvent = 'leibniz-console-data:update';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const defaultResultRoot = '.runs/views';
+const consoleDataCachePath = resolve(
+  repositoryRoot,
+  'src/leibniz/console/_web_src/src/generated/consoleDataPayload.json',
+);
 
 export default defineConfig({
   base: consoleBasePath(),
@@ -30,7 +34,7 @@ function leibnizConsoleData() {
       if (id !== resolvedConsoleDataModuleId) {
         return null;
       }
-      const payload = loadConsoleDataPayload();
+      const payload = readConsoleDataPayload();
       return [
         "import { parseConsoleDataRecord } from '/src/consoleData.ts';",
         `const payload = ${payload};`,
@@ -61,10 +65,11 @@ function leibnizConsoleData() {
           server.moduleGraph.invalidateModule(module);
         }
         try {
+          const payload = refreshConsoleDataPayload();
           server.ws.send({
             type: 'custom',
             event: consoleDataUpdateEvent,
-            data: JSON.parse(loadConsoleDataPayload()),
+            data: JSON.parse(payload),
           });
         } catch (error) {
           server.config.logger.error(`failed to refresh Leibniz console data: ${error}`);
@@ -74,7 +79,21 @@ function leibnizConsoleData() {
   };
 }
 
-function loadConsoleDataPayload() {
+function readConsoleDataPayload() {
+  if (!existsSync(consoleDataCachePath)) {
+    return refreshConsoleDataPayload();
+  }
+  return readFileSync(consoleDataCachePath, 'utf8');
+}
+
+export function refreshConsoleDataPayload() {
+  const payload = loadConsoleDataPayload();
+  mkdirSync(dirname(consoleDataCachePath), { recursive: true });
+  writeFileSync(consoleDataCachePath, payload);
+  return payload;
+}
+
+export function loadConsoleDataPayload() {
   const roots = consoleResultRoots();
   const resultRootArgs = resultRootArguments(roots);
   return execFileSync(
@@ -91,6 +110,10 @@ function loadConsoleDataPayload() {
       encoding: 'utf8',
     },
   );
+}
+
+export function consoleDataPayloadPath() {
+  return consoleDataCachePath;
 }
 
 export function consoleResultWatchRoots(env = process.env, root = repositoryRoot) {
