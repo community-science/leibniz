@@ -50,6 +50,19 @@ def test_ci_uses_miniforge_environment_file() -> None:
     assert "actions/setup-python" not in workflow
 
 
+def test_main_branch_triggers_pages_rebuild() -> None:
+    workflow = (_root / ".github" / "workflows" / "pages-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "name: Trigger Pages Rebuild" in workflow
+    assert "branches: [main]" in workflow
+    assert "LEIBNIZ_PAGES_DISPATCH_TOKEN" in workflow
+    assert "repos/community-science/community-science.github.io/dispatches" in workflow
+    assert "event_type=leibniz-updated" in workflow
+    assert "client_payload[sha]" in workflow
+
+
 def test_development_extra_contains_no_isolation_build_backend() -> None:
     pyproject = tomllib.loads((_root / "pyproject.toml").read_text(encoding="utf-8"))
 
