@@ -11,12 +11,13 @@ from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
 from leibniz.outcomes import OutcomeSpace
 from leibniz.prediction_results import (
-    DirectFiniteProbabilityPrediction,
+    PredictionResultContract,
     PredictionResultValidationError,
 )
 from leibniz.prediction_spaces import (
     FiniteOutcomeSpace,
     PredictionSpaceValidationError,
+    parse_prediction_space,
 )
 from leibniz.records import FieldSpec, RecordSpec
 
@@ -102,11 +103,15 @@ class ModelInterface:
         except ValueError as error:
             raise ModelInterfaceValidationError(str(error)) from error
         try:
-            prediction_space = FiniteOutcomeSpace.from_record(
+            prediction_space = parse_prediction_space(
                 _as_mapping(validated["prediction_space"], field="prediction_space")
             )
         except PredictionSpaceValidationError as error:
             raise ModelInterfaceValidationError(str(error)) from error
+        if not isinstance(prediction_space, FiniteOutcomeSpace):
+            raise ModelInterfaceValidationError(
+                "direct-finite-probability-measure requires finite-outcome-space prediction_space"
+            )
         interface = cls(
             id=_as_identifier(validated["id"], field="id"),
             prediction_space=prediction_space,
@@ -128,21 +133,14 @@ class ModelInterface:
 
     def validate_prediction_result(
         self,
-        prediction: DirectFiniteProbabilityPrediction,
+        prediction: object,
     ) -> None:
         try:
-            if prediction.prediction_space != self.prediction_space:
-                raise PredictionResultValidationError(
-                    "prediction_space does not match model interface"
-                )
-            if prediction.prediction_kind != self.prediction_kind:
-                raise PredictionResultValidationError(
-                    "prediction_kind does not match model interface"
-                )
-            if prediction.output_encoding != self.output_encoding:
-                raise PredictionResultValidationError(
-                    "output_encoding does not match model interface"
-                )
+            PredictionResultContract.from_prediction(prediction).require_matches(
+                prediction_space=self.prediction_space,
+                prediction_kind=self.prediction_kind,
+                output_encoding=self.output_encoding,
+            )
         except PredictionResultValidationError as error:
             raise ModelInterfaceValidationError(str(error)) from error
 

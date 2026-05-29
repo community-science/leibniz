@@ -14,8 +14,10 @@ __all__ = [
     "FiniteOutcomeSpace",
     "FiniteTokenSequenceSpace",
     "FiniteTokenVocabulary",
+    "PredictionSpace",
     "PredictionSpaceValidationError",
     "RealVectorSpace",
+    "parse_prediction_space",
 ]
 
 _SequenceBoundary: TypeAlias = Literal["fixed-length"]
@@ -296,6 +298,24 @@ class RealVectorSpace:
             "coordinate_name": self.coordinate_name,
             "measure": self.measure,
         }
+
+
+PredictionSpace: TypeAlias = FiniteOutcomeSpace | FiniteTokenSequenceSpace | RealVectorSpace
+
+
+def parse_prediction_space(record: Mapping[str, object]) -> PredictionSpace:
+    """Parse a declared prediction target space by its public kind."""
+
+    kind = record.get("kind")
+    if kind == "finite-outcome-space":
+        return FiniteOutcomeSpace.from_record(record)
+    if kind == "finite-token-sequence":
+        return FiniteTokenSequenceSpace.from_record(record)
+    if kind == "real-vector":
+        return RealVectorSpace.from_record(record)
+    if not isinstance(kind, str):
+        raise PredictionSpaceValidationError("kind: expected string")
+    raise PredictionSpaceValidationError(f"unsupported prediction space kind: {kind}")
 
 
 def _as_int(value: object, *, field: str) -> int:
