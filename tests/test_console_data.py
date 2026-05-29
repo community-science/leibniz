@@ -130,6 +130,10 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         "unsupported_parameter_components": [],
         "unsupported_flop_components": [],
     }
+    assert [
+        evidence["node_path"]
+        for evidence in cast(list[dict[str, object]], model_inspection["node_evidence"])
+    ] == [["component-0"], ["component-1"], ["component-2"]]
     trace = cast(dict[str, object], model_inspection["architecture_trace"])
     trace_stages = cast(list[dict[str, object]], trace["stages"])
     assert [(stage["operator_kind"], stage["syntax_alias"]) for stage in trace_stages] == [

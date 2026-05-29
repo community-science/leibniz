@@ -129,6 +129,11 @@ assertEqual(
   'model inspection graph summary components',
 );
 assertEqual(
+  modelInspection.node_evidence.map((evidence) => evidence.node_path.join('/')).join(','),
+  'component-0,component-1,component-2',
+  'model inspection node evidence paths',
+);
+assertEqual(
   modelInspection.architecture_trace.stages.map((stage) => stage.operator_kind).join(','),
   'local-aggregation,rank-collapse,affine-readout',
   'model architecture trace stages',
