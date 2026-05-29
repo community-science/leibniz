@@ -13,6 +13,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../.
 const defaultResultRoot = '.runs/views';
 
 export default defineConfig({
+  base: consoleBasePath(),
   plugins: [leibnizConsoleData(), react()],
 });
 
@@ -115,6 +116,10 @@ export function consoleResultRoots(env = process.env, root = repositoryRoot) {
 
 export function resultRootArguments(roots = consoleResultRoots()) {
   return roots.flatMap((root) => ['--result-root', root]);
+}
+
+export function consoleBasePath(env = process.env) {
+  return env.LEIBNIZ_CONSOLE_BASE_PATH ?? '/';
 }
 
 function existingDirectories(paths) {

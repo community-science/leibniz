@@ -1,0 +1,25 @@
+name: Trigger Pages Rebuild
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Dispatch pages rebuild
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Leibniz Pages deploy
+        env:
+          GH_TOKEN: ${{ secrets.LEIBNIZ_PAGES_DISPATCH_TOKEN }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          gh api repos/community-science/community-science.github.io/dispatches \
+            -f event_type=leibniz-updated \
+            -f client_payload[repository]=community-science/leibniz \
+            -f client_payload[ref]=main \
+            -f client_payload[sha]="$SOURCE_SHA"

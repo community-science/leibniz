@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { delimiter, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  consoleBasePath,
   consoleResultRoots,
   consoleResultWatchRoots,
   resultRootArguments,
@@ -411,6 +412,12 @@ function assertConsoleResultRootPolicy() {
     const defaultRoot = resolve(tempRoot, '.runs/views');
     mkdirSync(defaultRoot, { recursive: true });
     assertEqual(consoleResultRoots({}, tempRoot)[0], defaultRoot, 'default result root');
+    assertEqual(consoleBasePath({}), '/', 'default console base path');
+    assertEqual(
+      consoleBasePath({ LEIBNIZ_CONSOLE_BASE_PATH: '/leibniz-pages/' }),
+      '/leibniz-pages/',
+      'explicit console base path',
+    );
 
     const explicitRoot = resolve(tempRoot, 'publication-results');
     const explicitMissingRoot = resolve(tempRoot, 'missing-results');
