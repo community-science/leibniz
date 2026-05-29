@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from itertools import product
 from pathlib import Path
 from typing import cast
 
@@ -41,8 +42,8 @@ def test_digits_observation_formation_declaration_loads_source_artifact() -> Non
         (-0.08, 0.08),
     )
     assert declaration.variation_transform.spatial_affine.scale == (
-        (0.9, 1.1),
-        (0.9, 1.1),
+        (0.7, 1.3),
+        (0.7, 1.3),
     )
     assert declaration.variation_transform.spatial_affine.rotation_degrees == (8.0,)
     assert declaration.variation_transform.spatial_affine.shear_degrees == (5.0,)
@@ -50,6 +51,50 @@ def test_digits_observation_formation_declaration_loads_source_artifact() -> Non
     assert [component.id for component in declaration.components] == [
         f"digit-{digit}" for digit in range(10)
     ]
+
+
+def test_digits_spatial_variation_bounds_leave_canvas_margin() -> None:
+    declaration = _digits_declaration()
+    plan = MaterializationPlan(
+        id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.l1-test@0.1.0"),
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
+        materialization_declaration=ArtifactReference(
+            kind="materialization-declaration",
+            protocol_id=ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0"),
+        ),
+        scale_assignment=AxisAssignment(values={"L": 1}),
+        complexity_assignment=AxisAssignment(values={"C": 1}),
+        resolution_assignment=AxisAssignment(values={"N": 32}),
+        seed=101,
+    )
+    scale_extremes = ((1.3, 1.3), (1.3, 0.7), (0.7, 1.3))
+
+    for component_index in range(len(declaration.components)):
+        for translation_x, translation_y, scale, rotation, shear in product(
+            (-0.08, 0.08),
+            (-0.08, 0.08),
+            scale_extremes,
+            (-8.0, 8.0),
+            (-5.0, 5.0),
+        ):
+            observation = declaration.form_observation(
+                id=ProtocolIdentifier.parse("benchmarks.digits.observations.margin-test@0.1.0"),
+                plan=plan,
+                component_sequence=(component_index,),
+                variation_coordinates=(
+                    _variation_coordinate(
+                        translation=(translation_x, translation_y),
+                        scale=scale,
+                        rotation_degrees=rotation,
+                        shear_degrees=shear,
+                    ),
+                ),
+            )
+            min_x, max_x, min_y, max_y = _nonzero_bounds(observation.field)
+            assert min_x > 0
+            assert max_x < 31
+            assert min_y > 0
+            assert max_y < 31
 
 
 def test_digits_observation_formation_is_deterministic_for_materialization_plan() -> None:
@@ -509,6 +554,24 @@ def _nonzero_count(field: FieldObservation, *, x_start: int, x_stop: int) -> int
             if field.values[y * width + x] > 0:
                 count += 1
     return count
+
+
+def _nonzero_bounds(field: FieldObservation) -> tuple[int, int, int, int]:
+    _channels, height, width = field.shape
+    coordinates = [
+        (x, y)
+        for y in range(height)
+        for x in range(width)
+        if field.values[y * width + x] > 0
+    ]
+    if not coordinates:
+        raise AssertionError("expected nonzero field")
+    return (
+        min(x for x, _y in coordinates),
+        max(x for x, _y in coordinates),
+        min(y for _x, y in coordinates),
+        max(y for _x, y in coordinates),
+    )
 
 
 def _weighted_x_mean(field: FieldObservation) -> float:
