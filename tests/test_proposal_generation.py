@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any, cast
 
+import leibniz.proposal_generation as proposal_generation
 from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
 from leibniz.cli import main
@@ -10,6 +11,7 @@ from leibniz.proposal_generation import (
     generate_experiment_proposals,
 )
 from leibniz.proposals import ExperimentProposalDocument
+from leibniz.tensor_runtime import TensorRuntimeDevice, TensorRuntimeDeviceKind
 
 _repository_root = Path(__file__).parents[1]
 _benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -120,6 +122,39 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
     assert result_search_diagnostics["sampled_resource_stratum"] == search_diagnostics[
         "sampled_resource_stratum"
     ]
+
+
+def test_generate_experiment_proposals_filters_mps_incompatible_candidates(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    def fake_preferred_device(_requested: TensorRuntimeDevice) -> TensorRuntimeDeviceKind:
+        return "mps"
+
+    monkeypatch.setattr(
+        proposal_generation,
+        "preferred_tensor_runtime_device_kind",
+        fake_preferred_device,
+    )
+
+    summary = generate_experiment_proposals(
+        ProposalGenerationPlan(
+            benchmark_root=_benchmark_root,
+            runs_root=tmp_path / ".runs",
+            candidate_budget=3,
+            candidate_sample_count=32,
+            tensor_device="auto",
+        )
+    )
+
+    architectures = tuple(
+        ArchitectureManifestDocument.from_bytes(path.read_bytes()).manifest
+        for path in summary.architecture_paths
+    )
+    assert summary.proposal_count == 3
+    for architecture in architectures:
+        size = cast(int, architecture.layers[0].parameters["size"])
+        assert 32 % size == 0
 
 
 def test_cli_generates_experiment_proposals(
