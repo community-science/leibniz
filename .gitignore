@@ -14,7 +14,7 @@ node_modules/
 .vite/
 dist/
 build/
-src/leibniz/console/_web_src/src/generated/*.ts
+src/leibniz/console/_web_src/src/generated/
 
 # Local tooling
 .DS_Store

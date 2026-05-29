@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { delimiter, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  consoleDataPayloadPath,
   consoleBasePath,
   consoleResultRoots,
   consoleResultWatchRoots,
@@ -390,6 +391,12 @@ function assertConsoleResultRootPolicy() {
   if (viteConfig.includes('addWatchFile')) {
     throw new Error('Console result roots must be watched through the dev-server watcher');
   }
+  if (!viteConfig.includes('readConsoleDataPayload()')) {
+    throw new Error('Console dev startup must read prepared console data before page load');
+  }
+  if (!viteConfig.includes('refreshConsoleDataPayload()')) {
+    throw new Error('Console result polling must refresh the prepared console data payload');
+  }
   if (viteConfig.includes("type: 'full-reload'")) {
     throw new Error('Console result polling must update console data without a full page reload');
   }
@@ -439,6 +446,11 @@ function assertConsoleResultRootPolicy() {
       resultRootArguments([explicitRoot]).join('|'),
       ['--result-root', explicitRoot].join('|'),
       'result root arguments',
+    );
+    assertEqual(
+      consoleDataPayloadPath().endsWith('src/leibniz/console/_web_src/src/generated/consoleDataPayload.json'),
+      true,
+      'console data payload path',
     );
   } finally {
     rmSync(tempRoot, { force: true, recursive: true });

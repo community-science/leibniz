@@ -51,6 +51,9 @@ def test_generated_console_web_modules_are_npm_build_artifacts() -> None:
         text=True,
     ).stdout.splitlines()
     assert tracked == []
+    assert "src/leibniz/console/_web_src/src/generated/" in (
+        _repository_root / ".gitignore"
+    ).read_text(encoding="utf-8")
 
     package = (_console_package / "package.json").read_text(encoding="utf-8")
     assert '"generate": "python -m leibniz.console.codegen"' in package
@@ -60,7 +63,9 @@ def test_generated_console_web_modules_are_npm_build_artifacts() -> None:
     )
     assert '"browser-smoke": "node ../../../../tests/console_browser_smoke.mjs"' in package
     assert '"playwright":' in package
-    for lifecycle in ("prebuild", "precheck", "predev", "pretest", "pretypecheck"):
+    assert '"prepare-console-data": "node scripts/prepareConsoleData.mjs"' in package
+    assert '"predev": "npm run generate && npm run prepare-console-data"' in package
+    for lifecycle in ("prebuild", "precheck", "pretest", "pretypecheck"):
         assert f'"{lifecycle}": "npm run generate"' in package
 
     browser_smoke = (_repository_root / "tests" / "console_browser_smoke.mjs").read_text(
@@ -73,6 +78,16 @@ def test_generated_console_web_modules_are_npm_build_artifacts() -> None:
     assert "detached: process.platform !== 'win32'" in browser_smoke
     assert "process.kill(-child.pid, signal)" in browser_smoke
     assert "killProcessGroup(child, 'SIGKILL')" in browser_smoke
+
+    prepare_console_data = (
+        _console_package / "scripts" / "prepareConsoleData.mjs"
+    ).read_text(encoding="utf-8")
+    assert "function isPrepared(fingerprint)" in prepare_console_data
+    assert (
+        "const metadataPath = `${consoleDataPayloadPath()}.metadata.json`"
+        in prepare_console_data
+    )
+    assert "Leibniz console data is current" in prepare_console_data
     assert "headless console browser smoke test timed out" in browser_smoke
     assert "process.exit(0)" in browser_smoke
 
