@@ -7,6 +7,7 @@ from leibniz.documents import load_object_document
 _repository_root = Path(__file__).parents[1]
 _status_path = _repository_root / "CONTRACT_GENERATION_STATUS.json"
 _generated_web_root = Path("src/leibniz/console/_web_src/src/generated")
+_source_implementation_suffixes = frozenset({".css", ".html", ".mjs", ".py", ".ts", ".tsx"})
 _coverage_keys = frozenset(
     {
         "authored_contract",
@@ -107,9 +108,15 @@ def test_contract_generation_status_categorizes_tracked_code() -> None:
 
     assert uncategorized == []
     assert multiply_categorized == {}
-    assert _handwritten_implementation_lines(
+    budgeted_paths = _handwritten_implementation_paths(
         tracked_paths=_tracked_inventory_paths(line_budget["tracked_roots"]),
         categories=code_inventory["categories"],
+    )
+    assert all(Path(path).suffix in _source_implementation_suffixes for path in budgeted_paths)
+    assert "src/leibniz/console/_web_src/package-lock.json" not in budgeted_paths
+    assert "src/leibniz/console/_web_src/package.json" not in budgeted_paths
+    assert _handwritten_implementation_lines(
+        budgeted_paths=budgeted_paths,
     ) <= line_budget["maximum"]
 
 
@@ -179,15 +186,25 @@ def _tracked_inventory_paths(tracked_roots: list[str]) -> list[str]:
 
 def _handwritten_implementation_lines(
     *,
+    budgeted_paths: list[str],
+) -> int:
+    return sum(
+        _nonblank_line_count(_repository_root / relative_path)
+        for relative_path in budgeted_paths
+    )
+
+
+def _handwritten_implementation_paths(
+    *,
     tracked_paths: list[str],
     categories: list[dict[str, Any]],
-) -> int:
+) -> list[str]:
     line_budget_by_pattern = {
         pattern: category["line_budget"]
         for category in categories
         for pattern in category["path_patterns"]
     }
-    total = 0
+    budgeted_paths: list[str] = []
     for relative_path in tracked_paths:
         path = PurePosixPath(relative_path)
         if not any(
@@ -195,8 +212,8 @@ def _handwritten_implementation_lines(
             for pattern, budget in line_budget_by_pattern.items()
         ):
             continue
-        total += _nonblank_line_count(_repository_root / relative_path)
-    return total
+        budgeted_paths.append(relative_path)
+    return budgeted_paths
 
 
 def _nonblank_line_count(path: Path) -> int:

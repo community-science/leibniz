@@ -21,8 +21,8 @@
       "tracked_roots": [
         "src/leibniz"
       ],
-      "maximum": 34543,
-      "counting": "Tracked nonblank lines under src/leibniz in categories marked handwritten-implementation. Contract files, tests, fixtures, package metadata, generated outputs, and repository automation are excluded."
+      "maximum": 33283,
+      "counting": "Tracked nonblank source implementation lines under src/leibniz in categories marked handwritten-implementation. Contract files, tests, fixtures, package metadata, lockfiles, build configuration, generated outputs, and repository automation are excluded."
     },
     "categories": [
       {
@@ -59,7 +59,6 @@
           "src/leibniz/content.py",
           "src/leibniz/documents.py",
           "src/leibniz/identifiers.py",
-          "src/leibniz/py.typed",
           "src/leibniz/records.py",
           "src/leibniz/tensor_shapes.py",
           "src/leibniz/timing.py"
@@ -67,6 +66,16 @@
         "status": "hand-maintained",
         "line_budget": "handwritten-implementation",
         "ratchet_next": "Constrain this layer to stable primitives consumed by generated contract runtimes."
+      },
+      {
+        "name": "python-package-metadata",
+        "scope": "Python package marker files that affect packaging or type discovery but are not implementation code.",
+        "path_patterns": [
+          "src/leibniz/py.typed"
+        ],
+        "status": "hand-maintained",
+        "line_budget": "excluded",
+        "ratchet_next": "Keep packaging markers explicit and outside implementation-line accounting."
       },
       {
         "name": "python-artifact-authority-and-publication",
@@ -176,21 +185,30 @@
       },
       {
         "name": "console-web-source",
-        "scope": "Browser console React UI, transport parsers, Vite config, npm package metadata, and console data preparation.",
+        "scope": "Browser console React UI, transport parsers, styling, and console data preparation.",
         "path_patterns": [
           "src/leibniz/console/_web_src/index.html",
-          "src/leibniz/console/_web_src/package-lock.json",
-          "src/leibniz/console/_web_src/package.json",
           "src/leibniz/console/_web_src/scripts/*.mjs",
           "src/leibniz/console/_web_src/src/*.css",
           "src/leibniz/console/_web_src/src/*.ts",
-          "src/leibniz/console/_web_src/src/*.tsx",
-          "src/leibniz/console/_web_src/tsconfig.json",
-          "src/leibniz/console/_web_src/vite.config.mjs"
+          "src/leibniz/console/_web_src/src/*.tsx"
         ],
         "status": "mixed-hand-maintained-and-generated-consumer",
         "line_budget": "handwritten-implementation",
         "ratchet_next": "Replace handwritten transport decoders with generated TypeScript while keeping UI composition handwritten."
+      },
+      {
+        "name": "console-web-build-configuration",
+        "scope": "Browser console package metadata, dependency lockfile, TypeScript configuration, and Vite configuration.",
+        "path_patterns": [
+          "src/leibniz/console/_web_src/package-lock.json",
+          "src/leibniz/console/_web_src/package.json",
+          "src/leibniz/console/_web_src/tsconfig.json",
+          "src/leibniz/console/_web_src/vite.config.mjs"
+        ],
+        "status": "hand-maintained",
+        "line_budget": "excluded",
+        "ratchet_next": "Keep build configuration explicit while excluding package metadata and lockfile churn from implementation-line accounting."
       },
       {
         "name": "python-test-suite",
