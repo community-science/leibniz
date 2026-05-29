@@ -326,7 +326,12 @@ class ObservationGenerator:
                 )
                 for index in range(sample_count)
             )
-        variation_samples: list[tuple[Mapping[str, object], tuple[Mapping[str, object], ...]]] = []
+        variation_samples: list[
+            tuple[
+                Mapping[str, object],
+                tuple[Mapping[str, object], ...],
+            ]
+        ] = []
         with _timing_span(timing, f"{timing_prefix}variation_coordinates", samples=sample_count):
             for sequence in sequence_samples:
                 variation_samples.append(
@@ -613,10 +618,13 @@ def _variation_transform_values_and_coordinates(
     transform_record: Mapping[str, object],
     generator: random.Random,
     slot_count: int,
-) -> tuple[Mapping[str, object], tuple[Mapping[str, object], ...]]:
+) -> tuple[
+    Mapping[str, object],
+    tuple[Mapping[str, object], ...],
+]:
     if slot_count < 1:
         raise ObservationGenerationError("slot_count must be positive")
-    coordinates = [
+    coordinates = tuple(
         dict(
             _variation_coordinate_record(
                 transform=transform,
@@ -625,14 +633,14 @@ def _variation_transform_values_and_coordinates(
             )
         )
         for slot_index in range(slot_count)
-    ]
+    )
     return (
         {
             "kind": "field-variation-transform-samples",
             "bounds": transform_record,
-            "coordinates": coordinates,
+            "coordinates": [dict(coordinate) for coordinate in coordinates],
         },
-        tuple(coordinates),
+        coordinates,
     )
 
 

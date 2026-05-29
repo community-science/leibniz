@@ -3,6 +3,7 @@ from typing import Any, cast
 
 import pytest
 
+import leibniz.tensor_runtime as tensor_runtime
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlanDocument
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
@@ -202,6 +203,36 @@ def test_formation_tensor_cache_batches_grid_sampling_once(
     cache.batch_tensors(batch=formation_batch, outcome_ids=outcome_ids)
 
     assert calls == {"affine_grid": 1, "grid_sample": 1}
+
+
+def test_formation_tensor_cache_batch_tensors_use_generated_coordinate_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    generator = load_observation_generator(_digits_benchmark_root)
+    formation_batch = generator.sample_formation_batch(scale=2, sample_count=3, seed=515)
+    outcome_ids = tuple(
+        outcome.id
+        for outcome in generator.benchmark_manifest.resolve_outcome_space(scale=2).outcomes
+    )
+    cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
+
+    def reject_record_parse(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("batch_tensors should use generated coordinate values")
+
+    monkeypatch.setattr(
+        tensor_runtime,
+        "_variation_coordinate",
+        cast(Any, reject_record_parse),
+    )
+
+    fields, labels = cache.batch_tensors(batch=formation_batch, outcome_ids=outcome_ids)
+
+    assert fields.shape[0] == len(formation_batch.samples)
+    assert labels.cpu().tolist() == [
+        outcome_ids.index(sample.outcome_id)
+        for sample in formation_batch.samples
+    ]
 
 
 def test_formation_tensor_cache_reuses_component_tensors() -> None:

@@ -177,7 +177,7 @@ class FormationTensorCache:
             if len(sample.variation_coordinates) != slot_count:
                 raise TensorRuntimeError("variation_coordinates length must match slot count")
             for slot_index, component_index in enumerate(sample.component_sequence):
-                coordinate = _variation_coordinate(
+                coordinate = _generated_variation_coordinate(
                     sample.variation_coordinates[slot_index],
                     expected_slot_index=slot_index,
                 )
@@ -522,6 +522,23 @@ def _variation_coordinate(
     )
 
 
+def _generated_variation_coordinate(
+    record: Mapping[str, object],
+    *,
+    expected_slot_index: int,
+) -> _VariationCoordinate:
+    spatial = cast(Mapping[str, object], record["spatial_affine"])
+    value_scale = cast(Mapping[str, object], record["value_scale"])
+    return _VariationCoordinate(
+        slot_index=expected_slot_index,
+        translation=_trusted_pair(spatial["translation"]),
+        scale=_trusted_pair(spatial["scale"]),
+        rotation_degrees=_trusted_single_number(spatial["rotation_degrees"]),
+        shear_degrees=_trusted_single_number(spatial["shear_degrees"]),
+        value_scale=_trusted_float(value_scale["scale"]),
+    )
+
+
 def _affine_grid_row(
     *,
     coordinate: _VariationCoordinate,
@@ -597,6 +614,11 @@ def _pair(value: object, name: str) -> tuple[float, float]:
     return (_number(sequence[0], f"{name}.0"), _number(sequence[1], f"{name}.1"))
 
 
+def _trusted_pair(value: object) -> tuple[float, float]:
+    sequence = cast(Sequence[object], value)
+    return (_trusted_float(sequence[0]), _trusted_float(sequence[1]))
+
+
 def _single_number(value: object, name: str) -> float:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         raise TensorRuntimeError(f"{name} must contain one value")
@@ -604,6 +626,15 @@ def _single_number(value: object, name: str) -> float:
     if len(sequence) != 1:
         raise TensorRuntimeError(f"{name} must contain one value")
     return _number(sequence[0], f"{name}.0")
+
+
+def _trusted_single_number(value: object) -> float:
+    sequence = cast(Sequence[object], value)
+    return _trusted_float(sequence[0])
+
+
+def _trusted_float(value: object) -> float:
+    return float(cast(int | float, value))
 
 
 def _number(value: object, name: str) -> float:
