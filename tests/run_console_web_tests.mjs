@@ -67,12 +67,12 @@ for (const contract of contracts) {
     contract,
   ]);
   if (generatedDataContracts.has(contract)) {
-    const payload = readFileSync(generatedPayloadPath, 'utf8');
     const script = [
-      `globalThis.consoleDataPayload = ${payload};`,
-      `await import('./${contract}');`,
+      "import { readFileSync } from 'node:fs';",
+      "globalThis.consoleDataPayload = JSON.parse(readFileSync(process.argv[1], 'utf8'));",
+      "await import(`./${process.argv[2]}`);",
     ].join('\n');
-    run('node', ['--experimental-strip-types', '--eval', script]);
+    run('node', ['--experimental-strip-types', '--eval', script, generatedPayloadPath, contract]);
   } else {
     run('node', ['--experimental-strip-types', contract]);
   }

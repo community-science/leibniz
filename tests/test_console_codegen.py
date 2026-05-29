@@ -66,6 +66,14 @@ def test_generated_console_web_modules_are_npm_build_artifacts() -> None:
     assert "await runConsoleCommand('npm', ['run', 'build']" in browser_smoke
     assert "chromium.launch({ headless: true })" in browser_smoke
 
+    console_contract_runner = (
+        _repository_root / "tests" / "run_console_web_tests.mjs"
+    ).read_text(encoding="utf-8")
+    assert "globalThis.consoleDataPayload = JSON.parse(readFileSync(process.argv[1], 'utf8'))" in (
+        console_contract_runner
+    )
+    assert "globalThis.consoleDataPayload = ${payload}" not in console_contract_runner
+
 
 def test_handwritten_web_source_uses_generated_protocol_formats() -> None:
     migrated_literals = (
