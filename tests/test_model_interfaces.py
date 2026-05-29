@@ -92,6 +92,9 @@ def test_model_interface_validates_direct_finite_prediction_results() -> None:
             lambda: interface.validate_prediction_result(mismatched_prediction)
         )
     ) == "prediction_space does not match model interface"
+    assert str(
+        capture_model_interface_error(lambda: interface.validate_prediction_result(object()))
+    ) == "prediction result does not expose prediction_space"
 
 
 def test_model_interface_document_loads_bytes_with_digest() -> None:

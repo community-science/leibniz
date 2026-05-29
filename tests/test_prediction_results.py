@@ -7,6 +7,7 @@ from leibniz.outcomes import FiniteProbabilityMeasure, Outcome, OutcomeSpace, Pr
 from leibniz.prediction_results import (
     DirectFiniteProbabilityPrediction,
     PredictionMass,
+    PredictionResultContract,
     PredictionResultValidationError,
 )
 from leibniz.prediction_spaces import FiniteOutcomeSpace
@@ -45,6 +46,37 @@ def test_direct_finite_probability_prediction_records_indexed_mass_sequence() ->
         )
         == prediction
     )
+    assert prediction.contract == PredictionResultContract(
+        prediction_space=prediction_space,
+        prediction_kind="direct-finite-probability-measure",
+        output_encoding="probability-mass-sequence",
+    )
+
+
+def test_prediction_result_contract_matches_interface_metadata() -> None:
+    prediction_space = FiniteOutcomeSpace.from_outcome_space(_outcome_space())
+    prediction = DirectFiniteProbabilityPrediction.from_probabilities(
+        id=ProtocolIdentifier.parse("core.boolean-prediction@0.1.0"),
+        prediction_space=prediction_space,
+        probabilities=(0.25, 0.75),
+    )
+
+    contract = PredictionResultContract.from_prediction(prediction)
+
+    contract.require_matches(
+        prediction_space=prediction_space,
+        prediction_kind="direct-finite-probability-measure",
+        output_encoding="probability-mass-sequence",
+    )
+    assert str(
+        _capture_prediction_error(
+            lambda: contract.require_matches(
+                prediction_space=prediction_space,
+                prediction_kind="other",
+                output_encoding="probability-mass-sequence",
+            )
+        )
+    ) == "prediction_kind does not match model interface"
 
 
 def test_direct_finite_probability_prediction_converts_to_probability_measure() -> None:

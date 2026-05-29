@@ -18,6 +18,7 @@ from leibniz.records import FieldSpec, RecordSpec
 __all__ = [
     "DirectFiniteProbabilityPrediction",
     "PredictionMass",
+    "PredictionResultContract",
     "PredictionResultValidationError",
 ]
 
@@ -49,6 +50,64 @@ _direct_finite_probability_prediction_record = RecordSpec(
 
 class PredictionResultValidationError(ValueError):
     """Raised when a prediction result record is invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionResultContract:
+    """Runtime-neutral prediction result interface metadata."""
+
+    prediction_space: object
+    prediction_kind: str
+    output_encoding: str
+
+    def __post_init__(self) -> None:
+        if type(self.prediction_kind) is not str or not self.prediction_kind:
+            raise PredictionResultValidationError("prediction_kind must be nonempty")
+        if type(self.output_encoding) is not str or not self.output_encoding:
+            raise PredictionResultValidationError("output_encoding must be nonempty")
+
+    @classmethod
+    def from_prediction(cls, prediction: object) -> PredictionResultContract:
+        prediction_space = getattr(prediction, "prediction_space", None)
+        prediction_kind = getattr(prediction, "prediction_kind", None)
+        output_encoding = getattr(prediction, "output_encoding", None)
+        if prediction_space is None:
+            raise PredictionResultValidationError(
+                "prediction result does not expose prediction_space"
+            )
+        if not isinstance(prediction_kind, str) or not prediction_kind:
+            raise PredictionResultValidationError(
+                "prediction result does not expose prediction_kind"
+            )
+        if not isinstance(output_encoding, str) or not output_encoding:
+            raise PredictionResultValidationError(
+                "prediction result does not expose output_encoding"
+            )
+        return cls(
+            prediction_space=prediction_space,
+            prediction_kind=prediction_kind,
+            output_encoding=output_encoding,
+        )
+
+    def require_matches(
+        self,
+        *,
+        prediction_space: object,
+        prediction_kind: str,
+        output_encoding: str,
+    ) -> None:
+        if self.prediction_space != prediction_space:
+            raise PredictionResultValidationError(
+                "prediction_space does not match model interface"
+            )
+        if self.prediction_kind != prediction_kind:
+            raise PredictionResultValidationError(
+                "prediction_kind does not match model interface"
+            )
+        if self.output_encoding != output_encoding:
+            raise PredictionResultValidationError(
+                "output_encoding does not match model interface"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +280,14 @@ class DirectFiniteProbabilityPrediction:
     @property
     def total_probability(self) -> float:
         return math.fsum(mass.probability for mass in self.probabilities)
+
+    @property
+    def contract(self) -> PredictionResultContract:
+        return PredictionResultContract(
+            prediction_space=self.prediction_space,
+            prediction_kind=self.prediction_kind,
+            output_encoding=self.output_encoding,
+        )
 
     def probability_at(self, outcome_index: int) -> float:
         if type(outcome_index) is not int or outcome_index < 0:

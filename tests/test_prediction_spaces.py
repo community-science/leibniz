@@ -6,6 +6,7 @@ from leibniz.prediction_spaces import (
     FiniteTokenSequenceSpace,
     FiniteTokenVocabulary,
     RealVectorSpace,
+    parse_prediction_space,
 )
 
 
@@ -64,6 +65,25 @@ def test_real_vector_space_records_continuous_prediction_targets() -> None:
         "coordinate_name": "position",
         "measure": "lebesgue",
     }
+
+
+def test_parse_prediction_space_dispatches_public_space_kinds() -> None:
+    sequence_space = FiniteTokenSequenceSpace(
+        vocabulary=FiniteTokenVocabulary(token_count=2, token_name="bit"),
+        length=2,
+    )
+    outcome_space = sequence_space.outcome_space(
+        id=ProtocolIdentifier.parse("benchmarks.bits.outcomes.l2@0.1.0")
+    )
+    finite_outcome_space = sequence_space.finite_outcome_space(id=outcome_space.id)
+    real_vector_space = RealVectorSpace(dimension=2, coordinate_name="position")
+
+    assert parse_prediction_space(sequence_space.to_record()) == sequence_space
+    assert parse_prediction_space(finite_outcome_space.to_record()) == finite_outcome_space
+    assert parse_prediction_space(real_vector_space.to_record()) == real_vector_space
+
+    with pytest.raises(ValueError, match="unsupported prediction space kind: other"):
+        parse_prediction_space({"kind": "other"})
 
 
 def test_finite_outcome_space_validates_outcome_count() -> None:
