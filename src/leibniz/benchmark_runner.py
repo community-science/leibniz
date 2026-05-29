@@ -27,11 +27,11 @@ from leibniz.observation_generation import (
 from leibniz.operator_semantics import model_operator_semantic_registry
 from leibniz.outcomes import (
     AcceptedEvent,
-    FiniteProbabilityMeasure,
     OutcomeSpace,
-    ProbabilityMass,
     RawScoringEvidence,
 )
+from leibniz.prediction_results import DirectFiniteProbabilityPrediction
+from leibniz.prediction_spaces import FiniteOutcomeSpace
 from leibniz.scale_evaluation import (
     AdaptiveScaleEvaluation,
     PerScaleScore,
@@ -1486,7 +1486,7 @@ def _measurements_for_predictions(
     probabilities: tuple[tuple[float, ...], ...],
     run_slug: str,
 ) -> tuple[MeasurementRecord, ...]:
-    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    prediction_space = FiniteOutcomeSpace.from_outcome_space(outcome_space)
     measurements: list[MeasurementRecord] = []
     for sample, sample_probabilities in zip(batch.samples, probabilities, strict=True):
         accepted_event = AcceptedEvent.from_record(
@@ -1497,18 +1497,13 @@ def _measurements_for_predictions(
             },
             outcome_space=outcome_space,
         )
-        probability_measure = FiniteProbabilityMeasure(
+        prediction = DirectFiniteProbabilityPrediction.from_probabilities(
             id=_sample_identifier("measures", run_slug, sample),
-            outcome_space_id=outcome_space.id,
-            probabilities=tuple(
-                ProbabilityMass(outcome_id, probability)
-                for outcome_id, probability in zip(
-                    outcome_ids,
-                    sample_probabilities,
-                    strict=True,
-                )
-                if probability > 0
-            ),
+            prediction_space=prediction_space,
+            probabilities=sample_probabilities,
+        )
+        probability_measure = prediction.to_probability_measure(
+            outcome_space=outcome_space,
         )
         measurements.append(
             MeasurementRecord(
