@@ -353,6 +353,10 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
     assert proposal["selector_name"] == "resource-bootstrap"
     assert proposal["source_candidate_rank"]
     assert proposal["command"]
+    command = cast(list[str], proposal["command"])
+    assert "--scale" not in command
+    assert "--scale-curriculum" not in command
+    assert "--curriculum-max-scale" not in command
     assert len(leaderboard) == 1
     assert leaderboard[0]["observed_complexities"] == [1.0]
     assert runs_root.joinpath("measurements").is_dir()

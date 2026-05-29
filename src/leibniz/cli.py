@@ -351,7 +351,6 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="local result checkout; defaults to .runs",
     )
-    propose_results.add_argument("--scale", default=1, type=int)
     propose_results.add_argument("--candidate-budget", default=3, type=int)
     propose_results.add_argument("--candidate-sample-count", default=64, type=int)
     propose_results.add_argument("--sample-count", default=512, type=int)
@@ -370,8 +369,6 @@ def _parser() -> argparse.ArgumentParser:
     propose_results.add_argument("--convergence-min-delta", default=1e-3, type=float)
     propose_results.add_argument("--convergence-min-steps", default=500, type=int)
     propose_results.add_argument("--target-validation-loss", default=None, type=float)
-    propose_results.add_argument("--scale-curriculum", action="store_true")
-    propose_results.add_argument("--curriculum-max-scale", default=None, type=int)
     propose_results.add_argument(
         "--device",
         default="auto",
@@ -398,7 +395,6 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="local result checkout; defaults to .runs",
     )
-    run.add_argument("--scale", default=1, type=int)
     run.add_argument("--sample-count", default=512, type=int)
     run.add_argument("--evaluation-sample-count", default=None, type=int)
     run.add_argument("--seed", default=101, type=int)
@@ -415,8 +411,6 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--convergence-min-delta", default=1e-3, type=float)
     run.add_argument("--convergence-min-steps", default=500, type=int)
     run.add_argument("--target-validation-loss", default=None, type=float)
-    run.add_argument("--scale-curriculum", action="store_true")
-    run.add_argument("--curriculum-max-scale", default=None, type=int)
     run.add_argument(
         "--device",
         default="auto",
@@ -437,7 +431,6 @@ def _parser() -> argparse.ArgumentParser:
         help="local result checkout; defaults to .runs",
     )
     loop.add_argument("--iterations", default=1, type=int)
-    loop.add_argument("--scale", default=1, type=int)
     loop.add_argument("--candidate-budget", default=3, type=int)
     loop.add_argument("--candidate-sample-count", default=64, type=int)
     loop.add_argument("--sample-count", default=512, type=int)
@@ -456,8 +449,6 @@ def _parser() -> argparse.ArgumentParser:
     loop.add_argument("--convergence-min-delta", default=1e-3, type=float)
     loop.add_argument("--convergence-min-steps", default=500, type=int)
     loop.add_argument("--target-validation-loss", default=None, type=float)
-    loop.add_argument("--scale-curriculum", action="store_true")
-    loop.add_argument("--curriculum-max-scale", default=None, type=int)
     loop.add_argument(
         "--device",
         default="auto",
@@ -479,7 +470,6 @@ def _parser() -> argparse.ArgumentParser:
         help="local result checkout; defaults to .runs",
     )
     shakedown.add_argument("--iterations", default=1, type=int)
-    shakedown.add_argument("--scale", default=1, type=int)
     shakedown.add_argument("--candidate-budget", default=1, type=int)
     shakedown.add_argument("--candidate-sample-count", default=64, type=int)
     shakedown.add_argument("--sample-count", default=1, type=int)
@@ -575,7 +565,6 @@ def _benchmark(args: argparse.Namespace) -> int:
                     architecture_path=args.architecture,
                     runs_root=args.runs_root,
                     benchmark_root=args.benchmark_root,
-                    scale=args.scale,
                     sample_count=args.sample_count,
                     evaluation_sample_count=args.evaluation_sample_count,
                     seed=args.seed,
@@ -589,8 +578,6 @@ def _benchmark(args: argparse.Namespace) -> int:
                     convergence_min_steps=args.convergence_min_steps,
                     target_validation_loss=args.target_validation_loss,
                     tensor_device=args.device,
-                    scale_curriculum=args.scale_curriculum,
-                    curriculum_max_scale=args.curriculum_max_scale,
                     dry_run=args.dry_run,
                 )
             )
@@ -685,7 +672,6 @@ def _active_training_loop_plan(
         benchmark_root=args.benchmark_root,
         runs_root=args.runs_root,
         iterations=args.iterations,
-        scale=args.scale,
         candidate_budget=args.candidate_budget,
         candidate_sample_count=args.candidate_sample_count,
         sample_count=args.sample_count,
@@ -701,8 +687,6 @@ def _active_training_loop_plan(
         convergence_min_steps=args.convergence_min_steps,
         target_validation_loss=args.target_validation_loss,
         tensor_device=args.device,
-        scale_curriculum=bool(getattr(args, "scale_curriculum", False)),
-        curriculum_max_scale=getattr(args, "curriculum_max_scale", None),
         dry_run=dry_run,
         retry_failed=args.retry_failed,
         progress_callback=progress_callback,
@@ -915,7 +899,6 @@ def _results(args: argparse.Namespace) -> int:
                 ProposalGenerationPlan(
                     benchmark_root=args.benchmark_root,
                     runs_root=args.runs_root,
-                    scale=args.scale,
                     candidate_budget=args.candidate_budget,
                     candidate_sample_count=args.candidate_sample_count,
                     sample_count=args.sample_count,
@@ -931,8 +914,6 @@ def _results(args: argparse.Namespace) -> int:
                     convergence_min_steps=args.convergence_min_steps,
                     target_validation_loss=args.target_validation_loss,
                     tensor_device=args.device,
-                    scale_curriculum=args.scale_curriculum,
-                    curriculum_max_scale=args.curriculum_max_scale,
                 )
             )
             print(

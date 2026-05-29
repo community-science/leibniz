@@ -69,6 +69,7 @@ _default_validation_interval = 250
 _default_convergence_patience = 12
 _default_convergence_min_delta = 1e-3
 _default_convergence_min_steps = 500
+_initial_scale = 1
 _adaptive_pooling_alias = model_operator_semantic_registry().operators[0].syntax_aliases[0]
 
 
@@ -143,7 +144,6 @@ class BenchmarkRunPlan:
     architecture_path: Path
     benchmark_root: Path
     runs_root: Path = Path(".runs")
-    scale: int = 1
     sample_count: int = _default_sample_count
     evaluation_sample_count: int | None = None
     seed: int = 101
@@ -157,13 +157,9 @@ class BenchmarkRunPlan:
     convergence_min_steps: int = _default_convergence_min_steps
     target_validation_loss: float | None = None
     tensor_device: TensorRuntimeDevice = "auto"
-    scale_curriculum: bool = False
-    curriculum_max_scale: int | None = None
     dry_run: bool = False
 
     def __post_init__(self) -> None:
-        if type(self.scale) is not int or self.scale < 1:
-            raise BenchmarkRunnerError("scale must be a positive integer")
         if type(self.sample_count) is not int or self.sample_count < 1:
             raise BenchmarkRunnerError("sample_count must be a positive integer")
         if (
@@ -206,12 +202,6 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError("convergence_min_steps must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise BenchmarkRunnerError("target_validation_loss must be nonnegative")
-        if type(self.scale_curriculum) is not bool:
-            raise BenchmarkRunnerError("scale_curriculum must be boolean")
-        if self.curriculum_max_scale is not None and (
-            type(self.curriculum_max_scale) is not int or self.curriculum_max_scale < self.scale
-        ):
-            raise BenchmarkRunnerError("curriculum_max_scale must be at least scale")
         try:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
@@ -222,7 +212,7 @@ class BenchmarkRunPlan:
         """Return the deterministic local run suffix."""
 
         base = (
-            f"l{self.scale}-seed{self.seed}-samples{self.sample_count}"
+            f"l{_initial_scale}-seed{self.seed}-samples{self.sample_count}"
             f"-steps{self.train_steps if self.train_steps is not None else 'converge'}"
         )
         if self.resolved_evaluation_sample_count == self.sample_count:
@@ -246,10 +236,6 @@ class BenchmarkRunPlan:
             ),
             "tensor_device": self.tensor_device,
         }
-        if self.scale_curriculum:
-            controls["scale_curriculum"] = True
-        if self.curriculum_max_scale is not None:
-            controls["curriculum_max_scale"] = self.curriculum_max_scale
         return f"train-{ContentDigest.from_value(controls).hex[:12]}"
 
     @property
@@ -303,11 +289,11 @@ def run_benchmark(
         plan.architecture_path.read_bytes()
     ).manifest
     evaluation_batch = generator.sample_batch(
-        scale=plan.scale,
+        scale=_initial_scale,
         sample_count=plan.resolved_evaluation_sample_count,
         seed=plan.seed,
     )
-    outcome_space = generator.benchmark_manifest.resolve_outcome_space(scale=plan.scale)
+    outcome_space = generator.benchmark_manifest.resolve_outcome_space(scale=_initial_scale)
     _validate_architecture_for_batch(
         architecture=architecture,
         batch=evaluation_batch,
@@ -354,7 +340,7 @@ def run_benchmark(
         evaluation_batch=evaluation_batch,
         generator=generator,
         outcome_space=outcome_space,
-        scale=plan.scale,
+        scale=_initial_scale,
         sample_count=plan.sample_count,
         train_steps=plan.train_steps,
         learning_rate=float(plan.learning_rate),
@@ -390,11 +376,11 @@ def run_benchmark(
             training_run=training_result.training_run,
             outcome_space=outcome_space,
         )
-        if plan.scale_curriculum
+        if generator.benchmark_manifest.scale_parameter is not None
         else None
     )
     dataset = MeasurementDataset(measurements=measurements)
-    dataset.validate_manifest(generator.benchmark_manifest, scale=plan.scale)
+    dataset.validate_manifest(generator.benchmark_manifest, scale=_initial_scale)
     _write_document(summary.measurement_dataset_path, dataset.to_record())
     _write_document(summary.model_inspection_path, model_inspection.to_record())
     _write_document(
@@ -402,7 +388,7 @@ def run_benchmark(
         {
             **summary.to_record(),
             "dry_run": False,
-            "scale": plan.scale,
+            "scale": _initial_scale,
             "sample_count": plan.sample_count,
             "evaluation_sample_count": plan.resolved_evaluation_sample_count,
             "seed": plan.seed,
@@ -416,8 +402,6 @@ def run_benchmark(
             "convergence_min_steps": plan.convergence_min_steps,
             "tensor_runtime": "pytorch",
             "tensor_device": training_result.training_run.protocol.tensor_device,
-            "scale_curriculum": plan.scale_curriculum,
-            "curriculum_max_scale": plan.curriculum_max_scale,
             "training_run": training_result.training_run.to_record(),
             "throughput": training_result.throughput,
             **(
@@ -508,11 +492,11 @@ def _scale_evaluation_trace(
     outcome_space: OutcomeSpace,
 ) -> ScaleEvaluationTrace:
     if generator.benchmark_manifest.scale_parameter is None:
-        raise BenchmarkRunnerError("scale curriculum requires a benchmark scale parameter")
+        raise BenchmarkRunnerError("adaptive scale evaluation requires a benchmark scale parameter")
     axis = ScaleAxis(
         symbol=generator.benchmark_manifest.scale_parameter.symbol,
         minimum=generator.benchmark_manifest.scale_parameter.minimum,
-        maximum=plan.curriculum_max_scale,
+        maximum=None,
     )
     score = PerScaleScore()
     evaluation = AdaptiveScaleEvaluation(
@@ -522,7 +506,7 @@ def _scale_evaluation_trace(
     )
     levels = [
         ScaleEvaluationLevel(
-            scale=plan.scale,
+            scale=_initial_scale,
             competence=_validation_competence(
                 best_validation_loss=training_run.best_validation_loss,
                 outcome_count=len(outcome_space.outcomes),
@@ -534,31 +518,29 @@ def _scale_evaluation_trace(
             },
         )
     ]
-    next_scale = plan.scale + 1
-    max_scale = plan.curriculum_max_scale if plan.curriculum_max_scale is not None else next_scale
-    if next_scale <= max_scale:
-        boundary_reason = _direct_prediction_boundary_reason(
-            generator=generator,
-            architecture=architecture,
-            scale=next_scale,
-            sample_count=plan.resolved_evaluation_sample_count,
-            seed=plan.seed + 20_000_039,
+    next_scale = _initial_scale + 1
+    boundary_reason = _direct_prediction_boundary_reason(
+        generator=generator,
+        architecture=architecture,
+        scale=next_scale,
+        sample_count=plan.resolved_evaluation_sample_count,
+        seed=plan.seed + 20_000_039,
+    )
+    if boundary_reason is not None:
+        levels.append(
+            ScaleEvaluationLevel(
+                scale=next_scale,
+                competence=0.0,
+                boundary_reason=boundary_reason,
+            )
         )
-        if boundary_reason is not None:
-            levels.append(
-                ScaleEvaluationLevel(
-                    scale=next_scale,
-                    competence=0.0,
-                    boundary_reason=boundary_reason,
-                )
-            )
-            return ScaleEvaluationTrace(
-                axis=axis,
-                score=score,
-                evaluation=evaluation,
-                levels=tuple(levels),
-                stop_reason="model-scale-boundary",
-            )
+        return ScaleEvaluationTrace(
+            axis=axis,
+            score=score,
+            evaluation=evaluation,
+            levels=tuple(levels),
+            stop_reason="model-scale-boundary",
+        )
     return ScaleEvaluationTrace(
         axis=axis,
         score=score,
@@ -1171,7 +1153,7 @@ def _training_progress_record(
         "run_status": "running",
         "benchmark_id": str(summary.benchmark_id),
         "architecture_path": summary.architecture_path.as_posix(),
-        "scale": plan.scale,
+        "scale": _initial_scale,
         "sample_count": plan.sample_count,
         "evaluation_sample_count": plan.resolved_evaluation_sample_count,
         "seed": plan.seed,

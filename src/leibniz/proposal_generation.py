@@ -54,6 +54,7 @@ __all__ = [
 ]
 
 _document_suffix = document_filename_suffix()
+_initial_scale = 1
 
 
 class ProposalGenerationError(ValueError):
@@ -66,7 +67,6 @@ class ProposalGenerationPlan:
 
     benchmark_root: Path
     runs_root: Path = Path(".runs")
-    scale: int = 1
     candidate_budget: int = 3
     candidate_sample_count: int = 64
     sample_count: int = 512
@@ -82,12 +82,8 @@ class ProposalGenerationPlan:
     convergence_min_steps: int = 500
     target_validation_loss: float | None = None
     tensor_device: TensorRuntimeDevice = "auto"
-    scale_curriculum: bool = False
-    curriculum_max_scale: int | None = None
 
     def __post_init__(self) -> None:
-        if type(self.scale) is not int or self.scale < 1:
-            raise ProposalGenerationError("scale must be a positive integer")
         if type(self.candidate_budget) is not int or self.candidate_budget < 1:
             raise ProposalGenerationError("candidate_budget must be positive")
         if type(self.candidate_sample_count) is not int or self.candidate_sample_count < 1:
@@ -138,12 +134,6 @@ class ProposalGenerationPlan:
             raise ProposalGenerationError("convergence_min_steps must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise ProposalGenerationError("target_validation_loss must be nonnegative")
-        if type(self.scale_curriculum) is not bool:
-            raise ProposalGenerationError("scale_curriculum must be boolean")
-        if self.curriculum_max_scale is not None and (
-            type(self.curriculum_max_scale) is not int or self.curriculum_max_scale < self.scale
-        ):
-            raise ProposalGenerationError("curriculum_max_scale must be at least scale")
         try:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
@@ -209,8 +199,12 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
 
     generator = load_observation_generator(plan.benchmark_root)
     manifest = generator.benchmark_manifest
-    outcome_space = manifest.resolve_outcome_space(scale=plan.scale)
-    sample = generator.sample_batch(scale=plan.scale, sample_count=1, seed=plan.seed).samples[0]
+    outcome_space = manifest.resolve_outcome_space(scale=_initial_scale)
+    sample = generator.sample_batch(
+        scale=_initial_scale,
+        sample_count=1,
+        seed=plan.seed,
+    ).samples[0]
     dataset = _measurement_dataset(plan.runs_root, benchmark_id=manifest.id)
     measured = _measured_architectures(plan.runs_root, benchmark_id=manifest.id)
     search_distribution = default_architecture_search_distribution()
@@ -297,8 +291,6 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                     architecture_path.as_posix(),
                     "--runs-root",
                     plan.runs_root.as_posix(),
-                    "--scale",
-                    str(plan.scale),
                     "--sample-count",
                     str(plan.sample_count),
                     "--evaluation-sample-count",
@@ -326,16 +318,6 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                     str(plan.convergence_min_steps),
                     "--device",
                     plan.tensor_device,
-                    *(
-                        ("--scale-curriculum",)
-                        if plan.scale_curriculum
-                        else ()
-                    ),
-                    *(
-                        ()
-                        if plan.curriculum_max_scale is None
-                        else ("--curriculum-max-scale", str(plan.curriculum_max_scale))
-                    ),
                     *(
                         ()
                         if plan.target_validation_loss is None

@@ -48,7 +48,6 @@ class ActiveTrainingLoopPlan:
     benchmark_root: Path
     runs_root: Path = Path(".runs")
     iterations: int = 1
-    scale: int = 1
     candidate_budget: int = 3
     candidate_sample_count: int = 64
     sample_count: int = 512
@@ -64,8 +63,6 @@ class ActiveTrainingLoopPlan:
     convergence_min_steps: int = 500
     target_validation_loss: float | None = None
     tensor_device: TensorRuntimeDevice = "auto"
-    scale_curriculum: bool = False
-    curriculum_max_scale: int | None = None
     dry_run: bool = False
     retry_failed: bool = False
     progress_callback: Callable[[BenchmarkRunSummary], None] | None = None
@@ -73,8 +70,6 @@ class ActiveTrainingLoopPlan:
     def __post_init__(self) -> None:
         if type(self.iterations) is not int or self.iterations < 1:
             raise ActiveTrainingLoopError("iterations must be positive")
-        if type(self.scale) is not int or self.scale < 1:
-            raise ActiveTrainingLoopError("scale must be positive")
         if type(self.candidate_budget) is not int or self.candidate_budget < 1:
             raise ActiveTrainingLoopError("candidate_budget must be positive")
         if type(self.candidate_sample_count) is not int or self.candidate_sample_count < 1:
@@ -125,12 +120,6 @@ class ActiveTrainingLoopPlan:
             raise ActiveTrainingLoopError("convergence_min_steps must be nonnegative")
         if self.target_validation_loss is not None and self.target_validation_loss < 0:
             raise ActiveTrainingLoopError("target_validation_loss must be nonnegative")
-        if type(self.scale_curriculum) is not bool:
-            raise ActiveTrainingLoopError("scale_curriculum must be boolean")
-        if self.curriculum_max_scale is not None and (
-            type(self.curriculum_max_scale) is not int or self.curriculum_max_scale < self.scale
-        ):
-            raise ActiveTrainingLoopError("curriculum_max_scale must be at least scale")
         try:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
@@ -183,7 +172,6 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
             ProposalGenerationPlan(
                 benchmark_root=plan.benchmark_root,
                 runs_root=plan.runs_root,
-                scale=plan.scale,
                 candidate_budget=plan.candidate_budget,
                 candidate_sample_count=plan.candidate_sample_count,
                 sample_count=plan.sample_count,
@@ -199,8 +187,6 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                 convergence_min_steps=plan.convergence_min_steps,
                 target_validation_loss=plan.target_validation_loss,
                 tensor_device=plan.tensor_device,
-                scale_curriculum=plan.scale_curriculum,
-                curriculum_max_scale=plan.curriculum_max_scale,
             )
         )
         benchmark_id = proposal_summary.benchmark_id
@@ -266,7 +252,6 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                         architecture_path=architecture_path,
                         benchmark_root=plan.benchmark_root,
                         runs_root=plan.runs_root,
-                        scale=plan.scale,
                         sample_count=plan.sample_count,
                         evaluation_sample_count=plan.evaluation_sample_count,
                         seed=iteration_seed,
@@ -280,8 +265,6 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
                         convergence_min_steps=plan.convergence_min_steps,
                         target_validation_loss=plan.target_validation_loss,
                         tensor_device=plan.tensor_device,
-                        scale_curriculum=plan.scale_curriculum,
-                        curriculum_max_scale=plan.curriculum_max_scale,
                     ),
                     progress_callback=refresh_progress,
                 )
