@@ -18,13 +18,22 @@ __all__ = [
     "ModelArtifactManifest",
     "ModelArtifactManifestDocument",
     "ModelArtifactManifestValidationError",
+    "ModelExecutionFamily",
 ]
 
+_model_execution_family_record = RecordSpec(
+    fields={
+        "kind": FieldSpec(kind="string"),
+        "runtime": FieldSpec(kind="string"),
+        "architecture_family": FieldSpec(kind="string"),
+    }
+)
 _model_artifact_manifest_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
         "architecture": FieldSpec(kind="record"),
         "interface": FieldSpec(kind="record"),
+        "execution_family": FieldSpec(kind="record"),
         "model_artifacts": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="record"),
@@ -43,12 +52,69 @@ class ModelArtifactManifestValidationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class ModelExecutionFamily:
+    """Declared executable family for model artifacts, separate from model semantics."""
+
+    kind: str
+    runtime: str
+    architecture_family: str
+
+    def __post_init__(self) -> None:
+        if not self.kind:
+            raise ModelArtifactManifestValidationError("execution_family kind must be nonempty")
+        if not self.runtime:
+            raise ModelArtifactManifestValidationError("execution_family runtime must be nonempty")
+        if not self.architecture_family:
+            raise ModelArtifactManifestValidationError(
+                "execution_family architecture_family must be nonempty"
+            )
+        if self.kind == "reference-runner-pytorch-sequential":
+            if self.runtime != "pytorch":
+                raise ModelArtifactManifestValidationError(
+                    "reference-runner-pytorch-sequential requires runtime pytorch"
+                )
+            if self.architecture_family != "sequential-architecture-components":
+                raise ModelArtifactManifestValidationError(
+                    "reference-runner-pytorch-sequential requires "
+                    "architecture_family sequential-architecture-components"
+                )
+
+    @classmethod
+    def reference_runner_pytorch_sequential(cls) -> ModelExecutionFamily:
+        return cls(
+            kind="reference-runner-pytorch-sequential",
+            runtime="pytorch",
+            architecture_family="sequential-architecture-components",
+        )
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ModelExecutionFamily:
+        try:
+            validated = _model_execution_family_record.validate(record)
+        except ValueError as error:
+            raise ModelArtifactManifestValidationError(str(error)) from error
+        return cls(
+            kind=str(validated["kind"]),
+            runtime=str(validated["runtime"]),
+            architecture_family=str(validated["architecture_family"]),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "runtime": self.runtime,
+            "architecture_family": self.architecture_family,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ModelArtifactManifest:
     """Durable metadata for a trained or submitted model artifact."""
 
     id: ProtocolIdentifier
     architecture: ArtifactReference
     interface: ArtifactReference
+    execution_family: ModelExecutionFamily
     model_artifacts: tuple[ArtifactReference, ...]
     training_provenance: tuple[ArtifactReference, ...] = ()
 
@@ -126,6 +192,9 @@ class ModelArtifactManifest:
             interface=ArtifactReference.from_record(
                 _as_mapping(validated["interface"], field="interface")
             ),
+            execution_family=ModelExecutionFamily.from_record(
+                _as_mapping(validated["execution_family"], field="execution_family")
+            ),
             model_artifacts=model_artifacts,
             training_provenance=training_provenance,
         )
@@ -156,6 +225,7 @@ class ModelArtifactManifest:
             "id": str(self.id),
             "architecture": self.architecture.to_record(),
             "interface": self.interface.to_record(),
+            "execution_family": self.execution_family.to_record(),
             "model_artifacts": [artifact.to_record() for artifact in self.model_artifacts],
         }
         if self.training_provenance:
