@@ -2,11 +2,11 @@ import {
   BookOpenCheck,
   Database,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { ArtifactBrowser } from './ArtifactBrowser';
 import { BenchmarksPanel } from './BenchmarksPanel';
-import consoleData from 'virtual:leibniz-console-data';
+import initialConsoleData, { subscribeConsoleData } from 'virtual:leibniz-console-data';
 
 type TabId = 'benchmarks' | 'artifacts';
 
@@ -22,6 +22,9 @@ const tabs: ConsoleTab[] = [
 
 export function ConsoleShell() {
   const [currentTab, setCurrentTab] = useState<TabId>('benchmarks');
+  const [consoleData, setConsoleData] = useState(initialConsoleData);
+
+  useEffect(() => subscribeConsoleData(setConsoleData), []);
 
   return (
     <main className="mission-control">
