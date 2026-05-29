@@ -296,6 +296,18 @@ const inspections: ModelInspectionRecord[] = [
       },
     ],
     model_artifacts: [],
+    node_evidence: [
+      {
+        claim_kinds: ['architecture-structure', 'operator-semantics', 'resource-accounting'],
+        evidence_artifacts: [
+          {
+            kind: 'architecture-manifest',
+            record_digest: architectureDigest,
+          },
+        ],
+        node_path: ['component-0'],
+      },
+    ],
     output_shape: [2],
     source_path: 'results/model.json',
     training_provenance: [],

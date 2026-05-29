@@ -32,7 +32,11 @@ from leibniz.measurements import (
     MeasurementDatasetDocument,
     MeasurementRecord,
 )
-from leibniz.model_inspection import ModelInspectionDocument, ModelInspectionRecord
+from leibniz.model_inspection import (
+    ModelInspectionDocument,
+    ModelInspectionRecord,
+    ModelInspectionValidationError,
+)
 from leibniz.publications import SubmissionPublicationBundle, SubmissionPublicationDocument
 from leibniz.submissions import SubmissionArtifact, SubmissionPackageManifest
 from leibniz.training_runs import TrainingRunRecord
@@ -1756,7 +1760,16 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
     history = _as_sequence(record.get("training_history"), "training_history")
     for index, run in enumerate(history):
         _validate_run_result(_as_mapping(run, f"training_history.{index}"))
-    _as_sequence(record.get("model_inspections", ()), "model_inspections")
+    for index, inspection in enumerate(
+        _as_sequence(record.get("model_inspections", ()), "model_inspections")
+    ):
+        field = f"model_inspections.{index}"
+        inspection_record = dict(_as_mapping(inspection, field))
+        inspection_record.pop("source_path", None)
+        try:
+            ModelInspectionRecord.from_record(inspection_record)
+        except ModelInspectionValidationError as error:
+            raise LocalResultImportError(f"{field}: invalid model inspection: {error}") from error
     for index, proposal in enumerate(_as_sequence(record.get("proposals", ()), "proposals")):
         _validate_proposal_result(_as_mapping(proposal, f"proposals.{index}"))
 

@@ -107,6 +107,16 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
         "flatten",
         "dense",
     )
+    assert [evidence.node_path for evidence in inspection.node_evidence] == [
+        ("component-0",),
+        ("component-1",),
+        ("component-2",),
+    ]
+    assert inspection.node_evidence[0].claim_kinds == (
+        "architecture-structure",
+        "operator-semantics",
+        "resource-accounting",
+    )
     assert inspection.digest == ContentDigest.from_value(inspection.to_record())
 
 
@@ -129,6 +139,16 @@ def test_model_inspection_includes_model_manifest_sources() -> None:
     )
     assert inspection.model_artifacts == (_checkpoint_reference(),)
     assert inspection.training_provenance == (_training_reference(),)
+    assert {
+        reference.kind
+        for evidence in inspection.node_evidence
+        for reference in evidence.evidence_artifacts
+    } == {
+        "architecture-manifest",
+        "model-checkpoint",
+        "model-manifest",
+        "training-provenance",
+    }
 
 
 def test_model_inspection_rejects_model_manifest_architecture_mismatch() -> None:
@@ -240,6 +260,18 @@ def test_model_inspection_rejects_malformed_records() -> None:
     record["architecture_summary"] = summary
     error = capture_model_inspection_error(lambda: ModelInspectionRecord.from_record(record))
     assert str(error) == "architecture_summary does not match graph"
+
+    record = inspection.to_record()
+    node_evidence = list(cast(list[object], record["node_evidence"]))
+    node_evidence.append(
+        {
+            **cast(dict[str, object], node_evidence[0]),
+            "node_path": ["unknown-node"],
+        }
+    )
+    record["node_evidence"] = node_evidence
+    error = capture_model_inspection_error(lambda: ModelInspectionRecord.from_record(record))
+    assert str(error) == "node_evidence node_path must start with an architecture graph node"
 
 
 def _model_manifest_record() -> dict[str, object]:

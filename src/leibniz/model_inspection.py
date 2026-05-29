@@ -18,6 +18,7 @@ from leibniz.submissions import SubmissionPackageManifest
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
+    "ModelGraphNodeEvidence",
     "ModelInspectionComponent",
     "ModelInspectionCostSummary",
     "ModelInspectionDocument",
@@ -108,6 +109,13 @@ _graph_summary_record = RecordSpec(
         ),
     }
 )
+_node_evidence_record = RecordSpec(
+    fields={
+        "node_path": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
+        "claim_kinds": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
+        "evidence_artifacts": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
+    }
+)
 _inspection_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
@@ -119,6 +127,7 @@ _inspection_record = RecordSpec(
         "architecture_trace": FieldSpec(kind="record"),
         "architecture_graph": FieldSpec(kind="record"),
         "architecture_summary": FieldSpec(kind="record"),
+        "node_evidence": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
         "model_manifest": FieldSpec(kind="record", required=False),
         "submission_package": FieldSpec(kind="record", required=False),
         "benchmark_manifest": FieldSpec(kind="record", required=False),
@@ -139,6 +148,72 @@ _inspection_record = RecordSpec(
 
 class ModelInspectionValidationError(ValueError):
     """Raised when a model inspection record is invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class ModelGraphNodeEvidence:
+    """Evidence references supporting claims about one architecture graph node path."""
+
+    node_path: tuple[str, ...]
+    claim_kinds: tuple[str, ...]
+    evidence_artifacts: tuple[ArtifactReference, ...]
+
+    def __post_init__(self) -> None:
+        if not self.node_path:
+            raise ModelInspectionValidationError("node_path must not be empty")
+        if any(not node_id for node_id in self.node_path):
+            raise ModelInspectionValidationError("node_path values must be nonempty")
+        if not self.claim_kinds:
+            raise ModelInspectionValidationError("claim_kinds must not be empty")
+        if any(not claim for claim in self.claim_kinds):
+            raise ModelInspectionValidationError("claim_kinds must be nonempty")
+        if self.claim_kinds != tuple(sorted(set(self.claim_kinds))):
+            raise ModelInspectionValidationError("claim_kinds must be sorted unique")
+        if not self.evidence_artifacts:
+            raise ModelInspectionValidationError("evidence_artifacts must not be empty")
+        duplicate = _first_duplicate_reference(self.evidence_artifacts)
+        if duplicate is not None:
+            raise ModelInspectionValidationError(
+                f"duplicate node evidence artifact reference: {duplicate}"
+            )
+        object.__setattr__(
+            self,
+            "evidence_artifacts",
+            tuple(sorted(self.evidence_artifacts, key=_reference_sort_key)),
+        )
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> ModelGraphNodeEvidence:
+        try:
+            validated = _node_evidence_record.validate(record)
+        except ValueError as error:
+            raise ModelInspectionValidationError(str(error)) from error
+        return cls(
+            node_path=tuple(
+                _as_string(node_id, field="node_path")
+                for node_id in _as_sequence(validated["node_path"], field="node_path")
+            ),
+            claim_kinds=tuple(
+                _as_string(claim, field="claim_kinds")
+                for claim in _as_sequence(validated["claim_kinds"], field="claim_kinds")
+            ),
+            evidence_artifacts=tuple(
+                ArtifactReference.from_record(_as_mapping(item, field="evidence_artifacts"))
+                for item in _as_sequence(
+                    validated["evidence_artifacts"],
+                    field="evidence_artifacts",
+                )
+            ),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "node_path": list(self.node_path),
+            "claim_kinds": list(self.claim_kinds),
+            "evidence_artifacts": [
+                artifact.to_record() for artifact in self.evidence_artifacts
+            ],
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -615,6 +690,7 @@ class ModelInspectionRecord:
     architecture_trace: ModelInspectionTrace
     architecture_graph: ArchitectureGraph
     architecture_summary: ModelInspectionGraphSummary
+    node_evidence: tuple[ModelGraphNodeEvidence, ...]
     model_manifest: ArtifactReference | None = None
     submission_package: ArtifactReference | None = None
     benchmark_manifest: ArtifactReference | None = None
@@ -679,6 +755,24 @@ class ModelInspectionRecord:
         )
         if self.architecture_summary != expected_summary:
             raise ModelInspectionValidationError("architecture_summary does not match graph")
+        if not self.node_evidence:
+            raise ModelInspectionValidationError(
+                "node_evidence must not be empty"
+            )
+        actual_node_paths = tuple(evidence.node_path for evidence in self.node_evidence)
+        if actual_node_paths != tuple(sorted(set(actual_node_paths))):
+            raise ModelInspectionValidationError("node_evidence node_paths must be sorted unique")
+        graph_node_ids = frozenset(node.id for node in self.architecture_graph.nodes)
+        for node_path in actual_node_paths:
+            if node_path[0] not in graph_node_ids:
+                raise ModelInspectionValidationError(
+                    "node_evidence node_path must start with an architecture graph node"
+                )
+        expected_node_paths = frozenset((node.id,) for node in self.architecture_graph.nodes)
+        if not expected_node_paths.issubset(actual_node_paths):
+            raise ModelInspectionValidationError(
+                "node_evidence must describe each architecture graph node"
+            )
         _require_reference_kind(
             self.model_manifest,
             kind="model-manifest",
@@ -720,12 +814,13 @@ class ModelInspectionRecord:
         components, cost_summary, architecture_trace = _architecture_components(
             architecture_manifest
         )
+        architecture_reference = reference_for_record(
+            kind="architecture-manifest",
+            record=architecture_manifest.to_record(),
+        )
         return cls(
             id=id,
-            architecture=reference_for_record(
-                kind="architecture-manifest",
-                record=architecture_manifest.to_record(),
-            ),
+            architecture=architecture_reference,
             input_shape=architecture_manifest.input_shape,
             output_shape=architecture_manifest.output_shape,
             components=components,
@@ -735,6 +830,10 @@ class ModelInspectionRecord:
             architecture_summary=ModelInspectionGraphSummary.from_graph(
                 graph=architecture_manifest.graph,
                 cost_summary=cost_summary,
+            ),
+            node_evidence=_node_evidence_records(
+                graph=architecture_manifest.graph,
+                evidence_artifacts=(architecture_reference,),
             ),
         )
 
@@ -761,6 +860,18 @@ class ModelInspectionRecord:
             architecture_trace=record.architecture_trace,
             architecture_graph=record.architecture_graph,
             architecture_summary=record.architecture_summary,
+            node_evidence=_node_evidence_records(
+                graph=record.architecture_graph,
+                evidence_artifacts=(
+                    record.architecture,
+                    reference_for_record(
+                        kind="model-manifest",
+                        record=model_manifest.to_record(),
+                    ),
+                    *model_manifest.model_artifacts,
+                    *model_manifest.training_provenance,
+                ),
+            ),
             model_manifest=reference_for_record(
                 kind="model-manifest",
                 record=model_manifest.to_record(),
@@ -790,6 +901,24 @@ class ModelInspectionRecord:
             architecture_trace=record.architecture_trace,
             architecture_graph=record.architecture_graph,
             architecture_summary=record.architecture_summary,
+            node_evidence=_node_evidence_records(
+                graph=record.architecture_graph,
+                evidence_artifacts=(
+                    record.architecture,
+                    reference_for_record(
+                        kind="submission-package",
+                        record=submission_package.to_record(),
+                    ),
+                    *(
+                        ArtifactReference(
+                            kind="submission-artifact",
+                            protocol_id=artifact.id,
+                            content_digest=artifact.digest,
+                        )
+                        for artifact in submission_package.artifacts
+                    ),
+                ),
+            ),
             submission_package=reference_for_record(
                 kind="submission-package",
                 record=submission_package.to_record(),
@@ -844,6 +973,15 @@ class ModelInspectionRecord:
             architecture_summary=ModelInspectionGraphSummary.from_record(
                 _as_mapping(validated["architecture_summary"], field="architecture_summary")
             ),
+            node_evidence=tuple(
+                ModelGraphNodeEvidence.from_record(
+                    _as_mapping(item, field="node_evidence")
+                )
+                for item in _as_sequence(
+                    validated["node_evidence"],
+                    field="node_evidence",
+                )
+            ),
             model_manifest=_optional_reference(validated.get("model_manifest"), "model_manifest"),
             submission_package=_optional_reference(
                 validated.get("submission_package"),
@@ -888,6 +1026,9 @@ class ModelInspectionRecord:
             "architecture_trace": self.architecture_trace.to_record(),
             "architecture_graph": self.architecture_graph.to_record(),
             "architecture_summary": self.architecture_summary.to_record(),
+            "node_evidence": [
+                evidence.to_record() for evidence in self.node_evidence
+            ],
         }
         if self.model_manifest is not None:
             record["model_manifest"] = self.model_manifest.to_record()
@@ -984,6 +1125,25 @@ def _architecture_components(
     )
 
 
+def _node_evidence_records(
+    *,
+    graph: ArchitectureGraph,
+    evidence_artifacts: tuple[ArtifactReference, ...],
+) -> tuple[ModelGraphNodeEvidence, ...]:
+    return tuple(
+        ModelGraphNodeEvidence(
+            node_path=(node.id,),
+            claim_kinds=(
+                "architecture-structure",
+                "operator-semantics",
+                "resource-accounting",
+            ),
+            evidence_artifacts=evidence_artifacts,
+        )
+        for node in graph.nodes
+    )
+
+
 def _require_reference_kind(
     reference: ArtifactReference | None,
     *,
@@ -1012,6 +1172,18 @@ def _optional_reference(value: object, field: str) -> ArtifactReference | None:
     if value is None:
         return None
     return ArtifactReference.from_record(_as_mapping(value, field=field))
+
+
+def _first_duplicate_reference(
+    references: tuple[ArtifactReference, ...],
+) -> ArtifactReference | None:
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for reference in references:
+        key = _reference_sort_key(reference)
+        if key in seen:
+            return reference
+        seen.add(key)
+    return None
 
 
 def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:

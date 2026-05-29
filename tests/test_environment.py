@@ -40,7 +40,12 @@ def test_ci_uses_miniforge_environment_file() -> None:
     assert "name: Lint" in workflow
     assert "name: Type check" in workflow
     assert "name: Repository policy" in workflow
+    assert "name: Console build and browser tests" in workflow
     assert "name: Build and import package" in workflow
+    assert "actions/setup-node@v4" in workflow
+    assert "npm ci" in workflow
+    assert "npx playwright install --with-deps chromium" in workflow
+    assert "npm test" in workflow
     assert "python -m build --no-isolation" in workflow
     assert "actions/setup-python" not in workflow
 

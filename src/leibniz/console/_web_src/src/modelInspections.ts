@@ -11,12 +11,19 @@ export type ModelInspectionRecord = {
   architecture_trace: ModelInspectionTraceRecord;
   architecture_graph: ModelInspectionArchitectureGraphRecord;
   architecture_summary: ModelInspectionGraphSummaryRecord;
+  node_evidence: ModelGraphNodeEvidenceRecord[];
   model_manifest?: ArtifactReferenceRecord;
   submission_package?: ArtifactReferenceRecord;
   benchmark_manifest?: ArtifactReferenceRecord;
   measurement_dataset?: ArtifactReferenceRecord;
   model_artifacts: ArtifactReferenceRecord[];
   training_provenance: ArtifactReferenceRecord[];
+};
+
+export type ModelGraphNodeEvidenceRecord = {
+  node_path: string[];
+  claim_kinds: string[];
+  evidence_artifacts: ArtifactReferenceRecord[];
 };
 
 export type ModelInspectionComponentRecord = {
@@ -131,6 +138,9 @@ export function parseModelInspectionRecord(
       record.architecture_summary,
       `${path}.architecture_summary`,
     ),
+    node_evidence: requireArray(record.node_evidence, `${path}.node_evidence`).map(
+      (evidence, index) => parseNodeEvidence(evidence, `${path}.node_evidence.${index}`),
+    ),
     model_manifest: parseOptionalReference(record.model_manifest, `${path}.model_manifest`),
     submission_package: parseOptionalReference(
       record.submission_package,
@@ -148,6 +158,17 @@ export function parseModelInspectionRecord(
     training_provenance: parseOptionalReferenceArray(
       record.training_provenance,
       `${path}.training_provenance`,
+    ),
+  };
+}
+
+function parseNodeEvidence(value: unknown, path: string): ModelGraphNodeEvidenceRecord {
+  const record = requireRecord(value, path);
+  return {
+    node_path: parseStringArray(record.node_path, `${path}.node_path`),
+    claim_kinds: parseStringArray(record.claim_kinds, `${path}.claim_kinds`),
+    evidence_artifacts: requireArray(record.evidence_artifacts, `${path}.evidence_artifacts`).map(
+      (reference, index) => parseReference(reference, `${path}.evidence_artifacts.${index}`),
     ),
   };
 }

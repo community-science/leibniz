@@ -12,7 +12,8 @@
     "predev": "npm run generate",
     "dev": "vite",
     "pretest": "npm run generate",
-    "test": "node ../../../../tests/run_console_web_tests.mjs",
+    "test": "node ../../../../tests/run_console_web_tests.mjs && npm run browser-smoke",
+    "browser-smoke": "node ../../../../tests/console_browser_smoke.mjs",
     "pretypecheck": "npm run generate",
     "typecheck": "tsc --noEmit"
   },
@@ -25,7 +26,8 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
-    "vite": "^8.0.9",
-    "typescript": "~6.0.2"
+    "playwright": "^1.60.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.9"
   }
 }
