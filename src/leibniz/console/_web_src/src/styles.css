@@ -70,7 +70,7 @@
   --result-table-model-column: 2fr;
   --result-table-metric-column: 1fr;
   --proposal-card-min: 240px;
-  --model-layer-min: 220px;
+  --model-operation-min: 220px;
   --artifact-reference-min: 220px;
   --benchmark-list-width: 300px;
   --benchmark-sample-tile-size: 128px;
@@ -2001,7 +2001,7 @@ p {
 .benchmark-model-cost-grid dt,
 .benchmark-model-training-artifacts dt,
 .benchmark-model-training-grid dt,
-.benchmark-model-layer-shape-grid dt,
+.benchmark-model-operation-shape-grid dt,
 .benchmark-model-operator-grid dt,
 .benchmark-model-source-list dt {
   color: var(--text-dim);
@@ -2016,7 +2016,7 @@ p {
 .benchmark-model-cost-grid dd,
 .benchmark-model-training-artifacts dd,
 .benchmark-model-training-grid dd,
-.benchmark-model-layer-shape-grid dd,
+.benchmark-model-operation-shape-grid dd,
 .benchmark-model-operator-grid dd,
 .benchmark-model-source-list dd {
   margin: 0;
@@ -2154,14 +2154,14 @@ p {
   font-size: var(--font-label);
 }
 
-.benchmark-model-layer-list,
+.benchmark-model-operation-list,
 .benchmark-model-source-list {
   display: flex;
   flex-direction: column;
   gap: var(--space-lg);
 }
 
-.benchmark-model-layer {
+.benchmark-model-operation {
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
@@ -2171,14 +2171,14 @@ p {
   padding: var(--space-lg);
 }
 
-.benchmark-model-layer-heading {
+.benchmark-model-operation-heading {
   display: grid;
-  grid-template-columns: var(--space-5xl) minmax(0, 1fr);
+  grid-template-columns: minmax(var(--space-5xl), auto) minmax(0, 1fr);
   align-items: center;
   gap: var(--space-lg);
 }
 
-.benchmark-model-layer-heading span {
+.benchmark-model-operation-heading span {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2190,11 +2190,11 @@ p {
   font-size: var(--font-control);
 }
 
-.benchmark-model-layer-heading strong {
+.benchmark-model-operation-heading strong {
   overflow-wrap: anywhere;
 }
 
-.benchmark-model-layer-heading small {
+.benchmark-model-operation-heading small {
   display: block;
   margin-top: var(--space-3xs);
   overflow-wrap: anywhere;
@@ -2202,18 +2202,18 @@ p {
   font-size: var(--font-label);
 }
 
-.benchmark-model-layer-shape-grid {
+.benchmark-model-operation-shape-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--space-sm);
   margin: 0;
 }
 
-.benchmark-model-layer-shape-grid div {
+.benchmark-model-operation-shape-grid div {
   min-width: 0;
 }
 
-.benchmark-model-layer-config {
+.benchmark-model-operation-config {
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--text-muted);
@@ -2223,7 +2223,7 @@ p {
 
 .benchmark-model-operator-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(var(--model-layer-min), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(var(--model-operation-min), 1fr));
   gap: var(--space-sm);
   margin: 0;
 }

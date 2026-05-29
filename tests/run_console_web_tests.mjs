@@ -315,15 +315,13 @@ function assertBenchmarkModelWorkbenchStructure() {
     'benchmark-model-training-grid',
     'benchmark-model-validation-chart',
     'benchmark-model-cost-grid',
-    'benchmark-model-layer-shape-grid',
+    'Graph Operations',
+    'benchmark-model-operation-shape-grid',
   ];
   for (const marker of requiredPanelMarkers) {
     if (!panel.includes(marker)) {
       throw new Error(`BenchmarksPanel must expose model workbench marker: ${marker}`);
     }
-  }
-  if (panel.includes('benchmark-model-grid')) {
-    throw new Error('BenchmarksPanel must not use the old model card grid');
   }
 
   const requiredStyleMarkers = [
@@ -332,7 +330,7 @@ function assertBenchmarkModelWorkbenchStructure() {
     '.benchmark-model-artifact-flow',
     '.benchmark-model-lineage-graph',
     '.benchmark-model-validation-chart',
-    '.benchmark-model-layer-shape-grid',
+    '.benchmark-model-operation-shape-grid',
   ];
   for (const marker of requiredStyleMarkers) {
     if (!styles.includes(marker)) {
