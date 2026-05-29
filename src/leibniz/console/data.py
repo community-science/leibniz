@@ -319,7 +319,7 @@ class ConsoleDataBuilder:
                     f"{entry.source_path}: benchmark task requires scale_parameter"
                 )
             atom_count = manifest.outcome_sequence.atom_count
-            scales = (1, 2, 3, 4)
+            scales = tuple(range(1, 9))
             batches: list[Mapping[str, object]] = []
             for scale in scales:
                 batches.append(
@@ -328,7 +328,7 @@ class ConsoleDataBuilder:
                         mode="canonical",
                         label=f"Canonical L={scale}",
                         scale=scale,
-                        sample_count=4,
+                        sample_count=8,
                         seed=101,
                         sample_card_density="standard",
                         aggregate_mode=False,

@@ -193,17 +193,25 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert task["outcome_atom_count"] == 10
     batches = cast(list[dict[str, object]], task["batches"])
     assert [(batch["mode"], batch["scale"], batch["sample_count"]) for batch in batches] == [
-        ("canonical", 1, 4),
-        ("canonical", 2, 4),
-        ("canonical", 3, 4),
-        ("canonical", 4, 4),
+        ("canonical", 1, 8),
+        ("canonical", 2, 8),
+        ("canonical", 3, 8),
+        ("canonical", 4, 8),
+        ("canonical", 5, 8),
+        ("canonical", 6, 8),
+        ("canonical", 7, 8),
+        ("canonical", 8, 8),
         ("symbol-probe", 1, 10),
         ("complexity-sweep", 1, 1),
         ("complexity-sweep", 2, 1),
         ("complexity-sweep", 3, 1),
         ("complexity-sweep", 4, 1),
+        ("complexity-sweep", 5, 1),
+        ("complexity-sweep", 6, 1),
+        ("complexity-sweep", 7, 1),
+        ("complexity-sweep", 8, 1),
     ]
-    symbol_probe = batches[4]
+    symbol_probe = batches[8]
     symbol_presentation = cast(dict[str, object], symbol_probe["presentation"])
     assert symbol_presentation == {
         "sample_card_density": "compact",
@@ -226,7 +234,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     variation_coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
     assert len(variation_coordinates) == 1
     assert variation_coordinates[0]["kind"] == "field-variation-transform-coordinate"
-    sweep_presentation = cast(dict[str, object], batches[5]["presentation"])
+    sweep_presentation = cast(dict[str, object], batches[9]["presentation"])
     assert sweep_presentation == {
         "sample_card_density": "standard",
         "aggregate_mode": True,

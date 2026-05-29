@@ -35,7 +35,7 @@ def test_digits_observation_formation_declaration_loads_source_artifact() -> Non
     assert declaration.channel_count == 1
     assert declaration.resolution_axis == "N"
     assert declaration.slot_composition.count_axis == "L"
-    assert declaration.variation_transform.spatial_affine.coordinate_system == "normalized-field"
+    assert declaration.variation_transform.spatial_affine.coordinate_system == "normalized-slot"
     assert declaration.variation_transform.spatial_affine.translation == (
         (-0.08, 0.08),
         (-0.08, 0.08),
@@ -207,6 +207,35 @@ def test_variation_coordinates_apply_spatial_translation() -> None:
     assert all(0.0 <= value <= 1.0 for value in shifted.field.values)
 
 
+def test_variation_translation_is_slot_relative_for_multi_slot_observations() -> None:
+    declaration = _synthetic_mark_declaration()
+    plan = _synthetic_plan_with(slot_count=4, resolution=128)
+    identity = declaration.form_observation(
+        id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.base@0.1.0"),
+        plan=plan,
+        component_sequence=(0, 0, 0, 0),
+        variation_coordinates=tuple(
+            _variation_coordinate(slot_index=slot_index) for slot_index in range(4)
+        ),
+    )
+    shifted = declaration.form_observation(
+        id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.shifted@0.1.0"),
+        plan=plan,
+        component_sequence=(0, 0, 0, 0),
+        variation_coordinates=tuple(
+            _variation_coordinate(slot_index=slot_index, translation=(0.25, 0.0))
+            for slot_index in range(4)
+        ),
+    )
+
+    expected_shifted_mean = _weighted_x_mean(identity.field) + 0.25 / 4
+    assert abs(_weighted_x_mean(shifted.field) - expected_shifted_mean) <= 0.02
+    assert _nonzero_count(shifted.field, x_start=0, x_stop=32) > 0
+    assert _nonzero_count(shifted.field, x_start=32, x_stop=64) > 0
+    assert _nonzero_count(shifted.field, x_start=64, x_stop=96) > 0
+    assert _nonzero_count(shifted.field, x_start=96, x_stop=128) > 0
+
+
 def test_observation_formation_rejects_variation_coordinate_mismatch() -> None:
     declaration = _synthetic_mark_declaration()
     plan = _synthetic_plan()
@@ -240,7 +269,7 @@ def test_variation_transform_declaration_round_trips_canonically() -> None:
     assert transform.to_record() == _canonical_variation_transform_record()
     assert SpatialAffineVariation.identity(spatial_rank=2).to_record() == {
         "kind": "spatial-affine",
-        "coordinate_system": "normalized-field",
+        "coordinate_system": "normalized-slot",
         "spatial_rank": 2,
         "translation": [[0.0, 0.0], [0.0, 0.0]],
         "scale": [[1.0, 1.0], [1.0, 1.0]],
@@ -363,7 +392,7 @@ def _variation_transform_record() -> dict[str, object]:
         "kind": "field-variation-transform",
         "spatial_affine": {
             "kind": "spatial-affine",
-            "coordinate_system": "normalized-field",
+            "coordinate_system": "normalized-slot",
             "spatial_rank": 2,
             "translation": [[-0.1, 0.1], [-0.2, 0.2]],
             "scale": [[0.9, 1.1], [0.8, 1.2]],
@@ -382,7 +411,7 @@ def _canonical_variation_transform_record() -> dict[str, object]:
         "kind": "field-variation-transform",
         "spatial_affine": {
             "kind": "spatial-affine",
-            "coordinate_system": "normalized-field",
+            "coordinate_system": "normalized-slot",
             "spatial_rank": 2,
             "translation": [[-0.1, 0.1], [-0.2, 0.2]],
             "scale": [[0.9, 1.1], [0.8, 1.2]],
@@ -427,6 +456,10 @@ def _synthetic_mark_declaration() -> ObservationFormationDeclaration:
 
 
 def _synthetic_plan() -> MaterializationPlan:
+    return _synthetic_plan_with(slot_count=1, resolution=32)
+
+
+def _synthetic_plan_with(*, slot_count: int, resolution: int) -> MaterializationPlan:
     return MaterializationPlan(
         id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.materialization-plan@0.1.0"),
         benchmark_id=ProtocolIdentifier.parse("benchmarks.synthetic-marks@0.1.0"),
@@ -434,9 +467,9 @@ def _synthetic_plan() -> MaterializationPlan:
             kind="materialization-declaration",
             protocol_id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.materialization@0.1.0"),
         ),
-        scale_assignment=AxisAssignment(values={"S": 1}),
-        complexity_assignment=AxisAssignment(values={"C": 1}),
-        resolution_assignment=AxisAssignment(values={"N": 32}),
+        scale_assignment=AxisAssignment(values={"S": slot_count}),
+        complexity_assignment=AxisAssignment(values={"C": slot_count}),
+        resolution_assignment=AxisAssignment(values={"N": resolution}),
         seed=101,
     )
 
@@ -455,7 +488,7 @@ def _variation_coordinate(
         "slot_index": slot_index,
         "spatial_affine": {
             "kind": "spatial-affine-coordinate",
-            "coordinate_system": "normalized-field",
+            "coordinate_system": "normalized-slot",
             "translation": list(translation),
             "scale": list(scale),
             "rotation_degrees": [rotation_degrees],

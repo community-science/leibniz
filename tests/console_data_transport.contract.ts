@@ -148,24 +148,24 @@ if (benchmarkTask === undefined) {
   throw new Error('expected benchmark task');
 }
 assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind');
-assertEqual(benchmarkTask?.batches.length, 9, 'benchmark batch count');
+assertEqual(benchmarkTask?.batches.length, 17, 'benchmark batch count');
 assertEqual(
   benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.scale}:${batch.sample_count}`).join('|'),
-  'canonical:1:4|canonical:2:4|canonical:3:4|canonical:4:4|symbol-probe:1:10|complexity-sweep:1:1|complexity-sweep:2:1|complexity-sweep:3:1|complexity-sweep:4:1',
+  'canonical:1:8|canonical:2:8|canonical:3:8|canonical:4:8|canonical:5:8|canonical:6:8|canonical:7:8|canonical:8:8|symbol-probe:1:10|complexity-sweep:1:1|complexity-sweep:2:1|complexity-sweep:3:1|complexity-sweep:4:1|complexity-sweep:5:1|complexity-sweep:6:1|complexity-sweep:7:1|complexity-sweep:8:1',
   'generated benchmark batches',
 );
 assertEqual(
-  benchmarkTask?.batches[4]?.samples.map((sample) => sample.component_sequence.join('')).join(','),
+  benchmarkTask?.batches[8]?.samples.map((sample) => sample.component_sequence.join('')).join(','),
   '0,1,2,3,4,5,6,7,8,9',
   'symbol probe batch',
 );
 assertEqual(
-  benchmarkTask?.batches[4]?.presentation.sample_card_density,
+  benchmarkTask?.batches[8]?.presentation.sample_card_density,
   'compact',
   'compact batch presentation',
 );
 assertEqual(
-  benchmarkTask?.batches[5]?.presentation.aggregate_mode,
+  benchmarkTask?.batches[9]?.presentation.aggregate_mode,
   true,
   'aggregate batch presentation',
 );

@@ -557,8 +557,8 @@ def _variation_coordinate(
     spatial = _mapping(record.get("spatial_affine"), "spatial_affine")
     if str(spatial.get("kind")) != "spatial-affine-coordinate":
         raise TensorRuntimeError("spatial_affine kind must be spatial-affine-coordinate")
-    if str(spatial.get("coordinate_system")) != "normalized-field":
-        raise TensorRuntimeError("spatial_affine coordinate_system must be normalized-field")
+    if str(spatial.get("coordinate_system")) != "normalized-slot":
+        raise TensorRuntimeError("spatial_affine coordinate_system must be normalized-slot")
     value_scale = _mapping(record.get("value_scale"), "value_scale")
     if str(value_scale.get("kind")) != "value-scale-coordinate":
         raise TensorRuntimeError("value_scale kind must be value-scale-coordinate")
@@ -643,8 +643,13 @@ def _affine_grid_row_from_values(
     center = _slot_center(slot_count=slot_count, slot_index=slot_index, axis=slot_axis)
     center_x = 2.0 * center[0] - 1.0
     center_y = 2.0 * center[1] - 1.0
-    translation_x = 2.0 * translation[0]
-    translation_y = 2.0 * translation[1]
+    field_translation = _slot_relative_translation(
+        translation,
+        slot_count=slot_count,
+        slot_axis=slot_axis,
+    )
+    translation_x = 2.0 * field_translation[0]
+    translation_y = 2.0 * field_translation[1]
     return (
         (
             inverse[0][0],
@@ -693,6 +698,17 @@ def _slot_center(
     if axis == "x":
         return ((slot_index + 0.5) / slot_count, 0.5)
     return (0.5, (slot_index + 0.5) / slot_count)
+
+
+def _slot_relative_translation(
+    translation: tuple[float, float],
+    *,
+    slot_count: int,
+    slot_axis: str,
+) -> tuple[float, float]:
+    if slot_axis == "x":
+        return (translation[0] / slot_count, translation[1])
+    return (translation[0], translation[1] / slot_count)
 
 
 def _mapping(value: object, name: str) -> Mapping[str, object]:
