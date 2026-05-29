@@ -33,6 +33,8 @@ def test_generated_console_result_view_records_module_contains_parser_surface() 
     generated = generated_console_result_view_records_module()
     assert "export type BenchmarkResultRecord" in generated
     assert "export function parseResultViewRecords" in generated
+    assert "console_view_model?: RunDetailViewModelRecord;" in generated
+    assert "parseRunDetailViewModel(record.console_view_model" in generated
     assert "function parseWorkQueueItem" in generated
     assert "export type RunDetailViewModelRecord" in generated
     assert "function parseRunDetailViewModel" in generated

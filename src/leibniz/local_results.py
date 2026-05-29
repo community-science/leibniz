@@ -1138,7 +1138,7 @@ def _benchmark_result_record(
     runs: tuple[_BenchmarkRunRecord, ...],
     proposals: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
-    models = tuple(_model_result_records(runs))
+    models = tuple(_model_result_records(runs, manifest=manifest))
     record: dict[str, object] = {
         "benchmark_id": str(runs[0].benchmark_id),
         "cost_axes": [
@@ -1176,6 +1176,8 @@ def _model_inspection_records(
 
 def _model_result_records(
     runs: tuple[_BenchmarkRunRecord, ...],
+    *,
+    manifest: BenchmarkManifest,
 ) -> tuple[dict[str, object], ...]:
     grouped: dict[str, list[_BenchmarkRunRecord]] = {}
     for run in runs:
@@ -1190,21 +1192,149 @@ def _model_result_records(
             ordered_runs,
             key=lambda run: (run.score, -_cost_value(run.cost_summary, "parameter_count")),
         )
-        records.append(
-            {
-                "model_key": model_key,
-                "architecture_digest": str(best_run.architecture_digest),
-                "benchmark_id": str(best_run.benchmark_id),
-                "score": score,
-                "observed_complexities": [point["complexity"] for point in points],
-                "points": list(points),
-                "cost_summary": dict(best_run.cost_summary),
-                "run_ids": [run.run_id for run in ordered_runs],
-                "measurement_count": sum(run.measurement_count for run in ordered_runs),
-                "source_kinds": sorted({run.source_kind for run in ordered_runs}),
-            }
+        record: dict[str, object] = {
+            "model_key": model_key,
+            "architecture_digest": str(best_run.architecture_digest),
+            "benchmark_id": str(best_run.benchmark_id),
+            "score": score,
+            "observed_complexities": [point["complexity"] for point in points],
+            "points": list(points),
+            "cost_summary": dict(best_run.cost_summary),
+            "run_ids": [run.run_id for run in ordered_runs],
+            "measurement_count": sum(run.measurement_count for run in ordered_runs),
+            "source_kinds": sorted({run.source_kind for run in ordered_runs}),
+        }
+        record["console_view_model"] = _model_console_view_model(
+            manifest=manifest,
+            model=record,
+            runs=ordered_runs,
+            inspection=best_run.model_inspection,
         )
+        records.append(record)
     return tuple(sorted(records, key=_model_sort_key))
+
+
+def _model_console_view_model(
+    *,
+    manifest: BenchmarkManifest,
+    model: Mapping[str, object],
+    runs: tuple[_BenchmarkRunRecord, ...],
+    inspection: Mapping[str, object],
+) -> Mapping[str, object]:
+    architecture_summary = _as_mapping(
+        inspection.get("architecture_summary"),
+        "model_inspection.architecture_summary",
+    )
+    cost_summary = _as_mapping(model.get("cost_summary"), "model.cost_summary")
+    node_evidence = _as_sequence(
+        inspection.get("node_evidence", ()),
+        "model_inspection.node_evidence",
+    )
+    node_claim_kinds = sorted(
+        {
+            claim
+            for evidence in node_evidence
+            for claim in _as_sequence(
+                _as_mapping(evidence, "model_inspection.node_evidence").get("claim_kinds"),
+                "model_inspection.node_evidence.claim_kinds",
+            )
+            if isinstance(claim, str) and claim
+        }
+    )
+    source_kinds = _as_sequence(model.get("source_kinds"), "model.source_kinds")
+    sections = [
+        _console_detail_entries_section(
+            title="Model Contract",
+            entries=(
+                ("Benchmark", str(manifest.id)),
+                (
+                    "Prediction Space",
+                    _prediction_space_label(manifest),
+                ),
+                (
+                    "Observed " + _model_complexity_label(manifest),
+                    ", ".join(
+                        _console_number_value(value, precision=2)
+                        for value in _as_sequence(
+                            model.get("observed_complexities"),
+                            "model.observed_complexities",
+                        )
+                    )
+                    or "none",
+                ),
+                ("Score", _console_number_value(model.get("score"), precision=4)),
+            ),
+        ),
+        _console_detail_entries_section(
+            title="Architecture Graph",
+            entries=(
+                ("Components", _console_number_value(architecture_summary.get("component_count"))),
+                ("Edges", _console_number_value(architecture_summary.get("edge_count"))),
+                ("Inputs", _node_list_label(architecture_summary.get("input_node_ids"))),
+                ("Outputs", _node_list_label(architecture_summary.get("output_node_ids"))),
+                (
+                    "Component Kinds",
+                    ", ".join(
+                        str(kind)
+                        for kind in _as_sequence(
+                            architecture_summary.get("component_kinds"),
+                            "architecture_summary.component_kinds",
+                        )
+                    )
+                    or "unknown",
+                ),
+            ),
+        ),
+        _console_detail_entries_section(
+            title="Evidence",
+            entries=(
+                ("Node Evidence", _console_number_value(len(node_evidence))),
+                ("Claim Kinds", ", ".join(node_claim_kinds) or "none"),
+                ("Runs", _console_number_value(len(runs))),
+                ("Measurements", _console_number_value(model.get("measurement_count"))),
+                (
+                    "Sources",
+                    ", ".join(str(kind) for kind in source_kinds if isinstance(kind, str))
+                    or "unknown",
+                ),
+            ),
+        ),
+        _console_detail_entries_section(
+            title="Resources",
+            entries=(
+                ("Parameters", _console_number_value(cost_summary.get("parameter_count"))),
+                ("Storage", _console_number_value(cost_summary.get("parameter_bytes"))),
+                ("FLOPs", _console_number_value(cost_summary.get("inference_flops"))),
+            ),
+        ),
+    ]
+    return {"detail_sections": sections}
+
+
+def _prediction_space_label(manifest: BenchmarkManifest) -> str:
+    if manifest.outcome_sequence is not None:
+        return (
+            f"finite {manifest.outcome_sequence.atom_name} token sequence"
+            f" over {manifest.outcome_sequence.atom_count} atoms"
+        )
+    if manifest.outcome_space is not None:
+        return f"finite outcome space with {len(manifest.outcome_space.outcomes)} outcomes"
+    return "not declared"
+
+
+def _model_complexity_label(manifest: BenchmarkManifest) -> str:
+    if manifest.complexity_coordinate is not None:
+        return manifest.complexity_coordinate
+    if manifest.scale_parameter is not None:
+        return manifest.scale_parameter.symbol
+    return "Complexity"
+
+
+def _node_list_label(value: object) -> str:
+    if not isinstance(value, list):
+        return "unknown"
+    labels = [str(item) for item in cast(list[object], value) if isinstance(item, str) and item]
+    return ", ".join(labels) if labels else "none"
 
 
 def _proposal_records(
@@ -1790,6 +1920,10 @@ def _validate_model_result(record: Mapping[str, object]) -> None:
     _as_mapping(record.get("cost_summary"), "cost_summary")
     _as_sequence(record.get("run_ids"), "run_ids")
     _as_sequence(record.get("source_kinds"), "source_kinds")
+    if "console_view_model" in record:
+        _validate_console_detail_view_model(
+            _as_mapping(record.get("console_view_model"), "console_view_model")
+        )
 
 
 def _validate_run_result(record: Mapping[str, object]) -> None:
@@ -1816,12 +1950,12 @@ def _validate_run_result(record: Mapping[str, object]) -> None:
             _as_mapping(record.get("training_diagnostics"), "training_diagnostics")
         )
     if "console_view_model" in record:
-        _validate_run_console_view_model(
+        _validate_console_detail_view_model(
             _as_mapping(record.get("console_view_model"), "console_view_model")
         )
 
 
-def _validate_run_console_view_model(record: Mapping[str, object]) -> None:
+def _validate_console_detail_view_model(record: Mapping[str, object]) -> None:
     sections = _as_sequence(record.get("detail_sections"), "console_view_model.detail_sections")
     for section_index, section in enumerate(sections):
         section_record = _as_mapping(

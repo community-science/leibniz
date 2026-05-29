@@ -139,6 +139,23 @@ def test_materialize_benchmark_result_views_projects_imported_publications(
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     assert leaderboard[0]["score"] == 1.0
     assert leaderboard[0]["observed_complexities"] == [1.0]
+    model_view = cast(dict[str, object], leaderboard[0]["console_view_model"])
+    model_sections = cast(list[dict[str, object]], model_view["detail_sections"])
+    assert [section["title"] for section in model_sections] == [
+        "Model Contract",
+        "Architecture Graph",
+        "Evidence",
+        "Resources",
+    ]
+    contract_entries = cast(list[dict[str, object]], model_sections[0]["entries"])
+    assert contract_entries[1] == {
+        "label": "Prediction Space",
+        "value": "finite digit token sequence over 10 atoms",
+    }
+    graph_entries = cast(list[dict[str, object]], model_sections[1]["entries"])
+    assert graph_entries[0] == {"label": "Components", "value": "3"}
+    evidence_entries = cast(list[dict[str, object]], model_sections[2]["entries"])
+    assert evidence_entries[0] == {"label": "Node Evidence", "value": "3"}
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     assert cost_summary["parameter_count"] == 50
     frontiers = cast(dict[str, object], result["frontiers"])
