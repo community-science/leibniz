@@ -99,6 +99,15 @@ def test_digits_outcome_sequence_encodes_lexicographic_token_indices() -> None:
         2,
         3,
     )
+    assert manifest.outcome_sequence.token_sequence_space(length=3).to_record() == {
+        "kind": "finite-token-sequence",
+        "vocabulary": {
+            "token_count": 10,
+            "token_name": "digit",
+        },
+        "length": 3,
+        "sequence_boundary": "fixed-length",
+    }
 
 
 def test_digits_competence_integral_uses_materialization_complexity_assignments() -> None:

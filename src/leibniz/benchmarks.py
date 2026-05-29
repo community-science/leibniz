@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from itertools import product
 from typing import cast
 
 from leibniz.artifacts import ArtifactReference
@@ -12,7 +11,8 @@ from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.latent_factors import LatentFactorDeclaration
-from leibniz.outcomes import Outcome, OutcomeSpace
+from leibniz.outcomes import OutcomeSpace
+from leibniz.prediction_spaces import FiniteTokenSequenceSpace, FiniteTokenVocabulary
 from leibniz.records import FieldSpec, RecordSpec
 
 __all__ = [
@@ -131,51 +131,31 @@ class BenchmarkOutcomeSequence:
         )
 
     def outcome_count(self, scale: int) -> int:
-        if isinstance(scale, bool):
-            raise BenchmarkManifestValidationError("scale must be an integer")
-        if scale < 1:
-            raise BenchmarkManifestValidationError("scale must be positive")
-        return self.atom_count**scale
+        return self.token_sequence_space(length=scale).cardinality
 
     def outcome_index(self, atoms: Sequence[int]) -> int:
         """Return the lexicographic outcome index for a token sequence."""
 
         atom_values = tuple(_as_int(atom, field="atoms") for atom in atoms)
-        if not atom_values:
-            raise BenchmarkManifestValidationError("outcome sequence must not be empty")
-        index = 0
-        for atom in atom_values:
-            if atom < 0 or atom >= self.atom_count:
-                raise BenchmarkManifestValidationError(
-                    f"outcome atom {atom} is outside 0..{self.atom_count - 1}"
-                )
-            index = index * self.atom_count + atom
-        return index
+        try:
+            return self.token_sequence_space(length=len(atom_values)).sequence_index(atom_values)
+        except ValueError as error:
+            raise BenchmarkManifestValidationError(str(error)) from error
 
     def atoms_for_outcome_index(self, *, index: int, length: int) -> tuple[int, ...]:
         """Return the token sequence at one lexicographic outcome index."""
 
-        if isinstance(length, bool) or length < 1:
-            raise BenchmarkManifestValidationError("length must be positive")
-        if type(index) is not int or index < 0 or index >= self.outcome_count(length):
-            raise BenchmarkManifestValidationError("outcome index is outside sequence space")
-        atoms = [0] * length
-        cursor = index
-        for position in range(length - 1, -1, -1):
-            atoms[position] = cursor % self.atom_count
-            cursor //= self.atom_count
-        return tuple(atoms)
+        try:
+            return self.token_sequence_space(length=length).sequence_for_index(index)
+        except ValueError as error:
+            raise BenchmarkManifestValidationError(str(error)) from error
 
     def outcome_id(self, atoms: Sequence[int]) -> str:
         atom_values = tuple(_as_int(atom, field="atoms") for atom in atoms)
-        if not atom_values:
-            raise BenchmarkManifestValidationError("outcome sequence must not be empty")
-        for atom in atom_values:
-            if atom < 0 or atom >= self.atom_count:
-                raise BenchmarkManifestValidationError(
-                    f"outcome atom {atom} is outside 0..{self.atom_count - 1}"
-                )
-        return "-".join((self.atom_name, *(str(atom) for atom in atom_values)))
+        try:
+            return self.token_sequence_space(length=len(atom_values)).outcome_id(atom_values)
+        except ValueError as error:
+            raise BenchmarkManifestValidationError(str(error)) from error
 
     def resolve_outcome_space(
         self,
@@ -187,12 +167,23 @@ class BenchmarkOutcomeSequence:
             raise BenchmarkManifestValidationError("length must be an integer")
         if length < 1:
             raise BenchmarkManifestValidationError("length must be positive")
-        return OutcomeSpace(
-            id=id,
-            outcomes=tuple(
-                Outcome(self.outcome_id(atoms))
-                for atoms in product(range(self.atom_count), repeat=length)
-            ),
+        return self.token_sequence_space(length=length).outcome_space(id=id)
+
+    @property
+    def token_vocabulary(self) -> FiniteTokenVocabulary:
+        """Return the generic token vocabulary represented by this manifest field."""
+
+        return FiniteTokenVocabulary(
+            token_count=self.atom_count,
+            token_name=self.atom_name,
+        )
+
+    def token_sequence_space(self, *, length: int) -> FiniteTokenSequenceSpace:
+        """Return the generic fixed-length token sequence prediction space."""
+
+        return FiniteTokenSequenceSpace(
+            vocabulary=self.token_vocabulary,
+            length=length,
         )
 
     def to_record(self) -> dict[str, object]:
