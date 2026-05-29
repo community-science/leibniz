@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from leibniz.artifacts import ArtifactReference
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.content import ContentDigest
 from leibniz.documents import document_filename_suffix
@@ -274,6 +275,24 @@ class ObservationGenerator:
             raise ObservationGenerationError(
                 "component_sequences length must match sample_count"
             )
+        if self.benchmark_manifest.scale_parameter is None:
+            raise ObservationGenerationError("benchmark manifest must declare scale")
+        scale_assignment = AxisAssignment(
+            values={self.benchmark_manifest.scale_parameter.symbol: scale}
+        )
+        complexity_assignment = AxisAssignment(values={complexity_axis: int(complexity)})
+        resolution_assignment = self.materialization.minimum_resolution(scale_assignment)
+        self.materialization.require_resolution(
+            scale_assignment=scale_assignment,
+            resolution_assignment=resolution_assignment,
+        )
+        materialization_declaration = ArtifactReference(
+            kind="materialization-declaration",
+            protocol_id=self.materialization.id,
+            record_digest=self.materialization.digest,
+        )
+        variation_transform_record = self.formation.variation_transform.to_record()
+        variation_transform_digest = str(ContentDigest.from_value(variation_transform_record))
 
         with _timing_span(
             timing,
@@ -285,8 +304,10 @@ class ObservationGenerator:
                     scale=scale,
                     seed=seed,
                     index=index,
-                    complexity_axis=complexity_axis,
-                    complexity=complexity,
+                    scale_assignment=scale_assignment,
+                    complexity_assignment=complexity_assignment,
+                    resolution_assignment=resolution_assignment,
+                    materialization_declaration=materialization_declaration,
                 )
                 for index in range(sample_count)
             )
@@ -307,6 +328,8 @@ class ObservationGenerator:
             for index, sequence in enumerate(sequence_samples):
                 variation_values = _variation_transform_values(
                     transform=self.formation.variation_transform,
+                    transform_record=variation_transform_record,
+                    transform_digest=variation_transform_digest,
                     seed=plans[index].seed,
                     sample_index=index,
                     slot_count=len(sequence),
@@ -391,22 +414,21 @@ class ObservationGenerator:
         scale: int,
         seed: int,
         index: int,
-        complexity_axis: str,
-        complexity: float,
+        scale_assignment: AxisAssignment,
+        complexity_assignment: AxisAssignment,
+        resolution_assignment: AxisAssignment,
+        materialization_declaration: ArtifactReference,
     ) -> MaterializationPlan:
-        if self.benchmark_manifest.scale_parameter is None:
-            raise ObservationGenerationError("benchmark manifest must declare scale")
-        plan = MaterializationPlan.resolve(
+        return MaterializationPlan(
             id=self._plan_id(scale=scale, seed=seed, index=index),
-            declaration=self.materialization,
-            scale_assignment=AxisAssignment(
-                values={self.benchmark_manifest.scale_parameter.symbol: scale}
-            ),
-            complexity_assignment=AxisAssignment(values={complexity_axis: int(complexity)}),
+            benchmark_id=self.materialization.benchmark_id,
+            materialization_declaration=materialization_declaration,
+            scale_assignment=scale_assignment,
+            complexity_assignment=complexity_assignment,
+            resolution_assignment=resolution_assignment,
             seed=seed,
+            latent_factor_declaration=self.materialization.latent_factor_declaration,
         )
-        plan.validate_declaration(self.materialization)
-        return plan
 
     def _outcome_id(self, sequence: tuple[int, ...]) -> str:
         if self.benchmark_manifest.outcome_sequence is None:
@@ -487,16 +509,58 @@ def sample_variation_transform_coordinates(
         raise ObservationGenerationError("sample_index must be a nonnegative integer")
     if type(slot_index) is not int or slot_index < 0:
         raise ObservationGenerationError("slot_index must be a nonnegative integer")
-    generator = random.Random(
-        ":".join(
-            (
-                str(seed),
-                str(sample_index),
-                str(slot_index),
-                str(ContentDigest.from_value(transform.to_record())),
-            )
-        )
+    generator = _variation_random(
+        seed=seed,
+        sample_index=sample_index,
+        slot_index=slot_index,
+        transform_digest=str(ContentDigest.from_value(transform.to_record())),
     )
+    return _variation_coordinate_record(
+        transform=transform,
+        generator=generator,
+        slot_index=slot_index,
+    )
+
+
+def _sample_variation_transform_coordinates(
+    *,
+    transform: VariationTransformDeclaration,
+    transform_digest: str,
+    seed: int,
+    sample_index: int,
+    slot_index: int,
+) -> Mapping[str, object]:
+    generator = _variation_random(
+        seed=seed,
+        sample_index=sample_index,
+        slot_index=slot_index,
+        transform_digest=transform_digest,
+    )
+    return _variation_coordinate_record(
+        transform=transform,
+        generator=generator,
+        slot_index=slot_index,
+    )
+
+
+def _variation_random(
+    *,
+    seed: int,
+    sample_index: int,
+    slot_index: int,
+    transform_digest: str,
+) -> random.Random:
+    return random.Random(
+        ":".join((str(seed), str(sample_index), str(slot_index), transform_digest))
+    )
+
+
+def _variation_coordinate_record(
+    *,
+    transform: VariationTransformDeclaration,
+    generator: random.Random,
+    slot_index: int,
+) -> Mapping[str, object]:
     spatial = transform.spatial_affine
     return {
         "kind": "field-variation-transform-coordinate",
@@ -567,19 +631,28 @@ def field_to_png_data_url(field: FieldObservation) -> str:
 def _variation_transform_values(
     *,
     transform: VariationTransformDeclaration,
+    transform_record: Mapping[str, object] | None = None,
+    transform_digest: str | None = None,
     seed: int,
     sample_index: int,
     slot_count: int,
 ) -> Mapping[str, object]:
     if slot_count < 1:
         raise ObservationGenerationError("slot_count must be positive")
+    bounds = transform.to_record() if transform_record is None else transform_record
+    digest = (
+        str(ContentDigest.from_value(bounds))
+        if transform_digest is None
+        else transform_digest
+    )
     return {
         "kind": "field-variation-transform-samples",
-        "bounds": transform.to_record(),
+        "bounds": bounds,
         "coordinates": [
             dict(
-                sample_variation_transform_coordinates(
+                _sample_variation_transform_coordinates(
                     transform=transform,
+                    transform_digest=digest,
                     seed=seed,
                     sample_index=sample_index,
                     slot_index=slot_index,
