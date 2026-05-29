@@ -177,10 +177,6 @@ class FormationTensorCache:
             if len(sample.variation_coordinates) != slot_count:
                 raise TensorRuntimeError("variation_coordinates length must match slot count")
             for slot_index, component_index in enumerate(sample.component_sequence):
-                coordinate = _generated_variation_coordinate(
-                    sample.variation_coordinates[slot_index],
-                    expected_slot_index=slot_index,
-                )
                 source_tensors.append(
                     self.component_tensor(
                         resolution=resolution,
@@ -189,15 +185,14 @@ class FormationTensorCache:
                         component_index=component_index,
                     )
                 )
-                affine_rows.append(
-                    _affine_grid_row(
-                        coordinate=coordinate,
-                        slot_count=slot_count,
-                        slot_index=slot_index,
-                        slot_axis=self.formation.slot_composition.slot_axis,
-                    )
+                row, value_scale = _generated_affine_grid_row_and_value_scale(
+                    sample.variation_coordinates[slot_index],
+                    slot_count=slot_count,
+                    slot_index=slot_index,
+                    slot_axis=self.formation.slot_composition.slot_axis,
                 )
-                value_scales.append(coordinate.value_scale)
+                affine_rows.append(row)
+                value_scales.append(value_scale)
         torch = self.runtime.torch
         sources = torch.stack(source_tensors)
         theta = torch.tensor(
@@ -522,20 +517,26 @@ def _variation_coordinate(
     )
 
 
-def _generated_variation_coordinate(
+def _generated_affine_grid_row_and_value_scale(
     record: Mapping[str, object],
     *,
-    expected_slot_index: int,
-) -> _VariationCoordinate:
+    slot_count: int,
+    slot_index: int,
+    slot_axis: str,
+) -> tuple[tuple[tuple[float, float, float], tuple[float, float, float]], float]:
     spatial = cast(Mapping[str, object], record["spatial_affine"])
     value_scale = cast(Mapping[str, object], record["value_scale"])
-    return _VariationCoordinate(
-        slot_index=expected_slot_index,
-        translation=_trusted_pair(spatial["translation"]),
-        scale=_trusted_pair(spatial["scale"]),
-        rotation_degrees=_trusted_single_number(spatial["rotation_degrees"]),
-        shear_degrees=_trusted_single_number(spatial["shear_degrees"]),
-        value_scale=_trusted_float(value_scale["scale"]),
+    return (
+        _affine_grid_row_from_values(
+            translation=_trusted_pair(spatial["translation"]),
+            scale=_trusted_pair(spatial["scale"]),
+            rotation_degrees=_trusted_single_number(spatial["rotation_degrees"]),
+            shear_degrees=_trusted_single_number(spatial["shear_degrees"]),
+            slot_count=slot_count,
+            slot_index=slot_index,
+            slot_axis=slot_axis,
+        ),
+        _trusted_float(value_scale["scale"]),
     )
 
 
@@ -546,12 +547,37 @@ def _affine_grid_row(
     slot_index: int,
     slot_axis: str,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    inverse = _inverse_affine_matrix(coordinate)
+    return _affine_grid_row_from_values(
+        translation=coordinate.translation,
+        scale=coordinate.scale,
+        rotation_degrees=coordinate.rotation_degrees,
+        shear_degrees=coordinate.shear_degrees,
+        slot_count=slot_count,
+        slot_index=slot_index,
+        slot_axis=slot_axis,
+    )
+
+
+def _affine_grid_row_from_values(
+    *,
+    translation: tuple[float, float],
+    scale: tuple[float, float],
+    rotation_degrees: float,
+    shear_degrees: float,
+    slot_count: int,
+    slot_index: int,
+    slot_axis: str,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    inverse = _inverse_affine_matrix_from_values(
+        scale=scale,
+        rotation_degrees=rotation_degrees,
+        shear_degrees=shear_degrees,
+    )
     center = _slot_center(slot_count=slot_count, slot_index=slot_index, axis=slot_axis)
     center_x = 2.0 * center[0] - 1.0
     center_y = 2.0 * center[1] - 1.0
-    translation_x = 2.0 * coordinate.translation[0]
-    translation_y = 2.0 * coordinate.translation[1]
+    translation_x = 2.0 * translation[0]
+    translation_y = 2.0 * translation[1]
     return (
         (
             inverse[0][0],
@@ -570,12 +596,15 @@ def _affine_grid_row(
     )
 
 
-def _inverse_affine_matrix(
-    coordinate: _VariationCoordinate,
+def _inverse_affine_matrix_from_values(
+    *,
+    scale: tuple[float, float],
+    rotation_degrees: float,
+    shear_degrees: float,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
-    angle = math.radians(coordinate.rotation_degrees)
-    shear = math.tan(math.radians(coordinate.shear_degrees))
-    scale_x, scale_y = coordinate.scale
+    angle = math.radians(rotation_degrees)
+    shear = math.tan(math.radians(shear_degrees))
+    scale_x, scale_y = scale
     cos_angle = math.cos(angle)
     sin_angle = math.sin(angle)
     a = cos_angle * scale_x

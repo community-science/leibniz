@@ -220,10 +220,18 @@ def test_formation_tensor_cache_batch_tensors_use_generated_coordinate_values(
     def reject_record_parse(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("batch_tensors should use generated coordinate values")
 
+    def reject_general_affine_row(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("batch_tensors should use trusted generated affine rows")
+
     monkeypatch.setattr(
         tensor_runtime,
         "_variation_coordinate",
         cast(Any, reject_record_parse),
+    )
+    monkeypatch.setattr(
+        tensor_runtime,
+        "_affine_grid_row",
+        cast(Any, reject_general_affine_row),
     )
 
     fields, labels = cache.batch_tensors(batch=formation_batch, outcome_ids=outcome_ids)
