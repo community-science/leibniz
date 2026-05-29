@@ -6,7 +6,6 @@ import pytest
 
 import leibniz.benchmark_runner as benchmark_runner
 from leibniz.benchmark_runner import (
-    BenchmarkRunnerError,
     BenchmarkRunPlan,
     BenchmarkRunSummary,
     run_benchmark,
@@ -457,21 +456,7 @@ def test_digits_benchmark_runner_materializes_running_training_history(
     assert not progress_path.exists()
 
 
-def test_digits_benchmark_runner_rejects_unmatched_architecture_shape(tmp_path: Path) -> None:
-    with pytest.raises(BenchmarkRunnerError, match="does not match generated observation shape"):
-        run_benchmark(
-            BenchmarkRunPlan(
-                architecture_path=_digits_architecture,
-                benchmark_root=_digits_benchmark_root,
-                runs_root=tmp_path / ".runs",
-                scale=2,
-                sample_count=1,
-                tensor_device="cpu",
-            )
-        )
-
-
-def test_digits_benchmark_runner_records_scale_curriculum_boundary(tmp_path: Path) -> None:
+def test_digits_benchmark_runner_records_adaptive_scale_boundary(tmp_path: Path) -> None:
     summary = run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
@@ -480,7 +465,6 @@ def test_digits_benchmark_runner_records_scale_curriculum_boundary(tmp_path: Pat
             sample_count=2,
             train_steps=0,
             tensor_device="cpu",
-            scale_curriculum=True,
         )
     )
 
