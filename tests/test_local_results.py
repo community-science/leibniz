@@ -81,6 +81,33 @@ def test_console_result_view_rejects_wrong_format() -> None:
         load_console_result_view(canonical_document_bytes({"format": "other", "format_version": 1}))
 
 
+def test_console_result_view_validates_embedded_model_inspections(tmp_path: Path) -> None:
+    source_root = tmp_path / "hf-checkout"
+    source_root.mkdir()
+    bundle_path = source_root / "digits_publication.json"
+    bundle_path.write_bytes(canonical_document_bytes(_digits_publication_bundle_record()))
+    import_submission_publications(
+        (source_root,),
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+
+    view = dict(load_console_result_view(summary.view_file.read_bytes()))
+    results = cast(list[dict[str, object]], view["benchmark_results"])
+    inspections = cast(list[dict[str, object]], results[0]["model_inspections"])
+    inspections[0] = {key: value for key, value in inspections[0].items() if key != "components"}
+
+    with pytest.raises(
+        LocalResultImportError,
+        match="model_inspections.0: invalid model inspection",
+    ):
+        load_console_result_view(canonical_document_bytes(view))
+
+
 def test_materialize_benchmark_result_views_projects_imported_publications(
     tmp_path: Path,
 ) -> None:
