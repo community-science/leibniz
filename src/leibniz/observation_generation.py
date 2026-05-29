@@ -293,6 +293,8 @@ class ObservationGenerator:
         slot_count = scale_assignment.require_axis(self.formation.slot_composition.count_axis)
         variation_transform_record = self.formation.variation_transform.to_record()
         variation_transform_digest = str(ContentDigest.from_value(variation_transform_record))
+        component_generator = random.Random(f"{seed}:component-sequence")
+        variation_generator = random.Random(f"{seed}:variation:{variation_transform_digest}")
 
         with _timing_span(
             timing,
@@ -317,8 +319,7 @@ class ObservationGenerator:
                     tuple(sequences[index])
                     if sequences
                     else _sample_component_sequence(
-                        seed=seed,
-                        sample_index=index,
+                        generator=component_generator,
                         slot_count=slot_count,
                         component_count=len(self.formation.components),
                     )
@@ -327,15 +328,15 @@ class ObservationGenerator:
             )
         variation_samples: list[tuple[Mapping[str, object], tuple[Mapping[str, object], ...]]] = []
         with _timing_span(timing, f"{timing_prefix}variation_coordinates", samples=sample_count):
-            for index, sequence in enumerate(sequence_samples):
-                variation_samples.append(_variation_transform_values_and_coordinates(
-                    transform=self.formation.variation_transform,
-                    transform_record=variation_transform_record,
-                    transform_digest=variation_transform_digest,
-                    seed=plans[index].seed,
-                    sample_index=index,
-                    slot_count=len(sequence),
-                ))
+            for sequence in sequence_samples:
+                variation_samples.append(
+                    _variation_transform_values_and_coordinates(
+                        transform=self.formation.variation_transform,
+                        transform_record=variation_transform_record,
+                        generator=variation_generator,
+                        slot_count=len(sequence),
+                    )
+                )
         samples: list[GeneratedFormationSample] = []
         with _timing_span(timing, f"{timing_prefix}sample_assembly", samples=sample_count):
             for index, plan, sequence, variation_sample in zip(
@@ -521,27 +522,6 @@ def sample_variation_transform_coordinates(
     )
 
 
-def _sample_variation_transform_coordinates(
-    *,
-    transform: VariationTransformDeclaration,
-    transform_digest: str,
-    seed: int,
-    sample_index: int,
-    slot_index: int,
-) -> Mapping[str, object]:
-    generator = _variation_random(
-        seed=seed,
-        sample_index=sample_index,
-        slot_index=slot_index,
-        transform_digest=transform_digest,
-    )
-    return _variation_coordinate_record(
-        transform=transform,
-        generator=generator,
-        slot_index=slot_index,
-    )
-
-
 def _variation_random(
     *,
     seed: int,
@@ -631,20 +611,16 @@ def _variation_transform_values_and_coordinates(
     *,
     transform: VariationTransformDeclaration,
     transform_record: Mapping[str, object],
-    transform_digest: str,
-    seed: int,
-    sample_index: int,
+    generator: random.Random,
     slot_count: int,
 ) -> tuple[Mapping[str, object], tuple[Mapping[str, object], ...]]:
     if slot_count < 1:
         raise ObservationGenerationError("slot_count must be positive")
     coordinates = [
         dict(
-            _sample_variation_transform_coordinates(
+            _variation_coordinate_record(
                 transform=transform,
-                transform_digest=transform_digest,
-                seed=seed,
-                sample_index=sample_index,
+                generator=generator,
                 slot_index=slot_index,
             )
         )
@@ -662,14 +638,12 @@ def _variation_transform_values_and_coordinates(
 
 def _sample_component_sequence(
     *,
-    seed: int,
-    sample_index: int,
+    generator: random.Random,
     slot_count: int,
     component_count: int,
 ) -> tuple[int, ...]:
     if slot_count < 1:
         raise ObservationGenerationError("slot count must be positive")
-    generator = random.Random(seed + sample_index)
     return tuple(generator.randrange(component_count) for _slot in range(slot_count))
 
 

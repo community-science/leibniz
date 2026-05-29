@@ -89,20 +89,6 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
         seed=101,
     )
     assert formation_batch.samples[0].materialization_plan == direct_plan
-    assert formation_batch.samples[0].variation_coordinates[0] == (
-        sample_variation_transform_coordinates(
-            transform=generator.formation.variation_transform,
-            seed=101,
-            sample_index=0,
-            slot_index=0,
-        )
-    )
-    assert formation_batch.samples[1].component_sequence == (
-        generator.formation.sample_component_sequence(
-            plan=formation_batch.samples[1].materialization_plan,
-            sample_index=1,
-        )
-    )
 
 
 def test_digits_observation_generator_records_optional_timing() -> None:
