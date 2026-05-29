@@ -1,5 +1,7 @@
+import math
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -21,7 +23,7 @@ from leibniz.tensor_runtime import (
     TensorRuntimeDeviceKind,
     resolve_tensor_runtime,
 )
-from leibniz.training_runs import TrainingHistoryPoint, TrainingRunRecord
+from leibniz.training_runs import TrainingHistoryPoint, TrainingProtocol, TrainingRunRecord
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -477,9 +479,72 @@ def test_digits_benchmark_runner_records_adaptive_scale_boundary(tmp_path: Path)
 
     assert trace["stop_reason"] == "model-scale-boundary"
     assert levels[0]["scale"] == 1
+    assert levels[0]["score_weight"] == 1.0
     assert levels[1]["scale"] == 2
     assert levels[1]["competence"] == 0.0
+    assert levels[1]["score_weight"] == 2.0
+    assert trace["integrated_score"] == levels[0]["competence"]
     assert "output_shape" in cast(str, levels[1]["boundary_reason"])
+
+
+def test_adaptive_scale_trace_retrains_until_zero_marginal_score(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trained_scales: list[int] = []
+
+    def no_boundary(**_kwargs: object) -> None:
+        return None
+
+    def train_scale(**kwargs: object) -> Any:
+        scale = cast(int, kwargs["scale"])
+        evaluation_batch = kwargs["evaluation_batch"]
+        outcome_space = kwargs["outcome_space"]
+        samples = cast(Any, evaluation_batch).samples
+        outcomes = cast(Any, outcome_space).outcomes
+        trained_scales.append(scale)
+        outcome_count = len(outcomes)
+        best_loss = 0.0 if scale in {1, 2} else math.log(outcome_count)
+        return SimpleNamespace(
+            probabilities=tuple(
+                tuple(1.0 / outcome_count for _outcome in outcomes) for _sample in samples
+            ),
+            training_run=_training_run(best_loss=best_loss),
+            throughput={},
+        )
+
+    monkeypatch.setattr(benchmark_runner, "_direct_prediction_boundary_reason", no_boundary)
+    monkeypatch.setattr(benchmark_runner, "_train_and_predict", train_scale)
+
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            runs_root=tmp_path / ".runs",
+            sample_count=2,
+            evaluation_sample_count=2,
+            train_steps=0,
+            tensor_device="cpu",
+        )
+    )
+    training_summary = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    trace = cast(Mapping[str, object], training_summary["scale_evaluation_trace"])
+    levels = cast(list[Mapping[str, object]], trace["levels"])
+
+    assert trained_scales == [1, 2, 3]
+    assert trace["stop_reason"] == "zero-marginal-score"
+    assert [level["scale"] for level in levels] == [1, 2, 3]
+    for actual, expected in zip(
+        (cast(float, level["score_weight"]) for level in levels),
+        (1.0, 2.0, 3.0),
+        strict=True,
+    ):
+        assert math.isclose(actual, expected)
+    assert [level["competence"] for level in levels] == [1.0, 1.0, 0.0]
+    assert trace["integrated_score"] == 3.0
 
 
 def test_cli_runs_digits_benchmark_dry_run(
@@ -528,4 +593,36 @@ def _history_point(
         best_validation_step=step,
         best_validation_check=check,
         stale_checks=stale_checks,
+    )
+
+
+def _training_run(*, best_loss: float) -> TrainingRunRecord:
+    history = (_history_point(check=0, step=0, loss=best_loss, best=best_loss),)
+    return TrainingRunRecord(
+        status="completed",
+        stop_reason="no-training-steps",
+        steps_run=0,
+        validation_checks=len(history),
+        best_validation_loss=best_loss,
+        best_validation_step=0,
+        best_validation_check=0,
+        protocol=TrainingProtocol(
+            kind="fixed-step-local-batch",
+            objective="cross-entropy",
+            optimizer="sgd",
+            learning_rate=0.01,
+            schedule="none",
+            seed=101,
+            batch_size=2,
+            max_steps=0,
+            validation_interval=250,
+            validation_sample_count=2,
+            min_delta=1e-3,
+            patience=12,
+            validation_source="generator-resample",
+            min_steps=500,
+            tensor_runtime="pytorch",
+            tensor_device="cpu",
+        ),
+        validation_history=history,
     )

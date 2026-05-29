@@ -15,17 +15,23 @@ def test_scale_trace_integrates_consecutive_local_competence() -> None:
         score=PerScaleScore(),
         evaluation=AdaptiveScaleEvaluation(axis_symbol="L"),
         levels=(
-            ScaleEvaluationLevel(scale=1, competence=0.75),
+            ScaleEvaluationLevel(scale=1, competence=0.75, score_weight=1.0),
             ScaleEvaluationLevel(
                 scale=2,
+                competence=0.5,
+                score_weight=2.0,
+            ),
+            ScaleEvaluationLevel(
+                scale=3,
                 competence=0.0,
+                score_weight=3.0,
                 boundary_reason="model output_shape does not match resolved outcome space",
             ),
         ),
         stop_reason="model-scale-boundary",
     )
 
-    assert trace.integrated_score == 0.75
+    assert trace.integrated_score == 1.75
     assert ScaleEvaluationTrace.from_record(trace.to_record()) == trace
 
 
@@ -43,8 +49,8 @@ def test_scale_trace_requires_consecutive_scales_from_minimum() -> None:
             score=PerScaleScore(),
             evaluation=AdaptiveScaleEvaluation(axis_symbol="L"),
             levels=(
-                ScaleEvaluationLevel(scale=1, competence=0.75),
-                ScaleEvaluationLevel(scale=3, competence=0.25),
+                ScaleEvaluationLevel(scale=1, competence=0.75, score_weight=1.0),
+                ScaleEvaluationLevel(scale=3, competence=0.25, score_weight=3.0),
             ),
             stop_reason="test",
         )

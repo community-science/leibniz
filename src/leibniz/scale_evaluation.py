@@ -48,6 +48,7 @@ _scale_level_record = RecordSpec(
     fields={
         "scale": FieldSpec(kind="integer"),
         "competence": FieldSpec(kind="number"),
+        "score_weight": FieldSpec(kind="number"),
         "resources": FieldSpec(kind="record", required=False),
         "boundary_reason": FieldSpec(kind="string", required=False),
     }
@@ -226,6 +227,7 @@ class ScaleEvaluationLevel:
 
     scale: int
     competence: float
+    score_weight: float
     resources: Mapping[str, object] | None = None
     boundary_reason: str | None = None
 
@@ -233,6 +235,9 @@ class ScaleEvaluationLevel:
         if not axis.contains(self.scale):
             raise ScaleEvaluationValidationError("scale is outside axis domain")
         score.validate_value(self.competence)
+        _require_finite(self.score_weight, "score_weight")
+        if self.score_weight <= 0:
+            raise ScaleEvaluationValidationError("score_weight must be positive")
         if self.resources is not None:
             _validate_scalar_mapping(self.resources, "resources")
         if self.boundary_reason is not None and not self.boundary_reason:
@@ -247,6 +252,7 @@ class ScaleEvaluationLevel:
         return cls(
             scale=_as_int(validated["scale"], "scale"),
             competence=_as_float(validated["competence"], "competence"),
+            score_weight=_as_float(validated["score_weight"], "score_weight"),
             resources=(
                 None
                 if "resources" not in validated
@@ -263,6 +269,7 @@ class ScaleEvaluationLevel:
         record: dict[str, object] = {
             "scale": self.scale,
             "competence": self.competence,
+            "score_weight": self.score_weight,
         }
         if self.resources is not None:
             record["resources"] = dict(self.resources)
@@ -286,7 +293,7 @@ class ScaleEvaluationTrace:
 
     @property
     def integrated_score(self) -> float:
-        return sum(level.competence for level in self.levels)
+        return sum(level.competence * level.score_weight for level in self.levels)
 
     def validate(self) -> None:
         if self.evaluation.axis_symbol != self.axis.symbol:
