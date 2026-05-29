@@ -225,6 +225,7 @@ function assertBenchmarkSamplePaneStructure() {
     '--benchmark-sample-tile-size',
     '--benchmark-sample-caption-height',
     '.benchmark-sample-coordinate-inspector',
+    'object-fit: contain',
     'text-overflow: ellipsis',
   ];
   for (const marker of requiredStyleMarkers) {
