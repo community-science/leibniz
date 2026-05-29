@@ -6,6 +6,7 @@ import math
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import count
 from pathlib import Path
 from typing import Any, cast
 
@@ -47,6 +48,7 @@ __all__ = [
     "BenchmarkRunnerError",
     "BenchmarkRunPlan",
     "BenchmarkRunSummary",
+    "has_windowed_validation_plateau",
     "run_benchmark",
 ]
 
@@ -54,7 +56,7 @@ _document_suffix = document_filename_suffix()
 _progress_format = "leibniz.benchmark-training-progress"
 _progress_format_version = 1
 _default_sample_count = 512
-_default_train_steps = 50_000
+_default_train_steps: int | None = None
 _default_validation_interval = 250
 _default_convergence_patience = 12
 _default_convergence_min_delta = 1e-3
@@ -136,7 +138,7 @@ class BenchmarkRunPlan:
     sample_count: int = _default_sample_count
     evaluation_sample_count: int | None = None
     seed: int = 101
-    train_steps: int = _default_train_steps
+    train_steps: int | None = _default_train_steps
     learning_rate: float = 0.01
     optimizer: str = "sgd"
     schedule: str = "none"
@@ -163,8 +165,20 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError("evaluation_sample_count must be a positive integer")
         if type(self.seed) is not int or self.seed < 0:
             raise BenchmarkRunnerError("seed must be a nonnegative integer")
-        if type(self.train_steps) is not int or self.train_steps < 0:
+        if self.train_steps is not None and (
+            type(self.train_steps) is not int or self.train_steps < 0
+        ):
             raise BenchmarkRunnerError("train_steps must be a nonnegative integer")
+        if self.train_steps is None and self.schedule == "cosine":
+            raise BenchmarkRunnerError("cosine schedule requires train_steps")
+        if (
+            self.train_steps is None
+            and self.convergence_patience == 0
+            and self.target_validation_loss is None
+        ):
+            raise BenchmarkRunnerError(
+                "uncapped training requires convergence_patience or target_validation_loss"
+            )
         if self.learning_rate <= 0:
             raise BenchmarkRunnerError("learning_rate must be positive")
         if self.optimizer not in {"sgd", "adam", "adamw"}:
@@ -192,7 +206,7 @@ class BenchmarkRunPlan:
 
         base = (
             f"l{self.scale}-seed{self.seed}-samples{self.sample_count}"
-            f"-steps{self.train_steps}"
+            f"-steps{self.train_steps if self.train_steps is not None else 'converge'}"
         )
         if self.resolved_evaluation_sample_count == self.sample_count:
             return f"{base}-{self.training_control_atom}"
@@ -454,7 +468,7 @@ def _train_and_predict(
     outcome_space: OutcomeSpace,
     scale: int,
     sample_count: int,
-    train_steps: int,
+    train_steps: int | None,
     learning_rate: float,
     optimizer_name: str,
     schedule_name: str,
@@ -512,7 +526,7 @@ def _train_and_predict_on_device(
     outcome_space: OutcomeSpace,
     scale: int,
     sample_count: int,
-    train_steps: int,
+    train_steps: int | None,
     learning_rate: float,
     optimizer_name: str,
     schedule_name: str,
@@ -659,6 +673,7 @@ def _train_and_predict_on_device(
         convergence_patience=convergence_patience,
         convergence_min_delta=convergence_min_delta,
         convergence_min_steps=convergence_min_steps,
+        target_validation_loss=target_validation_loss,
         tensor_device=runtime.device_kind,
         validation_history=tuple(validation_history),
     )
@@ -687,7 +702,7 @@ def _train_until_convergence(
     loss_function: Any,
     train_batch: Callable[[int], tuple[Any, Any]],
     validation_batch: Callable[[int], tuple[Any, Any]],
-    max_steps: int,
+    max_steps: int | None,
     validation_interval: int,
     patience: int,
     min_delta: float,
@@ -750,7 +765,8 @@ def _train_until_convergence(
 
     append_validation(step=0, check=0)
     validation_check = 1
-    for step in range(1, max_steps + 1):
+    steps = count(1) if max_steps is None else range(1, max_steps + 1)
+    for step in steps:
         training_started = time.perf_counter()
         fields, labels = train_batch(step)
         module.train()
@@ -769,7 +785,8 @@ def _train_until_convergence(
             seconds=time.perf_counter() - training_started,
             samples=batch_size,
         )
-        if step % validation_interval != 0 and step != max_steps:
+        hit_step_cap = max_steps is not None and step == max_steps
+        if step % validation_interval != 0 and not hit_step_cap:
             continue
         append_validation(step=step, check=validation_check)
         validation_check += 1
@@ -779,7 +796,15 @@ def _train_until_convergence(
             and best_loss <= target_validation_loss
         ):
             break
-        if patience > 0 and step >= min_steps and stale_checks >= patience:
+        if (
+            patience > 0
+            and step >= min_steps
+            and has_windowed_validation_plateau(
+                validation_history,
+                window_checks=patience,
+                min_delta=min_delta,
+            )
+        ):
             break
     return validation_history
 
@@ -801,11 +826,24 @@ def _validation_loss(
     return loss
 
 
+def has_windowed_validation_plateau(
+    validation_history: Sequence[TrainingHistoryPoint],
+    *,
+    window_checks: int,
+    min_delta: float,
+) -> bool:
+    if window_checks <= 0 or len(validation_history) <= window_checks:
+        return False
+    current = validation_history[-1]
+    window_start = validation_history[-1 - window_checks]
+    return window_start.best_validation_loss - current.best_validation_loss < min_delta
+
+
 def _training_run_record(
     *,
     seed: int,
     batch_size: int,
-    max_steps: int,
+    max_steps: int | None,
     learning_rate: float,
     optimizer_name: str,
     schedule_name: str,
@@ -813,24 +851,31 @@ def _training_run_record(
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
+    target_validation_loss: float | None,
     tensor_device: str,
     validation_history: tuple[TrainingHistoryPoint, ...],
 ) -> TrainingRunRecord:
     best = validation_history[-1]
     last_step = validation_history[-1].step
-    last_stale_checks = validation_history[-1].stale_checks
     if max_steps == 0:
         stop_reason = "no-training-steps"
         status = "completed"
-    elif convergence_patience > 0 and last_stale_checks >= convergence_patience:
+    elif has_windowed_validation_plateau(
+        validation_history,
+        window_checks=convergence_patience,
+        min_delta=convergence_min_delta,
+    ):
         stop_reason = "validation-plateau"
         status = "converged"
-    elif last_step < max_steps:
+    elif target_validation_loss is not None and best.best_validation_loss <= target_validation_loss:
         stop_reason = "target-validation-loss"
         status = "converged"
-    else:
+    elif max_steps is not None and last_step >= max_steps:
         stop_reason = "max-steps"
         status = "budget-exhausted"
+    else:
+        stop_reason = "training-stopped"
+        status = "completed"
     return TrainingRunRecord(
         status=status,
         stop_reason=stop_reason,
@@ -865,7 +910,7 @@ def _running_training_run_record(
     *,
     seed: int,
     batch_size: int,
-    max_steps: int,
+    max_steps: int | None,
     learning_rate: float,
     optimizer_name: str,
     schedule_name: str,
@@ -1184,12 +1229,14 @@ def _make_scheduler(
     torch: Any,
     optimizer: Any,
     name: str,
-    max_steps: int,
+    max_steps: int | None,
     min_delta: float,
 ) -> _LearningRateSchedule | None:
     if name == "none":
         return None
     if name == "cosine":
+        if max_steps is None:
+            raise BenchmarkRunnerError("cosine schedule requires train_steps")
         return _LearningRateSchedule(
             scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer,
