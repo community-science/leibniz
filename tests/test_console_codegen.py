@@ -65,6 +65,10 @@ def test_generated_console_web_modules_are_npm_build_artifacts() -> None:
     assert "LEIBNIZ_CONSOLE_RESULT_ROOTS" in browser_smoke
     assert "await runConsoleCommand('npm', ['run', 'build']" in browser_smoke
     assert "chromium.launch({ headless: true })" in browser_smoke
+    assert "async function stopPreview" in browser_smoke
+    assert "detached: process.platform !== 'win32'" in browser_smoke
+    assert "process.kill(-child.pid, signal)" in browser_smoke
+    assert "killProcessGroup(child, 'SIGKILL')" in browser_smoke
 
     console_contract_runner = (
         _repository_root / "tests" / "run_console_web_tests.mjs"

@@ -25,7 +25,7 @@ try {
   preview = spawnConsoleCommand(
     'npx',
     ['vite', 'preview', '--host', host, '--port', String(port), '--strictPort'],
-    { env: testEnv },
+    { detached: process.platform !== 'win32', env: testEnv },
   );
   await waitForHttp(`http://${host}:${port}/`);
   const browser = await chromium.launch({ headless: true });
@@ -61,8 +61,7 @@ try {
   }
 } finally {
   if (preview !== undefined) {
-    preview.kill();
-    await new Promise((resolve) => preview.once('exit', resolve));
+    await stopPreview(preview);
   }
   rmSync(resultRoot, { force: true, recursive: true });
 }
@@ -85,6 +84,38 @@ async function runConsoleCommand(command, args, options = {}) {
   if (exitCode !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed:\n${output.join('')}`);
   }
+}
+
+async function stopPreview(child) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  killProcessGroup(child);
+  const exited = await Promise.race([
+    new Promise((resolve) => child.once('exit', () => resolve(true))),
+    new Promise((resolve) => setTimeout(() => resolve(false), 2_000)),
+  ]);
+  if (exited) {
+    return;
+  }
+  killProcessGroup(child, 'SIGKILL');
+  await Promise.race([
+    new Promise((resolve) => child.once('exit', resolve)),
+    new Promise((resolve) => setTimeout(resolve, 2_000)),
+  ]);
+}
+
+function killProcessGroup(child, signal = 'SIGTERM') {
+  if (process.platform !== 'win32' && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (_error) {
+      child.kill(signal);
+      return;
+    }
+  }
+  child.kill(signal);
 }
 
 async function freePort() {
