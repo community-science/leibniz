@@ -20,6 +20,7 @@ import {
   consoleProtocolFormats,
   consoleProtocolFormatVersions,
 } from './generated/protocolVocabulary.ts';
+import { requireLiteral, requireRecord } from './transport.ts';
 
 export type ConsoleDataRecord = {
   format: typeof consoleProtocolFormats.consoleData;
@@ -39,13 +40,16 @@ export class ConsoleDataTransportError extends Error {
   }
 }
 
+const error = (message: string) => new ConsoleDataTransportError(message);
+
 export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
-  const record = requireRecord(value, 'console data');
-  const format = requireLiteral(record.format, 'format', consoleProtocolFormats.consoleData);
+  const record = requireRecord(value, 'console data', error);
+  const format = requireLiteral(record.format, 'format', consoleProtocolFormats.consoleData, error);
   const formatVersion = requireLiteral(
     record.format_version,
     'format_version',
     consoleProtocolFormatVersions.consoleData,
+    error,
   );
   const artifactIndex = parseConsoleArtifactIndexRecord(record.artifact_index);
   const artifactDetails = parseConsoleArtifactDetailRecords(record.artifact_details);
@@ -64,22 +68,4 @@ export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
     benchmark_tasks: benchmarkTasks,
     operator_vocabulary: operatorVocabulary,
   };
-}
-
-function requireRecord(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new ConsoleDataTransportError(`${path}: expected record`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireLiteral<const Literal extends string | number>(
-  value: unknown,
-  path: string,
-  expected: Literal,
-): Literal {
-  if (value !== expected) {
-    throw new ConsoleDataTransportError(`${path}: expected ${String(expected)}`);
-  }
-  return expected;
 }

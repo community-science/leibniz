@@ -17,6 +17,7 @@ import type {
   BenchmarkResultRecord,
   ResultViewRecord,
 } from '../src/leibniz/console/_web_src/src/resultViews.ts';
+import { parseResultViewRecords } from '../src/leibniz/console/_web_src/src/resultViews.ts';
 
 const targetBenchmark = 'benchmarks.target@0.1.0';
 const otherBenchmark = 'benchmarks.other@0.1.0';
@@ -410,8 +411,99 @@ const expandedPlotModel = benchmarkPlotModel(
 );
 assertEqual(expandedPlotModel.xDomain[1], 22, 'plot x maximum expands by log2 step');
 
+const parsedResultViews = parseResultViewRecords([
+  {
+    benchmark_results: [
+      {
+        ...result,
+        proposals: undefined,
+      },
+    ],
+    format: 'leibniz.console.benchmark-results',
+    format_version: 1,
+    source_path: 'results/benchmark_results.json',
+  },
+]);
+const parsedBenchmarkResult = parsedResultViews[0];
+if (parsedBenchmarkResult?.format !== 'leibniz.console.benchmark-results') {
+  throw new Error('parsed benchmark result view must keep its discriminant');
+}
+assertEqual(
+  Array.isArray(parsedBenchmarkResult.benchmark_results[0]?.proposals),
+  true,
+  'parser defaults missing proposals',
+);
+assertThrows(
+  () =>
+    parseResultViewRecords([
+      {
+        format: 'leibniz.console.imported-results',
+        format_version: 1,
+        publication_bundles: [{ id: 'publication-bundles.incomplete@0.1.0' }],
+        source_path: 'results/imported_results.json',
+      },
+    ]),
+  'parser rejects incomplete imported publication bundles',
+);
+assertThrows(
+  () =>
+    parseResultViewRecords([
+      {
+        benchmark_results: [
+          {
+            ...result,
+            proposals: [
+              {
+                candidate_id: 'model-a',
+                candidate_kind: 'architecture',
+                command: [],
+                rank: 1,
+                rationale: 'missing id',
+              },
+            ],
+          },
+        ],
+        format: 'leibniz.console.benchmark-results',
+        format_version: 1,
+        source_path: 'results/benchmark_results.json',
+      },
+    ]),
+  'parser rejects malformed proposals',
+);
+assertThrows(
+  () =>
+    parseResultViewRecords([
+      {
+        benchmark_results: [
+          {
+            ...result,
+            leaderboard: [
+              {
+                ...result.leaderboard[0]!,
+                console_view_model: {},
+              },
+            ],
+          },
+        ],
+        format: 'leibniz.console.benchmark-results',
+        format_version: 1,
+        source_path: 'results/benchmark_results.json',
+      },
+    ]),
+  'parser rejects malformed console view models',
+);
+
 function assertEqual(actual: unknown, expected: unknown, label: string) {
   if (actual !== expected) {
     throw new Error(`${label}: expected ${String(expected)}, got ${String(actual)}`);
   }
+}
+
+function assertThrows(callback: () => unknown, label: string) {
+  try {
+    callback();
+  } catch {
+    return;
+  }
+  throw new Error(`${label}: expected exception`);
 }

@@ -1,3 +1,4 @@
+import re
 import subprocess
 from pathlib import Path
 
@@ -35,13 +36,15 @@ def test_generated_console_result_view_records_module_contains_parser_surface() 
     assert "export type BenchmarkResultRecord" in generated
     assert "export function parseResultViewRecords" in generated
     assert "console_view_model?: RunDetailViewModelRecord;" in generated
-    assert "parseRunDetailViewModel(record.console_view_model" in generated
-    assert "component_count: requireNumber(record.component_count" in generated
+    assert "from '../transport.ts'" in generated
+    assert "parseImportedPublicationBundleRecord" in generated
+    assert "proposals: requireArray(record.proposals ?? []" in generated
+    assert "parseRunDetailViewModel" in generated
+    assert "parseModelInspectionRecord(inspection" in generated
     assert "layer_count" not in generated
     assert "parseWorkQueueItem(item" in generated
     assert "from './workQueueRecords.ts'" in generated
     assert "export type RunDetailViewModelRecord" in generated
-    assert "function parseRunDetailViewModel" in generated
 
 
 def test_generated_console_work_queue_records_module_uses_authored_contract() -> None:
@@ -192,6 +195,26 @@ def test_console_transport_modules_share_boundary_helpers() -> None:
                 duplicated_helpers.append(f"{relative_path}: {marker}")
 
     assert duplicated_helpers == []
+
+
+def test_console_styles_do_not_keep_unused_class_selectors() -> None:
+    styles = (_web_source_root / "styles.css").read_text(encoding="utf-8")
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in _handwritten_web_source_files()
+        if path.name != "styles.css"
+    )
+    classes = sorted(set(re.findall(r"\.([A-Za-z_][A-Za-z0-9_-]*)", styles)))
+
+    assert [class_name for class_name in classes if class_name not in source] == []
+
+
+def test_console_styles_do_not_reference_undefined_custom_properties() -> None:
+    styles = (_web_source_root / "styles.css").read_text(encoding="utf-8")
+    definitions = set(re.findall(r"^\s*(--[A-Za-z0-9_-]+)\s*:", styles, flags=re.MULTILINE))
+    references = set(re.findall(r"var\((--[A-Za-z0-9_-]+)", styles))
+
+    assert sorted(references - definitions) == []
 
 
 def test_benchmark_dashboard_renders_python_owned_run_detail_sections() -> None:
