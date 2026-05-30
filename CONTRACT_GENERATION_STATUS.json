@@ -21,7 +21,7 @@
       "tracked_roots": [
         "src/leibniz"
       ],
-      "maximum": 32078,
+      "maximum": 32158,
       "counting": "Tracked nonblank source implementation lines under src/leibniz in categories marked handwritten-implementation. Contract-runtime support, contract files, tests, fixtures, package metadata, lockfiles, build configuration, generated outputs, and repository automation are excluded."
     },
     "graph_projection": {
@@ -617,9 +617,6 @@
       "scope": "Local work-queue item transport records produced by the active loop and consumed by the browser console.",
       "contract_owner": "python-owned-codegen",
       "record_spec_modules": [],
-      "authored_contracts": [
-        "src/leibniz/contract_artifacts/work_queue_items.json"
-      ],
       "python_runtime": [
         "src/leibniz/work_queues.py"
       ],
@@ -635,7 +632,7 @@
         "generated_typescript_runtime": true,
         "generated_conformance_tests": false
       },
-      "ratchet_next": "Generate conformance fixtures from the authored work-queue item contract and remove the remaining result-view record schema text from the large generated module.",
+      "ratchet_next": "Generate conformance fixtures from the WorkQueueItem-owned contract and remove the remaining result-view record schema text from the large generated module.",
       "tests": [
         "tests/test_console_codegen.py",
         "tests/test_work_queues.py",

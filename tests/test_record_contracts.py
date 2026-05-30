@@ -1,14 +1,9 @@
 from leibniz.contracts import ContractObject, RuntimeProjection
-from leibniz.record_contracts import record_contract_set_from_package
-from leibniz.records import record_specs_from_package_contract
+from leibniz.work_queues import WorkQueueItem
 
 
 def test_record_contract_exposes_generic_projection_boundaries() -> None:
-    contract = record_contract_set_from_package(
-        "leibniz.contract_artifacts",
-        "work_queue_items",
-        description="work queue item record contracts",
-    ).require_record("work_queue_item")
+    contract = WorkQueueItem.record_contract()
 
     assert isinstance(contract, ContractObject)
     assert contract.contract_name == "work_queue_item"
@@ -51,16 +46,8 @@ def test_record_contract_exposes_generic_projection_boundaries() -> None:
 
 
 def test_record_contract_owns_conformance_cases_and_source_graph_facts() -> None:
-    contract = record_contract_set_from_package(
-        "leibniz.contract_artifacts",
-        "work_queue_items",
-        description="work queue item record contracts",
-    ).require_record("work_queue_item")
-    spec = record_specs_from_package_contract(
-        "leibniz.contract_artifacts",
-        "work_queue_items",
-        description="work queue item record contracts",
-    )["work_queue_item"]
+    contract = WorkQueueItem.record_contract()
+    spec = WorkQueueItem.record_spec()
 
     conformance_cases = contract.conformance_cases()
 

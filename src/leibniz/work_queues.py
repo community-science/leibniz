@@ -17,7 +17,8 @@ from leibniz.documents import (
     load_object_document,
 )
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.records import RecordExtractor, record_specs_from_package_contract
+from leibniz.record_contracts import FieldContract, RecordContract
+from leibniz.records import RecordExtractor, RecordSpec, record_specs_from_contract
 
 __all__ = [
     "WorkQueueError",
@@ -34,12 +35,6 @@ _view_format = _protocol_formats.work_queue_view
 _format_version = _protocol_format_versions.work_queue_item
 _document_suffix = document_filename_suffix()
 _Status = Literal["pending", "reserved", "completed", "failed"]
-_record_contracts = record_specs_from_package_contract(
-    "leibniz.contract_artifacts",
-    "work_queue_items",
-    description="work queue item record contracts",
-)
-_work_queue_item_record = _record_contracts["work_queue_item"]
 
 
 class WorkQueueError(ValueError):
@@ -61,6 +56,85 @@ class WorkQueueItem:
     run_id: str | None = None
     measurement_dataset_path: Path | None = None
     error: str | None = None
+
+    @classmethod
+    def record_contract(cls) -> RecordContract:
+        """Return the contract object owned by work-queue item records."""
+
+        return RecordContract(
+            name="work_queue_item",
+            fields=(
+                FieldContract(name="format", kind="literal", literal=_item_format),
+                FieldContract(name="format_version", kind="literal", literal=_format_version),
+                FieldContract(name="id", kind="string"),
+                FieldContract(name="benchmark_id", kind="identifier"),
+                FieldContract(name="proposal_id", kind="string"),
+                FieldContract(name="candidate_id", kind="string", required=False),
+                FieldContract(name="proposal_set_path", kind="string"),
+                FieldContract(
+                    name="command",
+                    kind="sequence",
+                    item=FieldContract(kind="string"),
+                ),
+                FieldContract(
+                    name="status",
+                    kind="string",
+                    values=("pending", "reserved", "completed", "failed"),
+                ),
+                FieldContract(name="sequence", kind="integer"),
+                FieldContract(name="run_id", kind="string", required=False),
+                FieldContract(
+                    name="measurement_dataset_path",
+                    kind="string",
+                    required=False,
+                ),
+                FieldContract(name="error", kind="string", required=False),
+            ),
+        )
+
+    @classmethod
+    def record_spec(cls) -> RecordSpec:
+        """Generate the Python validation runtime owned by this domain class."""
+
+        contract = cls.record_contract()
+        return record_specs_from_contract(
+            {
+                "format": "leibniz.record-contract-set",
+                "format_version": 1,
+                "records": [
+                    {
+                        "name": contract.name,
+                        "allow_unknown": contract.allow_unknown,
+                        "fields": tuple(
+                            _field_contract_record(field)
+                            for field in contract.fields
+                        ),
+                    }
+                ],
+            }
+        )[contract.name]
+
+    @classmethod
+    def typescript_record_module(cls) -> str:
+        """Generate the TypeScript parser/type surface for work-queue items."""
+
+        return cls.record_contract().to_typescript_module(
+            exported_type="WorkQueueItemRecord",
+            parser_name="parseWorkQueueItem",
+            error_name="WorkQueueTransportError",
+            literal_expressions={
+                "format": "workQueueItemFormat",
+                "format_version": "workQueueItemFormatVersion",
+            },
+            imports="""import {
+  consoleProtocolFormats,
+  consoleProtocolFormatVersions,
+} from './protocolVocabulary.ts';
+
+const workQueueItemFormat = consoleProtocolFormats.workQueueItem;
+const workQueueItemFormatVersion = consoleProtocolFormatVersions.workQueueItem;
+""",
+        )
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -109,7 +183,7 @@ class WorkQueueItem:
         if record.get("format_version") != _format_version:
             raise WorkQueueError("work queue item has unsupported format_version")
         try:
-            validated = _work_queue_item_record.validate(record)
+            validated = cls.record_spec().validate(record)
         except ValueError as error:
             raise WorkQueueError(str(error)) from error
         extractor = RecordExtractor(WorkQueueError)
@@ -199,3 +273,18 @@ def materialize_work_queue_view(runs_root: Path) -> Path:
 def _item_path(runs_root: Path, item: WorkQueueItem) -> Path:
     benchmark_atom = str(item.benchmark_id.name).replace(".", "_")
     return runs_root / "work-queues" / benchmark_atom / f"{item.id}{_document_suffix}"
+
+
+def _field_contract_record(field: FieldContract) -> dict[str, object]:
+    record: dict[str, object] = {"kind": field.kind}
+    if field.name is not None:
+        record["name"] = field.name
+    if not field.required:
+        record["required"] = False
+    if field.kind == "literal":
+        record["literal"] = field.literal_or(None)
+    if field.item is not None:
+        record["item"] = _field_contract_record(field.item)
+    if field.values is not None:
+        record["values"] = list(field.values)
+    return record
