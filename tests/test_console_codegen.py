@@ -51,7 +51,11 @@ def test_generated_console_work_queue_records_module_uses_authored_contract() ->
     assert "export type WorkQueueItemStatus = 'pending' | 'reserved' | 'completed' | 'failed';" in (
         generated
     )
+    assert "rejectUnknownFields(record, path" in generated
+    assert "sequence: requireInteger(record.sequence" in generated
     assert "leibniz.work-queue-item" not in generated
+    assert "function requireBoolean" not in generated
+    assert "function requireNumber" not in generated
 
 
 def test_generated_console_web_modules_are_npm_build_artifacts() -> None:
