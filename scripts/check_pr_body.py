@@ -64,7 +64,7 @@ def validate_pr_body(*, template: tuple[TemplateSection, ...], body: str) -> lis
             continue
         template_content = _normalized_section_body(template_by_title[title].body)
         if title == "Contribution Terms":
-            if content != template_content:
+            if _normalized_whitespace(content) != _normalized_whitespace(template_content):
                 errors.append(
                     "section ## Contribution Terms must match the template "
                     "contribution terms exactly"
@@ -106,6 +106,10 @@ def _sections(markdown: str) -> tuple[TemplateSection, ...]:
 
 def _normalized_section_body(body: str) -> str:
     return "\n".join(line.rstrip() for line in body.strip().splitlines()).strip()
+
+
+def _normalized_whitespace(body: str) -> str:
+    return " ".join(body.split())
 
 
 if __name__ == "__main__":

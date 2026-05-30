@@ -351,7 +351,7 @@ class ConsoleDataBuilder:
         scales = tuple(range(1, 9))
         digit_cursor = 0
         for scale in scales:
-            component_sequences_list = []
+            component_sequences_list: list[tuple[int, ...]] = []
             for _sample_index in range(samples_per_scale):
                 component_sequences_list.append(
                     tuple((digit_cursor + slot) % atom_count for slot in range(scale))

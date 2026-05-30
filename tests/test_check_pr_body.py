@@ -12,6 +12,10 @@ assert _spec.loader is not None
 _module = importlib.util.module_from_spec(_spec)
 sys.modules["check_pr_body"] = _module
 _spec.loader.exec_module(_module)
+_contribution_terms = (
+    "By submitting this pull request, I agree that, if accepted, my contribution will be "
+    "released under the repository's CC0-1.0 public domain dedication."
+)
 
 
 def test_pr_body_validator_accepts_completed_template_body() -> None:
@@ -70,6 +74,22 @@ def test_pr_body_validator_requires_verbatim_contribution_terms() -> None:
     ]
 
 
+def test_pr_body_validator_accepts_wrapped_contribution_terms() -> None:
+    template = _module._sections(
+        (_repository_root / ".github" / "pull_request_template.md").read_text(
+            encoding="utf-8"
+        )
+    )
+    body = _completed_body().replace(
+        "my contribution will be released",
+        "my contribution will\nbe released",
+    )
+
+    errors = _module.validate_pr_body(template=template, body=body)
+
+    assert errors == []
+
+
 def test_pr_body_validator_rejects_extra_contribution_terms_text() -> None:
     template = _module._sections(
         (_repository_root / ".github" / "pull_request_template.md").read_text(
@@ -89,7 +109,7 @@ def test_pr_body_validator_rejects_extra_contribution_terms_text() -> None:
 
 
 def _completed_body() -> str:
-    return """## Purpose
+    return f"""## Purpose
 
 Add a template-driven pull request body check.
 
@@ -119,6 +139,5 @@ Considered hard-coded headings and rejected them.
 
 ## Contribution Terms
 
-By submitting this pull request, I agree that, if accepted, my contribution will
-be released under the repository's CC0-1.0 public domain dedication.
+{_contribution_terms}
 """
