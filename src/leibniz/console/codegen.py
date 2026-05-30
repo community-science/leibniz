@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from importlib.resources import files
 from pathlib import Path
-from typing import cast
 
 from leibniz.console.protocol import (
     console_protocol_format_versions,
     console_protocol_formats,
 )
-from leibniz.documents import document_filename_suffix, load_object_document
+from leibniz.record_contracts import record_contract_set_from_package, typescript_literal
 
 __all__ = [
     "generated_console_protocol_module",
@@ -36,17 +33,6 @@ _generated_work_queue_records_module_path = (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class _TypeScriptContractModule:
-    contract_name: str
-    record_name: str
-    exported_type: str
-    parser_name: str
-    error_name: str
-    literal_expressions: Mapping[str, str]
-    imports: str = ""
-
-
 def generated_console_protocol_module() -> str:
     """Return the generated TypeScript console protocol vocabulary module."""
 
@@ -54,9 +40,9 @@ def generated_console_protocol_module() -> str:
     versions = _console_protocol_format_versions()
     return (
         "export const consoleProtocolFormats = "
-        f"{_typescript_literal(formats)} as const;\n\n"
+        f"{typescript_literal(formats)} as const;\n\n"
         "export const consoleProtocolFormatVersions = "
-        f"{_typescript_literal(versions)} as const;\n"
+        f"{typescript_literal(versions)} as const;\n"
     )
 
 
@@ -79,18 +65,20 @@ def generated_console_result_view_records_module() -> str:
 def generated_console_work_queue_records_module() -> str:
     """Return the generated TypeScript work-queue record parser module."""
 
-    return _typescript_record_contract_module(
-        _TypeScriptContractModule(
-            contract_name="work_queue_items",
-            record_name="work_queue_item",
-            exported_type="WorkQueueItemRecord",
-            parser_name="parseWorkQueueItem",
-            error_name="WorkQueueTransportError",
-            literal_expressions={
-                "format": "workQueueItemFormat",
-                "format_version": "workQueueItemFormatVersion",
-            },
-            imports="""import {
+    contract_set = record_contract_set_from_package(
+        "leibniz.contracts",
+        "work_queue_items",
+        description="work queue item record contracts",
+    )
+    return contract_set.require_record("work_queue_item").to_typescript_module(
+        exported_type="WorkQueueItemRecord",
+        parser_name="parseWorkQueueItem",
+        error_name="WorkQueueTransportError",
+        literal_expressions={
+            "format": "workQueueItemFormat",
+            "format_version": "workQueueItemFormatVersion",
+        },
+        imports="""import {
   consoleProtocolFormats,
   consoleProtocolFormatVersions,
 } from './protocolVocabulary.ts';
@@ -98,7 +86,6 @@ def generated_console_work_queue_records_module() -> str:
 const workQueueItemFormat = consoleProtocolFormats.workQueueItem;
 const workQueueItemFormatVersion = consoleProtocolFormatVersions.workQueueItem;
 """,
-        )
     )
 
 
@@ -154,502 +141,6 @@ def _console_protocol_format_versions() -> Mapping[str, object]:
         "resultView": versions.result_view,
         "workQueueItem": versions.work_queue_item,
     }
-
-
-def _typescript_literal(value: object) -> str:
-    return _typescript_literal_lines(value, indent=0)
-
-
-def _typescript_literal_lines(value: object, *, indent: int) -> str:
-    prefix = " " * indent
-    child_indent = indent + 2
-    child_prefix = " " * child_indent
-    if isinstance(value, str):
-        return _typescript_string(value)
-    if isinstance(value, int) and not isinstance(value, bool):
-        return str(value)
-    if isinstance(value, Mapping):
-        mapping = cast(Mapping[str, object], value)
-        if not value:
-            return "{}"
-        lines = ["{"]
-        items = sorted(mapping.items())
-        for index, (key, item) in enumerate(items):
-            suffix = "," if index < len(items) - 1 else ""
-            rendered = _typescript_literal_lines(item, indent=child_indent)
-            lines.append(f"{child_prefix}{_typescript_string(str(key))}: {rendered}{suffix}")
-        lines.append(f"{prefix}}}")
-        return "\n".join(lines)
-    raise TypeError(f"unsupported generated TypeScript value: {type(value).__name__}")
-
-
-def _typescript_string(value: str) -> str:
-    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
-
-
-def _typescript_record_contract_module(config: _TypeScriptContractModule) -> str:
-    contract = load_object_document(
-        files("leibniz.contracts")
-        .joinpath(f"{config.contract_name}{document_filename_suffix()}")
-        .read_bytes(),
-        description=f"{config.record_name} record contracts",
-    )
-    fields = _contract_fields(contract=contract, record_name=config.record_name)
-    named_unions = _named_union_fields(fields=fields)
-    imports = config.imports.rstrip()
-    type_aliases = "\n".join(
-        _typescript_union_alias(
-            name=_union_name(field_name=field_name, exported_type=config.exported_type),
-            values=values,
-        )
-        for field_name, values in named_unions.items()
-    )
-    record_type = _typescript_record_type(
-        exported_type=config.exported_type,
-        fields=fields,
-        named_unions=named_unions,
-        literal_expressions=config.literal_expressions,
-    )
-    parser = _typescript_record_parser(
-        exported_type=config.exported_type,
-        parser_name=config.parser_name,
-        error_name=config.error_name,
-        fields=fields,
-        named_unions=named_unions,
-        literal_expressions=config.literal_expressions,
-    )
-    helpers = _typescript_record_parser_helpers(
-        error_name=config.error_name,
-        required_helpers=_required_typescript_helpers(fields=fields),
-    )
-    sections = [
-        section
-        for section in (imports, type_aliases, record_type, parser, helpers)
-        if section
-    ]
-    return "\n\n".join(sections) + "\n"
-
-
-def _typescript_record_type(
-    *,
-    exported_type: str,
-    fields: tuple[Mapping[str, object], ...],
-    named_unions: Mapping[str, tuple[str, ...]],
-    literal_expressions: Mapping[str, str],
-) -> str:
-    lines = [f"export type {exported_type} = {{"]
-    for field in fields:
-        field_name = _field_name(field)
-        marker = "?" if not _field_required(field) else ""
-        field_type = _typescript_field_type(
-            field,
-            exported_type=exported_type,
-            named_unions=named_unions,
-            literal_expressions=literal_expressions,
-        )
-        lines.append(
-            f"  {field_name}{marker}: {field_type};"
-        )
-    lines.append("};")
-    return "\n".join(lines)
-
-
-def _typescript_record_parser(
-    *,
-    exported_type: str,
-    parser_name: str,
-    error_name: str,
-    fields: tuple[Mapping[str, object], ...],
-    named_unions: Mapping[str, tuple[str, ...]],
-    literal_expressions: Mapping[str, str],
-) -> str:
-    known_fields = ", ".join(_typescript_string(_field_name(field)) for field in fields)
-    lines = [
-        f"export function {parser_name}(value: unknown, path: string): {exported_type} {{",
-        "  const record = requireRecord(value, path);",
-        f"  rejectUnknownFields(record, path, [{known_fields}]);",
-        "  return {",
-    ]
-    for field in fields:
-        field_name = _field_name(field)
-        rendered = _typescript_field_parser(
-            field,
-            exported_type=exported_type,
-            named_unions=named_unions,
-            literal_expressions=literal_expressions,
-        )
-        if _field_required(field):
-            lines.append(f"    {field_name}: {rendered},")
-        else:
-            lines.extend(
-                [
-                    f"    {field_name}:",
-                    f"      record.{field_name} === undefined",
-                    "        ? undefined",
-                    f"        : {rendered},",
-                ]
-            )
-    lines.extend(["  };", "}"])
-    parser_sections = ["\n".join(lines)]
-    parser_sections.extend(
-        _typescript_union_parser(
-            name=_union_name(field_name=field_name, exported_type=exported_type),
-            values=values,
-            error_name=error_name,
-        )
-        for field_name, values in named_unions.items()
-    )
-    return "\n\n".join(parser_sections)
-
-
-def _typescript_union_alias(*, name: str, values: tuple[str, ...]) -> str:
-    return f"export type {name} = {' | '.join(_typescript_string(value) for value in values)};"
-
-
-def _typescript_union_parser(
-    *,
-    name: str,
-    values: tuple[str, ...],
-    error_name: str,
-) -> str:
-    parser_name = f"parse{name}"
-    allowed = ", ".join(_typescript_string(value) for value in values)
-    return f"""function {parser_name}(value: unknown, path: string): {name} {{
-  const parsed = requireString(value, path);
-  if (![{allowed}].includes(parsed)) {{
-    throw new {error_name}(`${{path}}: expected {_humanize_type_name(name)}`);
-  }}
-  return parsed as {name};
-}}"""
-
-
-def _typescript_record_parser_helpers(
-    *,
-    error_name: str,
-    required_helpers: set[str],
-) -> str:
-    sections = [
-        f"""class {error_name} extends Error {{
-  constructor(message: string) {{
-    super(message);
-    this.name = '{error_name}';
-  }}
-}}""",
-        f"""function requireRecord(value: unknown, path: string): Record<string, unknown> {{
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {{
-    throw new {error_name}(`${{path}}: expected record`);
-  }}
-  return value as Record<string, unknown>;
-}}""",
-        f"""function rejectUnknownFields(
-  record: Record<string, unknown>,
-  path: string,
-  fields: string[],
-): void {{
-  const known = new Set(fields);
-  for (const field of Object.keys(record)) {{
-    if (!known.has(field)) {{
-      throw new {error_name}(`${{path}}.${{field}}: unknown field`);
-    }}
-  }}
-}}""",
-    ]
-    if "array" in required_helpers:
-        sections.append(
-            f"""function requireArray(value: unknown, path: string): unknown[] {{
-  if (!Array.isArray(value)) {{
-    throw new {error_name}(`${{path}}: expected array`);
-  }}
-  return value;
-}}"""
-        )
-    if "string" in required_helpers:
-        sections.append(
-            f"""function requireString(value: unknown, path: string): string {{
-  if (typeof value !== 'string') {{
-    throw new {error_name}(`${{path}}: expected string`);
-  }}
-  return value;
-}}"""
-        )
-    if "boolean" in required_helpers:
-        sections.append(
-            f"""function requireBoolean(value: unknown, path: string): boolean {{
-  if (typeof value !== 'boolean') {{
-    throw new {error_name}(`${{path}}: expected boolean`);
-  }}
-  return value;
-}}"""
-        )
-    if "integer" in required_helpers:
-        sections.append(
-            f"""function requireInteger(value: unknown, path: string): number {{
-  if (typeof value !== 'number' || !Number.isInteger(value)) {{
-    throw new {error_name}(`${{path}}: expected integer`);
-  }}
-  return value;
-}}"""
-        )
-    if "number" in required_helpers:
-        sections.append(
-            f"""function requireNumber(value: unknown, path: string): number {{
-  if (typeof value !== 'number' || !Number.isFinite(value)) {{
-    throw new {error_name}(`${{path}}: expected number`);
-  }}
-  return value;
-}}"""
-        )
-    if "literal" in required_helpers:
-        sections.append(
-            f"""function requireLiteral<T extends string | number>(
-  value: unknown,
-  path: string,
-  expected: T,
-): T {{
-  if (value !== expected) {{
-    throw new {error_name}(`${{path}}: expected ${{String(expected)}}`);
-  }}
-  return expected;
-}}"""
-        )
-    return "\n\n".join(sections)
-
-
-def _required_typescript_helpers(*, fields: tuple[Mapping[str, object], ...]) -> set[str]:
-    helpers: set[str] = set()
-    for field in fields:
-        _collect_required_typescript_helpers(field=field, helpers=helpers)
-    return helpers
-
-
-def _collect_required_typescript_helpers(
-    *,
-    field: Mapping[str, object],
-    helpers: set[str],
-) -> None:
-    if "values" in field:
-        helpers.add("string")
-        return
-    kind = _field_kind(field)
-    if kind in {"identifier", "name", "string", "version"}:
-        helpers.add("string")
-    elif kind == "integer":
-        helpers.add("integer")
-    elif kind == "number":
-        helpers.add("number")
-    elif kind == "boolean":
-        helpers.add("boolean")
-    elif kind == "literal":
-        helpers.add("literal")
-    elif kind == "sequence":
-        helpers.add("array")
-        _collect_required_typescript_helpers(
-            field=_mapping_value(field["item"], field=f"{_field_name(field)}.item"),
-            helpers=helpers,
-        )
-
-
-def _typescript_field_type(
-    field: Mapping[str, object],
-    *,
-    exported_type: str,
-    named_unions: Mapping[str, tuple[str, ...]],
-    literal_expressions: Mapping[str, str],
-) -> str:
-    field_name = _field_name(field, default="")
-    if field_name in named_unions:
-        return _union_name(field_name=field_name, exported_type=exported_type)
-    kind = _field_kind(field)
-    if field_name in literal_expressions:
-        return f"typeof {literal_expressions[field_name]}"
-    if kind == "literal":
-        return _typescript_literal_type(field["literal"])
-    if kind in {"identifier", "name", "string", "version"}:
-        return "string"
-    if kind in {"integer", "number"}:
-        return "number"
-    if kind == "boolean":
-        return "boolean"
-    if kind == "record":
-        return "Record<string, unknown>"
-    if kind == "sequence":
-        item = _mapping_value(field["item"], field=f"{field_name}.item")
-        item_type = _typescript_field_type(
-            item,
-            exported_type=exported_type,
-            named_unions={},
-            literal_expressions={},
-        )
-        return f"{item_type}[]"
-    raise ValueError(f"{field_name}: unsupported contract field kind: {kind}")
-
-
-def _typescript_field_parser(
-    field: Mapping[str, object],
-    *,
-    exported_type: str,
-    named_unions: Mapping[str, tuple[str, ...]],
-    literal_expressions: Mapping[str, str],
-) -> str:
-    field_name = _field_name(field)
-    value = f"record.{field_name}"
-    path = f"`${{path}}.{field_name}`"
-    return _typescript_value_parser(
-        field,
-        value=value,
-        path=path,
-        exported_type=exported_type,
-        named_unions=named_unions,
-        literal_expressions=literal_expressions,
-    )
-
-
-def _typescript_value_parser(
-    field: Mapping[str, object],
-    *,
-    value: str,
-    path: str,
-    exported_type: str,
-    named_unions: Mapping[str, tuple[str, ...]],
-    literal_expressions: Mapping[str, str],
-) -> str:
-    field_name = _field_name(field, default="")
-    if field_name in named_unions:
-        return (
-            f"parse{_union_name(field_name=field_name, exported_type=exported_type)}"
-            f"({value}, {path})"
-        )
-    kind = _field_kind(field)
-    if field_name in literal_expressions:
-        return f"requireLiteral({value}, {path}, {literal_expressions[field_name]})"
-    if kind == "literal":
-        return f"requireLiteral({value}, {path}, {_typescript_literal(field['literal'])})"
-    if kind in {"identifier", "name", "string", "version"}:
-        return f"requireString({value}, {path})"
-    if kind == "integer":
-        return f"requireInteger({value}, {path})"
-    if kind == "number":
-        return f"requireNumber({value}, {path})"
-    if kind == "boolean":
-        return f"requireBoolean({value}, {path})"
-    if kind == "record":
-        return f"requireRecord({value}, {path})"
-    if kind == "sequence":
-        item = _mapping_value(field["item"], field=f"{field_name}.item")
-        item_parser = _typescript_value_parser(
-            item,
-            value="item",
-            path=_typescript_index_path(path),
-            exported_type=exported_type,
-            named_unions={},
-            literal_expressions={},
-        )
-        return f"requireArray({value}, {path}).map((item, index) =>\n    {item_parser},\n  )"
-    raise ValueError(f"{field_name}: unsupported contract field kind: {kind}")
-
-
-def _named_union_fields(*, fields: tuple[Mapping[str, object], ...]) -> dict[str, tuple[str, ...]]:
-    unions: dict[str, tuple[str, ...]] = {}
-    for field in fields:
-        if "values" not in field:
-            continue
-        field_name = _field_name(field)
-        unions[field_name] = tuple(
-            str(value) for value in _sequence_value(field["values"], field=_field_name(field))
-        )
-    return unions
-
-
-def _field_name(field: Mapping[str, object], *, default: str | None = None) -> str:
-    if "name" not in field:
-        if default is not None:
-            return default
-        raise ValueError("contract field is missing name")
-    value = field["name"]
-    if not isinstance(value, str) or not value:
-        raise ValueError("contract field name must be nonempty string")
-    return value
-
-
-def _field_kind(field: Mapping[str, object]) -> str:
-    value = field.get("kind")
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{_field_name(field, default='<field>')}: missing field kind")
-    return value
-
-
-def _field_required(field: Mapping[str, object]) -> bool:
-    value = field.get("required", True)
-    if not isinstance(value, bool):
-        raise ValueError(f"{_field_name(field)}.required: expected boolean")
-    return value
-
-
-def _union_name(*, field_name: str, exported_type: str) -> str:
-    record_stem = exported_type.removesuffix("Record")
-    return record_stem + _pascal_case(field_name)
-
-
-def _pascal_case(value: str) -> str:
-    return "".join(part.capitalize() for part in value.split("_") if part)
-
-
-def _typescript_literal_type(value: object) -> str:
-    if isinstance(value, str):
-        return _typescript_string(value)
-    if isinstance(value, int) and not isinstance(value, bool):
-        return str(value)
-    if value is None:
-        return "null"
-    raise ValueError(f"unsupported TypeScript literal type: {value!r}")
-
-
-def _humanize_type_name(name: str) -> str:
-    return " ".join(part.lower() for part in _split_pascal_case(name))
-
-
-def _typescript_index_path(path: str) -> str:
-    if path.startswith("`") and path.endswith("`"):
-        return path[:-1] + ".${index}`"
-    raise ValueError(f"unsupported generated TypeScript path expression: {path}")
-
-
-def _split_pascal_case(value: str) -> tuple[str, ...]:
-    parts: list[str] = []
-    start = 0
-    for index, character in enumerate(value):
-        if index > 0 and character.isupper():
-            parts.append(value[start:index])
-            start = index
-    parts.append(value[start:])
-    return tuple(part for part in parts if part)
-
-
-def _contract_fields(
-    *,
-    contract: Mapping[str, object],
-    record_name: str,
-) -> tuple[Mapping[str, object], ...]:
-    for record_value in _sequence_value(contract["records"], field="records"):
-        record = _mapping_value(record_value, field="records")
-        if record["name"] == record_name:
-            return tuple(
-                _mapping_value(field, field=f"{record_name}.fields")
-                for field in _sequence_value(record["fields"], field=f"{record_name}.fields")
-            )
-    raise ValueError(f"missing contract record: {record_name}")
-
-
-def _mapping_value(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _sequence_value(value: object, *, field: str) -> Sequence[object]:
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
-        raise ValueError(f"{field}: expected sequence")
-    return cast(Sequence[object], value)
 
 
 _result_view_records_module = """import {
