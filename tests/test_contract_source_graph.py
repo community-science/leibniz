@@ -57,6 +57,16 @@ def test_contract_source_graph_projects_inventory_to_checked_graph() -> None:
         "record-spec:src/leibniz/contracts/submission_registries.json:submission_registry",
     ) in edges
     assert (
+        "uses-authored-contract",
+        "contract-surface:work-queue-item-records",
+        "path:src/leibniz/contracts/work_queue_items.json",
+    ) in edges
+    assert (
+        "generated-by",
+        "generated-output:src/leibniz/console/_web_src/src/generated/workQueueRecords.ts",
+        "contract-surface:work-queue-item-records",
+    ) in edges
+    assert (
         "owns-record-spec-module",
         "contract-surface:model-architecture-and-semantics-records",
         "path:src/leibniz/model_interfaces.py",

@@ -17,6 +17,7 @@ from leibniz.documents import (
     load_object_document,
 )
 from leibniz.identifiers import ProtocolIdentifier
+from leibniz.records import RecordExtractor, record_specs_from_package_contract
 
 __all__ = [
     "WorkQueueError",
@@ -33,6 +34,12 @@ _view_format = _protocol_formats.work_queue_view
 _format_version = _protocol_format_versions.work_queue_item
 _document_suffix = document_filename_suffix()
 _Status = Literal["pending", "reserved", "completed", "failed"]
+_record_contracts = record_specs_from_package_contract(
+    "leibniz.contracts",
+    "work_queue_items",
+    description="work queue item record contracts",
+)
+_work_queue_item_record = _record_contracts["work_queue_item"]
 
 
 class WorkQueueError(ValueError):
@@ -101,33 +108,49 @@ class WorkQueueItem:
             raise WorkQueueError("work queue item has unsupported format")
         if record.get("format_version") != _format_version:
             raise WorkQueueError("work queue item has unsupported format_version")
+        try:
+            validated = _work_queue_item_record.validate(record)
+        except ValueError as error:
+            raise WorkQueueError(str(error)) from error
+        extractor = RecordExtractor(WorkQueueError)
         return cls(
-            id=_as_string(record.get("id"), "id"),
-            benchmark_id=_as_identifier(record.get("benchmark_id"), "benchmark_id"),
-            proposal_id=_as_string(record.get("proposal_id"), "proposal_id"),
+            id=extractor.string(validated["id"], "id"),
+            benchmark_id=extractor.identifier(validated["benchmark_id"], "benchmark_id"),
+            proposal_id=extractor.string(validated["proposal_id"], "proposal_id"),
             candidate_id=(
-                _as_string(record["candidate_id"], "candidate_id")
-                if "candidate_id" in record
+                extractor.string(validated["candidate_id"], "candidate_id")
+                if "candidate_id" in validated
                 else None
             ),
             proposal_set_path=Path(
-                _as_string(record.get("proposal_set_path"), "proposal_set_path")
+                extractor.string(validated["proposal_set_path"], "proposal_set_path")
             ),
             command=tuple(
-                _as_string(item, "command")
-                for item in _as_sequence(record.get("command"), "command")
+                extractor.string(item, "command")
+                for item in extractor.sequence(validated["command"], "command")
             ),
-            status=cast(_Status, _as_string(record.get("status"), "status")),
-            sequence=_as_int(record.get("sequence"), "sequence"),
+            status=cast(_Status, extractor.string(validated["status"], "status")),
+            sequence=extractor.integer(validated["sequence"], "sequence"),
             run_id=(
-                _as_string(record["run_id"], "run_id") if "run_id" in record else None
-            ),
-            measurement_dataset_path=(
-                Path(_as_string(record["measurement_dataset_path"], "measurement_dataset_path"))
-                if "measurement_dataset_path" in record
+                extractor.string(validated["run_id"], "run_id")
+                if "run_id" in validated
                 else None
             ),
-            error=_as_string(record["error"], "error") if "error" in record else None,
+            measurement_dataset_path=(
+                Path(
+                    extractor.string(
+                        validated["measurement_dataset_path"],
+                        "measurement_dataset_path",
+                    )
+                )
+                if "measurement_dataset_path" in validated
+                else None
+            ),
+            error=(
+                extractor.string(validated["error"], "error")
+                if "error" in validated
+                else None
+            ),
         )
 
 
@@ -177,31 +200,3 @@ def _item_path(runs_root: Path, item: WorkQueueItem) -> Path:
     benchmark_atom = str(item.benchmark_id.name).replace(".", "_")
     return runs_root / "work-queues" / benchmark_atom / f"{item.id}{_document_suffix}"
 
-
-def _as_identifier(value: object, field: str) -> ProtocolIdentifier:
-    if isinstance(value, str):
-        try:
-            return ProtocolIdentifier.parse(value)
-        except ValueError as error:
-            raise WorkQueueError(str(error)) from error
-    raise WorkQueueError(f"{field}: expected identifier")
-
-
-def _as_int(value: object, field: str) -> int:
-    if type(value) is not int:
-        raise WorkQueueError(f"{field}: expected integer")
-    return value
-
-
-def _as_sequence(value: object, field: str) -> tuple[object, ...]:
-    if isinstance(value, tuple):
-        return cast(tuple[object, ...], value)
-    if isinstance(value, list):
-        return tuple(cast(list[object], value))
-    raise WorkQueueError(f"{field}: expected sequence")
-
-
-def _as_string(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise WorkQueueError(f"{field}: expected nonempty string")
-    return value

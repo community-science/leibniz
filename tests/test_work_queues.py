@@ -4,6 +4,7 @@ from typing import cast
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import load_console_result_view
 from leibniz.work_queues import (
+    WorkQueueError,
     WorkQueueItem,
     load_work_queue_items,
     materialize_work_queue_view,
@@ -38,3 +39,23 @@ def test_work_queue_items_round_trip_and_materialize_console_view(tmp_path: Path
     queue_items = cast(list[dict[str, object]], view["queue_items"])
     assert queue_items == [item.to_record()]
     assert queue_items[0]["candidate_id"] == "architecture.example@0.1.0"
+
+
+def test_work_queue_item_contract_rejects_unknown_fields() -> None:
+    record = WorkQueueItem(
+        id="iteration-1-rank-1",
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.example@0.1.0"),
+        proposal_id="proposal-1",
+        proposal_set_path=Path(".runs/proposals/proposal-set.json"),
+        command=("leibniz", "benchmark", "run"),
+        status="pending",
+        sequence=0,
+    ).to_record()
+    record["extra"] = "unsupported"
+
+    try:
+        WorkQueueItem.from_record(record)
+    except WorkQueueError as error:
+        assert str(error) == "extra: unknown field"
+    else:
+        raise AssertionError("expected WorkQueueError")

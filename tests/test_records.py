@@ -258,6 +258,32 @@ def test_record_contract_generation_rejects_invalid_contracts() -> None:
     )
 
 
+def test_record_contract_generation_supports_allowed_values() -> None:
+    specs = record_specs_from_contract(
+        {
+            "format": "leibniz.record-contract-set",
+            "format_version": 1,
+            "records": [
+                {
+                    "name": "status",
+                    "fields": [
+                        {
+                            "name": "state",
+                            "kind": "string",
+                            "values": ["pending", "completed"],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert specs["status"].validate({"state": "pending"}) == {"state": "pending"}
+    assert specs["status"].collect_violations({"state": "failed"}) == (
+        RecordViolation(path=("state",), message="expected allowed value"),
+    )
+
+
 def capture_validation_error(call: Callable[[], object]) -> RecordValidationError:
     try:
         call()
