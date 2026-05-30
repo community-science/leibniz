@@ -13,7 +13,8 @@ from leibniz.model_scale_contracts import (
     ModelScaleContract,
     ModelScaleContractValidationError,
 )
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.record_contracts import FieldContract, RecordContract
+from leibniz.records import RecordSpec, record_specs_from_contract
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
@@ -27,59 +28,6 @@ __all__ = [
     "ArchitectureManifestValidationError",
 ]
 
-_architecture_manifest_record = RecordSpec(
-    fields={
-        "id": FieldSpec(kind="identifier", required=False),
-        "input_shape": FieldSpec(
-            kind="sequence",
-            item=FieldSpec(kind="integer"),
-        ),
-        "output_shape": FieldSpec(
-            kind="sequence",
-            item=FieldSpec(kind="integer"),
-        ),
-        "layers": FieldSpec(
-            kind="sequence",
-            item=FieldSpec(kind="record"),
-        ),
-        "model_scale_contract": FieldSpec(kind="record", required=False),
-    }
-)
-_architecture_layer_record = RecordSpec(
-    fields={
-        "kind": FieldSpec(kind="string"),
-        "parameters": FieldSpec(kind="record", required=False),
-    }
-)
-_architecture_graph_node_record = RecordSpec(
-    fields={
-        "id": FieldSpec(kind="string"),
-        "component": FieldSpec(kind="record"),
-    }
-)
-_architecture_graph_edge_record = RecordSpec(
-    fields={
-        "source_node_id": FieldSpec(kind="string"),
-        "target_node_id": FieldSpec(kind="string"),
-        "kind": FieldSpec(kind="string"),
-    }
-)
-_architecture_graph_record = RecordSpec(
-    fields={
-        "nodes": FieldSpec(
-            kind="sequence",
-            item=FieldSpec(kind="record", record=_architecture_graph_node_record),
-        ),
-        "edges": FieldSpec(
-            kind="sequence",
-            item=FieldSpec(kind="record", record=_architecture_graph_edge_record),
-        ),
-        "input_node_ids": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
-        "output_node_ids": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
-    }
-)
-
-
 class ArchitectureManifestValidationError(ValueError):
     """Raised when an architecture manifest is invalid."""
 
@@ -90,6 +38,24 @@ class ArchitectureComponent:
 
     kind: str
     parameters: Mapping[str, object]
+
+    @classmethod
+    def record_contract(cls) -> RecordContract:
+        """Return the component record contract owned by this class."""
+
+        return RecordContract(
+            name="architecture_component",
+            fields=(
+                FieldContract(name="kind", kind="string"),
+                FieldContract(name="parameters", kind="record", required=False),
+            ),
+        )
+
+    @classmethod
+    def record_spec(cls) -> RecordSpec:
+        """Generate the Python validation runtime for component records."""
+
+        return _record_spec_from_contract(cls.record_contract())
 
     def __post_init__(self) -> None:
         if not self.kind:
@@ -102,7 +68,7 @@ class ArchitectureComponent:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ArchitectureComponent:
         try:
-            validated = _architecture_layer_record.validate(record)
+            validated = cls.record_spec().validate(record)
         except ValueError as error:
             raise ArchitectureManifestValidationError(str(error)) from error
         return cls(
@@ -127,6 +93,24 @@ class ArchitectureGraphNode:
     id: str
     component: ArchitectureComponent
 
+    @classmethod
+    def record_contract(cls) -> RecordContract:
+        """Return the graph-node record contract owned by this class."""
+
+        return RecordContract(
+            name="architecture_graph_node",
+            fields=(
+                FieldContract(name="id", kind="string"),
+                FieldContract(name="component", kind="record"),
+            ),
+        )
+
+    @classmethod
+    def record_spec(cls) -> RecordSpec:
+        """Generate the Python validation runtime for graph-node records."""
+
+        return _record_spec_from_contract(cls.record_contract())
+
     def __post_init__(self) -> None:
         if not self.id:
             raise ArchitectureManifestValidationError("graph node id must be nonempty")
@@ -134,7 +118,7 @@ class ArchitectureGraphNode:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ArchitectureGraphNode:
         try:
-            validated = _architecture_graph_node_record.validate(record)
+            validated = cls.record_spec().validate(record)
         except ValueError as error:
             raise ArchitectureManifestValidationError(str(error)) from error
         return cls(
@@ -159,6 +143,25 @@ class ArchitectureGraphEdge:
     target_node_id: str
     kind: str = "data-flow"
 
+    @classmethod
+    def record_contract(cls) -> RecordContract:
+        """Return the graph-edge record contract owned by this class."""
+
+        return RecordContract(
+            name="architecture_graph_edge",
+            fields=(
+                FieldContract(name="source_node_id", kind="string"),
+                FieldContract(name="target_node_id", kind="string"),
+                FieldContract(name="kind", kind="string"),
+            ),
+        )
+
+    @classmethod
+    def record_spec(cls) -> RecordSpec:
+        """Generate the Python validation runtime for graph-edge records."""
+
+        return _record_spec_from_contract(cls.record_contract())
+
     def __post_init__(self) -> None:
         if not self.source_node_id:
             raise ArchitectureManifestValidationError("edge source_node_id must be nonempty")
@@ -172,7 +175,7 @@ class ArchitectureGraphEdge:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ArchitectureGraphEdge:
         try:
-            validated = _architecture_graph_edge_record.validate(record)
+            validated = cls.record_spec().validate(record)
         except ValueError as error:
             raise ArchitectureManifestValidationError(str(error)) from error
         return cls(
@@ -197,6 +200,74 @@ class ArchitectureGraph:
     edges: tuple[ArchitectureGraphEdge, ...]
     input_node_ids: tuple[str, ...]
     output_node_ids: tuple[str, ...]
+
+    @classmethod
+    def record_contract(cls) -> RecordContract:
+        """Return the architecture graph record contract owned by this class."""
+
+        return RecordContract(
+            name="architecture_graph",
+            fields=(
+                FieldContract(
+                    name="nodes",
+                    kind="sequence",
+                    item=FieldContract(kind="record"),
+                ),
+                FieldContract(
+                    name="edges",
+                    kind="sequence",
+                    item=FieldContract(kind="record"),
+                ),
+                FieldContract(
+                    name="input_node_ids",
+                    kind="sequence",
+                    item=FieldContract(kind="string"),
+                ),
+                FieldContract(
+                    name="output_node_ids",
+                    kind="sequence",
+                    item=FieldContract(kind="string"),
+                ),
+            ),
+        )
+
+    @classmethod
+    def record_spec(cls) -> RecordSpec:
+        """Generate the Python validation runtime for graph records."""
+
+        return _record_spec_from_contract(cls.record_contract())
+
+    @classmethod
+    def source_graph_facts(cls) -> tuple[Mapping[str, object], ...]:
+        """Return source-graph facts for the graph contract hierarchy."""
+
+        contracts = (
+            ArchitectureComponent.record_contract(),
+            ArchitectureGraphNode.record_contract(),
+            ArchitectureGraphEdge.record_contract(),
+            cls.record_contract(),
+        )
+        return (
+            *tuple(fact for contract in contracts for fact in contract.source_graph_facts()),
+            {
+                "kind": "record-contract-edge",
+                "source": cls.record_contract().name,
+                "target": ArchitectureGraphNode.record_contract().name,
+                "relationship": "contains-nodes",
+            },
+            {
+                "kind": "record-contract-edge",
+                "source": cls.record_contract().name,
+                "target": ArchitectureGraphEdge.record_contract().name,
+                "relationship": "contains-edges",
+            },
+            {
+                "kind": "record-contract-edge",
+                "source": ArchitectureGraphNode.record_contract().name,
+                "target": ArchitectureComponent.record_contract().name,
+                "relationship": "contains-component",
+            },
+        )
 
     def __post_init__(self) -> None:
         if not self.nodes:
@@ -250,7 +321,7 @@ class ArchitectureGraph:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ArchitectureGraph:
         try:
-            validated = _architecture_graph_record.validate(record)
+            validated = cls.record_spec().validate(record)
         except ValueError as error:
             raise ArchitectureManifestValidationError(str(error)) from error
         return cls(
@@ -297,6 +368,64 @@ class ArchitectureManifest:
     layers: tuple[ArchitectureLayer, ...]
     model_scale_contract: ModelScaleContract | None = None
 
+    @classmethod
+    def record_contract(cls) -> RecordContract:
+        """Return the architecture manifest record contract owned by this class."""
+
+        return RecordContract(
+            name="architecture_manifest",
+            fields=(
+                FieldContract(name="id", kind="identifier", required=False),
+                FieldContract(
+                    name="input_shape",
+                    kind="sequence",
+                    item=FieldContract(kind="integer"),
+                ),
+                FieldContract(
+                    name="output_shape",
+                    kind="sequence",
+                    item=FieldContract(kind="integer"),
+                ),
+                FieldContract(
+                    name="layers",
+                    kind="sequence",
+                    item=FieldContract(kind="record"),
+                ),
+                FieldContract(
+                    name="model_scale_contract",
+                    kind="record",
+                    required=False,
+                ),
+            ),
+        )
+
+    @classmethod
+    def record_spec(cls) -> RecordSpec:
+        """Generate the Python validation runtime for architecture manifests."""
+
+        return _record_spec_from_contract(cls.record_contract())
+
+    @classmethod
+    def source_graph_facts(cls) -> tuple[Mapping[str, object], ...]:
+        """Return source-graph facts for manifest and graph contracts."""
+
+        return (
+            *cls.record_contract().source_graph_facts(),
+            *ArchitectureGraph.source_graph_facts(),
+            {
+                "kind": "record-contract-edge",
+                "source": cls.record_contract().name,
+                "target": ArchitectureComponent.record_contract().name,
+                "relationship": "contains-layers",
+            },
+            {
+                "kind": "record-contract-edge",
+                "source": cls.record_contract().name,
+                "target": ArchitectureGraph.record_contract().name,
+                "relationship": "projects-to-graph",
+            },
+        )
+
     def __post_init__(self) -> None:
         try:
             self.id.require_unreleased()
@@ -320,7 +449,7 @@ class ArchitectureManifest:
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ArchitectureManifest:
         try:
-            validated = _architecture_manifest_record.validate(record)
+            validated = cls.record_spec().validate(record)
             input_shape = _as_shape(validated["input_shape"], field="input_shape")
             output_shape = _as_shape(validated["output_shape"], field="output_shape")
             layers = tuple(
@@ -402,6 +531,39 @@ class ArchitectureManifestDocument:
 def _architecture_id(content_record: Mapping[str, object]) -> ProtocolIdentifier:
     digest = ContentDigest.from_value(content_record)
     return ProtocolIdentifier.parse(f"architecture.sha-{digest.hex}@0.1.0")
+
+
+def _record_spec_from_contract(contract: RecordContract) -> RecordSpec:
+    return record_specs_from_contract(_record_contract_set_record(contract))[contract.name]
+
+
+def _record_contract_set_record(contract: RecordContract) -> Mapping[str, object]:
+    return {
+        "format": "leibniz.record-contract-set",
+        "format_version": 1,
+        "records": [
+            {
+                "name": contract.name,
+                "allow_unknown": contract.allow_unknown,
+                "fields": tuple(_field_contract_record(field) for field in contract.fields),
+            }
+        ],
+    }
+
+
+def _field_contract_record(field: FieldContract) -> dict[str, object]:
+    record: dict[str, object] = {"kind": field.kind}
+    if field.name is not None:
+        record["name"] = field.name
+    if not field.required:
+        record["required"] = False
+    if field.kind == "literal":
+        record["literal"] = field.literal_or(None)
+    if field.item is not None:
+        record["item"] = _field_contract_record(field.item)
+    if field.values is not None:
+        record["values"] = list(field.values)
+    return record
 
 
 def _architecture_content_record(
