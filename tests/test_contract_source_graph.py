@@ -46,6 +46,24 @@ def test_contract_source_graph_projects_inventory_to_checked_graph() -> None:
         "contract-surface:model-architecture-and-semantics-records",
         "path:src/leibniz/model_interfaces.py",
     ) in edges
+    assert nodes[
+        "record-spec:src/leibniz/model_interfaces.py:_model_interface_record"
+    ] == {
+        "id": "record-spec:src/leibniz/model_interfaces.py:_model_interface_record",
+        "kind": "record-spec",
+        "label": "_model_interface_record",
+        "path": "src/leibniz/model_interfaces.py",
+    }
+    assert (
+        "declares-record-spec",
+        "path:src/leibniz/model_interfaces.py",
+        "record-spec:src/leibniz/model_interfaces.py:_model_interface_record",
+    ) in edges
+    assert (
+        "covers-record-spec",
+        "contract-surface:model-architecture-and-semantics-records",
+        "record-spec:src/leibniz/model_interfaces.py:_model_interface_record",
+    ) in edges
     assert (
         "tested-by",
         "contract-surface:console-result-view-records",

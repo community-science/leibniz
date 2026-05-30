@@ -31,11 +31,14 @@
         "contract-surface",
         "generated-output",
         "path",
+        "record-spec",
         "structural-marker",
         "test"
       ],
       "edge_kinds": [
         "categorizes",
+        "covers-record-spec",
+        "declares-record-spec",
         "generated-by",
         "has-structural-marker",
         "owns-record-spec-module",

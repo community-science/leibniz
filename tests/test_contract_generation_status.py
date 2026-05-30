@@ -97,11 +97,14 @@ def test_contract_generation_status_categorizes_tracked_code() -> None:
         "contract-surface",
         "generated-output",
         "path",
+        "record-spec",
         "structural-marker",
         "test",
     }
     assert set(graph_projection["edge_kinds"]) == {
         "categorizes",
+        "covers-record-spec",
+        "declares-record-spec",
         "generated-by",
         "has-structural-marker",
         "owns-record-spec-module",
