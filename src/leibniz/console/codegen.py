@@ -10,7 +10,8 @@ from leibniz.console.protocol import (
     console_protocol_format_versions,
     console_protocol_formats,
 )
-from leibniz.record_contracts import record_contract_set_from_package, typescript_literal
+from leibniz.record_contracts import typescript_literal
+from leibniz.work_queues import WorkQueueItem
 
 __all__ = [
     "generated_console_protocol_module",
@@ -65,28 +66,7 @@ def generated_console_result_view_records_module() -> str:
 def generated_console_work_queue_records_module() -> str:
     """Return the generated TypeScript work-queue record parser module."""
 
-    contract_set = record_contract_set_from_package(
-        "leibniz.contract_artifacts",
-        "work_queue_items",
-        description="work queue item record contracts",
-    )
-    return contract_set.require_record("work_queue_item").to_typescript_module(
-        exported_type="WorkQueueItemRecord",
-        parser_name="parseWorkQueueItem",
-        error_name="WorkQueueTransportError",
-        literal_expressions={
-            "format": "workQueueItemFormat",
-            "format_version": "workQueueItemFormatVersion",
-        },
-        imports="""import {
-  consoleProtocolFormats,
-  consoleProtocolFormatVersions,
-} from './protocolVocabulary.ts';
-
-const workQueueItemFormat = consoleProtocolFormats.workQueueItem;
-const workQueueItemFormatVersion = consoleProtocolFormatVersions.workQueueItem;
-""",
-    )
+    return WorkQueueItem.typescript_record_module()
 
 
 def write_generated_console_result_view_records_module(
