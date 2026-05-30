@@ -165,6 +165,35 @@ def test_handwritten_result_view_source_uses_generated_record_parsers() -> None:
     assert offenders == ()
 
 
+def test_console_transport_modules_share_boundary_helpers() -> None:
+    transport = _web_source_root / "transport.ts"
+    assert transport.exists()
+    assert "export function requireRecord" in transport.read_text(encoding="utf-8")
+
+    duplicated_helpers: list[str] = []
+    for path in (
+        _web_source_root / "artifactDetails.ts",
+        _web_source_root / "benchmarkTasks.ts",
+        _web_source_root / "modelInspections.ts",
+        _web_source_root / "operatorVocabulary.ts",
+    ):
+        source = path.read_text(encoding="utf-8")
+        relative_path = path.relative_to(_repository_root).as_posix()
+        if "from './transport.ts'" not in source:
+            duplicated_helpers.append(f"{relative_path}: missing shared transport import")
+        for marker in (
+            "function requireRecord",
+            "function requireArray",
+            "function requireString",
+            "function requireNumber",
+            "function requireLiteral",
+        ):
+            if marker in source:
+                duplicated_helpers.append(f"{relative_path}: {marker}")
+
+    assert duplicated_helpers == []
+
+
 def test_benchmark_dashboard_renders_python_owned_run_detail_sections() -> None:
     dashboard = (
         _web_source_root / "BenchmarkResultDashboard.tsx"
