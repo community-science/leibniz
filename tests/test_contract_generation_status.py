@@ -1,4 +1,5 @@
 import ast
+import importlib
 import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -142,6 +143,8 @@ def test_contract_generation_status_categorizes_tracked_code() -> None:
 
     category_names: set[str] = set()
     patterns_by_category: dict[str, tuple[str, ...]] = {}
+    authored_contract_paths = _surface_paths(status, key="authored_contracts")
+    generated_output_paths = _surface_paths(status, key="generated_outputs")
     for category in code_inventory["categories"]:
         name = category["name"]
         assert name not in category_names
@@ -160,11 +163,14 @@ def test_contract_generation_status_categorizes_tracked_code() -> None:
             assert category["line_budget_basis"] == "domain-implementation"
         else:
             assert category["line_budget_basis"] in _excluded_line_budget_bases
-        if category["line_budget_basis"] == "contract-runtime":
-            assert category["structural_marker"] == "leibniz.records.ContractRuntimeSupport"
-        if category["line_budget_basis"] == "codegen-runtime":
-            assert category["structural_marker"] == (
-                "leibniz.console.codegen.write_generated_console_web_modules"
+            _assert_excluded_category_basis(
+                category=category,
+                matched_paths=_paths_matching_patterns(
+                    tracked_paths=tracked_paths,
+                    patterns=tuple(category["path_patterns"]),
+                ),
+                authored_contract_paths=authored_contract_paths,
+                generated_output_paths=generated_output_paths,
             )
         assert category["ratchet_next"]
         patterns = tuple(category["path_patterns"])
@@ -346,3 +352,79 @@ def _typescript_generation_surfaces(status: dict[str, Any]) -> set[str]:
         for surface in status["surfaces"]
         if surface["coverage"]["generated_typescript_runtime"]
     }
+
+
+def _surface_paths(status: dict[str, Any], *, key: str) -> set[str]:
+    return {
+        str(path)
+        for surface in status["surfaces"]
+        for path in cast(list[object], surface.get(key, []))
+    }
+
+
+def _assert_excluded_category_basis(
+    *,
+    category: dict[str, Any],
+    matched_paths: set[str],
+    authored_contract_paths: set[str],
+    generated_output_paths: set[str],
+) -> None:
+    basis = category["line_budget_basis"]
+    if basis in {"contract-runtime", "codegen-runtime"}:
+        marker = str(category["structural_marker"])
+        marker_object = _resolve_structural_marker(marker)
+        if basis == "contract-runtime":
+            assert isinstance(marker_object, type)
+            assert issubclass(marker_object, ContractRuntimeSupport)
+        else:
+            assert callable(marker_object)
+    elif basis == "authored-contract":
+        assert matched_paths <= authored_contract_paths
+        for relative_path in matched_paths:
+            document = load_object_document(
+                (_repository_root / relative_path).read_bytes(),
+                description=relative_path,
+            )
+            assert document["format"] == "leibniz.record-contract-set"
+            assert document["format_version"] == 1
+    elif basis == "authored-data":
+        assert matched_paths.isdisjoint(generated_output_paths)
+    elif basis == "build-configuration":
+        assert all(
+            "package" in path or "config" in path or "tsconfig" in path
+            for path in matched_paths
+        )
+    elif basis == "inventory":
+        assert matched_paths == {"CONTRACT_GENERATION_STATUS.json"}
+    elif basis == "package-metadata":
+        assert all(
+            path.endswith("__init__.py") or path.endswith("py.typed")
+            for path in matched_paths
+        )
+    elif basis == "repository-automation":
+        assert all(
+            path.startswith((".github/", "scripts/")) or path == "pyproject.toml"
+            for path in matched_paths
+        )
+    elif basis == "tests":
+        assert all(path.startswith("tests/") for path in matched_paths)
+    else:
+        raise AssertionError(f"unsupported excluded line-budget basis: {basis}")
+
+
+def _paths_matching_patterns(
+    *,
+    tracked_paths: list[str],
+    patterns: tuple[str, ...],
+) -> set[str]:
+    return {
+        relative_path
+        for relative_path in tracked_paths
+        if any(PurePosixPath(relative_path).match(pattern) for pattern in patterns)
+    }
+
+
+def _resolve_structural_marker(marker: str) -> object:
+    module_name, _, attribute_name = marker.rpartition(".")
+    module = importlib.import_module(module_name)
+    return getattr(module, attribute_name)
