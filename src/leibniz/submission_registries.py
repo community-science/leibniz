@@ -25,7 +25,7 @@ __all__ = [
 _RepositoryType: TypeAlias = Literal["dataset", "model", "space"]
 _repo_part = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _record_contracts = record_specs_from_package_contract(
-    "leibniz.contracts",
+    "leibniz.contract_artifacts",
     "submission_registries",
     description="submission registry record contracts",
 )

@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.resources import files
 from typing import Literal, TypeAlias, cast
 
+from leibniz.contracts import (
+    ConformanceCase,
+    ContractObject,
+    ContractRuntimeSupport,
+    RuntimeProjection,
+)
 from leibniz.documents import document_filename_suffix, load_object_document
 
 __all__ = [
+    "ConformanceCase",
+    "ContractObject",
     "ContractRuntimeSupport",
     "FieldContract",
     "FieldKind",
@@ -18,6 +25,7 @@ __all__ = [
     "RecordContractSet",
     "RecordContractValidationError",
     "RecordContractViolation",
+    "RuntimeProjection",
     "ScalarKind",
     "TypeScriptRecordModule",
     "record_contract_set_from_contract",
@@ -49,15 +57,6 @@ _field_kinds = frozenset(
     }
 )
 _missing_literal = object()
-
-
-class ContractRuntimeSupport(ABC):
-    """Marker base for generic handwritten record contract runtime support."""
-
-    @property
-    @abstractmethod
-    def contract_runtime_role(self) -> str:
-        """Return the generic record-runtime role this object serves."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +98,7 @@ class FieldContract(ContractRuntimeSupport):
 
 
 @dataclass(frozen=True, slots=True)
-class RecordContract(ContractRuntimeSupport):
+class RecordContract(ContractObject):
     """A parsed record declaration from an authored record contract."""
 
     name: str
@@ -109,6 +108,57 @@ class RecordContract(ContractRuntimeSupport):
     @property
     def contract_runtime_role(self) -> str:
         return "record-contract"
+
+    @property
+    def contract_name(self) -> str:
+        return self.name
+
+    def runtime_projections(self) -> tuple[RuntimeProjection, ...]:
+        """Return generic runtime projection facts for this record contract."""
+
+        return (
+            RuntimeProjection(
+                contract_name=self.name,
+                surface="python-record-validation",
+                target="leibniz.records.RecordSpec",
+                content={
+                    "fields": tuple(_required_field_name(field) for field in self.fields),
+                    "allow_unknown": self.allow_unknown,
+                },
+            ),
+        )
+
+    def typescript_runtime_projection(
+        self,
+        *,
+        exported_type: str,
+        parser_name: str,
+        error_name: str,
+        literal_expressions: Mapping[str, str] | None = None,
+        imports: str = "",
+    ) -> RuntimeProjection:
+        """Generate a TypeScript runtime projection for this record contract."""
+
+        content = _typescript_record_contract_module(
+            TypeScriptRecordModule(
+                record=self,
+                exported_type=exported_type,
+                parser_name=parser_name,
+                error_name=error_name,
+                literal_expressions=literal_expressions or {},
+                imports=imports,
+            )
+        )
+        return RuntimeProjection(
+            contract_name=self.name,
+            surface="typescript-record-parser",
+            target=exported_type,
+            content=content,
+            metadata={
+                "parser_name": parser_name,
+                "error_name": error_name,
+            },
+        )
 
     def to_typescript_module(
         self,
@@ -121,15 +171,52 @@ class RecordContract(ContractRuntimeSupport):
     ) -> str:
         """Generate a TypeScript record type and parser for this contract."""
 
-        return _typescript_record_contract_module(
-            TypeScriptRecordModule(
-                record=self,
-                exported_type=exported_type,
-                parser_name=parser_name,
-                error_name=error_name,
-                literal_expressions=literal_expressions or {},
-                imports=imports,
+        projection = self.typescript_runtime_projection(
+            exported_type=exported_type,
+            parser_name=parser_name,
+            error_name=error_name,
+            literal_expressions=literal_expressions,
+            imports=imports,
+        )
+        return cast(str, projection.content)
+
+    def conformance_cases(self) -> tuple[ConformanceCase, ...]:
+        """Return minimal record examples owned by this contract."""
+
+        cases = [
+            ConformanceCase(
+                contract_name=self.name,
+                name=f"{self.name}-valid-minimal",
+                record=_minimal_record(fields=self.fields),
+                expected_valid=True,
+                reason="all required fields satisfy their declared field contracts",
             )
+        ]
+        first_required = next((field for field in self.fields if field.required), None)
+        if first_required is not None:
+            invalid = dict(cases[0].record)
+            invalid.pop(_required_field_name(first_required), None)
+            cases.append(
+                ConformanceCase(
+                    contract_name=self.name,
+                    name=f"{self.name}-missing-required-field",
+                    record=invalid,
+                    expected_valid=False,
+                    reason=f"{_required_field_name(first_required)} is required",
+                )
+            )
+        return tuple(cases)
+
+    def source_graph_facts(self) -> tuple[Mapping[str, object], ...]:
+        """Return source-graph facts for this record contract."""
+
+        return (
+            {
+                "kind": "record-contract",
+                "name": self.name,
+                "fields": tuple(_required_field_name(field) for field in self.fields),
+                "allow_unknown": self.allow_unknown,
+            },
         )
 
 
@@ -347,6 +434,43 @@ def typescript_literal(value: object) -> str:
     """Render a small Python value as a TypeScript literal expression."""
 
     return _typescript_literal_lines(value, indent=0)
+
+
+def _minimal_record(*, fields: tuple[FieldContract, ...]) -> Mapping[str, object]:
+    return {
+        _required_field_name(field): _minimal_field_value(field)
+        for field in fields
+        if field.required
+    }
+
+
+def _minimal_field_value(field: FieldContract) -> object:
+    if field.values:
+        return field.values[0]
+    if field.kind == "literal":
+        return field.literal_or(None)
+    if field.kind == "boolean":
+        return True
+    if field.kind == "integer":
+        return 1
+    if field.kind == "number":
+        return 1.0
+    if field.kind == "identifier":
+        return "core.example@0.1.0"
+    if field.kind == "name":
+        return "core.example"
+    if field.kind == "version":
+        return "0.1.0"
+    if field.kind == "record":
+        return {}
+    if field.kind == "sequence":
+        if field.item is None:
+            return []
+        return [_minimal_field_value(field.item)]
+    if field.kind == "string":
+        return "example"
+    field_name = field.name or "<anonymous>"
+    raise ValueError(f"{field_name}: unsupported contract field kind: {field.kind}")
 
 
 def _typescript_record_contract_module(config: TypeScriptRecordModule) -> str:
