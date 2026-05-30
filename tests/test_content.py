@@ -166,6 +166,7 @@ def test_source_does_not_hide_json_filename_suffixes_by_concatenating_string_lit
 def test_json_suffix_detectors_reject_split_string_literal_terms() -> None:
     assert _has_hidden_json_suffix('suffix = "." + "".join(("j", "s", "o", "n"))')
     assert _has_hidden_json_suffix('suffix = "." + "js" + "on"')
+    assert _has_hidden_json_suffix('load("name" + "." + "j" + "son")')
     assert _has_json_filename_suffix_literal('suffix = ".json"')
     assert not _has_hidden_json_suffix('suffix = ".json"')
     assert not _has_json_filename_suffix_literal('suffix = ".csv"')
@@ -185,8 +186,7 @@ def test_tests_import_json_only_at_document_format_boundary() -> None:
 def _has_hidden_json_suffix(source: str) -> bool:
     tree = ast.parse(source)
     return any(
-        isinstance(node, ast.Assign | ast.AnnAssign)
-        and _assigns_hidden_json_suffix(node)
+        _hides_json_suffix(node)
         for node in ast.walk(tree)
     )
 
@@ -199,16 +199,20 @@ def _has_json_filename_suffix_literal(source: str) -> bool:
     )
 
 
-def _assigns_hidden_json_suffix(node: ast.Assign | ast.AnnAssign) -> bool:
-    targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
-    if not any(isinstance(target, ast.Name) and target.id.endswith("suffix") for target in targets):
+def _hides_json_suffix(node: ast.AST) -> bool:
+    if isinstance(node, ast.Constant) and node.value == ".json":
         return False
-    if node.value is None:
+    return _string_literal_value(node) == ".json" or _contains_hidden_json_suffix(node)
+
+
+def _contains_hidden_json_suffix(node: ast.AST) -> bool:
+    if isinstance(node, ast.Constant):
         return False
-    literal = _string_literal_value(node.value)
-    return literal == ".json" and not (
-        isinstance(node.value, ast.Constant) and node.value.value == ".json"
-    )
+    literal = _string_literal_value(node)
+    if literal is None or not literal.endswith(".json"):
+        return False
+    expression = ast.unparse(node)
+    return ".json" not in expression
 
 
 def _string_literal_value(node: ast.AST) -> str | None:

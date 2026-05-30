@@ -43,6 +43,7 @@
         "has-structural-marker",
         "owns-record-spec-module",
         "tested-by",
+        "uses-authored-contract",
         "uses-runtime"
       ]
     },
@@ -107,12 +108,24 @@
         "name": "python-package-metadata",
         "scope": "Python package marker files that affect packaging or type discovery but are not implementation code.",
         "path_patterns": [
+          "src/leibniz/contracts/__init__.py",
           "src/leibniz/py.typed"
         ],
         "status": "hand-maintained",
         "line_budget": "excluded",
         "line_budget_basis": "package-metadata",
         "ratchet_next": "Keep packaging markers explicit and outside implementation-line accounting."
+      },
+      {
+        "name": "authored-record-contracts",
+        "scope": "Hand-authored record contract artifacts used to generate runtime record validators.",
+        "path_patterns": [
+          "src/leibniz/contracts/*.json"
+        ],
+        "status": "hand-authored-data",
+        "line_budget": "excluded",
+        "line_budget_basis": "authored-contract",
+        "ratchet_next": "Generate Python, TypeScript, and conformance fixtures from these authored record contracts."
       },
       {
         "name": "python-artifact-authority-and-publication",
@@ -323,8 +336,10 @@
         "src/leibniz/artifacts.py",
         "src/leibniz/authority_indexes.py",
         "src/leibniz/publications.py",
-        "src/leibniz/submission_registries.py",
         "src/leibniz/submissions.py"
+      ],
+      "authored_contracts": [
+        "src/leibniz/contracts/submission_registries.json"
       ],
       "python_runtime": [
         "src/leibniz/artifacts.py",

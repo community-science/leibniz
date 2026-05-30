@@ -129,6 +129,39 @@ def source_graph(*, repository_root: Path, status_path: Path) -> dict[str, objec
         surface_id = _node_id("contract-surface", surface_name)
         add_node(GraphNode(id=surface_id, kind="contract-surface", label=surface_name))
         for path in _strings(
+            surface.get("authored_contracts", []),
+            field=f"{surface_name}.authored_contracts",
+        ):
+            path_id = _path_node_id(path)
+            add_node(GraphNode(id=path_id, kind="path", label=path, path=path))
+            add_edge(GraphEdge(kind="uses-authored-contract", source=surface_id, target=path_id))
+            for record_spec in _record_spec_contract_declarations(
+                repository_root=repository_root,
+                relative_path=path,
+            ):
+                add_node(
+                    GraphNode(
+                        id=record_spec.id,
+                        kind="record-spec",
+                        label=record_spec.name,
+                        path=record_spec.module_path,
+                    )
+                )
+                add_edge(
+                    GraphEdge(
+                        kind="declares-record-spec",
+                        source=path_id,
+                        target=record_spec.id,
+                    )
+                )
+                add_edge(
+                    GraphEdge(
+                        kind="covers-record-spec",
+                        source=surface_id,
+                        target=record_spec.id,
+                    )
+                )
+        for path in _strings(
             surface["record_spec_modules"],
             field=f"{surface_name}.record_spec_modules",
         ):
@@ -219,6 +252,8 @@ def _record_specs_by_module(
     declarations_by_module: dict[str, tuple[RecordSpecDeclaration, ...]] = {}
     for path in sorted((repository_root / "src" / "leibniz").rglob("*.py")):
         relative_path = path.relative_to(repository_root).as_posix()
+        if relative_path == "src/leibniz/records.py":
+            continue
         declarations = _record_spec_declarations(path=path, relative_path=relative_path)
         if declarations:
             declarations_by_module[relative_path] = declarations
@@ -246,6 +281,28 @@ def _record_spec_declarations(
                         line=node.lineno,
                     )
                 )
+    return tuple(sorted(declarations, key=lambda declaration: declaration.name))
+
+
+def _record_spec_contract_declarations(
+    *,
+    repository_root: Path,
+    relative_path: str,
+) -> tuple[RecordSpecDeclaration, ...]:
+    contract = _load_status(repository_root / relative_path)
+    if contract.get("format") != "leibniz.record-contract-set":
+        return ()
+    records = _sequence(contract.get("records"), field=f"{relative_path}.records")
+    declarations: list[RecordSpecDeclaration] = []
+    for index, record_value in enumerate(records):
+        record = _mapping(record_value, field=f"{relative_path}.records.{index}")
+        declarations.append(
+            RecordSpecDeclaration(
+                module_path=relative_path,
+                name=_string(record.get("name"), field=f"{relative_path}.records.{index}.name"),
+                line=index + 1,
+            )
+        )
     return tuple(sorted(declarations, key=lambda declaration: declaration.name))
 
 
