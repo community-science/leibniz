@@ -94,8 +94,9 @@
       },
       {
         "name": "python-contract-runtime",
-        "scope": "Generic handwritten runtime support for validating and extracting values from authored record contracts.",
+        "scope": "Generic handwritten runtime support for parsing authored record contracts, validating records, extracting values, and producing generated runtime surfaces.",
         "path_patterns": [
+          "src/leibniz/record_contracts.py",
           "src/leibniz/records.py"
         ],
         "status": "hand-maintained",
@@ -328,6 +329,7 @@
       "contract_owner": "python-runtime-coupled",
       "record_spec_modules": [],
       "python_runtime": [
+        "src/leibniz/record_contracts.py",
         "src/leibniz/records.py"
       ],
       "typescript_runtime": [],

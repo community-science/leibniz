@@ -126,6 +126,7 @@ def test_contract_generation_status_categorizes_tracked_code() -> None:
         "uses-runtime",
     }
     assert _contract_runtime_paths(code_inventory["categories"]) == [
+        "src/leibniz/record_contracts.py",
         "src/leibniz/records.py"
     ]
     assert _contract_runtime_types() == {

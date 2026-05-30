@@ -8,18 +8,25 @@ data being checked against those rules.
 from __future__ import annotations
 
 import math
-from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from importlib.resources import files
-from typing import Literal, TypeAlias, cast
+from typing import TypeAlias, cast
 
-from leibniz.documents import document_filename_suffix, load_object_document
 from leibniz.identifiers import (
     IdentifierSyntaxError,
     ProtocolIdentifier,
     ProtocolName,
     SemanticVersion,
+)
+from leibniz.record_contracts import (
+    ContractRuntimeSupport,
+    FieldContract,
+    FieldKind,
+    RecordContract,
+    RecordContractValidationError,
+    ScalarKind,
+    record_contract_set_from_contract,
+    record_contract_set_from_package,
 )
 
 __all__ = [
@@ -37,41 +44,9 @@ __all__ = [
     "record_specs_from_contract",
 ]
 
-ScalarKind: TypeAlias = Literal["boolean", "integer", "number", "string"]
-FieldKind: TypeAlias = ScalarKind | Literal[
-    "identifier",
-    "literal",
-    "name",
-    "record",
-    "sequence",
-    "version",
-]
 RecordValue: TypeAlias = object
 ValidatedRecord: TypeAlias = Mapping[str, RecordValue]
 _unset = object()
-_field_kinds = frozenset(
-    {
-        "boolean",
-        "identifier",
-        "integer",
-        "literal",
-        "name",
-        "number",
-        "record",
-        "sequence",
-        "string",
-        "version",
-    }
-)
-
-
-class ContractRuntimeSupport(ABC):
-    """Marker base for generic handwritten record contract runtime support."""
-
-    @property
-    @abstractmethod
-    def contract_runtime_role(self) -> str:
-        """Return the generic record-runtime role this object serves."""
 
 
 class RecordValidationError(ValueError):
@@ -173,37 +148,16 @@ class RecordExtractor(ContractRuntimeSupport):
 def record_specs_from_contract(contract: Mapping[str, object]) -> dict[str, RecordSpec]:
     """Generate record specifications from an authored record-contract document."""
 
-    if contract.get("format") != "leibniz.record-contract-set":
+    try:
+        contract_set = record_contract_set_from_contract(contract)
+    except RecordContractValidationError as error:
         raise RecordValidationError(
-            (RecordViolation(path=("format",), message="expected record-contract set"),)
-        )
-    if contract.get("format_version") != 1:
-        raise RecordValidationError(
-            (RecordViolation(path=("format_version",), message="expected version 1"),)
-        )
-    records = _require_contract_sequence(contract.get("records"), path=("records",))
-    specs: dict[str, RecordSpec] = {}
-    for index, record in enumerate(records):
-        record_path = ("records", str(index))
-        if not isinstance(record, Mapping):
-            raise RecordValidationError(
-                (RecordViolation(path=record_path, message="expected record"),)
+            tuple(
+                RecordViolation(path=violation.path, message=violation.message)
+                for violation in error.violations
             )
-        record_map = cast(Mapping[str, object], record)
-        name = _require_contract_string(record_map.get("name"), path=(*record_path, "name"))
-        if name in specs:
-            raise RecordValidationError(
-                (RecordViolation(path=(*record_path, "name"), message="duplicate record"),)
-            )
-        fields = _require_contract_sequence(record_map.get("fields"), path=(*record_path, "fields"))
-        specs[name] = RecordSpec(
-            fields=_field_specs_from_contract(fields=fields, path=(*record_path, "fields")),
-            allow_unknown=_optional_contract_boolean(
-                record_map.get("allow_unknown", False),
-                path=(*record_path, "allow_unknown"),
-            ),
-        )
-    return specs
+        ) from error
+    return _record_specs_from_contract_set(tuple(contract_set.records.values()))
 
 
 def record_specs_from_package_contract(
@@ -214,11 +168,20 @@ def record_specs_from_package_contract(
 ) -> dict[str, RecordSpec]:
     """Generate record specs from a bundled authored record-contract document."""
 
-    contract = load_object_document(
-        files(package).joinpath(f"{name}{document_filename_suffix()}").read_bytes(),
-        description=description,
-    )
-    return record_specs_from_contract(contract)
+    try:
+        contract_set = record_contract_set_from_package(
+            package,
+            name,
+            description=description,
+        )
+    except RecordContractValidationError as error:
+        raise RecordValidationError(
+            tuple(
+                RecordViolation(path=violation.path, message=violation.message)
+                for violation in error.violations
+            )
+        ) from error
+    return _record_specs_from_contract_set(tuple(contract_set.records.values()))
 
 
 def _validate_record(
@@ -396,107 +359,35 @@ def _parse_sequence(
     return tuple(parsed), tuple(violations)
 
 
-def _field_spec_from_contract(
-    field: object,
-    *,
-    path: tuple[str, ...],
-) -> tuple[str, FieldSpec]:
-    if not isinstance(field, Mapping):
-        raise RecordValidationError((RecordViolation(path=path, message="expected record"),))
-    field_map = cast(Mapping[str, object], field)
-    name = _require_contract_string(field_map.get("name"), path=(*path, "name"))
-    kind = _field_kind_from_contract(field_map.get("kind"), path=(*path, "kind"))
-    required = _optional_contract_boolean(
-        field_map.get("required", True),
-        path=(*path, "required"),
+def _record_specs_from_contract_set(
+    contracts: Sequence[RecordContract],
+) -> dict[str, RecordSpec]:
+    return {contract.name: _record_spec_from_contract(contract) for contract in contracts}
+
+
+def _record_spec_from_contract(contract: RecordContract) -> RecordSpec:
+    return RecordSpec(
+        fields={
+            field.name: _field_spec_from_contract(field)
+            for field in contract.fields
+            if field.name is not None
+        },
+        allow_unknown=contract.allow_unknown,
     )
-    item = (
-        _anonymous_field_spec_from_contract(field_map["item"], path=(*path, "item"))
-        if "item" in field_map
-        else None
-    )
-    literal = field_map.get("literal", _unset)
-    values = _optional_contract_values(field_map.get("values"), path=(*path, "values"))
-    return (
-        name,
-        FieldSpec(
-            kind=kind,
-            required=required,
-            literal=literal,
-            item=item,
-            values=values,
+
+
+def _field_spec_from_contract(field: FieldContract) -> FieldSpec:
+    return FieldSpec(
+        kind=field.kind,
+        required=field.required,
+        literal=field.literal_or(_unset),
+        item=(
+            _field_spec_from_contract(field.item)
+            if field.item is not None
+            else None
         ),
+        values=field.values,
     )
-
-
-def _anonymous_field_spec_from_contract(
-    field: object,
-    *,
-    path: tuple[str, ...],
-) -> FieldSpec:
-    if not isinstance(field, Mapping):
-        raise RecordValidationError((RecordViolation(path=path, message="expected record"),))
-    field_map = cast(Mapping[str, object], field)
-    kind = _field_kind_from_contract(field_map.get("kind"), path=(*path, "kind"))
-    item = (
-        _anonymous_field_spec_from_contract(field_map["item"], path=(*path, "item"))
-        if "item" in field_map
-        else None
-    )
-    literal = field_map.get("literal", _unset)
-    values = _optional_contract_values(field_map.get("values"), path=(*path, "values"))
-    return FieldSpec(kind=kind, literal=literal, item=item, values=values)
-
-
-def _field_specs_from_contract(
-    *,
-    fields: Sequence[object],
-    path: tuple[str, ...],
-) -> dict[str, FieldSpec]:
-    specs: dict[str, FieldSpec] = {}
-    for offset, field in enumerate(fields):
-        field_name, field_spec = _field_spec_from_contract(field, path=(*path, str(offset)))
-        if field_name in specs:
-            raise RecordValidationError(
-                (RecordViolation(path=(*path, str(offset), "name"), message="duplicate field"),)
-            )
-        specs[field_name] = field_spec
-    return specs
-
-
-def _field_kind_from_contract(value: object, *, path: tuple[str, ...]) -> FieldKind:
-    kind = _require_contract_string(value, path=path)
-    if kind not in _field_kinds:
-        raise RecordValidationError((RecordViolation(path=path, message="unsupported field kind"),))
-    return cast(FieldKind, kind)
-
-
-def _require_contract_sequence(value: object, *, path: tuple[str, ...]) -> Sequence[object]:
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
-        raise RecordValidationError((RecordViolation(path=path, message="expected sequence"),))
-    return cast(Sequence[object], value)
-
-
-def _require_contract_string(value: object, *, path: tuple[str, ...]) -> str:
-    if not isinstance(value, str):
-        raise RecordValidationError((RecordViolation(path=path, message="expected string"),))
-    return value
-
-
-def _optional_contract_boolean(value: object, *, path: tuple[str, ...]) -> bool:
-    if not isinstance(value, bool):
-        raise RecordValidationError((RecordViolation(path=path, message="expected boolean"),))
-    return value
-
-
-def _optional_contract_values(
-    value: object,
-    *,
-    path: tuple[str, ...],
-) -> tuple[object, ...] | None:
-    if value is None:
-        return None
-    return tuple(_require_contract_sequence(value, path=path))
 
 
 def _require_string(
