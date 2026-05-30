@@ -9,9 +9,9 @@ import tempfile
 import urllib.error
 import urllib.request
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
@@ -78,54 +78,35 @@ _publication_directories = (
 )
 
 
+class _SummaryRecordMixin:
+    def to_record(self) -> dict[str, object]:
+        return _summary_record(self)
+
+
 class LocalResultImportError(ValueError):
     """Raised when local result import cannot produce a valid console view."""
 
 
 @dataclass(frozen=True, slots=True)
-class LocalResultImportSummary:
-    """Summary of one operator-local result import."""
-
+class LocalResultImportSummary(_SummaryRecordMixin):
     source_files: tuple[Path, ...]
     import_files: tuple[Path, ...]
     view_file: Path
     publication_bundle_count: int
     measurement_count: int
 
-    def to_record(self) -> dict[str, object]:
-        return {
-            "source_files": [path.as_posix() for path in self.source_files],
-            "import_files": [path.as_posix() for path in self.import_files],
-            "view_file": self.view_file.as_posix(),
-            "publication_bundle_count": self.publication_bundle_count,
-            "measurement_count": self.measurement_count,
-        }
-
 
 @dataclass(frozen=True, slots=True)
-class LocalBenchmarkResultViewSummary:
-    """Summary of one operator-local benchmark result projection."""
-
+class LocalBenchmarkResultViewSummary(_SummaryRecordMixin):
     source_files: tuple[Path, ...]
     view_file: Path
     benchmark_count: int
     model_count: int
     run_count: int
 
-    def to_record(self) -> dict[str, object]:
-        return {
-            "source_files": [path.as_posix() for path in self.source_files],
-            "view_file": self.view_file.as_posix(),
-            "benchmark_count": self.benchmark_count,
-            "model_count": self.model_count,
-            "run_count": self.run_count,
-        }
-
 
 @dataclass(frozen=True, slots=True)
-class LocalPublicationExportSummary:
-    """Summary of publication bundles exported from local benchmark results."""
-
+class LocalPublicationExportSummary(_SummaryRecordMixin):
     source_files: tuple[Path, ...]
     publication_files: tuple[Path, ...]
     publication_bundle_count: int
@@ -133,23 +114,9 @@ class LocalPublicationExportSummary:
     git_commit: str | None = None
     git_pushed: bool = False
 
-    def to_record(self) -> dict[str, object]:
-        record: dict[str, object] = {
-            "source_files": [path.as_posix() for path in self.source_files],
-            "publication_files": [path.as_posix() for path in self.publication_files],
-            "publication_bundle_count": self.publication_bundle_count,
-            "measurement_count": self.measurement_count,
-            "git_pushed": self.git_pushed,
-        }
-        if self.git_commit is not None:
-            record["git_commit"] = self.git_commit
-        return record
-
 
 @dataclass(frozen=True, slots=True)
-class LocalPublicationCheckoutSummary:
-    """Summary of a prepared public result-publication checkout."""
-
+class LocalPublicationCheckoutSummary(_SummaryRecordMixin):
     repo_id: str | None
     runs_root: Path
     repo_url: str | None
@@ -157,33 +124,31 @@ class LocalPublicationCheckoutSummary:
     scaffold_commit: str | None
     pushed: bool
 
-    def to_record(self) -> dict[str, object]:
-        record: dict[str, object] = {
-            "runs_root": self.runs_root.as_posix(),
-            "created_or_reused": self.created_or_reused,
-            "pushed": self.pushed,
-        }
-        if self.repo_id is not None:
-            record["repo_id"] = self.repo_id
-        if self.repo_url is not None:
-            record["repo_url"] = self.repo_url
-        if self.scaffold_commit is not None:
-            record["scaffold_commit"] = self.scaffold_commit
-        return record
-
 
 @dataclass(frozen=True, slots=True)
-class LocalPublicationPushSummary:
-    """Summary of pushing a result-publication checkout."""
-
+class LocalPublicationPushSummary(_SummaryRecordMixin):
     runs_root: Path
     pushed_commit: str
 
-    def to_record(self) -> dict[str, object]:
-        return {
-            "runs_root": self.runs_root.as_posix(),
-            "pushed_commit": self.pushed_commit,
-        }
+
+def _summary_record(summary: Any) -> dict[str, object]:
+    record: dict[str, object] = {}
+    for field in fields(summary):
+        value = getattr(summary, field.name)
+        if value is None:
+            continue
+        if isinstance(value, Path):
+            record[field.name] = value.as_posix()
+        elif isinstance(value, tuple):
+            values = cast(tuple[object, ...], value)
+            record[field.name] = (
+                [path.as_posix() for path in cast(tuple[Path, ...], values)]
+                if all(isinstance(item, Path) for item in values)
+                else values
+            )
+        else:
+            record[field.name] = value
+    return record
 
 
 def initialize_publication_checkout(
@@ -197,8 +162,6 @@ def initialize_publication_checkout(
     push: bool = False,
     commit_message: str = "Initialize Leibniz result publication checkout",
 ) -> LocalPublicationCheckoutSummary:
-    """Create or reuse a public Hugging Face dataset checkout for run results."""
-
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     runs_root = _resolve_output_root(repository_root, runs_root)
     endpoint = endpoint.rstrip("/")
@@ -278,13 +241,6 @@ def publish_local_benchmark_results(
     token: str | None = None,
     commit_message: str = "Publish Leibniz benchmark results",
 ) -> LocalPublicationExportSummary:
-    """Write local benchmark runs as publication bundles for explicit import.
-
-    The resolved runs root is treated as the publication checkout. Publication
-    bundles are generated under that checkout, and ``commit`` commits all dirty
-    run-state changes there.
-    """
-
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     runs_root = _resolve_output_root(repository_root, runs_root)
     output_root = runs_root / "publication_bundles"
@@ -1810,10 +1766,11 @@ def _bundle_filename(bundle_id: ProtocolIdentifier, digest: ContentDigest) -> st
 
 
 def _validate_publication_bundle_view(record: Mapping[str, object]) -> None:
-    _as_string(record.get("id"), "id")
-    _as_string(record.get("digest"), "digest")
-    _as_string(record.get("source_path"), "source_path")
-    _as_string(record.get("submission_package_id"), "submission_package_id")
+    _require_string_fields(
+        record,
+        "",
+        ("id", "digest", "source_path", "submission_package_id"),
+    )
     benchmark_ids = _as_sequence(record.get("benchmark_ids"), "benchmark_ids")
     if not all(isinstance(item, str) and item for item in benchmark_ids):
         raise LocalResultImportError("benchmark_ids must contain nonempty strings")
@@ -1822,8 +1779,7 @@ def _validate_publication_bundle_view(record: Mapping[str, object]) -> None:
         raise LocalResultImportError("measurement_count must be an integer")
     if measurement_count < 0:
         raise LocalResultImportError("measurement_count must be nonnegative")
-    _as_mapping(record.get("measurement_dataset"), "measurement_dataset")
-    _as_mapping(record.get("measurement_score_view"), "measurement_score_view")
+    _require_mapping_fields(record, "", ("measurement_dataset", "measurement_score_view"))
 
 
 def _validate_benchmark_result_view(record: Mapping[str, object]) -> None:
@@ -1846,12 +1802,14 @@ def _validate_work_queue_item(record: Mapping[str, object]) -> None:
         raise LocalResultImportError("work queue item has unsupported format")
     if record.get("format_version") != _console_result_view_format_version:
         raise LocalResultImportError("work queue item has unsupported format_version")
-    _as_string(record.get("id"), "queue_items.id")
-    _as_string(record.get("benchmark_id"), "queue_items.benchmark_id")
-    _as_string(record.get("proposal_id"), "queue_items.proposal_id")
-    if "candidate_id" in record:
-        _as_string(record.get("candidate_id"), "queue_items.candidate_id")
-    _as_string(record.get("proposal_set_path"), "queue_items.proposal_set_path")
+    _require_string_fields(
+        record,
+        "queue_items",
+        ("id", "benchmark_id", "proposal_id", "proposal_set_path", "status"),
+    )
+    for field in ("candidate_id", "run_id", "measurement_dataset_path", "error"):
+        if field in record:
+            _as_string(record.get(field), f"queue_items.{field}")
     command = _as_sequence(record.get("command"), "queue_items.command")
     if not all(isinstance(argument, str) and argument for argument in command):
         raise LocalResultImportError("queue_items.command must contain strings")
@@ -1861,15 +1819,6 @@ def _validate_work_queue_item(record: Mapping[str, object]) -> None:
     sequence = _optional_int(record.get("sequence"), "queue_items.sequence")
     if sequence is None or sequence < 0:
         raise LocalResultImportError("queue_items.sequence must be nonnegative")
-    if "run_id" in record:
-        _as_string(record.get("run_id"), "queue_items.run_id")
-    if "measurement_dataset_path" in record:
-        _as_string(
-            record.get("measurement_dataset_path"),
-            "queue_items.measurement_dataset_path",
-        )
-    if "error" in record:
-        _as_string(record.get("error"), "queue_items.error")
 
 
 def _validate_benchmark_result(record: Mapping[str, object]) -> None:
@@ -1878,21 +1827,21 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
     if not cost_axes:
         raise LocalResultImportError("cost_axes must not be empty")
     for index, axis in enumerate(cost_axes):
-        axis_record = _as_mapping(axis, f"cost_axes.{index}")
-        _as_string(axis_record.get("key"), f"cost_axes.{index}.key")
-        _as_string(axis_record.get("label"), f"cost_axes.{index}.label")
-    leaderboard = _as_sequence(record.get("leaderboard"), "leaderboard")
-    for index, model in enumerate(leaderboard):
-        _validate_model_result(_as_mapping(model, f"leaderboard.{index}"))
+        _require_string_fields(
+            _as_mapping(axis, f"cost_axes.{index}"),
+            f"cost_axes.{index}",
+            ("key", "label"),
+        )
+    _require_record_sequence(record, "leaderboard")
     frontiers = _as_mapping(record.get("frontiers"), "frontiers")
-    for axis in ("parameter_count", "inference_flops", "parameter_bytes"):
-        _as_sequence(frontiers.get(axis), f"frontiers.{axis}")
-    history = _as_sequence(record.get("training_history"), "training_history")
-    for index, run in enumerate(history):
-        _validate_run_result(_as_mapping(run, f"training_history.{index}"))
-    for index, inspection in enumerate(
-        _as_sequence(record.get("model_inspections", ()), "model_inspections")
-    ):
+    _require_sequence_fields(
+        frontiers,
+        "frontiers",
+        ("parameter_count", "inference_flops", "parameter_bytes"),
+    )
+    _require_record_sequence(record, "training_history")
+    inspections = _as_sequence(record.get("model_inspections", ()), "model_inspections")
+    for index, inspection in enumerate(inspections):
         field = f"model_inspections.{index}"
         inspection_record = dict(_as_mapping(inspection, field))
         inspection_record.pop("source_path", None)
@@ -1900,436 +1849,49 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
             ModelInspectionRecord.from_record(inspection_record)
         except ModelInspectionValidationError as error:
             raise LocalResultImportError(f"{field}: invalid model inspection: {error}") from error
-    for index, proposal in enumerate(_as_sequence(record.get("proposals", ()), "proposals")):
-        _validate_proposal_result(_as_mapping(proposal, f"proposals.{index}"))
+    _require_record_sequence(record, "proposals", default=())
 
 
-def _validate_model_result(record: Mapping[str, object]) -> None:
-    _as_string(record.get("model_key"), "model_key")
-    _as_string(record.get("architecture_digest"), "architecture_digest")
-    _as_string(record.get("benchmark_id"), "benchmark_id")
-    _as_nonnegative_number(record.get("score"), "score")
-    _as_sequence(record.get("observed_complexities"), "observed_complexities")
-    for index, point in enumerate(_as_sequence(record.get("points"), "points")):
-        point_record = _as_mapping(point, f"points.{index}")
-        _as_nonnegative_number(point_record.get("complexity"), f"points.{index}.complexity")
-        _as_nonnegative_number(point_record.get("score"), f"points.{index}.score")
-        if "sample_count" in point_record:
-            _as_nonnegative_number(point_record.get("sample_count"), f"points.{index}.sample_count")
-        _as_sequence(point_record.get("run_ids"), f"points.{index}.run_ids")
-    _as_mapping(record.get("cost_summary"), "cost_summary")
-    _as_sequence(record.get("run_ids"), "run_ids")
-    _as_sequence(record.get("source_kinds"), "source_kinds")
-    if "console_view_model" in record:
-        _validate_console_detail_view_model(
-            _as_mapping(record.get("console_view_model"), "console_view_model")
-        )
+def _require_record_sequence(
+    record: Mapping[str, object],
+    field: str,
+    *,
+    default: tuple[object, ...] | None = None,
+) -> None:
+    value = record.get(field, default) if default is not None else record.get(field)
+    for index, item in enumerate(_as_sequence(value, field)):
+        _as_mapping(item, f"{field}.{index}")
 
 
-def _validate_run_result(record: Mapping[str, object]) -> None:
-    _as_string(record.get("source_kind"), "source_kind")
-    _as_string(record.get("source_path"), "source_path")
-    _as_string(record.get("run_id"), "run_id")
-    _as_string(record.get("run_slug"), "run_slug")
-    _as_string(record.get("benchmark_id"), "benchmark_id")
-    _as_string(record.get("architecture_digest"), "architecture_digest")
-    _as_string(record.get("model_key"), "model_key")
-    _as_nonnegative_number(record.get("measurement_count"), "measurement_count")
-    _as_nonnegative_number(record.get("score"), "score")
-    _as_mapping(record.get("cost_summary"), "cost_summary")
-    _as_mapping(record.get("architecture"), "architecture")
-    if "model_inspection_digest" in record:
-        _as_string(record.get("model_inspection_digest"), "model_inspection_digest")
-    if "model_inspection_path" in record:
-        _as_string(record.get("model_inspection_path"), "model_inspection_path")
-    _as_string(record.get("measurement_dataset_digest"), "measurement_dataset_digest")
-    if "sampled_competence" in record:
-        _as_mapping(record.get("sampled_competence"), "sampled_competence")
-    if "training_diagnostics" in record:
-        _validate_training_diagnostics(
-            _as_mapping(record.get("training_diagnostics"), "training_diagnostics")
-        )
-    if "console_view_model" in record:
-        _validate_console_detail_view_model(
-            _as_mapping(record.get("console_view_model"), "console_view_model")
-        )
+def _field_path(prefix: str, field: str) -> str:
+    return field if not prefix else f"{prefix}.{field}"
 
 
-def _validate_console_detail_view_model(record: Mapping[str, object]) -> None:
-    sections = _as_sequence(record.get("detail_sections"), "console_view_model.detail_sections")
-    for section_index, section in enumerate(sections):
-        section_record = _as_mapping(
-            section,
-            f"console_view_model.detail_sections.{section_index}",
-        )
-        _as_string(
-            section_record.get("title"),
-            f"console_view_model.detail_sections.{section_index}.title",
-        )
-        if "entries" in section_record:
-            entries = _as_sequence(
-                section_record["entries"],
-                f"console_view_model.detail_sections.{section_index}.entries",
-            )
-            for entry_index, entry in enumerate(entries):
-                entry_record = _as_mapping(
-                    entry,
-                    f"console_view_model.detail_sections.{section_index}.entries.{entry_index}",
-                )
-                _as_string(
-                    entry_record.get("label"),
-                    "console_view_model.detail_sections.entries.label",
-                )
-                _as_string(
-                    entry_record.get("value"),
-                    "console_view_model.detail_sections.entries.value",
-                )
-        if "table" in section_record:
-            table = _as_mapping(
-                section_record["table"],
-                f"console_view_model.detail_sections.{section_index}.table",
-            )
-            _as_string(table.get("aria_label"), "console_view_model.detail_sections.table")
-            columns = _as_sequence(
-                table.get("columns"),
-                f"console_view_model.detail_sections.{section_index}.table.columns",
-            )
-            if not all(isinstance(column, str) and column for column in columns):
-                raise LocalResultImportError("console_view_model table columns must be strings")
-            rows = _as_sequence(
-                table.get("rows"),
-                f"console_view_model.detail_sections.{section_index}.table.rows",
-            )
-            for row in rows:
-                values = _as_sequence(row, "console_view_model.detail_sections.table.rows")
-                if len(values) != len(columns) or not all(
-                    isinstance(value, str) and value for value in values
-                ):
-                    raise LocalResultImportError(
-                        "console_view_model table rows must match columns"
-                    )
+def _require_string_fields(
+    record: Mapping[str, object],
+    prefix: str,
+    fields: tuple[str, ...],
+) -> None:
+    for field in fields:
+        _as_string(record.get(field), _field_path(prefix, field))
 
 
-def _validate_training_diagnostics(record: Mapping[str, object]) -> None:
-    status = _as_string(record.get("status"), "training_diagnostics.status")
-    if status not in {
-        "running",
-        "completed",
-        "converged",
-        "budget-exhausted",
-        "not-trainable",
-        "failed",
-    }:
-        raise LocalResultImportError(f"unsupported training status: {status}")
-    _as_string(record.get("stop_reason"), "training_diagnostics.stop_reason")
-    _as_nonnegative_number(record.get("steps_run"), "training_diagnostics.steps_run")
-    _as_nonnegative_number(
-        record.get("validation_checks"),
-        "training_diagnostics.validation_checks",
-    )
-    _as_nonnegative_number(
-        record.get("best_validation_loss"),
-        "training_diagnostics.best_validation_loss",
-    )
-    _as_nonnegative_number(
-        record.get("best_validation_step"),
-        "training_diagnostics.best_validation_step",
-    )
-    _as_nonnegative_number(
-        record.get("best_validation_check"),
-        "training_diagnostics.best_validation_check",
-    )
-    _as_nonnegative_number(
-        record.get("final_validation_loss"),
-        "training_diagnostics.final_validation_loss",
-    )
-    _as_nonnegative_number(
-        record.get("final_validation_step"),
-        "training_diagnostics.final_validation_step",
-    )
-    _as_nonnegative_number(
-        record.get("final_validation_check"),
-        "training_diagnostics.final_validation_check",
-    )
-    protocol = _as_mapping(record.get("protocol"), "training_diagnostics.protocol")
-    for field in (
-        "kind",
-        "objective",
-        "optimizer",
-        "schedule",
-        "validation_source",
-    ):
-        _as_string(protocol.get(field), f"training_diagnostics.protocol.{field}")
-    for field in (
-        "learning_rate",
-        "seed",
-        "batch_size",
-        "validation_interval",
-        "validation_sample_count",
-        "min_delta",
-        "patience",
-    ):
-        _as_nonnegative_number(
-            protocol.get(field),
-            f"training_diagnostics.protocol.{field}",
-        )
-    if "max_steps" in protocol:
-        _as_nonnegative_number(
-            protocol.get("max_steps"),
-            "training_diagnostics.protocol.max_steps",
-        )
-    history = _as_sequence(
-        record.get("validation_history"),
-        "training_diagnostics.validation_history",
-    )
-    if not history:
-        raise LocalResultImportError("training_diagnostics.validation_history must not be empty")
-    for index, point in enumerate(history):
-        point_record = _as_mapping(point, f"training_diagnostics.validation_history.{index}")
-        for field in (
-            "step",
-            "validation_check",
-            "validation_loss",
-            "best_validation_loss",
-            "best_validation_step",
-            "best_validation_check",
-            "stale_checks",
-        ):
-            _as_nonnegative_number(
-                point_record.get(field),
-                f"training_diagnostics.validation_history.{index}.{field}",
-            )
-        if "learning_rates" in point_record:
-            for rate in _as_sequence(
-                point_record.get("learning_rates"),
-                f"training_diagnostics.validation_history.{index}.learning_rates",
-            ):
-                _as_nonnegative_number(
-                    rate,
-                    f"training_diagnostics.validation_history.{index}.learning_rates",
-                )
-    for index, artifact in enumerate(
-        _as_sequence(record.get("artifacts"), "training_diagnostics.artifacts")
-    ):
-        artifact_record = _as_mapping(artifact, f"training_diagnostics.artifacts.{index}")
-        _as_string(artifact_record.get("kind"), f"training_diagnostics.artifacts.{index}.kind")
-        _as_string(
-            artifact_record.get("digest"),
-            f"training_diagnostics.artifacts.{index}.digest",
-        )
-        if "path" in artifact_record:
-            _as_string(
-                artifact_record.get("path"),
-                f"training_diagnostics.artifacts.{index}.path",
-            )
-    if "throughput" in record:
-        _validate_throughput_record(
-            _as_mapping(record.get("throughput"), "training_diagnostics.throughput")
-        )
+def _require_mapping_fields(
+    record: Mapping[str, object],
+    prefix: str,
+    fields: tuple[str, ...],
+) -> None:
+    for field in fields:
+        _as_mapping(record.get(field), _field_path(prefix, field))
 
 
-def _validate_throughput_record(record: Mapping[str, object]) -> None:
-    _as_string(record.get("kind"), "training_diagnostics.throughput.kind")
-    _as_string(
-        record.get("tensor_runtime"),
-        "training_diagnostics.throughput.tensor_runtime",
-    )
-    _as_string(record.get("tensor_device"), "training_diagnostics.throughput.tensor_device")
-    for name in ("training", "validation", "evaluation"):
-        phase = _as_mapping(
-            record.get(name),
-            f"training_diagnostics.throughput.{name}",
-        )
-        _as_string(phase.get("kind"), f"training_diagnostics.throughput.{name}.kind")
-        _as_nonnegative_number(
-            phase.get("sample_count"),
-            f"training_diagnostics.throughput.{name}.sample_count",
-        )
-        _as_nonnegative_number(
-            phase.get("seconds"),
-            f"training_diagnostics.throughput.{name}.seconds",
-        )
-        _as_nonnegative_number(
-            phase.get("samples_per_second"),
-            f"training_diagnostics.throughput.{name}.samples_per_second",
-        )
-    if "phase_timing" in record:
-        _validate_phase_timing_record(
-            _as_mapping(
-                record.get("phase_timing"),
-                "training_diagnostics.throughput.phase_timing",
-            )
-        )
-    roofline = _as_mapping(
-        record.get("roofline"),
-        "training_diagnostics.throughput.roofline",
-    )
-    _as_string(roofline.get("kind"), "training_diagnostics.throughput.roofline.kind")
-    _as_string(roofline.get("status"), "training_diagnostics.throughput.roofline.status")
-    if "peak_flops_per_second" in roofline:
-        _as_nonnegative_number(
-            roofline.get("peak_flops_per_second"),
-            "training_diagnostics.throughput.roofline.peak_flops_per_second",
-        )
-    if "peak_bytes_per_second" in roofline:
-        _as_nonnegative_number(
-            roofline.get("peak_bytes_per_second"),
-            "training_diagnostics.throughput.roofline.peak_bytes_per_second",
-        )
-    comparison = _as_mapping(
-        record.get("roofline_comparison"),
-        "training_diagnostics.throughput.roofline_comparison",
-    )
-    _as_string(
-        comparison.get("status"),
-        "training_diagnostics.throughput.roofline_comparison.status",
-    )
-    if comparison.get("status") == "available":
-        phases = _as_mapping(
-            comparison.get("phases"),
-            "training_diagnostics.throughput.roofline_comparison.phases",
-        )
-        for name in ("training", "validation", "evaluation"):
-            _validate_roofline_phase(
-                _as_mapping(
-                    phases.get(name),
-                    f"training_diagnostics.throughput.roofline_comparison.phases.{name}",
-                ),
-                path=f"training_diagnostics.throughput.roofline_comparison.phases.{name}",
-            )
-
-
-def _validate_roofline_phase(record: Mapping[str, object], *, path: str) -> None:
-    for field in (
-        "flops_per_sample",
-        "bytes_per_sample",
-        "arithmetic_intensity_flops_per_byte",
-        "expected_roofline_flops_per_second",
-        "observed_flops_per_second",
-        "fraction_of_roofline",
-        "samples_per_second",
-    ):
-        _as_nonnegative_number(record.get(field), f"{path}.{field}")
-    _as_string(record.get("limiting_resource"), f"{path}.limiting_resource")
-
-
-def _validate_phase_timing_record(record: Mapping[str, object]) -> None:
-    _as_string(record.get("kind"), "training_diagnostics.throughput.phase_timing.kind")
-    phases = _as_mapping(
-        record.get("phases"),
-        "training_diagnostics.throughput.phase_timing.phases",
-    )
-    for name, phase in phases.items():
-        phase_record = _as_mapping(
-            phase,
-            f"training_diagnostics.throughput.phase_timing.phases.{name}",
-        )
-        _as_string(
-            phase_record.get("kind"),
-            f"training_diagnostics.throughput.phase_timing.phases.{name}.kind",
-        )
-        _as_string(
-            phase_record.get("phase"),
-            f"training_diagnostics.throughput.phase_timing.phases.{name}.phase",
-        )
-        for field in (
-            "calls",
-            "sample_count",
-            "seconds",
-            "seconds_per_call",
-            "samples_per_second",
-        ):
-            _as_nonnegative_number(
-                phase_record.get(field),
-                f"training_diagnostics.throughput.phase_timing.phases.{name}.{field}",
-            )
-
-
-def _validate_proposal_result(record: Mapping[str, object]) -> None:
-    _as_string(record.get("id"), "proposals.id")
-    _as_nonnegative_number(record.get("rank"), "proposals.rank")
-    _as_string(record.get("candidate_kind"), "proposals.candidate_kind")
-    _as_string(record.get("candidate_id"), "proposals.candidate_id")
-    _as_string(record.get("rationale"), "proposals.rationale")
-    for field in (
-        "predicted_score",
-        "uncertainty",
-        "acquisition_value",
-        "novelty",
-        "expected_frontier_improvement",
-    ):
-        if field in record:
-            _as_nonnegative_number(record[field], f"proposals.{field}")
-    if "acquisition_model" in record:
-        _as_string(record.get("acquisition_model"), "proposals.acquisition_model")
-    if "acquisition_components" in record:
-        _as_mapping(record.get("acquisition_components"), "proposals.acquisition_components")
-    if "search_diagnostics" in record:
-        diagnostics = _as_mapping(record.get("search_diagnostics"), "proposals.search_diagnostics")
-        if "search_distribution_id" in diagnostics:
-            _as_string(
-                diagnostics.get("search_distribution_id"),
-                "proposals.search_diagnostics.search_distribution_id",
-            )
-        if "semantic_coordinates" in diagnostics:
-            for index, coordinate in enumerate(
-                _as_sequence(
-                    diagnostics.get("semantic_coordinates"),
-                    "proposals.search_diagnostics.semantic_coordinates",
-                )
-            ):
-                coordinate_record = _as_mapping(
-                    coordinate,
-                    f"proposals.search_diagnostics.semantic_coordinates.{index}",
-                )
-                _as_string(
-                    coordinate_record.get("name"),
-                    f"proposals.search_diagnostics.semantic_coordinates.{index}.name",
-                )
-                value = coordinate_record.get("value")
-                if not isinstance(value, str | int):
-                    raise LocalResultImportError(
-                        "proposals.search_diagnostics.semantic_coordinates.value "
-                        "must be a string or integer"
-                    )
-        if "sampled_resource_stratum" in diagnostics:
-            stratum = _as_mapping(
-                diagnostics.get("sampled_resource_stratum"),
-                "proposals.search_diagnostics.sampled_resource_stratum",
-            )
-            _as_nonnegative_number(
-                stratum.get("index"),
-                "proposals.search_diagnostics.sampled_resource_stratum.index",
-            )
-            _as_nonnegative_number(
-                stratum.get("count"),
-                "proposals.search_diagnostics.sampled_resource_stratum.count",
-            )
-        if "nearest_measured_support" in diagnostics:
-            support = _as_mapping(
-                diagnostics.get("nearest_measured_support"),
-                "proposals.search_diagnostics.nearest_measured_support",
-            )
-            _as_string(
-                support.get("architecture_digest"),
-                "proposals.search_diagnostics.nearest_measured_support.architecture_digest",
-            )
-            _as_nonnegative_number(
-                support.get("parameter_count"),
-                "proposals.search_diagnostics.nearest_measured_support.parameter_count",
-            )
-            _as_nonnegative_number(
-                support.get("score"),
-                "proposals.search_diagnostics.nearest_measured_support.score",
-            )
-            _as_nonnegative_number(
-                support.get("log_parameter_distance"),
-                "proposals.search_diagnostics.nearest_measured_support.log_parameter_distance",
-            )
-    if "command" in record:
-        command = _as_sequence(record["command"], "proposals.command")
-        if not all(isinstance(argument, str) and argument for argument in command):
-            raise LocalResultImportError("proposals.command must contain strings")
+def _require_sequence_fields(
+    record: Mapping[str, object],
+    prefix: str,
+    fields: tuple[str, ...],
+) -> None:
+    for field in fields:
+        _as_sequence(record.get(field), _field_path(prefix, field))
 
 
 def _as_mapping(value: object, field: str) -> Mapping[str, object]:

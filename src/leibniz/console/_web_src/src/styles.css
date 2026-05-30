@@ -1,6 +1,5 @@
 :root {
   --neon-blue: #00f2ff;
-  --neon-pink: #ff0055;
   --bg-dark: #0a0a0c;
   --panel-bg: rgba(20, 20, 25, 0.85);
   --panel-bg-subtle: rgba(20, 20, 25, 0.72);
@@ -46,7 +45,6 @@
   --space-4xl: 20px;
   --space-5xl: 24px;
   --space-6xl: 32px;
-  --space-7xl: 48px;
 
   --radius-xs: 3px;
   --radius-sm: 4px;
@@ -61,22 +59,16 @@
   --artifact-detail-column: 5fr;
   --artifact-detail-sticky-offset: var(--space-6xl);
   --inspection-metadata-label-min: 92px;
-  --performance-point-min: 220px;
-  --performance-source-min: 240px;
   --result-source-metric-min: 96px;
-  --performance-bar-height: 10px;
   --frontier-chart-height: 440px;
-  --frontier-point-size: 10px;
   --result-table-model-column: 2fr;
   --result-table-metric-column: 1fr;
   --proposal-card-min: 240px;
   --model-operation-min: 220px;
   --artifact-reference-min: 220px;
-  --benchmark-list-width: 300px;
   --benchmark-sample-tile-size: 128px;
   --benchmark-sample-caption-height: 40px;
   --benchmark-sample-min: var(--benchmark-sample-tile-size);
-  --benchmark-compact-sample-min: var(--benchmark-sample-tile-size);
   --benchmark-preview-size: 128px;
   --benchmark-compact-preview-size: var(--benchmark-preview-size);
   --benchmark-label-min: 88px;
@@ -535,108 +527,15 @@ p {
   text-align: right;
 }
 
-.performance-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-2xl);
-}
-
-.performance-header h2,
 .performance-section h3 {
   margin: 0;
   font-size: var(--font-panel-title);
-}
-
-.performance-header p {
-  margin: var(--space-xs) 0 0;
-  color: var(--text-secondary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--font-path);
-  overflow-wrap: anywhere;
-}
-
-.performance-point dt,
-.performance-source dt {
-  color: var(--text-dim);
-  font-size: var(--font-label);
-  font-weight: 700;
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-}
-
-.performance-point dd,
-.performance-source dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: white;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--font-control);
 }
 
 .performance-section {
   display: flex;
   flex-direction: column;
   gap: var(--space-lg);
-}
-
-.performance-points,
-.performance-source-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(var(--performance-point-min), 1fr));
-  gap: var(--space-lg);
-}
-
-.performance-source-grid {
-  grid-template-columns: repeat(auto-fit, minmax(var(--performance-source-min), 1fr));
-}
-
-.performance-point,
-.performance-source {
-  border: var(--line-thin) solid var(--border-color-strong);
-  border-radius: var(--radius-md);
-  background: var(--panel-bg-subtle);
-  padding: var(--space-xl);
-}
-
-.performance-point-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-lg);
-}
-
-.performance-point-heading span,
-.performance-source > span {
-  color: white;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--font-control);
-}
-
-.performance-point-heading strong {
-  color: var(--neon-blue);
-  font-size: var(--font-body);
-}
-
-.performance-bar {
-  height: var(--performance-bar-height);
-  margin: var(--space-lg) 0;
-  overflow: hidden;
-  border-radius: var(--radius-xs);
-  background: var(--control-bg);
-}
-
-.performance-bar div {
-  height: 100%;
-  background: var(--neon-blue);
-}
-
-.performance-point dl,
-.performance-source dl {
-  display: grid;
-  grid-template-columns: minmax(var(--inspection-metadata-label-min), auto) minmax(0, 1fr);
-  gap: var(--space-md) var(--space-lg);
-  margin: var(--space-lg) 0 0;
 }
 
 .benchmark-result-dashboard {
@@ -1673,31 +1572,6 @@ p {
   padding: var(--space-lg);
 }
 
-.benchmark-compact-label {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-3xs);
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  text-align: center;
-}
-
-.benchmark-compact-label strong {
-  max-width: 100%;
-  font-size: var(--font-panel-title);
-  line-height: var(--line-tight);
-  overflow-wrap: anywhere;
-}
-
-.benchmark-compact-label span {
-  max-width: 100%;
-  color: var(--text-muted);
-  font-size: var(--font-status);
-  overflow-wrap: anywhere;
-}
-
 .benchmark-model-workbench {
   display: flex;
   flex-direction: column;
@@ -2262,7 +2136,6 @@ p {
     padding: var(--space-4xl);
   }
 
-  .performance-header,
   .benchmark-header {
     align-items: stretch;
     flex-direction: column;

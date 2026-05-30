@@ -55,3 +55,11 @@ export function optionalString(
 ): string | undefined {
   return value === undefined ? undefined : requireString(value, path, error);
 }
+
+export function optionalNumber(
+  value: unknown,
+  path: string,
+  error: ErrorFactory,
+): number | undefined {
+  return value === undefined ? undefined : requireNumber(value, path, error);
+}

@@ -2,6 +2,7 @@ import {
   consoleProtocolFormats,
   consoleProtocolFormatVersions,
 } from './generated/protocolVocabulary.ts';
+import { requireArray, requireLiteral, requireRecord, requireString } from './transport.ts';
 
 export type ArtifactReferenceRecord = {
   kind: string;
@@ -35,19 +36,23 @@ export class ConsoleArtifactIndexTransportError extends Error {
   }
 }
 
+const error = (message: string) => new ConsoleArtifactIndexTransportError(message);
+
 export function parseConsoleArtifactIndexRecord(value: unknown): ConsoleArtifactIndexRecord {
-  const record = requireRecord(value, 'console artifact index');
+  const record = requireRecord(value, 'console artifact index', error);
   const format = requireLiteral(
     record.format,
     'format',
     consoleProtocolFormats.artifactIndex,
+    error,
   );
   const formatVersion = requireLiteral(
     record.format_version,
     'format_version',
     consoleProtocolFormatVersions.artifactIndex,
+    error,
   );
-  const artifacts = requireArray(record.artifacts, 'artifacts').map((artifact, index) =>
+  const artifacts = requireArray(record.artifacts, 'artifacts', error).map((artifact, index) =>
     parseEntryRecord(artifact, `artifacts.${index}`),
   );
 
@@ -59,30 +64,35 @@ export function parseConsoleArtifactIndexRecord(value: unknown): ConsoleArtifact
 }
 
 function parseEntryRecord(value: unknown, path: string): ConsoleArtifactIndexEntryRecord {
-  const record = requireRecord(value, path);
+  const record = requireRecord(value, path, error);
   const entry: ConsoleArtifactIndexEntryRecord = {
-    kind: requireString(record.kind, `${path}.kind`),
-    source_path: requireString(record.source_path, `${path}.source_path`),
-    digest: requireString(record.digest, `${path}.digest`),
+    kind: requireString(record.kind, `${path}.kind`, error),
+    source_path: requireString(record.source_path, `${path}.source_path`, error),
+    digest: requireString(record.digest, `${path}.digest`, error),
     reference: parseReferenceRecord(record.reference, `${path}.reference`),
-    dependencies: requireArray(record.dependencies, `${path}.dependencies`).map(
+    dependencies: requireArray(record.dependencies, `${path}.dependencies`, error).map(
       (dependency, index) => parseReferenceRecord(dependency, `${path}.dependencies.${index}`),
     ),
-    validation_status: requireLiteral(record.validation_status, `${path}.validation_status`, 'valid'),
-    validation_command: requireString(record.validation_command, `${path}.validation_command`),
+    validation_status: requireLiteral(
+      record.validation_status,
+      `${path}.validation_status`,
+      'valid',
+      error,
+    ),
+    validation_command: requireString(record.validation_command, `${path}.validation_command`, error),
   };
 
   if (record.protocol_id !== undefined) {
-    entry.protocol_id = requireString(record.protocol_id, `${path}.protocol_id`);
+    entry.protocol_id = requireString(record.protocol_id, `${path}.protocol_id`, error);
   }
 
   return entry;
 }
 
 function parseReferenceRecord(value: unknown, path: string): ArtifactReferenceRecord {
-  const record = requireRecord(value, path);
+  const record = requireRecord(value, path, error);
   const reference: ArtifactReferenceRecord = {
-    kind: requireString(record.kind, `${path}.kind`),
+    kind: requireString(record.kind, `${path}.kind`, error),
   };
 
   assignOptionalString(reference, 'protocol_id', record.protocol_id, path);
@@ -100,38 +110,6 @@ function assignOptionalString(
   path: string,
 ) {
   if (value !== undefined) {
-    target[key] = requireString(value, `${path}.${key}`);
+    target[key] = requireString(value, `${path}.${key}`, error);
   }
-}
-
-function requireRecord(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new ConsoleArtifactIndexTransportError(`${path}: expected record`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireArray(value: unknown, path: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new ConsoleArtifactIndexTransportError(`${path}: expected array`);
-  }
-  return value;
-}
-
-function requireString(value: unknown, path: string): string {
-  if (typeof value !== 'string') {
-    throw new ConsoleArtifactIndexTransportError(`${path}: expected string`);
-  }
-  return value;
-}
-
-function requireLiteral<const Literal extends string | number>(
-  value: unknown,
-  path: string,
-  expected: Literal,
-): Literal {
-  if (value !== expected) {
-    throw new ConsoleArtifactIndexTransportError(`${path}: expected ${String(expected)}`);
-  }
-  return expected;
 }
