@@ -96,20 +96,21 @@
         "name": "python-contract-runtime",
         "scope": "Generic handwritten runtime support for parsing authored record contracts, validating records, extracting values, and producing generated runtime surfaces.",
         "path_patterns": [
+          "src/leibniz/contracts.py",
           "src/leibniz/record_contracts.py",
           "src/leibniz/records.py"
         ],
         "status": "hand-maintained",
         "line_budget": "excluded",
         "line_budget_basis": "contract-runtime",
-        "structural_marker": "leibniz.records.ContractRuntimeSupport",
+        "structural_marker": "leibniz.contracts.ContractRuntimeSupport",
         "ratchet_next": "Keep this layer narrow and contract-generic while domain record declarations move toward authored contracts and generated runtimes."
       },
       {
         "name": "python-package-metadata",
         "scope": "Python package marker files that affect packaging or type discovery but are not implementation code.",
         "path_patterns": [
-          "src/leibniz/contracts/__init__.py",
+          "src/leibniz/contract_artifacts/__init__.py",
           "src/leibniz/py.typed"
         ],
         "status": "hand-maintained",
@@ -121,7 +122,7 @@
         "name": "authored-record-contracts",
         "scope": "Hand-authored record contract artifacts used to generate runtime record validators.",
         "path_patterns": [
-          "src/leibniz/contracts/*.json"
+          "src/leibniz/contract_artifacts/*.json"
         ],
         "status": "hand-authored-data",
         "line_budget": "excluded",
@@ -329,6 +330,7 @@
       "contract_owner": "python-runtime-coupled",
       "record_spec_modules": [],
       "python_runtime": [
+        "src/leibniz/contracts.py",
         "src/leibniz/record_contracts.py",
         "src/leibniz/records.py"
       ],
@@ -356,7 +358,7 @@
         "src/leibniz/submissions.py"
       ],
       "authored_contracts": [
-        "src/leibniz/contracts/submission_registries.json"
+        "src/leibniz/contract_artifacts/submission_registries.json"
       ],
       "python_runtime": [
         "src/leibniz/artifacts.py",
@@ -616,7 +618,7 @@
       "contract_owner": "python-owned-codegen",
       "record_spec_modules": [],
       "authored_contracts": [
-        "src/leibniz/contracts/work_queue_items.json"
+        "src/leibniz/contract_artifacts/work_queue_items.json"
       ],
       "python_runtime": [
         "src/leibniz/work_queues.py"

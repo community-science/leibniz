@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypeAlias, cast
 
+from leibniz.contracts import ContractRuntimeSupport
 from leibniz.identifiers import (
     IdentifierSyntaxError,
     ProtocolIdentifier,
@@ -19,7 +20,6 @@ from leibniz.identifiers import (
     SemanticVersion,
 )
 from leibniz.record_contracts import (
-    ContractRuntimeSupport,
     FieldContract,
     FieldKind,
     RecordContract,

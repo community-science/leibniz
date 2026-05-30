@@ -35,7 +35,7 @@ _format_version = _protocol_format_versions.work_queue_item
 _document_suffix = document_filename_suffix()
 _Status = Literal["pending", "reserved", "completed", "failed"]
 _record_contracts = record_specs_from_package_contract(
-    "leibniz.contracts",
+    "leibniz.contract_artifacts",
     "work_queue_items",
     description="work queue item record contracts",
 )
@@ -199,4 +199,3 @@ def materialize_work_queue_view(runs_root: Path) -> Path:
 def _item_path(runs_root: Path, item: WorkQueueItem) -> Path:
     benchmark_atom = str(item.benchmark_id.name).replace(".", "_")
     return runs_root / "work-queues" / benchmark_atom / f"{item.id}{_document_suffix}"
-

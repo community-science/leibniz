@@ -4,9 +4,9 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
+from leibniz.contracts import ContractRuntimeSupport
 from leibniz.documents import load_object_document
 from leibniz.records import (
-    ContractRuntimeSupport,
     FieldSpec,
     RecordExtractor,
     RecordSpec,
@@ -126,8 +126,9 @@ def test_contract_generation_status_categorizes_tracked_code() -> None:
         "uses-runtime",
     }
     assert _contract_runtime_paths(code_inventory["categories"]) == [
+        "src/leibniz/contracts.py",
         "src/leibniz/record_contracts.py",
-        "src/leibniz/records.py"
+        "src/leibniz/records.py",
     ]
     assert _contract_runtime_types() == {
         "FieldSpec",

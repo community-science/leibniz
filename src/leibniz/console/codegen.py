@@ -66,7 +66,7 @@ def generated_console_work_queue_records_module() -> str:
     """Return the generated TypeScript work-queue record parser module."""
 
     contract_set = record_contract_set_from_package(
-        "leibniz.contracts",
+        "leibniz.contract_artifacts",
         "work_queue_items",
         description="work queue item record contracts",
     )

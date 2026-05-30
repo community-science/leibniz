@@ -28,13 +28,13 @@ def test_contract_source_graph_projects_inventory_to_checked_graph() -> None:
     assert graph["format"] == "leibniz.contract-source-graph"
     assert graph["format_version"] == 1
     assert nodes["category:python-contract-runtime"]["kind"] == "category"
-    assert nodes["structural-marker:leibniz.records.ContractRuntimeSupport"]["kind"] == (
+    assert nodes["structural-marker:leibniz.contracts.ContractRuntimeSupport"]["kind"] == (
         "structural-marker"
     )
     assert (
         "has-structural-marker",
         "category:python-contract-runtime",
-        "structural-marker:leibniz.records.ContractRuntimeSupport",
+        "structural-marker:leibniz.contracts.ContractRuntimeSupport",
     ) in edges
     assert (
         "categorizes",
@@ -44,22 +44,22 @@ def test_contract_source_graph_projects_inventory_to_checked_graph() -> None:
     assert (
         "uses-authored-contract",
         "contract-surface:artifact-and-authority-records",
-        "path:src/leibniz/contracts/submission_registries.json",
+        "path:src/leibniz/contract_artifacts/submission_registries.json",
     ) in edges
     assert (
         "declares-record-spec",
-        "path:src/leibniz/contracts/submission_registries.json",
-        "record-spec:src/leibniz/contracts/submission_registries.json:submission_registry",
+        "path:src/leibniz/contract_artifacts/submission_registries.json",
+        "record-spec:src/leibniz/contract_artifacts/submission_registries.json:submission_registry",
     ) in edges
     assert (
         "covers-record-spec",
         "contract-surface:artifact-and-authority-records",
-        "record-spec:src/leibniz/contracts/submission_registries.json:submission_registry",
+        "record-spec:src/leibniz/contract_artifacts/submission_registries.json:submission_registry",
     ) in edges
     assert (
         "uses-authored-contract",
         "contract-surface:work-queue-item-records",
-        "path:src/leibniz/contracts/work_queue_items.json",
+        "path:src/leibniz/contract_artifacts/work_queue_items.json",
     ) in edges
     assert (
         "generated-by",
