@@ -108,6 +108,86 @@ def test_console_result_view_validates_embedded_model_inspections(tmp_path: Path
         load_console_result_view(canonical_document_bytes(view))
 
 
+def test_console_result_view_validates_benchmark_leaderboard_models(tmp_path: Path) -> None:
+    source_root = tmp_path / "hf-checkout"
+    source_root.mkdir()
+    bundle_path = source_root / "digits_publication.json"
+    bundle_path.write_bytes(canonical_document_bytes(_digits_publication_bundle_record()))
+    import_submission_publications(
+        (source_root,),
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+
+    view = dict(load_console_result_view(summary.view_file.read_bytes()))
+    results = cast(list[dict[str, object]], view["benchmark_results"])
+    leaderboard = cast(list[dict[str, object]], results[0]["leaderboard"])
+    leaderboard[0] = {key: value for key, value in leaderboard[0].items() if key != "model_key"}
+
+    with pytest.raises(LocalResultImportError, match="model_key"):
+        load_console_result_view(canonical_document_bytes(view))
+
+
+def test_console_result_view_validates_model_detail_tables(tmp_path: Path) -> None:
+    source_root = tmp_path / "hf-checkout"
+    source_root.mkdir()
+    bundle_path = source_root / "digits_publication.json"
+    bundle_path.write_bytes(canonical_document_bytes(_digits_publication_bundle_record()))
+    import_submission_publications(
+        (source_root,),
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+
+    view = dict(load_console_result_view(summary.view_file.read_bytes()))
+    results = cast(list[dict[str, object]], view["benchmark_results"])
+    leaderboard = cast(list[dict[str, object]], results[0]["leaderboard"])
+    model_view = cast(dict[str, object], leaderboard[0]["console_view_model"])
+    sections = cast(list[dict[str, object]], model_view["detail_sections"])
+    sections[0]["table"] = {
+        "aria_label": "Malformed detail table",
+        "columns": ["A", "B"],
+        "rows": [["only one cell"]],
+    }
+
+    with pytest.raises(LocalResultImportError, match="table rows must match columns"):
+        load_console_result_view(canonical_document_bytes(view))
+
+
+def test_console_result_view_validates_training_diagnostics_records(tmp_path: Path) -> None:
+    source_root = tmp_path / "hf-checkout"
+    source_root.mkdir()
+    bundle_path = source_root / "digits_publication.json"
+    bundle_path.write_bytes(canonical_document_bytes(_digits_publication_bundle_record()))
+    import_submission_publications(
+        (source_root,),
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        runs_root=tmp_path / ".runs",
+    )
+
+    view = dict(load_console_result_view(summary.view_file.read_bytes()))
+    results = cast(list[dict[str, object]], view["benchmark_results"])
+    history = cast(list[dict[str, object]], results[0]["training_history"])
+    history[0]["training_diagnostics"] = {
+        "status": "not-a-training-status",
+    }
+
+    with pytest.raises(LocalResultImportError, match="unsupported training status"):
+        load_console_result_view(canonical_document_bytes(view))
+
+
 def test_materialize_benchmark_result_views_projects_imported_publications(
     tmp_path: Path,
 ) -> None:

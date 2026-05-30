@@ -1832,14 +1832,15 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
             f"cost_axes.{index}",
             ("key", "label"),
         )
-    _require_record_sequence(record, "leaderboard")
+    for index, model in enumerate(_record_sequence(record, "leaderboard")):
+        _validate_model_result(model, f"leaderboard.{index}")
     frontiers = _as_mapping(record.get("frontiers"), "frontiers")
-    _require_sequence_fields(
-        frontiers,
-        "frontiers",
-        ("parameter_count", "inference_flops", "parameter_bytes"),
-    )
-    _require_record_sequence(record, "training_history")
+    for axis in ("parameter_count", "inference_flops", "parameter_bytes"):
+        for index, model in enumerate(_as_sequence(frontiers.get(axis), f"frontiers.{axis}")):
+            field = f"frontiers.{axis}.{index}"
+            _validate_model_result(_as_mapping(model, field), field)
+    for index, run in enumerate(_record_sequence(record, "training_history")):
+        _validate_run_result(run, f"training_history.{index}")
     inspections = _as_sequence(record.get("model_inspections", ()), "model_inspections")
     for index, inspection in enumerate(inspections):
         field = f"model_inspections.{index}"
@@ -1849,18 +1850,175 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
             ModelInspectionRecord.from_record(inspection_record)
         except ModelInspectionValidationError as error:
             raise LocalResultImportError(f"{field}: invalid model inspection: {error}") from error
-    _require_record_sequence(record, "proposals", default=())
+    for index, proposal in enumerate(_record_sequence(record, "proposals", default=())):
+        _validate_proposal_result(proposal, f"proposals.{index}")
 
 
-def _require_record_sequence(
+def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
+    _require_string_fields(record, prefix, ("model_key", "architecture_digest", "benchmark_id"))
+    _as_nonnegative_number(record.get("score"), _field_path(prefix, "score"))
+    _require_sequence_fields(
+        record,
+        prefix,
+        ("observed_complexities", "points", "run_ids", "source_kinds"),
+    )
+    _require_mapping_fields(record, prefix, ("cost_summary",))
+    _as_nonnegative_number(
+        record.get("measurement_count"),
+        _field_path(prefix, "measurement_count"),
+    )
+    if "console_view_model" in record:
+        _validate_console_detail_view_model(
+            _as_mapping(record["console_view_model"], _field_path(prefix, "console_view_model")),
+            _field_path(prefix, "console_view_model"),
+        )
+
+
+def _validate_run_result(record: Mapping[str, object], prefix: str) -> None:
+    _require_string_fields(
+        record,
+        prefix,
+        (
+            "source_kind",
+            "source_path",
+            "run_id",
+            "run_slug",
+            "benchmark_id",
+            "architecture_digest",
+            "model_key",
+            "measurement_dataset_digest",
+        ),
+    )
+    _as_nonnegative_number(
+        record.get("measurement_count"),
+        _field_path(prefix, "measurement_count"),
+    )
+    _as_nonnegative_number(record.get("score"), _field_path(prefix, "score"))
+    _require_mapping_fields(record, prefix, ("cost_summary", "architecture"))
+    for field in ("model_inspection_digest", "model_inspection_path"):
+        if field in record:
+            _as_string(record[field], _field_path(prefix, field))
+    if "sampled_competence" in record:
+        _as_mapping(record["sampled_competence"], _field_path(prefix, "sampled_competence"))
+    if "training_diagnostics" in record:
+        diagnostics_path = _field_path(prefix, "training_diagnostics")
+        _validate_training_diagnostics(
+            _as_mapping(record["training_diagnostics"], diagnostics_path),
+            diagnostics_path,
+        )
+    if "console_view_model" in record:
+        _validate_console_detail_view_model(
+            _as_mapping(record["console_view_model"], _field_path(prefix, "console_view_model")),
+            _field_path(prefix, "console_view_model"),
+        )
+
+
+def _validate_console_detail_view_model(record: Mapping[str, object], prefix: str) -> None:
+    sections = _as_sequence(
+        record.get("detail_sections"),
+        _field_path(prefix, "detail_sections"),
+    )
+    for section_index, section in enumerate(sections):
+        section_prefix = f"{prefix}.detail_sections.{section_index}"
+        section_record = _as_mapping(section, section_prefix)
+        _as_string(section_record.get("title"), _field_path(section_prefix, "title"))
+        if "entries" in section_record:
+            entries = _as_sequence(
+                section_record["entries"],
+                _field_path(section_prefix, "entries"),
+            )
+            for entry_index, entry in enumerate(entries):
+                entry_record = _as_mapping(entry, f"{section_prefix}.entries.{entry_index}")
+                _require_string_fields(
+                    entry_record,
+                    f"{section_prefix}.entries.{entry_index}",
+                    ("label", "value"),
+                )
+        if "table" in section_record:
+            table_prefix = _field_path(section_prefix, "table")
+            table = _as_mapping(section_record["table"], table_prefix)
+            _as_string(table.get("aria_label"), _field_path(table_prefix, "aria_label"))
+            columns = _as_sequence(table.get("columns"), _field_path(table_prefix, "columns"))
+            rows = _as_sequence(table.get("rows"), _field_path(table_prefix, "rows"))
+            if not columns or not all(isinstance(column, str) and column for column in columns):
+                raise LocalResultImportError("console_view_model table columns must be strings")
+            for row in rows:
+                values = _as_sequence(row, _field_path(table_prefix, "rows"))
+                cells_are_strings = all(isinstance(value, str) and value for value in values)
+                if len(values) != len(columns) or not cells_are_strings:
+                    raise LocalResultImportError("console_view_model table rows must match columns")
+
+
+def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) -> None:
+    status = _as_string(record.get("status"), _field_path(prefix, "status"))
+    statuses = {"running", "completed", "converged", "budget-exhausted", "not-trainable", "failed"}
+    if status not in statuses:
+        raise LocalResultImportError(f"unsupported training status: {status}")
+    _as_string(record.get("stop_reason"), _field_path(prefix, "stop_reason"))
+    numeric_fields = (
+        "steps_run",
+        "validation_checks",
+        "best_validation_loss",
+        "best_validation_step",
+        "best_validation_check",
+        "final_validation_loss",
+        "final_validation_step",
+        "final_validation_check",
+    )
+    for field in numeric_fields:
+        _as_nonnegative_number(record.get(field), _field_path(prefix, field))
+    protocol = _as_mapping(record.get("protocol"), _field_path(prefix, "protocol"))
+    protocol_path = _field_path(prefix, "protocol")
+    _require_string_fields(
+        protocol,
+        protocol_path,
+        ("kind", "objective", "optimizer", "schedule", "validation_source"),
+    )
+    protocol_numbers = (
+        "learning_rate",
+        "seed",
+        "batch_size",
+        "validation_interval",
+        "validation_sample_count",
+        "min_delta",
+        "patience",
+    )
+    for field in protocol_numbers:
+        _as_nonnegative_number(protocol.get(field), f"{prefix}.protocol.{field}")
+    for field in ("validation_history", "artifacts"):
+        _as_sequence(record.get(field), _field_path(prefix, field))
+
+
+def _validate_proposal_result(record: Mapping[str, object], prefix: str) -> None:
+    _require_string_fields(record, prefix, ("id", "candidate_kind", "candidate_id", "rationale"))
+    _as_nonnegative_number(record.get("rank"), _field_path(prefix, "rank"))
+    optional_numbers = (
+        "predicted_score",
+        "uncertainty",
+        "acquisition_value",
+        "novelty",
+        "expected_frontier_improvement",
+    )
+    for field in optional_numbers:
+        if field in record:
+            _as_nonnegative_number(record[field], _field_path(prefix, field))
+    if "command" in record:
+        command = _as_sequence(record["command"], _field_path(prefix, "command"))
+        if not all(isinstance(argument, str) and argument for argument in command):
+            raise LocalResultImportError("proposals.command must contain strings")
+
+
+def _record_sequence(
     record: Mapping[str, object],
     field: str,
     *,
     default: tuple[object, ...] | None = None,
-) -> None:
+) -> tuple[Mapping[str, object], ...]:
     value = record.get(field, default) if default is not None else record.get(field)
-    for index, item in enumerate(_as_sequence(value, field)):
+    return tuple(
         _as_mapping(item, f"{field}.{index}")
+        for index, item in enumerate(_as_sequence(value, field))
+    )
 
 
 def _field_path(prefix: str, field: str) -> str:

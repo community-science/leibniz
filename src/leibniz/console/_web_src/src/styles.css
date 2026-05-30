@@ -59,6 +59,7 @@
   --artifact-detail-column: 5fr;
   --artifact-detail-sticky-offset: var(--space-6xl);
   --inspection-metadata-label-min: 92px;
+  --performance-source-min: 240px;
   --result-source-metric-min: 96px;
   --frontier-chart-height: 440px;
   --result-table-model-column: 2fr;
