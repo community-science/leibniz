@@ -21,6 +21,7 @@ _excluded_line_budget_bases = frozenset(
         "authored-data",
         "authored-contract",
         "build-configuration",
+        "codegen-runtime",
         "contract-runtime",
         "inventory",
         "package-metadata",
@@ -88,6 +89,7 @@ def test_contract_generation_status_is_complete_and_well_formed() -> None:
     assert _typescript_generation_surfaces(status) == {
         "console-protocol-vocabulary",
         "console-result-view-records",
+        "work-queue-item-records",
     }
 
 
@@ -160,6 +162,10 @@ def test_contract_generation_status_categorizes_tracked_code() -> None:
             assert category["line_budget_basis"] in _excluded_line_budget_bases
         if category["line_budget_basis"] == "contract-runtime":
             assert category["structural_marker"] == "leibniz.records.ContractRuntimeSupport"
+        if category["line_budget_basis"] == "codegen-runtime":
+            assert category["structural_marker"] == (
+                "leibniz.console.codegen.write_generated_console_web_modules"
+            )
         assert category["ratchet_next"]
         patterns = tuple(category["path_patterns"])
         assert patterns

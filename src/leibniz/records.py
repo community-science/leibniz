@@ -108,6 +108,7 @@ class FieldSpec(ContractRuntimeSupport):
     literal: object = _unset
     item: FieldSpec | None = None
     record: RecordSpec | None = None
+    values: tuple[object, ...] | None = None
 
     @property
     def contract_runtime_role(self) -> str:
@@ -155,6 +156,9 @@ class RecordExtractor(ContractRuntimeSupport):
 
     def boolean(self, value: object, field: str) -> bool:
         return _require_boolean(value, field=field, error_type=self.error_type)
+
+    def integer(self, value: object, field: str) -> int:
+        return _require_integer(value, field=field, error_type=self.error_type)
 
     def identifier(self, value: object, field: str) -> ProtocolIdentifier:
         return _require_identifier(value, field=field, error_type=self.error_type)
@@ -239,6 +243,14 @@ def _validate_record(
             spec=field_spec,
             path=field_path,
         )
+        if (
+            not field_violations
+            and field_spec.values is not None
+            and value not in field_spec.values
+        ):
+            field_violations = (
+                RecordViolation(path=field_path, message="expected allowed value"),
+            )
         violations.extend(field_violations)
         if not field_violations:
             validated[field_name] = value
@@ -404,6 +416,7 @@ def _field_spec_from_contract(
         else None
     )
     literal = field_map.get("literal", _unset)
+    values = _optional_contract_values(field_map.get("values"), path=(*path, "values"))
     return (
         name,
         FieldSpec(
@@ -411,6 +424,7 @@ def _field_spec_from_contract(
             required=required,
             literal=literal,
             item=item,
+            values=values,
         ),
     )
 
@@ -430,7 +444,8 @@ def _anonymous_field_spec_from_contract(
         else None
     )
     literal = field_map.get("literal", _unset)
-    return FieldSpec(kind=kind, literal=literal, item=item)
+    values = _optional_contract_values(field_map.get("values"), path=(*path, "values"))
+    return FieldSpec(kind=kind, literal=literal, item=item, values=values)
 
 
 def _field_specs_from_contract(
@@ -474,6 +489,16 @@ def _optional_contract_boolean(value: object, *, path: tuple[str, ...]) -> bool:
     return value
 
 
+def _optional_contract_values(
+    value: object,
+    *,
+    path: tuple[str, ...],
+) -> tuple[object, ...] | None:
+    if value is None:
+        return None
+    return tuple(_require_contract_sequence(value, path=path))
+
+
 def _require_string(
     value: object,
     *,
@@ -493,6 +518,17 @@ def _require_boolean(
 ) -> bool:
     if not isinstance(value, bool):
         raise error_type(f"{field}: expected boolean")
+    return value
+
+
+def _require_integer(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> int:
+    if type(value) is not int:
+        raise error_type(f"{field}: expected integer")
     return value
 
 

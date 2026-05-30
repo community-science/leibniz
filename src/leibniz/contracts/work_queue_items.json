@@ -1,0 +1,78 @@
+{
+  "format": "leibniz.record-contract-set",
+  "format_version": 1,
+  "records": [
+    {
+      "name": "work_queue_item",
+      "fields": [
+        {
+          "name": "format",
+          "kind": "literal",
+          "literal": "leibniz.work-queue-item"
+        },
+        {
+          "name": "format_version",
+          "kind": "literal",
+          "literal": 1
+        },
+        {
+          "name": "id",
+          "kind": "string"
+        },
+        {
+          "name": "benchmark_id",
+          "kind": "identifier"
+        },
+        {
+          "name": "proposal_id",
+          "kind": "string"
+        },
+        {
+          "name": "candidate_id",
+          "kind": "string",
+          "required": false
+        },
+        {
+          "name": "proposal_set_path",
+          "kind": "string"
+        },
+        {
+          "name": "command",
+          "kind": "sequence",
+          "item": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "status",
+          "kind": "string",
+          "values": [
+            "pending",
+            "reserved",
+            "completed",
+            "failed"
+          ]
+        },
+        {
+          "name": "sequence",
+          "kind": "integer"
+        },
+        {
+          "name": "run_id",
+          "kind": "string",
+          "required": false
+        },
+        {
+          "name": "measurement_dataset_path",
+          "kind": "string",
+          "required": false
+        },
+        {
+          "name": "error",
+          "kind": "string",
+          "required": false
+        }
+      ]
+    }
+  ]
+}

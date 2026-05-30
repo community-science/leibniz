@@ -231,14 +231,29 @@
       },
       {
         "name": "console-python",
-        "scope": "Python console protocol vocabulary, TypeScript code generation, artifact indexing, and console data payload construction.",
+        "scope": "Python console protocol vocabulary, artifact indexing, and console data payload construction.",
         "path_patterns": [
-          "src/leibniz/console/*.py"
+          "src/leibniz/console/__init__.py",
+          "src/leibniz/console/artifact_index.py",
+          "src/leibniz/console/data.py",
+          "src/leibniz/console/protocol.py"
         ],
         "status": "mixed-hand-maintained-and-codegen",
         "line_budget": "handwritten-implementation",
         "line_budget_basis": "domain-implementation",
         "ratchet_next": "Keep console generation centralized while moving declarations into authored contracts."
+      },
+      {
+        "name": "console-codegen-runtime",
+        "scope": "Python generator implementation for deterministic console TypeScript modules.",
+        "path_patterns": [
+          "src/leibniz/console/codegen.py"
+        ],
+        "status": "mixed-hand-maintained-and-codegen",
+        "line_budget": "excluded",
+        "line_budget_basis": "codegen-runtime",
+        "structural_marker": "leibniz.console.codegen.write_generated_console_web_modules",
+        "ratchet_next": "Keep generator logic narrow while authored contracts replace hand-maintained TypeScript transport schemas."
       },
       {
         "name": "console-web-source",
@@ -590,6 +605,36 @@
       "ratchet_next": "Move result-view record declarations out of codegen implementation details and generate both producers and parsers from authored contracts.",
       "tests": [
         "tests/test_console_codegen.py",
+        "tests/run_console_web_tests.mjs"
+      ]
+    },
+    {
+      "name": "work-queue-item-records",
+      "scope": "Local work-queue item transport records produced by the active loop and consumed by the browser console.",
+      "contract_owner": "python-owned-codegen",
+      "record_spec_modules": [],
+      "authored_contracts": [
+        "src/leibniz/contracts/work_queue_items.json"
+      ],
+      "python_runtime": [
+        "src/leibniz/work_queues.py"
+      ],
+      "typescript_runtime": [
+        "src/leibniz/console/_web_src/src/resultViews.ts"
+      ],
+      "generated_outputs": [
+        "src/leibniz/console/_web_src/src/generated/workQueueRecords.ts"
+      ],
+      "coverage": {
+        "authored_contract": true,
+        "generated_python_runtime": true,
+        "generated_typescript_runtime": true,
+        "generated_conformance_tests": false
+      },
+      "ratchet_next": "Generate conformance fixtures from the authored work-queue item contract and remove the remaining result-view record schema text from the large generated module.",
+      "tests": [
+        "tests/test_console_codegen.py",
+        "tests/test_work_queues.py",
         "tests/run_console_web_tests.mjs"
       ]
     },
