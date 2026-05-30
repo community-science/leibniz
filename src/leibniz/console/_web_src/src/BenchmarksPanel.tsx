@@ -1,9 +1,7 @@
 import {
-  Activity,
   Boxes,
   ChevronDown,
   Fingerprint,
-  Gauge,
   GitBranch,
   PackageCheck,
   type LucideIcon,
@@ -48,9 +46,7 @@ import type {
   RunResultRecord,
   TrainingHistoryPointRecord,
   TrainingProtocolRecord,
-  WorkQueueItemRecord,
 } from './resultViews.ts';
-import { isWorkQueueView } from './resultViews.ts';
 
 type SampleCardDensity = 'standard' | 'compact';
 type ModelArtifactView = 'model' | 'architecture' | 'training' | 'artifacts';
@@ -108,13 +104,6 @@ export function BenchmarksPanel({
     [resultViews, selected],
   );
   const selectedResult = benchmarkResults[0];
-  const queueItems = useMemo(
-    () =>
-      selected === undefined
-        ? []
-        : workQueueItemsForTask(resultViews, selected.benchmark_id),
-    [resultViews, selected],
-  );
 
   if (selected === undefined) {
     return (
@@ -126,10 +115,6 @@ export function BenchmarksPanel({
 
   const result = selectedResult?.result;
   const modelRows = modelComparisonRows(result, modelInspections);
-  const sampleCount = selected.batches.reduce(
-    (total, batch) => total + batch.samples.length,
-    0,
-  );
 
   return (
     <section className="benchmark-workbench" aria-label="Benchmarks">
@@ -150,46 +135,17 @@ export function BenchmarksPanel({
                 ))}
               </select>
             </h2>
-            <p>{selected.benchmark_id}</p>
-            <p>{selectedResult?.sourcePath ?? selected.source_path}</p>
           </div>
-          <dl className="benchmark-header-metrics">
-            <div>
-              <dt>Models</dt>
-              <dd>{result?.leaderboard.length ?? 0}</dd>
-            </div>
-            <div>
-              <dt>Runs</dt>
-              <dd>{result?.training_history.length ?? 0}</dd>
-            </div>
-            <div>
-              <dt>Samples</dt>
-              <dd>{sampleCount}</dd>
-            </div>
-            <div>
-              <dt>Queue</dt>
-              <dd>{workQueueStatusLabel(queueItems)}</dd>
-            </div>
-            <div>
-              <dt>Updated</dt>
-              <dd>{resultUpdatedLabel(selectedResult)}</dd>
-            </div>
-            <div>
-              <dt>Size</dt>
-              <dd>{resultSizeLabel(selectedResult)}</dd>
-            </div>
-          </dl>
         </div>
 
         <div className="benchmark-section-stack">
           <CollapsibleBenchmarkSection
             label="Performance"
-            summary={`${result?.leaderboard.length ?? 0} models / ${result?.training_history.length ?? 0} runs`}
+            summary={`${result?.leaderboard.length ?? 0} models`}
           >
             <BenchmarkPerformancePane
               benchmark={selected}
               operatorVocabulary={operatorVocabulary}
-              queueItems={queueItems}
               resultEntry={selectedResult}
             />
           </CollapsibleBenchmarkSection>
@@ -207,7 +163,6 @@ export function BenchmarksPanel({
           )}
           <CollapsibleBenchmarkSection
             label="Samples"
-            summary={`${selected.batches.length} batches / ${sampleCount} samples`}
           >
             <BenchmarkTaskPane task={selected} />
           </CollapsibleBenchmarkSection>
@@ -246,64 +201,13 @@ function CollapsibleBenchmarkSection({
   );
 }
 
-function workQueueItemsForTask(
-  resultViews: ResultViewRecord[],
-  benchmarkId: string,
-): WorkQueueItemRecord[] {
-  return resultViews
-    .filter(isWorkQueueView)
-    .flatMap((view) => view.queue_items)
-    .filter((item) => item.benchmark_id === benchmarkId)
-    .sort((left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id));
-}
-
-function workQueueStatusLabel(items: WorkQueueItemRecord[]): string {
-  if (items.length === 0) {
-    return 'Queue empty';
-  }
-  const counts = new Map<WorkQueueItemRecord['status'], number>();
-  for (const item of items) {
-    counts.set(item.status, (counts.get(item.status) ?? 0) + 1);
-  }
-  return ['reserved', 'pending', 'completed', 'failed']
-    .map((status) => [status, counts.get(status as WorkQueueItemRecord['status']) ?? 0] as const)
-    .filter(([, count]) => count > 0)
-    .map(([status, count]) => `${count} ${status}`)
-    .join(' / ');
-}
-
-function resultUpdatedLabel(resultEntry: BenchmarkResultEntry | undefined): string {
-  if (resultEntry?.sourceMtimeMs === undefined) {
-    return 'Not reported';
-  }
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(resultEntry.sourceMtimeMs));
-}
-
-function resultSizeLabel(resultEntry: BenchmarkResultEntry | undefined): string {
-  if (resultEntry?.sourceSizeBytes === undefined) {
-    return 'Not reported';
-  }
-  return new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: 1,
-    minimumFractionDigits: 0,
-    style: 'unit',
-    unit: 'byte',
-    unitDisplay: 'narrow',
-  }).format(resultEntry.sourceSizeBytes);
-}
-
 function BenchmarkPerformancePane({
   benchmark,
   operatorVocabulary,
-  queueItems,
   resultEntry,
 }: {
   benchmark: BenchmarkTaskRecord;
   operatorVocabulary: OperatorVocabularyRecord;
-  queueItems: WorkQueueItemRecord[];
   resultEntry:
     | BenchmarkResultEntry
     | undefined;
@@ -314,7 +218,6 @@ function BenchmarkPerformancePane({
     <div className="benchmark-task">
       <BenchmarkResultDashboard
         operatorVocabulary={operatorVocabulary}
-        queueItems={queueItems}
         result={result}
       />
     </div>
@@ -1183,43 +1086,9 @@ function referenceLabel(reference: ArtifactReferenceRecord): string {
 }
 
 function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
-  const modes = useMemo(() => unique(task.batches.map((batch) => batch.mode)), [task.batches]);
-  const [mode, setMode] = useState(modes[0] ?? '');
   const [selectedSampleKey, setSelectedSampleKey] = useState<string | null>(null);
-  const matchingMode = matchingBatches(task.batches, { mode });
-  const scales = unique(matchingMode.map((batch) => batch.scale));
-  const [scale, setScale] = useState(scales[0] ?? task.batches[0]?.scale ?? 1);
-  const matchingScale = matchingBatches(task.batches, { mode, scale });
-  const seeds = unique(matchingScale.map((batch) => batch.seed));
-  const [seed, setSeed] = useState(seeds[0] ?? task.batches[0]?.seed ?? 0);
-  const matchingSeed = matchingBatches(task.batches, { mode, scale, seed });
-  const sampleCounts = unique(matchingSeed.map((batch) => batch.sample_count));
-  const [sampleCount, setSampleCount] = useState(
-    sampleCounts[0] ?? task.batches[0]?.sample_count ?? 1,
-  );
-  const selected =
-    task.batches.find(
-      (batch) =>
-        batch.mode === mode &&
-        batch.scale === scale &&
-        batch.seed === seed &&
-        batch.sample_count === sampleCount,
-    ) ??
-    matchingSeed[0] ??
-    matchingScale[0] ??
-    matchingMode[0] ??
-    task.batches[0];
-  const aggregateMode = selected?.presentation.aggregate_mode === true;
-  const visibleBatches = aggregateMode
-    ? matchingBatches(task.batches, { mode, seed: selected?.seed }).sort(
-        (left, right) => left.scale - right.scale,
-      )
-    : selected === undefined
-      ? []
-      : [selected];
-  const visibleSamples = visibleBatches.flatMap((batch) =>
-    batch.samples.map((sample) => ({ batch, sample })),
-  );
+  const selected = task.batches[0];
+  const visibleSamples = selected?.samples.map((sample) => ({ batch: selected, sample })) ?? [];
   const selectedSample =
     visibleSamples.find(({ batch, sample }) => sampleKey(batch, sample) === selectedSampleKey) ??
     visibleSamples[0];
@@ -1234,70 +1103,8 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
 
   return (
     <div className="benchmark-task">
-      <section className="benchmark-task-controls" aria-label="Benchmark sample controls">
-        <SelectControl
-          label="Mode"
-          value={mode}
-          values={modes}
-          labelFor={modeLabel}
-          onChange={setMode}
-        />
-        {aggregateMode ? null : (
-          <SelectControl
-            label={task.scale_axis}
-            value={String(selected.scale)}
-            values={unique(
-              matchingBatches(task.batches, { mode }).map((batch) => String(batch.scale)),
-            )}
-            onChange={(value) => setScale(Number(value))}
-          />
-        )}
-        <SelectControl
-          label="Seed"
-          value={String(selected.seed)}
-          values={unique(
-            matchingBatches(
-              task.batches,
-              aggregateMode ? { mode } : { mode, scale: selected.scale },
-            ).map((batch) => String(batch.seed)),
-          )}
-          onChange={(value) => setSeed(Number(value))}
-        />
-        {aggregateMode ? null : (
-          <SelectControl
-            label="Samples"
-            value={String(selected.sample_count)}
-            values={unique(
-              matchingBatches(task.batches, {
-                mode,
-                scale: selected.scale,
-                seed: selected.seed,
-              }).map((batch) => String(batch.sample_count)),
-            )}
-            onChange={(value) => setSampleCount(Number(value))}
-          />
-        )}
-      </section>
-      <section className="benchmark-task-summary" aria-label="Benchmark batch summary">
-        <Metric
-          icon={<Gauge size={16} />}
-          label={task.complexity_axis}
-          value={
-            aggregateMode
-              ? complexityRange(visibleBatches)
-              : String(selected.samples[0]?.complexity ?? selected.scale)
-          }
-        />
-        <Metric icon={<Activity size={16} />} label="Mode" value={modeLabel(selected.mode)} />
-        <Metric label="Outcomes" value={`${task.outcome_atom_count} ${task.outcome_atom_name}s`} />
-        <Metric
-          label="Batch"
-          value={aggregateMode ? `${visibleSamples.length} samples` : selected.label}
-        />
-      </section>
       {selectedSample === undefined ? null : (
         <BenchmarkSampleCoordinateInspector
-          batch={selectedSample.batch}
           sample={selectedSample.sample}
           task={task}
         />
@@ -1345,32 +1152,23 @@ function BenchmarkSampleCard({
       <div className="benchmark-image-shell">
         <img alt={sample.outcome_id} src={sample.image_data_url} />
       </div>
-      <div className="benchmark-sample-caption">
-        <span>{sample.component_sequence.join('')}</span>
-        <span>{sample.outcome_id}</span>
-      </div>
     </button>
   );
 }
 
 function BenchmarkSampleCoordinateInspector({
-  batch,
   sample,
   task,
 }: {
-  batch: GeneratedObservationBatchRecord;
   sample: GeneratedObservationSampleRecord;
   task: BenchmarkTaskRecord;
 }) {
   const content = sample.latent_coordinates.find((coordinate) => coordinate.role === 'content');
   const variation = sample.latent_coordinates.find((coordinate) => coordinate.role === 'variation');
   const entries: [string, string][] = [
-    ['Outcome', sample.outcome_id],
-    ['Components', sample.component_sequence.join('')],
-    [task.scale_axis, String(batch.scale)],
+    ['Components', sample.component_sequence.join(' ')],
+    [task.scale_axis, assignmentLabel(sample.materialization_plan.scale_assignment)],
     [task.complexity_axis, String(sample.complexity)],
-    ['Seed', String(batch.seed)],
-    ['Sample', `${sample.index + 1} / ${batch.sample_count}`],
     ['Field', sample.field_shape.join(' x ')],
     ['Content DOF', String(content?.multiplicity ?? 'n/a')],
     ['Variation DOF', String(variation?.multiplicity ?? 'n/a')],
@@ -1460,7 +1258,6 @@ function materializationEntries(sample: GeneratedObservationSampleRecord): [stri
     ['Scale', assignmentLabel(sample.materialization_plan.scale_assignment)],
     ['Complexity', assignmentLabel(sample.materialization_plan.complexity_assignment)],
     ['Resolution', assignmentLabel(sample.materialization_plan.resolution_assignment)],
-    ['Seed', recordString(sample.materialization_plan, 'seed')],
   ];
 }
 
@@ -1590,78 +1387,11 @@ function recordString(record: Record<string, unknown>, key: string): string {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : 'unknown';
 }
 
-function SelectControl({
-  label,
-  labelFor = (value: string) => value,
-  onChange,
-  value,
-  values,
-}: {
-  label: string;
-  labelFor?: (value: string) => string;
-  onChange: (value: string) => void;
-  value: string;
-  values: string[];
-}) {
-  return (
-    <label className="benchmark-task-control">
-      <span>{label}</span>
-      <select onChange={(event) => onChange(event.target.value)} value={value}>
-        {values.map((item) => (
-          <option key={item} value={item}>
-            {labelFor(item)}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function Metric({
-  icon,
-  label,
-  value,
-}: {
-  icon?: ReactNode;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="benchmark-metric">
-      {icon}
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function matchingBatches(
-  batches: GeneratedObservationBatchRecord[],
-  criteria: { mode?: string; scale?: number; seed?: number },
-): GeneratedObservationBatchRecord[] {
-  return batches.filter(
-    (batch) =>
-      (criteria.mode === undefined || batch.mode === criteria.mode) &&
-      (criteria.scale === undefined || batch.scale === criteria.scale) &&
-      (criteria.seed === undefined || batch.seed === criteria.seed),
-  );
-}
-
 function modeLabel(mode: string): string {
   return mode
     .split('-')
     .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
     .join(' ');
-}
-
-function complexityRange(batches: GeneratedObservationBatchRecord[]): string {
-  const complexities = batches
-    .map((batch) => batch.samples[0]?.complexity)
-    .filter((complexity): complexity is number => complexity !== undefined);
-  if (complexities.length === 0) {
-    return 'n/a';
-  }
-  return `${Math.min(...complexities)}-${Math.max(...complexities)}`;
 }
 
 function unique<T extends string | number>(values: T[]): T[] {

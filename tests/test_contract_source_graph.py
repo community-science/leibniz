@@ -56,34 +56,6 @@ def test_contract_source_graph_projects_inventory_to_checked_graph() -> None:
         "contract-surface:artifact-and-authority-records",
         "record-spec:src/leibniz/contract_artifacts/submission_registries.json:submission_registry",
     ) in edges
-    assert (
-        "uses-runtime",
-        "contract-surface:work-queue-item-records",
-        "path:src/leibniz/work_queues.py",
-    ) in edges
-    assert nodes[
-        "contract-object:src/leibniz/work_queues.py:WorkQueueItem:work_queue_item"
-    ] == {
-        "id": "contract-object:src/leibniz/work_queues.py:WorkQueueItem:work_queue_item",
-        "kind": "contract-object",
-        "label": "WorkQueueItem.work_queue_item",
-        "path": "src/leibniz/work_queues.py",
-    }
-    assert (
-        "declares-contract-object",
-        "path:src/leibniz/work_queues.py",
-        "contract-object:src/leibniz/work_queues.py:WorkQueueItem:work_queue_item",
-    ) in edges
-    assert (
-        "covers-contract-object",
-        "contract-surface:work-queue-item-records",
-        "contract-object:src/leibniz/work_queues.py:WorkQueueItem:work_queue_item",
-    ) in edges
-    assert (
-        "generated-by",
-        "generated-output:src/leibniz/console/_web_src/src/generated/workQueueRecords.ts",
-        "contract-surface:work-queue-item-records",
-    ) in edges
     assert nodes[
         "contract-object:src/leibniz/architectures.py:ArchitectureManifest:architecture_manifest"
     ] == {

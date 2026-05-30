@@ -149,10 +149,6 @@ function assertBenchmarkWorkbenchStructure() {
     'benchmark-workbench',
     'benchmark-title-select',
     'benchmark-section-summary',
-    'workQueueItemsForTask',
-    'workQueueStatusLabel',
-    'resultUpdatedLabel',
-    'resultSizeLabel',
   ];
   for (const marker of requiredPanelMarkers) {
     if (!panel.includes(marker)) {
@@ -191,23 +187,16 @@ function assertBenchmarkSamplePaneStructure() {
   const requiredPanelMarkers = [
     'BenchmarkSampleCoordinateInspector',
     'benchmark-sample-coordinate-inspector',
-    'benchmark-sample-caption',
   ];
   for (const marker of requiredPanelMarkers) {
     if (!panel.includes(marker)) {
       throw new Error(`BenchmarksPanel must expose sample pane marker: ${marker}`);
     }
   }
-  if (panel.includes('benchmark-sample-card-body') || panel.includes('benchmark-sample-card-title')) {
-    throw new Error('Benchmark sample cards must remain tile/caption oriented');
-  }
-
   const requiredStyleMarkers = [
     '--benchmark-sample-tile-size',
-    '--benchmark-sample-caption-height',
     '.benchmark-sample-coordinate-inspector',
     'object-fit: contain',
-    'text-overflow: ellipsis',
   ];
   for (const marker of requiredStyleMarkers) {
     if (!styles.includes(marker)) {
@@ -350,20 +339,11 @@ function assertConsoleResultRootPolicy() {
     resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/generated/resultViewRecords.ts'),
     'utf8',
   );
-  for (const marker of [
-    'WorkQueueViewRecord',
-    'WorkQueueItemRecord',
-    'parseWorkQueueViewRecord',
-    'parseWorkQueueItem',
-    'isWorkQueueView',
-    'acquisition_model',
-    'acquisition_components',
-  ]) {
+  for (const marker of ['acquisition_model', 'acquisition_components']) {
     if (!resultViewRecords.includes(marker)) {
-      throw new Error(`Result view transport must support work queue marker: ${marker}`);
+      throw new Error(`Result view transport must support proposal marker: ${marker}`);
     }
   }
-
   const viteConfig = readFileSync(
     resolve(repositoryRoot, 'src/leibniz/console/_web_src/vite.config.mjs'),
     'utf8',

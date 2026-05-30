@@ -122,44 +122,55 @@ if (benchmarkTask === undefined) {
   throw new Error('expected benchmark task');
 }
 assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind');
-assertEqual(benchmarkTask?.batches.length, 17, 'benchmark batch count');
+assertEqual(benchmarkTask?.batches.length, 1, 'benchmark batch count');
 assertEqual(
   benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.scale}:${batch.sample_count}`).join('|'),
-  'canonical:1:8|canonical:2:8|canonical:3:8|canonical:4:8|canonical:5:8|canonical:6:8|canonical:7:8|canonical:8:8|symbol-probe:1:10|complexity-sweep:1:1|complexity-sweep:2:1|complexity-sweep:3:1|complexity-sweep:4:1|complexity-sweep:5:1|complexity-sweep:6:1|complexity-sweep:7:1|complexity-sweep:8:1',
+  'balanced:1:40',
   'generated benchmark batches',
 );
+const generatedSamples = benchmarkTask?.batches[0]?.samples ?? [];
 assertEqual(
-  benchmarkTask?.batches[8]?.samples.map((sample) => sample.component_sequence.join('')).join(','),
-  '0,1,2,3,4,5,6,7,8,9',
-  'symbol probe batch',
+  generatedSamples.map((sample) => sample.component_sequence.length).join(','),
+  '1,6,4,2,7,5,3,8,6,4,1,7,5,2,8,6,3,1,7,4,2,8,5,3,6,4,1,7,5,2,8,6,3,1,7,4,2,8,5,3',
+  'mixed sample display order',
 );
 assertEqual(
-  benchmarkTask?.batches[8]?.presentation.sample_card_density,
-  'compact',
-  'compact batch presentation',
+  scaleCounts(generatedSamples).join(','),
+  '5,5,5,5,5,5,5,5',
+  'balanced scale samples',
 );
 assertEqual(
-  benchmarkTask?.batches[9]?.presentation.aggregate_mode,
-  true,
-  'aggregate batch presentation',
+  digitCounts(generatedSamples).join(','),
+  '18,18,18,18,18,18,18,18,18,18',
+  'balanced digit counts',
 );
-const canonicalSample = benchmarkTask?.batches[0]?.samples[0];
-if (canonicalSample === undefined) {
-  throw new Error('expected canonical sample');
+assertEqual(
+  benchmarkTask?.batches[0]?.presentation.sample_card_density,
+  'standard',
+  'sample presentation density',
+);
+assertEqual(
+  benchmarkTask?.batches[0]?.presentation.aggregate_mode,
+  false,
+  'sample presentation aggregate mode',
+);
+const generatedSample = benchmarkTask?.batches[0]?.samples[0];
+if (generatedSample === undefined) {
+  throw new Error('expected generated sample');
 }
-assertEqual(canonicalSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
-assertEqual(canonicalSample.field_shape.join('x'), '1x32x32', 'sample field shape');
+assertEqual(generatedSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
+assertEqual(generatedSample.field_shape.join('x'), '1x32x32', 'sample field shape');
 assertEqual(
-  canonicalSample.latent_coordinates.map((coordinate) => coordinate.role).join(','),
+  generatedSample.latent_coordinates.map((coordinate) => coordinate.role).join(','),
   'content,variation,materialization',
   'sample latent roles',
 );
 assertEqual(
-  canonicalSample.latent_coordinates.find((coordinate) => coordinate.role === 'content')?.multiplicity,
+  generatedSample.latent_coordinates.find((coordinate) => coordinate.role === 'content')?.multiplicity,
   1,
   'sample content multiplicity',
 );
-const variationCoordinate = canonicalSample.latent_coordinates.find(
+const variationCoordinate = generatedSample.latent_coordinates.find(
   (coordinate) => coordinate.role === 'variation',
 );
 const variationValues = variationCoordinate?.values as Record<string, unknown> | undefined;
@@ -178,7 +189,7 @@ assertEqual(
   1,
   'sample variation coordinate count',
 );
-const materializationPlan = canonicalSample.materialization_plan as Record<string, unknown>;
+const materializationPlan = generatedSample.materialization_plan as Record<string, unknown>;
 assertEqual(assignmentLabel(materializationPlan.scale_assignment), 'L=1', 'sample scale assignment');
 assertEqual(
   assignmentLabel(materializationPlan.complexity_assignment),
@@ -233,6 +244,29 @@ function assertDataError(callback: () => void, expectedMessage: string) {
   }
 
   throw new Error(`expected console data transport error: ${expectedMessage}`);
+}
+
+function digitCounts(samples: { component_sequence: number[] }[]): number[] {
+  const counts = new Map<number, number>();
+  for (const sample of samples) {
+    for (const digit of sample.component_sequence) {
+      counts.set(digit, (counts.get(digit) ?? 0) + 1);
+    }
+  }
+  return Array.from(counts.entries())
+    .sort(([left], [right]) => left - right)
+    .map(([, count]) => count);
+}
+
+function scaleCounts(samples: { component_sequence: number[] }[]): number[] {
+  const counts = new Map<number, number>();
+  for (const sample of samples) {
+    const scale = sample.component_sequence.length;
+    counts.set(scale, (counts.get(scale) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort(([left], [right]) => left - right)
+    .map(([, count]) => count);
 }
 
 function assignmentLabel(value: unknown): string {

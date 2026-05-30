@@ -90,7 +90,6 @@ def test_contract_generation_status_is_complete_and_well_formed() -> None:
     assert _typescript_generation_surfaces(status) == {
         "console-protocol-vocabulary",
         "console-result-view-records",
-        "work-queue-item-records",
     }
 
 

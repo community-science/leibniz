@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import cast
 
@@ -193,37 +194,27 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert task["outcome_atom_count"] == 10
     batches = cast(list[dict[str, object]], task["batches"])
     assert [(batch["mode"], batch["scale"], batch["sample_count"]) for batch in batches] == [
-        ("canonical", 1, 8),
-        ("canonical", 2, 8),
-        ("canonical", 3, 8),
-        ("canonical", 4, 8),
-        ("canonical", 5, 8),
-        ("canonical", 6, 8),
-        ("canonical", 7, 8),
-        ("canonical", 8, 8),
-        ("symbol-probe", 1, 10),
-        ("complexity-sweep", 1, 1),
-        ("complexity-sweep", 2, 1),
-        ("complexity-sweep", 3, 1),
-        ("complexity-sweep", 4, 1),
-        ("complexity-sweep", 5, 1),
-        ("complexity-sweep", 6, 1),
-        ("complexity-sweep", 7, 1),
-        ("complexity-sweep", 8, 1),
+        ("balanced", 1, 40),
     ]
-    symbol_probe = batches[8]
-    symbol_presentation = cast(dict[str, object], symbol_probe["presentation"])
-    assert symbol_presentation == {
-        "sample_card_density": "compact",
+    batch = batches[0]
+    presentation = cast(dict[str, object], batch["presentation"])
+    assert presentation == {
+        "sample_card_density": "standard",
         "aggregate_mode": False,
     }
-    symbol_samples = cast(list[dict[str, object]], symbol_probe["samples"])
-    assert [sample["component_sequence"] for sample in symbol_samples] == [
-        [digit] for digit in range(10)
+    samples = cast(list[dict[str, object]], batch["samples"])
+    component_sequences = [
+        cast(list[int], sample["component_sequence"]) for sample in samples
     ]
-    assert str(symbol_samples[0]["image_data_url"]).startswith("data:image/png;base64,")
-    assert symbol_samples[0]["field_shape"] == [1, 32, 32]
-    latent_coordinates = cast(list[dict[str, object]], symbol_samples[0]["latent_coordinates"])
+    assert [len(sequence) for sequence in component_sequences[:8]] == [1, 6, 4, 2, 7, 5, 3, 8]
+    assert Counter(len(sequence) for sequence in component_sequences) == dict.fromkeys(
+        range(1, 9), 5
+    )
+    digit_counts = Counter(digit for sequence in component_sequences for digit in sequence)
+    assert digit_counts == dict.fromkeys(range(10), 18)
+    assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
+    assert samples[0]["field_shape"] == [1, 32, 32]
+    latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])
     variation = next(
         coordinate for coordinate in latent_coordinates if coordinate["role"] == "variation"
     )
@@ -234,11 +225,6 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     variation_coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
     assert len(variation_coordinates) == 1
     assert variation_coordinates[0]["kind"] == "field-variation-transform-coordinate"
-    sweep_presentation = cast(dict[str, object], batches[9]["presentation"])
-    assert sweep_presentation == {
-        "sample_card_density": "standard",
-        "aggregate_mode": True,
-    }
 
 
 def test_console_data_payload_is_a_canonical_object_document() -> None:

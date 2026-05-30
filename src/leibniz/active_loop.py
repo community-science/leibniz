@@ -3,30 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 from leibniz.benchmark_runner import BenchmarkRunPlan, BenchmarkRunSummary, run_benchmark
-from leibniz.content import ContentDigest
 from leibniz.documents import load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import LocalResultImportError, materialize_benchmark_result_views
 from leibniz.proposal_generation import (
     ProposalGenerationPlan,
-    ProposalGenerationSummary,
     generate_experiment_proposals,
 )
 from leibniz.tensor_runtime import (
     TensorRuntimeDevice,
     TensorRuntimeError,
     validate_tensor_runtime_device,
-)
-from leibniz.work_queues import (
-    WorkQueueItem,
-    load_work_queue_items,
-    materialize_work_queue_view,
-    write_work_queue_item,
 )
 
 __all__ = [
@@ -47,8 +39,6 @@ class ActiveTrainingLoopPlan:
 
     benchmark_root: Path
     runs_root: Path = Path(".runs")
-    iterations: int = 1
-    candidate_budget: int = 3
     candidate_sample_count: int = 64
     sample_count: int = 512
     evaluation_sample_count: int | None = None
@@ -64,20 +54,11 @@ class ActiveTrainingLoopPlan:
     target_validation_loss: float | None = None
     tensor_device: TensorRuntimeDevice = "auto"
     dry_run: bool = False
-    retry_failed: bool = False
     progress_callback: Callable[[BenchmarkRunSummary], None] | None = None
 
     def __post_init__(self) -> None:
-        if type(self.iterations) is not int or self.iterations < 1:
-            raise ActiveTrainingLoopError("iterations must be positive")
-        if type(self.candidate_budget) is not int or self.candidate_budget < 1:
-            raise ActiveTrainingLoopError("candidate_budget must be positive")
         if type(self.candidate_sample_count) is not int or self.candidate_sample_count < 1:
             raise ActiveTrainingLoopError("candidate_sample_count must be positive")
-        if self.candidate_sample_count < self.candidate_budget:
-            raise ActiveTrainingLoopError(
-                "candidate_sample_count must be at least candidate_budget"
-            )
         if type(self.sample_count) is not int or self.sample_count < 1:
             raise ActiveTrainingLoopError("sample_count must be positive")
         if (
@@ -124,8 +105,6 @@ class ActiveTrainingLoopPlan:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
             raise ActiveTrainingLoopError(str(error)) from error
-        if type(self.retry_failed) is not bool:
-            raise ActiveTrainingLoopError("retry_failed must be boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,193 +136,87 @@ class ActiveTrainingLoopSummary:
 
 
 def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoopSummary:
-    """Generate proposals, run selected candidates, and refresh local result views."""
+    """Generate one proposal, run one candidate, and refresh local result views."""
 
-    proposal_summaries: list[ProposalGenerationSummary] = []
-    benchmark_summaries: list[BenchmarkRunSummary] = []
-    planned_commands: list[tuple[str, ...]] = []
-    benchmark_id: ProtocolIdentifier | None = None
     result_view_path = _materialize_if_possible(plan.runs_root)
-    materialize_work_queue_view(plan.runs_root)
-
-    for iteration in range(plan.iterations):
-        iteration_seed = plan.seed + iteration
-        proposal_summary = generate_experiment_proposals(
-            ProposalGenerationPlan(
-                benchmark_root=plan.benchmark_root,
-                runs_root=plan.runs_root,
-                candidate_budget=plan.candidate_budget,
-                candidate_sample_count=plan.candidate_sample_count,
-                sample_count=plan.sample_count,
-                evaluation_sample_count=plan.evaluation_sample_count,
-                seed=iteration_seed,
-                train_steps=plan.train_steps,
-                learning_rate=plan.learning_rate,
-                optimizer=plan.optimizer,
-                schedule=plan.schedule,
-                validation_interval=plan.validation_interval,
-                convergence_patience=plan.convergence_patience,
-                convergence_min_delta=plan.convergence_min_delta,
-                convergence_min_steps=plan.convergence_min_steps,
-                target_validation_loss=plan.target_validation_loss,
-                tensor_device=plan.tensor_device,
-            )
+    proposal_summary = generate_experiment_proposals(
+        ProposalGenerationPlan(
+            benchmark_root=plan.benchmark_root,
+            runs_root=plan.runs_root,
+            candidate_budget=1,
+            candidate_sample_count=plan.candidate_sample_count,
+            sample_count=plan.sample_count,
+            evaluation_sample_count=plan.evaluation_sample_count,
+            seed=plan.seed,
+            train_steps=plan.train_steps,
+            learning_rate=plan.learning_rate,
+            optimizer=plan.optimizer,
+            schedule=plan.schedule,
+            validation_interval=plan.validation_interval,
+            convergence_patience=plan.convergence_patience,
+            convergence_min_delta=plan.convergence_min_delta,
+            convergence_min_steps=plan.convergence_min_steps,
+            target_validation_loss=plan.target_validation_loss,
+            tensor_device=plan.tensor_device,
         )
-        benchmark_id = proposal_summary.benchmark_id
-        proposal_summaries.append(proposal_summary)
-        proposals = _proposal_records(proposal_summary.proposal_set_path)
-        for proposal_index, proposal in enumerate(proposals):
-            command = _proposal_command(proposal)
-            planned_commands.append(command)
-            sequence = iteration * len(proposals) + proposal_index
-            queue_item = _queue_item_for_proposal(
-                proposal=proposal,
-                proposal_summary=proposal_summary,
-                command=command,
-                sequence=sequence,
-            )
-            existing_queue_item = _matching_queue_item(
-                plan.runs_root,
-                benchmark_id=proposal_summary.benchmark_id,
-                command=command,
-            )
-            if existing_queue_item is not None:
-                queue_item = replace(
-                    existing_queue_item,
-                    candidate_id=_proposal_string(proposal, "candidate_id"),
-                    proposal_id=str(proposal["id"]),
-                    proposal_set_path=proposal_summary.proposal_set_path,
-                    sequence=sequence,
-                )
-            if queue_item.status == "completed":
-                materialize_work_queue_view(plan.runs_root)
-                continue
-            if queue_item.status == "failed" and not plan.retry_failed:
-                materialize_work_queue_view(plan.runs_root)
-                raise ActiveTrainingLoopError(
-                    "matching failed queue item requires --retry-failed"
-                )
-            if queue_item.status == "failed":
-                queue_item = replace(queue_item, error=None, status="pending")
-            if queue_item.status == "pending":
-                write_work_queue_item(plan.runs_root, queue_item)
-                materialize_work_queue_view(plan.runs_root)
-            if plan.dry_run:
-                continue
+    )
+    proposal = _proposal_records(proposal_summary.proposal_set_path)[0]
+    command = _proposal_command(proposal)
+    if plan.dry_run:
+        return ActiveTrainingLoopSummary(
+            benchmark_id=proposal_summary.benchmark_id,
+            completed_run_count=0,
+            planned_commands=(command,),
+            proposal_set_paths=(proposal_summary.proposal_set_path,),
+            measurement_dataset_paths=(),
+            result_view_path=result_view_path,
+            dry_run=plan.dry_run,
+        )
 
-            architecture_path = _architecture_path_for_command(command)
-            write_work_queue_item(
-                plan.runs_root,
-                replace(queue_item, status="reserved"),
-            )
-            materialize_work_queue_view(plan.runs_root)
-            try:
-                def refresh_progress(_summary: BenchmarkRunSummary) -> None:
-                    materialize_benchmark_result_views(
-                        repository_root=Path.cwd(),
-                        runs_root=plan.runs_root,
-                    )
-                    materialize_work_queue_view(plan.runs_root)
-                    if plan.progress_callback is not None:
-                        plan.progress_callback(_summary)
+    architecture_path = _architecture_path_for_command(command)
 
-                benchmark_summary = run_benchmark(
-                    BenchmarkRunPlan(
-                        architecture_path=architecture_path,
-                        benchmark_root=plan.benchmark_root,
-                        runs_root=plan.runs_root,
-                        sample_count=plan.sample_count,
-                        evaluation_sample_count=plan.evaluation_sample_count,
-                        seed=iteration_seed,
-                        train_steps=plan.train_steps,
-                        learning_rate=plan.learning_rate,
-                        optimizer=plan.optimizer,
-                        schedule=plan.schedule,
-                        validation_interval=plan.validation_interval,
-                        convergence_patience=plan.convergence_patience,
-                        convergence_min_delta=plan.convergence_min_delta,
-                        convergence_min_steps=plan.convergence_min_steps,
-                        target_validation_loss=plan.target_validation_loss,
-                        tensor_device=plan.tensor_device,
-                    ),
-                    progress_callback=refresh_progress,
-                )
-            except Exception as error:
-                write_work_queue_item(
-                    plan.runs_root,
-                    replace(queue_item, error=str(error), status="failed"),
-                )
-                materialize_work_queue_view(plan.runs_root)
-                raise
-            write_work_queue_item(
-                plan.runs_root,
-                replace(
-                    queue_item,
-                    measurement_dataset_path=benchmark_summary.measurement_dataset_path,
-                    run_id=benchmark_summary.run_slug,
-                    status="completed",
-                ),
-            )
-            benchmark_summaries.append(benchmark_summary)
-            result_view_path = materialize_benchmark_result_views(
-                repository_root=Path.cwd(),
-                runs_root=plan.runs_root,
-            ).view_file
-            materialize_work_queue_view(plan.runs_root)
+    def refresh_progress(_summary: BenchmarkRunSummary) -> None:
+        materialize_benchmark_result_views(
+            repository_root=Path.cwd(),
+            runs_root=plan.runs_root,
+        )
+        if plan.progress_callback is not None:
+            plan.progress_callback(_summary)
 
-    if benchmark_id is None:
-        raise ActiveTrainingLoopError("active loop did not generate proposals")
-    return ActiveTrainingLoopSummary(
-        benchmark_id=benchmark_id,
-        completed_run_count=len(benchmark_summaries),
-        planned_commands=tuple(planned_commands),
-        proposal_set_paths=tuple(summary.proposal_set_path for summary in proposal_summaries),
-        measurement_dataset_paths=tuple(
-            summary.measurement_dataset_path for summary in benchmark_summaries
+    benchmark_summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=architecture_path,
+            benchmark_root=plan.benchmark_root,
+            runs_root=plan.runs_root,
+            sample_count=plan.sample_count,
+            evaluation_sample_count=plan.evaluation_sample_count,
+            seed=plan.seed,
+            train_steps=plan.train_steps,
+            learning_rate=plan.learning_rate,
+            optimizer=plan.optimizer,
+            schedule=plan.schedule,
+            validation_interval=plan.validation_interval,
+            convergence_patience=plan.convergence_patience,
+            convergence_min_delta=plan.convergence_min_delta,
+            convergence_min_steps=plan.convergence_min_steps,
+            target_validation_loss=plan.target_validation_loss,
+            tensor_device=plan.tensor_device,
         ),
+        progress_callback=refresh_progress,
+    )
+    result_view_path = materialize_benchmark_result_views(
+        repository_root=Path.cwd(),
+        runs_root=plan.runs_root,
+    ).view_file
+    return ActiveTrainingLoopSummary(
+        benchmark_id=proposal_summary.benchmark_id,
+        completed_run_count=1,
+        planned_commands=(command,),
+        proposal_set_paths=(proposal_summary.proposal_set_path,),
+        measurement_dataset_paths=(benchmark_summary.measurement_dataset_path,),
         result_view_path=result_view_path,
         dry_run=plan.dry_run,
     )
-
-
-def _queue_item_for_proposal(
-    *,
-    proposal: Mapping[str, object],
-    proposal_summary: ProposalGenerationSummary,
-    command: tuple[str, ...],
-    sequence: int,
-) -> WorkQueueItem:
-    rank = proposal.get("rank", 1)
-    command_digest = str(ContentDigest.from_value(list(command))).split(":", maxsplit=1)[1][:12]
-    return WorkQueueItem(
-        id=f"sequence-{sequence + 1}-rank-{rank}-{command_digest}",
-        benchmark_id=proposal_summary.benchmark_id,
-        proposal_id=str(proposal["id"]),
-        candidate_id=_proposal_string(proposal, "candidate_id"),
-        proposal_set_path=proposal_summary.proposal_set_path,
-        command=command,
-        status="pending",
-        sequence=sequence,
-    )
-
-
-def _matching_queue_item(
-    runs_root: Path,
-    *,
-    benchmark_id: ProtocolIdentifier,
-    command: tuple[str, ...],
-) -> WorkQueueItem | None:
-    for item in load_work_queue_items(runs_root):
-        if item.benchmark_id == benchmark_id and item.command == command:
-            return item
-    return None
-
-
-def _proposal_string(proposal: Mapping[str, object], field: str) -> str:
-    value = proposal.get(field)
-    if not isinstance(value, str) or not value:
-        raise ActiveTrainingLoopError(f"proposal does not declare {field}")
-    return value
 
 
 def _materialize_if_possible(runs_root: Path) -> Path | None:

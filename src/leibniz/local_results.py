@@ -61,7 +61,6 @@ _protocol_formats = console_protocol_formats()
 _protocol_format_versions = console_protocol_format_versions()
 _console_result_view_format = _protocol_formats.imported_result_view
 _benchmark_result_view_format = _protocol_formats.benchmark_result_view
-_work_queue_view_format = _protocol_formats.work_queue_view
 _console_result_view_format_version = _protocol_format_versions.result_view
 _document_suffix = document_filename_suffix()
 _manifest_filename = "manifest" + _document_suffix
@@ -74,7 +73,6 @@ _publication_directories = (
     "publication_bundles",
     "training",
     "views",
-    "work-queues",
 )
 
 
@@ -433,9 +431,6 @@ def load_console_result_view(data: bytes) -> Mapping[str, object]:
         raise LocalResultImportError(str(error)) from error
     if record.get("format") == _benchmark_result_view_format:
         _validate_benchmark_result_view(record)
-        return record
-    if record.get("format") == _work_queue_view_format:
-        _validate_work_queue_view(record)
         return record
     if record.get("format") != _console_result_view_format:
         raise LocalResultImportError("console result view has unsupported format")
@@ -1788,37 +1783,6 @@ def _validate_benchmark_result_view(record: Mapping[str, object]) -> None:
     results = _as_sequence(record.get("benchmark_results"), "benchmark_results")
     for index, result in enumerate(results):
         _validate_benchmark_result(_as_mapping(result, f"benchmark_results.{index}"))
-
-
-def _validate_work_queue_view(record: Mapping[str, object]) -> None:
-    if record.get("format_version") != _console_result_view_format_version:
-        raise LocalResultImportError("console result view has unsupported format_version")
-    for index, item in enumerate(_as_sequence(record.get("queue_items"), "queue_items")):
-        _validate_work_queue_item(_as_mapping(item, f"queue_items.{index}"))
-
-
-def _validate_work_queue_item(record: Mapping[str, object]) -> None:
-    if record.get("format") != "leibniz.work-queue-item":
-        raise LocalResultImportError("work queue item has unsupported format")
-    if record.get("format_version") != _console_result_view_format_version:
-        raise LocalResultImportError("work queue item has unsupported format_version")
-    _require_string_fields(
-        record,
-        "queue_items",
-        ("id", "benchmark_id", "proposal_id", "proposal_set_path", "status"),
-    )
-    for field in ("candidate_id", "run_id", "measurement_dataset_path", "error"):
-        if field in record:
-            _as_string(record.get(field), f"queue_items.{field}")
-    command = _as_sequence(record.get("command"), "queue_items.command")
-    if not all(isinstance(argument, str) and argument for argument in command):
-        raise LocalResultImportError("queue_items.command must contain strings")
-    status = _as_string(record.get("status"), "queue_items.status")
-    if status not in {"pending", "reserved", "completed", "failed"}:
-        raise LocalResultImportError(f"unsupported queue item status: {status}")
-    sequence = _optional_int(record.get("sequence"), "queue_items.sequence")
-    if sequence is None or sequence < 0:
-        raise LocalResultImportError("queue_items.sequence must be nonnegative")
 
 
 def _validate_benchmark_result(record: Mapping[str, object]) -> None:

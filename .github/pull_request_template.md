@@ -30,5 +30,4 @@ Which design choices were considered, kept, changed, or rejected?
 
 ## Contribution Terms
 
-By submitting this pull request, I agree that, if accepted, my contribution will
-be released under the repository's CC0-1.0 public domain dedication.
+By submitting this pull request, I agree that, if accepted, my contribution will be released under the repository's CC0-1.0 public domain dedication.
