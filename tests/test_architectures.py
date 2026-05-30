@@ -128,6 +128,35 @@ def test_architecture_graph_lowers_sequential_layers_to_single_path() -> None:
     assert ArchitectureGraph.from_record(graph.to_record()) == graph
 
 
+def test_architecture_classes_own_contracts_and_source_graph_facts() -> None:
+    graph = ArchitectureManifest.from_record(_architecture_record()).graph
+
+    assert ArchitectureComponent.record_contract().contract_name == "architecture_component"
+    assert ArchitectureGraphNode.record_contract().contract_name == "architecture_graph_node"
+    assert ArchitectureGraphEdge.record_contract().contract_name == "architecture_graph_edge"
+    assert ArchitectureGraph.record_contract().contract_name == "architecture_graph"
+    assert ArchitectureManifest.record_contract().contract_name == "architecture_manifest"
+    assert ArchitectureGraph.record_spec().validate(graph.to_record()) == {
+        "nodes": tuple(node.to_record() for node in graph.nodes),
+        "edges": tuple(edge.to_record() for edge in graph.edges),
+        "input_node_ids": graph.input_node_ids,
+        "output_node_ids": graph.output_node_ids,
+    }
+    assert ArchitectureGraph.from_record(graph.to_record()) == graph
+    assert {
+        "kind": "record-contract-edge",
+        "source": "architecture_graph",
+        "target": "architecture_graph_node",
+        "relationship": "contains-nodes",
+    } in ArchitectureManifest.source_graph_facts()
+    assert {
+        "kind": "record-contract-edge",
+        "source": "architecture_manifest",
+        "target": "architecture_graph",
+        "relationship": "projects-to-graph",
+    } in ArchitectureManifest.source_graph_facts()
+
+
 def test_architecture_graph_rejects_invalid_references_and_cycles() -> None:
     graph = ArchitectureManifest.from_record(_architecture_record()).graph
     record = graph.to_record()
