@@ -7,7 +7,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
 import { BenchmarkResultDashboard } from './BenchmarkResultDashboard.tsx';
 import {
@@ -39,6 +39,7 @@ import {
   syntaxAliasDisplayName,
   type OperatorVocabularyRecord,
 } from './operatorVocabulary.ts';
+import { usePersistentState } from './persistentState.ts';
 import type {
   BenchmarkResultRecord,
   ResultViewRecord,
@@ -94,7 +95,10 @@ export function BenchmarksPanel({
   resultViews: ResultViewRecord[];
   tasks: BenchmarkTaskRecord[];
 }) {
-  const [selectedBenchmarkId, setSelectedBenchmarkId] = useState(tasks[0]?.benchmark_id ?? '');
+  const [selectedBenchmarkId, setSelectedBenchmarkId] = usePersistentState(
+    'leibniz.console.benchmarks.selectedBenchmark',
+    tasks[0]?.benchmark_id ?? '',
+  );
   const selected = tasks.find((task) => task.benchmark_id === selectedBenchmarkId) ?? tasks[0];
   const benchmarkResults = useMemo(
     () =>
@@ -140,8 +144,15 @@ export function BenchmarksPanel({
 
         <div className="benchmark-section-stack">
           <CollapsibleBenchmarkSection
+            label="Samples"
+            storageKey="leibniz.console.benchmarks.section.samples.expanded"
+          >
+            <BenchmarkTaskPane task={selected} />
+          </CollapsibleBenchmarkSection>
+          <CollapsibleBenchmarkSection
             label="Performance"
             summary={`${result?.leaderboard.length ?? 0} models`}
+            storageKey="leibniz.console.benchmarks.section.performance.expanded"
           >
             <BenchmarkPerformancePane
               benchmark={selected}
@@ -153,6 +164,7 @@ export function BenchmarksPanel({
             <CollapsibleBenchmarkSection
               label="Models"
               summary={`${modelRows.length} inspected candidates`}
+              storageKey="leibniz.console.benchmarks.section.models.expanded"
             >
               <BenchmarkModelsPane
                 operatorVocabulary={operatorVocabulary}
@@ -161,11 +173,6 @@ export function BenchmarksPanel({
               />
             </CollapsibleBenchmarkSection>
           )}
-          <CollapsibleBenchmarkSection
-            label="Samples"
-          >
-            <BenchmarkTaskPane task={selected} />
-          </CollapsibleBenchmarkSection>
         </div>
       </div>
     </section>
@@ -175,13 +182,15 @@ export function BenchmarksPanel({
 function CollapsibleBenchmarkSection({
   children,
   label,
+  storageKey,
   summary,
 }: {
   children: ReactNode;
   label: string;
+  storageKey: string;
   summary?: string;
 }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = usePersistentState(storageKey, true);
   return (
     <section className="benchmark-collapsible-section">
       <div className="benchmark-section-heading">
@@ -249,7 +258,10 @@ function BenchmarkModelsPane({
   result: BenchmarkResultRecord | undefined;
 }) {
   const costAxis = benchmarkCostAxes(result)[0]?.key ?? 'parameter_count';
-  const [selectedModelKey, setSelectedModelKey] = useState(rows[0]?.model.model_key ?? '');
+  const [selectedModelKey, setSelectedModelKey] = usePersistentState(
+    `leibniz.console.benchmarks.${result?.benchmark_id ?? 'empty'}.selectedModel`,
+    rows[0]?.model.model_key ?? '',
+  );
   const selectedRow =
     rows.find(({ model }) => model.model_key === selectedModelKey) ?? rows[0];
 
@@ -325,7 +337,10 @@ function BenchmarkModelInspector({
   operatorVocabulary: OperatorVocabularyRecord;
   runs: RunResultRecord[];
 }) {
-  const [artifactView, setArtifactView] = useState<ModelArtifactView>('model');
+  const [artifactView, setArtifactView] = usePersistentState<ModelArtifactView>(
+    `leibniz.console.benchmarks.${model.model_key}.artifactView`,
+    'model',
+  );
   return (
     <article className="benchmark-model-detail">
       <header className="benchmark-model-artifact-hero">
@@ -1086,7 +1101,10 @@ function referenceLabel(reference: ArtifactReferenceRecord): string {
 }
 
 function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
-  const [selectedSampleKey, setSelectedSampleKey] = useState<string | null>(null);
+  const [selectedSampleKey, setSelectedSampleKey] = usePersistentState<string | null>(
+    `leibniz.console.benchmarks.${task.benchmark_id}.selectedSample`,
+    null,
+  );
   const selected = task.batches[0];
   const visibleSamples = selected?.samples.map((sample) => ({ batch: selected, sample })) ?? [];
   const selectedSample =
@@ -1106,7 +1124,6 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
       {selectedSample === undefined ? null : (
         <BenchmarkSampleCoordinateInspector
           sample={selectedSample.sample}
-          task={task}
         />
       )}
       <section
@@ -1123,11 +1140,6 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
           />
         ))}
       </section>
-      {selectedSample === undefined ? null : (
-        <BenchmarkSampleDetail
-          sample={selectedSample.sample}
-        />
-      )}
     </div>
   );
 }
@@ -1158,20 +1170,13 @@ function BenchmarkSampleCard({
 
 function BenchmarkSampleCoordinateInspector({
   sample,
-  task,
 }: {
   sample: GeneratedObservationSampleRecord;
-  task: BenchmarkTaskRecord;
 }) {
-  const content = sample.latent_coordinates.find((coordinate) => coordinate.role === 'content');
-  const variation = sample.latent_coordinates.find((coordinate) => coordinate.role === 'variation');
   const entries: [string, string][] = [
     ['Components', sample.component_sequence.join(' ')],
-    [task.scale_axis, assignmentLabel(sample.materialization_plan.scale_assignment)],
-    [task.complexity_axis, String(sample.complexity)],
+    ['Complexity', String(sample.complexity)],
     ['Field', sample.field_shape.join(' x ')],
-    ['Content DOF', String(content?.multiplicity ?? 'n/a')],
-    ['Variation DOF', String(variation?.multiplicity ?? 'n/a')],
   ];
   return (
     <section
@@ -1191,209 +1196,9 @@ function BenchmarkSampleCoordinateInspector({
   );
 }
 
-function BenchmarkSampleDetail({
-  sample,
-}: {
-  sample: GeneratedObservationSampleRecord;
-}) {
-  const latentRoles = unique(sample.latent_coordinates.map((coordinate) => coordinate.role));
-  return (
-    <section className="benchmark-sample-detail" aria-label="Selected sample detail">
-      <section className="benchmark-sample-detail-section">
-        <h4>Materialization</h4>
-        <dl className="benchmark-sample-detail-grid">
-          {materializationEntries(sample).map(([key, value]) => (
-            <div key={key}>
-              <dt>{key}</dt>
-              <dd>{value}</dd>
-            </div>
-          ))}
-        </dl>
-      </section>
-      <section className="benchmark-sample-detail-section">
-        <h4>Latent Coordinates</h4>
-        <div className="benchmark-latent-role-list">
-          {latentRoles.map((role) => (
-            <article className="benchmark-latent-role" key={role}>
-              <h5>{modeLabel(role)}</h5>
-              {sample.latent_coordinates
-                .filter((coordinate) => coordinate.role === role)
-                .map((coordinate) => (
-                  <dl className="benchmark-sample-detail-grid" key={coordinate.name}>
-                    <dt>Name</dt>
-                    <dd>{coordinate.name}</dd>
-                    <dt>Role</dt>
-                    <dd>{coordinate.role}</dd>
-                    <dt>Multiplicity</dt>
-                    <dd>{coordinate.multiplicity}</dd>
-                    <dt>Measure</dt>
-                    <dd>{recordLabel(coordinate.degree_measure)}</dd>
-                    {latentValueEntries(coordinate.values).map(([label, value]) => (
-                      <div key={label}>
-                        <dt>{label}</dt>
-                        <dd title={value}>{value}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                ))}
-            </article>
-          ))}
-        </div>
-      </section>
-    </section>
-  );
-}
-
 function sampleKey(
   batch: GeneratedObservationBatchRecord,
   sample: GeneratedObservationSampleRecord,
 ): string {
   return `${batch.mode}:${batch.scale}:${batch.seed}:${batch.sample_count}:${sample.index}:${sample.outcome_id}`;
-}
-
-function materializationEntries(sample: GeneratedObservationSampleRecord): [string, string][] {
-  return [
-    ['Plan', recordString(sample.materialization_plan, 'id')],
-    ['Benchmark', recordString(sample.materialization_plan, 'benchmark_id')],
-    ['Scale', assignmentLabel(sample.materialization_plan.scale_assignment)],
-    ['Complexity', assignmentLabel(sample.materialization_plan.complexity_assignment)],
-    ['Resolution', assignmentLabel(sample.materialization_plan.resolution_assignment)],
-  ];
-}
-
-function latentValueEntries(value: unknown): [string, string][] {
-  const record = optionalRecord(value);
-  if (record?.kind === 'field-variation-transform-samples') {
-    return [
-      ['Values', variationCoordinateCountLabel(record.coordinates)],
-      ['Bounds', variationBoundsLabel(record.bounds)],
-      ['Coordinates', variationCoordinatesLabel(record.coordinates)],
-    ];
-  }
-  return [['Values', parameterValueLabel(value)]];
-}
-
-function variationCoordinateCountLabel(value: unknown): string {
-  if (!Array.isArray(value)) {
-    return 'unknown';
-  }
-  return `${value.length} slot ${value.length === 1 ? 'transform' : 'transforms'}`;
-}
-
-function variationBoundsLabel(value: unknown): string {
-  const bounds = optionalRecord(value);
-  const spatial = optionalRecord(bounds?.spatial_affine);
-  const valueScale = optionalRecord(bounds?.value_scale);
-  return [
-    labeledValue('translation', intervalListLabel(spatial?.translation)),
-    labeledValue('scale', intervalListLabel(spatial?.scale)),
-    labeledValue('rotation', symmetricBoundsLabel(spatial?.rotation_degrees)),
-    labeledValue('shear', symmetricBoundsLabel(spatial?.shear_degrees)),
-    labeledValue('value', intervalLabel(valueScale?.scale)),
-  ]
-    .filter((entry): entry is string => entry !== null)
-    .join('; ') || 'unknown';
-}
-
-function variationCoordinatesLabel(value: unknown): string {
-  if (!Array.isArray(value)) {
-    return 'unknown';
-  }
-  return (
-    value
-      .map((item) => {
-        const coordinate = optionalRecord(item);
-        const spatial = optionalRecord(coordinate?.spatial_affine);
-        const valueScale = optionalRecord(coordinate?.value_scale);
-        return [
-          `${parameterValueLabel(coordinate?.slot_index)}:`,
-          `t=${numberListLabel(spatial?.translation)}`,
-          `s=${numberListLabel(spatial?.scale)}`,
-          `r=${numberListLabel(spatial?.rotation_degrees)}`,
-          `sh=${numberListLabel(spatial?.shear_degrees)}`,
-          `v=${numberLabel(valueScale?.scale)}`,
-        ].join(' ');
-      })
-      .join(' | ') || 'none'
-  );
-}
-
-function labeledValue(label: string, value: string): string | null {
-  return value === 'unknown' ? null : `${label} ${value}`;
-}
-
-function intervalListLabel(value: unknown): string {
-  if (!Array.isArray(value)) {
-    return 'unknown';
-  }
-  return value.map((item) => intervalLabel(item)).join(' x ');
-}
-
-function intervalLabel(value: unknown): string {
-  if (!Array.isArray(value) || value.length !== 2) {
-    return 'unknown';
-  }
-  return `[${numberLabel(value[0])}, ${numberLabel(value[1])}]`;
-}
-
-function symmetricBoundsLabel(value: unknown): string {
-  if (!Array.isArray(value) || value.length === 0) {
-    return 'unknown';
-  }
-  return value.map((item) => `+/-${numberLabel(item)}`).join(', ');
-}
-
-function numberListLabel(value: unknown): string {
-  if (!Array.isArray(value)) {
-    return 'unknown';
-  }
-  return `(${value.map((item) => numberLabel(item)).join(', ')})`;
-}
-
-function numberLabel(value: unknown): string {
-  return typeof value === 'number'
-    ? new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 }).format(value)
-    : parameterValueLabel(value);
-}
-
-function optionalRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function assignmentLabel(value: unknown): string {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return 'unknown';
-  }
-  const values = (value as Record<string, unknown>).values;
-  if (!Array.isArray(values)) {
-    return 'unknown';
-  }
-  return values
-    .map((entry) => {
-      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-        return null;
-      }
-      const record = entry as Record<string, unknown>;
-      return `${String(record.axis)}=${String(record.value)}`;
-    })
-    .filter((entry): entry is string => entry !== null)
-    .join(', ') || 'unknown';
-}
-
-function recordString(record: Record<string, unknown>, key: string): string {
-  const value = record[key];
-  return typeof value === 'string' || typeof value === 'number' ? String(value) : 'unknown';
-}
-
-function modeLabel(mode: string): string {
-  return mode
-    .split('-')
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join(' ');
-}
-
-function unique<T extends string | number>(values: T[]): T[] {
-  return Array.from(new Set(values));
 }

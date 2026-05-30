@@ -1068,73 +1068,11 @@ p {
 .benchmark-sample-coordinate-inspector dd {
   margin: 0;
   min-width: 0;
-  overflow: hidden;
   color: var(--text-primary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--font-control);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.benchmark-sample-detail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xl);
-}
-
-.benchmark-sample-detail-section h4,
-.benchmark-latent-role h5 {
-  margin: 0;
-}
-
-.benchmark-sample-detail-grid {
-  display: grid;
-  grid-template-columns: minmax(0, var(--benchmark-label-min)) minmax(0, 1fr);
-  gap: var(--space-xs) var(--space-lg);
-  align-content: start;
-  margin: 0;
-}
-
-.benchmark-sample-detail-grid div {
-  display: contents;
-}
-
-.benchmark-sample-detail-grid dt,
-.benchmark-latent-role h5 {
-  color: var(--text-muted);
-  font-size: var(--font-label);
-  font-weight: 700;
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-}
-
-.benchmark-sample-detail-grid dd {
-  margin: 0;
   overflow-wrap: anywhere;
-  color: var(--text-primary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--font-control);
-}
-
-.benchmark-sample-detail-section,
-.benchmark-latent-role-list,
-.benchmark-latent-role {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
-}
-
-.benchmark-sample-detail-section {
-  border: var(--line-thin) solid var(--border-color);
-  background: var(--control-bg);
-  padding: var(--space-lg);
-}
-
-.benchmark-latent-role {
-  border: var(--line-thin) solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--control-bg);
-  padding: var(--space-lg);
+  white-space: normal;
 }
 
 .benchmark-model-workbench {

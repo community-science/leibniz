@@ -37,6 +37,7 @@ import {
   coordinateDisplayName,
   type OperatorVocabularyRecord,
 } from './operatorVocabulary.ts';
+import { usePersistentState } from './persistentState.ts';
 
 type PlotView = {
   xDomain: [number, number];
@@ -64,6 +65,10 @@ const plotAxisSelectorHeight = 25;
 const plotAxisSelectorMinWidth = 264;
 const plotAxisSelectorButtonWidth = 84;
 const proposalIntervalCapHalfWidth = 7;
+const defaultLeaderboardSort: ModelResultSort = {
+  key: 'score',
+  direction: 'descending',
+};
 
 export function BenchmarkResultDashboard({
   operatorVocabulary,
@@ -73,15 +78,25 @@ export function BenchmarkResultDashboard({
   result: BenchmarkResultRecord;
 }) {
   const costAxes = benchmarkCostAxes(result);
-  const [selectedCostAxis, setSelectedCostAxis] = useState(costAxes[0]?.key ?? 'parameter_count');
+  const stateKeyPrefix = `leibniz.console.benchmarks.${result.benchmark_id}.performance`;
+  const [selectedCostAxis, setSelectedCostAxis] = usePersistentState(
+    `${stateKeyPrefix}.costAxis`,
+    costAxes[0]?.key ?? 'parameter_count',
+  );
   const costAxis = benchmarkCostAxis(selectedCostAxis, costAxes);
-  const [plotView, setPlotView] = useState<PlotView | null>(null);
+  const [plotView, setPlotView] = usePersistentState<PlotView | null>(
+    `${stateKeyPrefix}.plotView`,
+    null,
+  );
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [leaderboardSort, setLeaderboardSort] = useState<ModelResultSort>({
-    key: 'score',
-    direction: 'descending',
-  });
+  const [selectedId, setSelectedId] = usePersistentState<string | null>(
+    `${stateKeyPrefix}.selectedId`,
+    null,
+  );
+  const [leaderboardSort, setLeaderboardSort] = usePersistentState<ModelResultSort>(
+    `${stateKeyPrefix}.leaderboardSort`,
+    defaultLeaderboardSort,
+  );
   const plot = benchmarkPlotModel(result, costAxis);
   const selection = selectionForId(result, selectedId);
   const proposalRows = proposalAssociations(result);

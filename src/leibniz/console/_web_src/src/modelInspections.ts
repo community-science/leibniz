@@ -126,5 +126,18 @@ export function parseModelInspectionRecord(
     const componentRecord = requireRecord(component, `${path}.components.${index}`, error);
     requireNumber(componentRecord.index, `${path}.components.${index}.index`, error);
   });
-  return record as unknown as ModelInspectionRecord;
+  return {
+    ...record,
+    model_artifacts: artifactReferences(record.model_artifacts ?? [], `${path}.model_artifacts`),
+    training_provenance: artifactReferences(
+      record.training_provenance ?? [],
+      `${path}.training_provenance`,
+    ),
+  } as unknown as ModelInspectionRecord;
+}
+
+function artifactReferences(value: unknown, path: string): ArtifactReferenceRecord[] {
+  return requireArray(value, path, error).map((item, index) =>
+    requireRecord(item, `${path}.${index}`, error) as ArtifactReferenceRecord,
+  );
 }

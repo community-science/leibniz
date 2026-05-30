@@ -2,6 +2,7 @@ import { BookOpenCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { BenchmarksPanel } from './BenchmarksPanel';
+import { usePersistentState } from './persistentState';
 import initialConsoleData, { subscribeConsoleData } from 'virtual:leibniz-console-data';
 
 type TabId = 'benchmarks';
@@ -16,8 +17,12 @@ const tabs: ConsoleTab[] = [
 ];
 
 export function ConsoleShell() {
-  const [currentTab, setCurrentTab] = useState<TabId>('benchmarks');
+  const [currentTab, setCurrentTab] = usePersistentState<TabId>(
+    'leibniz.console.currentTab',
+    'benchmarks',
+  );
   const [consoleData, setConsoleData] = useState(initialConsoleData);
+  const activeTab = tabs.some((tab) => tab.id === currentTab) ? currentTab : 'benchmarks';
 
   useEffect(() => subscribeConsoleData(setConsoleData), []);
 
@@ -30,11 +35,11 @@ export function ConsoleShell() {
       <nav className="tab-navigation" aria-label="Console views">
         {tabs.map((tab) => (
           <button
-            className={`tab-button ${currentTab === tab.id ? 'active' : ''}`}
+            className={`tab-button ${activeTab === tab.id ? 'active' : ''}`}
             key={tab.id}
             onClick={() => setCurrentTab(tab.id)}
             type="button"
-            aria-current={currentTab === tab.id ? 'page' : undefined}
+            aria-current={activeTab === tab.id ? 'page' : undefined}
           >
             <BookOpenCheck size={16} />
             {tab.label}
@@ -43,7 +48,7 @@ export function ConsoleShell() {
       </nav>
 
       <section className="tab-content">
-        <div className="console-overview" hidden={currentTab !== 'benchmarks'}>
+        <div className="console-overview" hidden={activeTab !== 'benchmarks'}>
           <BenchmarksPanel
             modelInspections={consoleData.model_inspections}
             operatorVocabulary={consoleData.operator_vocabulary}
