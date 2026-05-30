@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -45,6 +46,17 @@ class GraphEdge:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class RecordSpecDeclaration:
+    module_path: str
+    name: str
+    line: int
+
+    @property
+    def id(self) -> str:
+        return _node_id("record-spec", f"{self.module_path}:{self.name}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository-root", default=Path("."), type=Path)
@@ -73,6 +85,7 @@ def source_graph(*, repository_root: Path, status_path: Path) -> dict[str, objec
         repository_root=repository_root,
         tracked_roots=_strings(inventory["tracked_roots"], field="tracked_roots"),
     )
+    record_specs_by_module = _record_specs_by_module(repository_root=repository_root)
 
     node_kinds = frozenset(_strings(projection["node_kinds"], field="node_kinds"))
     edge_kinds = frozenset(_strings(projection["edge_kinds"], field="edge_kinds"))
@@ -109,6 +122,7 @@ def source_graph(*, repository_root: Path, status_path: Path) -> dict[str, objec
             add_node(GraphNode(id=path_id, kind="path", label=path, path=path))
             add_edge(GraphEdge(kind="categorizes", source=category_id, target=path_id))
 
+    declared_record_spec_modules: set[str] = set()
     for surface_value in surfaces:
         surface = _mapping(surface_value, field="surfaces")
         surface_name = _string(surface["name"], field="surfaces.name")
@@ -126,6 +140,30 @@ def source_graph(*, repository_root: Path, status_path: Path) -> dict[str, objec
                     target=_path_node_id(path),
                 )
             )
+            declared_record_spec_modules.add(path)
+            for record_spec in record_specs_by_module.get(path, ()):
+                add_node(
+                    GraphNode(
+                        id=record_spec.id,
+                        kind="record-spec",
+                        label=record_spec.name,
+                        path=record_spec.module_path,
+                    )
+                )
+                add_edge(
+                    GraphEdge(
+                        kind="declares-record-spec",
+                        source=_path_node_id(path),
+                        target=record_spec.id,
+                    )
+                )
+                add_edge(
+                    GraphEdge(
+                        kind="covers-record-spec",
+                        source=surface_id,
+                        target=record_spec.id,
+                    )
+                )
         for path in _strings(surface["python_runtime"], field=f"{surface_name}.python_runtime"):
             add_node(GraphNode(id=_path_node_id(path), kind="path", label=path, path=path))
             add_edge(GraphEdge(kind="uses-runtime", source=surface_id, target=_path_node_id(path)))
@@ -147,6 +185,11 @@ def source_graph(*, repository_root: Path, status_path: Path) -> dict[str, objec
             add_node(GraphNode(id=generated_id, kind="generated-output", label=path, path=path))
             add_edge(GraphEdge(kind="generated-by", source=generated_id, target=surface_id))
 
+    _assert_record_spec_module_coverage(
+        discovered_modules=frozenset(record_specs_by_module),
+        declared_modules=frozenset(declared_record_spec_modules),
+    )
+
     return {
         "format": "leibniz.contract-source-graph",
         "format_version": 1,
@@ -167,6 +210,65 @@ def _resolve_status_path(*, repository_root: Path, status: Path) -> Path:
 
 def _load_status(path: Path) -> dict[str, Any]:
     return dict(load_object_document(path.read_bytes(), description=path.as_posix()))
+
+
+def _record_specs_by_module(
+    *,
+    repository_root: Path,
+) -> dict[str, tuple[RecordSpecDeclaration, ...]]:
+    declarations_by_module: dict[str, tuple[RecordSpecDeclaration, ...]] = {}
+    for path in sorted((repository_root / "src" / "leibniz").rglob("*.py")):
+        relative_path = path.relative_to(repository_root).as_posix()
+        declarations = _record_spec_declarations(path=path, relative_path=relative_path)
+        if declarations:
+            declarations_by_module[relative_path] = declarations
+    return declarations_by_module
+
+
+def _record_spec_declarations(
+    *,
+    path: Path,
+    relative_path: str,
+) -> tuple[RecordSpecDeclaration, ...]:
+    syntax_tree = ast.parse(path.read_text(encoding="utf-8"))
+    declarations: list[RecordSpecDeclaration] = []
+    for node in ast.walk(syntax_tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not _is_record_spec_call(node.value):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                declarations.append(
+                    RecordSpecDeclaration(
+                        module_path=relative_path,
+                        name=target.id,
+                        line=node.lineno,
+                    )
+                )
+    return tuple(sorted(declarations, key=lambda declaration: declaration.name))
+
+
+def _is_record_spec_call(value: ast.expr) -> bool:
+    return (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id == "RecordSpec"
+    )
+
+
+def _assert_record_spec_module_coverage(
+    *,
+    discovered_modules: frozenset[str],
+    declared_modules: frozenset[str],
+) -> None:
+    missing = sorted(discovered_modules - declared_modules)
+    unknown = sorted(declared_modules - discovered_modules)
+    if missing or unknown:
+        raise ValueError(
+            "record spec module coverage drift: "
+            f"missing={missing!r}; unknown={unknown!r}"
+        )
 
 
 def _tracked_inventory_paths(
