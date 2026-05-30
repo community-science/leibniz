@@ -1,32 +1,21 @@
+from leibniz.architectures import ArchitectureComponent
 from leibniz.contracts import ContractObject, RuntimeProjection
-from leibniz.work_queues import WorkQueueItem
 
 
 def test_record_contract_exposes_generic_projection_boundaries() -> None:
-    contract = WorkQueueItem.record_contract()
+    contract = ArchitectureComponent.record_contract()
 
     assert isinstance(contract, ContractObject)
-    assert contract.contract_name == "work_queue_item"
+    assert contract.contract_name == "architecture_component"
     assert contract.runtime_projections() == (
         RuntimeProjection(
-            contract_name="work_queue_item",
+            contract_name="architecture_component",
             surface="python-record-validation",
             target="leibniz.records.RecordSpec",
             content={
                 "fields": (
-                    "format",
-                    "format_version",
-                    "id",
-                    "benchmark_id",
-                    "proposal_id",
-                    "candidate_id",
-                    "proposal_set_path",
-                    "command",
-                    "status",
-                    "sequence",
-                    "run_id",
-                    "measurement_dataset_path",
-                    "error",
+                    "kind",
+                    "parameters",
                 ),
                 "allow_unknown": False,
             },
@@ -34,20 +23,20 @@ def test_record_contract_exposes_generic_projection_boundaries() -> None:
     )
 
     typescript_projection = contract.typescript_runtime_projection(
-        exported_type="WorkQueueItemRecord",
-        parser_name="parseWorkQueueItem",
-        error_name="WorkQueueTransportError",
+        exported_type="ArchitectureComponentRecord",
+        parser_name="parseArchitectureComponent",
+        error_name="ArchitectureComponentTransportError",
     )
 
     assert typescript_projection.surface == "typescript-record-parser"
-    assert typescript_projection.target == "WorkQueueItemRecord"
+    assert typescript_projection.target == "ArchitectureComponentRecord"
     assert isinstance(typescript_projection.content, str)
-    assert "export function parseWorkQueueItem" in typescript_projection.content
+    assert "export function parseArchitectureComponent" in typescript_projection.content
 
 
 def test_record_contract_owns_conformance_cases_and_source_graph_facts() -> None:
-    contract = WorkQueueItem.record_contract()
-    spec = WorkQueueItem.record_spec()
+    contract = ArchitectureComponent.record_contract()
+    spec = ArchitectureComponent.record_spec()
 
     conformance_cases = contract.conformance_cases()
 
@@ -58,21 +47,10 @@ def test_record_contract_owns_conformance_cases_and_source_graph_facts() -> None
     assert contract.source_graph_facts() == (
         {
             "kind": "record-contract",
-            "name": "work_queue_item",
+            "name": "architecture_component",
             "fields": (
-                "format",
-                "format_version",
-                "id",
-                "benchmark_id",
-                "proposal_id",
-                "candidate_id",
-                "proposal_set_path",
-                "command",
-                "status",
-                "sequence",
-                "run_id",
-                "measurement_dataset_path",
-                "error",
+                "kind",
+                "parameters",
             ),
             "allow_unknown": False,
         },

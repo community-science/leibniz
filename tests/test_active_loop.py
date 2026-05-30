@@ -1,22 +1,15 @@
 import os
 import subprocess
 import sys
-from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import cast
 
 import pytest
 
-from leibniz.active_loop import (
-    ActiveTrainingLoopError,
-    ActiveTrainingLoopPlan,
-    run_active_training_loop,
-)
+from leibniz.active_loop import ActiveTrainingLoopPlan, run_active_training_loop
 from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
 from leibniz.cli import main
 from leibniz.console.data import ConsoleDataBuilder
-from leibniz.local_results import load_console_result_view
-from leibniz.work_queues import load_work_queue_items, write_work_queue_item
 
 _repository_root = Path(__file__).parents[1]
 _benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -25,13 +18,14 @@ _architecture_path = (
 )
 
 
-def test_active_training_loop_dry_run_plans_without_training(tmp_path: Path) -> None:
+def test_active_training_loop_dry_run_plans_one_training_session(
+    tmp_path: Path,
+) -> None:
     summary = run_active_training_loop(
         ActiveTrainingLoopPlan(
             benchmark_root=_benchmark_root,
             runs_root=tmp_path / ".runs",
             dry_run=True,
-            candidate_budget=1,
             sample_count=1,
         )
     )
@@ -41,21 +35,17 @@ def test_active_training_loop_dry_run_plans_without_training(tmp_path: Path) -> 
     assert len(summary.planned_commands) == 1
     assert summary.planned_commands[0][:3] == ("leibniz", "benchmark", "run")
     assert summary.proposal_set_paths[0].exists()
+    assert summary.measurement_dataset_paths == ()
     assert not (tmp_path / ".runs" / "measurements").exists()
-    work_queue_view = load_console_result_view(
-        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
-    )
-    queue_items = cast(list[dict[str, object]], work_queue_view["queue_items"])
-    assert [item["status"] for item in queue_items] == ["pending"]
 
 
-def test_active_training_loop_runs_one_iteration_and_refreshes_results(tmp_path: Path) -> None:
+def test_active_training_loop_runs_one_training_session_and_refreshes_results(
+    tmp_path: Path,
+) -> None:
     summary = run_active_training_loop(
         ActiveTrainingLoopPlan(
             benchmark_root=_benchmark_root,
             runs_root=tmp_path / ".runs",
-            iterations=1,
-            candidate_budget=1,
             sample_count=1,
             train_steps=0,
             tensor_device="cpu",
@@ -63,28 +53,20 @@ def test_active_training_loop_runs_one_iteration_and_refreshes_results(tmp_path:
     )
 
     assert summary.completed_run_count == 1
+    assert len(summary.planned_commands) == 1
+    assert len(summary.measurement_dataset_paths) == 1
     assert summary.measurement_dataset_paths[0].exists()
     assert summary.result_view_path is not None
     assert summary.result_view_path.exists()
-    work_queue_view = load_console_result_view(
-        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
-    )
-    queue_items = cast(list[dict[str, object]], work_queue_view["queue_items"])
-    assert [item["status"] for item in queue_items] == ["completed"]
-    assert queue_items[0]["run_id"]
-    assert queue_items[0]["measurement_dataset_path"] == summary.measurement_dataset_paths[
-        0
-    ].as_posix()
-    assert queue_items[0]["candidate_id"]
 
 
-def test_active_training_loop_runs_bounded_proposal_batch(tmp_path: Path) -> None:
+def test_active_training_loop_always_generates_one_proposal(
+    tmp_path: Path,
+) -> None:
     summary = run_active_training_loop(
         ActiveTrainingLoopPlan(
             benchmark_root=_benchmark_root,
             runs_root=tmp_path / ".runs",
-            iterations=1,
-            candidate_budget=2,
             candidate_sample_count=8,
             sample_count=1,
             train_steps=0,
@@ -92,189 +74,9 @@ def test_active_training_loop_runs_bounded_proposal_batch(tmp_path: Path) -> Non
         )
     )
 
-    queue_view = load_console_result_view(
-        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
-    )
-    queue_items = cast(list[dict[str, object]], queue_view["queue_items"])
-
-    assert summary.completed_run_count == 2
-    assert len(summary.planned_commands) == 2
-    assert len(summary.measurement_dataset_paths) == 2
-    assert [item["status"] for item in queue_items] == ["completed", "completed"]
-    assert [item["sequence"] for item in queue_items] == [0, 1]
-    assert len({item["candidate_id"] for item in queue_items}) == 2
-    assert len({item["run_id"] for item in queue_items}) == 2
-
-
-def test_active_training_loop_resumes_pending_dry_run_work(tmp_path: Path) -> None:
-    dry_run_summary = run_active_training_loop(
-        ActiveTrainingLoopPlan(
-            benchmark_root=_benchmark_root,
-            runs_root=tmp_path / ".runs",
-            dry_run=True,
-            candidate_budget=1,
-            sample_count=1,
-            train_steps=0,
-            tensor_device="cpu",
-        )
-    )
-    queue_view = load_console_result_view(
-        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
-    )
-    pending_items = cast(list[dict[str, object]], queue_view["queue_items"])
-
-    run_summary = run_active_training_loop(
-        ActiveTrainingLoopPlan(
-            benchmark_root=_benchmark_root,
-            runs_root=tmp_path / ".runs",
-            candidate_budget=1,
-            sample_count=1,
-            train_steps=0,
-            tensor_device="cpu",
-        )
-    )
-
-    queue_view = load_console_result_view(
-        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
-    )
-    completed_items = cast(list[dict[str, object]], queue_view["queue_items"])
-    assert dry_run_summary.planned_commands == run_summary.planned_commands
-    assert [item["id"] for item in completed_items] == [item["id"] for item in pending_items]
-    assert [item["status"] for item in completed_items] == ["completed"]
-
-
-def test_active_training_loop_skips_completed_matching_work(tmp_path: Path) -> None:
-    runs_root = tmp_path / ".runs"
-    run_active_training_loop(
-        ActiveTrainingLoopPlan(
-            benchmark_root=_benchmark_root,
-            runs_root=runs_root,
-            dry_run=True,
-            candidate_budget=1,
-            sample_count=1,
-            train_steps=0,
-        )
-    )
-    pending_item = load_work_queue_items(runs_root)[0]
-    write_work_queue_item(
-        runs_root,
-        replace(
-            pending_item,
-            measurement_dataset_path=runs_root / "measurements" / "existing.json",
-            run_id="existing-run",
-            status="completed",
-        ),
-    )
-
-    summary = run_active_training_loop(
-        ActiveTrainingLoopPlan(
-            benchmark_root=_benchmark_root,
-            runs_root=runs_root,
-            candidate_budget=1,
-            sample_count=1,
-            train_steps=0,
-        )
-    )
-
-    queue_view = load_console_result_view(
-        (runs_root / "views" / "work_queue.json").read_bytes()
-    )
-    queue_items = cast(list[dict[str, object]], queue_view["queue_items"])
-    assert summary.completed_run_count == 0
-    assert not runs_root.joinpath("measurements").is_dir()
-    assert [item["status"] for item in queue_items] == ["completed"]
-
-
-def test_active_training_loop_blocks_failed_work_without_explicit_retry(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def fail_run(
-        _plan: BenchmarkRunPlan,
-        *,
-        progress_callback: object | None = None,
-    ):
-        del progress_callback
-        raise RuntimeError("synthetic training failure")
-
-    monkeypatch.setattr("leibniz.active_loop.run_benchmark", fail_run)
-    with pytest.raises(RuntimeError, match="synthetic training failure"):
-        run_active_training_loop(
-            ActiveTrainingLoopPlan(
-                benchmark_root=_benchmark_root,
-                runs_root=tmp_path / ".runs",
-                candidate_budget=1,
-                sample_count=1,
-                train_steps=0,
-                tensor_device="cpu",
-            )
-        )
-
-    monkeypatch.setattr("leibniz.active_loop.run_benchmark", run_benchmark)
-    with pytest.raises(ActiveTrainingLoopError, match="requires --retry-failed"):
-        run_active_training_loop(
-            ActiveTrainingLoopPlan(
-                benchmark_root=_benchmark_root,
-                runs_root=tmp_path / ".runs",
-                candidate_budget=1,
-                sample_count=1,
-                train_steps=0,
-                tensor_device="cpu",
-            )
-        )
-
-    queue_view = load_console_result_view(
-        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
-    )
-    queue_items = cast(list[dict[str, object]], queue_view["queue_items"])
-    assert [item["status"] for item in queue_items] == ["failed"]
-
-
-def test_active_training_loop_retries_failed_work_when_requested(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def fail_run(
-        _plan: BenchmarkRunPlan,
-        *,
-        progress_callback: object | None = None,
-    ):
-        del progress_callback
-        raise RuntimeError("synthetic training failure")
-
-    monkeypatch.setattr("leibniz.active_loop.run_benchmark", fail_run)
-    with pytest.raises(RuntimeError, match="synthetic training failure"):
-        run_active_training_loop(
-            ActiveTrainingLoopPlan(
-                benchmark_root=_benchmark_root,
-                runs_root=tmp_path / ".runs",
-                candidate_budget=1,
-                sample_count=1,
-                train_steps=0,
-                tensor_device="cpu",
-            )
-        )
-
-    monkeypatch.setattr("leibniz.active_loop.run_benchmark", run_benchmark)
-    summary = run_active_training_loop(
-        ActiveTrainingLoopPlan(
-            benchmark_root=_benchmark_root,
-            runs_root=tmp_path / ".runs",
-            candidate_budget=1,
-            sample_count=1,
-            train_steps=0,
-            retry_failed=True,
-            tensor_device="cpu",
-        )
-    )
-
-    queue_view = load_console_result_view(
-        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
-    )
-    queue_items = cast(list[dict[str, object]], queue_view["queue_items"])
     assert summary.completed_run_count == 1
-    assert [item["status"] for item in queue_items] == ["completed"]
-    assert "error" not in queue_items[0]
+    assert len(summary.planned_commands) == 1
+    assert len(summary.measurement_dataset_paths) == 1
 
 
 def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
@@ -294,10 +96,6 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
             str(_benchmark_root),
             "--runs-root",
             str(runs_root),
-            "--iterations",
-            "1",
-            "--candidate-budget",
-            "1",
             "--sample-count",
             "1",
             "--train-steps",
@@ -335,14 +133,6 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
     assert benchmark_view["source_path"] == (
         runs_root / "views" / "benchmark_results.json"
     ).as_posix()
-    work_queue_view = next(
-        view for view in result_views if view["format"] == "leibniz.console.work-queue"
-    )
-    queue_items = cast(list[dict[str, object]], work_queue_view["queue_items"])
-    assert work_queue_view["source_path"] == (
-        runs_root / "views" / "work_queue.json"
-    ).as_posix()
-    assert [item["status"] for item in queue_items] == ["completed"]
     training_history = cast(list[dict[str, object]], digits_result["training_history"])
     proposals = cast(list[dict[str, object]], digits_result["proposals"])
     leaderboard = cast(list[dict[str, object]], digits_result["leaderboard"])
@@ -395,20 +185,12 @@ def test_active_training_loop_preserves_existing_measurements_on_run_failure(
             ActiveTrainingLoopPlan(
                 benchmark_root=_benchmark_root,
                 runs_root=tmp_path / ".runs",
-                iterations=1,
-                candidate_budget=1,
                 sample_count=1,
                 train_steps=0,
             )
         )
 
     assert initial.measurement_dataset_path.read_bytes() == before
-    work_queue_view = load_console_result_view(
-        (tmp_path / ".runs" / "views" / "work_queue.json").read_bytes()
-    )
-    queue_items = cast(list[dict[str, object]], work_queue_view["queue_items"])
-    assert [item["status"] for item in queue_items] == ["failed"]
-    assert queue_items[0]["error"] == "synthetic training failure"
 
 
 def test_cli_runs_active_training_loop_dry_run(
@@ -423,8 +205,6 @@ def test_cli_runs_active_training_loop_dry_run(
             str(_benchmark_root),
             "--runs-root",
             str(tmp_path / ".runs"),
-            "--candidate-budget",
-            "1",
             "--sample-count",
             "1",
             "--dry-run",
@@ -452,8 +232,6 @@ def test_cli_runs_active_frontier_shakedown(
             str(_benchmark_root),
             "--runs-root",
             str(runs_root),
-            "--candidate-budget",
-            "1",
             "--sample-count",
             "1",
             "--train-steps",
@@ -472,4 +250,3 @@ def test_cli_runs_active_frontier_shakedown(
     assert "best score: n/a -> " in captured.out
     assert "view: " in captured.out
     assert runs_root.joinpath("views", "benchmark_results.json").is_file()
-    assert runs_root.joinpath("views", "work_queue.json").is_file()

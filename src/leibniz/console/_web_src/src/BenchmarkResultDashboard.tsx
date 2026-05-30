@@ -32,7 +32,6 @@ import type {
   ModelResultRecord,
   ProposalRecord,
   RunDetailSectionRecord,
-  WorkQueueItemRecord,
 } from './resultViews.ts';
 import {
   coordinateDisplayName,
@@ -68,11 +67,9 @@ const proposalIntervalCapHalfWidth = 7;
 
 export function BenchmarkResultDashboard({
   operatorVocabulary,
-  queueItems = [],
   result,
 }: {
   operatorVocabulary: OperatorVocabularyRecord;
-  queueItems?: WorkQueueItemRecord[];
   result: BenchmarkResultRecord;
 }) {
   const costAxes = benchmarkCostAxes(result);
@@ -139,7 +136,6 @@ export function BenchmarkResultDashboard({
         associations={proposalRows}
         onSelect={setSelectedId}
         operatorVocabulary={operatorVocabulary}
-        queueItems={queueItems}
         selectedId={selectedId}
       />
       <RunHistoryTable
@@ -520,13 +516,11 @@ function ProposalCards({
   associations,
   onSelect,
   operatorVocabulary,
-  queueItems,
   selectedId,
 }: {
   associations: BenchmarkProposalAssociation[];
   onSelect: (id: string) => void;
   operatorVocabulary: OperatorVocabularyRecord;
-  queueItems: WorkQueueItemRecord[];
   selectedId: string | null;
 }) {
   if (associations.length === 0) {
@@ -538,11 +532,6 @@ function ProposalCards({
       <h3>Proposals</h3>
       <div className="proposal-card-grid">
         {associations.map(({ model, proposal }) => {
-          const queueItem = queueItems.find(
-            (item) =>
-              item.proposal_id === proposal.id &&
-              (item.candidate_id === undefined || item.candidate_id === proposal.candidate_id),
-          );
           return (
             <button
               className={`proposal-card ${selectedId === proposal.id ? 'selected' : ''}`}
@@ -559,8 +548,6 @@ function ProposalCards({
                 <dd>{proposal.candidate_id}</dd>
                 <dt>Acquisition</dt>
                 <dd>{proposal.acquisition_model ?? 'not recorded'}</dd>
-                <dt>Queue</dt>
-                <dd>{queueItem?.status ?? 'not queued'}</dd>
                 <dt>Prediction</dt>
                 <dd>{scoreLabel(proposal.predicted_score)}</dd>
                 <dt>Uncertainty</dt>

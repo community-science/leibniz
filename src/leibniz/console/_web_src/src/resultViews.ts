@@ -1,7 +1,6 @@
 export {
   isBenchmarkResultView,
   isImportedResultView,
-  isWorkQueueView,
   parseResultViewRecords,
 } from './generated/resultViewRecords.ts';
 
@@ -25,7 +24,4 @@ export type {
   TrainingDiagnosticsRecord,
   TrainingHistoryPointRecord,
   TrainingProtocolRecord,
-  WorkQueueItemRecord,
-  WorkQueueItemStatus,
-  WorkQueueViewRecord,
 } from './generated/resultViewRecords.ts';

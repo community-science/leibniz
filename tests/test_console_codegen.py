@@ -5,7 +5,6 @@ from pathlib import Path
 from leibniz.console.codegen import (
     generated_console_protocol_module,
     generated_console_result_view_records_module,
-    generated_console_work_queue_records_module,
 )
 
 _repository_root = Path(__file__).parents[1]
@@ -42,23 +41,7 @@ def test_generated_console_result_view_records_module_contains_parser_surface() 
     assert "parseRunDetailViewModel" in generated
     assert "arrayOf(record.model_inspections ?? []" in generated
     assert "layer_count" not in generated
-    assert "parseWorkQueueItem(item" in generated
-    assert "from './workQueueRecords.ts'" in generated
     assert "export type RunDetailViewModelRecord" in generated
-
-
-def test_generated_console_work_queue_records_module_uses_authored_contract() -> None:
-    generated = generated_console_work_queue_records_module()
-    assert "export type WorkQueueItemRecord" in generated
-    assert "export function parseWorkQueueItem" in generated
-    assert "export type WorkQueueItemStatus = 'pending' | 'reserved' | 'completed' | 'failed';" in (
-        generated
-    )
-    assert "rejectUnknownFields(record, path" in generated
-    assert "sequence: requireInteger(record.sequence" in generated
-    assert "leibniz.work-queue-item" not in generated
-    assert "function requireBoolean" not in generated
-    assert "function requireNumber" not in generated
 
 
 def test_generated_console_web_modules_are_npm_build_artifacts() -> None:
@@ -125,8 +108,6 @@ def test_handwritten_web_source_uses_generated_protocol_formats() -> None:
         "leibniz.console.artifact-index",
         "leibniz.console.imported-results",
         "leibniz.console.benchmark-results",
-        "leibniz.console.work-queue",
-        "leibniz.work-queue-item",
     )
 
     offenders = tuple(
@@ -147,8 +128,6 @@ def test_handwritten_result_view_source_uses_generated_record_parsers() -> None:
         "function parseResultViewRecord",
         "function parseImportedResultViewRecord",
         "function parseBenchmarkResultViewRecord",
-        "function parseWorkQueueViewRecord",
-        "function parseWorkQueueItem",
         "function parseBenchmarkResult",
         "function parseModelResult",
         "function parseRunResult",

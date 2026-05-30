@@ -430,8 +430,6 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="local result checkout; defaults to .runs",
     )
-    loop.add_argument("--iterations", default=1, type=int)
-    loop.add_argument("--candidate-budget", default=3, type=int)
     loop.add_argument("--candidate-sample-count", default=64, type=int)
     loop.add_argument("--sample-count", default=512, type=int)
     loop.add_argument("--evaluation-sample-count", default=None, type=int)
@@ -456,7 +454,6 @@ def _parser() -> argparse.ArgumentParser:
         help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
     )
     loop.add_argument("--dry-run", action="store_true")
-    loop.add_argument("--retry-failed", action="store_true")
     shakedown = benchmark_subcommands.add_parser(
         "shakedown",
         description="run a small active frontier shakedown",
@@ -469,8 +466,6 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="local result checkout; defaults to .runs",
     )
-    shakedown.add_argument("--iterations", default=1, type=int)
-    shakedown.add_argument("--candidate-budget", default=1, type=int)
     shakedown.add_argument("--candidate-sample-count", default=64, type=int)
     shakedown.add_argument("--sample-count", default=1, type=int)
     shakedown.add_argument("--evaluation-sample-count", default=None, type=int)
@@ -494,7 +489,6 @@ def _parser() -> argparse.ArgumentParser:
         choices=("auto", "cpu", "cuda", "mps"),
         help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
     )
-    shakedown.add_argument("--retry-failed", action="store_true")
     time_formation = benchmark_subcommands.add_parser(
         "time-formation",
         description="time local benchmark observation formation paths",
@@ -671,8 +665,6 @@ def _active_training_loop_plan(
     return ActiveTrainingLoopPlan(
         benchmark_root=args.benchmark_root,
         runs_root=args.runs_root,
-        iterations=args.iterations,
-        candidate_budget=args.candidate_budget,
         candidate_sample_count=args.candidate_sample_count,
         sample_count=args.sample_count,
         evaluation_sample_count=args.evaluation_sample_count,
@@ -688,7 +680,6 @@ def _active_training_loop_plan(
         target_validation_loss=args.target_validation_loss,
         tensor_device=args.device,
         dry_run=dry_run,
-        retry_failed=args.retry_failed,
         progress_callback=progress_callback,
     )
 

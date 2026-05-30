@@ -13,15 +13,12 @@ from leibniz.console.protocol import (
     console_protocol_formats,
 )
 from leibniz.record_contracts import typescript_literal
-from leibniz.work_queues import WorkQueueItem
 
 __all__ = [
     "generated_console_protocol_module",
     "generated_console_result_view_records_module",
-    "generated_console_work_queue_records_module",
     "write_generated_console_protocol_module",
     "write_generated_console_result_view_records_module",
-    "write_generated_console_work_queue_records_module",
     "write_generated_console_web_modules",
 ]
 
@@ -31,11 +28,6 @@ _generated_protocol_module_path = (
 _generated_result_view_records_module_path = (
     Path(__file__).parent / "_web_src" / "src" / "generated" / "resultViewRecords.ts"
 )
-_generated_work_queue_records_module_path = (
-    Path(__file__).parent / "_web_src" / "src" / "generated" / "workQueueRecords.ts"
-)
-
-
 def generated_console_protocol_module() -> str:
     """Return the generated TypeScript console protocol vocabulary module."""
 
@@ -65,12 +57,6 @@ def generated_console_result_view_records_module() -> str:
     return _result_view_records_module.rstrip("\n") + "\n"
 
 
-def generated_console_work_queue_records_module() -> str:
-    """Return the generated TypeScript work-queue record parser module."""
-
-    return WorkQueueItem.typescript_record_module()
-
-
 def write_generated_console_result_view_records_module(
     path: Path = _generated_result_view_records_module_path,
 ) -> Path:
@@ -81,23 +67,12 @@ def write_generated_console_result_view_records_module(
     return path
 
 
-def write_generated_console_work_queue_records_module(
-    path: Path = _generated_work_queue_records_module_path,
-) -> Path:
-    """Write the generated TypeScript work-queue record parser module."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(generated_console_work_queue_records_module(), encoding="utf-8")
-    return path
-
-
 def write_generated_console_web_modules() -> tuple[Path, ...]:
     """Write every generated console web-source module."""
 
     return (
         write_generated_console_protocol_module(),
         write_generated_console_result_view_records_module(),
-        write_generated_console_work_queue_records_module(),
     )
 
 
@@ -109,9 +84,7 @@ def _console_protocol_formats() -> Mapping[str, object]:
         "resultViews": {
             "importedResults": formats.imported_result_view,
             "benchmarkResults": formats.benchmark_result_view,
-            "workQueue": formats.work_queue_view,
         },
-        "workQueueItem": formats.work_queue_item,
     }
 
 
@@ -121,7 +94,6 @@ def _console_protocol_format_versions() -> Mapping[str, object]:
         "consoleData": versions.console_data,
         "artifactIndex": versions.artifact_index,
         "resultView": versions.result_view,
-        "workQueueItem": versions.work_queue_item,
     }
 
 
@@ -141,12 +113,6 @@ import {
   consoleProtocolFormats,
   consoleProtocolFormatVersions,
 } from './protocolVocabulary.ts';
-import {
-  parseWorkQueueItem,
-  type WorkQueueItemRecord,
-} from './workQueueRecords.ts';
-
-export type { WorkQueueItemRecord, WorkQueueItemStatus } from './workQueueRecords.ts';
 
 const resultViewFormats = consoleProtocolFormats.resultViews;
 const resultViewFormatVersion = consoleProtocolFormatVersions.resultView;
@@ -160,8 +126,7 @@ type ResultViewBaseRecord = {
 
 export type ResultViewRecord =
   | ImportedResultViewRecord
-  | BenchmarkResultViewRecord
-  | WorkQueueViewRecord;
+  | BenchmarkResultViewRecord;
 
 export type ImportedResultViewRecord = ResultViewBaseRecord & {
   format: typeof resultViewFormats.importedResults;
@@ -171,11 +136,6 @@ export type ImportedResultViewRecord = ResultViewBaseRecord & {
 export type BenchmarkResultViewRecord = ResultViewBaseRecord & {
   format: typeof resultViewFormats.benchmarkResults;
   benchmark_results: BenchmarkResultRecord[];
-};
-
-export type WorkQueueViewRecord = ResultViewBaseRecord & {
-  format: typeof resultViewFormats.workQueue;
-  queue_items: WorkQueueItemRecord[];
 };
 
 export type ImportedPublicationBundleRecord = {
@@ -364,12 +324,6 @@ export function isImportedResultView(
   return view.format === resultViewFormats.importedResults;
 }
 
-export function isWorkQueueView(
-  view: ResultViewRecord,
-): view is WorkQueueViewRecord {
-  return view.format === resultViewFormats.workQueue;
-}
-
 export function parseResultViewRecords(value: unknown): ResultViewRecord[] {
   return requireArray(value, 'result_views', transportError).map((view, index) =>
     parseResultViewRecord(view, `result_views.${index}`),
@@ -385,9 +339,6 @@ function parseResultViewRecord(value: unknown, path: string): ResultViewRecord {
   if (record.format === resultViewFormats.benchmarkResults) {
     return parseBenchmarkResultViewRecord(record, path);
   }
-  if (record.format === resultViewFormats.workQueue) {
-    return parseWorkQueueViewRecord(record, path);
-  }
   requireLiteral(record.format, `${path}.format`, resultViewFormats.importedResults, transportError);
   return withFields(record, {
     publication_bundles: arrayOf(record.publication_bundles, `${path}.publication_bundles`, parseImportedPublicationBundleRecord),
@@ -401,16 +352,6 @@ function parseBenchmarkResultViewRecord(
   return withFields(record, {
     benchmark_results: arrayOf(record.benchmark_results, `${path}.benchmark_results`, parseBenchmarkResult),
   }) as BenchmarkResultViewRecord;
-}
-
-function parseWorkQueueViewRecord(
-  record: Record<string, unknown>,
-  path: string,
-): WorkQueueViewRecord {
-  requireArray(record.queue_items, `${path}.queue_items`, transportError).forEach((item, index) =>
-    parseWorkQueueItem(item, `${path}.queue_items.${index}`),
-  );
-  return record as unknown as WorkQueueViewRecord;
 }
 
 function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultRecord {
@@ -639,25 +580,15 @@ def _main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="generated result-view records module path",
     )
-    parser.add_argument(
-        "--work-queue-records-path",
-        default=None,
-        type=Path,
-        help="generated work-queue records module path",
-    )
     args = parser.parse_args(argv)
 
     protocol_path = args.path or _generated_protocol_module_path
     result_view_records_path = (
         args.result_view_records_path or _generated_result_view_records_module_path
     )
-    work_queue_records_path = (
-        args.work_queue_records_path or _generated_work_queue_records_module_path
-    )
     expected_modules = (
         (protocol_path, generated_console_protocol_module()),
         (result_view_records_path, generated_console_result_view_records_module()),
-        (work_queue_records_path, generated_console_work_queue_records_module()),
     )
     if args.check:
         for path, expected in expected_modules:
@@ -667,7 +598,6 @@ def _main(argv: Sequence[str] | None = None) -> int:
         return 0
     write_generated_console_protocol_module(protocol_path)
     write_generated_console_result_view_records_module(result_view_records_path)
-    write_generated_console_work_queue_records_module(work_queue_records_path)
     return 0
 
 

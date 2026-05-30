@@ -42,7 +42,6 @@ _state_artifact_kinds = frozenset(
         "publication-bundle",
         "submission-publication",
         "training-summary",
-        "work-queue-view",
     )
 )
 

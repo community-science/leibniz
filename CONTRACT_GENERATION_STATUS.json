@@ -21,7 +21,7 @@
       "tracked_roots": [
         "src/leibniz"
       ],
-      "maximum": 29625,
+      "maximum": 28788,
       "counting": "Tracked nonblank source implementation lines under src/leibniz in categories marked handwritten-implementation. Contract-runtime support, contract files, tests, fixtures, package metadata, lockfiles, build configuration, generated outputs, and repository automation are excluded."
     },
     "graph_projection": {
@@ -211,7 +211,7 @@
       },
       {
         "name": "python-workflow-and-runner",
-        "scope": "Active loop, acquisition, benchmark runner, proposal generation and selection, resource selection, federation, local results, projections, training runs, work queues, and CLI entrypoints.",
+        "scope": "Active loop, acquisition, benchmark runner, proposal generation and selection, resource selection, federation, local results, projections, training runs, and CLI entrypoints.",
         "path_patterns": [
           "src/leibniz/acquisition.py",
           "src/leibniz/active_loop.py",
@@ -226,8 +226,7 @@
           "src/leibniz/proposals.py",
           "src/leibniz/resource_selection.py",
           "src/leibniz/selection.py",
-          "src/leibniz/training_runs.py",
-          "src/leibniz/work_queues.py"
+          "src/leibniz/training_runs.py"
         ],
         "status": "hand-maintained",
         "line_budget": "handwritten-implementation",
@@ -592,8 +591,7 @@
       "record_spec_modules": [],
       "python_runtime": [
         "src/leibniz/benchmark_runner.py",
-        "src/leibniz/local_results.py",
-        "src/leibniz/work_queues.py"
+        "src/leibniz/local_results.py"
       ],
       "typescript_runtime": [
         "src/leibniz/console/_web_src/src/resultViews.ts"
@@ -610,33 +608,6 @@
       "ratchet_next": "Move result-view record declarations out of codegen implementation details and generate both producers and parsers from authored contracts.",
       "tests": [
         "tests/test_console_codegen.py",
-        "tests/run_console_web_tests.mjs"
-      ]
-    },
-    {
-      "name": "work-queue-item-records",
-      "scope": "Local work-queue item transport records produced by the active loop and consumed by the browser console.",
-      "contract_owner": "python-owned-codegen",
-      "record_spec_modules": [],
-      "python_runtime": [
-        "src/leibniz/work_queues.py"
-      ],
-      "typescript_runtime": [
-        "src/leibniz/console/_web_src/src/resultViews.ts"
-      ],
-      "generated_outputs": [
-        "src/leibniz/console/_web_src/src/generated/workQueueRecords.ts"
-      ],
-      "coverage": {
-        "authored_contract": true,
-        "generated_python_runtime": true,
-        "generated_typescript_runtime": true,
-        "generated_conformance_tests": false
-      },
-      "ratchet_next": "Generate conformance fixtures from the WorkQueueItem-owned contract and remove the remaining result-view record schema text from the large generated module.",
-      "tests": [
-        "tests/test_console_codegen.py",
-        "tests/test_work_queues.py",
         "tests/run_console_web_tests.mjs"
       ]
     },

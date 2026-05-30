@@ -43,10 +43,7 @@ _protocol_format_versions = console_protocol_format_versions()
 _format = _protocol_formats.console_data
 _format_version = _protocol_format_versions.console_data
 _document_suffix = document_filename_suffix()
-_generated_batch_cache: dict[
-    tuple[str, str, int, int, int, str, bool, tuple[tuple[int, ...], ...] | None],
-    Mapping[str, object],
-] = {}
+_generated_batch_cache: dict[tuple[str, str], Mapping[str, object]] = {}
 
 
 class ConsoleDataValidationError(ValueError):
@@ -319,50 +316,6 @@ class ConsoleDataBuilder:
                     f"{entry.source_path}: benchmark task requires scale_parameter"
                 )
             atom_count = manifest.outcome_sequence.atom_count
-            scales = tuple(range(1, 9))
-            batches: list[Mapping[str, object]] = []
-            for scale in scales:
-                batches.append(
-                    self._generated_observation_batch(
-                        generator=generator,
-                        mode="canonical",
-                        label=f"Canonical L={scale}",
-                        scale=scale,
-                        sample_count=8,
-                        seed=101,
-                        sample_card_density="standard",
-                        aggregate_mode=False,
-                    )
-                )
-            batches.append(
-                self._generated_observation_batch(
-                    generator=generator,
-                    mode="symbol-probe",
-                    label="Symbol probe",
-                    scale=1,
-                    sample_count=atom_count,
-                    seed=101,
-                    component_sequences=tuple((digit,) for digit in range(atom_count)),
-                    sample_card_density="compact",
-                    aggregate_mode=False,
-                )
-            )
-            for scale in scales:
-                batches.append(
-                    self._generated_observation_batch(
-                        generator=generator,
-                        mode="complexity-sweep",
-                        label=f"Complexity C={scale}",
-                        scale=scale,
-                        sample_count=1,
-                        seed=202,
-                        component_sequences=(
-                            tuple(index % atom_count for index in range(scale)),
-                        ),
-                        sample_card_density="standard",
-                        aggregate_mode=True,
-                    )
-                )
             tasks.append(
                 {
                     "kind": "generated-observations",
@@ -373,56 +326,47 @@ class ConsoleDataBuilder:
                     "complexity_axis": manifest.complexity_coordinate,
                     "outcome_atom_name": manifest.outcome_sequence.atom_name,
                     "outcome_atom_count": atom_count,
-                    "batches": batches,
+                    "batches": [
+                        self._balanced_observation_batch(
+                            generator=generator,
+                            atom_count=atom_count,
+                        )
+                    ],
                 }
             )
         return tuple(tasks)
 
-    def _generated_observation_batch(
+    def _balanced_observation_batch(
         self,
         *,
         generator: ObservationGenerator,
-        mode: str,
-        label: str,
-        scale: int,
-        sample_count: int,
-        seed: int,
-        sample_card_density: str,
-        aggregate_mode: bool,
-        component_sequences: tuple[tuple[int, ...], ...] | None = None,
+        atom_count: int,
     ) -> Mapping[str, object]:
-        cache_key = (
-            str(generator.benchmark_manifest.id),
-            mode,
-            scale,
-            sample_count,
-            seed,
-            sample_card_density,
-            aggregate_mode,
-            component_sequences,
-        )
+        cache_key = (str(generator.benchmark_manifest.id), "balanced-l-samples")
         cached = _generated_batch_cache.get(cache_key)
         if cached is not None:
             return cached
-        batch = generator.sample_batch(
-            scale=scale,
-            sample_count=sample_count,
-            seed=seed,
-            component_sequences=component_sequences,
-        )
-        record = {
-            "mode": mode,
-            "label": label,
-            "scale": batch.scale,
-            "seed": batch.seed,
-            "sample_count": len(batch.samples),
-            "presentation": {
-                "sample_card_density": sample_card_density,
-                "aggregate_mode": aggregate_mode,
-            },
-            "samples": [
+        samples: list[Mapping[str, object]] = []
+        samples_per_scale = 5
+        scales = tuple(range(1, 9))
+        digit_cursor = 0
+        for scale in scales:
+            component_sequences_list = []
+            for _sample_index in range(samples_per_scale):
+                component_sequences_list.append(
+                    tuple((digit_cursor + slot) % atom_count for slot in range(scale))
+                )
+                digit_cursor += scale
+            batch = generator.sample_batch(
+                scale=scale,
+                sample_count=samples_per_scale,
+                seed=400 + scale,
+                component_sequences=tuple(component_sequences_list),
+            )
+            base_index = len(samples)
+            samples.extend(
                 {
-                    "index": sample.index,
+                    "index": base_index + sample.index,
                     "outcome_id": sample.outcome_id,
                     "component_sequence": list(sample.observation.component_sequence),
                     "complexity": sample.complexity,
@@ -434,7 +378,20 @@ class ConsoleDataBuilder:
                     ],
                 }
                 for sample in batch.samples
-            ],
+            )
+        sample_count = len(samples)
+        samples.sort(key=lambda sample: _sample_display_key(sample, sample_count))
+        record = {
+            "mode": "balanced",
+            "label": "Balanced samples",
+            "scale": 1,
+            "seed": 401,
+            "sample_count": len(samples),
+            "presentation": {
+                "sample_card_density": "standard",
+                "aggregate_mode": False,
+            },
+            "samples": samples,
         }
         _generated_batch_cache[cache_key] = record
         return record
@@ -509,6 +466,14 @@ class ConsoleDataBuilder:
         if resolved.is_relative_to(self._repository_root):
             return resolved.relative_to(self._repository_root).as_posix()
         return resolved.as_posix()
+
+
+def _sample_display_key(sample: Mapping[str, object], sample_count: int) -> int:
+    index = sample["index"]
+    if not isinstance(index, int):
+        raise ConsoleDataValidationError("generated sample index must be an integer")
+    return (index * 17) % (sample_count + 1)
+
 
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
