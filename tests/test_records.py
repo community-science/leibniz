@@ -6,6 +6,7 @@ from leibniz.records import (
     RecordSpec,
     RecordValidationError,
     RecordViolation,
+    record_specs_from_contract,
 )
 
 
@@ -200,6 +201,60 @@ def test_field_specs_record_required_and_optional_fields() -> None:
     assert FieldSpec(kind="string", required=False) == FieldSpec(
         kind="string",
         required=False,
+    )
+
+
+def test_record_specs_generate_from_authored_contract() -> None:
+    specs = record_specs_from_contract(
+        {
+            "format": "leibniz.record-contract-set",
+            "format_version": 1,
+            "records": [
+                {
+                    "name": "example",
+                    "fields": [
+                        {"name": "id", "kind": "identifier"},
+                        {
+                            "name": "labels",
+                            "kind": "sequence",
+                            "item": {"kind": "string"},
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert specs["example"].validate(
+        {
+            "id": "core.example@0.1.0",
+            "labels": ["alpha", "beta"],
+        }
+    ) == {
+        "id": ProtocolIdentifier.parse("core.example@0.1.0"),
+        "labels": ("alpha", "beta"),
+    }
+
+
+def test_record_contract_generation_rejects_invalid_contracts() -> None:
+    assert capture_validation_error(
+        lambda: record_specs_from_contract(
+            {
+                "format": "leibniz.record-contract-set",
+                "format_version": 1,
+                "records": [
+                    {
+                        "name": "bad",
+                        "fields": [
+                            {"name": "id", "kind": "identifier"},
+                            {"name": "id", "kind": "string"},
+                        ],
+                    }
+                ],
+            }
+        )
+    ).violations == (
+        RecordViolation(path=("records", "0", "fields", "1", "name"), message="duplicate field"),
     )
 
 

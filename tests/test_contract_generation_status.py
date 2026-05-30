@@ -1,7 +1,7 @@
 import ast
 import subprocess
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 from leibniz.documents import load_object_document
 from leibniz.records import (
@@ -19,6 +19,7 @@ _source_implementation_suffixes = frozenset({".css", ".html", ".mjs", ".py", ".t
 _excluded_line_budget_bases = frozenset(
     {
         "authored-data",
+        "authored-contract",
         "build-configuration",
         "contract-runtime",
         "inventory",
@@ -62,8 +63,17 @@ def test_contract_generation_status_is_complete_and_well_formed() -> None:
         assert surface["ratchet_next"]
         assert surface["tests"]
 
-        for key in ("record_spec_modules", "python_runtime", "typescript_runtime", "tests"):
-            for relative_path in surface[key]:
+        for key in (
+            "authored_contracts",
+            "record_spec_modules",
+            "python_runtime",
+            "typescript_runtime",
+            "tests",
+        ):
+            paths_value = surface.get(key, [])
+            assert isinstance(paths_value, list)
+            paths = cast(list[object], paths_value)
+            for relative_path in [str(path) for path in paths]:
                 _assert_existing_repository_path(relative_path)
 
         for relative_path in surface["record_spec_modules"]:
@@ -109,6 +119,7 @@ def test_contract_generation_status_categorizes_tracked_code() -> None:
         "has-structural-marker",
         "owns-record-spec-module",
         "tested-by",
+        "uses-authored-contract",
         "uses-runtime",
     }
     assert _contract_runtime_paths(code_inventory["categories"]) == [
@@ -224,7 +235,7 @@ def _record_spec_modules() -> list[str]:
     return sorted(
         path.relative_to(_repository_root).as_posix()
         for path in (_repository_root / "src" / "leibniz").rglob("*.py")
-        if _contains_record_spec_call(path)
+        if path.name != "records.py" and _contains_record_spec_call(path)
     )
 
 
