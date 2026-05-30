@@ -28,6 +28,7 @@
       "description": "The inventory is intended to project to a source graph: path nodes are categorized by category nodes, contract-surface nodes own runtime/test/generated-output paths, and structural-marker nodes justify excluded implementation-adjacent runtime support.",
       "node_kinds": [
         "category",
+        "contract-object",
         "contract-surface",
         "generated-output",
         "path",
@@ -37,7 +38,9 @@
       ],
       "edge_kinds": [
         "categorizes",
+        "covers-contract-object",
         "covers-record-spec",
+        "declares-contract-object",
         "declares-record-spec",
         "generated-by",
         "has-structural-marker",

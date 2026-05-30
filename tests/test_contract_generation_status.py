@@ -107,6 +107,7 @@ def test_contract_generation_status_categorizes_tracked_code() -> None:
     assert line_budget["counting"]
     assert set(graph_projection["node_kinds"]) == {
         "category",
+        "contract-object",
         "contract-surface",
         "generated-output",
         "path",
@@ -116,7 +117,9 @@ def test_contract_generation_status_categorizes_tracked_code() -> None:
     }
     assert set(graph_projection["edge_kinds"]) == {
         "categorizes",
+        "covers-contract-object",
         "covers-record-spec",
+        "declares-contract-object",
         "declares-record-spec",
         "generated-by",
         "has-structural-marker",
