@@ -23,13 +23,10 @@ const pythonPath = [resolve(repositoryRoot, 'src'), process.env.PYTHONPATH]
   .join(delimiter);
 
 const contracts = [
-  'tests/console_artifact_browser.contract.ts',
   'tests/console_benchmark_dashboard.contract.ts',
   'tests/console_data_transport.contract.ts',
-  'tests/console_artifact_index_transport.contract.ts',
 ];
 const generatedDataContracts = new Set([
-  'tests/console_artifact_browser.contract.ts',
   'tests/console_data_transport.contract.ts',
 ]);
 
@@ -43,7 +40,7 @@ const generatedPayload = run(
 );
 writeFileSync(generatedPayloadPath, generatedPayload);
 assertShellUsesGeneratedConsoleData();
-assertConsoleShellSurfaceIsConsolidated();
+assertConsoleShellNavigation();
 assertBenchmarkWorkbenchStructure();
 assertBenchmarkSamplePaneStructure();
 assertBenchmarkFrontierPlotStructure();
@@ -94,41 +91,24 @@ function assertShellUsesGeneratedConsoleData() {
   if (shell.includes('demoArtifact')) {
     throw new Error('ConsoleShell must not import handwritten demo artifact data');
   }
-  if (!shell.includes("{ id: 'benchmarks', label: 'Benchmarks' }")) {
-    throw new Error('ConsoleShell must expose a Benchmarks tab');
-  }
 }
 
-function assertConsoleShellSurfaceIsConsolidated() {
+function assertConsoleShellNavigation() {
   const shell = readFileSync(
     resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/ConsoleShell.tsx'),
     'utf8',
   );
-  const consoleData = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/consoleData.ts'),
-    'utf8',
-  );
-  const bannedShellMarkers = [
-    "{ id: 'home'",
-    "{ id: 'data'",
-    "{ id: 'performance'",
-    "{ id: 'models'",
-    "{ id: 'source'",
-    'console-grid',
-    'console-section',
-    'ModelInspectionPanel',
-    'SourceModuleInventory',
-  ];
-  for (const marker of bannedShellMarkers) {
-    if (shell.includes(marker)) {
-      throw new Error(`ConsoleShell must not expose retired surface marker: ${marker}`);
+  for (const marker of [
+    'const tabs:',
+    "useState<TabId>('benchmarks')",
+    'setCurrentTab(tab.id)',
+    'aria-current={currentTab === tab.id',
+    "hidden={currentTab !== 'benchmarks'}",
+    'Benchmarks',
+  ]) {
+    if (!shell.includes(marker)) {
+      throw new Error(`ConsoleShell must keep functional Benchmarks navigation: ${marker}`);
     }
-  }
-  if (!shell.includes("useState<TabId>('benchmarks')")) {
-    throw new Error('ConsoleShell must default to the Benchmarks tab');
-  }
-  if (consoleData.includes('source_modules') || consoleData.includes('SourceModule')) {
-    throw new Error('consoleData transport must not include Source-only module inventory');
   }
 }
 

@@ -23,7 +23,7 @@ import {
   scoreLabel,
   shortDigest,
 } from './benchmarkDashboardModel.ts';
-import type { ArtifactReferenceRecord } from './artifactIndex.ts';
+import type { ArtifactReferenceRecord } from './artifactReferences.ts';
 import type {
   BenchmarkTaskRecord,
   GeneratedObservationBatchRecord,

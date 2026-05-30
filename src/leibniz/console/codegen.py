@@ -62,7 +62,7 @@ def write_generated_console_protocol_module(
 def generated_console_result_view_records_module() -> str:
     """Return the generated TypeScript result-view record parser module."""
 
-    return _result_view_records_module
+    return _result_view_records_module.rstrip("\n") + "\n"
 
 
 def generated_console_work_queue_records_module() -> str:
@@ -378,12 +378,7 @@ export function parseResultViewRecords(value: unknown): ResultViewRecord[] {
 
 function parseResultViewRecord(value: unknown, path: string): ResultViewRecord {
   const record = requireRecord(value, path, transportError);
-  requireLiteral(
-    record.format_version,
-    `${path}.format_version`,
-    resultViewFormatVersion,
-    transportError,
-  );
+  requireLiteral(record.format_version, `${path}.format_version`, resultViewFormatVersion, transportError);
   requireString(record.source_path, `${path}.source_path`, transportError);
   optionalNumber(record.source_mtime_ms, `${path}.source_mtime_ms`, transportError);
   optionalNumber(record.source_size_bytes, `${path}.source_size_bytes`, transportError);
@@ -393,38 +388,19 @@ function parseResultViewRecord(value: unknown, path: string): ResultViewRecord {
   if (record.format === resultViewFormats.workQueue) {
     return parseWorkQueueViewRecord(record, path);
   }
-  requireLiteral(
-    record.format,
-    `${path}.format`,
-    resultViewFormats.importedResults,
-    transportError,
-  );
-  return {
-    ...record,
-    publication_bundles: requireArray(
-      record.publication_bundles,
-      `${path}.publication_bundles`,
-      transportError,
-    ).map((bundle, index) =>
-      parseImportedPublicationBundleRecord(bundle, `${path}.publication_bundles.${index}`),
-    ),
-  } as ImportedResultViewRecord;
+  requireLiteral(record.format, `${path}.format`, resultViewFormats.importedResults, transportError);
+  return withFields(record, {
+    publication_bundles: arrayOf(record.publication_bundles, `${path}.publication_bundles`, parseImportedPublicationBundleRecord),
+  }) as ImportedResultViewRecord;
 }
 
 function parseBenchmarkResultViewRecord(
   record: Record<string, unknown>,
   path: string,
 ): BenchmarkResultViewRecord {
-  return {
-    ...record,
-    benchmark_results: requireArray(
-      record.benchmark_results,
-      `${path}.benchmark_results`,
-      transportError,
-    ).map(
-    (result, index) => parseBenchmarkResult(result, `${path}.benchmark_results.${index}`),
-    ),
-  } as BenchmarkResultViewRecord;
+  return withFields(record, {
+    benchmark_results: arrayOf(record.benchmark_results, `${path}.benchmark_results`, parseBenchmarkResult),
+  }) as BenchmarkResultViewRecord;
 }
 
 function parseWorkQueueViewRecord(
@@ -439,98 +415,76 @@ function parseWorkQueueViewRecord(
 
 function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultRecord {
   const record = requireRecord(value, path, transportError);
-  requireString(record.benchmark_id, `${path}.benchmark_id`, transportError);
-  const costAxes = requireArray(record.cost_axes, `${path}.cost_axes`, transportError).map(
-    (axis, index) => {
-      const axisRecord = requireRecord(axis, `${path}.cost_axes.${index}`, transportError);
-      return {
-        key: requireString(axisRecord.key, `${path}.cost_axes.${index}.key`, transportError),
-        label: requireString(axisRecord.label, `${path}.cost_axes.${index}.label`, transportError),
-      };
-    },
-  );
-  return {
-    ...record,
+  return withFields(record, {
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
-    cost_axes: costAxes,
-    leaderboard: requireArray(record.leaderboard, `${path}.leaderboard`, transportError).map(
-      (model, index) => parseModelResult(model, `${path}.leaderboard.${index}`),
-    ),
+    cost_axes: arrayOf(record.cost_axes, `${path}.cost_axes`, parseCostAxis),
+    leaderboard: arrayOf(record.leaderboard, `${path}.leaderboard`, parseModelResult),
     frontiers: parseFrontiers(record.frontiers, `${path}.frontiers`),
-    training_history: requireArray(record.training_history, `${path}.training_history`, transportError).map(
-      (run, index) => parseRunResult(run, `${path}.training_history.${index}`),
-    ),
-    model_inspections: requireArray(record.model_inspections ?? [], `${path}.model_inspections`, transportError).map(
-      (inspection, index) => parseModelInspectionRecord(inspection, `${path}.model_inspections.${index}`),
-    ),
-    proposals: requireArray(record.proposals ?? [], `${path}.proposals`, transportError).map(
-      (proposal, index) => parseProposal(proposal, `${path}.proposals.${index}`),
-    ),
-  } as BenchmarkResultRecord;
+    training_history: arrayOf(record.training_history, `${path}.training_history`, parseRunResult),
+    model_inspections: arrayOf(record.model_inspections ?? [], `${path}.model_inspections`, parseModelInspectionRecord),
+    proposals: arrayOf(record.proposals ?? [], `${path}.proposals`, parseProposal),
+  }) as BenchmarkResultRecord;
 }
 
 function parseModelResult(value: unknown, path: string): ModelResultRecord {
   const record = requireRecord(value, path, transportError);
-  return {
-    ...record,
+  requireStrings(record, path, ['model_key', 'architecture_digest', 'benchmark_id']);
+  return withFields(record, {
     model_key: requireString(record.model_key, `${path}.model_key`, transportError),
     architecture_digest: requireString(record.architecture_digest, `${path}.architecture_digest`, transportError),
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
     observed_complexities: numberArray(record.observed_complexities, `${path}.observed_complexities`),
-    points: requireArray(record.points, `${path}.points`, transportError).map((point, index) =>
-      parseCompetencePoint(point, `${path}.points.${index}`),
-    ),
+    points: arrayOf(record.points, `${path}.points`, parseCompetencePoint),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
     run_ids: stringArray(record.run_ids, `${path}.run_ids`),
     measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`, transportError),
     source_kinds: stringArray(record.source_kinds, `${path}.source_kinds`),
-    console_view_model:
-      record.console_view_model === undefined
-        ? undefined
-        : parseRunDetailViewModel(record.console_view_model, `${path}.console_view_model`),
-  } as ModelResultRecord;
+    console_view_model: optional(record.console_view_model, `${path}.console_view_model`, parseRunDetailViewModel),
+  }) as ModelResultRecord;
 }
 
 function parseRunResult(value: unknown, path: string): RunResultRecord {
   const record = requireRecord(value, path, transportError);
-  return {
-    ...record,
-    source_kind: requireString(record.source_kind, `${path}.source_kind`, transportError),
-    source_path: requireString(record.source_path, `${path}.source_path`, transportError),
-    run_id: requireString(record.run_id, `${path}.run_id`, transportError),
-    run_slug: requireString(record.run_slug, `${path}.run_slug`, transportError),
-    benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
-    architecture_digest: requireString(record.architecture_digest, `${path}.architecture_digest`, transportError),
-    model_key: requireString(record.model_key, `${path}.model_key`, transportError),
+  requireStrings(record, path, [
+    'source_kind',
+    'source_path',
+    'run_id',
+    'run_slug',
+    'benchmark_id',
+    'architecture_digest',
+    'model_key',
+    'measurement_dataset_digest',
+  ]);
+  return withFields(record, {
     measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
     architecture: requireRecord(record.architecture, `${path}.architecture`, transportError),
-    measurement_dataset_digest: requireString(record.measurement_dataset_digest, `${path}.measurement_dataset_digest`, transportError),
-    training_diagnostics:
-      record.training_diagnostics === undefined
-        ? undefined
-        : parseTrainingDiagnostics(record.training_diagnostics, `${path}.training_diagnostics`),
-    console_view_model:
-      record.console_view_model === undefined
-        ? undefined
-        : parseRunDetailViewModel(record.console_view_model, `${path}.console_view_model`),
-  } as RunResultRecord;
+    training_diagnostics: optional(record.training_diagnostics, `${path}.training_diagnostics`, parseTrainingDiagnostics),
+    console_view_model: optional(record.console_view_model, `${path}.console_view_model`, parseRunDetailViewModel),
+  }) as RunResultRecord;
 }
 
 function parseImportedPublicationBundleRecord(value: unknown, path: string): ImportedPublicationBundleRecord {
   const record = requireRecord(value, path, transportError);
+  requireStrings(record, path, ['id', 'digest', 'source_path', 'submission_package_id']);
   return {
-    id: requireString(record.id, `${path}.id`, transportError),
-    digest: requireString(record.digest, `${path}.digest`, transportError),
-    source_path: requireString(record.source_path, `${path}.source_path`, transportError),
-    submission_package_id: requireString(record.submission_package_id, `${path}.submission_package_id`, transportError),
+    id: record.id,
+    digest: record.digest,
+    source_path: record.source_path,
+    submission_package_id: record.submission_package_id,
     benchmark_ids: stringArray(record.benchmark_ids, `${path}.benchmark_ids`),
     measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`, transportError),
     measurement_dataset: requireRecord(record.measurement_dataset, `${path}.measurement_dataset`, transportError),
     measurement_score_view: requireRecord(record.measurement_score_view, `${path}.measurement_score_view`, transportError),
-  };
+  } as ImportedPublicationBundleRecord;
+}
+
+function parseCostAxis(value: unknown, path: string): CostAxisRecord {
+  const record = requireRecord(value, path, transportError);
+  requireStrings(record, path, ['key', 'label']);
+  return record as CostAxisRecord;
 }
 
 function parseCompetencePoint(value: unknown, path: string): CompetencePointRecord {
@@ -546,74 +500,76 @@ function parseCompetencePoint(value: unknown, path: string): CompetencePointReco
 function parseRunDetailViewModel(value: unknown, path: string): RunDetailViewModelRecord {
   const record = requireRecord(value, path, transportError);
   return {
-    detail_sections: requireArray(record.detail_sections, `${path}.detail_sections`, transportError).map((section, index) => {
-      const sectionRecord = requireRecord(section, `${path}.detail_sections.${index}`, transportError);
+    detail_sections: arrayOf(record.detail_sections, `${path}.detail_sections`, (section, sectionPath) => {
+      const sectionRecord = requireRecord(section, sectionPath, transportError);
       return {
-        title: requireString(sectionRecord.title, `${path}.detail_sections.${index}.title`, transportError),
-        entries: sectionRecord.entries === undefined ? undefined : requireArray(sectionRecord.entries, `${path}.detail_sections.${index}.entries`, transportError).map((entry, entryIndex) => {
-          const entryRecord = requireRecord(entry, `${path}.detail_sections.${index}.entries.${entryIndex}`, transportError);
-          return {
-            label: requireString(entryRecord.label, `${path}.detail_sections.${index}.entries.${entryIndex}.label`, transportError),
-            value: requireString(entryRecord.value, `${path}.detail_sections.${index}.entries.${entryIndex}.value`, transportError),
-          };
-        }),
-        table: sectionRecord.table === undefined ? undefined : parseRunDetailTable(sectionRecord.table, `${path}.detail_sections.${index}.table`),
+        title: requireString(sectionRecord.title, `${sectionPath}.title`, transportError),
+        entries: optional(sectionRecord.entries, `${sectionPath}.entries`, parseDetailEntries),
+        table: optional(sectionRecord.table, `${sectionPath}.table`, parseRunDetailTable),
       };
     }),
   };
 }
 
+function parseDetailEntries(value: unknown, path: string): RunDetailEntryRecord[] {
+  return arrayOf(value, path, (entry, entryPath) => {
+    const record = requireRecord(entry, entryPath, transportError);
+    requireStrings(record, entryPath, ['label', 'value']);
+    return record as RunDetailEntryRecord;
+  });
+}
+
 function parseRunDetailTable(value: unknown, path: string): RunDetailTableRecord {
   const record = requireRecord(value, path, transportError);
+  const columns = stringArray(record.columns, `${path}.columns`);
+  const rows = arrayOf(record.rows, `${path}.rows`, stringArray);
+  rows.forEach((row, index) => {
+    if (row.length !== columns.length) {
+      throw transportError(`${path}.rows.${index}: expected ${columns.length} cells`);
+    }
+  });
   return {
     aria_label: requireString(record.aria_label, `${path}.aria_label`, transportError),
-    columns: stringArray(record.columns, `${path}.columns`),
-    rows: requireArray(record.rows, `${path}.rows`, transportError).map((row, index) =>
-      stringArray(row, `${path}.rows.${index}`),
-    ),
+    columns,
+    rows,
   };
 }
 
 function parseTrainingDiagnostics(value: unknown, path: string): TrainingDiagnosticsRecord {
   const record = requireRecord(value, path, transportError);
-  return {
-    ...record,
-    status: requireString(record.status, `${path}.status`, transportError),
-    stop_reason: requireString(record.stop_reason, `${path}.stop_reason`, transportError),
-    steps_run: requireNumber(record.steps_run, `${path}.steps_run`, transportError),
-    validation_checks: requireNumber(record.validation_checks, `${path}.validation_checks`, transportError),
-    best_validation_loss: requireNumber(record.best_validation_loss, `${path}.best_validation_loss`, transportError),
-    best_validation_step: requireNumber(record.best_validation_step, `${path}.best_validation_step`, transportError),
-    best_validation_check: requireNumber(record.best_validation_check, `${path}.best_validation_check`, transportError),
-    final_validation_loss: requireNumber(record.final_validation_loss, `${path}.final_validation_loss`, transportError),
-    final_validation_step: requireNumber(record.final_validation_step, `${path}.final_validation_step`, transportError),
-    final_validation_check: requireNumber(record.final_validation_check, `${path}.final_validation_check`, transportError),
+  requireStrings(record, path, ['status', 'stop_reason']);
+  requireNumbers(record, path, [
+    'steps_run',
+    'validation_checks',
+    'best_validation_loss',
+    'best_validation_step',
+    'best_validation_check',
+    'final_validation_loss',
+    'final_validation_step',
+    'final_validation_check',
+  ]);
+  return withFields(record, {
     protocol: requireRecord(record.protocol, `${path}.protocol`, transportError) as TrainingProtocolRecord,
     validation_history: requireArray(record.validation_history, `${path}.validation_history`, transportError) as TrainingHistoryPointRecord[],
     artifacts: requireArray(record.artifacts, `${path}.artifacts`, transportError) as TrainingArtifactReferenceRecord[],
-  };
+  }) as TrainingDiagnosticsRecord;
 }
 
 function parseProposal(value: unknown, path: string): ProposalRecord {
   const record = requireRecord(value, path, transportError);
-  return {
-    ...record,
-    id: requireString(record.id, `${path}.id`, transportError),
+  requireStrings(record, path, ['id', 'candidate_kind', 'candidate_id', 'rationale']);
+  return withFields(record, {
     rank: requireNumber(record.rank, `${path}.rank`, transportError),
-    candidate_kind: requireString(record.candidate_kind, `${path}.candidate_kind`, transportError),
-    candidate_id: requireString(record.candidate_id, `${path}.candidate_id`, transportError),
-    rationale: requireString(record.rationale, `${path}.rationale`, transportError),
     command: record.command === undefined ? [] : stringArray(record.command, `${path}.command`),
-  } as ProposalRecord;
+  }) as ProposalRecord;
 }
 
 function parseCostSummary(value: unknown, path: string): CostSummaryRecord {
   const record = requireRecord(value, path, transportError);
   return {
+    ...record,
     component_count: requireNumber(record.component_count, `${path}.component_count`, transportError),
     parameter_count: optionalNumber(record.parameter_count, `${path}.parameter_count`, transportError),
-    parameter_bytes: optionalNumber(record.parameter_bytes, `${path}.parameter_bytes`, transportError),
-    inference_flops: optionalNumber(record.inference_flops, `${path}.inference_flops`, transportError),
     unknown_parameter_components:
       record.unknown_parameter_components === undefined
         ? undefined
@@ -626,24 +582,42 @@ function parseFrontiers(value: unknown, path: string): Record<string, ModelResul
   return Object.fromEntries(
     Object.entries(record).map(([key, models]) => [
       key,
-      requireArray(models, `${path}.${key}`, transportError).map((model, index) =>
-        parseModelResult(model, `${path}.${key}.${index}`),
-      ),
+      arrayOf(models, `${path}.${key}`, parseModelResult),
     ]),
   );
 }
 
+function arrayOf<T>(value: unknown, path: string, parse: (item: unknown, path: string) => T): T[] {
+  return requireArray(value, path, transportError).map((item, index) => parse(item, `${path}.${index}`));
+}
+
+function optional<T>(value: unknown, path: string, parse: (item: unknown, path: string) => T): T | undefined {
+  return value === undefined ? undefined : parse(value, path);
+}
+
+function requireStrings(record: Record<string, unknown>, path: string, fields: string[]): void {
+  fields.forEach((field) => requireString(record[field], `${path}.${field}`, transportError));
+}
+
+function requireNumbers(record: Record<string, unknown>, path: string, fields: string[]): void {
+  fields.forEach((field) => requireNumber(record[field], `${path}.${field}`, transportError));
+}
+
+function withFields<T extends Record<string, unknown>>(
+  record: Record<string, unknown>,
+  fields: T,
+): Record<string, unknown> & T {
+  return { ...record, ...fields };
+}
+
 function stringArray(value: unknown, path: string): string[] {
-  return requireArray(value, path, transportError).map((item, index) =>
-    requireString(item, `${path}.${index}`, transportError),
-  );
+  return arrayOf(value, path, (item, itemPath) => requireString(item, itemPath, transportError));
 }
 
 function numberArray(value: unknown, path: string): number[] {
-  return requireArray(value, path, transportError).map((item, index) =>
-    requireNumber(item, `${path}.${index}`, transportError),
-  );
+  return arrayOf(value, path, (item, itemPath) => requireNumber(item, itemPath, transportError));
 }
+
 """
 
 def _main(argv: Sequence[str] | None = None) -> int:

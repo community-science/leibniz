@@ -21,7 +21,7 @@
       "tracked_roots": [
         "src/leibniz"
       ],
-      "maximum": 32292,
+      "maximum": 29625,
       "counting": "Tracked nonblank source implementation lines under src/leibniz in categories marked handwritten-implementation. Contract-runtime support, contract files, tests, fixtures, package metadata, lockfiles, build configuration, generated outputs, and repository automation are excluded."
     },
     "graph_projection": {
@@ -408,7 +408,6 @@
         "src/leibniz/observation_showcases.py"
       ],
       "typescript_runtime": [
-        "src/leibniz/console/_web_src/src/artifactDetails.ts",
         "src/leibniz/console/_web_src/src/benchmarkTasks.ts"
       ],
       "generated_outputs": [],
@@ -418,7 +417,7 @@
         "generated_typescript_runtime": false,
         "generated_conformance_tests": false
       },
-      "ratchet_next": "Author benchmark and observation contracts once, then generate Python loaders and console display parsers from that source.",
+      "ratchet_next": "Generate observation contracts and console task parsers from the same authored benchmark metadata.",
       "tests": [
         "tests/test_benchmarks.py",
         "tests/test_latent_factors.py",
@@ -569,7 +568,7 @@
       ],
       "typescript_runtime": [
         "src/leibniz/console/_web_src/src/consoleData.ts",
-        "src/leibniz/console/_web_src/src/artifactIndex.ts"
+        "src/leibniz/console/_web_src/src/artifactReferences.ts"
       ],
       "generated_outputs": [
         "src/leibniz/console/_web_src/src/generated/protocolVocabulary.ts"
@@ -643,7 +642,7 @@
     },
     {
       "name": "console-web-transport-records",
-      "scope": "Console data payloads, benchmark tasks, artifact details, model inspections, and artifact index records consumed by the browser.",
+      "scope": "Console data payloads, benchmark tasks, model inspections, and artifact references consumed by the browser.",
       "contract_owner": "mixed-python-and-typescript-runtime",
       "record_spec_modules": [],
       "python_runtime": [
@@ -651,7 +650,6 @@
         "src/leibniz/console/data.py"
       ],
       "typescript_runtime": [
-        "src/leibniz/console/_web_src/src/artifactDetails.ts",
         "src/leibniz/console/_web_src/src/benchmarkTasks.ts",
         "src/leibniz/console/_web_src/src/consoleData.ts",
         "src/leibniz/console/_web_src/src/modelInspections.ts"
