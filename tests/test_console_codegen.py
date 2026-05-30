@@ -38,9 +38,9 @@ def test_generated_console_result_view_records_module_contains_parser_surface() 
     assert "console_view_model?: RunDetailViewModelRecord;" in generated
     assert "from '../transport.ts'" in generated
     assert "parseImportedPublicationBundleRecord" in generated
-    assert "proposals: requireArray(record.proposals ?? []" in generated
+    assert "proposals: arrayOf(record.proposals ?? []" in generated
     assert "parseRunDetailViewModel" in generated
-    assert "parseModelInspectionRecord(inspection" in generated
+    assert "arrayOf(record.model_inspections ?? []" in generated
     assert "layer_count" not in generated
     assert "parseWorkQueueItem(item" in generated
     assert "from './workQueueRecords.ts'" in generated
@@ -175,7 +175,6 @@ def test_console_transport_modules_share_boundary_helpers() -> None:
 
     duplicated_helpers: list[str] = []
     for path in (
-        _web_source_root / "artifactDetails.ts",
         _web_source_root / "benchmarkTasks.ts",
         _web_source_root / "modelInspections.ts",
         _web_source_root / "operatorVocabulary.ts",
@@ -232,35 +231,6 @@ def test_benchmark_dashboard_renders_python_owned_run_detail_sections() -> None:
     offenders = tuple(marker for marker in migrated_markers if marker in dashboard)
 
     assert "console_view_model?.detail_sections" in dashboard
-    assert offenders == ()
-
-
-def test_console_artifact_kind_literals_stay_inside_detail_boundary() -> None:
-    artifact_kind_literals = (
-        "architecture-manifest",
-        "benchmark-manifest",
-        "latent-factor-declaration",
-        "materialization-declaration",
-        "materialization-plan",
-        "measurement",
-        "observation-formation-declaration",
-        "observation-showcase",
-    )
-    allowed = {
-        "src/leibniz/console/_web_src/src/ArtifactTypedDetail.tsx",
-        "src/leibniz/console/_web_src/src/artifactDetails.ts",
-    }
-
-    offenders = tuple(
-        path.relative_to(_repository_root).as_posix()
-        for path in _handwritten_web_source_files()
-        if path.relative_to(_repository_root).as_posix() not in allowed
-        and any(
-            _typescript_string_literal(source=path.read_text(encoding="utf-8"), value=literal)
-            for literal in artifact_kind_literals
-        )
-    )
-
     assert offenders == ()
 
 

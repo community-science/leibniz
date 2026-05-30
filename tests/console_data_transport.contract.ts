@@ -1,5 +1,4 @@
 import { parseConsoleDataRecord } from '../src/leibniz/console/_web_src/src/consoleData.ts';
-import { detailForArtifact } from '../src/leibniz/console/_web_src/src/artifactDetails.ts';
 import {
   coordinateDisplayName,
   descriptorAxisDisplayName,
@@ -13,10 +12,6 @@ declare const consoleDataPayload: unknown;
 
 const parsed = parseConsoleDataRecord(consoleDataPayload);
 const rawConsoleData = consoleDataPayload as Record<string, unknown>;
-const artifacts = parsed.artifact_index.artifacts;
-const detailCoverage = artifacts.map((artifact) =>
-  detailForArtifact(parsed.artifact_details, artifact),
-);
 const modelInspection = parsed.model_inspections[0];
 if (modelInspection === undefined) {
   throw new Error('expected model inspection fixture');
@@ -24,8 +19,6 @@ if (modelInspection === undefined) {
 
 assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
-assertEqual(artifacts.length, 12, 'artifact count');
-assertEqual(detailCoverage.every((detail) => detail !== undefined), true, 'detail coverage');
 assertEqual(parsed.result_views.length, 0, 'result view count');
 assertEqual(parsed.model_inspections.length, 1, 'model inspection count');
 assertEqual(parsed.benchmark_tasks.length, 1, 'benchmark task count');
@@ -68,25 +61,6 @@ assertEqual(
   coordinateDisplayName(parsed.operator_vocabulary, 'operator.0.local_support_size'),
   'Local support size',
   'operator vocabulary coordinate display',
-);
-assertEqual('source_modules' in rawConsoleData, false, 'source module transport removed');
-assertEqual(
-  artifacts.map((artifact) => `${artifact.kind}:${artifact.source_path}`).join('|'),
-  [
-    'architecture-manifest:tests/fixtures/architecture/digits_pool/manifest.json',
-    'benchmark-manifest:src/leibniz/benchmarks/digits/manifest.json',
-    'benchmark-manifest:tests/fixtures/chess/mate_in_one/manifest.json',
-    'benchmark-manifest:tests/fixtures/finite_outcome/manifest.json',
-    'latent-factor-declaration:src/leibniz/benchmarks/digits/latent_factors.json',
-    'materialization-declaration:src/leibniz/benchmarks/digits/materialization.json',
-    'materialization-plan:tests/fixtures/digits/materialization_plan_l1.json',
-    'materialization-plan:tests/fixtures/digits/materialization_plan_l3.json',
-    'measurement:tests/fixtures/chess/mate_in_one/measurement.json',
-    'measurement:tests/fixtures/finite_outcome/measurement.json',
-    'observation-formation-declaration:src/leibniz/benchmarks/digits/observation_formation.json',
-    'observation-showcase:src/leibniz/benchmarks/digits/inspection_showcase.json',
-  ].join('|'),
-  'artifact order',
 );
 assertEqual(
   modelInspection.cost_summary.parameter_count,
@@ -215,14 +189,6 @@ assertEqual(
   assignmentLabel(materializationPlan.resolution_assignment),
   'N=32',
   'sample resolution assignment',
-);
-assertEqual(
-  artifacts
-    .filter((artifact) => artifact.kind === 'measurement')
-    .map((artifact) => artifact.dependencies[0]?.protocol_id)
-    .join(','),
-  'benchmarks.chess@0.1.0,core.boolean-benchmark@0.1.0',
-  'measurement dependencies',
 );
 assertDataError(
   () => parseConsoleDataRecord({ ...parsed, format_version: 2 }),

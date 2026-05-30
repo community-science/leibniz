@@ -1,4 +1,4 @@
-import type { ArtifactReferenceRecord } from './artifactIndex.ts';
+import type { ArtifactReferenceRecord } from './artifactReferences.ts';
 import { requireArray, requireNumber, requireRecord } from './transport.ts';
 
 export type ModelInspectionRecord = {

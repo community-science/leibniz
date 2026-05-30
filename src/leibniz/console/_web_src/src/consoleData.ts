@@ -1,11 +1,3 @@
-import {
-  parseConsoleArtifactIndexRecord,
-  type ConsoleArtifactIndexRecord,
-} from './artifactIndex.ts';
-import {
-  parseConsoleArtifactDetailRecords,
-  type ConsoleArtifactDetailMap,
-} from './artifactDetails.ts';
 import { parseModelInspectionRecords, type ModelInspectionRecord } from './modelInspections.ts';
 import {
   parseOperatorVocabularyRecord,
@@ -25,8 +17,6 @@ import { requireLiteral, requireRecord } from './transport.ts';
 export type ConsoleDataRecord = {
   format: typeof consoleProtocolFormats.consoleData;
   format_version: typeof consoleProtocolFormatVersions.consoleData;
-  artifact_index: ConsoleArtifactIndexRecord;
-  artifact_details: ConsoleArtifactDetailMap;
   result_views: ResultViewRecord[];
   model_inspections: ModelInspectionRecord[];
   benchmark_tasks: BenchmarkTaskRecord[];
@@ -51,8 +41,6 @@ export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
     consoleProtocolFormatVersions.consoleData,
     error,
   );
-  const artifactIndex = parseConsoleArtifactIndexRecord(record.artifact_index);
-  const artifactDetails = parseConsoleArtifactDetailRecords(record.artifact_details);
   const resultViews = parseResultViewRecords(record.result_views);
   const modelInspections = parseModelInspectionRecords(record.model_inspections);
   const benchmarkTasks = parseBenchmarkTaskRecords(record.benchmark_tasks);
@@ -61,8 +49,6 @@ export function parseConsoleDataRecord(value: unknown): ConsoleDataRecord {
   return {
     format,
     format_version: formatVersion,
-    artifact_index: artifactIndex,
-    artifact_details: artifactDetails,
     result_views: resultViews,
     model_inspections: modelInspections,
     benchmark_tasks: benchmarkTasks,

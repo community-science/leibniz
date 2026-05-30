@@ -1,14 +1,10 @@
-import {
-  BookOpenCheck,
-  Database,
-} from 'lucide-react';
+import { BookOpenCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-import { ArtifactBrowser } from './ArtifactBrowser';
 import { BenchmarksPanel } from './BenchmarksPanel';
 import initialConsoleData, { subscribeConsoleData } from 'virtual:leibniz-console-data';
 
-type TabId = 'benchmarks' | 'artifacts';
+type TabId = 'benchmarks';
 
 type ConsoleTab = {
   id: TabId;
@@ -17,7 +13,6 @@ type ConsoleTab = {
 
 const tabs: ConsoleTab[] = [
   { id: 'benchmarks', label: 'Benchmarks' },
-  { id: 'artifacts', label: 'Artifacts' },
 ];
 
 export function ConsoleShell() {
@@ -39,12 +34,9 @@ export function ConsoleShell() {
             key={tab.id}
             onClick={() => setCurrentTab(tab.id)}
             type="button"
+            aria-current={currentTab === tab.id ? 'page' : undefined}
           >
-            {tab.id === 'artifacts' ? (
-              <Database size={16} />
-            ) : (
-              <BookOpenCheck size={16} />
-            )}
+            <BookOpenCheck size={16} />
             {tab.label}
           </button>
         ))}
@@ -57,13 +49,6 @@ export function ConsoleShell() {
             operatorVocabulary={consoleData.operator_vocabulary}
             resultViews={consoleData.result_views}
             tasks={consoleData.benchmark_tasks}
-          />
-        </div>
-
-        <div className="console-overview" hidden={currentTab !== 'artifacts'}>
-          <ArtifactBrowser
-            details={consoleData.artifact_details}
-            index={consoleData.artifact_index}
           />
         </div>
       </section>
