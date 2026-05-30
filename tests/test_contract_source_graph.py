@@ -61,10 +61,47 @@ def test_contract_source_graph_projects_inventory_to_checked_graph() -> None:
         "contract-surface:work-queue-item-records",
         "path:src/leibniz/work_queues.py",
     ) in edges
+    assert nodes[
+        "contract-object:src/leibniz/work_queues.py:WorkQueueItem:work_queue_item"
+    ] == {
+        "id": "contract-object:src/leibniz/work_queues.py:WorkQueueItem:work_queue_item",
+        "kind": "contract-object",
+        "label": "WorkQueueItem.work_queue_item",
+        "path": "src/leibniz/work_queues.py",
+    }
+    assert (
+        "declares-contract-object",
+        "path:src/leibniz/work_queues.py",
+        "contract-object:src/leibniz/work_queues.py:WorkQueueItem:work_queue_item",
+    ) in edges
+    assert (
+        "covers-contract-object",
+        "contract-surface:work-queue-item-records",
+        "contract-object:src/leibniz/work_queues.py:WorkQueueItem:work_queue_item",
+    ) in edges
     assert (
         "generated-by",
         "generated-output:src/leibniz/console/_web_src/src/generated/workQueueRecords.ts",
         "contract-surface:work-queue-item-records",
+    ) in edges
+    assert nodes[
+        "contract-object:src/leibniz/architectures.py:ArchitectureManifest:architecture_manifest"
+    ] == {
+        "id": (
+            "contract-object:src/leibniz/architectures.py:"
+            "ArchitectureManifest:architecture_manifest"
+        ),
+        "kind": "contract-object",
+        "label": "ArchitectureManifest.architecture_manifest",
+        "path": "src/leibniz/architectures.py",
+    }
+    assert (
+        "covers-contract-object",
+        "contract-surface:model-architecture-and-semantics-records",
+        (
+            "contract-object:src/leibniz/architectures.py:"
+            "ArchitectureManifest:architecture_manifest"
+        ),
     ) in edges
     assert (
         "owns-record-spec-module",

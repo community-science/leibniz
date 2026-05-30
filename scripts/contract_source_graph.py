@@ -57,6 +57,21 @@ class RecordSpecDeclaration:
         return _node_id("record-spec", f"{self.module_path}:{self.name}")
 
 
+@dataclass(frozen=True, slots=True)
+class ContractObjectDeclaration:
+    module_path: str
+    class_name: str
+    contract_name: str
+    line: int
+
+    @property
+    def id(self) -> str:
+        return _node_id(
+            "contract-object",
+            f"{self.module_path}:{self.class_name}:{self.contract_name}",
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository-root", default=Path("."), type=Path)
@@ -86,6 +101,7 @@ def source_graph(*, repository_root: Path, status_path: Path) -> dict[str, objec
         tracked_roots=_strings(inventory["tracked_roots"], field="tracked_roots"),
     )
     record_specs_by_module = _record_specs_by_module(repository_root=repository_root)
+    contract_objects_by_module = _contract_objects_by_module(repository_root=repository_root)
 
     node_kinds = frozenset(_strings(projection["node_kinds"], field="node_kinds"))
     edge_kinds = frozenset(_strings(projection["edge_kinds"], field="edge_kinds"))
@@ -123,6 +139,7 @@ def source_graph(*, repository_root: Path, status_path: Path) -> dict[str, objec
             add_edge(GraphEdge(kind="categorizes", source=category_id, target=path_id))
 
     declared_record_spec_modules: set[str] = set()
+    declared_contract_object_modules: set[str] = set()
     for surface_value in surfaces:
         surface = _mapping(surface_value, field="surfaces")
         surface_name = _string(surface["name"], field="surfaces.name")
@@ -200,6 +217,33 @@ def source_graph(*, repository_root: Path, status_path: Path) -> dict[str, objec
         for path in _strings(surface["python_runtime"], field=f"{surface_name}.python_runtime"):
             add_node(GraphNode(id=_path_node_id(path), kind="path", label=path, path=path))
             add_edge(GraphEdge(kind="uses-runtime", source=surface_id, target=_path_node_id(path)))
+            declared_contract_object_modules.add(path)
+            for contract_object in contract_objects_by_module.get(path, ()):
+                add_node(
+                    GraphNode(
+                        id=contract_object.id,
+                        kind="contract-object",
+                        label=(
+                            f"{contract_object.class_name}."
+                            f"{contract_object.contract_name}"
+                        ),
+                        path=contract_object.module_path,
+                    )
+                )
+                add_edge(
+                    GraphEdge(
+                        kind="declares-contract-object",
+                        source=_path_node_id(path),
+                        target=contract_object.id,
+                    )
+                )
+                add_edge(
+                    GraphEdge(
+                        kind="covers-contract-object",
+                        source=surface_id,
+                        target=contract_object.id,
+                    )
+                )
         for path in _strings(
             surface["typescript_runtime"],
             field=f"{surface_name}.typescript_runtime",
@@ -221,6 +265,10 @@ def source_graph(*, repository_root: Path, status_path: Path) -> dict[str, objec
     _assert_record_spec_module_coverage(
         discovered_modules=frozenset(record_specs_by_module),
         declared_modules=frozenset(declared_record_spec_modules),
+    )
+    _assert_contract_object_module_coverage(
+        discovered_modules=frozenset(contract_objects_by_module),
+        declared_modules=frozenset(declared_contract_object_modules),
     )
 
     return {
@@ -260,6 +308,19 @@ def _record_specs_by_module(
     return declarations_by_module
 
 
+def _contract_objects_by_module(
+    *,
+    repository_root: Path,
+) -> dict[str, tuple[ContractObjectDeclaration, ...]]:
+    declarations_by_module: dict[str, tuple[ContractObjectDeclaration, ...]] = {}
+    for path in sorted((repository_root / "src" / "leibniz").rglob("*.py")):
+        relative_path = path.relative_to(repository_root).as_posix()
+        declarations = _contract_object_declarations(path=path, relative_path=relative_path)
+        if declarations:
+            declarations_by_module[relative_path] = declarations
+    return declarations_by_module
+
+
 def _record_spec_declarations(
     *,
     path: Path,
@@ -282,6 +343,57 @@ def _record_spec_declarations(
                     )
                 )
     return tuple(sorted(declarations, key=lambda declaration: declaration.name))
+
+
+def _contract_object_declarations(
+    *,
+    path: Path,
+    relative_path: str,
+) -> tuple[ContractObjectDeclaration, ...]:
+    syntax_tree = ast.parse(path.read_text(encoding="utf-8"))
+    declarations: list[ContractObjectDeclaration] = []
+    for node in ast.walk(syntax_tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for child in node.body:
+            if not isinstance(child, ast.FunctionDef):
+                continue
+            if child.name != "record_contract":
+                continue
+            contract_name = _returned_record_contract_name(child)
+            if contract_name is None:
+                continue
+            declarations.append(
+                ContractObjectDeclaration(
+                    module_path=relative_path,
+                    class_name=node.name,
+                    contract_name=contract_name,
+                    line=child.lineno,
+                )
+            )
+    return tuple(
+        sorted(
+            declarations,
+            key=lambda declaration: (declaration.module_path, declaration.class_name),
+        )
+    )
+
+
+def _returned_record_contract_name(function: ast.FunctionDef) -> str | None:
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Return):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Call):
+            continue
+        if not _is_name(value.func, "RecordContract"):
+            continue
+        for keyword in value.keywords:
+            if keyword.arg != "name":
+                continue
+            if isinstance(keyword.value, ast.Constant) and isinstance(keyword.value.value, str):
+                return keyword.value.value
+    return None
 
 
 def _record_spec_contract_declarations(
@@ -314,6 +426,10 @@ def _is_record_spec_call(value: ast.expr) -> bool:
     )
 
 
+def _is_name(value: ast.expr, name: str) -> bool:
+    return isinstance(value, ast.Name) and value.id == name
+
+
 def _assert_record_spec_module_coverage(
     *,
     discovered_modules: frozenset[str],
@@ -326,6 +442,16 @@ def _assert_record_spec_module_coverage(
             "record spec module coverage drift: "
             f"missing={missing!r}; unknown={unknown!r}"
         )
+
+
+def _assert_contract_object_module_coverage(
+    *,
+    discovered_modules: frozenset[str],
+    declared_modules: frozenset[str],
+) -> None:
+    missing = sorted(discovered_modules - declared_modules)
+    if missing:
+        raise ValueError(f"contract object module coverage drift: missing={missing!r}")
 
 
 def _tracked_inventory_paths(
