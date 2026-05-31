@@ -60,6 +60,20 @@ try {
     if (browserFailures.length > 0) {
       throw new Error(browserFailures.join('\n'));
     }
+    const samplesToggle = page.getByRole('button', { name: 'Samples' }).first();
+    await samplesToggle.waitFor({ state: 'visible' });
+    await samplesToggle.click();
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.locator('.benchmark-workbench').waitFor({ state: 'visible', timeout: 5_000 });
+    const persistedExpanded = await page
+      .getByRole('button', { name: 'Samples' })
+      .first()
+      .getAttribute('aria-expanded');
+    if (persistedExpanded !== 'false') {
+      throw new Error(
+        `expected collapsed Samples section to persist after reload, found ${persistedExpanded}`,
+      );
+    }
   } finally {
     await browser.close();
   }

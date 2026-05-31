@@ -100,10 +100,12 @@ function assertConsoleShellNavigation() {
   );
   for (const marker of [
     'const tabs:',
-    "useState<TabId>('benchmarks')",
+    "usePersistentState<TabId>(",
+    "'leibniz.console.currentTab'",
+    "const activeTab = tabs.some((tab) => tab.id === currentTab) ? currentTab : 'benchmarks'",
     'setCurrentTab(tab.id)',
-    'aria-current={currentTab === tab.id',
-    "hidden={currentTab !== 'benchmarks'}",
+    'aria-current={activeTab === tab.id',
+    "hidden={activeTab !== 'benchmarks'}",
     'Benchmarks',
   ]) {
     if (!shell.includes(marker)) {

@@ -416,6 +416,13 @@ const parsedResultViews = parseResultViewRecords([
     benchmark_results: [
       {
         ...result,
+        model_inspections: [
+          {
+            ...inspections[0]!,
+            model_artifacts: undefined,
+            training_provenance: undefined,
+          },
+        ],
         proposals: undefined,
       },
     ],
@@ -432,6 +439,16 @@ assertEqual(
   Array.isArray(parsedBenchmarkResult.benchmark_results[0]?.proposals),
   true,
   'parser defaults missing proposals',
+);
+assertEqual(
+  parsedBenchmarkResult.benchmark_results[0]?.model_inspections[0]?.model_artifacts.length,
+  0,
+  'parser defaults missing model artifacts',
+);
+assertEqual(
+  parsedBenchmarkResult.benchmark_results[0]?.model_inspections[0]?.training_provenance.length,
+  0,
+  'parser defaults missing training provenance',
 );
 assertThrows(
   () =>
