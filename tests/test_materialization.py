@@ -93,7 +93,7 @@ def test_digits_materialization_declaration_loads_source_artifact() -> None:
         protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
     )
     assert declaration.minimum_resolution(AxisAssignment(values={"L": 4})) == AxisAssignment(
-        values={"N": 128}
+        values={"W": 128, "H": 32}
     )
     assert document.digest == ContentDigest.from_value(declaration.to_record())
 
@@ -105,7 +105,7 @@ def test_materialization_declaration_uses_strongest_requirement_per_resolution_a
     stronger = LinearResolutionRequirement(
         name=ProtocolName.parse("benchmarks.digits.resolution.extra-margin"),
         source_axis="L",
-        resolution_axis="N",
+        resolution_axis="W",
         coefficient=40,
         basis="analytic-bound",
     )
@@ -118,7 +118,7 @@ def test_materialization_declaration_uses_strongest_requirement_per_resolution_a
     )
 
     assert declaration.minimum_resolution(AxisAssignment(values={"L": 3})) == AxisAssignment(
-        values={"N": 120}
+        values={"W": 120, "H": 32}
     )
 
 
@@ -145,7 +145,7 @@ def test_materialization_plan_resolves_from_declaration_deterministically() -> N
     )
 
     assert left == right
-    assert left.resolution_assignment == AxisAssignment(values={"N": 96})
+    assert left.resolution_assignment == AxisAssignment(values={"W": 96, "H": 32})
     assert left.complexity_assignment.require_axis("C") == 3
     left.validate_declaration(declaration)
 
@@ -166,10 +166,10 @@ def test_materialization_plan_documents_validate_digits_fixtures() -> None:
 
     assert l1.plan.scale_assignment.require_axis("L") == 1
     assert l1.plan.complexity_assignment.require_axis("C") == 1
-    assert l1.plan.resolution_assignment.require_axis("N") == 32
+    assert l1.plan.resolution_assignment.values == {"W": 32, "H": 32}
     assert l3.plan.scale_assignment.require_axis("L") == 3
     assert l3.plan.complexity_assignment.require_axis("C") == 3
-    assert l3.plan.resolution_assignment.require_axis("N") == 96
+    assert l3.plan.resolution_assignment.values == {"W": 96, "H": 32}
     assert l3.digest == ContentDigest.from_value(l3.plan.to_record())
 
 
@@ -190,12 +190,12 @@ def test_materialization_plan_rejects_under_resolved_request() -> None:
         ),
         scale_assignment=AxisAssignment(values={"L": 3}),
         complexity_assignment=AxisAssignment(values={"C": 3}),
-        resolution_assignment=AxisAssignment(values={"N": 95}),
+        resolution_assignment=AxisAssignment(values={"W": 95, "H": 32}),
         seed=101,
     )
 
     assert str(capture_materialization_error(lambda: plan.validate_declaration(declaration))) == (
-        "N=95 is below minimum 96 for L=3"
+        "W=95 is below minimum 96 for L=3"
     )
 
 

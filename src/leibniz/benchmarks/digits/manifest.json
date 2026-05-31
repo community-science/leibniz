@@ -9,7 +9,7 @@
   "scale_parameter": {
     "symbol": "L",
     "minimum": 1,
-    "description": "Number of digit slots in the image."
+    "description": "Number of digits in the ordered sequence."
   },
   "latent_factor_declaration": {
     "kind": "latent-factor-declaration",

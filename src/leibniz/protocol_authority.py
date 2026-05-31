@@ -381,7 +381,7 @@ def _routes() -> tuple[ProtocolArtifactRoute, ...]:
                 "leibniz.observation_formation."
                 "ObservationFormationDeclarationDocument"
             ),
-            required_fields=frozenset(("id", "interpreter", "slot_composition", "components")),
+            required_fields=frozenset(("id", "interpreter", "sequence_layout", "components")),
             load_document=ObservationFormationDeclarationDocument.from_bytes,
             document_identity=lambda document: str(
                 cast(ObservationFormationDeclarationDocument, document).declaration.id

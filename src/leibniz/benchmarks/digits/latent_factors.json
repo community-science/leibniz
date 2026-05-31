@@ -29,11 +29,11 @@
       }
     },
     {
-      "name": "benchmarks.digits.materialization.canvas-side",
+      "name": "benchmarks.digits.materialization.canvas-shape",
       "role": "materialization",
       "degree_measure": {
-        "kind": "scalar",
-        "count": 1
+        "kind": "vector-dimension",
+        "count": 2
       }
     }
   ],

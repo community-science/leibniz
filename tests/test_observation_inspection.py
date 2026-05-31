@@ -47,10 +47,10 @@ def test_digits_observation_inspection_records_sample_provenance() -> None:
     assert inspection.component_sequence == sequence
     assert inspection.scale_assignment.values == {"L": 3}
     assert inspection.complexity_assignment.values == {"C": 3}
-    assert inspection.resolution_assignment.values == {"N": 96}
-    assert inspection.field_shape == (1, 96, 96)
+    assert inspection.resolution_assignment.values == {"W": 96, "H": 32}
+    assert inspection.field_shape == (1, 32, 96)
     assert inspection.field_preview is not None
-    assert sum(run.count for run in inspection.field_preview.runs) == 96 * 96
+    assert sum(run.count for run in inspection.field_preview.runs) == 96 * 32
     assert record["field_digest"] == str(observation.field.digest)
     assert record["formed_observation"] == {
         "kind": "formed-observation",
@@ -88,11 +88,16 @@ def test_non_digits_observation_uses_same_inspection_record_path() -> None:
             "id": "benchmarks.synthetic-bars.observation-formation@0.1.0",
             "benchmark_id": "benchmarks.synthetic-bars@0.1.0",
             "interpreter": "field-mark-composition@0.1.0",
-            "output_field": {"channel_count": 1, "resolution_axis": "R"},
-            "slot_composition": {
-                "count_axis": "S",
-                "resolution_axis": "R",
-                "slot_axis": "y",
+            "output_field": {
+                "channel_count": 1,
+                "width_axis": "W",
+                "height_axis": "H",
+            },
+            "sequence_layout": {
+                "sequence_axis": "S",
+                "width_axis": "W",
+                "height_axis": "H",
+                "placement_axis": "y",
             },
             "components": [
                 {
@@ -119,7 +124,7 @@ def test_non_digits_observation_uses_same_inspection_record_path() -> None:
         ),
         scale_assignment=AxisAssignment(values={"S": 2}),
         complexity_assignment=AxisAssignment(values={"C": 2}),
-        resolution_assignment=AxisAssignment(values={"R": 16}),
+        resolution_assignment=AxisAssignment(values={"W": 16, "H": 20}),
         seed=11,
     )
     observation = declaration.form_observation(
@@ -136,8 +141,8 @@ def test_non_digits_observation_uses_same_inspection_record_path() -> None:
     )
 
     assert inspection.scale_assignment.values == {"S": 2}
-    assert inspection.resolution_assignment.values == {"R": 16}
-    assert inspection.field_shape == (1, 16, 16)
+    assert inspection.resolution_assignment.values == {"W": 16, "H": 20}
+    assert inspection.field_shape == (1, 20, 16)
     assert inspection.outcome_id is None
 
 
@@ -152,20 +157,23 @@ def test_observation_inspection_rejects_mismatched_plan_reference() -> None:
         ),
         scale_assignment=AxisAssignment(values={"L": 3}),
         complexity_assignment=AxisAssignment(values={"C": 3}),
-        resolution_assignment=AxisAssignment(values={"N": 96}),
+        resolution_assignment=AxisAssignment(values={"W": 96, "H": 32}),
         seed=101,
     )
 
-    assert str(
-        capture_inspection_error(
-            lambda: ObservationInspectionRecord.from_formed_observation(
-                id=ProtocolIdentifier.parse("benchmarks.digits.inspections.bad@0.1.0"),
-                observation=observation,
-                materialization_plan=wrong_plan,
-                sample_index=0,
+    assert (
+        str(
+            capture_inspection_error(
+                lambda: ObservationInspectionRecord.from_formed_observation(
+                    id=ProtocolIdentifier.parse("benchmarks.digits.inspections.bad@0.1.0"),
+                    observation=observation,
+                    materialization_plan=wrong_plan,
+                    sample_index=0,
+                )
             )
         )
-    ) == "observation materialization_plan reference does not match plan"
+        == "observation materialization_plan reference does not match plan"
+    )
 
 
 def test_observation_inspection_rejects_invalid_preview_run_length() -> None:
@@ -174,9 +182,10 @@ def test_observation_inspection_rejects_invalid_preview_run_length() -> None:
     assert isinstance(preview, dict)
     preview["runs"] = [{"value": 0, "count": 1}]
 
-    assert str(
-        capture_inspection_error(lambda: ObservationInspectionRecord.from_record(record))
-    ) == "preview run length 1 does not match shape size 9216"
+    assert (
+        str(capture_inspection_error(lambda: ObservationInspectionRecord.from_record(record)))
+        == "preview run length 1 does not match shape size 3072"
+    )
 
 
 def _digits_declaration() -> ObservationFormationDeclaration:

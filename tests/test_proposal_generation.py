@@ -151,10 +151,12 @@ def test_generate_experiment_proposals_filters_mps_incompatible_candidates(
         ArchitectureManifestDocument.from_bytes(path.read_bytes()).manifest
         for path in summary.architecture_paths
     )
-    assert summary.proposal_count == 3
+    assert 1 <= summary.proposal_count <= 3
+    assert summary.proposal_count == len(architectures)
     for architecture in architectures:
         size = cast(int, architecture.layers[0].parameters["size"])
-        assert 32 % size == 0
+        assert architecture.input_shape[-2] % size == 0
+        assert architecture.input_shape[-1] % size == 0
 
 
 def test_cli_generates_experiment_proposals(

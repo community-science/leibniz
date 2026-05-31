@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import math
 import random
 import struct
 import zlib
@@ -10,6 +11,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
@@ -54,6 +56,13 @@ _document_suffix = document_filename_suffix()
 
 class ObservationGenerationError(ValueError):
     """Raised when observation generation cannot satisfy benchmark declarations."""
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolutionSampling:
+    width_axis: str
+    height_axis: str
+    maximum_pixel_multiplier: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,10 +119,7 @@ class GeneratedObservationBatch:
             "benchmark_id": str(self.benchmark_id),
             "scale": self.scale,
             "seed": self.seed,
-            "samples": [
-                sample.to_record(include_field=include_fields)
-                for sample in self.samples
-            ],
+            "samples": [sample.to_record(include_field=include_fields) for sample in self.samples],
         }
 
 
@@ -123,7 +129,8 @@ class GeneratedFormationSample:
 
     index: int
     materialization_plan: MaterializationPlan
-    resolution: int
+    width: int
+    height: int
     component_sequence: tuple[int, ...]
     variation_coordinates: tuple[Mapping[str, object], ...]
     variation_values: Mapping[str, object]
@@ -271,9 +278,7 @@ class ObservationGenerator:
         with _timing_span(timing, f"{timing_prefix}component_sequences"):
             sequences = tuple(component_sequences) if component_sequences is not None else ()
         if sequences and len(sequences) != sample_count:
-            raise ObservationGenerationError(
-                "component_sequences length must match sample_count"
-            )
+            raise ObservationGenerationError("component_sequences length must match sample_count")
         if self.benchmark_manifest.scale_parameter is None:
             raise ObservationGenerationError("benchmark manifest must declare scale")
         scale_assignment = AxisAssignment(
@@ -281,6 +286,11 @@ class ObservationGenerator:
         )
         complexity_assignment = AxisAssignment(values={complexity_axis: int(complexity)})
         resolution_assignment = self.materialization.minimum_resolution(scale_assignment)
+        resolution_assignment = self._sample_resolution_assignment(
+            scale=scale,
+            seed=seed,
+            minimum_assignment=resolution_assignment,
+        )
         self.materialization.require_resolution(
             scale_assignment=scale_assignment,
             resolution_assignment=resolution_assignment,
@@ -290,7 +300,9 @@ class ObservationGenerator:
             protocol_id=self.materialization.id,
             record_digest=self.materialization.digest,
         )
-        slot_count = scale_assignment.require_axis(self.formation.slot_composition.count_axis)
+        sequence_length = scale_assignment.require_axis(
+            self.formation.sequence_layout.sequence_axis
+        )
         variation_transform_record = self.formation.variation_transform.to_record()
         variation_transform_digest = str(ContentDigest.from_value(variation_transform_record))
         component_generator = random.Random(f"{seed}:component-sequence")
@@ -320,7 +332,7 @@ class ObservationGenerator:
                     if sequences
                     else _sample_component_sequence(
                         generator=component_generator,
-                        slot_count=slot_count,
+                        sequence_length=sequence_length,
                         component_count=len(self.formation.components),
                     )
                 )
@@ -339,7 +351,7 @@ class ObservationGenerator:
                         transform=self.formation.variation_transform,
                         transform_record=variation_transform_record,
                         generator=variation_generator,
-                        slot_count=len(sequence),
+                        sequence_length=len(sequence),
                     )
                 )
         samples: list[GeneratedFormationSample] = []
@@ -356,9 +368,8 @@ class ObservationGenerator:
                     GeneratedFormationSample(
                         index=index,
                         materialization_plan=plan,
-                        resolution=plan.resolution_assignment.require_axis(
-                            self.formation.resolution_axis
-                        ),
+                        width=plan.resolution_assignment.require_axis(self.formation.width_axis),
+                        height=plan.resolution_assignment.require_axis(self.formation.height_axis),
                         component_sequence=sequence,
                         variation_coordinates=variation_coordinates,
                         variation_values=variation_values,
@@ -435,6 +446,41 @@ class ObservationGenerator:
             latent_factor_declaration=self.materialization.latent_factor_declaration,
         )
 
+    def _sample_resolution_assignment(
+        self,
+        *,
+        scale: int,
+        seed: int,
+        minimum_assignment: AxisAssignment,
+    ) -> AxisAssignment:
+        sampling = _resolution_sampling(self.materialization.layout)
+        if sampling is None:
+            return minimum_assignment
+        minimum_width = minimum_assignment.require_axis(sampling.width_axis)
+        minimum_height = minimum_assignment.require_axis(sampling.height_axis)
+        side_multiplier = math.sqrt(sampling.maximum_pixel_multiplier)
+        maximum_width = math.floor(minimum_width * side_multiplier)
+        maximum_height = math.floor(minimum_height * side_multiplier)
+        if maximum_width < minimum_width:
+            raise ObservationGenerationError(
+                f"{sampling.width_axis} maximum {maximum_width} is below "
+                f"required minimum {minimum_width}"
+            )
+        if maximum_height < minimum_height:
+            raise ObservationGenerationError(
+                f"{sampling.height_axis} maximum {maximum_height} is below "
+                f"required minimum {minimum_height}"
+            )
+        generator = random.Random(
+            f"{seed}:resolution:{scale}:{sampling.width_axis}:{minimum_width}:"
+            f"{maximum_width}:{sampling.height_axis}:{minimum_height}:{maximum_height}:"
+            f"{sampling.maximum_pixel_multiplier}"
+        )
+        values = dict(minimum_assignment.values)
+        values[sampling.width_axis] = generator.randint(minimum_width, maximum_width)
+        values[sampling.height_axis] = generator.randint(minimum_height, maximum_height)
+        return AxisAssignment(values=values)
+
     def _outcome_id(self, sequence: tuple[int, ...]) -> str:
         if self.benchmark_manifest.outcome_sequence is None:
             raise ObservationGenerationError("benchmark manifest must declare outcome sequence")
@@ -504,26 +550,26 @@ def sample_variation_transform_coordinates(
     transform: VariationTransformDeclaration,
     seed: int,
     sample_index: int,
-    slot_index: int,
+    sequence_index: int,
 ) -> Mapping[str, object]:
-    """Sample one deterministic per-slot variation transform coordinate."""
+    """Sample one deterministic per-sequence-position variation coordinate."""
 
     if type(seed) is not int or seed < 0:
         raise ObservationGenerationError("seed must be a nonnegative integer")
     if type(sample_index) is not int or sample_index < 0:
         raise ObservationGenerationError("sample_index must be a nonnegative integer")
-    if type(slot_index) is not int or slot_index < 0:
-        raise ObservationGenerationError("slot_index must be a nonnegative integer")
+    if type(sequence_index) is not int or sequence_index < 0:
+        raise ObservationGenerationError("sequence_index must be a nonnegative integer")
     generator = _variation_random(
         seed=seed,
         sample_index=sample_index,
-        slot_index=slot_index,
+        sequence_index=sequence_index,
         transform_digest=str(ContentDigest.from_value(transform.to_record())),
     )
     return _variation_coordinate_record(
         transform=transform,
         generator=generator,
-        slot_index=slot_index,
+        sequence_index=sequence_index,
     )
 
 
@@ -531,11 +577,11 @@ def _variation_random(
     *,
     seed: int,
     sample_index: int,
-    slot_index: int,
+    sequence_index: int,
     transform_digest: str,
 ) -> random.Random:
     return random.Random(
-        ":".join((str(seed), str(sample_index), str(slot_index), transform_digest))
+        ":".join((str(seed), str(sample_index), str(sequence_index), transform_digest))
     )
 
 
@@ -543,22 +589,19 @@ def _variation_coordinate_record(
     *,
     transform: VariationTransformDeclaration,
     generator: random.Random,
-    slot_index: int,
+    sequence_index: int,
 ) -> Mapping[str, object]:
     spatial = transform.spatial_affine
     return {
         "kind": "field-variation-transform-coordinate",
-        "slot_index": slot_index,
+        "sequence_index": sequence_index,
         "spatial_affine": {
             "kind": "spatial-affine-coordinate",
             "coordinate_system": spatial.coordinate_system,
-            "translation": [
-                _sample_interval(generator, bounds) for bounds in spatial.translation
-            ],
+            "translation": [_sample_interval(generator, bounds) for bounds in spatial.translation],
             "scale": [_sample_interval(generator, bounds) for bounds in spatial.scale],
             "rotation_degrees": [
-                _sample_symmetric(generator, bound)
-                for bound in spatial.rotation_degrees
+                _sample_symmetric(generator, bound) for bound in spatial.rotation_degrees
             ],
             "shear_degrees": [
                 _sample_symmetric(generator, bound) for bound in spatial.shear_degrees
@@ -591,10 +634,7 @@ def field_to_png_bytes(field: FieldObservation) -> bytes:
     rows: list[bytes] = []
     for y_index in range(height):
         offset = y_index * width
-        row = bytes(
-            _uint8(field.values[offset + x_index])
-            for x_index in range(width)
-        )
+        row = bytes(_uint8(field.values[offset + x_index]) for x_index in range(width))
         rows.append(b"\x00" + row)
     payload = b"".join(rows)
     return (
@@ -617,22 +657,22 @@ def _variation_transform_values_and_coordinates(
     transform: VariationTransformDeclaration,
     transform_record: Mapping[str, object],
     generator: random.Random,
-    slot_count: int,
+    sequence_length: int,
 ) -> tuple[
     Mapping[str, object],
     tuple[Mapping[str, object], ...],
 ]:
-    if slot_count < 1:
-        raise ObservationGenerationError("slot_count must be positive")
+    if sequence_length < 1:
+        raise ObservationGenerationError("sequence_length must be positive")
     coordinates = tuple(
         dict(
             _variation_coordinate_record(
                 transform=transform,
                 generator=generator,
-                slot_index=slot_index,
+                sequence_index=sequence_index,
             )
         )
-        for slot_index in range(slot_count)
+        for sequence_index in range(sequence_length)
     )
     return (
         {
@@ -644,15 +684,52 @@ def _variation_transform_values_and_coordinates(
     )
 
 
+def _resolution_sampling(
+    layout: Mapping[str, object] | None,
+) -> _ResolutionSampling | None:
+    if layout is None or "resolution_sampling" not in layout:
+        return None
+    value = layout["resolution_sampling"]
+    if not isinstance(value, Mapping):
+        raise ObservationGenerationError("resolution_sampling must be a record")
+    value = cast(Mapping[str, object], value)
+    kind = value.get("kind")
+    if kind != "uniform-integer-rectangle":
+        raise ObservationGenerationError(f"unsupported resolution_sampling kind: {kind}")
+    width_axis = value.get("width_axis")
+    if not isinstance(width_axis, str) or not width_axis:
+        raise ObservationGenerationError("resolution_sampling width_axis must be nonempty")
+    height_axis = value.get("height_axis")
+    if not isinstance(height_axis, str) or not height_axis:
+        raise ObservationGenerationError("resolution_sampling height_axis must be nonempty")
+    multiplier = value.get("maximum_pixel_multiplier")
+    if (
+        not isinstance(multiplier, int | float)
+        or isinstance(multiplier, bool)
+        or not math.isfinite(float(multiplier))
+        or float(multiplier) < 1.0
+    ):
+        raise ObservationGenerationError(
+            "resolution_sampling maximum_pixel_multiplier must be at least 1"
+        )
+    return _ResolutionSampling(
+        width_axis=width_axis,
+        height_axis=height_axis,
+        maximum_pixel_multiplier=float(multiplier),
+    )
+
+
 def _sample_component_sequence(
     *,
     generator: random.Random,
-    slot_count: int,
+    sequence_length: int,
     component_count: int,
 ) -> tuple[int, ...]:
-    if slot_count < 1:
-        raise ObservationGenerationError("slot count must be positive")
-    return tuple(generator.randrange(component_count) for _slot in range(slot_count))
+    if sequence_length < 1:
+        raise ObservationGenerationError("sequence length must be positive")
+    return tuple(
+        generator.randrange(component_count) for _sequence_element in range(sequence_length)
+    )
 
 
 def _sample_interval(

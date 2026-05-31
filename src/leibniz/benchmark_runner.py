@@ -471,11 +471,12 @@ def _validate_architecture_for_batch(
     outcome_space: OutcomeSpace,
 ) -> None:
     sample_shape = batch.samples[0].field.shape
-    if architecture.input_shape != sample_shape:
-        raise BenchmarkRunnerError(
-            f"architecture input_shape {architecture.input_shape} does not match "
-            f"generated observation shape {sample_shape}"
-        )
+    input_reason = _input_shape_boundary_reason(
+        architecture=architecture,
+        sample_shape=sample_shape,
+    )
+    if input_reason is not None:
+        raise BenchmarkRunnerError(input_reason)
     outcome_count = len(outcome_space.outcomes)
     if architecture.output_shape != (outcome_count,):
         raise BenchmarkRunnerError(
@@ -656,8 +657,6 @@ def _input_shape_boundary_reason(
     architecture: ArchitectureManifest,
     sample_shape: tuple[int, ...],
 ) -> str | None:
-    if architecture.input_shape == sample_shape:
-        return None
     contract = architecture.model_scale_contract
     if contract is not None:
         if _shape_matches_scale_contract(contract=contract, sample_shape=sample_shape):
@@ -669,8 +668,9 @@ def _input_shape_boundary_reason(
     if _adaptive_pooling_input_compatible(architecture=architecture, sample_shape=sample_shape):
         return None
     return (
-        f"architecture input_shape {architecture.input_shape} does not match "
-        f"generated observation shape {sample_shape}"
+        "architecture must declare a variable-shape contract or compatible "
+        "adaptive-pooling input for generated observation shape "
+        f"{sample_shape}"
     )
 
 
@@ -679,6 +679,8 @@ def _shape_matches_scale_contract(
     contract: Any,
     sample_shape: tuple[int, ...],
 ) -> bool:
+    if contract.maximum is not None and contract.maximum == contract.minimum:
+        return False
     if len(contract.axes) != len(sample_shape):
         return False
     scaled_values: list[int] = []

@@ -24,7 +24,7 @@ __all__ = [
     "ObservationFormationDeclaration",
     "ObservationFormationDeclarationDocument",
     "ObservationFormationValidationError",
-    "SlotComposition",
+    "SequenceLayout",
     "SpatialAffineVariation",
     "ValueScaleVariation",
 ]
@@ -51,17 +51,19 @@ _component_record = RecordSpec(
         "marks": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
     }
 )
-_slot_composition_record = RecordSpec(
+_sequence_layout_record = RecordSpec(
     fields={
-        "count_axis": FieldSpec(kind="string"),
-        "resolution_axis": FieldSpec(kind="string"),
-        "slot_axis": FieldSpec(kind="string"),
+        "sequence_axis": FieldSpec(kind="string"),
+        "width_axis": FieldSpec(kind="string"),
+        "height_axis": FieldSpec(kind="string"),
+        "placement_axis": FieldSpec(kind="string"),
     }
 )
 _output_field_record = RecordSpec(
     fields={
         "channel_count": FieldSpec(kind="integer"),
-        "resolution_axis": FieldSpec(kind="string"),
+        "width_axis": FieldSpec(kind="string"),
+        "height_axis": FieldSpec(kind="string"),
     }
 )
 _spatial_affine_variation_record = RecordSpec(
@@ -108,7 +110,7 @@ _observation_formation_declaration_record = RecordSpec(
         "benchmark_id": FieldSpec(kind="identifier"),
         "interpreter": FieldSpec(kind="string"),
         "output_field": FieldSpec(kind="record"),
-        "slot_composition": FieldSpec(kind="record"),
+        "sequence_layout": FieldSpec(kind="record"),
         "variation_transform": FieldSpec(kind="record", required=False),
         "components": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
     }
@@ -130,7 +132,7 @@ class _SpatialAffineCoordinate:
 
 @dataclass(frozen=True, slots=True)
 class _VariationCoordinate:
-    slot_index: int
+    sequence_index: int
     spatial_affine: _SpatialAffineCoordinate
     value_scale: float
 
@@ -233,38 +235,43 @@ class ObservationComponent:
 
 
 @dataclass(frozen=True, slots=True)
-class SlotComposition:
-    """Repeat components across slots controlled by a scale axis."""
+class SequenceLayout:
+    """Place ordered sequence components along a declared field axis."""
 
-    count_axis: str
-    resolution_axis: str
-    slot_axis: str
+    sequence_axis: str
+    placement_axis: str
+    width_axis: str
+    height_axis: str
 
     def __post_init__(self) -> None:
-        if not self.count_axis:
-            raise ObservationFormationValidationError("count_axis must be nonempty")
-        if not self.resolution_axis:
-            raise ObservationFormationValidationError("resolution_axis must be nonempty")
-        if self.slot_axis not in {"x", "y"}:
-            raise ObservationFormationValidationError("slot_axis must be x or y")
+        if not self.sequence_axis:
+            raise ObservationFormationValidationError("sequence_axis must be nonempty")
+        if not self.width_axis:
+            raise ObservationFormationValidationError("width_axis must be nonempty")
+        if not self.height_axis:
+            raise ObservationFormationValidationError("height_axis must be nonempty")
+        if self.placement_axis not in {"x", "y"}:
+            raise ObservationFormationValidationError("placement_axis must be x or y")
 
     @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> SlotComposition:
+    def from_record(cls, record: Mapping[str, object]) -> SequenceLayout:
         try:
-            validated = _slot_composition_record.validate(record)
+            validated = _sequence_layout_record.validate(record)
         except ValueError as error:
             raise ObservationFormationValidationError(str(error)) from error
         return cls(
-            count_axis=str(validated["count_axis"]),
-            resolution_axis=str(validated["resolution_axis"]),
-            slot_axis=str(validated["slot_axis"]),
+            sequence_axis=str(validated["sequence_axis"]),
+            placement_axis=str(validated["placement_axis"]),
+            width_axis=str(validated["width_axis"]),
+            height_axis=str(validated["height_axis"]),
         )
 
     def to_record(self) -> dict[str, object]:
         return {
-            "count_axis": self.count_axis,
-            "resolution_axis": self.resolution_axis,
-            "slot_axis": self.slot_axis,
+            "sequence_axis": self.sequence_axis,
+            "placement_axis": self.placement_axis,
+            "width_axis": self.width_axis,
+            "height_axis": self.height_axis,
         }
 
 
@@ -285,9 +292,9 @@ class SpatialAffineVariation:
             raise ObservationFormationValidationError(
                 f"unsupported spatial affine variation kind: {self.kind}"
             )
-        if self.coordinate_system != "normalized-slot":
+        if self.coordinate_system != "normalized-sequence-element":
             raise ObservationFormationValidationError(
-                "spatial affine coordinate_system must be normalized-slot"
+                "spatial affine coordinate_system must be normalized-sequence-element"
             )
         if type(self.spatial_rank) is not int or self.spatial_rank < 1:
             raise ObservationFormationValidationError("spatial_rank must be positive")
@@ -296,9 +303,7 @@ class SpatialAffineVariation:
                 "translation bounds length must equal spatial_rank"
             )
         if len(self.scale) != self.spatial_rank:
-            raise ObservationFormationValidationError(
-                "scale bounds length must equal spatial_rank"
-            )
+            raise ObservationFormationValidationError("scale bounds length must equal spatial_rank")
         for index, bounds in enumerate(self.translation):
             _validate_interval(bounds, field=f"translation.{index}")
         for index, bounds in enumerate(self.scale):
@@ -315,9 +320,7 @@ class SpatialAffineVariation:
         for index, value in enumerate((*self.rotation_degrees, *self.shear_degrees)):
             if not math.isfinite(value) or value < 0:
                 field = (
-                    "rotation_degrees"
-                    if index < len(self.rotation_degrees)
-                    else "shear_degrees"
+                    "rotation_degrees" if index < len(self.rotation_degrees) else "shear_degrees"
                 )
                 raise ObservationFormationValidationError(
                     f"{field} values must be finite nonnegative numbers"
@@ -327,16 +330,12 @@ class SpatialAffineVariation:
     def identity(cls, *, spatial_rank: int) -> SpatialAffineVariation:
         return cls(
             kind="spatial-affine",
-            coordinate_system="normalized-slot",
+            coordinate_system="normalized-sequence-element",
             spatial_rank=spatial_rank,
             translation=tuple((0.0, 0.0) for _axis in range(spatial_rank)),
             scale=tuple((1.0, 1.0) for _axis in range(spatial_rank)),
-            rotation_degrees=tuple(
-                0.0 for _plane in range(spatial_rank * (spatial_rank - 1) // 2)
-            ),
-            shear_degrees=tuple(
-                0.0 for _plane in range(spatial_rank * (spatial_rank - 1) // 2)
-            ),
+            rotation_degrees=tuple(0.0 for _plane in range(spatial_rank * (spatial_rank - 1) // 2)),
+            shear_degrees=tuple(0.0 for _plane in range(spatial_rank * (spatial_rank - 1) // 2)),
         )
 
     @classmethod
@@ -516,8 +515,7 @@ class FormedObservation:
             raise ObservationFormationValidationError(str(error)) from error
         if self.formation_declaration.kind != "observation-formation-declaration":
             raise ObservationFormationValidationError(
-                "formation_declaration reference must have kind "
-                "observation-formation-declaration"
+                "formation_declaration reference must have kind observation-formation-declaration"
             )
         if self.materialization_plan.kind != "materialization-plan":
             raise ObservationFormationValidationError(
@@ -554,8 +552,9 @@ class ObservationFormationDeclaration:
     benchmark_id: ProtocolIdentifier
     interpreter: str
     channel_count: int
-    resolution_axis: str
-    slot_composition: SlotComposition
+    width_axis: str
+    height_axis: str
+    sequence_layout: SequenceLayout
     components: tuple[ObservationComponent, ...]
     variation_transform: VariationTransformDeclaration = field(
         default_factory=VariationTransformDeclaration.identity
@@ -573,11 +572,17 @@ class ObservationFormationDeclaration:
             )
         if isinstance(self.channel_count, bool) or self.channel_count < 1:
             raise ObservationFormationValidationError("channel_count must be positive")
-        if not self.resolution_axis:
-            raise ObservationFormationValidationError("resolution_axis must be nonempty")
-        if self.slot_composition.resolution_axis != self.resolution_axis:
+        if not self.width_axis:
+            raise ObservationFormationValidationError("width_axis must be nonempty")
+        if not self.height_axis:
+            raise ObservationFormationValidationError("height_axis must be nonempty")
+        if self.sequence_layout.width_axis != self.width_axis:
             raise ObservationFormationValidationError(
-                "slot composition resolution_axis must match output field resolution_axis"
+                "sequence layout width_axis must match output field width_axis"
+            )
+        if self.sequence_layout.height_axis != self.height_axis:
+            raise ObservationFormationValidationError(
+                "sequence layout height_axis must match output field height_axis"
             )
         if not self.components:
             raise ObservationFormationValidationError("components must not be empty")
@@ -588,8 +593,7 @@ class ObservationFormationDeclaration:
             for mark in component.marks:
                 if mark.channel >= self.channel_count:
                     raise ObservationFormationValidationError(
-                        f"mark channel {mark.channel} is outside channel_count "
-                        f"{self.channel_count}"
+                        f"mark channel {mark.channel} is outside channel_count {self.channel_count}"
                     )
 
     @classmethod
@@ -605,9 +609,10 @@ class ObservationFormationDeclaration:
             benchmark_id=_as_identifier(validated["benchmark_id"], field="benchmark_id"),
             interpreter=str(validated["interpreter"]),
             channel_count=_as_int(output["channel_count"], field="channel_count"),
-            resolution_axis=str(output["resolution_axis"]),
-            slot_composition=SlotComposition.from_record(
-                _as_mapping(validated["slot_composition"], field="slot_composition")
+            width_axis=str(output["width_axis"]),
+            height_axis=str(output["height_axis"]),
+            sequence_layout=SequenceLayout.from_record(
+                _as_mapping(validated["sequence_layout"], field="sequence_layout")
             ),
             components=tuple(
                 ObservationComponent.from_record(_as_mapping(component, field="components"))
@@ -630,11 +635,14 @@ class ObservationFormationDeclaration:
     ) -> tuple[int, ...]:
         if sample_index < 0:
             raise ObservationFormationValidationError("sample_index must be nonnegative")
-        slot_count = plan.scale_assignment.require_axis(self.slot_composition.count_axis)
-        if slot_count < 1:
-            raise ObservationFormationValidationError("slot count must be positive")
+        sequence_length = plan.scale_assignment.require_axis(self.sequence_layout.sequence_axis)
+        if sequence_length < 1:
+            raise ObservationFormationValidationError("sequence length must be positive")
         generator = random.Random(plan.seed + sample_index)
-        return tuple(generator.randrange(len(self.components)) for _slot in range(slot_count))
+        return tuple(
+            generator.randrange(len(self.components))
+            for _sequence_element in range(sequence_length)
+        )
 
     def form_observation(
         self,
@@ -648,24 +656,27 @@ class ObservationFormationDeclaration:
             raise ObservationFormationValidationError(
                 f"plan benchmark_id {plan.benchmark_id} does not match {self.benchmark_id}"
             )
-        slots = plan.scale_assignment.require_axis(self.slot_composition.count_axis)
-        resolution = plan.resolution_assignment.require_axis(self.resolution_axis)
+        sequence_elements = plan.scale_assignment.require_axis(self.sequence_layout.sequence_axis)
+        width = plan.resolution_assignment.require_axis(self.width_axis)
+        height = plan.resolution_assignment.require_axis(self.height_axis)
         sequence = tuple(_as_int(index, field="component_sequence") for index in component_sequence)
-        if len(sequence) != slots:
+        if len(sequence) != sequence_elements:
             raise ObservationFormationValidationError(
-                f"component_sequence length {len(sequence)} does not match slot count {slots}"
+                f"component_sequence length {len(sequence)} does not match "
+                f"sequence length {sequence_elements}"
             )
         if any(index >= len(self.components) for index in sequence):
             raise ObservationFormationValidationError(
                 "component_sequence index is outside component vocabulary"
             )
         coordinates = self._variation_coordinates(
-            slot_count=slots,
+            sequence_length=sequence_elements,
             variation_coordinates=variation_coordinates,
         )
         field = self._form_field(
             sequence=sequence,
-            resolution=resolution,
+            width=width,
+            height=height,
             variation_coordinates=coordinates,
         )
         return FormedObservation(
@@ -688,37 +699,43 @@ class ObservationFormationDeclaration:
     def component_field(
         self,
         *,
-        resolution: int,
-        slot_count: int,
-        slot_index: int,
+        width: int,
+        height: int,
+        sequence_length: int,
+        sequence_index: int,
         component_index: int,
     ) -> FieldObservation:
-        """Form one unvaried component in one slot of the output field."""
+        """Form one unvaried component at one sequence position in the output field."""
 
-        if resolution < 1:
-            raise ObservationFormationValidationError("resolution must be positive")
-        if slot_count < 1:
-            raise ObservationFormationValidationError("slot_count must be positive")
-        if slot_index < 0 or slot_index >= slot_count:
-            raise ObservationFormationValidationError("slot_index must be within slot_count")
+        if width < 1:
+            raise ObservationFormationValidationError("width must be positive")
+        if height < 1:
+            raise ObservationFormationValidationError("height must be positive")
+        if sequence_length < 1:
+            raise ObservationFormationValidationError("sequence_length must be positive")
+        if sequence_index < 0 or sequence_index >= sequence_length:
+            raise ObservationFormationValidationError(
+                "sequence_index must be within sequence_length"
+            )
         if component_index < 0 or component_index >= len(self.components):
             raise ObservationFormationValidationError(
                 "component_index is outside component vocabulary"
             )
-        values = [0.0] * (self.channel_count * resolution * resolution)
+        values = [0.0] * (self.channel_count * width * height)
         component = self.components[component_index]
         for mark in component.marks:
             _draw_mark(
                 values=values,
                 channel_count=self.channel_count,
-                resolution=resolution,
-                slot_count=slot_count,
-                slot_index=slot_index,
-                slot_axis=self.slot_composition.slot_axis,
+                width=width,
+                height=height,
+                sequence_length=sequence_length,
+                sequence_index=sequence_index,
+                placement_axis=self.sequence_layout.placement_axis,
                 mark=mark,
             )
         return FieldObservation(
-            shape=(self.channel_count, resolution, resolution),
+            shape=(self.channel_count, height, width),
             values=tuple(values),
         )
 
@@ -733,9 +750,10 @@ class ObservationFormationDeclaration:
             "interpreter": self.interpreter,
             "output_field": {
                 "channel_count": self.channel_count,
-                "resolution_axis": self.resolution_axis,
+                "width_axis": self.width_axis,
+                "height_axis": self.height_axis,
             },
-            "slot_composition": self.slot_composition.to_record(),
+            "sequence_layout": self.sequence_layout.to_record(),
             "variation_transform": self.variation_transform.to_record(),
             "components": [component.to_record() for component in self.components],
         }
@@ -743,22 +761,22 @@ class ObservationFormationDeclaration:
     def _variation_coordinates(
         self,
         *,
-        slot_count: int,
+        sequence_length: int,
         variation_coordinates: Sequence[Mapping[str, object]] | None,
     ) -> tuple[_VariationCoordinate, ...] | None:
         if variation_coordinates is None:
             return None
         coordinates = tuple(variation_coordinates)
-        if len(coordinates) != slot_count:
+        if len(coordinates) != sequence_length:
             raise ObservationFormationValidationError(
-                "variation_coordinates length must match slot count"
+                "variation_coordinates length must match sequence length"
             )
         parsed_coordinates: list[_VariationCoordinate] = []
-        for slot_index, coordinate in enumerate(coordinates):
+        for sequence_index, coordinate in enumerate(coordinates):
             parsed = _parse_variation_coordinate(coordinate, field="variation_coordinates")
-            if parsed.slot_index != slot_index:
+            if parsed.sequence_index != sequence_index:
                 raise ObservationFormationValidationError(
-                    "variation coordinate slot_index must match coordinate position"
+                    "variation coordinate sequence_index must match coordinate position"
                 )
             parsed_coordinates.append(parsed)
         return tuple(parsed_coordinates)
@@ -767,13 +785,16 @@ class ObservationFormationDeclaration:
         self,
         *,
         sequence: tuple[int, ...],
-        resolution: int,
+        width: int,
+        height: int,
         variation_coordinates: tuple[_VariationCoordinate, ...] | None = None,
     ) -> FieldObservation:
-        if resolution < 1:
-            raise ObservationFormationValidationError("resolution must be positive")
-        values = [0.0] * (self.channel_count * resolution * resolution)
-        for slot_index, component_index in enumerate(sequence):
+        if width < 1:
+            raise ObservationFormationValidationError("width must be positive")
+        if height < 1:
+            raise ObservationFormationValidationError("height must be positive")
+        values = [0.0] * (self.channel_count * width * height)
+        for sequence_index, component_index in enumerate(sequence):
             target_values = values
             if variation_coordinates is not None:
                 target_values = [0.0] * len(values)
@@ -782,25 +803,27 @@ class ObservationFormationDeclaration:
                 _draw_mark(
                     values=target_values,
                     channel_count=self.channel_count,
-                    resolution=resolution,
-                    slot_count=len(sequence),
-                    slot_index=slot_index,
-                    slot_axis=self.slot_composition.slot_axis,
+                    width=width,
+                    height=height,
+                    sequence_length=len(sequence),
+                    sequence_index=sequence_index,
+                    placement_axis=self.sequence_layout.placement_axis,
                     mark=mark,
                 )
             if variation_coordinates is not None:
-                _merge_transformed_slot(
+                _merge_transformed_sequence_element(
                     values=values,
                     source_values=target_values,
                     channel_count=self.channel_count,
-                    resolution=resolution,
-                    slot_count=len(sequence),
-                    slot_index=slot_index,
-                    slot_axis=self.slot_composition.slot_axis,
-                    coordinate=variation_coordinates[slot_index],
+                    width=width,
+                    height=height,
+                    sequence_length=len(sequence),
+                    sequence_index=sequence_index,
+                    placement_axis=self.sequence_layout.placement_axis,
+                    coordinate=variation_coordinates[sequence_index],
                 )
         return FieldObservation(
-            shape=(self.channel_count, resolution, resolution),
+            shape=(self.channel_count, height, width),
             values=tuple(values),
         )
 
@@ -826,73 +849,84 @@ def _draw_mark(
     *,
     values: list[float],
     channel_count: int,
-    resolution: int,
-    slot_count: int,
-    slot_index: int,
-    slot_axis: str,
+    width: int,
+    height: int,
+    sequence_length: int,
+    sequence_index: int,
+    placement_axis: str,
     mark: ComponentMark,
 ) -> None:
     curve_points = tuple(
-        _slot_point(point, slot_count=slot_count, slot_index=slot_index, axis=slot_axis)
+        _field_pixel_point(
+            point,
+            width=width,
+            height=height,
+            sequence_length=sequence_length,
+            sequence_index=sequence_index,
+            placement_axis=placement_axis,
+        )
         for point in _sample_bezier_curve(mark.control_points)
     )
-    threshold = mark.width / (2.0 * resolution)
-    x_range = _pixel_range(
+    threshold = mark.width / 2.0
+    x_range = _pixel_index_range(
         min(point[0] for point in curve_points) - threshold,
         max(point[0] for point in curve_points) + threshold,
-        resolution=resolution,
+        size=width,
     )
-    y_range = _pixel_range(
+    y_range = _pixel_index_range(
         min(point[1] for point in curve_points) - threshold,
         max(point[1] for point in curve_points) + threshold,
-        resolution=resolution,
+        size=height,
     )
     for y_index in y_range:
-        y = (y_index + 0.5) / resolution
+        y = y_index + 0.5
         for x_index in x_range:
-            x = (x_index + 0.5) / resolution
+            x = x_index + 0.5
             if _polyline_distance((x, y), curve_points) <= threshold:
-                value_index = (
-                    mark.channel * resolution * resolution
-                    + y_index * resolution
-                    + x_index
-                )
+                value_index = mark.channel * width * height + y_index * width + x_index
                 values[value_index] = max(values[value_index], mark.value)
 
 
-def _merge_transformed_slot(
+def _merge_transformed_sequence_element(
     *,
     values: list[float],
     source_values: list[float],
     channel_count: int,
-    resolution: int,
-    slot_count: int,
-    slot_index: int,
-    slot_axis: str,
+    width: int,
+    height: int,
+    sequence_length: int,
+    sequence_index: int,
+    placement_axis: str,
     coordinate: _VariationCoordinate,
 ) -> None:
-    if coordinate.spatial_affine.coordinate_system != "normalized-slot":
+    if coordinate.spatial_affine.coordinate_system != "normalized-sequence-element":
         raise ObservationFormationValidationError(
-            "variation coordinate coordinate_system must be normalized-slot"
+            "variation coordinate coordinate_system must be normalized-sequence-element"
         )
     if _is_identity_variation_coordinate(coordinate):
         for index, value in enumerate(source_values):
             if value > values[index]:
                 values[index] = value
         return
-    center = _slot_center(slot_count=slot_count, slot_index=slot_index, axis=slot_axis)
+    center = _sequence_center(
+        width=width,
+        height=height,
+        sequence_length=sequence_length,
+        sequence_index=sequence_index,
+        placement_axis=placement_axis,
+    )
     inverse = _inverse_affine_matrix(coordinate.spatial_affine)
-    translation = _slot_relative_translation(
+    translation = _sequence_relative_translation(
         coordinate.spatial_affine.translation,
-        slot_count=slot_count,
-        slot_axis=slot_axis,
+        sequence_length=sequence_length,
+        placement_axis=placement_axis,
     )
     for channel in range(channel_count):
-        channel_offset = channel * resolution * resolution
-        for y_index in range(resolution):
-            y = (y_index + 0.5) / resolution
-            for x_index in range(resolution):
-                x = (x_index + 0.5) / resolution
+        channel_offset = channel * width * height
+        for y_index in range(height):
+            y = (y_index + 0.5) / height
+            for x_index in range(width):
+                x = (x_index + 0.5) / width
                 source_x, source_y = _inverse_transform_point(
                     (x, y),
                     center=center,
@@ -902,13 +936,14 @@ def _merge_transformed_slot(
                 value = _bilinear_sample(
                     source_values,
                     channel_offset=channel_offset,
-                    resolution=resolution,
+                    width=width,
+                    height=height,
                     x=source_x,
                     y=source_y,
                 )
                 if value <= 0.0:
                     continue
-                target_index = channel_offset + y_index * resolution + x_index
+                target_index = channel_offset + y_index * width + x_index
                 values[target_index] = max(
                     values[target_index],
                     min(1.0, value * coordinate.value_scale),
@@ -925,26 +960,33 @@ def _is_identity_variation_coordinate(coordinate: _VariationCoordinate) -> bool:
     )
 
 
-def _slot_center(
+def _sequence_center(
     *,
-    slot_count: int,
-    slot_index: int,
-    axis: str,
+    width: int,
+    height: int,
+    sequence_length: int,
+    sequence_index: int,
+    placement_axis: str,
 ) -> tuple[float, float]:
-    if axis == "x":
-        return ((slot_index + 0.5) / slot_count, 0.5)
-    return (0.5, (slot_index + 0.5) / slot_count)
+    return _sequence_point(
+        (0.5, 0.5),
+        width=width,
+        height=height,
+        sequence_length=sequence_length,
+        sequence_index=sequence_index,
+        placement_axis=placement_axis,
+    )
 
 
-def _slot_relative_translation(
+def _sequence_relative_translation(
     translation: tuple[float, float],
     *,
-    slot_count: int,
-    slot_axis: str,
+    sequence_length: int,
+    placement_axis: str,
 ) -> tuple[float, float]:
-    if slot_axis == "x":
-        return (translation[0] / slot_count, translation[1])
-    return (translation[0], translation[1] / slot_count)
+    if placement_axis == "x":
+        return (translation[0] / sequence_length, translation[1])
+    return (translation[0], translation[1] / sequence_length)
 
 
 def _inverse_affine_matrix(
@@ -985,32 +1027,33 @@ def _bilinear_sample(
     values: Sequence[float],
     *,
     channel_offset: int,
-    resolution: int,
+    width: int,
+    height: int,
     x: float,
     y: float,
 ) -> float:
-    pixel_x = x * resolution - 0.5
-    pixel_y = y * resolution - 0.5
-    if pixel_x < 0 or pixel_y < 0 or pixel_x > resolution - 1 or pixel_y > resolution - 1:
+    pixel_x = x * width - 0.5
+    pixel_y = y * height - 0.5
+    if pixel_x < 0 or pixel_y < 0 or pixel_x > width - 1 or pixel_y > height - 1:
         return 0.0
     left = math.floor(pixel_x)
     top = math.floor(pixel_y)
-    right = min(resolution - 1, left + 1)
-    bottom = min(resolution - 1, top + 1)
+    right = min(width - 1, left + 1)
+    bottom = min(height - 1, top + 1)
     x_weight = pixel_x - left
     y_weight = pixel_y - top
-    top_left = values[channel_offset + top * resolution + left]
-    top_right = values[channel_offset + top * resolution + right]
-    bottom_left = values[channel_offset + bottom * resolution + left]
-    bottom_right = values[channel_offset + bottom * resolution + right]
+    top_left = values[channel_offset + top * width + left]
+    top_right = values[channel_offset + top * width + right]
+    bottom_left = values[channel_offset + bottom * width + left]
+    bottom_right = values[channel_offset + bottom * width + right]
     top_value = (1.0 - x_weight) * top_left + x_weight * top_right
     bottom_value = (1.0 - x_weight) * bottom_left + x_weight * bottom_right
     return (1.0 - y_weight) * top_value + y_weight * bottom_value
 
 
-def _pixel_range(lower: float, upper: float, *, resolution: int) -> range:
-    start = max(0, math.floor(lower * resolution))
-    stop = min(resolution, math.ceil(upper * resolution))
+def _pixel_index_range(lower: float, upper: float, *, size: int) -> range:
+    start = max(0, math.floor(lower))
+    stop = min(size, math.ceil(upper))
     return range(start, stop)
 
 
@@ -1019,8 +1062,7 @@ def _sample_bezier_curve(
 ) -> tuple[tuple[float, float], ...]:
     sample_count = max(1, (len(control_points) - 1) * _curve_samples_per_degree)
     return tuple(
-        _bezier_point(control_points, index / sample_count)
-        for index in range(sample_count + 1)
+        _bezier_point(control_points, index / sample_count) for index in range(sample_count + 1)
     )
 
 
@@ -1040,17 +1082,39 @@ def _bezier_point(
     return working[0]
 
 
-def _slot_point(
+def _sequence_point(
     point: tuple[float, float],
     *,
-    slot_count: int,
-    slot_index: int,
-    axis: str,
+    width: int,
+    height: int,
+    sequence_length: int,
+    sequence_index: int,
+    placement_axis: str,
 ) -> tuple[float, float]:
     x, y = point
-    if axis == "x":
-        return ((slot_index + x) / slot_count, y)
-    return (x, (slot_index + y) / slot_count)
+    if placement_axis == "x":
+        return ((sequence_index + x) / sequence_length, y)
+    return (x, (sequence_index + y) / sequence_length)
+
+
+def _field_pixel_point(
+    point: tuple[float, float],
+    *,
+    width: int,
+    height: int,
+    sequence_length: int,
+    sequence_index: int,
+    placement_axis: str,
+) -> tuple[float, float]:
+    x, y = _sequence_point(
+        point,
+        width=width,
+        height=height,
+        sequence_length=sequence_length,
+        sequence_index=sequence_index,
+        placement_axis=placement_axis,
+    )
+    return (x * width, y * height)
 
 
 def _polyline_distance(
@@ -1058,8 +1122,7 @@ def _polyline_distance(
     points: tuple[tuple[float, float], ...],
 ) -> float:
     return min(
-        _segment_distance(point, start, end)
-        for start, end in zip(points, points[1:], strict=False)
+        _segment_distance(point, start, end) for start, end in zip(points, points[1:], strict=False)
     )
 
 
@@ -1137,7 +1200,7 @@ def _parse_variation_coordinate(
             f"{field}.value_scale.scale must be finite and positive"
         )
     return _VariationCoordinate(
-        slot_index=_as_int(value.get("slot_index"), field=f"{field}.slot_index"),
+        sequence_index=_as_int(value.get("sequence_index"), field=f"{field}.sequence_index"),
         spatial_affine=_SpatialAffineCoordinate(
             coordinate_system=str(spatial.get("coordinate_system")),
             translation=translation,

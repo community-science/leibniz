@@ -27,7 +27,7 @@ def test_digits_observation_generator_is_deterministic() -> None:
 
     assert left == right
     assert left.scale == 3
-    assert left.samples[0].field.shape == (1, 96, 96)
+    assert left.samples[0].field.shape == (1, 62, 100)
     assert left.samples[0].complexity == 3.0
     assert len(left.samples[0].observation.component_sequence) == 3
     assert left.samples[0].outcome_id.startswith("digit-")
@@ -44,7 +44,7 @@ def test_digits_observation_generator_is_deterministic() -> None:
         generator.formation.variation_transform.to_record()
     )
     coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
-    assert [coordinate["slot_index"] for coordinate in coordinates] == [0, 1, 2]
+    assert [coordinate["sequence_index"] for coordinate in coordinates] == [0, 1, 2]
     assert len(coordinates) == 3
     assert _within_transform_bounds(
         coordinates[0],
@@ -61,10 +61,12 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
     assert formation_batch.benchmark_id == observation_batch.benchmark_id
     assert formation_batch.scale == observation_batch.scale
     assert formation_batch.seed == observation_batch.seed
-    assert [sample.resolution for sample in formation_batch.samples] == [96, 96]
+    assert [(sample.width, sample.height) for sample in formation_batch.samples] == [
+        (100, 62),
+        (100, 62),
+    ]
     assert [sample.component_sequence for sample in formation_batch.samples] == [
-        sample.observation.component_sequence
-        for sample in observation_batch.samples
+        sample.observation.component_sequence for sample in observation_batch.samples
     ]
     assert [sample.outcome_id for sample in formation_batch.samples] == [
         sample.outcome_id for sample in observation_batch.samples
@@ -81,14 +83,18 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
         )
         for sample in observation_batch.samples
     ]
-    direct_plan = MaterializationPlan.resolve(
+    minimum_plan = MaterializationPlan.resolve(
         id=formation_batch.samples[0].materialization_plan.id,
         declaration=generator.materialization,
         scale_assignment=AxisAssignment(values={"L": 3}),
         complexity_assignment=AxisAssignment(values={"C": 3}),
         seed=101,
     )
-    assert formation_batch.samples[0].materialization_plan == direct_plan
+    generated_plan = formation_batch.samples[0].materialization_plan
+    assert generated_plan.scale_assignment == minimum_plan.scale_assignment
+    assert generated_plan.complexity_assignment == minimum_plan.complexity_assignment
+    assert minimum_plan.resolution_assignment.values == {"W": 96, "H": 32}
+    assert generated_plan.resolution_assignment.values == {"W": 100, "H": 62}
 
 
 def test_digits_observation_generator_records_optional_timing() -> None:
@@ -122,7 +128,7 @@ def test_digits_observation_generator_records_optional_timing() -> None:
     assert cast(float, observation["seconds"]) > 0
 
 
-def test_digits_observation_generator_scales_resolution_and_complexity() -> None:
+def test_digits_observation_generator_samples_resolution_from_complexity_bound() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
     batch = generator.sample_batch(
@@ -133,12 +139,42 @@ def test_digits_observation_generator_scales_resolution_and_complexity() -> None
     )
     sample = batch.samples[0]
 
-    assert sample.field.shape == (1, 128, 128)
+    assert sample.field.shape == (1, 55, 229)
     assert sample.materialization_plan.scale_assignment.require_axis("L") == 4
-    assert sample.materialization_plan.resolution_assignment.require_axis("N") == 128
+    assert sample.materialization_plan.resolution_assignment.values == {"W": 229, "H": 55}
     assert sample.materialization_plan.complexity_assignment.require_axis("C") == 4
     assert sample.complexity == 4.0
     assert sample.outcome_id == "digit-1-2-3-4"
+
+
+def test_digits_observation_generator_decouples_canvas_size_from_complexity() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    scale_one = generator.sample_formation_batch(scale=1, sample_count=3, seed=101)
+    scale_three = generator.sample_formation_batch(scale=3, sample_count=3, seed=101)
+    scale_three_other_seed = generator.sample_formation_batch(
+        scale=3,
+        sample_count=3,
+        seed=102,
+    )
+
+    assert {sample.complexity for sample in scale_one.samples} == {1.0}
+    assert {sample.complexity for sample in scale_three.samples} == {3.0}
+    assert [(sample.width, sample.height) for sample in scale_three.samples] == [
+        (100, 62),
+        (100, 62),
+        (100, 62),
+    ]
+    assert [(sample.width, sample.height) for sample in scale_three_other_seed.samples] == [
+        (140, 40),
+        (140, 40),
+        (140, 40),
+    ]
+    assert 32 <= scale_one.samples[0].width <= 64
+    assert 32 <= scale_one.samples[0].height <= 64
+    assert 96 <= scale_three.samples[0].width <= 192
+    assert 32 <= scale_three.samples[0].height <= 64
+    assert (scale_three.samples[0].width, scale_three.samples[0].height) != (96, 32)
 
 
 def test_digits_observation_generator_applies_recorded_variation_coordinates() -> None:
@@ -192,30 +228,30 @@ def test_variation_transform_sampling_is_deterministic_and_declaration_driven() 
         transform=transform,
         seed=707,
         sample_index=2,
-        slot_index=1,
+        sequence_index=1,
     )
     right = sample_variation_transform_coordinates(
         transform=transform,
         seed=707,
         sample_index=2,
-        slot_index=1,
+        sequence_index=1,
     )
     other = sample_variation_transform_coordinates(
         transform=transform,
         seed=707,
         sample_index=3,
-        slot_index=1,
+        sequence_index=1,
     )
-    other_slot = sample_variation_transform_coordinates(
+    other_sequence_element = sample_variation_transform_coordinates(
         transform=transform,
         seed=707,
         sample_index=2,
-        slot_index=2,
+        sequence_index=2,
     )
 
     assert left == right
     assert left != other
-    assert left != other_slot
+    assert left != other_sequence_element
     assert _within_transform_bounds(left, bounds=transform.to_record())
 
 
@@ -235,22 +271,35 @@ def test_field_png_encoding_is_deterministic() -> None:
 def test_observation_generator_rejects_invalid_requests() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
-    assert str(
-        capture_generation_error(lambda: generator.sample_batch(scale=0, sample_count=1, seed=1))
-    ) == "scale must be a positive integer"
-    assert str(
-        capture_generation_error(lambda: generator.sample_batch(scale=1, sample_count=0, seed=1))
-    ) == "sample_count must be a positive integer"
-    assert str(
-        capture_generation_error(
-            lambda: generator.sample_batch(
-                scale=1,
-                sample_count=2,
-                seed=1,
-                component_sequences=((1,),),
+    assert (
+        str(
+            capture_generation_error(
+                lambda: generator.sample_batch(scale=0, sample_count=1, seed=1)
             )
         )
-    ) == "component_sequences length must match sample_count"
+        == "scale must be a positive integer"
+    )
+    assert (
+        str(
+            capture_generation_error(
+                lambda: generator.sample_batch(scale=1, sample_count=0, seed=1)
+            )
+        )
+        == "sample_count must be a positive integer"
+    )
+    assert (
+        str(
+            capture_generation_error(
+                lambda: generator.sample_batch(
+                    scale=1,
+                    sample_count=2,
+                    seed=1,
+                    component_sequences=((1,),),
+                )
+            )
+        )
+        == "component_sequences length must match sample_count"
+    )
 
 
 def _coordinate(
@@ -295,10 +344,7 @@ def _within_transform_bounds(
             -bound <= value <= bound
             for value, bound in zip(rotations, rotation_bounds, strict=True)
         )
-        and all(
-            -bound <= value <= bound
-            for value, bound in zip(shears, shear_bounds, strict=True)
-        )
+        and all(-bound <= value <= bound for value, bound in zip(shears, shear_bounds, strict=True))
         and cast(list[float], value_scale_bounds["scale"])[0]
         <= cast(float, value_scale["scale"])
         <= cast(list[float], value_scale_bounds["scale"])[1]

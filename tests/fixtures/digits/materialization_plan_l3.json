@@ -21,7 +21,8 @@
   },
   "resolution_assignment": {
     "values": [
-      {"axis": "N", "value": 96}
+      {"axis": "H", "value": 32},
+      {"axis": "W", "value": 96}
     ]
   },
   "seed": 101
