@@ -81,7 +81,7 @@ def test_federation_target_rejects_credentials_and_local_paths() -> None:
     ) == "repository_id must not include a URI scheme"
 
     assert str(
-        capture_federation_error(lambda: FederationTarget(repository_id=".leibniz/submissions"))
+        capture_federation_error(lambda: FederationTarget(repository_id="./results/submissions"))
     ) == "repository_id must not be a local path"
 
     assert str(

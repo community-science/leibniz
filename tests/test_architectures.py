@@ -233,7 +233,7 @@ def test_architecture_manifest_rejects_invalid_ids_shapes_and_layers() -> None:
 
     record = _architecture_record()
     layers = list(_layers())
-    layers[0] = {"kind": "dense", "weights_path": ".leibniz/checkpoints/model.pt"}
+    layers[0] = {"kind": "dense", "weights_path": "results/checkpoints/model.pt"}
     record["layers"] = layers
     assert str(capture_architecture_error(lambda: ArchitectureManifest.from_record(record))) == (
         "weights_path: unknown field"

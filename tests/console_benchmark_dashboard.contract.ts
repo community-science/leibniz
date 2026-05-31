@@ -148,12 +148,12 @@ const result: BenchmarkResultRecord = {
       scale: 1,
       score: 0.75,
       source_kind: 'local',
-      source_path: '.runs/training/run-a.json',
+      source_path: 'results/training/run-a.json',
       training_diagnostics: {
         artifacts: [
           { digest: 'sha256:dataset1234', kind: 'measurement-dataset' },
-          { digest: architectureDigest, kind: 'model-inspection', path: '.runs/models/a.json' },
-          { digest: 'sha256:training1234', kind: 'training-summary', path: '.runs/training/run-a.json' },
+          { digest: architectureDigest, kind: 'model-inspection', path: 'results/models/a.json' },
+          { digest: 'sha256:training1234', kind: 'training-summary', path: 'results/training/run-a.json' },
         ],
         best_validation_check: 1,
         best_validation_loss: 0.4,

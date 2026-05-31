@@ -130,7 +130,7 @@ def test_model_operation_rejects_malformed_and_local_artifact_refs() -> None:
     record["outputs"] = [
         {
             "role": "model",
-            "artifact": {"kind": "model-checkpoint", "external_uri": ".leibniz/model.pt"},
+            "artifact": {"kind": "model-checkpoint", "external_uri": "./results/model.pt"},
         }
     ]
     assert str(capture_operation_error(lambda: ModelOperation.from_record(record))) == (

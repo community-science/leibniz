@@ -411,7 +411,7 @@ class ConsoleDataBuilder:
     def _repository_path(self, source_path: PurePosixPath, *, description: str) -> Path:
         if source_path.is_absolute():
             raise ConsoleDataValidationError(f"{description} must be repository-relative")
-        if ".leibniz" in source_path.parts or ".runs" in source_path.parts:
+        if "results" in source_path.parts:
             raise ConsoleDataValidationError(f"{description} must not reference local state")
         path = (self._repository_root / Path(source_path)).resolve()
         if not path.is_relative_to(self._repository_root):
@@ -448,10 +448,8 @@ class ConsoleDataBuilder:
         )
         if path.is_relative_to(self._repository_root):
             relative = path.relative_to(self._repository_root)
-            if ".leibniz" in relative.parts:
-                raise ConsoleDataValidationError("result root must not reference .leibniz")
-            if ".runs" in relative.parts and relative.parts[:2] != (".runs", "views"):
-                raise ConsoleDataValidationError("result root inside .runs must be .runs/views")
+            if "results" in relative.parts and relative.parts[:2] != ("results", "views"):
+                raise ConsoleDataValidationError("result root inside results must be results/views")
         if not path.is_dir():
             raise ConsoleDataValidationError(f"result root does not name a directory: {root}")
         return path
@@ -488,7 +486,7 @@ def _main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         type=Path,
-        help="explicit generated result-view root, such as .runs/views",
+        help="explicit generated result-view root, such as results/views",
     )
     args = parser.parse_args(argv)
 

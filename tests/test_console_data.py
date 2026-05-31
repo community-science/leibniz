@@ -300,7 +300,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
       "training_history": [
         {
           "source_kind": "local-run",
-          "source_path": ".runs/training/example.json",
+          "source_path": "results/training/example.json",
           "run_id": "run-1",
           "run_slug": "run-1",
           "benchmark_id": "benchmarks.digits@0.1.0",
@@ -352,17 +352,14 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
 
 def test_console_data_rejects_local_state_roots() -> None:
     with pytest.raises(ConsoleDataValidationError, match="local state"):
-        ConsoleDataBuilder(_repository_root).discover((PurePosixPath(".leibniz"),))
-
-    with pytest.raises(ConsoleDataValidationError, match="local state"):
-        ConsoleDataBuilder(_repository_root).discover((PurePosixPath(".runs"),))
+        ConsoleDataBuilder(_repository_root).discover((PurePosixPath("results"),))
 
 
-def test_console_data_rejects_raw_runs_result_roots() -> None:
-    with pytest.raises(ConsoleDataValidationError, match=".runs/views"):
+def test_console_data_rejects_raw_result_roots() -> None:
+    with pytest.raises(ConsoleDataValidationError, match="results/views"):
         ConsoleDataBuilder(_repository_root).discover(
             (PurePosixPath("tests/fixtures"),),
-            result_roots=(Path(".runs"),),
+            result_roots=(Path("results"),),
         )
 
 

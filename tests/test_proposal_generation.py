@@ -27,7 +27,7 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
         BenchmarkRunPlan(
             architecture_path=_architecture_path,
             benchmark_root=_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             sample_count=2,
             seed=101,
             train_steps=1,
@@ -39,7 +39,7 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
     summary = generate_experiment_proposals(
         ProposalGenerationPlan(
             benchmark_root=_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             candidate_budget=2,
         )
     )
@@ -50,7 +50,7 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
     )
     document = ExperimentProposalDocument.from_bytes(
         summary.proposal_set_path.read_bytes(),
-        dataset=_local_measurement_dataset(tmp_path / ".runs"),
+        dataset=_local_measurement_dataset(tmp_path / "results"),
         architectures=architectures,
     )
 
@@ -102,7 +102,7 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
 
     result_summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
     result_view = load_console_result_view(result_summary.view_file.read_bytes())
     benchmark_results = cast(list[dict[str, object]], result_view["benchmark_results"])
@@ -140,7 +140,7 @@ def test_generate_experiment_proposals_filters_mps_incompatible_candidates(
     summary = generate_experiment_proposals(
         ProposalGenerationPlan(
             benchmark_root=_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             candidate_budget=3,
             candidate_sample_count=32,
             tensor_device="auto",
@@ -167,8 +167,8 @@ def test_cli_generates_experiment_proposals(
             "propose",
             "--benchmark-root",
             str(_benchmark_root),
-            "--runs-root",
-            str(tmp_path / ".runs"),
+            "--results-root",
+            str(tmp_path / "results"),
             "--candidate-budget",
             "1",
             "--evaluation-sample-count",
@@ -192,12 +192,12 @@ def test_cli_generates_experiment_proposals(
     assert exit_code == 0
     assert captured.err == ""
     assert "generated 1 proposal(s)" in captured.out
-    assert (tmp_path / ".runs" / "proposals").is_dir()
+    assert (tmp_path / "results" / "proposals").is_dir()
 
 
-def _local_measurement_dataset(runs_root: Path):
+def _local_measurement_dataset(results_root: Path):
     from leibniz.measurements import MeasurementDatasetDocument
 
-    measurement_files = tuple((runs_root / "measurements").rglob("*.json"))
+    measurement_files = tuple((results_root / "measurements").rglob("*.json"))
     assert len(measurement_files) == 1
     return MeasurementDatasetDocument.from_bytes(measurement_files[0].read_bytes()).dataset

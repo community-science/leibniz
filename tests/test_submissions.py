@@ -103,7 +103,7 @@ def test_submission_package_artifact_metadata_is_durable_only() -> None:
         {
             "id": "artifacts.model-weights@0.1.0",
             "digest": str(_architecture_document().digest),
-            "path": ".leibniz/checkpoints/model.pt",
+            "path": "results/checkpoints/model.pt",
         }
     ]
     assert str(capture_submission_error(lambda: SubmissionPackageManifest.from_record(record))) == (

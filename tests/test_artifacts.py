@@ -129,7 +129,7 @@ def test_artifact_reference_rejects_non_durable_identity() -> None:
             lambda: ArtifactReference.from_record(
                 {
                     "kind": "architecture-manifest",
-                    "external_uri": ".leibniz/cache/model.json",
+                    "external_uri": "./results/cache/model.json",
                 }
             )
         )
@@ -179,7 +179,7 @@ def test_artifact_reference_rejects_malformed_fields() -> None:
                 {
                     "kind": "architecture-manifest",
                     "record_digest": str(ContentDigest.from_value(_architecture_record())),
-                    "path": ".leibniz/cache/model.json",
+                    "path": "./results/cache/model.json",
                 }
             )
         )

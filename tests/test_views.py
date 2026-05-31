@@ -130,7 +130,7 @@ def test_measurement_score_view_rejects_malformed_records() -> None:
     record = view.to_record()
     entries = _entry_records(record)
     first = dict(_entry_record(entries[0]))
-    first["local_path"] = ".leibniz/views/scores.json"
+    first["local_path"] = "results/views/scores.json"
     entries[0] = first
     record["entries"] = entries
     assert str(

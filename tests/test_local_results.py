@@ -4,6 +4,7 @@ from typing import cast
 
 import pytest
 
+import leibniz.local_results as local_results
 from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
 from leibniz.benchmarks import BenchmarkManifestDocument
@@ -40,12 +41,12 @@ def test_import_submission_publications_materializes_runs_views(tmp_path: Path) 
     summary = import_submission_publications(
         (source_root,),
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
 
     assert summary.publication_bundle_count == 1
     assert summary.measurement_count == 1
-    assert summary.view_file == tmp_path / ".runs" / "views" / "imported_results.json"
+    assert summary.view_file == tmp_path / "results" / "views" / "imported_results.json"
     assert len(summary.import_files) == 1
 
     imported_bundle = SubmissionPublicationDocument.from_bytes(
@@ -72,7 +73,7 @@ def test_import_submission_publications_ignores_non_publication_json(tmp_path: P
         import_submission_publications(
             (source_root,),
             repository_root=_repository_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
         )
 
 
@@ -89,11 +90,11 @@ def test_console_result_view_validates_embedded_model_inspections(tmp_path: Path
     import_submission_publications(
         (source_root,),
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
 
     view = dict(load_console_result_view(summary.view_file.read_bytes()))
@@ -116,11 +117,11 @@ def test_console_result_view_validates_benchmark_leaderboard_models(tmp_path: Pa
     import_submission_publications(
         (source_root,),
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
 
     view = dict(load_console_result_view(summary.view_file.read_bytes()))
@@ -140,11 +141,11 @@ def test_console_result_view_validates_model_detail_tables(tmp_path: Path) -> No
     import_submission_publications(
         (source_root,),
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
 
     view = dict(load_console_result_view(summary.view_file.read_bytes()))
@@ -170,11 +171,11 @@ def test_console_result_view_validates_training_diagnostics_records(tmp_path: Pa
     import_submission_publications(
         (source_root,),
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
 
     view = dict(load_console_result_view(summary.view_file.read_bytes()))
@@ -198,18 +199,18 @@ def test_materialize_benchmark_result_views_projects_imported_publications(
     import_submission_publications(
         (source_root,),
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
 
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
 
     assert summary.benchmark_count == 1
     assert summary.model_count == 1
     assert summary.run_count == 1
-    assert summary.view_file == tmp_path / ".runs" / "views" / "benchmark_results.json"
+    assert summary.view_file == tmp_path / "results" / "views" / "benchmark_results.json"
 
     view = load_console_result_view(summary.view_file.read_bytes())
     assert view["format"] == "leibniz.console.benchmark-results"
@@ -264,12 +265,12 @@ def test_materialize_imported_publications_accepts_numeric_architecture_digest(
     import_submission_publications(
         (source_root,),
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
 
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
 
     view = load_console_result_view(summary.view_file.read_bytes())
@@ -278,23 +279,23 @@ def test_materialize_imported_publications_accepts_numeric_architecture_digest(
     assert inspections[0]["id"] == "model-inspections.imported.sha-057e708d0a213627@0.1.0"
 
 
-def test_materialize_benchmark_result_views_rejects_empty_runs_root(tmp_path: Path) -> None:
+def test_materialize_benchmark_result_views_rejects_empty_results_root(tmp_path: Path) -> None:
     with pytest.raises(LocalResultImportError, match="no benchmark result records"):
         materialize_benchmark_result_views(
             repository_root=_repository_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
         )
 
 
 def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) -> None:
-    local_runs_root = tmp_path / "local-runs"
-    imported_runs_root = tmp_path / "imported-runs"
-    _init_git(local_runs_root)
+    local_results_root = tmp_path / "local-runs"
+    imported_results_root = tmp_path / "imported-runs"
+    _init_git(local_results_root)
     run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=local_runs_root,
+            results_root=local_results_root,
             sample_count=1,
             train_steps=0,
         )
@@ -302,16 +303,16 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
 
     publish_summary = publish_local_benchmark_results(
         repository_root=_repository_root,
-        runs_root=local_runs_root,
+        results_root=local_results_root,
     )
     imported_summary = import_submission_publications(
-        (local_runs_root / "publication_bundles",),
+        (local_results_root / "publication_bundles",),
         repository_root=_repository_root,
-        runs_root=imported_runs_root,
+        results_root=imported_results_root,
     )
     result_summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
-        runs_root=imported_runs_root,
+        results_root=imported_results_root,
     )
 
     assert publish_summary.publication_bundle_count == 1
@@ -338,13 +339,13 @@ def test_cli_publishes_local_benchmark_results(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runs_root = tmp_path / ".runs"
-    _init_git(runs_root, configure_identity=False)
+    results_root = tmp_path / "results"
+    _init_git(results_root, configure_identity=False)
     run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=runs_root,
+            results_root=results_root,
             sample_count=1,
             train_steps=0,
         )
@@ -354,8 +355,8 @@ def test_cli_publishes_local_benchmark_results(
         [
             "results",
             "publish",
-            "--runs-root",
-            str(runs_root),
+            "--results-root",
+            str(results_root),
             "--message",
             "Publish test results",
         ]
@@ -367,18 +368,18 @@ def test_cli_publishes_local_benchmark_results(
     assert "wrote 1 publication bundle(s), 1 measurement(s)" in captured.out
     assert "publication: " in captured.out
     assert "commit: " in captured.out
-    assert len(tuple((runs_root / "publication_bundles").glob("*.json"))) == 1
-    assert _git(runs_root, "status", "--porcelain").stdout == ""
+    assert len(tuple((results_root / "publication_bundles").glob("*.json"))) == 1
+    assert _git(results_root, "status", "--porcelain").stdout == ""
 
 
-def test_publish_defaults_publication_output_to_runs_root(tmp_path: Path) -> None:
-    runs_root = tmp_path / ".runs"
-    _init_git(runs_root)
+def test_publish_defaults_publication_output_to_results_root(tmp_path: Path) -> None:
+    results_root = tmp_path / "results"
+    _init_git(results_root)
     run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=runs_root,
+            results_root=results_root,
             sample_count=1,
             train_steps=0,
         )
@@ -386,21 +387,21 @@ def test_publish_defaults_publication_output_to_runs_root(tmp_path: Path) -> Non
 
     summary = publish_local_benchmark_results(
         repository_root=_repository_root,
-        runs_root=runs_root,
+        results_root=results_root,
     )
 
     assert len(summary.publication_files) == 1
-    assert summary.publication_files[0].parent == runs_root / "publication_bundles"
+    assert summary.publication_files[0].parent == results_root / "publication_bundles"
 
 
-def test_publish_can_commit_runs_root_checkout(tmp_path: Path) -> None:
-    runs_root = tmp_path / ".runs"
-    _init_git(runs_root)
+def test_publish_can_commit_results_root_checkout(tmp_path: Path) -> None:
+    results_root = tmp_path / "results"
+    _init_git(results_root)
     run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=runs_root,
+            results_root=results_root,
             sample_count=1,
             train_steps=0,
         )
@@ -408,29 +409,29 @@ def test_publish_can_commit_runs_root_checkout(tmp_path: Path) -> None:
 
     summary = publish_local_benchmark_results(
         repository_root=_repository_root,
-        runs_root=runs_root,
+        results_root=results_root,
         commit_message="Publish test results",
     )
 
-    assert summary.git_commit == _git(runs_root, "rev-parse", "HEAD").stdout.strip()
+    assert summary.git_commit == _git(results_root, "rev-parse", "HEAD").stdout.strip()
     assert summary.git_pushed is False
-    assert _git(runs_root, "status", "--porcelain").stdout == ""
-    tracked_files = _git(runs_root, "ls-files").stdout.splitlines()
+    assert _git(results_root, "status", "--porcelain").stdout == ""
+    tracked_files = _git(results_root, "ls-files").stdout.splitlines()
     assert "views/benchmark_results.json" in tracked_files
     assert any(path.startswith("publication_bundles/") for path in tracked_files)
 
 
 def test_publish_pushes_only_when_requested(tmp_path: Path) -> None:
-    runs_root = tmp_path / ".runs"
+    results_root = tmp_path / "results"
     remote_root = tmp_path / "remote.git"
     _git(tmp_path, "init", "--bare", str(remote_root))
-    _init_git(runs_root)
-    _git(runs_root, "remote", "add", "origin", str(remote_root))
+    _init_git(results_root)
+    _git(results_root, "remote", "add", "origin", str(remote_root))
     run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=runs_root,
+            results_root=results_root,
             sample_count=1,
             train_steps=0,
         )
@@ -438,7 +439,7 @@ def test_publish_pushes_only_when_requested(tmp_path: Path) -> None:
 
     summary = publish_local_benchmark_results(
         repository_root=_repository_root,
-        runs_root=runs_root,
+        results_root=results_root,
         push=True,
         commit_message="Publish test results",
     )
@@ -447,22 +448,75 @@ def test_publish_pushes_only_when_requested(tmp_path: Path) -> None:
     assert _git(remote_root, "rev-parse", "HEAD").stdout.strip() == summary.git_commit
 
 
+def test_publish_prefers_hugging_face_api_when_token_is_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results_root = tmp_path / "results"
+    uploaded_paths: list[str] = []
+
+    class _CommitInfo:
+        commit_id = "hf-commit"
+
+    class _CommitOperationAdd:
+        def __init__(self, *, path_in_repo: str, path_or_fileobj: str) -> None:
+            del path_or_fileobj
+            uploaded_paths.append(path_in_repo)
+
+    class _HfApi:
+        def create_commit(self, **kwargs: object) -> _CommitInfo:
+            assert kwargs["repo_id"] == "operator/leibniz-results"
+            assert kwargs["repo_type"] == "dataset"
+            assert kwargs["token"] == "hf_test"
+            return _CommitInfo()
+
+    class _HfModule:
+        CommitOperationAdd = _CommitOperationAdd
+        HfApi = _HfApi
+
+    monkeypatch.setattr(local_results, "_hf_api_module", lambda: _HfModule)
+    run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=results_root,
+            sample_count=1,
+            train_steps=0,
+        )
+    )
+
+    summary = publish_local_benchmark_results(
+        repository_root=_repository_root,
+        results_root=results_root,
+        push=True,
+        repo_id="operator/leibniz-results",
+        token="hf_test",
+        commit_message="Publish test results",
+    )
+
+    assert summary.remote == "hf"
+    assert summary.remote_commit == "hf-commit"
+    assert summary.git_commit is None
+    assert "views/benchmark_results.json" in uploaded_paths
+    assert any(path.startswith("publication_bundles/") for path in uploaded_paths)
+
+
 def test_push_publication_checkout_pushes_existing_commit(tmp_path: Path) -> None:
-    runs_root = tmp_path / ".runs"
+    results_root = tmp_path / "results"
     remote_root = tmp_path / "remote.git"
     _git(tmp_path, "init", "--bare", str(remote_root))
-    _init_git(runs_root)
-    _git(runs_root, "remote", "add", "origin", str(remote_root))
-    (runs_root / "README.md").write_text("result checkout\n", encoding="utf-8")
-    _git(runs_root, "add", "README.md")
-    _git(runs_root, "commit", "-m", "Prepare checkout")
+    _init_git(results_root)
+    _git(results_root, "remote", "add", "origin", str(remote_root))
+    (results_root / "README.md").write_text("result checkout\n", encoding="utf-8")
+    _git(results_root, "add", "README.md")
+    _git(results_root, "commit", "-m", "Prepare checkout")
 
     summary = push_publication_checkout(
         repository_root=_repository_root,
-        runs_root=runs_root,
+        results_root=results_root,
     )
 
-    assert summary.pushed_commit == _git(runs_root, "rev-parse", "HEAD").stdout.strip()
+    assert summary.pushed_commit == _git(results_root, "rev-parse", "HEAD").stdout.strip()
     assert _git(remote_root, "rev-parse", "HEAD").stdout.strip() == summary.pushed_commit
 
 
@@ -470,23 +524,23 @@ def test_cli_pushes_publication_checkout(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runs_root = tmp_path / ".runs"
+    results_root = tmp_path / "results"
     remote_root = tmp_path / "remote.git"
     _git(tmp_path, "init", "--bare", str(remote_root))
-    _init_git(runs_root)
-    _git(runs_root, "remote", "add", "origin", str(remote_root))
-    (runs_root / "README.md").write_text("result checkout\n", encoding="utf-8")
-    _git(runs_root, "add", "README.md")
-    _git(runs_root, "commit", "-m", "Prepare checkout")
+    _init_git(results_root)
+    _git(results_root, "remote", "add", "origin", str(remote_root))
+    (results_root / "README.md").write_text("result checkout\n", encoding="utf-8")
+    _git(results_root, "add", "README.md")
+    _git(results_root, "commit", "-m", "Prepare checkout")
 
     exit_code = main(
         [
             "results",
             "push",
-            "--runs-root",
-            str(runs_root),
-            "--token",
-            "unused-local-token",
+            "--results-root",
+            str(results_root),
+            "--remote",
+            "git",
         ]
     )
 
@@ -495,66 +549,96 @@ def test_cli_pushes_publication_checkout(
     assert captured.err == ""
     assert "pushed: " in captured.out
     assert _git(remote_root, "rev-parse", "HEAD").stdout.strip() == _git(
-        runs_root, "rev-parse", "HEAD"
+        results_root, "rev-parse", "HEAD"
     ).stdout.strip()
 
 
-def test_initialize_publication_checkout_commits_scaffold_without_push_by_default(
+def test_initialize_publication_checkout_scaffolds_existing_git_checkout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runs_root = tmp_path / ".runs"
-    _init_git(runs_root)
+    results_root = tmp_path / "results"
+    _init_git(results_root)
     calls: list[str] = []
 
-    class _Response:
-        def read(self) -> bytes:
-            return b"{}"
+    class _HfApi:
+        def create_repo(self, **_kwargs: object) -> None:
+            calls.append("create")
 
-    def _urlopen(request: object, timeout: int) -> _Response:
-        del request, timeout
-        calls.append("create")
-        return _Response()
+    class _HfModule:
+        HfApi = _HfApi
 
-    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+        @staticmethod
+        def get_token() -> str:
+            return "hf_test"
+
+    monkeypatch.setattr(local_results, "_hf_api_module", lambda: _HfModule)
 
     summary = initialize_publication_checkout(
         repo_id="operator/leibniz-results",
         token="hf_test",
         repository_root=_repository_root,
-        runs_root=runs_root,
+        results_root=results_root,
     )
 
-    assert calls == ["create"]
+    assert calls == []
     assert summary.repo_url == "https://huggingface.co/datasets/operator/leibniz-results"
-    assert summary.scaffold_commit == _git(runs_root, "rev-parse", "HEAD").stdout.strip()
+    assert summary.scaffold_commit == _git(results_root, "rev-parse", "HEAD").stdout.strip()
     assert summary.pushed is False
-    assert _git(runs_root, "status", "--porcelain").stdout == ""
-    tracked_files = _git(runs_root, "ls-files").stdout.splitlines()
+    assert _git(results_root, "status", "--porcelain").stdout == ""
+    tracked_files = _git(results_root, "ls-files").stdout.splitlines()
     assert "README.md" in tracked_files
     assert "publication_bundles/.gitkeep" in tracked_files
 
 
+def test_initialize_publication_checkout_creates_hugging_face_repo_for_plain_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results_root = tmp_path / "results"
+    calls: list[str] = []
+
+    class _HfApi:
+        def create_repo(self, **kwargs: object) -> None:
+            calls.append(str(kwargs["repo_id"]))
+
+    class _HfModule:
+        HfApi = _HfApi
+
+    monkeypatch.setattr(local_results, "_hf_api_module", lambda: _HfModule)
+
+    summary = initialize_publication_checkout(
+        repo_id="operator/leibniz-results",
+        repository_root=_repository_root,
+        results_root=results_root,
+        token="hf_test",
+    )
+
+    assert calls == ["operator/leibniz-results"]
+    assert summary.scaffold_commit is None
+    assert summary.created_or_reused is True
+    assert (results_root / "publication_bundles" / ".gitkeep").is_file()
+
+
 def test_initialize_publication_checkout_supports_local_only_fallback(tmp_path: Path) -> None:
-    runs_root = tmp_path / ".runs"
+    results_root = tmp_path / "results"
 
     summary = initialize_publication_checkout(
         repo_id=None,
         token=None,
         repository_root=_repository_root,
-        runs_root=runs_root,
+        results_root=results_root,
         local_only=True,
     )
 
     assert summary.repo_id is None
     assert summary.repo_url is None
-    assert summary.scaffold_commit == _git(runs_root, "rev-parse", "HEAD").stdout.strip()
+    assert summary.scaffold_commit is None
     assert summary.pushed is False
-    assert _git(runs_root, "status", "--porcelain").stdout == ""
-    assert (runs_root / "publication_bundles" / ".gitkeep").is_file()
+    assert (results_root / "publication_bundles" / ".gitkeep").is_file()
 
 
-def test_cli_initializes_local_publication_checkout_with_default_runs_root(
+def test_cli_initializes_local_publication_checkout_with_default_results_root(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -567,9 +651,8 @@ def test_cli_initializes_local_publication_checkout_with_default_runs_root(
     assert exit_code == 0
     assert captured.err == ""
     assert "repository: local-only" in captured.out
-    assert "runs root: " in captured.out
-    assert (tmp_path / ".runs" / "publication_bundles" / ".gitkeep").is_file()
-    assert _git(tmp_path / ".runs", "status", "--porcelain").stdout == ""
+    assert "results root: " in captured.out
+    assert (tmp_path / "results" / "publication_bundles" / ".gitkeep").is_file()
 
 
 def _digits_publication_bundle_record(

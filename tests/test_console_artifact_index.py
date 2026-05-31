@@ -195,7 +195,7 @@ def test_console_artifact_index_rejects_local_state_paths() -> None:
     with pytest.raises(ConsoleArtifactIndexValidationError, match="local state"):
         ConsoleArtifactIndexSource(
             kind="benchmark-manifest",
-            source_path=PurePosixPath(".leibniz/manifest.json"),
+            source_path=PurePosixPath("results/manifest.json"),
         )
 
 

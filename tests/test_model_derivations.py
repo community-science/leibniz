@@ -200,7 +200,7 @@ def test_model_derivation_compatibility_rejects_bad_references_and_execution_fie
     ) == "operation reference must have kind model-operation"
 
     record = _compatibility_report_record()
-    record["checkpoint_output"] = ".leibniz/derived/model.pt"
+    record["checkpoint_output"] = "results/derived/model.pt"
     assert str(
         capture_derivation_error(
             lambda: ModelDerivationCompatibilityReport.from_record(record)

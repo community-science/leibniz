@@ -1,5 +1,4 @@
-.leibniz/
-.runs/
+results/
 
 # Python
 __pycache__/

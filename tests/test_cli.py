@@ -382,8 +382,8 @@ def test_cli_results_import_reports_missing_publications(
             "import",
             "--source",
             str(source_root),
-            "--runs-root",
-            str(tmp_path / ".runs"),
+            "--results-root",
+            str(tmp_path / "results"),
         ]
     )
 

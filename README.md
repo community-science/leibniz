@@ -70,26 +70,48 @@ are manual validation paths, not routine pull-request checks.
   `tests/fixtures/`; console web contract tests live beside the Python tests.
 - `scripts/`: repository environment setup and activation helpers.
 - `.github/workflows/`: pull-request and main-branch CI checks.
-- `.leibniz/`, `.runs/`, caches, checkpoints, and local publication checkouts:
-  local runtime state only; do not commit these unless a deterministic producer
-  and review path are explicitly documented.
+- `results/`, caches, checkpoints, and local publication checkouts: local
+  runtime state only; do not commit these unless a deterministic producer and
+  review path are explicitly documented.
 
 ## Result Publication Workflow
 
-Use a Hugging Face dataset repository as the local run-state checkout. The
-checkout is ignored by this source repository, but it is its own Git repository:
-benchmark runs write dirty state there, and publishing commits that checkout.
-Pushing to Hugging Face is always explicit.
+Benchmark runs write local state under `results/` by default. That path is
+ignored by this source repository so the console can discover result views
+without making benchmark state part of the source checkout.
 
-Create a public dataset repository and prepare `.runs` as the checkout:
+Before starting benchmark runs, prepare the result repository with the same
+setup command for either Hugging Face API auth or Git/SSH auth:
 
 ```bash
-export HF_TOKEN=...
 leibniz results init-publication --repo owner/leibniz-results
 ```
 
-Without a Hugging Face account, prepare the same local checkout and skip any
-Hub API or push step:
+With Hugging Face API auth, install `huggingface_hub` and authenticate with
+`hf auth login` or `HF_TOKEN`; `init-publication` can create the empty dataset
+repository as part of setup. With SSH-only Git auth, create the empty Hugging
+Face dataset repository first; `init-publication` then clones it into
+`results/` using `git@hf.co:datasets/owner/leibniz-results.git`. If you prefer
+to keep the clone outside this source checkout, clone it elsewhere, symlink
+`results/` to that clone, and then run the same `init-publication` command to
+validate and scaffold it:
+
+```bash
+git clone git@hf.co:datasets/owner/leibniz-results.git ../leibniz-results
+ln -s ../leibniz-results results
+leibniz results init-publication --repo owner/leibniz-results
+```
+
+After benchmark runs have written results locally, push them to that repository:
+
+```bash
+leibniz results publish --push --repo owner/leibniz-results
+```
+
+`results publish --push` uses the Hugging Face API when API credentials are
+available for `--repo`; otherwise it falls back to plain Git push when
+`results/` is a Git checkout. Without a Hugging Face account, prepare the same
+local result directory and skip any push step:
 
 ```bash
 leibniz results init-publication --local-only
@@ -111,7 +133,7 @@ Override those with `--train-steps`, `--convergence-min-steps`,
 `--convergence-min-delta` when you need a shorter diagnostic run.
 
 While a benchmark loop is training a reserved candidate, validation checkpoints
-are written under `.runs/training-progress/` and materialized into the local
+are written under `results/training-progress/` and materialized into the local
 benchmark result view as running leaderboard entries with accumulated validation
 history. Completed runs replace that progress state with final measurement,
 model-inspection, and training-summary records.
@@ -125,15 +147,15 @@ leibniz results publish
 Push only when you want to update the public Hugging Face repository:
 
 ```bash
-leibniz results publish --push
+leibniz results publish --push --repo owner/leibniz-results
 ```
 
 To inspect another publication checkout locally, import its publication bundle
-documents into a separate run root and materialize console views:
+documents into a separate result root and materialize console views:
 
 ```bash
-leibniz results import --source path/to/checkout --runs-root .runs-imported
-leibniz results materialize --runs-root .runs-imported
+leibniz results import --source path/to/checkout --results-root imported-results
+leibniz results materialize --results-root imported-results
 ```
 
 ## License

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -223,8 +222,8 @@ def _parser() -> argparse.ArgumentParser:
 
     init_publication = results_subcommands.add_parser(
         "init-publication",
-        description="prepare a public Hugging Face dataset checkout for run results",
-        help="prepare a result-publication checkout",
+        description="prepare the local result root for public Hugging Face publication",
+        help="prepare a result-publication root",
     )
     init_publication.add_argument(
         "--repo",
@@ -233,18 +232,19 @@ def _parser() -> argparse.ArgumentParser:
     init_publication.add_argument(
         "--token",
         default=None,
-        help="Hugging Face token; defaults to HF_TOKEN",
+        help="Hugging Face API token; defaults to HF_TOKEN or hf auth login",
     )
     init_publication.add_argument(
-        "--runs-root",
-        default=Path(".runs"),
+        "--results-root",
+        default=Path("results"),
         type=Path,
-        help="local result-publication checkout; defaults to .runs",
+        help="local result checkout; defaults to results",
     )
     init_publication.add_argument(
-        "--endpoint",
-        default="https://huggingface.co",
-        help="Hugging Face Hub endpoint",
+        "--remote",
+        choices=("auto", "hf", "git"),
+        default="auto",
+        help="publication remote selection; defaults to auto",
     )
     init_publication.add_argument(
         "--push",
@@ -276,10 +276,10 @@ def _parser() -> argparse.ArgumentParser:
         help="local publication checkout path or publication bundle document file",
     )
     import_results.add_argument(
-        "--runs-root",
-        default=Path(".runs"),
+        "--results-root",
+        default=Path("results"),
         type=Path,
-        help="local result checkout; defaults to .runs",
+        help="local result checkout; defaults to results",
     )
     publish_results = results_subcommands.add_parser(
         "publish",
@@ -287,20 +287,30 @@ def _parser() -> argparse.ArgumentParser:
         help="publish local result checkout",
     )
     publish_results.add_argument(
-        "--runs-root",
-        default=Path(".runs"),
+        "--results-root",
+        default=Path("results"),
         type=Path,
-        help="local result-publication checkout; defaults to .runs",
+        help="local result checkout; defaults to results",
+    )
+    publish_results.add_argument(
+        "--repo",
+        help="Hugging Face dataset repository id in owner/name form",
     )
     publish_results.add_argument(
         "--token",
         default=None,
-        help="Hugging Face token for --push; defaults to HF_TOKEN",
+        help="Hugging Face API token; defaults to HF_TOKEN or hf auth login",
+    )
+    publish_results.add_argument(
+        "--remote",
+        choices=("auto", "hf", "git"),
+        default="auto",
+        help="publication remote selection; defaults to auto",
     )
     publish_results.add_argument(
         "--push",
         action="store_true",
-        help="push the runs-root Git checkout after publishing",
+        help="push the result checkout after publishing",
     )
     publish_results.add_argument(
         "--message",
@@ -313,20 +323,25 @@ def _parser() -> argparse.ArgumentParser:
         help="push result checkout",
     )
     push_results.add_argument(
-        "--runs-root",
-        default=Path(".runs"),
+        "--results-root",
+        default=Path("results"),
         type=Path,
-        help="local result-publication checkout; defaults to .runs",
+        help="local result checkout; defaults to results",
+    )
+    push_results.add_argument(
+        "--repo",
+        help="Hugging Face dataset repository id in owner/name form",
     )
     push_results.add_argument(
         "--token",
         default=None,
-        help="Hugging Face token; defaults to HF_TOKEN",
+        help="Hugging Face API token; defaults to HF_TOKEN or hf auth login",
     )
     push_results.add_argument(
-        "--endpoint",
-        default="https://huggingface.co",
-        help="Hugging Face Hub endpoint",
+        "--remote",
+        choices=("auto", "hf", "git"),
+        default="auto",
+        help="publication remote selection; defaults to auto",
     )
     materialize_results = results_subcommands.add_parser(
         "materialize",
@@ -334,10 +349,10 @@ def _parser() -> argparse.ArgumentParser:
         help="materialize local result views",
     )
     materialize_results.add_argument(
-        "--runs-root",
-        default=Path(".runs"),
+        "--results-root",
+        default=Path("results"),
         type=Path,
-        help="local result checkout; defaults to .runs",
+        help="local result checkout; defaults to results",
     )
     propose_results = results_subcommands.add_parser(
         "propose",
@@ -346,10 +361,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     propose_results.add_argument("--benchmark-root", type=Path, required=True)
     propose_results.add_argument(
-        "--runs-root",
-        default=Path(".runs"),
+        "--results-root",
+        default=Path("results"),
         type=Path,
-        help="local result checkout; defaults to .runs",
+        help="local result checkout; defaults to results",
     )
     propose_results.add_argument("--candidate-budget", default=3, type=int)
     propose_results.add_argument("--candidate-sample-count", default=64, type=int)
@@ -390,10 +405,10 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--architecture", type=Path, required=True)
     run.add_argument("--benchmark-root", type=Path, required=True)
     run.add_argument(
-        "--runs-root",
-        default=Path(".runs"),
+        "--results-root",
+        default=Path("results"),
         type=Path,
-        help="local result checkout; defaults to .runs",
+        help="local result checkout; defaults to results",
     )
     run.add_argument("--sample-count", default=512, type=int)
     run.add_argument("--evaluation-sample-count", default=None, type=int)
@@ -425,10 +440,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     loop.add_argument("--benchmark-root", type=Path, required=True)
     loop.add_argument(
-        "--runs-root",
-        default=Path(".runs"),
+        "--results-root",
+        default=Path("results"),
         type=Path,
-        help="local result checkout; defaults to .runs",
+        help="local result checkout; defaults to results",
     )
     loop.add_argument("--candidate-sample-count", default=64, type=int)
     loop.add_argument("--sample-count", default=512, type=int)
@@ -461,10 +476,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     shakedown.add_argument("--benchmark-root", type=Path, required=True)
     shakedown.add_argument(
-        "--runs-root",
-        default=Path(".runs"),
+        "--results-root",
+        default=Path("results"),
         type=Path,
-        help="local result checkout; defaults to .runs",
+        help="local result checkout; defaults to results",
     )
     shakedown.add_argument("--candidate-sample-count", default=64, type=int)
     shakedown.add_argument("--sample-count", default=1, type=int)
@@ -557,7 +572,7 @@ def _benchmark(args: argparse.Namespace) -> int:
             summary = run_benchmark(
                 BenchmarkRunPlan(
                     architecture_path=args.architecture,
-                    runs_root=args.runs_root,
+                    results_root=args.results_root,
                     benchmark_root=args.benchmark_root,
                     sample_count=args.sample_count,
                     evaluation_sample_count=args.evaluation_sample_count,
@@ -605,14 +620,14 @@ def _benchmark(args: argparse.Namespace) -> int:
         if str(args.benchmark_command) == "shakedown":
             before = _frontier_snapshot(
                 benchmark_root=args.benchmark_root,
-                runs_root=args.runs_root,
+                results_root=args.results_root,
             )
             summary = run_active_training_loop(
                 _active_training_loop_plan(args, dry_run=False)
             )
             after = _frontier_snapshot(
                 benchmark_root=args.benchmark_root,
-                runs_root=args.runs_root,
+                results_root=args.results_root,
             )
             print(f"completed active frontier shakedown for {summary.benchmark_id}")
             print(
@@ -664,7 +679,7 @@ def _active_training_loop_plan(
 ) -> ActiveTrainingLoopPlan:
     return ActiveTrainingLoopPlan(
         benchmark_root=args.benchmark_root,
-        runs_root=args.runs_root,
+        results_root=args.results_root,
         candidate_sample_count=args.candidate_sample_count,
         sample_count=args.sample_count,
         evaluation_sample_count=args.evaluation_sample_count,
@@ -720,7 +735,7 @@ def _format_progress_number(value: object) -> str:
     return "?"
 
 
-def _frontier_snapshot(*, benchmark_root: Path, runs_root: Path) -> _FrontierSnapshot:
+def _frontier_snapshot(*, benchmark_root: Path, results_root: Path) -> _FrontierSnapshot:
     manifest = _load_manifest(benchmark_root / _manifest_filename)
     empty = _FrontierSnapshot(
         benchmark_id=str(manifest.id),
@@ -731,7 +746,7 @@ def _frontier_snapshot(*, benchmark_root: Path, runs_root: Path) -> _FrontierSna
     try:
         summary = materialize_benchmark_result_views(
             repository_root=Path.cwd(),
-            runs_root=runs_root,
+            results_root=results_root,
         )
     except LocalResultImportError as error:
         if "no benchmark result records found" in str(error):
@@ -798,24 +813,21 @@ def _results(args: argparse.Namespace) -> int:
     try:
         results_command = str(args.results_command)
         if results_command == "init-publication":
-            token = args.token or os.environ.get("HF_TOKEN")
-            if not args.local_only and token is None:
-                raise LocalResultImportError("--token or HF_TOKEN is required")
             summary = initialize_publication_checkout(
                 repo_id=args.repo,
-                token=token,
                 repository_root=Path.cwd(),
-                runs_root=args.runs_root,
-                endpoint=args.endpoint,
+                results_root=args.results_root,
+                remote=args.remote,
                 local_only=args.local_only,
                 push=args.push,
                 commit_message=args.message,
+                token=args.token,
             )
             if summary.repo_url is not None:
                 print(f"repository: {summary.repo_url}")
             else:
                 print("repository: local-only")
-            print(f"runs root: {summary.runs_root}")
+            print(f"results root: {summary.results_root}")
             if summary.scaffold_commit is not None:
                 print(f"commit: {summary.scaffold_commit}")
             else:
@@ -827,7 +839,7 @@ def _results(args: argparse.Namespace) -> int:
             summary = import_submission_publications(
                 args.source,
                 repository_root=Path.cwd(),
-                runs_root=args.runs_root,
+                results_root=args.results_root,
             )
             print(
                 "imported "
@@ -837,14 +849,13 @@ def _results(args: argparse.Namespace) -> int:
             print(f"view: {summary.view_file}")
             return 0
         if results_command == "publish":
-            token = args.token or os.environ.get("HF_TOKEN")
-            if args.push and token is None:
-                raise LocalResultImportError("--token or HF_TOKEN is required with --push")
             summary = publish_local_benchmark_results(
                 repository_root=Path.cwd(),
-                runs_root=args.runs_root,
+                results_root=args.results_root,
                 push=args.push,
-                token=token,
+                repo_id=args.repo,
+                remote=args.remote,
+                token=args.token,
                 commit_message=args.message,
             )
             print(
@@ -858,24 +869,25 @@ def _results(args: argparse.Namespace) -> int:
                 print(f"commit: {summary.git_commit}")
             if summary.git_pushed:
                 print("pushed: yes")
+            if summary.remote_commit is not None:
+                print(f"remote: {summary.remote}")
+                print(f"remote commit: {summary.remote_commit}")
             return 0
         if results_command == "push":
-            token = args.token or os.environ.get("HF_TOKEN")
-            if token is None:
-                raise LocalResultImportError("--token or HF_TOKEN is required")
             summary = push_publication_checkout(
                 repository_root=Path.cwd(),
-                runs_root=args.runs_root,
-                token=token,
-                endpoint=args.endpoint,
+                results_root=args.results_root,
+                repo_id=args.repo,
+                remote=args.remote,
+                token=args.token,
             )
             print(f"pushed: {summary.pushed_commit}")
-            print(f"runs root: {summary.runs_root}")
+            print(f"results root: {summary.results_root}")
             return 0
         if results_command == "materialize":
             summary = materialize_benchmark_result_views(
                 repository_root=Path.cwd(),
-                runs_root=args.runs_root,
+                results_root=args.results_root,
             )
             print(
                 "materialized "
@@ -889,7 +901,7 @@ def _results(args: argparse.Namespace) -> int:
             summary = generate_experiment_proposals(
                 ProposalGenerationPlan(
                     benchmark_root=args.benchmark_root,
-                    runs_root=args.runs_root,
+                    results_root=args.results_root,
                     candidate_budget=args.candidate_budget,
                     candidate_sample_count=args.candidate_sample_count,
                     sample_count=args.sample_count,

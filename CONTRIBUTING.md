@@ -46,7 +46,7 @@ editing, inspect nearby code and tests before choosing an implementation, keep
 changes scoped to the requested boundary, and preserve unrelated worktree
 changes. Agents should run the narrowest meaningful checks while iterating,
 report any skipped validation, and avoid committing local runtime state such as
-`.leibniz/`, `.runs/`, caches, checkpoints, registries, or queues.
+`results/`, caches, checkpoints, registries, or queues.
 
 ## Required Pull Request Explanation
 
@@ -162,7 +162,7 @@ measure concepts.
 Do not commit local outputs unless they have deterministic producers and a clear
 review path. In particular, keep these out of Git:
 
-- `.leibniz/`
+- `results/`
 - measurement records produced by local runs,
 - model checkpoints,
 - caches,
