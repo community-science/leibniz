@@ -37,6 +37,7 @@ _benchmark_manifest_record = RecordSpec(
         ),
         "latent_factor_declaration": FieldSpec(kind="record", required=False),
         "complexity_coordinate": FieldSpec(kind="string", required=False),
+        "resolution_analysis": FieldSpec(kind="record", required=False),
     }
 )
 _scale_parameter_record = RecordSpec(
@@ -206,6 +207,7 @@ class BenchmarkManifest:
     observation_ids: frozenset[str] | None = None
     latent_factor_declaration: ArtifactReference | None = None
     complexity_coordinate: str | None = None
+    resolution_analysis: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -255,6 +257,20 @@ class BenchmarkManifest:
                 "latent_factor_declaration reference must have kind "
                 "latent-factor-declaration"
             )
+        if self.resolution_analysis is not None:
+            if self.resolution_analysis.get("kind") != "component-discriminability-margin":
+                raise BenchmarkManifestValidationError(
+                    "resolution_analysis kind must be component-discriminability-margin"
+                )
+            margin = self.resolution_analysis.get("discriminability_margin")
+            if (
+                not isinstance(margin, int | float)
+                or isinstance(margin, bool)
+                or float(margin) <= 0.0
+            ):
+                raise BenchmarkManifestValidationError(
+                    "resolution_analysis discriminability_margin must be positive"
+                )
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> BenchmarkManifest:
@@ -274,6 +290,7 @@ class BenchmarkManifest:
                 validated.get("complexity_coordinate"),
                 field="complexity_coordinate",
             ),
+            resolution_analysis=_manifest_resolution_analysis(validated),
         )
 
     def validate_latent_factor_declaration(
@@ -332,7 +349,21 @@ class BenchmarkManifest:
             record["latent_factor_declaration"] = self.latent_factor_declaration.to_record()
         if self.complexity_coordinate is not None:
             record["complexity_coordinate"] = self.complexity_coordinate
+        if self.resolution_analysis is not None:
+            record["resolution_analysis"] = dict(self.resolution_analysis)
         return record
+
+    def resolution_discriminability_margin(self) -> float:
+        """Return the requested component-separation margin for resolution analysis."""
+
+        if self.resolution_analysis is None:
+            return 0.0
+        value = self.resolution_analysis["discriminability_margin"]
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            raise BenchmarkManifestValidationError(
+                "resolution_analysis discriminability_margin must be numeric"
+            )
+        return float(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -446,3 +477,12 @@ def _manifest_latent_factor_declaration(
         )
     except ValueError as error:
         raise BenchmarkManifestValidationError(str(error)) from error
+
+
+def _manifest_resolution_analysis(
+    validated: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    value = validated.get("resolution_analysis")
+    if value is None:
+        return None
+    return dict(_as_mapping(value, field="resolution_analysis"))

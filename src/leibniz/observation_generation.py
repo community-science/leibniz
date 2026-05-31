@@ -52,6 +52,10 @@ __all__ = [
 ]
 
 _document_suffix = document_filename_suffix()
+_discriminatable_resolution_cache: dict[
+    tuple[str, int, str, str, int, int, float],
+    tuple[int, int],
+] = {}
 
 
 class ObservationGenerationError(ValueError):
@@ -286,6 +290,10 @@ class ObservationGenerator:
         )
         complexity_assignment = AxisAssignment(values={complexity_axis: int(complexity)})
         resolution_assignment = self.materialization.minimum_resolution(scale_assignment)
+        resolution_assignment = self._minimum_discriminatable_resolution_assignment(
+            scale=scale,
+            minimum_assignment=resolution_assignment,
+        )
         resolution_assignment = self._sample_resolution_assignment(
             scale=scale,
             seed=seed,
@@ -479,6 +487,46 @@ class ObservationGenerator:
         values = dict(minimum_assignment.values)
         values[sampling.width_axis] = generator.randint(minimum_width, maximum_width)
         values[sampling.height_axis] = generator.randint(minimum_height, maximum_height)
+        return AxisAssignment(values=values)
+
+    def _minimum_discriminatable_resolution_assignment(
+        self,
+        *,
+        scale: int,
+        minimum_assignment: AxisAssignment,
+    ) -> AxisAssignment:
+        sampling = _resolution_sampling(self.materialization.layout)
+        if sampling is None:
+            return minimum_assignment
+        minimum_width = minimum_assignment.require_axis(sampling.width_axis)
+        minimum_height = minimum_assignment.require_axis(sampling.height_axis)
+        cache_key = (
+            str(self.formation.digest),
+            scale,
+            sampling.width_axis,
+            sampling.height_axis,
+            minimum_width,
+            minimum_height,
+            self.benchmark_manifest.resolution_discriminability_margin(),
+        )
+        cached = _discriminatable_resolution_cache.get(cache_key)
+        if cached is None:
+            cached = self.formation.minimum_discriminatable_resolution(
+                minimum_width=minimum_width,
+                minimum_height=minimum_height,
+                sequence_length=scale,
+                maximum_width=max(minimum_width * 32, scale * 64),
+                maximum_height=max(minimum_height * 32, 64),
+                variation_coordinates=self.formation.boundary_variation_coordinates(
+                    sequence_index=0
+                ),
+                minimum_pairwise_l1=self.benchmark_manifest.resolution_discriminability_margin(),
+            )
+            _discriminatable_resolution_cache[cache_key] = cached
+        width, height = cached
+        values = dict(minimum_assignment.values)
+        values[sampling.width_axis] = max(values.get(sampling.width_axis, 0), width)
+        values[sampling.height_axis] = max(values.get(sampling.height_axis, 0), height)
         return AxisAssignment(values=values)
 
     def _outcome_id(self, sequence: tuple[int, ...]) -> str:

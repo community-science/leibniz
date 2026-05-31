@@ -6,6 +6,7 @@ import math
 import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import combinations, product
 from typing import cast
 
 from leibniz.artifacts import ArtifactReference
@@ -19,6 +20,7 @@ __all__ = [
     "ComponentMark",
     "FieldObservation",
     "FormedObservation",
+    "ObservationComponentDiscriminabilityReport",
     "VariationTransformDeclaration",
     "ObservationComponent",
     "ObservationFormationDeclaration",
@@ -545,6 +547,31 @@ class FormedObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class ObservationComponentDiscriminabilityReport:
+    """Pairwise discriminability report for one observation formation envelope."""
+
+    width: int
+    height: int
+    sequence_length: int
+    sequence_index: int
+    component_count: int
+    variation_case_count: int
+    required_pairwise_l1: float
+    minimum_pairwise_l1: float
+    nearest_pair: tuple[int, int] | None
+
+    @property
+    def passed(self) -> bool:
+        """Return whether every component pair has positive distance."""
+
+        return (
+            self.nearest_pair is not None
+            and self.minimum_pairwise_l1 > 0.0
+            and self.minimum_pairwise_l1 >= self.required_pairwise_l1
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ObservationFormationDeclaration:
     """A manifest-driven interpreter declaration for forming observations."""
 
@@ -734,6 +761,391 @@ class ObservationFormationDeclaration:
                 placement_axis=self.sequence_layout.placement_axis,
                 mark=mark,
             )
+        return FieldObservation(
+            shape=(self.channel_count, height, width),
+            values=tuple(values),
+        )
+
+    def component_discriminability_report(
+        self,
+        *,
+        width: int,
+        height: int,
+        sequence_length: int = 1,
+        sequence_index: int = 0,
+        variation_coordinates: Sequence[Mapping[str, object] | None] = (None,),
+        minimum_pairwise_l1: float = 0.0,
+    ) -> ObservationComponentDiscriminabilityReport:
+        """Measure whether component renderings remain pairwise distinct."""
+
+        if width < 1:
+            raise ObservationFormationValidationError("width must be positive")
+        if height < 1:
+            raise ObservationFormationValidationError("height must be positive")
+        if sequence_length < 1:
+            raise ObservationFormationValidationError("sequence_length must be positive")
+        if sequence_index < 0 or sequence_index >= sequence_length:
+            raise ObservationFormationValidationError(
+                "sequence_index must be within sequence_length"
+            )
+        if not math.isfinite(minimum_pairwise_l1) or minimum_pairwise_l1 < 0.0:
+            raise ObservationFormationValidationError(
+                "minimum_pairwise_l1 must be finite and nonnegative"
+            )
+        coordinate_cases = tuple(variation_coordinates)
+        if not coordinate_cases:
+            raise ObservationFormationValidationError(
+                "variation_coordinates must not be empty"
+            )
+        minimum_distance = float("inf")
+        nearest_pair: tuple[int, int] | None = None
+        for coordinate in coordinate_cases:
+            fields = tuple(
+                self._component_analysis_field(
+                    width=width,
+                    height=height,
+                    sequence_length=sequence_length,
+                    sequence_index=sequence_index,
+                    component_index=component_index,
+                    variation_coordinate=coordinate,
+                )
+                for component_index in range(len(self.components))
+            )
+            for left_index, right_index in combinations(range(len(fields)), 2):
+                distance = _l1_distance(fields[left_index].values, fields[right_index].values)
+                if distance < minimum_distance:
+                    minimum_distance = distance
+                    nearest_pair = (left_index, right_index)
+                    if minimum_distance < minimum_pairwise_l1:
+                        return ObservationComponentDiscriminabilityReport(
+                            width=width,
+                            height=height,
+                            sequence_length=sequence_length,
+                            sequence_index=sequence_index,
+                            component_count=len(self.components),
+                            variation_case_count=len(coordinate_cases),
+                            required_pairwise_l1=minimum_pairwise_l1,
+                            minimum_pairwise_l1=minimum_distance,
+                            nearest_pair=nearest_pair,
+                        )
+        return ObservationComponentDiscriminabilityReport(
+            width=width,
+            height=height,
+            sequence_length=sequence_length,
+            sequence_index=sequence_index,
+            component_count=len(self.components),
+            variation_case_count=len(coordinate_cases),
+            required_pairwise_l1=minimum_pairwise_l1,
+            minimum_pairwise_l1=minimum_distance if nearest_pair is not None else 0.0,
+            nearest_pair=nearest_pair,
+        )
+
+    def minimum_discriminatable_resolution(
+        self,
+        *,
+        minimum_width: int,
+        minimum_height: int,
+        sequence_length: int,
+        maximum_width: int | None = None,
+        maximum_height: int | None = None,
+        variation_coordinates: Sequence[Mapping[str, object] | None] | None = None,
+        minimum_pairwise_l1: float = 0.0,
+    ) -> tuple[int, int]:
+        """Return the smallest searched resolution with distinct components."""
+
+        if minimum_width < 1:
+            raise ObservationFormationValidationError("minimum_width must be positive")
+        if minimum_height < 1:
+            raise ObservationFormationValidationError("minimum_height must be positive")
+        if sequence_length < 1:
+            raise ObservationFormationValidationError("sequence_length must be positive")
+        width_default = (
+            max(minimum_width * 4, 64 * sequence_length)
+            if self.sequence_layout.placement_axis == "x"
+            else max(minimum_width * 4, 64)
+        )
+        width_limit = maximum_width if maximum_width is not None else width_default
+        height_limit = maximum_height if maximum_height is not None else max(minimum_height * 4, 64)
+        if width_limit < minimum_width:
+            raise ObservationFormationValidationError("maximum_width is below minimum_width")
+        if height_limit < minimum_height:
+            raise ObservationFormationValidationError("maximum_height is below minimum_height")
+        coordinate_cases = tuple(variation_coordinates or (None,))
+        if self.sequence_layout.placement_axis in {"x", "y"}:
+            return self._minimum_discriminatable_sequence_resolution(
+                minimum_width=minimum_width,
+                minimum_height=minimum_height,
+                sequence_length=sequence_length,
+                maximum_width=width_limit,
+                maximum_height=height_limit,
+                variation_coordinates=coordinate_cases,
+                minimum_pairwise_l1=minimum_pairwise_l1,
+            )
+        for total in range(minimum_width + minimum_height, width_limit + height_limit + 1):
+            width_start = max(minimum_width, total - height_limit)
+            width_stop = min(width_limit, total - minimum_height)
+            for width in range(width_start, width_stop + 1):
+                height = total - width
+                if self._resolution_is_discriminatable(
+                    width=width,
+                    height=height,
+                    sequence_length=sequence_length,
+                    variation_coordinates=coordinate_cases,
+                    minimum_pairwise_l1=minimum_pairwise_l1,
+                ):
+                    return (width, height)
+        raise ObservationFormationValidationError(
+            "no discriminatable resolution found within search bounds"
+        )
+
+    def _minimum_discriminatable_sequence_resolution(
+        self,
+        *,
+        minimum_width: int,
+        minimum_height: int,
+        sequence_length: int,
+        maximum_width: int,
+        maximum_height: int,
+        variation_coordinates: tuple[Mapping[str, object] | None, ...],
+        minimum_pairwise_l1: float,
+    ) -> tuple[int, int]:
+        if self.sequence_layout.placement_axis == "x":
+            minimum_cell_width = max(1, math.ceil(minimum_width / sequence_length))
+            maximum_cell_width = max(1, maximum_width // sequence_length)
+            for side in range(
+                max(minimum_cell_width, minimum_height),
+                min(maximum_cell_width, maximum_height) + 1,
+            ):
+                if self._component_cell_is_discriminatable(
+                    width=side,
+                    height=side,
+                    variation_coordinates=variation_coordinates,
+                    minimum_pairwise_l1=minimum_pairwise_l1,
+                ):
+                    return (side * sequence_length, side)
+        else:
+            minimum_cell_height = max(1, math.ceil(minimum_height / sequence_length))
+            maximum_cell_height = max(1, maximum_height // sequence_length)
+            for side in range(
+                max(minimum_width, minimum_cell_height),
+                min(maximum_width, maximum_cell_height) + 1,
+            ):
+                if self._component_cell_is_discriminatable(
+                    width=side,
+                    height=side,
+                    variation_coordinates=variation_coordinates,
+                    minimum_pairwise_l1=minimum_pairwise_l1,
+                ):
+                    return (side, side * sequence_length)
+        raise ObservationFormationValidationError(
+            "no discriminatable sequence resolution found within search bounds"
+        )
+
+    def _component_cell_is_discriminatable(
+        self,
+        *,
+        width: int,
+        height: int,
+        variation_coordinates: tuple[Mapping[str, object] | None, ...],
+        minimum_pairwise_l1: float,
+    ) -> bool:
+        if minimum_pairwise_l1 <= 0.0:
+            return self._component_cell_report_is_discriminatable(
+                width=width,
+                height=height,
+                variation_coordinates=variation_coordinates,
+                minimum_pairwise_l1=minimum_pairwise_l1,
+            )
+        if not self._component_fields_clear_margin(
+            width=width,
+            height=height,
+            sequence_length=1,
+            sequence_index=0,
+            variation_coordinates=(None,),
+            minimum_pairwise_l1=minimum_pairwise_l1,
+        ):
+            return False
+        return self._component_fields_clear_margin(
+            width=width,
+            height=height,
+            sequence_length=1,
+            sequence_index=0,
+            variation_coordinates=variation_coordinates,
+            minimum_pairwise_l1=minimum_pairwise_l1,
+        )
+
+    def _component_cell_report_is_discriminatable(
+        self,
+        *,
+        width: int,
+        height: int,
+        variation_coordinates: tuple[Mapping[str, object] | None, ...],
+        minimum_pairwise_l1: float,
+    ) -> bool:
+        unvaried = self.component_discriminability_report(
+            width=width,
+            height=height,
+            sequence_length=1,
+            sequence_index=0,
+            minimum_pairwise_l1=minimum_pairwise_l1,
+        )
+        if not unvaried.passed:
+            return False
+        varied = self.component_discriminability_report(
+            width=width,
+            height=height,
+            sequence_length=1,
+            sequence_index=0,
+            variation_coordinates=variation_coordinates,
+            minimum_pairwise_l1=minimum_pairwise_l1,
+        )
+        return varied.passed
+
+    def _component_fields_clear_margin(
+        self,
+        *,
+        width: int,
+        height: int,
+        sequence_length: int,
+        sequence_index: int,
+        variation_coordinates: tuple[Mapping[str, object] | None, ...],
+        minimum_pairwise_l1: float,
+    ) -> bool:
+        for coordinate in variation_coordinates:
+            fields = tuple(
+                self._component_analysis_field(
+                    width=width,
+                    height=height,
+                    sequence_length=sequence_length,
+                    sequence_index=sequence_index,
+                    component_index=component_index,
+                    variation_coordinate=coordinate,
+                )
+                for component_index in range(len(self.components))
+            )
+            for left_index, right_index in combinations(range(len(fields)), 2):
+                if not _l1_distance_reaches(
+                    fields[left_index].values,
+                    fields[right_index].values,
+                    minimum_pairwise_l1,
+                ):
+                    return False
+        return True
+
+    def boundary_variation_coordinates(
+        self,
+        *,
+        sequence_index: int,
+    ) -> tuple[Mapping[str, object], ...]:
+        """Return transform-bound coordinates for live resolution analysis."""
+
+        if sequence_index < 0:
+            raise ObservationFormationValidationError("sequence_index must be nonnegative")
+        spatial = self.variation_transform.spatial_affine
+        value_scale = self.variation_transform.value_scale
+        cases: list[Mapping[str, object]] = []
+        for translation_x, translation_y, scale_x, scale_y, rotation, shear in product(
+            spatial.translation[0],
+            spatial.translation[1],
+            spatial.scale[0],
+            spatial.scale[1],
+            (-spatial.rotation_degrees[0], spatial.rotation_degrees[0]),
+            (-spatial.shear_degrees[0], spatial.shear_degrees[0]),
+        ):
+            cases.append(
+                {
+                    "kind": "field-variation-transform-coordinate",
+                    "sequence_index": sequence_index,
+                    "spatial_affine": {
+                        "kind": "spatial-affine-coordinate",
+                        "coordinate_system": spatial.coordinate_system,
+                        "translation": [translation_x, translation_y],
+                        "scale": [scale_x, scale_y],
+                        "rotation_degrees": [rotation],
+                        "shear_degrees": [shear],
+                    },
+                    "value_scale": {
+                        "kind": "value-scale-coordinate",
+                        "scale": value_scale.scale[0],
+                    },
+                }
+            )
+        return tuple(cases)
+
+    def _resolution_is_discriminatable(
+        self,
+        *,
+        width: int,
+        height: int,
+        sequence_length: int,
+        variation_coordinates: tuple[Mapping[str, object] | None, ...],
+        minimum_pairwise_l1: float,
+    ) -> bool:
+        for sequence_index in range(sequence_length):
+            coordinates = tuple(
+                None
+                if coordinate is None
+                else _variation_coordinate_with_sequence_index(coordinate, sequence_index)
+                for coordinate in variation_coordinates
+            )
+            report = self.component_discriminability_report(
+                width=width,
+                height=height,
+                sequence_length=sequence_length,
+                sequence_index=sequence_index,
+                variation_coordinates=coordinates,
+                minimum_pairwise_l1=minimum_pairwise_l1,
+            )
+            if not report.passed:
+                return False
+        return True
+
+    def _component_analysis_field(
+        self,
+        *,
+        width: int,
+        height: int,
+        sequence_length: int,
+        sequence_index: int,
+        component_index: int,
+        variation_coordinate: Mapping[str, object] | None,
+    ) -> FieldObservation:
+        if variation_coordinate is None:
+            return self.component_field(
+                width=width,
+                height=height,
+                sequence_length=sequence_length,
+                sequence_index=sequence_index,
+                component_index=component_index,
+            )
+        values = [0.0] * (self.channel_count * width * height)
+        source_values = [0.0] * len(values)
+        component = self.components[component_index]
+        for mark in component.marks:
+            _draw_mark(
+                values=source_values,
+                channel_count=self.channel_count,
+                width=width,
+                height=height,
+                sequence_length=sequence_length,
+                sequence_index=sequence_index,
+                placement_axis=self.sequence_layout.placement_axis,
+                mark=mark,
+            )
+        _merge_transformed_sequence_element(
+            values=values,
+            source_values=source_values,
+            channel_count=self.channel_count,
+            width=width,
+            height=height,
+            sequence_length=sequence_length,
+            sequence_index=sequence_index,
+            placement_axis=self.sequence_layout.placement_axis,
+            coordinate=_parse_variation_coordinate(
+                variation_coordinate,
+                field="variation_coordinates",
+            ),
+        )
         return FieldObservation(
             shape=(self.channel_count, height, width),
             values=tuple(values),
@@ -1126,6 +1538,22 @@ def _polyline_distance(
     )
 
 
+def _l1_distance(left: Sequence[float], right: Sequence[float]) -> float:
+    return sum(
+        abs(left_value - right_value)
+        for left_value, right_value in zip(left, right, strict=True)
+    )
+
+
+def _l1_distance_reaches(left: Sequence[float], right: Sequence[float], threshold: float) -> bool:
+    distance = 0.0
+    for left_value, right_value in zip(left, right, strict=True):
+        distance += abs(left_value - right_value)
+        if distance >= threshold:
+            return True
+    return False
+
+
 def _segment_distance(
     point: tuple[float, float],
     start: tuple[float, float],
@@ -1216,6 +1644,15 @@ def _parse_variation_coordinate(
         ),
         value_scale=value_scale_number,
     )
+
+
+def _variation_coordinate_with_sequence_index(
+    coordinate: Mapping[str, object],
+    sequence_index: int,
+) -> Mapping[str, object]:
+    updated = dict(coordinate)
+    updated["sequence_index"] = sequence_index
+    return updated
 
 
 def _coordinate_pair(value: object, *, field: str) -> tuple[float, float]:
