@@ -373,13 +373,13 @@ function assertConsoleResultRootPolicy() {
   try {
     assertEqual(consoleResultRoots({}, tempRoot).length, 0, 'missing default result root');
     assertEqual(consoleResultWatchRoots({}, tempRoot).length, 0, 'missing default watch root');
-    mkdirSync(resolve(tempRoot, '.runs'), { recursive: true });
+    mkdirSync(resolve(tempRoot, 'results'), { recursive: true });
     assertEqual(
       consoleResultWatchRoots({}, tempRoot)[0],
-      resolve(tempRoot, '.runs'),
+      resolve(tempRoot, 'results'),
       'default watch root',
     );
-    const defaultRoot = resolve(tempRoot, '.runs/views');
+    const defaultRoot = resolve(tempRoot, 'results/views');
     mkdirSync(defaultRoot, { recursive: true });
     assertEqual(consoleResultRoots({}, tempRoot)[0], defaultRoot, 'default result root');
     assertEqual(consoleBasePath({}), '/', 'default console base path');

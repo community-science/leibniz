@@ -29,12 +29,12 @@ def test_repository_policy_accepts_source_and_configuration_paths() -> None:
 def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
     violations = RepositoryPolicy.validate_tracked_paths(
         [
-            ".leibniz/measurements.json",
+            "results/measurements.json",
             ".pytest_cache/v/cache/nodeids",
             ".ruff_cache/CACHEDIR.TAG",
-            ".runs/measurements/digits/local-run.json",
-            ".runs/proposals/digits/proposal_set.json",
-            ".runs/views/benchmark_results.json",
+            "results/measurements/digits/local-run.json",
+            "results/proposals/digits/proposal_set.json",
+            "results/views/benchmark_results.json",
             ".venv/pyvenv.cfg",
             ".vite/deps/react.js",
             "build/lib/leibniz/__init__.py",
@@ -49,7 +49,7 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
 
     assert violations == (
         PolicyViolation(
-            path=PurePosixPath(".leibniz/measurements.json"),
+            path=PurePosixPath("results/measurements.json"),
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(
@@ -61,15 +61,15 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(
-            path=PurePosixPath(".runs/measurements/digits/local-run.json"),
+            path=PurePosixPath("results/measurements/digits/local-run.json"),
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(
-            path=PurePosixPath(".runs/proposals/digits/proposal_set.json"),
+            path=PurePosixPath("results/proposals/digits/proposal_set.json"),
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(
-            path=PurePosixPath(".runs/views/benchmark_results.json"),
+            path=PurePosixPath("results/views/benchmark_results.json"),
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(
@@ -138,7 +138,7 @@ def test_tracked_repository_id_examples_use_neutral_owners() -> None:
         for line_number, line in enumerate(text.splitlines(), start=1):
             if not repository_line_pattern.search(line):
                 continue
-            if any(marker in line for marker in ("https://", "hf://", ".leibniz/")):
+            if any(marker in line for marker in ("https://", "hf://", "results/")):
                 continue
             for match in repository_pattern.finditer(line):
                 owner = match.group("owner").lower()

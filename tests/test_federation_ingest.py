@@ -190,14 +190,14 @@ def test_federation_ingest_plan_rejects_invalid_sources_and_local_state() -> Non
     )
 
     record = _plan_record()
-    record["cache_dir"] = ".leibniz/ingest-cache"
+    record["cache_dir"] = "./results/ingest-cache"
     assert str(capture_ingest_error(lambda: FederationIngestPlan.from_record(record))) == (
         "cache_dir: unknown field"
     )
 
     record = _plan_record()
     entries = list(_entry_records(record))
-    entries[0]["repository"] = ".leibniz/source"
+    entries[0]["repository"] = "./results/source"
     record["entries"] = entries
     assert str(capture_ingest_error(lambda: FederationIngestPlan.from_record(record))) == (
         "repository must not be a local path"

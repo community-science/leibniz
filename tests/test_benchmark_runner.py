@@ -37,7 +37,7 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             sample_count=2,
             train_steps=1,
             dry_run=True,
@@ -51,13 +51,13 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     )
     assert summary.measurement_dataset_path == (
         tmp_path
-        / ".runs"
+        / "results"
         / "measurements"
         / "digits"
         / f"{summary.run_slug}.json"
     )
     assert not summary.measurement_dataset_path.exists()
-    assert not (tmp_path / ".runs").exists()
+    assert not (tmp_path / "results").exists()
 
 
 def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -> None:
@@ -65,7 +65,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             sample_count=2,
             evaluation_sample_count=3,
             seed=101,
@@ -168,7 +168,7 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             sample_count=2,
             seed=101,
             train_steps=3,
@@ -270,7 +270,7 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             sample_count=2,
             train_steps=1,
             tensor_device="auto",
@@ -324,7 +324,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             sample_count=2,
             seed=101,
             train_steps=1,
@@ -334,7 +334,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
 
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
 
     view = load_console_result_view(summary.view_file.read_bytes())
@@ -399,7 +399,7 @@ def test_digits_benchmark_runner_materializes_running_training_history(
     def refresh_progress(_summary: BenchmarkRunSummary) -> None:
         view_summary = materialize_benchmark_result_views(
             repository_root=_repository_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
         )
         progress_views.append(load_console_result_view(view_summary.view_file.read_bytes()))
 
@@ -407,7 +407,7 @@ def test_digits_benchmark_runner_materializes_running_training_history(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             sample_count=2,
             evaluation_sample_count=2,
             seed=101,
@@ -443,7 +443,7 @@ def test_digits_benchmark_runner_materializes_running_training_history(
 
     final_view_summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
-        runs_root=tmp_path / ".runs",
+        results_root=tmp_path / "results",
     )
     final_view = load_console_result_view(final_view_summary.view_file.read_bytes())
     final_result = cast(list[dict[str, object]], final_view["benchmark_results"])[0]
@@ -463,7 +463,7 @@ def test_digits_benchmark_runner_records_adaptive_scale_boundary(tmp_path: Path)
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             sample_count=2,
             train_steps=0,
             tensor_device="cpu",
@@ -520,7 +520,7 @@ def test_adaptive_scale_trace_retrains_until_zero_marginal_score(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             sample_count=2,
             evaluation_sample_count=2,
             train_steps=0,
@@ -559,8 +559,8 @@ def test_cli_runs_digits_benchmark_dry_run(
             str(_digits_architecture),
             "--benchmark-root",
             str(_digits_benchmark_root),
-            "--runs-root",
-            str(tmp_path / ".runs"),
+            "--results-root",
+            str(tmp_path / "results"),
             "--sample-count",
             "2",
             "--dry-run",
@@ -574,7 +574,7 @@ def test_cli_runs_digits_benchmark_dry_run(
         "planned benchmark run "
         "digits-arch-bb0dde9254dc-l1-seed101-samples2-stepsconverge-train-"
     )
-    assert not (tmp_path / ".runs").exists()
+    assert not (tmp_path / "results").exists()
 
 
 def _history_point(

@@ -66,7 +66,7 @@ class ProposalGenerationPlan:
     """Inputs for deterministic local proposal generation."""
 
     benchmark_root: Path
-    runs_root: Path = Path(".runs")
+    results_root: Path = Path("results")
     candidate_budget: int = 3
     candidate_sample_count: int = 64
     sample_count: int = 512
@@ -205,8 +205,8 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
         sample_count=1,
         seed=plan.seed,
     ).samples[0]
-    dataset = _measurement_dataset(plan.runs_root, benchmark_id=manifest.id)
-    measured = _measured_architectures(plan.runs_root, benchmark_id=manifest.id)
+    dataset = _measurement_dataset(plan.results_root, benchmark_id=manifest.id)
+    measured = _measured_architectures(plan.results_root, benchmark_id=manifest.id)
     search_distribution = default_architecture_search_distribution()
     preferred_device = preferred_tensor_runtime_device_kind(plan.tensor_device)
     sampled_candidates = tuple(
@@ -246,8 +246,8 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
         raise ProposalGenerationError("no unmeasured candidate architectures are available")
 
     benchmark_atom = _identifier_atom(manifest.id)
-    architecture_root = plan.runs_root / "proposals" / "architectures" / benchmark_atom
-    proposal_root = plan.runs_root / "proposals" / benchmark_atom
+    architecture_root = plan.results_root / "proposals" / "architectures" / benchmark_atom
+    proposal_root = plan.results_root / "proposals" / benchmark_atom
     architecture_root.mkdir(parents=True, exist_ok=True)
     proposal_root.mkdir(parents=True, exist_ok=True)
 
@@ -289,8 +289,8 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                     plan.benchmark_root.as_posix(),
                     "--architecture",
                     architecture_path.as_posix(),
-                    "--runs-root",
-                    plan.runs_root.as_posix(),
+                    "--results-root",
+                    plan.results_root.as_posix(),
                     "--sample-count",
                     str(plan.sample_count),
                     "--evaluation-sample-count",
@@ -350,12 +350,12 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
 
 
 def _measurement_dataset(
-    runs_root: Path,
+    results_root: Path,
     *,
     benchmark_id: ProtocolIdentifier,
 ) -> MeasurementDataset:
     records: dict[ProtocolIdentifier, Mapping[str, object]] = {}
-    for dataset in _measurement_datasets(runs_root, benchmark_id=benchmark_id):
+    for dataset in _measurement_datasets(results_root, benchmark_id=benchmark_id):
         for measurement in dataset.measurements:
             measurement_id = measurement.raw_scoring_evidence.id
             record = measurement.to_record()
@@ -372,16 +372,16 @@ def _measurement_dataset(
 
 
 def _measurement_datasets(
-    runs_root: Path,
+    results_root: Path,
     *,
     benchmark_id: ProtocolIdentifier,
 ) -> tuple[MeasurementDataset, ...]:
     datasets: list[MeasurementDataset] = []
-    measurement_root = runs_root / "measurements" / _identifier_atom(benchmark_id)
+    measurement_root = results_root / "measurements" / _identifier_atom(benchmark_id)
     if measurement_root.is_dir():
         for path in sorted(measurement_root.rglob("*" + _document_suffix)):
             datasets.append(MeasurementDatasetDocument.from_bytes(path.read_bytes()).dataset)
-    import_root = runs_root / "imports" / "publication_bundles"
+    import_root = results_root / "imports" / "publication_bundles"
     if import_root.is_dir():
         for path in sorted(import_root.rglob("*" + _document_suffix)):
             bundle = SubmissionPublicationDocument.from_bytes(path.read_bytes()).bundle
@@ -391,19 +391,19 @@ def _measurement_datasets(
 
 
 def _measured_architectures(
-    runs_root: Path,
+    results_root: Path,
     *,
     benchmark_id: ProtocolIdentifier,
 ) -> tuple[_MeasuredArchitecture, ...]:
     measured: list[_MeasuredArchitecture] = []
-    for summary in _training_summaries(runs_root, benchmark_id=benchmark_id):
+    for summary in _training_summaries(results_root, benchmark_id=benchmark_id):
         inspection_path = _summary_path(
-            runs_root=runs_root,
+            results_root=results_root,
             value=summary.get("model_inspection_path"),
             field="model_inspection_path",
         )
         dataset_path = _summary_path(
-            runs_root=runs_root,
+            results_root=results_root,
             value=summary.get("measurement_dataset_path"),
             field="measurement_dataset_path",
         )
@@ -417,7 +417,7 @@ def _measured_architectures(
             )
         )
 
-    import_root = runs_root / "imports" / "publication_bundles"
+    import_root = results_root / "imports" / "publication_bundles"
     if import_root.is_dir():
         for path in sorted(import_root.rglob("*" + _document_suffix)):
             bundle = SubmissionPublicationDocument.from_bytes(path.read_bytes()).bundle
@@ -438,11 +438,11 @@ def _measured_architectures(
 
 
 def _training_summaries(
-    runs_root: Path,
+    results_root: Path,
     *,
     benchmark_id: ProtocolIdentifier,
 ) -> tuple[Mapping[str, object], ...]:
-    training_root = runs_root / "training" / _identifier_atom(benchmark_id)
+    training_root = results_root / "training" / _identifier_atom(benchmark_id)
     if not training_root.is_dir():
         return ()
     summaries: list[Mapping[str, object]] = []
@@ -621,13 +621,13 @@ def _parameter_count(record: Mapping[str, object]) -> int:
     return value
 
 
-def _summary_path(*, runs_root: Path, value: object, field: str) -> Path:
+def _summary_path(*, results_root: Path, value: object, field: str) -> Path:
     if not isinstance(value, str) or not value:
         raise ProposalGenerationError(f"{field}: expected path string")
     path = Path(value)
-    resolved = path.resolve() if path.is_absolute() else (runs_root.parent / path).resolve()
-    if not resolved.is_relative_to(runs_root.resolve()):
-        raise ProposalGenerationError(f"{field} must stay inside runs root")
+    resolved = path.resolve() if path.is_absolute() else (results_root.parent / path).resolve()
+    if not resolved.is_relative_to(results_root.resolve()):
+        raise ProposalGenerationError(f"{field} must stay inside results root")
     if not resolved.is_file():
         raise ProposalGenerationError(f"{field} does not exist: {path}")
     return resolved

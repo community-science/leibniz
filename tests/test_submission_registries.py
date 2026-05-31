@@ -140,7 +140,7 @@ def test_submission_registry_rejects_malformed_or_local_repositories() -> None:
         capture_registry_error(
             lambda: SubmissionRegistrySource.from_record(
                 {
-                    "repository": ".leibniz/submissions",
+                    "repository": "./results/submissions",
                     "repository_type": "dataset",
                     "enabled": True,
                 }
@@ -206,7 +206,7 @@ def test_submission_registry_rejects_unsupported_fields_and_types() -> None:
     )
 
     record = _registry_record()
-    record["cache_dir"] = ".leibniz/submission-cache"
+    record["cache_dir"] = "./results/submission-cache"
     assert str(capture_registry_error(lambda: SubmissionRegistry.from_record(record))) == (
         "cache_dir: unknown field"
     )

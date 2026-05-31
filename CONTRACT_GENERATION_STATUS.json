@@ -21,7 +21,7 @@
       "tracked_roots": [
         "src/leibniz"
       ],
-      "maximum": 28621,
+      "maximum": 28679,
       "counting": "Tracked nonblank source implementation lines under src/leibniz in categories marked handwritten-implementation. Contract-runtime support, contract files, tests, fixtures, package metadata, lockfiles, build configuration, generated outputs, and repository automation are excluded."
     },
     "graph_projection": {

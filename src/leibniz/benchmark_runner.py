@@ -143,7 +143,7 @@ class BenchmarkRunPlan:
 
     architecture_path: Path
     benchmark_root: Path
-    runs_root: Path = Path(".runs")
+    results_root: Path = Path("results")
     sample_count: int = _default_sample_count
     evaluation_sample_count: int | None = None
     seed: int = 101
@@ -440,16 +440,16 @@ def _run_summary(
         architecture_path=plan.architecture_path,
         measurement_count=plan.resolved_evaluation_sample_count,
         measurement_dataset_path=(
-            plan.runs_root / "measurements" / benchmark_atom / f"{run_slug}{_document_suffix}"
+            plan.results_root / "measurements" / benchmark_atom / f"{run_slug}{_document_suffix}"
         ),
         model_inspection_path=(
-            plan.runs_root
+            plan.results_root
             / "model-inspections"
             / benchmark_atom
             / f"{run_slug}{_document_suffix}"
         ),
         training_summary_path=(
-            plan.runs_root / "training" / benchmark_atom / f"{run_slug}{_document_suffix}"
+            plan.results_root / "training" / benchmark_atom / f"{run_slug}{_document_suffix}"
         ),
         dry_run=plan.dry_run,
     )

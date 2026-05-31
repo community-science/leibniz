@@ -38,7 +38,7 @@ class ActiveTrainingLoopPlan:
     """Plan for a deterministic local active benchmark loop."""
 
     benchmark_root: Path
-    runs_root: Path = Path(".runs")
+    results_root: Path = Path("results")
     candidate_sample_count: int = 64
     sample_count: int = 512
     evaluation_sample_count: int | None = None
@@ -138,11 +138,11 @@ class ActiveTrainingLoopSummary:
 def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoopSummary:
     """Generate one proposal, run one candidate, and refresh local result views."""
 
-    result_view_path = _materialize_if_possible(plan.runs_root)
+    result_view_path = _materialize_if_possible(plan.results_root)
     proposal_summary = generate_experiment_proposals(
         ProposalGenerationPlan(
             benchmark_root=plan.benchmark_root,
-            runs_root=plan.runs_root,
+            results_root=plan.results_root,
             candidate_budget=1,
             candidate_sample_count=plan.candidate_sample_count,
             sample_count=plan.sample_count,
@@ -178,7 +178,7 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
     def refresh_progress(_summary: BenchmarkRunSummary) -> None:
         materialize_benchmark_result_views(
             repository_root=Path.cwd(),
-            runs_root=plan.runs_root,
+            results_root=plan.results_root,
         )
         if plan.progress_callback is not None:
             plan.progress_callback(_summary)
@@ -187,7 +187,7 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
         BenchmarkRunPlan(
             architecture_path=architecture_path,
             benchmark_root=plan.benchmark_root,
-            runs_root=plan.runs_root,
+            results_root=plan.results_root,
             sample_count=plan.sample_count,
             evaluation_sample_count=plan.evaluation_sample_count,
             seed=plan.seed,
@@ -206,7 +206,7 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
     )
     result_view_path = materialize_benchmark_result_views(
         repository_root=Path.cwd(),
-        runs_root=plan.runs_root,
+        results_root=plan.results_root,
     ).view_file
     return ActiveTrainingLoopSummary(
         benchmark_id=proposal_summary.benchmark_id,
@@ -219,11 +219,11 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
     )
 
 
-def _materialize_if_possible(runs_root: Path) -> Path | None:
+def _materialize_if_possible(results_root: Path) -> Path | None:
     try:
         return materialize_benchmark_result_views(
             repository_root=Path.cwd(),
-            runs_root=runs_root,
+            results_root=results_root,
         ).view_file
     except LocalResultImportError as error:
         if "no benchmark result records found" in str(error):

@@ -64,7 +64,7 @@ class ConsoleArtifactIndexSource:
     def __post_init__(self) -> None:
         if self.source_path.is_absolute():
             raise ConsoleArtifactIndexValidationError("source_path must be repository-relative")
-        if ".leibniz" in self.source_path.parts:
+        if "results" in self.source_path.parts:
             raise ConsoleArtifactIndexValidationError("source_path must not reference local state")
         if self.kind not in _artifact_loaders:
             raise ConsoleArtifactIndexValidationError(f"unsupported document kind: {self.kind}")
@@ -180,7 +180,7 @@ class ConsoleArtifactIndexBuilder:
     def _repository_path(self, source_path: PurePosixPath) -> Path:
         if source_path.is_absolute():
             raise ConsoleArtifactIndexValidationError("source_path must be repository-relative")
-        if ".leibniz" in source_path.parts:
+        if "results" in source_path.parts:
             raise ConsoleArtifactIndexValidationError("source_path must not reference local state")
         path = (self._repository_root / Path(source_path)).resolve()
         if not path.is_relative_to(self._repository_root):

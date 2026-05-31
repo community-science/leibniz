@@ -152,7 +152,7 @@ def test_model_artifact_manifest_rejects_local_or_duplicate_artifacts() -> None:
     record["model_artifacts"] = [
         {
             "kind": "model-checkpoint",
-            "external_uri": ".leibniz/checkpoints/model.pt",
+            "external_uri": "./results/checkpoints/model.pt",
         }
     ]
     assert str(

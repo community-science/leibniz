@@ -201,7 +201,7 @@ def test_resource_records_reject_negative_or_inconsistent_report_fields() -> Non
     )
 
     record = _resource_report_record()
-    record["checkpoint_path"] = ".leibniz/checkpoints/model.pt"
+    record["checkpoint_path"] = "results/checkpoints/model.pt"
     assert str(capture_resource_error(lambda: ResourceReport.from_record(record))) == (
         "checkpoint_path: unknown field"
     )

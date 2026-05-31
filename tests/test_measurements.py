@@ -170,7 +170,7 @@ def test_measurement_record_rejects_malformed_records_and_state_paths() -> None:
                 {
                     "benchmark_id": "core.boolean-benchmark@0.1.0",
                     **_minimal_scoring_record(),
-                    "local_path": ".leibniz/measurement_records/boolean.json",
+                    "local_path": "results/measurement_records/boolean.json",
                 }
             )
         )

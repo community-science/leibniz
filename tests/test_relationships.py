@@ -164,7 +164,7 @@ def test_relationship_fit_rejects_point_count_and_local_state_fields() -> None:
     ) == "point_count exceeds source dataset size"
 
     record = _relationship_fit_record()
-    record["local_path"] = ".leibniz/measurement_records/digits/relationship_fits.json"
+    record["local_path"] = "results/measurement_records/digits/relationship_fits.json"
     assert str(
         capture_relationship_error(
             lambda: RelationshipFitRecord.from_record(

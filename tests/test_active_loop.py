@@ -24,7 +24,7 @@ def test_active_training_loop_dry_run_plans_one_training_session(
     summary = run_active_training_loop(
         ActiveTrainingLoopPlan(
             benchmark_root=_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             dry_run=True,
             sample_count=1,
         )
@@ -36,7 +36,7 @@ def test_active_training_loop_dry_run_plans_one_training_session(
     assert summary.planned_commands[0][:3] == ("leibniz", "benchmark", "run")
     assert summary.proposal_set_paths[0].exists()
     assert summary.measurement_dataset_paths == ()
-    assert not (tmp_path / ".runs" / "measurements").exists()
+    assert not (tmp_path / "results" / "measurements").exists()
 
 
 def test_active_training_loop_runs_one_training_session_and_refreshes_results(
@@ -45,7 +45,7 @@ def test_active_training_loop_runs_one_training_session_and_refreshes_results(
     summary = run_active_training_loop(
         ActiveTrainingLoopPlan(
             benchmark_root=_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             sample_count=1,
             train_steps=0,
             tensor_device="cpu",
@@ -66,7 +66,7 @@ def test_active_training_loop_always_generates_one_proposal(
     summary = run_active_training_loop(
         ActiveTrainingLoopPlan(
             benchmark_root=_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             candidate_sample_count=8,
             sample_count=1,
             train_steps=0,
@@ -80,7 +80,7 @@ def test_active_training_loop_always_generates_one_proposal(
 
 
 def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
-    runs_root = tmp_path / ".runs"
+    results_root = tmp_path / "results"
     environment = {
         **os.environ,
         "PYTHONPATH": str(_repository_root / "src"),
@@ -94,8 +94,8 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
             "loop",
             "--benchmark-root",
             str(_benchmark_root),
-            "--runs-root",
-            str(runs_root),
+            "--results-root",
+            str(results_root),
             "--sample-count",
             "1",
             "--train-steps",
@@ -118,7 +118,7 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
 
     record = ConsoleDataBuilder(_repository_root).discover(
         (PurePosixPath("tests/fixtures"), PurePosixPath("src/leibniz/benchmarks")),
-        result_roots=(runs_root / "views",),
+        result_roots=(results_root / "views",),
     ).to_record()
     result_views = cast(list[dict[str, object]], record["result_views"])
     benchmark_view = next(
@@ -131,7 +131,7 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
         if result["benchmark_id"] == "benchmarks.digits@0.1.0"
     )
     assert benchmark_view["source_path"] == (
-        runs_root / "views" / "benchmark_results.json"
+        results_root / "views" / "benchmark_results.json"
     ).as_posix()
     training_history = cast(list[dict[str, object]], digits_result["training_history"])
     proposals = cast(list[dict[str, object]], digits_result["proposals"])
@@ -149,9 +149,9 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
     assert "--curriculum-max-scale" not in command
     assert len(leaderboard) == 1
     assert leaderboard[0]["observed_complexities"] == [1.0]
-    assert runs_root.joinpath("measurements").is_dir()
-    assert runs_root.joinpath("proposals").is_dir()
-    assert runs_root.joinpath("views", "benchmark_results.json").is_file()
+    assert results_root.joinpath("measurements").is_dir()
+    assert results_root.joinpath("proposals").is_dir()
+    assert results_root.joinpath("views", "benchmark_results.json").is_file()
 
 
 def test_active_training_loop_preserves_existing_measurements_on_run_failure(
@@ -162,7 +162,7 @@ def test_active_training_loop_preserves_existing_measurements_on_run_failure(
         BenchmarkRunPlan(
             architecture_path=_architecture_path,
             benchmark_root=_benchmark_root,
-            runs_root=tmp_path / ".runs",
+            results_root=tmp_path / "results",
             sample_count=1,
             train_steps=0,
             tensor_device="cpu",
@@ -184,7 +184,7 @@ def test_active_training_loop_preserves_existing_measurements_on_run_failure(
         run_active_training_loop(
             ActiveTrainingLoopPlan(
                 benchmark_root=_benchmark_root,
-                runs_root=tmp_path / ".runs",
+                results_root=tmp_path / "results",
                 sample_count=1,
                 train_steps=0,
             )
@@ -203,8 +203,8 @@ def test_cli_runs_active_training_loop_dry_run(
             "loop",
             "--benchmark-root",
             str(_benchmark_root),
-            "--runs-root",
-            str(tmp_path / ".runs"),
+            "--results-root",
+            str(tmp_path / "results"),
             "--sample-count",
             "1",
             "--dry-run",
@@ -222,7 +222,7 @@ def test_cli_runs_active_frontier_shakedown(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runs_root = tmp_path / ".runs"
+    results_root = tmp_path / "results"
 
     exit_code = main(
         [
@@ -230,8 +230,8 @@ def test_cli_runs_active_frontier_shakedown(
             "shakedown",
             "--benchmark-root",
             str(_benchmark_root),
-            "--runs-root",
-            str(runs_root),
+            "--results-root",
+            str(results_root),
             "--sample-count",
             "1",
             "--train-steps",
@@ -249,4 +249,4 @@ def test_cli_runs_active_frontier_shakedown(
     assert "models: 0 -> 1 (+1)" in captured.out
     assert "best score: n/a -> " in captured.out
     assert "view: " in captured.out
-    assert runs_root.joinpath("views", "benchmark_results.json").is_file()
+    assert results_root.joinpath("views", "benchmark_results.json").is_file()
