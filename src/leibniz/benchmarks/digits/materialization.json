@@ -10,19 +10,18 @@
       "name": "benchmarks.digits.resolution.canvas-width",
       "source_axis": "L",
       "resolution_axis": "W",
-      "coefficient": 32,
-      "minimum": 32,
+      "coefficient": 1,
       "basis": "analytic-bound",
-      "description": "Each digit sequence element requires at least 32 horizontal pixels."
+      "description": "Width has only a positive sequence floor; live observation formation analysis chooses the discriminatable canvas."
     },
     {
       "name": "benchmarks.digits.resolution.canvas-height",
       "source_axis": "L",
       "resolution_axis": "H",
       "coefficient": 0,
-      "minimum": 32,
+      "minimum": 1,
       "basis": "analytic-bound",
-      "description": "Digit glyphs require at least 32 vertical pixels independent of sequence length."
+      "description": "Height has only a positive floor; live observation formation analysis chooses the discriminatable canvas."
     }
   ],
   "layout": {

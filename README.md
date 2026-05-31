@@ -133,7 +133,10 @@ Override those with `--train-steps`, `--convergence-min-steps`,
 `--convergence-min-delta` when you need a shorter diagnostic run.
 
 The digits benchmark samples rectangular canvases with independently varying
-height and width. Candidate architectures must therefore accept variable
+height and width. Observation formation now derives the lower canvas floor from
+generic component discriminability analysis rather than a fixed pixel extent per
+digit; the benchmark manifest declares the scalar discriminability margin used
+by that live analysis. Candidate architectures must therefore accept variable
 spatial input shapes, for example by using adaptive pooling before any fixed
 readout. Fixed `input_shape`-only architectures are rejected for sampled digits
 runs because later training batches may have different canvas dimensions than

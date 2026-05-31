@@ -326,6 +326,15 @@ def test_digits_benchmark_manifest_loads_source_artifact() -> None:
         "benchmarks.digits.latent-factors@0.1.0"
     )
     assert manifest.complexity_coordinate == "C"
+    assert manifest.resolution_analysis == {
+        "kind": "component-discriminability-margin",
+        "discriminability_margin": 20.0,
+        "description": (
+            "Minimum rendered component separation required when choosing live "
+            "observation resolution."
+        ),
+    }
+    assert manifest.resolution_discriminability_margin() == 20.0
     assert document.digest == ContentDigest.from_value(manifest.to_record())
 
 

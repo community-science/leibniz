@@ -15,5 +15,10 @@
     "kind": "latent-factor-declaration",
     "protocol_id": "benchmarks.digits.latent-factors@0.1.0"
   },
-  "complexity_coordinate": "C"
+  "complexity_coordinate": "C",
+  "resolution_analysis": {
+    "kind": "component-discriminability-margin",
+    "discriminability_margin": 20.0,
+    "description": "Minimum rendered component separation required when choosing live observation resolution."
+  }
 }

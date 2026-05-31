@@ -128,7 +128,7 @@ def test_digits_observation_formation_is_deterministic_for_materialization_plan(
 
     assert sequence == declaration.sample_component_sequence(plan=plan, sample_index=0)
     assert left == right
-    assert left.field.shape == (1, 32, 96)
+    assert left.field.shape == (1, 16, 48)
     assert max(left.field.values) == 1.0
     assert sum(1 for value in left.field.values if value > 0) > 0
     assert left.to_record()["component_sequence"] == list(sequence)
@@ -147,9 +147,9 @@ def test_digits_observation_formation_separates_sequence_elements() -> None:
     )
 
     assert observation.component_sequence == (1, 2, 3)
-    assert _nonzero_count(observation.field, x_start=0, x_stop=32) > 0
-    assert _nonzero_count(observation.field, x_start=32, x_stop=64) > 0
-    assert _nonzero_count(observation.field, x_start=64, x_stop=96) > 0
+    assert _nonzero_count(observation.field, x_start=0, x_stop=16) > 0
+    assert _nonzero_count(observation.field, x_start=16, x_stop=32) > 0
+    assert _nonzero_count(observation.field, x_start=32, x_stop=48) > 0
 
 
 def test_digits_observation_formation_uses_sampled_canvas_extent() -> None:
