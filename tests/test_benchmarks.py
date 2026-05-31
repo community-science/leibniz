@@ -62,9 +62,7 @@ def test_benchmark_manifest_resolves_scale_indexed_outcome_space() -> None:
     manifest = BenchmarkManifest.from_record(_scale_indexed_manifest_record())
     outcome_space = manifest.resolve_outcome_space(scale=3)
 
-    assert outcome_space.id == ProtocolIdentifier.parse(
-        "benchmarks.digits.outcomes.l3@0.1.0"
-    )
+    assert outcome_space.id == ProtocolIdentifier.parse("benchmarks.digits.outcomes.l3@0.1.0")
     assert len(outcome_space.outcomes) == 1000
     assert outcome_space.outcomes[0].id == "digit-0-0-0"
     assert outcome_space.outcomes[-1].id == "digit-9-9-9"
@@ -92,9 +90,7 @@ def test_benchmark_manifest_accepts_declared_observation_ids() -> None:
 
     manifest = BenchmarkManifest.from_record(record)
 
-    assert manifest.observation_ids == frozenset(
-        {"fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"}
-    )
+    assert manifest.observation_ids == frozenset({"fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"})
     assert manifest.to_record() == {
         "id": "core.boolean-benchmark@0.1.0",
         "name": "core.boolean-benchmark",
@@ -137,18 +133,17 @@ def test_benchmark_manifest_observation_ids_are_order_independent() -> None:
 
     assert left == right
     assert left.to_record()["observation_ids"] == ["observation-1", "observation-2"]
-    assert ContentDigest.from_value(left.to_record()) == ContentDigest.from_value(
-        right.to_record()
-    )
+    assert ContentDigest.from_value(left.to_record()) == ContentDigest.from_value(right.to_record())
 
 
 def test_benchmark_manifest_rejects_mismatched_name() -> None:
     name_record = _benchmark_manifest_record()
     name_record["name"] = "core.other-benchmark"
 
-    assert str(
-        capture_manifest_error(lambda: BenchmarkManifest.from_record(name_record))
-    ) == "name core.other-benchmark does not match id name core.boolean-benchmark"
+    assert (
+        str(capture_manifest_error(lambda: BenchmarkManifest.from_record(name_record)))
+        == "name core.other-benchmark does not match id name core.boolean-benchmark"
+    )
 
 
 def test_benchmark_manifest_rejects_malformed_records() -> None:
@@ -194,16 +189,19 @@ def test_benchmark_manifest_rejects_invalid_observation_ids() -> None:
 
 
 def test_benchmark_manifest_rejects_missing_outcome_declaration() -> None:
-    assert str(
-        capture_manifest_error(
-            lambda: BenchmarkManifest.from_record(
-                {
-                    "id": "core.boolean-benchmark@0.1.0",
-                    "name": "core.boolean-benchmark",
-                }
+    assert (
+        str(
+            capture_manifest_error(
+                lambda: BenchmarkManifest.from_record(
+                    {
+                        "id": "core.boolean-benchmark@0.1.0",
+                        "name": "core.boolean-benchmark",
+                    }
+                )
             )
         )
-    ) == "manifest must declare exactly one of outcome_space or outcome_sequence"
+        == "manifest must declare exactly one of outcome_space or outcome_sequence"
+    )
 
 
 def test_benchmark_manifest_rejects_ambiguous_outcome_declaration() -> None:
@@ -271,15 +269,18 @@ def test_benchmark_manifest_document_expands_minimal_authoring_record() -> None:
 
 
 def test_benchmark_manifest_document_rejects_invalid_document_bytes() -> None:
-    assert str(
-        capture_manifest_error(lambda: BenchmarkManifestDocument.from_bytes(b"\xff"))
-    ) == "manifest document must be UTF-8"
-    assert str(
-        capture_manifest_error(lambda: BenchmarkManifestDocument.from_bytes(b"{"))
-    ) == "invalid manifest document: Expecting property name enclosed in double quotes"
-    assert str(
-        capture_manifest_error(lambda: BenchmarkManifestDocument.from_bytes(b"[]"))
-    ) == "manifest document must contain an object"
+    assert (
+        str(capture_manifest_error(lambda: BenchmarkManifestDocument.from_bytes(b"\xff")))
+        == "manifest document must be UTF-8"
+    )
+    assert (
+        str(capture_manifest_error(lambda: BenchmarkManifestDocument.from_bytes(b"{")))
+        == "invalid manifest document: Expecting property name enclosed in double quotes"
+    )
+    assert (
+        str(capture_manifest_error(lambda: BenchmarkManifestDocument.from_bytes(b"[]")))
+        == "manifest document must contain an object"
+    )
 
 
 def test_benchmark_manifest_document_rejects_invalid_manifest_record() -> None:
@@ -315,7 +316,7 @@ def test_digits_benchmark_manifest_loads_source_artifact() -> None:
     assert manifest.scale_parameter == BenchmarkScaleParameter(
         symbol="L",
         minimum=1,
-        description="Number of digit slots in the image.",
+        description="Number of digits in the ordered sequence.",
     )
     assert manifest.outcome_sequence is not None
     assert manifest.outcome_sequence.outcome_count(4) == 10000

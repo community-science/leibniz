@@ -7,20 +7,37 @@
   },
   "requirements": [
     {
-      "name": "benchmarks.digits.resolution.canvas-side",
+      "name": "benchmarks.digits.resolution.canvas-width",
       "source_axis": "L",
-      "resolution_axis": "N",
+      "resolution_axis": "W",
       "coefficient": 32,
       "minimum": 32,
       "basis": "analytic-bound",
-      "description": "Each digit slot requires a 32-pixel square cell in the initial materialization contract."
+      "description": "Each digit sequence element requires at least 32 horizontal pixels."
+    },
+    {
+      "name": "benchmarks.digits.resolution.canvas-height",
+      "source_axis": "L",
+      "resolution_axis": "H",
+      "coefficient": 0,
+      "minimum": 32,
+      "basis": "analytic-bound",
+      "description": "Digit glyphs require at least 32 vertical pixels independent of sequence length."
     }
   ],
   "layout": {
-    "kind": "axis-slots",
+    "kind": "sequence-layout",
     "sequence_axis": "L",
-    "resolution_axis": "N",
-    "slot_sizing": "equal-partition",
-    "slot_axis": "x"
+    "width_axis": "W",
+    "height_axis": "H",
+    "sequence_spacing": "left-to-right",
+    "placement_axis": "x",
+    "resolution_sampling": {
+      "kind": "uniform-integer-rectangle",
+      "width_axis": "W",
+      "height_axis": "H",
+      "maximum_pixel_multiplier": 4,
+      "description": "Batch canvas area is sampled up to a fixed multiple of the minimum area needed for the sequence."
+    }
   }
 }

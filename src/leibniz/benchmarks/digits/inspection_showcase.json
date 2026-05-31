@@ -22,7 +22,7 @@
       "component_sequence": [
         7
       ],
-      "id": "benchmarks.digits.inspection-samples.slots-1.digit-7@0.1.0",
+      "id": "benchmarks.digits.inspection-samples.sequence-1.digit-7@0.1.0",
       "label": "Single digit 7",
       "outcome_id": "digit-7",
       "sample_index": 0,
@@ -50,7 +50,7 @@
         2,
         3
       ],
-      "id": "benchmarks.digits.inspection-samples.slots-3.digits-1-2-3@0.1.0",
+      "id": "benchmarks.digits.inspection-samples.sequence-3.digits-1-2-3@0.1.0",
       "label": "Three digit sequence 123",
       "outcome_id": "digit-1-2-3",
       "sample_index": 1,

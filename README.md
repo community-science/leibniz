@@ -132,6 +132,13 @@ Override those with `--train-steps`, `--convergence-min-steps`,
 `--validation-interval`, `--convergence-patience`, and
 `--convergence-min-delta` when you need a shorter diagnostic run.
 
+The digits benchmark samples rectangular canvases with independently varying
+height and width. Candidate architectures must therefore accept variable
+spatial input shapes, for example by using adaptive pooling before any fixed
+readout. Fixed `input_shape`-only architectures are rejected for sampled digits
+runs because later training batches may have different canvas dimensions than
+the validation batch used during initial inspection.
+
 While a benchmark loop is training a reserved candidate, validation checkpoints
 are written under `results/training-progress/` and materialized into the local
 benchmark result view as running leaderboard entries with accumulated validation

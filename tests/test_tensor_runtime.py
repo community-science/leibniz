@@ -110,7 +110,8 @@ def test_formation_tensor_cache_matches_unvaried_pure_digits_formation() -> None
         (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
     ).plan
     sequence = (1, 2, 3)
-    resolution = plan.resolution_assignment.require_axis(declaration.resolution_axis)
+    width = plan.resolution_assignment.require_axis(declaration.width_axis)
+    height = plan.resolution_assignment.require_axis(declaration.height_axis)
     cache = FormationTensorCache(runtime=runtime, formation=declaration)
 
     pure = declaration.form_observation(
@@ -119,7 +120,8 @@ def test_formation_tensor_cache_matches_unvaried_pure_digits_formation() -> None
         component_sequence=sequence,
     )
     tensor = cache.component_sequence_tensor(
-        resolution=resolution,
+        width=width,
+        height=height,
         component_sequence=sequence,
     )
 
@@ -136,15 +138,16 @@ def test_formation_tensor_cache_matches_varied_pure_digits_formation() -> None:
         (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
     ).plan
     sequence = (1, 2, 3)
-    resolution = plan.resolution_assignment.require_axis(declaration.resolution_axis)
+    width = plan.resolution_assignment.require_axis(declaration.width_axis)
+    height = plan.resolution_assignment.require_axis(declaration.height_axis)
     coordinates = tuple(
         sample_variation_transform_coordinates(
             transform=declaration.variation_transform,
             seed=plan.seed,
             sample_index=7,
-            slot_index=slot_index,
+            sequence_index=sequence_index,
         )
-        for slot_index in range(len(sequence))
+        for sequence_index in range(len(sequence))
     )
     cache = FormationTensorCache(runtime=runtime, formation=declaration)
 
@@ -155,7 +158,8 @@ def test_formation_tensor_cache_matches_varied_pure_digits_formation() -> None:
         variation_coordinates=coordinates,
     )
     tensor = cache.varied_component_sequence_tensor(
-        resolution=resolution,
+        width=width,
+        height=height,
         component_sequence=sequence,
         variation_coordinates=coordinates,
     )
@@ -190,8 +194,7 @@ def test_formation_tensor_cache_batch_tensors_match_pure_observation_batch() -> 
     assert fields.shape == pure_fields.shape
     assert runtime.torch.allclose(fields, pure_fields, atol=2e-5)
     assert labels.cpu().tolist() == [
-        outcome_ids.index(sample.outcome_id)
-        for sample in observation_batch.samples
+        outcome_ids.index(sample.outcome_id) for sample in observation_batch.samples
     ]
 
 
@@ -267,8 +270,7 @@ def test_formation_tensor_cache_batch_tensors_use_generated_coordinate_values(
 
     assert fields.shape[0] == len(formation_batch.samples)
     assert labels.cpu().tolist() == [
-        outcome_ids.index(sample.outcome_id)
-        for sample in formation_batch.samples
+        outcome_ids.index(sample.outcome_id) for sample in formation_batch.samples
     ]
 
 
@@ -280,15 +282,17 @@ def test_formation_tensor_cache_reuses_component_tensors() -> None:
     cache = FormationTensorCache(runtime=runtime, formation=declaration)
 
     left = cache.component_tensor(
-        resolution=96,
-        slot_count=3,
-        slot_index=1,
+        width=96,
+        height=32,
+        sequence_length=3,
+        sequence_index=1,
         component_index=4,
     )
     right = cache.component_tensor(
-        resolution=96,
-        slot_count=3,
-        slot_index=1,
+        width=96,
+        height=32,
+        sequence_length=3,
+        sequence_index=1,
         component_index=4,
     )
 
@@ -303,19 +307,21 @@ def test_formation_tensor_cache_rejects_invalid_component_requests() -> None:
     cache = FormationTensorCache(runtime=runtime, formation=declaration)
 
     with pytest.raises(TensorRuntimeError, match="component_sequence must not be empty"):
-        cache.component_sequence_tensor(resolution=96, component_sequence=())
-    with pytest.raises(TensorRuntimeError, match="slot_index must be within slot_count"):
+        cache.component_sequence_tensor(width=96, height=32, component_sequence=())
+    with pytest.raises(TensorRuntimeError, match="sequence_index must be within sequence_length"):
         cache.component_tensor(
-            resolution=96,
-            slot_count=3,
-            slot_index=3,
+            width=96,
+            height=32,
+            sequence_length=3,
+            sequence_index=3,
             component_index=0,
         )
     with pytest.raises(TensorRuntimeError, match="component_index is outside"):
         cache.component_tensor(
-            resolution=96,
-            slot_count=3,
-            slot_index=0,
+            width=96,
+            height=32,
+            sequence_length=3,
+            sequence_index=0,
             component_index=len(declaration.components),
         )
 
@@ -327,9 +333,10 @@ def test_formation_tensor_cache_rejects_invalid_variation_coordinates() -> None:
     ).declaration
     cache = FormationTensorCache(runtime=runtime, formation=declaration)
 
-    with pytest.raises(TensorRuntimeError, match="length must match slot count"):
+    with pytest.raises(TensorRuntimeError, match="length must match sequence length"):
         cache.varied_component_sequence_tensor(
-            resolution=96,
+            width=96,
+            height=32,
             component_sequence=(1, 2),
             variation_coordinates=(),
         )
@@ -337,11 +344,12 @@ def test_formation_tensor_cache_rejects_invalid_variation_coordinates() -> None:
         transform=declaration.variation_transform,
         seed=101,
         sample_index=0,
-        slot_index=1,
+        sequence_index=1,
     )
-    with pytest.raises(TensorRuntimeError, match="slot_index must match"):
+    with pytest.raises(TensorRuntimeError, match="sequence_index must match"):
         cache.varied_component_sequence_tensor(
-            resolution=96,
+            width=96,
+            height=32,
             component_sequence=(1,),
             variation_coordinates=(coordinate,),
         )

@@ -7,17 +7,20 @@ from typing import Any, cast
 import pytest
 
 import leibniz.benchmark_runner as benchmark_runner
+from leibniz.architectures import ArchitectureManifest
 from leibniz.benchmark_runner import (
+    BenchmarkRunnerError,
     BenchmarkRunPlan,
     BenchmarkRunSummary,
     run_benchmark,
 )
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
-from leibniz.documents import load_object_document
+from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
 from leibniz.measurements import MeasurementDatasetDocument
 from leibniz.model_inspection import ModelInspectionDocument
+from leibniz.observation_generation import load_observation_generator
 from leibniz.tensor_runtime import (
     TensorRuntime,
     TensorRuntimeDeviceKind,
@@ -58,6 +61,40 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     )
     assert not summary.measurement_dataset_path.exists()
     assert not (tmp_path / "results").exists()
+
+
+def test_digits_benchmark_runner_rejects_fixed_shape_architecture(
+    tmp_path: Path,
+) -> None:
+    sample = load_observation_generator(_digits_benchmark_root).sample_batch(
+        scale=1,
+        sample_count=1,
+        seed=101,
+    ).samples[0]
+    architecture = ArchitectureManifest.from_record(
+        {
+            "input_shape": list(sample.field.shape),
+            "output_shape": [10],
+            "layers": [
+                {"kind": "flatten"},
+                {"kind": "dense", "parameters": {"out": 10}},
+            ],
+        }
+    )
+    architecture_path = tmp_path / "fixed-shape-architecture.json"
+    architecture_path.write_bytes(canonical_document_bytes(architecture.to_record()))
+
+    with pytest.raises(BenchmarkRunnerError, match="variable-shape contract"):
+        run_benchmark(
+            BenchmarkRunPlan(
+                architecture_path=architecture_path,
+                benchmark_root=_digits_benchmark_root,
+                results_root=tmp_path / "results",
+                sample_count=2,
+                train_steps=1,
+                dry_run=True,
+            )
+        )
 
 
 def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -> None:

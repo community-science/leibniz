@@ -1,3 +1,5 @@
+import base64
+import struct
 from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -206,14 +208,32 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     component_sequences = [
         cast(list[int], sample["component_sequence"]) for sample in samples
     ]
-    assert [len(sequence) for sequence in component_sequences[:8]] == [1, 6, 4, 2, 7, 5, 3, 8]
     assert Counter(len(sequence) for sequence in component_sequences) == dict.fromkeys(
         range(1, 9), 5
     )
     digit_counts = Counter(digit for sequence in component_sequences for digit in sequence)
     assert digit_counts == dict.fromkeys(range(10), 18)
+    assert any(
+        sequence
+        != [
+            (sequence[0] + sequence_index) % 10
+            for sequence_index in range(len(sequence))
+        ]
+        for sequence in component_sequences
+    )
+    field_shapes = [tuple(cast(list[int], sample["field_shape"])) for sample in samples]
+    assert len(set(field_shapes)) == len(field_shapes)
+    materialization_plans = [
+        cast(dict[str, object], sample["materialization_plan"]) for sample in samples
+    ]
+    assert all(".sample-0@" in str(plan["id"]) for plan in materialization_plans)
+    assert len({plan["seed"] for plan in materialization_plans}) == len(materialization_plans)
     assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
-    assert samples[0]["field_shape"] == [1, 32, 32]
+    assert samples[0]["field_shape"] == [1, 63, 45]
+    assert _png_dimensions(str(samples[0]["image_data_url"])) == (45, 63)
+    assert _png_dimensions(str(samples[1]["image_data_url"])) == (307, 35)
+    assert samples[0]["preview_crop"] == {"left": 10, "top": 23, "size": 27}
+    assert samples[1]["preview_crop"] == {"left": 8, "top": -128, "size": 289}
     latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])
     variation = next(
         coordinate for coordinate in latent_coordinates if coordinate["role"] == "variation"
@@ -235,6 +255,14 @@ def test_console_data_payload_is_a_canonical_object_document() -> None:
     record = load_object_document(data.to_bytes(), description="console data")
 
     assert record["format"] == "leibniz.console-data"
+
+
+def _png_dimensions(data_url: str) -> tuple[int, int]:
+    prefix = "data:image/png;base64,"
+    if not data_url.startswith(prefix):
+        raise AssertionError("expected PNG data URL")
+    data = base64.b64decode(data_url[len(prefix) :])
+    return struct.unpack(">II", data[16:24])
 
 
 def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:

@@ -54,71 +54,79 @@ class FormationTensorCache:
 
     runtime: TensorRuntime
     formation: ObservationFormationDeclaration
-    _component_tensors: dict[tuple[int, int, int, int], Any] = field(
-        default_factory=lambda: cast(dict[tuple[int, int, int, int], Any], {})
+    _component_tensors: dict[tuple[int, int, int, int, int], Any] = field(
+        default_factory=lambda: cast(dict[tuple[int, int, int, int, int], Any], {})
     )
 
     def component_sequence_tensor(
         self,
         *,
-        resolution: int,
+        width: int,
+        height: int,
         component_sequence: Sequence[int],
     ) -> Any:
         """Return an unvaried formed-field tensor for a component sequence."""
 
-        _require_positive_integer(resolution, "resolution")
+        _require_positive_integer(width, "width")
+        _require_positive_integer(height, "height")
         sequence = tuple(component_sequence)
         if not sequence:
             raise TensorRuntimeError("component_sequence must not be empty")
         tensors = [
             self.component_tensor(
-                resolution=resolution,
-                slot_count=len(sequence),
-                slot_index=slot_index,
+                width=width,
+                height=height,
+                sequence_length=len(sequence),
+                sequence_index=sequence_index,
                 component_index=component_index,
             )
-            for slot_index, component_index in enumerate(sequence)
+            for sequence_index, component_index in enumerate(sequence)
         ]
         return self.runtime.torch.stack(tensors).amax(dim=0)
 
     def varied_component_sequence_tensor(
         self,
         *,
-        resolution: int,
+        width: int,
+        height: int,
         component_sequence: Sequence[int],
         variation_coordinates: Sequence[Mapping[str, object]],
     ) -> Any:
-        """Return a formed-field tensor with recorded per-slot variation applied."""
+        """Return a formed-field tensor with recorded per-position variation applied."""
 
-        _require_positive_integer(resolution, "resolution")
+        _require_positive_integer(width, "width")
+        _require_positive_integer(height, "height")
         sequence = tuple(component_sequence)
         if not sequence:
             raise TensorRuntimeError("component_sequence must not be empty")
         coordinates = tuple(variation_coordinates)
         if len(coordinates) != len(sequence):
-            raise TensorRuntimeError("variation_coordinates length must match slot count")
+            raise TensorRuntimeError("variation_coordinates length must match sequence length")
         source_tensors: list[Any] = []
         affine_rows: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
         value_scales: list[float] = []
-        for slot_index, component_index in enumerate(sequence):
+        for sequence_index, component_index in enumerate(sequence):
             coordinate = _variation_coordinate(
-                coordinates[slot_index],
-                expected_slot_index=slot_index,
+                coordinates[sequence_index],
+                expected_sequence_index=sequence_index,
             )
             source_tensors.append(
                 self.component_tensor(
-                    resolution=resolution,
-                    slot_count=len(sequence),
-                    slot_index=slot_index,
+                    width=width,
+                    height=height,
+                    sequence_length=len(sequence),
+                    sequence_index=sequence_index,
                     component_index=component_index,
                 )
             )
             affine_rows.append(
                 _affine_grid_row(
                     coordinate=coordinate,
-                    slot_count=len(sequence),
-                    slot_index=slot_index,
-                    slot_axis=self.formation.slot_composition.slot_axis,
+                    sequence_length=len(sequence),
+                    sequence_index=sequence_index,
+                    placement_axis=self.formation.sequence_layout.placement_axis,
+                    width=width,
+                    height=height,
                 )
             )
             value_scales.append(coordinate.value_scale)
@@ -170,34 +178,38 @@ class FormationTensorCache:
         sample_count = len(batch.samples)
         if sample_count < 1:
             raise TensorRuntimeError("batch samples must not be empty")
-        resolution = batch.samples[0].resolution
-        slot_count = len(batch.samples[0].component_sequence)
-        if slot_count < 1:
+        width = batch.samples[0].width
+        height = batch.samples[0].height
+        sequence_length = len(batch.samples[0].component_sequence)
+        if sequence_length < 1:
             raise TensorRuntimeError("component_sequence must not be empty")
         source_tensors: list[Any] = []
         affine_rows: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
         value_scales: list[float] = []
         for sample in batch.samples:
-            if sample.resolution != resolution:
-                raise TensorRuntimeError("batch sample resolutions must match")
-            if len(sample.component_sequence) != slot_count:
-                raise TensorRuntimeError("batch sample slot counts must match")
-            if len(sample.variation_coordinates) != slot_count:
-                raise TensorRuntimeError("variation_coordinates length must match slot count")
-            for slot_index, component_index in enumerate(sample.component_sequence):
+            if sample.width != width or sample.height != height:
+                raise TensorRuntimeError("batch sample canvas shapes must match")
+            if len(sample.component_sequence) != sequence_length:
+                raise TensorRuntimeError("batch sample sequence lengths must match")
+            if len(sample.variation_coordinates) != sequence_length:
+                raise TensorRuntimeError("variation_coordinates length must match sequence length")
+            for sequence_index, component_index in enumerate(sample.component_sequence):
                 source_tensors.append(
                     self.component_tensor(
-                        resolution=resolution,
-                        slot_count=slot_count,
-                        slot_index=slot_index,
+                        width=width,
+                        height=height,
+                        sequence_length=sequence_length,
+                        sequence_index=sequence_index,
                         component_index=component_index,
                     )
                 )
                 row, value_scale = _generated_affine_grid_row_and_value_scale(
-                    sample.variation_coordinates[slot_index],
-                    slot_count=slot_count,
-                    slot_index=slot_index,
-                    slot_axis=self.formation.slot_composition.slot_axis,
+                    sample.variation_coordinates[sequence_index],
+                    sequence_length=sequence_length,
+                    sequence_index=sequence_index,
+                    placement_axis=self.formation.sequence_layout.placement_axis,
+                    width=width,
+                    height=height,
                 )
                 affine_rows.append(row)
                 value_scales.append(value_scale)
@@ -227,37 +239,40 @@ class FormationTensorCache:
         ).reshape((len(value_scales), 1, 1, 1))
         transformed = torch.clamp(transformed * scales, min=0.0, max=1.0)
         channels, height, width = transformed.shape[1:]
-        return transformed.reshape(
-            (sample_count, slot_count, channels, height, width)
-        ).amax(dim=1)
+        return transformed.reshape((sample_count, sequence_length, channels, height, width)).amax(
+            dim=1
+        )
 
     def component_tensor(
         self,
         *,
-        resolution: int,
-        slot_count: int,
-        slot_index: int,
+        width: int,
+        height: int,
+        sequence_length: int,
+        sequence_index: int,
         component_index: int,
     ) -> Any:
-        """Return a cached tensor for one component drawn into one slot."""
+        """Return a cached tensor for one component drawn at one sequence position."""
 
-        _require_positive_integer(resolution, "resolution")
-        _require_positive_integer(slot_count, "slot_count")
-        _require_slot_index(slot_index=slot_index, slot_count=slot_count)
+        _require_positive_integer(width, "width")
+        _require_positive_integer(height, "height")
+        _require_positive_integer(sequence_length, "sequence_length")
+        _require_sequence_index(sequence_index=sequence_index, sequence_length=sequence_length)
         if (
             type(component_index) is not int
             or component_index < 0
             or component_index >= len(self.formation.components)
         ):
             raise TensorRuntimeError("component_index is outside component vocabulary")
-        key = (resolution, slot_count, slot_index, component_index)
+        key = (width, height, sequence_length, sequence_index, component_index)
         cached = self._component_tensors.get(key)
         if cached is not None:
             return cached
         tensor = self._build_component_tensor(
-            resolution=resolution,
-            slot_count=slot_count,
-            slot_index=slot_index,
+            width=width,
+            height=height,
+            sequence_length=sequence_length,
+            sequence_index=sequence_index,
             component_index=component_index,
         )
         self._component_tensors[key] = tensor
@@ -266,15 +281,17 @@ class FormationTensorCache:
     def _build_component_tensor(
         self,
         *,
-        resolution: int,
-        slot_count: int,
-        slot_index: int,
+        width: int,
+        height: int,
+        sequence_length: int,
+        sequence_index: int,
         component_index: int,
     ) -> Any:
         field = self.formation.component_field(
-            resolution=resolution,
-            slot_count=slot_count,
-            slot_index=slot_index,
+            width=width,
+            height=height,
+            sequence_length=sequence_length,
+            sequence_index=sequence_index,
             component_index=component_index,
         )
         tensor = self.runtime.torch.tensor(
@@ -289,9 +306,7 @@ def validate_tensor_runtime_device(value: str) -> TensorRuntimeDevice:
     """Validate a requested tensor runtime device name."""
 
     if value not in _available_devices:
-        raise TensorRuntimeError(
-            "tensor runtime device must be one of: auto, cpu, cuda, mps"
-        )
+        raise TensorRuntimeError("tensor runtime device must be one of: auto, cpu, cuda, mps")
     return cast(TensorRuntimeDevice, value)
 
 
@@ -330,10 +345,13 @@ def architecture_supported_by_tensor_runtime(
 ) -> bool:
     """Return whether an architecture is eligible for a resolved tensor device."""
 
-    return architecture_tensor_runtime_issue(
-        architecture,
-        device_kind=device_kind,
-    ) is None
+    return (
+        architecture_tensor_runtime_issue(
+            architecture,
+            device_kind=device_kind,
+        )
+        is None
+    )
 
 
 def architecture_tensor_runtime_issue(
@@ -517,9 +535,7 @@ def _torch() -> Any:
     try:
         return cast(Any, importlib.import_module("torch"))
     except ImportError as error:
-        raise TensorRuntimeError(
-            "PyTorch is required to run benchmark training"
-        ) from error
+        raise TensorRuntimeError("PyTorch is required to run benchmark training") from error
 
 
 def _require_positive_integer(value: int, name: str) -> None:
@@ -527,14 +543,14 @@ def _require_positive_integer(value: int, name: str) -> None:
         raise TensorRuntimeError(f"{name} must be a positive integer")
 
 
-def _require_slot_index(*, slot_index: int, slot_count: int) -> None:
-    if type(slot_index) is not int or slot_index < 0 or slot_index >= slot_count:
-        raise TensorRuntimeError("slot_index must be within slot_count")
+def _require_sequence_index(*, sequence_index: int, sequence_length: int) -> None:
+    if type(sequence_index) is not int or sequence_index < 0 or sequence_index >= sequence_length:
+        raise TensorRuntimeError("sequence_index must be within sequence_length")
 
 
 @dataclass(frozen=True, slots=True)
 class _VariationCoordinate:
-    slot_index: int
+    sequence_index: int
     translation: tuple[float, float]
     scale: tuple[float, float]
     rotation_degrees: float
@@ -545,20 +561,24 @@ class _VariationCoordinate:
 def _variation_coordinate(
     record: Mapping[str, object],
     *,
-    expected_slot_index: int,
+    expected_sequence_index: int,
 ) -> _VariationCoordinate:
     if str(record.get("kind")) != "field-variation-transform-coordinate":
         raise TensorRuntimeError(
             "variation coordinate kind must be field-variation-transform-coordinate"
         )
-    slot_index = _integer(record.get("slot_index"), "slot_index")
-    if slot_index != expected_slot_index:
-        raise TensorRuntimeError("variation coordinate slot_index must match coordinate position")
+    sequence_index = _integer(record.get("sequence_index"), "sequence_index")
+    if sequence_index != expected_sequence_index:
+        raise TensorRuntimeError(
+            "variation coordinate sequence_index must match coordinate position"
+        )
     spatial = _mapping(record.get("spatial_affine"), "spatial_affine")
     if str(spatial.get("kind")) != "spatial-affine-coordinate":
         raise TensorRuntimeError("spatial_affine kind must be spatial-affine-coordinate")
-    if str(spatial.get("coordinate_system")) != "normalized-slot":
-        raise TensorRuntimeError("spatial_affine coordinate_system must be normalized-slot")
+    if str(spatial.get("coordinate_system")) != "normalized-sequence-element":
+        raise TensorRuntimeError(
+            "spatial_affine coordinate_system must be normalized-sequence-element"
+        )
     value_scale = _mapping(record.get("value_scale"), "value_scale")
     if str(value_scale.get("kind")) != "value-scale-coordinate":
         raise TensorRuntimeError("value_scale kind must be value-scale-coordinate")
@@ -569,7 +589,7 @@ def _variation_coordinate(
     if scale_value <= 0.0:
         raise TensorRuntimeError("value_scale.scale must be positive")
     return _VariationCoordinate(
-        slot_index=slot_index,
+        sequence_index=sequence_index,
         translation=_pair(spatial.get("translation"), "spatial_affine.translation"),
         scale=scale,
         rotation_degrees=_single_number(
@@ -587,9 +607,11 @@ def _variation_coordinate(
 def _generated_affine_grid_row_and_value_scale(
     record: Mapping[str, object],
     *,
-    slot_count: int,
-    slot_index: int,
-    slot_axis: str,
+    width: int,
+    height: int,
+    sequence_length: int,
+    sequence_index: int,
+    placement_axis: str,
 ) -> tuple[tuple[tuple[float, float, float], tuple[float, float, float]], float]:
     spatial = cast(Mapping[str, object], record["spatial_affine"])
     value_scale = cast(Mapping[str, object], record["value_scale"])
@@ -599,9 +621,11 @@ def _generated_affine_grid_row_and_value_scale(
             scale=_trusted_pair(spatial["scale"]),
             rotation_degrees=_trusted_single_number(spatial["rotation_degrees"]),
             shear_degrees=_trusted_single_number(spatial["shear_degrees"]),
-            slot_count=slot_count,
-            slot_index=slot_index,
-            slot_axis=slot_axis,
+            width=width,
+            height=height,
+            sequence_length=sequence_length,
+            sequence_index=sequence_index,
+            placement_axis=placement_axis,
         ),
         _trusted_float(value_scale["scale"]),
     )
@@ -610,18 +634,22 @@ def _generated_affine_grid_row_and_value_scale(
 def _affine_grid_row(
     *,
     coordinate: _VariationCoordinate,
-    slot_count: int,
-    slot_index: int,
-    slot_axis: str,
+    width: int,
+    height: int,
+    sequence_length: int,
+    sequence_index: int,
+    placement_axis: str,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     return _affine_grid_row_from_values(
         translation=coordinate.translation,
         scale=coordinate.scale,
         rotation_degrees=coordinate.rotation_degrees,
         shear_degrees=coordinate.shear_degrees,
-        slot_count=slot_count,
-        slot_index=slot_index,
-        slot_axis=slot_axis,
+        width=width,
+        height=height,
+        sequence_length=sequence_length,
+        sequence_index=sequence_index,
+        placement_axis=placement_axis,
     )
 
 
@@ -631,22 +659,30 @@ def _affine_grid_row_from_values(
     scale: tuple[float, float],
     rotation_degrees: float,
     shear_degrees: float,
-    slot_count: int,
-    slot_index: int,
-    slot_axis: str,
+    width: int,
+    height: int,
+    sequence_length: int,
+    sequence_index: int,
+    placement_axis: str,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     inverse = _inverse_affine_matrix_from_values(
         scale=scale,
         rotation_degrees=rotation_degrees,
         shear_degrees=shear_degrees,
     )
-    center = _slot_center(slot_count=slot_count, slot_index=slot_index, axis=slot_axis)
+    center = _sequence_center(
+        width=width,
+        height=height,
+        sequence_length=sequence_length,
+        sequence_index=sequence_index,
+        placement_axis=placement_axis,
+    )
     center_x = 2.0 * center[0] - 1.0
     center_y = 2.0 * center[1] - 1.0
-    field_translation = _slot_relative_translation(
+    field_translation = _sequence_relative_translation(
         translation,
-        slot_count=slot_count,
-        slot_axis=slot_axis,
+        sequence_length=sequence_length,
+        placement_axis=placement_axis,
     )
     translation_x = 2.0 * field_translation[0]
     translation_y = 2.0 * field_translation[1]
@@ -689,26 +725,28 @@ def _inverse_affine_matrix_from_values(
     return ((d / determinant, -b / determinant), (-c / determinant, a / determinant))
 
 
-def _slot_center(
+def _sequence_center(
     *,
-    slot_count: int,
-    slot_index: int,
-    axis: str,
+    width: int,
+    height: int,
+    sequence_length: int,
+    sequence_index: int,
+    placement_axis: str,
 ) -> tuple[float, float]:
-    if axis == "x":
-        return ((slot_index + 0.5) / slot_count, 0.5)
-    return (0.5, (slot_index + 0.5) / slot_count)
+    if placement_axis == "x":
+        return ((sequence_index + 0.5) / sequence_length, 0.5)
+    return (0.5, (sequence_index + 0.5) / sequence_length)
 
 
-def _slot_relative_translation(
+def _sequence_relative_translation(
     translation: tuple[float, float],
     *,
-    slot_count: int,
-    slot_axis: str,
+    sequence_length: int,
+    placement_axis: str,
 ) -> tuple[float, float]:
-    if slot_axis == "x":
-        return (translation[0] / slot_count, translation[1])
-    return (translation[0], translation[1] / slot_count)
+    if placement_axis == "x":
+        return (translation[0] / sequence_length, translation[1])
+    return (translation[0], translation[1] / sequence_length)
 
 
 def _mapping(value: object, name: str) -> Mapping[str, object]:

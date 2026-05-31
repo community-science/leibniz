@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.local_results import LocalResultImportError, load_console_result_view
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_operators import model_operator_vocabulary
+from leibniz.observation_formation import FieldObservation
 from leibniz.observation_generation import (
     ObservationGenerator,
     field_to_png_data_url,
@@ -246,13 +248,15 @@ class ConsoleDataBuilder:
                 "benchmark_id": record["benchmark_id"],
                 "interpreter": record["interpreter"],
                 "output_field": record["output_field"],
-                "slot_composition": record["slot_composition"],
+                "sequence_layout": record["sequence_layout"],
                 "component_count": len(components),
                 "mark_count": sum(
-                    len(self._required_sequence(
-                        self._required_mapping(component, "components")["marks"],
-                        "marks",
-                    ))
+                    len(
+                        self._required_sequence(
+                            self._required_mapping(component, "components")["marks"],
+                            "marks",
+                        )
+                    )
                     for component in components
                 ),
                 "components": record["components"],
@@ -349,36 +353,50 @@ class ConsoleDataBuilder:
         samples: list[Mapping[str, object]] = []
         samples_per_scale = 5
         scales = tuple(range(1, 9))
-        digit_cursor = 0
+        component_sequences = _balanced_component_sequences(
+            scales=scales,
+            samples_per_scale=samples_per_scale,
+            atom_count=atom_count,
+            seed=f"{generator.benchmark_manifest.id}:balanced-console-samples",
+        )
+        used_field_shapes: set[tuple[int, ...]] = set()
         for scale in scales:
-            component_sequences_list: list[tuple[int, ...]] = []
-            for _sample_index in range(samples_per_scale):
-                component_sequences_list.append(
-                    tuple((digit_cursor + slot) % atom_count for slot in range(scale))
+            for sample_index, sequence in enumerate(component_sequences[scale]):
+                seed = 4000 + scale * 100 + sample_index
+                attempt_count = 0
+                while True:
+                    attempt_count += 1
+                    if attempt_count > 512:
+                        raise ConsoleDataValidationError(
+                            "could not generate unique console sample canvas shapes"
+                        )
+                    batch = generator.sample_batch(
+                        scale=scale,
+                        sample_count=1,
+                        seed=seed,
+                        component_sequences=(sequence,),
+                    )
+                    sample = batch.samples[0]
+                    field_shape = tuple(sample.field.shape)
+                    if field_shape not in used_field_shapes:
+                        used_field_shapes.add(field_shape)
+                        break
+                    seed += 1000
+                samples.append(
+                    {
+                        "index": len(samples),
+                        "outcome_id": sample.outcome_id,
+                        "component_sequence": list(sample.observation.component_sequence),
+                        "complexity": sample.complexity,
+                        "field_shape": list(sample.field.shape),
+                        "image_data_url": field_to_png_data_url(sample.field),
+                        "preview_crop": _square_content_crop(sample.field, padding=2),
+                        "materialization_plan": sample.materialization_plan.to_record(),
+                        "latent_coordinates": [
+                            dict(coordinate) for coordinate in sample.latent_coordinates
+                        ],
+                    }
                 )
-                digit_cursor += scale
-            batch = generator.sample_batch(
-                scale=scale,
-                sample_count=samples_per_scale,
-                seed=400 + scale,
-                component_sequences=tuple(component_sequences_list),
-            )
-            base_index = len(samples)
-            samples.extend(
-                {
-                    "index": base_index + sample.index,
-                    "outcome_id": sample.outcome_id,
-                    "component_sequence": list(sample.observation.component_sequence),
-                    "complexity": sample.complexity,
-                    "field_shape": list(sample.field.shape),
-                    "image_data_url": field_to_png_data_url(sample.field),
-                    "materialization_plan": sample.materialization_plan.to_record(),
-                    "latent_coordinates": [
-                        dict(coordinate) for coordinate in sample.latent_coordinates
-                    ],
-                }
-                for sample in batch.samples
-            )
         sample_count = len(samples)
         samples.sort(key=lambda sample: _sample_display_key(sample, sample_count))
         record = {
@@ -441,11 +459,7 @@ class ConsoleDataBuilder:
         return tuple(sorted(views, key=lambda view: str(view["source_path"])))
 
     def _result_root_path(self, root: Path) -> Path:
-        path = (
-            root.resolve()
-            if root.is_absolute()
-            else (self._repository_root / root).resolve()
-        )
+        path = root.resolve() if root.is_absolute() else (self._repository_root / root).resolve()
         if path.is_relative_to(self._repository_root):
             relative = path.relative_to(self._repository_root)
             if "results" in relative.parts and relative.parts[:2] != ("results", "views"):
@@ -455,9 +469,7 @@ class ConsoleDataBuilder:
         return path
 
     def _result_view_files(self, root: Path) -> tuple[Path, ...]:
-        return tuple(
-            sorted(path for path in root.rglob("*" + _document_suffix) if path.is_file())
-        )
+        return tuple(sorted(path for path in root.rglob("*" + _document_suffix) if path.is_file()))
 
     def _display_path(self, path: Path) -> str:
         resolved = path.resolve()
@@ -472,6 +484,49 @@ def _sample_display_key(sample: Mapping[str, object], sample_count: int) -> int:
         raise ConsoleDataValidationError("generated sample index must be an integer")
     return (index * 17) % (sample_count + 1)
 
+
+def _square_content_crop(field: FieldObservation, *, padding: int) -> Mapping[str, object]:
+    _channels, height, width = field.shape
+    pixels = [index for index, value in enumerate(field.values) if value > 0.0]
+    if not pixels:
+        return {"left": 0, "top": 0, "size": max(width, height)}
+    xs = [index % width for index in pixels]
+    ys = [index // width for index in pixels]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    side = max(max_x - min_x + 1, max_y - min_y + 1) + padding * 2
+    left = round((min_x + max_x + 1 - side) / 2.0)
+    top = round((min_y + max_y + 1 - side) / 2.0)
+    return {"left": left, "top": top, "size": side}
+
+
+def _balanced_component_sequences(
+    *,
+    scales: tuple[int, ...],
+    samples_per_scale: int,
+    atom_count: int,
+    seed: str,
+) -> dict[int, tuple[tuple[int, ...], ...]]:
+    total_tokens = samples_per_scale * sum(scales)
+    if total_tokens % atom_count != 0:
+        raise ConsoleDataValidationError(
+            "balanced console samples require total token count to divide atom count"
+        )
+    generator = random.Random(seed)
+    tokens = [
+        digit
+        for digit in range(atom_count)
+        for _occurrence in range(total_tokens // atom_count)
+    ]
+    generator.shuffle(tokens)
+    token_iter = iter(tokens)
+    return {
+        scale: tuple(
+            tuple(next(token_iter) for _token in range(scale))
+            for _sample in range(samples_per_scale)
+        )
+        for scale in scales
+    }
 
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)

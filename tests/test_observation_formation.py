@@ -34,9 +34,20 @@ def test_digits_observation_formation_declaration_loads_source_artifact() -> Non
     )
     assert declaration.benchmark_id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
     assert declaration.channel_count == 1
-    assert declaration.resolution_axis == "N"
-    assert declaration.slot_composition.count_axis == "L"
-    assert declaration.variation_transform.spatial_affine.coordinate_system == "normalized-slot"
+    assert declaration.width_axis == "W"
+    assert declaration.height_axis == "H"
+    assert declaration.sequence_layout.sequence_axis == "L"
+    assert declaration.to_record()["sequence_layout"] == {
+        "sequence_axis": "L",
+        "placement_axis": "x",
+        "width_axis": "W",
+        "height_axis": "H",
+    }
+    assert "slot_composition" not in declaration.to_record()
+    assert (
+        declaration.variation_transform.spatial_affine.coordinate_system
+        == "normalized-sequence-element"
+    )
     assert declaration.variation_transform.spatial_affine.translation == (
         (-0.08, 0.08),
         (-0.08, 0.08),
@@ -64,7 +75,7 @@ def test_digits_spatial_variation_bounds_leave_canvas_margin() -> None:
         ),
         scale_assignment=AxisAssignment(values={"L": 1}),
         complexity_assignment=AxisAssignment(values={"C": 1}),
-        resolution_assignment=AxisAssignment(values={"N": 32}),
+        resolution_assignment=AxisAssignment(values={"W": 32, "H": 32}),
         seed=101,
     )
     scale_extremes = ((1.3, 1.3), (1.3, 0.7), (0.7, 1.3))
@@ -117,14 +128,14 @@ def test_digits_observation_formation_is_deterministic_for_materialization_plan(
 
     assert sequence == declaration.sample_component_sequence(plan=plan, sample_index=0)
     assert left == right
-    assert left.field.shape == (1, 96, 96)
+    assert left.field.shape == (1, 32, 96)
     assert max(left.field.values) == 1.0
     assert sum(1 for value in left.field.values if value > 0) > 0
     assert left.to_record()["component_sequence"] == list(sequence)
     assert left.to_record()["field_digest"] == str(left.field.digest)
 
 
-def test_digits_observation_formation_separates_slots() -> None:
+def test_digits_observation_formation_separates_sequence_elements() -> None:
     declaration = _digits_declaration()
     plan = MaterializationPlanDocument.from_bytes(
         (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
@@ -141,52 +152,106 @@ def test_digits_observation_formation_separates_slots() -> None:
     assert _nonzero_count(observation.field, x_start=64, x_stop=96) > 0
 
 
+def test_digits_observation_formation_uses_sampled_canvas_extent() -> None:
+    declaration = _digits_declaration()
+    plan = MaterializationPlan(
+        id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.large-canvas@0.1.0"),
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
+        materialization_declaration=ArtifactReference(
+            kind="materialization-declaration",
+            protocol_id=ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0"),
+        ),
+        scale_assignment=AxisAssignment(values={"L": 3}),
+        complexity_assignment=AxisAssignment(values={"C": 3}),
+        resolution_assignment=AxisAssignment(values={"W": 128, "H": 64}),
+        seed=101,
+    )
+
+    observation = declaration.form_observation(
+        id=ProtocolIdentifier.parse("benchmarks.digits.observations.large-canvas@0.1.0"),
+        plan=plan,
+        component_sequence=(1, 2, 3),
+    )
+    min_x, max_x, min_y, max_y = _nonzero_bounds(observation.field)
+
+    assert min_x > 0
+    assert max_x < 127
+    assert min_y > 0
+    assert max_y < 63
+
+
+def test_digits_observation_formation_keeps_stroke_width_in_pixel_space() -> None:
+    declaration = _digits_declaration()
+    plan = MaterializationPlan(
+        id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.wide-canvas@0.1.0"),
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
+        materialization_declaration=ArtifactReference(
+            kind="materialization-declaration",
+            protocol_id=ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0"),
+        ),
+        scale_assignment=AxisAssignment(values={"L": 7}),
+        complexity_assignment=AxisAssignment(values={"C": 7}),
+        resolution_assignment=AxisAssignment(values={"W": 339, "H": 41}),
+        seed=407,
+    )
+
+    observation = declaration.form_observation(
+        id=ProtocolIdentifier.parse("benchmarks.digits.observations.wide-canvas@0.1.0"),
+        plan=plan,
+        component_sequence=(9, 0, 1, 2, 3, 4, 5),
+    )
+    _channels, height, width = observation.field.shape
+
+    for sequence_index in range(7):
+        x_start = round(sequence_index * width / 7)
+        x_stop = round((sequence_index + 1) * width / 7)
+        cell_area = (x_stop - x_start) * height
+        nonzero_fraction = _nonzero_count(
+            observation.field,
+            x_start=x_start,
+            x_stop=x_stop,
+        ) / cell_area
+        assert 0.04 < nonzero_fraction < 0.15
+
+
 def test_observation_formation_rejects_component_sequence_mismatch() -> None:
     declaration = _digits_declaration()
     plan = MaterializationPlanDocument.from_bytes(
         (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
     ).plan
 
-    assert str(
-        capture_observation_error(
-            lambda: declaration.form_observation(
-                id=ProtocolIdentifier.parse("benchmarks.digits.observations.bad@0.1.0"),
-                plan=plan,
-                component_sequence=(1, 2),
+    assert (
+        str(
+            capture_observation_error(
+                lambda: declaration.form_observation(
+                    id=ProtocolIdentifier.parse("benchmarks.digits.observations.bad@0.1.0"),
+                    plan=plan,
+                    component_sequence=(1, 2),
+                )
             )
         )
-    ) == "component_sequence length 2 does not match slot count 3"
+        == "component_sequence length 2 does not match sequence length 3"
+    )
+
+
+def test_observation_formation_rejects_retired_slot_contract() -> None:
+    record = _minimal_declaration_record()
+    record["slot_composition"] = record.pop("sequence_layout")
+
+    assert (
+        str(capture_observation_error(lambda: ObservationFormationDeclaration.from_record(record)))
+        == "sequence_layout: missing required field; slot_composition: unknown field"
+    )
 
 
 def test_observation_formation_preserves_explicit_zero_mark_values() -> None:
-    declaration = ObservationFormationDeclaration.from_record(
-        {
-            "id": "benchmarks.synthetic-masks.observation-formation@0.1.0",
-            "benchmark_id": "benchmarks.synthetic-masks@0.1.0",
-            "interpreter": "field-mark-composition@0.1.0",
-            "output_field": {"channel_count": 1, "resolution_axis": "N"},
-            "slot_composition": {
-                "count_axis": "S",
-                "resolution_axis": "N",
-                "slot_axis": "x",
-            },
-            "components": [
-                {
-                    "id": "mask",
-                    "marks": [
-                        {
-                            "kind": "bezier-curve",
-                            "channel": 0,
-                            "degree": 1,
-                            "control_points": [[0.2, 0.5], [0.8, 0.5]],
-                            "width": 2,
-                            "value": 0,
-                        }
-                    ],
-                }
-            ],
-        }
-    )
+    record = _minimal_declaration_record()
+    record["id"] = "benchmarks.synthetic-masks.observation-formation@0.1.0"
+    record["benchmark_id"] = "benchmarks.synthetic-masks@0.1.0"
+    components = cast(list[dict[str, object]], record["components"])
+    marks = cast(list[dict[str, object]], components[0]["marks"])
+    marks[0]["value"] = 0
+    declaration = ObservationFormationDeclaration.from_record(record)
 
     assert declaration.components[0].marks[0].value == 0.0
     assert declaration.components[0].marks[0].to_record()["value"] == 0.0
@@ -210,8 +275,8 @@ def test_variation_identity_coordinates_preserve_observation_field() -> None:
         plan=plan,
         component_sequence=sequence,
         variation_coordinates=tuple(
-            _variation_coordinate(slot_index=slot_index)
-            for slot_index in range(len(sequence))
+            _variation_coordinate(sequence_index=sequence_index)
+            for sequence_index in range(len(sequence))
         ),
     )
 
@@ -252,15 +317,15 @@ def test_variation_coordinates_apply_spatial_translation() -> None:
     assert all(0.0 <= value <= 1.0 for value in shifted.field.values)
 
 
-def test_variation_translation_is_slot_relative_for_multi_slot_observations() -> None:
+def test_variation_translation_is_position_relative_for_longer_sequences() -> None:
     declaration = _synthetic_mark_declaration()
-    plan = _synthetic_plan_with(slot_count=4, resolution=128)
+    plan = _synthetic_plan_with(sequence_length=4, resolution=128)
     identity = declaration.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.base@0.1.0"),
         plan=plan,
         component_sequence=(0, 0, 0, 0),
         variation_coordinates=tuple(
-            _variation_coordinate(slot_index=slot_index) for slot_index in range(4)
+            _variation_coordinate(sequence_index=sequence_index) for sequence_index in range(4)
         ),
     )
     shifted = declaration.form_observation(
@@ -268,8 +333,8 @@ def test_variation_translation_is_slot_relative_for_multi_slot_observations() ->
         plan=plan,
         component_sequence=(0, 0, 0, 0),
         variation_coordinates=tuple(
-            _variation_coordinate(slot_index=slot_index, translation=(0.25, 0.0))
-            for slot_index in range(4)
+            _variation_coordinate(sequence_index=sequence_index, translation=(0.25, 0.0))
+            for sequence_index in range(4)
         ),
     )
 
@@ -285,27 +350,37 @@ def test_observation_formation_rejects_variation_coordinate_mismatch() -> None:
     declaration = _synthetic_mark_declaration()
     plan = _synthetic_plan()
 
-    assert str(
-        capture_observation_error(
-            lambda: declaration.form_observation(
-                id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.bad@0.1.0"),
-                plan=plan,
-                component_sequence=(0,),
-                variation_coordinates=(),
+    assert (
+        str(
+            capture_observation_error(
+                lambda: declaration.form_observation(
+                    id=ProtocolIdentifier.parse(
+                        "benchmarks.synthetic-marks.observations.bad@0.1.0"
+                    ),
+                    plan=plan,
+                    component_sequence=(0,),
+                    variation_coordinates=(),
+                )
             )
         )
-    ) == "variation_coordinates length must match slot count"
+        == "variation_coordinates length must match sequence length"
+    )
 
-    assert str(
-        capture_observation_error(
-            lambda: declaration.form_observation(
-                id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.bad@0.1.0"),
-                plan=plan,
-                component_sequence=(0,),
-                variation_coordinates=(_variation_coordinate(slot_index=1),),
+    assert (
+        str(
+            capture_observation_error(
+                lambda: declaration.form_observation(
+                    id=ProtocolIdentifier.parse(
+                        "benchmarks.synthetic-marks.observations.bad@0.1.0"
+                    ),
+                    plan=plan,
+                    component_sequence=(0,),
+                    variation_coordinates=(_variation_coordinate(sequence_index=1),),
+                )
             )
         )
-    ) == "variation coordinate slot_index must match coordinate position"
+        == "variation coordinate sequence_index must match coordinate position"
+    )
 
 
 def test_variation_transform_declaration_round_trips_canonically() -> None:
@@ -314,7 +389,7 @@ def test_variation_transform_declaration_round_trips_canonically() -> None:
     assert transform.to_record() == _canonical_variation_transform_record()
     assert SpatialAffineVariation.identity(spatial_rank=2).to_record() == {
         "kind": "spatial-affine",
-        "coordinate_system": "normalized-slot",
+        "coordinate_system": "normalized-sequence-element",
         "spatial_rank": 2,
         "translation": [[0.0, 0.0], [0.0, 0.0]],
         "scale": [[1.0, 1.0], [1.0, 1.0]],
@@ -332,34 +407,38 @@ def test_variation_transform_declaration_rejects_invalid_bounds() -> None:
     spatial = dict(cast(dict[str, object], record["spatial_affine"]))
     spatial["spatial_rank"] = 3
     record["spatial_affine"] = spatial
-    assert str(
-        capture_observation_error(lambda: VariationTransformDeclaration.from_record(record))
-    ) == "translation bounds length must equal spatial_rank"
+    assert (
+        str(capture_observation_error(lambda: VariationTransformDeclaration.from_record(record)))
+        == "translation bounds length must equal spatial_rank"
+    )
 
     record = _variation_transform_record()
     spatial = dict(cast(dict[str, object], record["spatial_affine"]))
     spatial["scale"] = [[0.0, 1.0], [1.0, 1.0]]
     record["spatial_affine"] = spatial
-    assert str(
-        capture_observation_error(lambda: VariationTransformDeclaration.from_record(record))
-    ) == "scale.0 bounds must be positive"
+    assert (
+        str(capture_observation_error(lambda: VariationTransformDeclaration.from_record(record)))
+        == "scale.0 bounds must be positive"
+    )
 
     record = _variation_transform_record()
     value_scale = dict(cast(dict[str, object], record["value_scale"]))
     value_scale["scale"] = [1.2, 0.8]
     record["value_scale"] = value_scale
-    assert str(
-        capture_observation_error(lambda: VariationTransformDeclaration.from_record(record))
-    ) == "value_scale.scale lower bound must not exceed upper"
+    assert (
+        str(capture_observation_error(lambda: VariationTransformDeclaration.from_record(record)))
+        == "value_scale.scale lower bound must not exceed upper"
+    )
 
 
 def test_variation_transform_declaration_rejects_unsupported_kinds() -> None:
     record = _variation_transform_record()
     record["kind"] = "other-transform"
 
-    assert str(
-        capture_observation_error(lambda: VariationTransformDeclaration.from_record(record))
-    ) == "unsupported variation transform kind: other-transform"
+    assert (
+        str(capture_observation_error(lambda: VariationTransformDeclaration.from_record(record)))
+        == "unsupported variation transform kind: other-transform"
+    )
 
 
 def test_non_digits_declaration_uses_same_interpreter_path() -> None:
@@ -368,11 +447,12 @@ def test_non_digits_declaration_uses_same_interpreter_path() -> None:
             "id": "benchmarks.synthetic-bars.observation-formation@0.1.0",
             "benchmark_id": "benchmarks.synthetic-bars@0.1.0",
             "interpreter": "field-mark-composition@0.1.0",
-            "output_field": {"channel_count": 1, "resolution_axis": "N"},
-            "slot_composition": {
-                "count_axis": "S",
-                "resolution_axis": "N",
-                "slot_axis": "y",
+            "output_field": {"channel_count": 1, "width_axis": "W", "height_axis": "H"},
+            "sequence_layout": {
+                "sequence_axis": "S",
+                "width_axis": "W",
+                "height_axis": "H",
+                "placement_axis": "y",
             },
             "components": [
                 {
@@ -399,7 +479,7 @@ def test_non_digits_declaration_uses_same_interpreter_path() -> None:
         ),
         scale_assignment=AxisAssignment(values={"S": 3}),
         complexity_assignment=AxisAssignment(values={"C": 3}),
-        resolution_assignment=AxisAssignment(values={"N": 96}),
+        resolution_assignment=AxisAssignment(values={"W": 96, "H": 96}),
         seed=101,
     )
 
@@ -414,16 +494,22 @@ def test_non_digits_declaration_uses_same_interpreter_path() -> None:
 
 
 def test_observation_formation_documents_reject_invalid_bytes() -> None:
-    assert str(
-        capture_observation_error(
-            lambda: ObservationFormationDeclarationDocument.from_bytes(b"\xff")
+    assert (
+        str(
+            capture_observation_error(
+                lambda: ObservationFormationDeclarationDocument.from_bytes(b"\xff")
+            )
         )
-    ) == "observation formation declaration must be UTF-8"
-    assert str(
-        capture_observation_error(
-            lambda: ObservationFormationDeclarationDocument.from_bytes(b"[]")
+        == "observation formation declaration must be UTF-8"
+    )
+    assert (
+        str(
+            capture_observation_error(
+                lambda: ObservationFormationDeclarationDocument.from_bytes(b"[]")
+            )
         )
-    ) == "observation formation declaration must contain an object"
+        == "observation formation declaration must contain an object"
+    )
 
 
 def _digits_declaration() -> ObservationFormationDeclaration:
@@ -437,7 +523,7 @@ def _variation_transform_record() -> dict[str, object]:
         "kind": "field-variation-transform",
         "spatial_affine": {
             "kind": "spatial-affine",
-            "coordinate_system": "normalized-slot",
+            "coordinate_system": "normalized-sequence-element",
             "spatial_rank": 2,
             "translation": [[-0.1, 0.1], [-0.2, 0.2]],
             "scale": [[0.9, 1.1], [0.8, 1.2]],
@@ -456,7 +542,7 @@ def _canonical_variation_transform_record() -> dict[str, object]:
         "kind": "field-variation-transform",
         "spatial_affine": {
             "kind": "spatial-affine",
-            "coordinate_system": "normalized-slot",
+            "coordinate_system": "normalized-sequence-element",
             "spatial_rank": 2,
             "translation": [[-0.1, 0.1], [-0.2, 0.2]],
             "scale": [[0.9, 1.1], [0.8, 1.2]],
@@ -471,57 +557,62 @@ def _canonical_variation_transform_record() -> dict[str, object]:
 
 
 def _synthetic_mark_declaration() -> ObservationFormationDeclaration:
-    return ObservationFormationDeclaration.from_record(
-        {
-            "id": "benchmarks.synthetic-marks.observation-formation@0.1.0",
-            "benchmark_id": "benchmarks.synthetic-marks@0.1.0",
-            "interpreter": "field-mark-composition@0.1.0",
-            "output_field": {"channel_count": 1, "resolution_axis": "N"},
-            "slot_composition": {
-                "count_axis": "S",
-                "resolution_axis": "N",
-                "slot_axis": "x",
-            },
-            "components": [
-                {
-                    "id": "mark",
-                    "marks": [
-                        {
-                            "kind": "bezier-curve",
-                            "channel": 0,
-                            "degree": 1,
-                            "control_points": [[0.35, 0.5], [0.65, 0.5]],
-                            "width": 4,
-                        }
-                    ],
-                }
-            ],
-        }
-    )
+    return ObservationFormationDeclaration.from_record(_minimal_declaration_record())
+
+
+def _minimal_declaration_record() -> dict[str, object]:
+    return {
+        "id": "benchmarks.synthetic-marks.observation-formation@0.1.0",
+        "benchmark_id": "benchmarks.synthetic-marks@0.1.0",
+        "interpreter": "field-mark-composition@0.1.0",
+        "output_field": {"channel_count": 1, "width_axis": "W", "height_axis": "H"},
+        "sequence_layout": {
+            "sequence_axis": "S",
+            "width_axis": "W",
+            "height_axis": "H",
+            "placement_axis": "x",
+        },
+        "components": [
+            {
+                "id": "mark",
+                "marks": [
+                    {
+                        "kind": "bezier-curve",
+                        "channel": 0,
+                        "degree": 1,
+                        "control_points": [[0.35, 0.5], [0.65, 0.5]],
+                        "width": 4,
+                    }
+                ],
+            }
+        ],
+    }
 
 
 def _synthetic_plan() -> MaterializationPlan:
-    return _synthetic_plan_with(slot_count=1, resolution=32)
+    return _synthetic_plan_with(sequence_length=1, resolution=32)
 
 
-def _synthetic_plan_with(*, slot_count: int, resolution: int) -> MaterializationPlan:
+def _synthetic_plan_with(*, sequence_length: int, resolution: int) -> MaterializationPlan:
     return MaterializationPlan(
         id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.materialization-plan@0.1.0"),
         benchmark_id=ProtocolIdentifier.parse("benchmarks.synthetic-marks@0.1.0"),
         materialization_declaration=ArtifactReference(
             kind="materialization-declaration",
-            protocol_id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.materialization@0.1.0"),
+            protocol_id=ProtocolIdentifier.parse(
+                "benchmarks.synthetic-marks.materialization@0.1.0"
+            ),
         ),
-        scale_assignment=AxisAssignment(values={"S": slot_count}),
-        complexity_assignment=AxisAssignment(values={"C": slot_count}),
-        resolution_assignment=AxisAssignment(values={"N": resolution}),
+        scale_assignment=AxisAssignment(values={"S": sequence_length}),
+        complexity_assignment=AxisAssignment(values={"C": sequence_length}),
+        resolution_assignment=AxisAssignment(values={"W": resolution, "H": resolution}),
         seed=101,
     )
 
 
 def _variation_coordinate(
     *,
-    slot_index: int = 0,
+    sequence_index: int = 0,
     translation: tuple[float, float] = (0.0, 0.0),
     scale: tuple[float, float] = (1.0, 1.0),
     rotation_degrees: float = 0.0,
@@ -530,10 +621,10 @@ def _variation_coordinate(
 ) -> dict[str, object]:
     return {
         "kind": "field-variation-transform-coordinate",
-        "slot_index": slot_index,
+        "sequence_index": sequence_index,
         "spatial_affine": {
             "kind": "spatial-affine-coordinate",
-            "coordinate_system": "normalized-slot",
+            "coordinate_system": "normalized-sequence-element",
             "translation": list(translation),
             "scale": list(scale),
             "rotation_degrees": [rotation_degrees],
@@ -559,10 +650,7 @@ def _nonzero_count(field: FieldObservation, *, x_start: int, x_stop: int) -> int
 def _nonzero_bounds(field: FieldObservation) -> tuple[int, int, int, int]:
     _channels, height, width = field.shape
     coordinates = [
-        (x, y)
-        for y in range(height)
-        for x in range(width)
-        if field.values[y * width + x] > 0
+        (x, y) for y in range(height) for x in range(width) if field.values[y * width + x] > 0
     ]
     if not coordinates:
         raise AssertionError("expected nonzero field")

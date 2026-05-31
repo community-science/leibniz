@@ -4,18 +4,20 @@
   "interpreter": "field-mark-composition@0.1.0",
   "output_field": {
     "channel_count": 1,
-    "resolution_axis": "N"
+    "width_axis": "W",
+    "height_axis": "H"
   },
-  "slot_composition": {
-    "count_axis": "L",
-    "resolution_axis": "N",
-    "slot_axis": "x"
+  "sequence_layout": {
+    "sequence_axis": "L",
+    "width_axis": "W",
+    "height_axis": "H",
+    "placement_axis": "x"
   },
   "variation_transform": {
     "kind": "field-variation-transform",
     "spatial_affine": {
       "kind": "spatial-affine",
-      "coordinate_system": "normalized-slot",
+      "coordinate_system": "normalized-sequence-element",
       "spatial_rank": 2,
       "translation": [[-0.08, 0.08], [-0.08, 0.08]],
       "scale": [[0.7, 1.3], [0.7, 1.3]],

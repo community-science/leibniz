@@ -130,11 +130,6 @@ assertEqual(
 );
 const generatedSamples = benchmarkTask?.batches[0]?.samples ?? [];
 assertEqual(
-  generatedSamples.map((sample) => sample.component_sequence.length).join(','),
-  '1,6,4,2,7,5,3,8,6,4,1,7,5,2,8,6,3,1,7,4,2,8,5,3,6,4,1,7,5,2,8,6,3,1,7,4,2,8,5,3',
-  'mixed sample display order',
-);
-assertEqual(
   scaleCounts(generatedSamples).join(','),
   '5,5,5,5,5,5,5,5',
   'balanced scale samples',
@@ -143,6 +138,11 @@ assertEqual(
   digitCounts(generatedSamples).join(','),
   '18,18,18,18,18,18,18,18,18,18',
   'balanced digit counts',
+);
+assertEqual(
+  new Set(generatedSamples.map((sample) => sample.field_shape.join('x'))).size,
+  generatedSamples.length,
+  'independent sample canvas shapes',
 );
 assertEqual(
   benchmarkTask?.batches[0]?.presentation.sample_card_density,
@@ -159,7 +159,16 @@ if (generatedSample === undefined) {
   throw new Error('expected generated sample');
 }
 assertEqual(generatedSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
-assertEqual(generatedSample.field_shape.join('x'), '1x32x32', 'sample field shape');
+assertEqual(generatedSample.field_shape.join('x'), '1x63x45', 'sample field shape');
+assertEqual(
+  [
+    generatedSample.preview_crop.left,
+    generatedSample.preview_crop.top,
+    generatedSample.preview_crop.size,
+  ].join(','),
+  '10,23,27',
+  'sample preview crop',
+);
 assertEqual(
   generatedSample.latent_coordinates.map((coordinate) => coordinate.role).join(','),
   'content,variation,materialization',
@@ -198,7 +207,7 @@ assertEqual(
 );
 assertEqual(
   assignmentLabel(materializationPlan.resolution_assignment),
-  'N=32',
+  'H=63,W=45',
   'sample resolution assignment',
 );
 assertDataError(
