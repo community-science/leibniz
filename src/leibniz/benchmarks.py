@@ -271,6 +271,57 @@ class BenchmarkManifest:
                 raise BenchmarkManifestValidationError(
                     "resolution_analysis discriminability_margin must be positive"
                 )
+            for field in (
+                "affine_minimum_absolute_determinant",
+                "affine_minimum_axis_alignment",
+                "affine_minimum_cell_overlap_ratio",
+                "affine_minimum_singular_value",
+                "affine_maximum_singular_value",
+                "affine_maximum_condition_number",
+                "affine_minimum_projected_extent",
+                "affine_maximum_projected_extent",
+            ):
+                value = self.resolution_analysis.get(field)
+                if value is None:
+                    continue
+                if (
+                    not isinstance(value, int | float)
+                    or isinstance(value, bool)
+                    or float(value) <= 0.0
+                ):
+                    raise BenchmarkManifestValidationError(
+                        f"resolution_analysis {field} must be positive"
+                    )
+            minimum_extent = self.resolution_analysis.get("affine_minimum_projected_extent")
+            maximum_extent = self.resolution_analysis.get("affine_maximum_projected_extent")
+            if (
+                isinstance(minimum_extent, int | float)
+                and not isinstance(minimum_extent, bool)
+                and isinstance(maximum_extent, int | float)
+                and not isinstance(maximum_extent, bool)
+                and float(minimum_extent) > float(maximum_extent)
+            ):
+                raise BenchmarkManifestValidationError(
+                    "resolution_analysis affine_minimum_projected_extent must not exceed "
+                    "affine_maximum_projected_extent"
+                )
+            minimum_singular_value = self.resolution_analysis.get(
+                "affine_minimum_singular_value"
+            )
+            maximum_singular_value = self.resolution_analysis.get(
+                "affine_maximum_singular_value"
+            )
+            if (
+                isinstance(minimum_singular_value, int | float)
+                and not isinstance(minimum_singular_value, bool)
+                and isinstance(maximum_singular_value, int | float)
+                and not isinstance(maximum_singular_value, bool)
+                and float(minimum_singular_value) > float(maximum_singular_value)
+            ):
+                raise BenchmarkManifestValidationError(
+                    "resolution_analysis affine_minimum_singular_value must not exceed "
+                    "affine_maximum_singular_value"
+                )
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> BenchmarkManifest:
@@ -364,6 +415,32 @@ class BenchmarkManifest:
                 "resolution_analysis discriminability_margin must be numeric"
             )
         return float(value)
+
+    def affine_acceptance_thresholds(self) -> dict[str, float]:
+        """Return optional fast affine proposal acceptance thresholds."""
+
+        if self.resolution_analysis is None:
+            return {}
+        thresholds: dict[str, float] = {}
+        for field in (
+            "affine_minimum_absolute_determinant",
+            "affine_minimum_axis_alignment",
+            "affine_minimum_cell_overlap_ratio",
+            "affine_minimum_singular_value",
+            "affine_maximum_singular_value",
+            "affine_maximum_condition_number",
+            "affine_minimum_projected_extent",
+            "affine_maximum_projected_extent",
+        ):
+            value = self.resolution_analysis.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, int | float) or isinstance(value, bool):
+                raise BenchmarkManifestValidationError(
+                    f"resolution_analysis {field} must be numeric"
+                )
+            thresholds[field] = float(value)
+        return thresholds
 
 
 @dataclass(frozen=True, slots=True)

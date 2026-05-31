@@ -5,25 +5,7 @@
     "kind": "latent-factor-declaration",
     "protocol_id": "benchmarks.digits.latent-factors@0.1.0"
   },
-  "requirements": [
-    {
-      "name": "benchmarks.digits.resolution.canvas-width",
-      "source_axis": "L",
-      "resolution_axis": "W",
-      "coefficient": 1,
-      "basis": "analytic-bound",
-      "description": "Width has only a positive sequence floor; live observation formation analysis chooses the discriminatable canvas."
-    },
-    {
-      "name": "benchmarks.digits.resolution.canvas-height",
-      "source_axis": "L",
-      "resolution_axis": "H",
-      "coefficient": 0,
-      "minimum": 1,
-      "basis": "analytic-bound",
-      "description": "Height has only a positive floor; live observation formation analysis chooses the discriminatable canvas."
-    }
-  ],
+  "requirements": [],
   "layout": {
     "kind": "sequence-layout",
     "sequence_axis": "L",

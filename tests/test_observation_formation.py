@@ -14,13 +14,17 @@ from leibniz.observation_formation import (
     ObservationFormationDeclarationDocument,
     ObservationFormationValidationError,
     SpatialAffineVariation,
-    ValueScaleVariation,
     VariationTransformDeclaration,
 )
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
 _digits_fixture_root = _repository_root / "tests" / "fixtures" / "digits"
+_AffineMatrix2D = tuple[
+    tuple[float, float, float],
+    tuple[float, float, float],
+    tuple[float, float, float],
+]
 
 
 def test_digits_observation_formation_declaration_loads_source_artifact() -> None:
@@ -48,17 +52,11 @@ def test_digits_observation_formation_declaration_loads_source_artifact() -> Non
         declaration.variation_transform.spatial_affine.coordinate_system
         == "normalized-sequence-element"
     )
-    assert declaration.variation_transform.spatial_affine.translation == (
-        (-0.08, 0.08),
-        (-0.08, 0.08),
+    assert declaration.variation_transform.spatial_affine.matrix == (
+        ((0.8, 1.2), (-0.08, 0.08), (-0.05, 0.05)),
+        ((-0.08, 0.08), (0.8, 1.2), (-0.05, 0.05)),
+        ((0.0, 0.0), (0.0, 0.0), (1.0, 1.0)),
     )
-    assert declaration.variation_transform.spatial_affine.scale == (
-        (0.7, 1.3),
-        (0.7, 1.3),
-    )
-    assert declaration.variation_transform.spatial_affine.rotation_degrees == (8.0,)
-    assert declaration.variation_transform.spatial_affine.shear_degrees == (5.0,)
-    assert declaration.variation_transform.value_scale.scale == (0.85, 1.15)
     assert [component.id for component in declaration.components] == [
         f"digit-{digit}" for digit in range(10)
     ]
@@ -78,28 +76,28 @@ def test_digits_spatial_variation_bounds_leave_canvas_margin() -> None:
         resolution_assignment=AxisAssignment(values={"W": 32, "H": 32}),
         seed=101,
     )
-    scale_extremes = ((1.3, 1.3), (1.3, 0.7), (0.7, 1.3))
+    matrix_extremes = (
+        ((1.3, 0.0, 0.0), (0.0, 1.3, 0.0), (0.0, 0.0, 1.0)),
+        ((1.2, 0.2, 0.0), (-0.2, 1.2, 0.0), (0.0, 0.0, 1.0)),
+        ((0.8, -0.2, 0.0), (0.2, 0.8, 0.0), (0.0, 0.0, 1.0)),
+    )
 
     for component_index in range(len(declaration.components)):
-        for translation_x, translation_y, scale, rotation, shear in product(
+        for translation_x, translation_y, matrix in product(
             (-0.08, 0.08),
             (-0.08, 0.08),
-            scale_extremes,
-            (-8.0, 8.0),
-            (-5.0, 5.0),
+            matrix_extremes,
         ):
+            affine_matrix = (
+                (matrix[0][0], matrix[0][1], translation_x),
+                (matrix[1][0], matrix[1][1], translation_y),
+                matrix[2],
+            )
             observation = declaration.form_observation(
                 id=ProtocolIdentifier.parse("benchmarks.digits.observations.margin-test@0.1.0"),
                 plan=plan,
                 component_sequence=(component_index,),
-                variation_coordinates=(
-                    _variation_coordinate(
-                        translation=(translation_x, translation_y),
-                        scale=scale,
-                        rotation_degrees=rotation,
-                        shear_degrees=shear,
-                    ),
-                ),
+                variation_coordinates=(_variation_coordinate(matrix=affine_matrix),),
             )
             min_x, max_x, min_y, max_y = _nonzero_bounds(observation.field)
             assert min_x > 0
@@ -283,20 +281,6 @@ def test_variation_identity_coordinates_preserve_observation_field() -> None:
     assert transformed.field == untransformed.field
 
 
-def test_variation_coordinates_apply_value_scale() -> None:
-    declaration = _synthetic_mark_declaration()
-    plan = _synthetic_plan()
-
-    observation = declaration.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.scaled@0.1.0"),
-        plan=plan,
-        component_sequence=(0,),
-        variation_coordinates=(_variation_coordinate(value_scale=0.5),),
-    )
-
-    assert max(observation.field.values) == 0.5
-
-
 def test_variation_coordinates_apply_spatial_translation() -> None:
     declaration = _synthetic_mark_declaration()
     plan = _synthetic_plan()
@@ -310,7 +294,7 @@ def test_variation_coordinates_apply_spatial_translation() -> None:
         id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.shifted@0.1.0"),
         plan=plan,
         component_sequence=(0,),
-        variation_coordinates=(_variation_coordinate(translation=(0.25, 0.0)),),
+        variation_coordinates=(_variation_coordinate(matrix=_affine_matrix(tx=0.25)),),
     )
 
     assert _weighted_x_mean(shifted.field) > _weighted_x_mean(identity.field) + 0.2
@@ -333,7 +317,7 @@ def test_variation_translation_is_position_relative_for_longer_sequences() -> No
         plan=plan,
         component_sequence=(0, 0, 0, 0),
         variation_coordinates=tuple(
-            _variation_coordinate(sequence_index=sequence_index, translation=(0.25, 0.0))
+            _variation_coordinate(sequence_index=sequence_index, matrix=_affine_matrix(tx=0.25))
             for sequence_index in range(4)
         ),
     )
@@ -391,14 +375,11 @@ def test_variation_transform_declaration_round_trips_canonically() -> None:
         "kind": "spatial-affine",
         "coordinate_system": "normalized-sequence-element",
         "spatial_rank": 2,
-        "translation": [[0.0, 0.0], [0.0, 0.0]],
-        "scale": [[1.0, 1.0], [1.0, 1.0]],
-        "rotation_degrees": [0.0],
-        "shear_degrees": [0.0],
-    }
-    assert ValueScaleVariation.identity().to_record() == {
-        "kind": "value-scale",
-        "scale": [1.0, 1.0],
+        "matrix": [
+            [[1.0, 1.0], [0.0, 0.0], [0.0, 0.0]],
+            [[0.0, 0.0], [1.0, 1.0], [0.0, 0.0]],
+            [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+        ],
     }
 
 
@@ -409,25 +390,29 @@ def test_variation_transform_declaration_rejects_invalid_bounds() -> None:
     record["spatial_affine"] = spatial
     assert (
         str(capture_observation_error(lambda: VariationTransformDeclaration.from_record(record)))
-        == "translation bounds length must equal spatial_rank"
+        == "matrix row count must equal spatial_rank plus one"
     )
 
     record = _variation_transform_record()
     spatial = dict(cast(dict[str, object], record["spatial_affine"]))
-    spatial["scale"] = [[0.0, 1.0], [1.0, 1.0]]
+    spatial["matrix"] = [[[0.0, 1.0]]]
     record["spatial_affine"] = spatial
     assert (
         str(capture_observation_error(lambda: VariationTransformDeclaration.from_record(record)))
-        == "scale.0 bounds must be positive"
+        == "matrix row count must equal spatial_rank plus one"
     )
 
     record = _variation_transform_record()
-    value_scale = dict(cast(dict[str, object], record["value_scale"]))
-    value_scale["scale"] = [1.2, 0.8]
-    record["value_scale"] = value_scale
+    spatial = dict(cast(dict[str, object], record["spatial_affine"]))
+    spatial["matrix"] = [
+        [[0.9, 1.1], [-0.2, 0.2], [-0.1, 0.1]],
+        [[-0.1, 0.1], [0.8, 1.2], [-0.2, 0.2]],
+        [[0.0, 0.0], [0.0, 0.0], [0.9, 1.1]],
+    ]
+    record["spatial_affine"] = spatial
     assert (
         str(capture_observation_error(lambda: VariationTransformDeclaration.from_record(record)))
-        == "value_scale.scale lower bound must not exceed upper"
+        == "matrix final row must be fixed affine coordinates"
     )
 
 
@@ -525,14 +510,11 @@ def _variation_transform_record() -> dict[str, object]:
             "kind": "spatial-affine",
             "coordinate_system": "normalized-sequence-element",
             "spatial_rank": 2,
-            "translation": [[-0.1, 0.1], [-0.2, 0.2]],
-            "scale": [[0.9, 1.1], [0.8, 1.2]],
-            "rotation_degrees": [12],
-            "shear_degrees": [5],
-        },
-        "value_scale": {
-            "kind": "value-scale",
-            "scale": [0.75, 1.25],
+            "matrix": [
+                [[0.9, 1.1], [-0.2, 0.2], [-0.1, 0.1]],
+                [[-0.1, 0.1], [0.8, 1.2], [-0.2, 0.2]],
+                [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+            ],
         },
     }
 
@@ -544,14 +526,11 @@ def _canonical_variation_transform_record() -> dict[str, object]:
             "kind": "spatial-affine",
             "coordinate_system": "normalized-sequence-element",
             "spatial_rank": 2,
-            "translation": [[-0.1, 0.1], [-0.2, 0.2]],
-            "scale": [[0.9, 1.1], [0.8, 1.2]],
-            "rotation_degrees": [12.0],
-            "shear_degrees": [5.0],
-        },
-        "value_scale": {
-            "kind": "value-scale",
-            "scale": [0.75, 1.25],
+            "matrix": [
+                [[0.9, 1.1], [-0.2, 0.2], [-0.1, 0.1]],
+                [[-0.1, 0.1], [0.8, 1.2], [-0.2, 0.2]],
+                [[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]],
+            ],
         },
     }
 
@@ -613,11 +592,11 @@ def _synthetic_plan_with(*, sequence_length: int, resolution: int) -> Materializ
 def _variation_coordinate(
     *,
     sequence_index: int = 0,
-    translation: tuple[float, float] = (0.0, 0.0),
-    scale: tuple[float, float] = (1.0, 1.0),
-    rotation_degrees: float = 0.0,
-    shear_degrees: float = 0.0,
-    value_scale: float = 1.0,
+    matrix: _AffineMatrix2D = (
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0),
+    ),
 ) -> dict[str, object]:
     return {
         "kind": "field-variation-transform-coordinate",
@@ -625,16 +604,13 @@ def _variation_coordinate(
         "spatial_affine": {
             "kind": "spatial-affine-coordinate",
             "coordinate_system": "normalized-sequence-element",
-            "translation": list(translation),
-            "scale": list(scale),
-            "rotation_degrees": [rotation_degrees],
-            "shear_degrees": [shear_degrees],
-        },
-        "value_scale": {
-            "kind": "value-scale-coordinate",
-            "scale": value_scale,
+            "matrix": [list(row) for row in matrix],
         },
     }
+
+
+def _affine_matrix(*, tx: float = 0.0, ty: float = 0.0) -> _AffineMatrix2D:
+    return ((1.0, 0.0, tx), (0.0, 1.0, ty), (0.0, 0.0, 1.0))
 
 
 def _nonzero_count(field: FieldObservation, *, x_start: int, x_stop: int) -> int:

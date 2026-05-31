@@ -28,11 +28,14 @@ __all__ = [
     "ObservationFormationValidationError",
     "SequenceLayout",
     "SpatialAffineVariation",
-    "ValueScaleVariation",
 ]
 
 _interpreter = "field-mark-composition@0.1.0"
 _curve_samples_per_degree = 12
+_component_analysis_field_cache: dict[
+    tuple[str, int, int, int],
+    FieldObservation,
+] = {}
 
 _mark_record = RecordSpec(
     fields={
@@ -73,37 +76,19 @@ _spatial_affine_variation_record = RecordSpec(
         "kind": FieldSpec(kind="string"),
         "coordinate_system": FieldSpec(kind="string"),
         "spatial_rank": FieldSpec(kind="integer"),
-        "translation": FieldSpec(
+        "matrix": FieldSpec(
             kind="sequence",
-            item=FieldSpec(kind="sequence", item=FieldSpec(kind="number")),
+            item=FieldSpec(
+                kind="sequence",
+                item=FieldSpec(kind="sequence", item=FieldSpec(kind="number")),
+            ),
         ),
-        "scale": FieldSpec(
-            kind="sequence",
-            item=FieldSpec(kind="sequence", item=FieldSpec(kind="number")),
-        ),
-        "rotation_degrees": FieldSpec(
-            kind="sequence",
-            item=FieldSpec(kind="number"),
-            required=False,
-        ),
-        "shear_degrees": FieldSpec(
-            kind="sequence",
-            item=FieldSpec(kind="number"),
-            required=False,
-        ),
-    }
-)
-_value_scale_variation_record = RecordSpec(
-    fields={
-        "kind": FieldSpec(kind="string"),
-        "scale": FieldSpec(kind="sequence", item=FieldSpec(kind="number")),
     }
 )
 _variation_transform_record = RecordSpec(
     fields={
         "kind": FieldSpec(kind="string"),
         "spatial_affine": FieldSpec(kind="record", required=False),
-        "value_scale": FieldSpec(kind="record", required=False),
     }
 )
 _observation_formation_declaration_record = RecordSpec(
@@ -123,20 +108,23 @@ class ObservationFormationValidationError(ValueError):
     """Raised when observation formation records are invalid."""
 
 
+_AffineMatrix2D = tuple[
+    tuple[float, float, float],
+    tuple[float, float, float],
+    tuple[float, float, float],
+]
+
+
 @dataclass(frozen=True, slots=True)
 class _SpatialAffineCoordinate:
     coordinate_system: str
-    translation: tuple[float, float]
-    scale: tuple[float, float]
-    rotation_degrees: float
-    shear_degrees: float
+    matrix: _AffineMatrix2D
 
 
 @dataclass(frozen=True, slots=True)
 class _VariationCoordinate:
     sequence_index: int
     spatial_affine: _SpatialAffineCoordinate
-    value_scale: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,15 +267,12 @@ class SequenceLayout:
 
 @dataclass(frozen=True, slots=True)
 class SpatialAffineVariation:
-    """Declared spatial affine variation bounds in normalized field coordinates."""
+    """Declared spatial affine proposal bounds in normalized field coordinates."""
 
     kind: str
     coordinate_system: str
     spatial_rank: int
-    translation: tuple[tuple[float, float], ...]
-    scale: tuple[tuple[float, float], ...]
-    rotation_degrees: tuple[float, ...] = ()
-    shear_degrees: tuple[float, ...] = ()
+    matrix: tuple[tuple[tuple[float, float], ...], ...]
 
     def __post_init__(self) -> None:
         if self.kind != "spatial-affine":
@@ -300,33 +285,26 @@ class SpatialAffineVariation:
             )
         if type(self.spatial_rank) is not int or self.spatial_rank < 1:
             raise ObservationFormationValidationError("spatial_rank must be positive")
-        if len(self.translation) != self.spatial_rank:
+        affine_rank = self.spatial_rank + 1
+        if len(self.matrix) != affine_rank:
             raise ObservationFormationValidationError(
-                "translation bounds length must equal spatial_rank"
+                "matrix row count must equal spatial_rank plus one"
             )
-        if len(self.scale) != self.spatial_rank:
-            raise ObservationFormationValidationError("scale bounds length must equal spatial_rank")
-        for index, bounds in enumerate(self.translation):
-            _validate_interval(bounds, field=f"translation.{index}")
-        for index, bounds in enumerate(self.scale):
-            _validate_interval(bounds, field=f"scale.{index}", positive=True)
-        plane_count = self.spatial_rank * (self.spatial_rank - 1) // 2
-        if len(self.rotation_degrees) != plane_count:
-            raise ObservationFormationValidationError(
-                "rotation_degrees length must match spatial coordinate plane count"
-            )
-        if len(self.shear_degrees) != plane_count:
-            raise ObservationFormationValidationError(
-                "shear_degrees length must match spatial coordinate plane count"
-            )
-        for index, value in enumerate((*self.rotation_degrees, *self.shear_degrees)):
-            if not math.isfinite(value) or value < 0:
-                field = (
-                    "rotation_degrees" if index < len(self.rotation_degrees) else "shear_degrees"
-                )
+        for row_index, row in enumerate(self.matrix):
+            if len(row) != affine_rank:
                 raise ObservationFormationValidationError(
-                    f"{field} values must be finite nonnegative numbers"
+                    "matrix column count must equal spatial_rank plus one"
                 )
+            for column_index, bounds in enumerate(row):
+                _validate_interval(bounds, field=f"matrix.{row_index}.{column_index}")
+                final_row_value = 1.0 if column_index == self.spatial_rank else 0.0
+                if row_index == self.spatial_rank and bounds != (
+                    final_row_value,
+                    final_row_value,
+                ):
+                    raise ObservationFormationValidationError(
+                        "matrix final row must be fixed affine coordinates"
+                    )
 
     @classmethod
     def identity(cls, *, spatial_rank: int) -> SpatialAffineVariation:
@@ -334,10 +312,13 @@ class SpatialAffineVariation:
             kind="spatial-affine",
             coordinate_system="normalized-sequence-element",
             spatial_rank=spatial_rank,
-            translation=tuple((0.0, 0.0) for _axis in range(spatial_rank)),
-            scale=tuple((1.0, 1.0) for _axis in range(spatial_rank)),
-            rotation_degrees=tuple(0.0 for _plane in range(spatial_rank * (spatial_rank - 1) // 2)),
-            shear_degrees=tuple(0.0 for _plane in range(spatial_rank * (spatial_rank - 1) // 2)),
+            matrix=tuple(
+                tuple(
+                    (1.0, 1.0) if row == column else (0.0, 0.0)
+                    for column in range(spatial_rank + 1)
+                )
+                for row in range(spatial_rank + 1)
+            ),
         )
 
     @classmethod
@@ -347,21 +328,11 @@ class SpatialAffineVariation:
         except ValueError as error:
             raise ObservationFormationValidationError(str(error)) from error
         spatial_rank = _as_int(validated["spatial_rank"], field="spatial_rank")
-        plane_count = spatial_rank * (spatial_rank - 1) // 2
         return cls(
             kind=str(validated["kind"]),
             coordinate_system=str(validated["coordinate_system"]),
             spatial_rank=spatial_rank,
-            translation=_interval_sequence(validated["translation"], field="translation"),
-            scale=_interval_sequence(validated["scale"], field="scale"),
-            rotation_degrees=_number_sequence(
-                validated.get("rotation_degrees", tuple(0.0 for _plane in range(plane_count))),
-                field="rotation_degrees",
-            ),
-            shear_degrees=_number_sequence(
-                validated.get("shear_degrees", tuple(0.0 for _plane in range(plane_count))),
-                field="shear_degrees",
-            ),
+            matrix=_matrix_interval_sequence(validated["matrix"], field="matrix"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -369,46 +340,7 @@ class SpatialAffineVariation:
             "kind": self.kind,
             "coordinate_system": self.coordinate_system,
             "spatial_rank": self.spatial_rank,
-            "translation": [list(bounds) for bounds in self.translation],
-            "scale": [list(bounds) for bounds in self.scale],
-            "rotation_degrees": list(self.rotation_degrees),
-            "shear_degrees": list(self.shear_degrees),
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class ValueScaleVariation:
-    """Declared scalar intensity variation bounds."""
-
-    kind: str
-    scale: tuple[float, float]
-
-    def __post_init__(self) -> None:
-        if self.kind != "value-scale":
-            raise ObservationFormationValidationError(
-                f"unsupported value scale variation kind: {self.kind}"
-            )
-        _validate_interval(self.scale, field="value_scale.scale", positive=True)
-
-    @classmethod
-    def identity(cls) -> ValueScaleVariation:
-        return cls(kind="value-scale", scale=(1.0, 1.0))
-
-    @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> ValueScaleVariation:
-        try:
-            validated = _value_scale_variation_record.validate(record)
-        except ValueError as error:
-            raise ObservationFormationValidationError(str(error)) from error
-        return cls(
-            kind=str(validated["kind"]),
-            scale=_interval(validated["scale"], field="value_scale.scale"),
-        )
-
-    def to_record(self) -> dict[str, object]:
-        return {
-            "kind": self.kind,
-            "scale": list(self.scale),
+            "matrix": [[list(bounds) for bounds in row] for row in self.matrix],
         }
 
 
@@ -418,7 +350,6 @@ class VariationTransformDeclaration:
 
     kind: str
     spatial_affine: SpatialAffineVariation
-    value_scale: ValueScaleVariation
 
     def __post_init__(self) -> None:
         if self.kind != "field-variation-transform":
@@ -431,7 +362,6 @@ class VariationTransformDeclaration:
         return cls(
             kind="field-variation-transform",
             spatial_affine=SpatialAffineVariation.identity(spatial_rank=spatial_rank),
-            value_scale=ValueScaleVariation.identity(),
         )
 
     @classmethod
@@ -449,20 +379,12 @@ class VariationTransformDeclaration:
                     _as_mapping(validated["spatial_affine"], field="spatial_affine")
                 )
             ),
-            value_scale=(
-                ValueScaleVariation.identity()
-                if "value_scale" not in validated
-                else ValueScaleVariation.from_record(
-                    _as_mapping(validated["value_scale"], field="value_scale")
-                )
-            ),
         )
 
     def to_record(self) -> dict[str, object]:
         return {
             "kind": self.kind,
             "spatial_affine": self.spatial_affine.to_record(),
-            "value_scale": self.value_scale.to_record(),
         }
 
 
@@ -840,6 +762,55 @@ class ObservationFormationDeclaration:
             nearest_pair=nearest_pair,
         )
 
+    def component_discriminability_passes(
+        self,
+        *,
+        width: int,
+        height: int,
+        sequence_length: int = 1,
+        sequence_index: int = 0,
+        variation_coordinates: Sequence[Mapping[str, object] | None] = (None,),
+        minimum_pairwise_l1: float = 0.0,
+    ) -> bool:
+        """Return whether component renderings clear a pairwise distance margin."""
+
+        if minimum_pairwise_l1 <= 0.0:
+            return self.component_discriminability_report(
+                width=width,
+                height=height,
+                sequence_length=sequence_length,
+                sequence_index=sequence_index,
+                variation_coordinates=variation_coordinates,
+                minimum_pairwise_l1=minimum_pairwise_l1,
+            ).passed
+        if width < 1:
+            raise ObservationFormationValidationError("width must be positive")
+        if height < 1:
+            raise ObservationFormationValidationError("height must be positive")
+        if sequence_length < 1:
+            raise ObservationFormationValidationError("sequence_length must be positive")
+        if sequence_index < 0 or sequence_index >= sequence_length:
+            raise ObservationFormationValidationError(
+                "sequence_index must be within sequence_length"
+            )
+        if not math.isfinite(minimum_pairwise_l1):
+            raise ObservationFormationValidationError(
+                "minimum_pairwise_l1 must be finite and nonnegative"
+            )
+        coordinate_cases = tuple(variation_coordinates)
+        if not coordinate_cases:
+            raise ObservationFormationValidationError(
+                "variation_coordinates must not be empty"
+            )
+        return self._component_fields_clear_margin(
+            width=width,
+            height=height,
+            sequence_length=sequence_length,
+            sequence_index=sequence_index,
+            variation_coordinates=coordinate_cases,
+            minimum_pairwise_l1=minimum_pairwise_l1,
+        )
+
     def minimum_discriminatable_resolution(
         self,
         *,
@@ -1042,16 +1013,12 @@ class ObservationFormationDeclaration:
         if sequence_index < 0:
             raise ObservationFormationValidationError("sequence_index must be nonnegative")
         spatial = self.variation_transform.spatial_affine
-        value_scale = self.variation_transform.value_scale
         cases: list[Mapping[str, object]] = []
-        for translation_x, translation_y, scale_x, scale_y, rotation, shear in product(
-            spatial.translation[0],
-            spatial.translation[1],
-            spatial.scale[0],
-            spatial.scale[1],
-            (-spatial.rotation_degrees[0], spatial.rotation_degrees[0]),
-            (-spatial.shear_degrees[0], spatial.shear_degrees[0]),
-        ):
+        for values in product(*(bounds for row in spatial.matrix for bounds in row)):
+            matrix = [
+                list(values[index : index + spatial.spatial_rank + 1])
+                for index in range(0, len(values), spatial.spatial_rank + 1)
+            ]
             cases.append(
                 {
                     "kind": "field-variation-transform-coordinate",
@@ -1059,14 +1026,7 @@ class ObservationFormationDeclaration:
                     "spatial_affine": {
                         "kind": "spatial-affine-coordinate",
                         "coordinate_system": spatial.coordinate_system,
-                        "translation": [translation_x, translation_y],
-                        "scale": [scale_x, scale_y],
-                        "rotation_degrees": [rotation],
-                        "shear_degrees": [shear],
-                    },
-                    "value_scale": {
-                        "kind": "value-scale-coordinate",
-                        "scale": value_scale.scale[0],
+                        "matrix": matrix,
                     },
                 }
             )
@@ -1111,7 +1071,7 @@ class ObservationFormationDeclaration:
         variation_coordinate: Mapping[str, object] | None,
     ) -> FieldObservation:
         if variation_coordinate is None:
-            return self.component_field(
+            return self._cached_component_analysis_field(
                 width=width,
                 height=height,
                 sequence_length=sequence_length,
@@ -1119,19 +1079,15 @@ class ObservationFormationDeclaration:
                 component_index=component_index,
             )
         values = [0.0] * (self.channel_count * width * height)
-        source_values = [0.0] * len(values)
-        component = self.components[component_index]
-        for mark in component.marks:
-            _draw_mark(
-                values=source_values,
-                channel_count=self.channel_count,
+        source_values = list(
+            self._cached_component_analysis_field(
                 width=width,
                 height=height,
                 sequence_length=sequence_length,
                 sequence_index=sequence_index,
-                placement_axis=self.sequence_layout.placement_axis,
-                mark=mark,
-            )
+                component_index=component_index,
+            ).values
+        )
         _merge_transformed_sequence_element(
             values=values,
             source_values=source_values,
@@ -1150,6 +1106,36 @@ class ObservationFormationDeclaration:
             shape=(self.channel_count, height, width),
             values=tuple(values),
         )
+
+    def _cached_component_analysis_field(
+        self,
+        *,
+        width: int,
+        height: int,
+        sequence_length: int,
+        sequence_index: int,
+        component_index: int,
+    ) -> FieldObservation:
+        if sequence_length != 1 or sequence_index != 0:
+            return self.component_field(
+                width=width,
+                height=height,
+                sequence_length=sequence_length,
+                sequence_index=sequence_index,
+                component_index=component_index,
+            )
+        key = (str(self.digest), width, height, component_index)
+        cached = _component_analysis_field_cache.get(key)
+        if cached is None:
+            cached = self.component_field(
+                width=width,
+                height=height,
+                sequence_length=sequence_length,
+                sequence_index=sequence_index,
+                component_index=component_index,
+            )
+            _component_analysis_field_cache[key] = cached
+        return cached
 
     @property
     def digest(self) -> ContentDigest:
@@ -1327,17 +1313,29 @@ def _merge_transformed_sequence_element(
         sequence_index=sequence_index,
         placement_axis=placement_axis,
     )
-    inverse = _inverse_affine_matrix(coordinate.spatial_affine)
+    linear_matrix = _linear_affine_matrix(coordinate.spatial_affine.matrix)
+    inverse = _inverse_affine_matrix(linear_matrix)
     translation = _sequence_relative_translation(
-        coordinate.spatial_affine.translation,
+        _affine_translation(coordinate.spatial_affine.matrix),
         sequence_length=sequence_length,
         placement_axis=placement_axis,
     )
+    target_x_range, target_y_range = _transformed_source_pixel_ranges(
+        source_values=source_values,
+        channel_count=channel_count,
+        width=width,
+        height=height,
+        matrix=linear_matrix,
+        center=center,
+        translation=translation,
+    )
+    if not target_x_range or not target_y_range:
+        return
     for channel in range(channel_count):
         channel_offset = channel * width * height
-        for y_index in range(height):
+        for y_index in target_y_range:
             y = (y_index + 0.5) / height
-            for x_index in range(width):
+            for x_index in target_x_range:
                 x = (x_index + 0.5) / width
                 source_x, source_y = _inverse_transform_point(
                     (x, y),
@@ -1356,19 +1354,80 @@ def _merge_transformed_sequence_element(
                 if value <= 0.0:
                     continue
                 target_index = channel_offset + y_index * width + x_index
-                values[target_index] = max(
-                    values[target_index],
-                    min(1.0, value * coordinate.value_scale),
-                )
+                values[target_index] = max(values[target_index], value)
+
+
+def _transformed_source_pixel_ranges(
+    *,
+    source_values: Sequence[float],
+    channel_count: int,
+    width: int,
+    height: int,
+    matrix: tuple[tuple[float, float], tuple[float, float]],
+    center: tuple[float, float],
+    translation: tuple[float, float],
+) -> tuple[range, range]:
+    source_bounds = _positive_source_bounds(
+        source_values=source_values,
+        channel_count=channel_count,
+        width=width,
+        height=height,
+    )
+    if source_bounds is None:
+        return range(0), range(0)
+    min_x, min_y, max_x, max_y = source_bounds
+    # Bilinear interpolation can read a positive pixel from one pixel outside the
+    # source bounding box, so expand before projecting the target loop bounds.
+    source_box = (
+        ((min_x - 1.5) / width, (min_y - 1.5) / height),
+        ((max_x + 2.5) / width, (min_y - 1.5) / height),
+        ((min_x - 1.5) / width, (max_y + 2.5) / height),
+        ((max_x + 2.5) / width, (max_y + 2.5) / height),
+    )
+    transformed = tuple(
+        _transform_point(point, center=center, translation=translation, matrix=matrix)
+        for point in source_box
+    )
+    x_values = tuple(point[0] for point in transformed)
+    y_values = tuple(point[1] for point in transformed)
+    return (
+        _normalized_pixel_range(min(x_values), max(x_values), size=width),
+        _normalized_pixel_range(min(y_values), max(y_values), size=height),
+    )
+
+
+def _positive_source_bounds(
+    *,
+    source_values: Sequence[float],
+    channel_count: int,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int] | None:
+    min_x = width
+    min_y = height
+    max_x = -1
+    max_y = -1
+    for channel in range(channel_count):
+        channel_offset = channel * width * height
+        for y_index in range(height):
+            row_offset = channel_offset + y_index * width
+            for x_index in range(width):
+                if source_values[row_offset + x_index] <= 0.0:
+                    continue
+                min_x = min(min_x, x_index)
+                min_y = min(min_y, y_index)
+                max_x = max(max_x, x_index)
+                max_y = max(max_y, y_index)
+    if max_x < min_x or max_y < min_y:
+        return None
+    return (min_x, min_y, max_x, max_y)
 
 
 def _is_identity_variation_coordinate(coordinate: _VariationCoordinate) -> bool:
-    return (
-        coordinate.spatial_affine.translation == (0.0, 0.0)
-        and coordinate.spatial_affine.scale == (1.0, 1.0)
-        and coordinate.spatial_affine.rotation_degrees == 0.0
-        and coordinate.spatial_affine.shear_degrees == 0.0
-        and coordinate.value_scale == 1.0
+    return coordinate.spatial_affine.matrix == (
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0),
     )
 
 
@@ -1402,22 +1461,25 @@ def _sequence_relative_translation(
 
 
 def _inverse_affine_matrix(
-    coordinate: _SpatialAffineCoordinate,
+    matrix: tuple[tuple[float, float], tuple[float, float]],
 ) -> tuple[tuple[float, float], tuple[float, float]]:
-    angle = math.radians(coordinate.rotation_degrees)
-    shear = math.tan(math.radians(coordinate.shear_degrees))
-    scale_x, scale_y = coordinate.scale
-    cos_angle = math.cos(angle)
-    sin_angle = math.sin(angle)
-    # Forward matrix is rotation * x-shear * axis scale.
-    a = cos_angle * scale_x
-    b = (cos_angle * shear - sin_angle) * scale_y
-    c = sin_angle * scale_x
-    d = (sin_angle * shear + cos_angle) * scale_y
+    (a, b), (c, d) = matrix
     determinant = a * d - b * c
     if not math.isfinite(determinant) or determinant == 0.0:
         raise ObservationFormationValidationError("variation affine transform is singular")
     return ((d / determinant, -b / determinant), (-c / determinant, a / determinant))
+
+
+def _linear_affine_matrix(
+    matrix: _AffineMatrix2D,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    return ((matrix[0][0], matrix[0][1]), (matrix[1][0], matrix[1][1]))
+
+
+def _affine_translation(
+    matrix: _AffineMatrix2D,
+) -> tuple[float, float]:
+    return (matrix[0][2], matrix[1][2])
 
 
 def _inverse_transform_point(
@@ -1432,6 +1494,21 @@ def _inverse_transform_point(
     return (
         center[0] + inverse_matrix[0][0] * dx + inverse_matrix[0][1] * dy,
         center[1] + inverse_matrix[1][0] * dx + inverse_matrix[1][1] * dy,
+    )
+
+
+def _transform_point(
+    point: tuple[float, float],
+    *,
+    center: tuple[float, float],
+    translation: tuple[float, float],
+    matrix: tuple[tuple[float, float], tuple[float, float]],
+) -> tuple[float, float]:
+    dx = point[0] - center[0]
+    dy = point[1] - center[1]
+    return (
+        center[0] + matrix[0][0] * dx + matrix[0][1] * dy + translation[0],
+        center[1] + matrix[1][0] * dx + matrix[1][1] * dy + translation[1],
     )
 
 
@@ -1466,6 +1543,12 @@ def _bilinear_sample(
 def _pixel_index_range(lower: float, upper: float, *, size: int) -> range:
     start = max(0, math.floor(lower))
     stop = min(size, math.ceil(upper))
+    return range(start, stop)
+
+
+def _normalized_pixel_range(lower: float, upper: float, *, size: int) -> range:
+    start = max(0, math.floor(lower * size - 0.5))
+    stop = min(size, math.ceil(upper * size + 0.5))
     return range(start, stop)
 
 
@@ -1608,41 +1691,13 @@ def _parse_variation_coordinate(
         raise ObservationFormationValidationError(
             f"{field}.spatial_affine: expected spatial-affine-coordinate"
         )
-    value_scale = _as_mapping(value.get("value_scale"), field=f"{field}.value_scale")
-    if str(value_scale.get("kind")) != "value-scale-coordinate":
-        raise ObservationFormationValidationError(
-            f"{field}.value_scale: expected value-scale-coordinate"
-        )
-    translation = _coordinate_pair(
-        spatial.get("translation"),
-        field=f"{field}.spatial_affine.translation",
-    )
-    scale = _coordinate_pair(spatial.get("scale"), field=f"{field}.spatial_affine.scale")
-    if scale[0] <= 0.0 or scale[1] <= 0.0:
-        raise ObservationFormationValidationError(
-            f"{field}.spatial_affine.scale values must be positive"
-        )
-    value_scale_number = _as_float(value_scale.get("scale"), field=f"{field}.value_scale.scale")
-    if not math.isfinite(value_scale_number) or value_scale_number <= 0.0:
-        raise ObservationFormationValidationError(
-            f"{field}.value_scale.scale must be finite and positive"
-        )
+    matrix = _coordinate_matrix(spatial.get("matrix"), field=f"{field}.spatial_affine.matrix")
     return _VariationCoordinate(
         sequence_index=_as_int(value.get("sequence_index"), field=f"{field}.sequence_index"),
         spatial_affine=_SpatialAffineCoordinate(
             coordinate_system=str(spatial.get("coordinate_system")),
-            translation=translation,
-            scale=scale,
-            rotation_degrees=_single_coordinate_number(
-                spatial.get("rotation_degrees"),
-                field=f"{field}.spatial_affine.rotation_degrees",
-            ),
-            shear_degrees=_single_coordinate_number(
-                spatial.get("shear_degrees"),
-                field=f"{field}.spatial_affine.shear_degrees",
-            ),
+            matrix=matrix,
         ),
-        value_scale=value_scale_number,
     )
 
 
@@ -1655,25 +1710,38 @@ def _variation_coordinate_with_sequence_index(
     return updated
 
 
-def _coordinate_pair(value: object, *, field: str) -> tuple[float, float]:
+def _coordinate_matrix(
+    value: object,
+    *,
+    field: str,
+) -> _AffineMatrix2D:
+    rows = _coordinate_sequence(value, field=field)
+    if len(rows) != 3:
+        raise ObservationFormationValidationError(f"{field}: expected three rows")
+    matrix = (
+        _coordinate_triplet(rows[0], field=f"{field}.0"),
+        _coordinate_triplet(rows[1], field=f"{field}.1"),
+        _coordinate_triplet(rows[2], field=f"{field}.2"),
+    )
+    if matrix[2] != (0.0, 0.0, 1.0):
+        raise ObservationFormationValidationError(
+            f"{field} final row must be fixed affine coordinates"
+        )
+    return matrix
+
+
+def _coordinate_triplet(value: object, *, field: str) -> tuple[float, float, float]:
     sequence = _coordinate_sequence(value, field=field)
-    if len(sequence) != 2:
-        raise ObservationFormationValidationError(f"{field}: expected two values")
-    first = _as_float(sequence[0], field=f"{field}.0")
-    second = _as_float(sequence[1], field=f"{field}.1")
-    if not math.isfinite(first) or not math.isfinite(second):
+    if len(sequence) != 3:
+        raise ObservationFormationValidationError(f"{field}: expected three values")
+    values = (
+        _as_float(sequence[0], field=f"{field}.0"),
+        _as_float(sequence[1], field=f"{field}.1"),
+        _as_float(sequence[2], field=f"{field}.2"),
+    )
+    if not all(math.isfinite(value) for value in values):
         raise ObservationFormationValidationError(f"{field} values must be finite")
-    return (first, second)
-
-
-def _single_coordinate_number(value: object, *, field: str) -> float:
-    sequence = _coordinate_sequence(value, field=field)
-    if len(sequence) != 1:
-        raise ObservationFormationValidationError(f"{field}: expected one value")
-    number = _as_float(sequence[0], field=f"{field}.0")
-    if not math.isfinite(number):
-        raise ObservationFormationValidationError(f"{field} value must be finite")
-    return number
+    return values
 
 
 def _coordinate_sequence(value: object, *, field: str) -> tuple[object, ...]:
@@ -1701,10 +1769,14 @@ def _interval_sequence(value: object, *, field: str) -> tuple[tuple[float, float
     )
 
 
-def _number_sequence(value: object, *, field: str) -> tuple[float, ...]:
+def _matrix_interval_sequence(
+    value: object,
+    *,
+    field: str,
+) -> tuple[tuple[tuple[float, float], ...], ...]:
     return tuple(
-        _as_float(item, field=f"{field}.{index}")
-        for index, item in enumerate(_as_sequence(value, field=field))
+        _interval_sequence(row, field=f"{field}.{row_index}")
+        for row_index, row in enumerate(_as_sequence(value, field=field))
     )
 
 

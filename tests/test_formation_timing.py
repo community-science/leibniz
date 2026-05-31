@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -32,6 +33,12 @@ def test_time_formation_paths_reports_samples_per_second() -> None:
     assert record["repeats"] == 1
     assert record["tensor_runtime"] == "pytorch"
     assert record["tensor_device"] == "cpu"
+    assert record["roofline"] != {}
+    assert "pure_phase_timing" in record
+    assert "tensor_phase_timing" in record
+    pure_timing = cast(dict[str, object], record["pure_phase_timing"])
+    pure_phases = cast(dict[str, object], pure_timing["phases"])
+    assert "pure.formation_batch.variation_coordinates" in pure_phases
     assert summary.pure_observation_seconds > 0
     assert summary.tensor_batch_seconds > 0
     assert summary.pure_observation_samples_per_second > 0

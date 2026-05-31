@@ -27,7 +27,7 @@ def test_digits_observation_generator_is_deterministic() -> None:
 
     assert left == right
     assert left.scale == 3
-    assert left.samples[0].field.shape == (1, 33, 142)
+    assert left.samples[0].field.shape == (1, 35, 115)
     assert left.samples[0].complexity == 3.0
     assert len(left.samples[0].observation.component_sequence) == 3
     assert left.samples[0].outcome_id.startswith("digit-")
@@ -37,7 +37,7 @@ def test_digits_observation_generator_is_deterministic() -> None:
     variation = _coordinate(left.samples[0].latent_coordinates, role="variation")
     assert variation["multiplicity"] == 3
     assert variation["name"] == "benchmarks.digits.sample.field-variation-transform"
-    assert variation["degree_measure"] == {"kind": "vector-dimension", "count": 7.0}
+    assert variation["degree_measure"] == {"kind": "vector-dimension", "count": 6.0}
     variation_values = cast(dict[str, object], variation["values"])
     assert variation_values["kind"] == "field-variation-transform-samples"
     assert cast(dict[str, object], variation_values["bounds"]) == (
@@ -73,8 +73,8 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
     assert formation_batch.scale == observation_batch.scale
     assert formation_batch.seed == observation_batch.seed
     assert [(sample.width, sample.height) for sample in formation_batch.samples] == [
-        (142, 33),
-        (142, 33),
+        (115, 35),
+        (115, 35),
     ]
     assert [sample.component_sequence for sample in formation_batch.samples] == [
         sample.observation.component_sequence for sample in observation_batch.samples
@@ -104,8 +104,8 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
     generated_plan = formation_batch.samples[0].materialization_plan
     assert generated_plan.scale_assignment == minimum_plan.scale_assignment
     assert generated_plan.complexity_assignment == minimum_plan.complexity_assignment
-    assert minimum_plan.resolution_assignment.values == {"W": 3, "H": 1}
-    assert generated_plan.resolution_assignment.values == {"W": 142, "H": 33}
+    assert minimum_plan.resolution_assignment.values == {"W": 1, "H": 1}
+    assert generated_plan.resolution_assignment.values == {"W": 115, "H": 35}
 
 
 def test_digits_observation_generator_records_optional_timing() -> None:
@@ -135,6 +135,11 @@ def test_digits_observation_generator_records_optional_timing() -> None:
     assert materialization["calls"] == 1
     assert materialization["sample_count"] == 2
     assert variation["sample_count"] == 2
+    variation_counters = cast(dict[str, float], variation["counters"])
+    assert variation_counters["candidate_count"] >= variation_counters["accepted_count"]
+    assert variation_counters["accepted_count"] == 4.0
+    assert variation_counters["candidate_count"] == variation_counters["accepted_count"]
+    assert "fast_reject_count" not in variation_counters
     assert observation["sample_count"] == 2
     assert cast(float, observation["seconds"]) > 0
 
@@ -150,9 +155,9 @@ def test_digits_observation_generator_samples_resolution_from_complexity_bound()
     )
     sample = batch.samples[0]
 
-    assert sample.field.shape == (1, 59, 132)
+    assert sample.field.shape == (1, 22, 88)
     assert sample.materialization_plan.scale_assignment.require_axis("L") == 4
-    assert sample.materialization_plan.resolution_assignment.values == {"W": 132, "H": 59}
+    assert sample.materialization_plan.resolution_assignment.values == {"W": 88, "H": 22}
     assert sample.materialization_plan.complexity_assignment.require_axis("C") == 4
     assert sample.complexity == 4.0
     assert sample.outcome_id == "digit-1-2-3-4"
@@ -172,20 +177,20 @@ def test_digits_observation_generator_decouples_canvas_size_from_complexity() ->
     assert {sample.complexity for sample in scale_one.samples} == {1.0}
     assert {sample.complexity for sample in scale_three.samples} == {3.0}
     assert [(sample.width, sample.height) for sample in scale_three.samples] == [
-        (142, 33),
-        (142, 33),
-        (142, 33),
+        (115, 35),
+        (115, 35),
+        (115, 35),
     ]
     assert [(sample.width, sample.height) for sample in scale_three_other_seed.samples] == [
-        (143, 42),
-        (143, 42),
-        (143, 42),
+        (70, 28),
+        (70, 28),
+        (70, 28),
     ]
-    assert 30 <= scale_one.samples[0].width <= 60
-    assert 30 <= scale_one.samples[0].height <= 60
-    assert 90 <= scale_three.samples[0].width <= 180
-    assert 30 <= scale_three.samples[0].height <= 60
-    assert (scale_three.samples[0].width, scale_three.samples[0].height) != (90, 30)
+    assert 20 <= scale_one.samples[0].width <= 40
+    assert 20 <= scale_one.samples[0].height <= 40
+    assert 60 <= scale_three.samples[0].width <= 120
+    assert 20 <= scale_three.samples[0].height <= 40
+    assert (scale_three.samples[0].width, scale_three.samples[0].height) != (60, 20)
 
 
 def test_digits_observation_generator_applies_recorded_variation_coordinates() -> None:
@@ -332,33 +337,12 @@ def _within_transform_bounds(
 ) -> bool:
     spatial = cast(Mapping[str, object], coordinate["spatial_affine"])
     spatial_bounds = cast(Mapping[str, object], bounds["spatial_affine"])
-    translation = cast(list[float], spatial["translation"])
-    translation_bounds = cast(list[list[float]], spatial_bounds["translation"])
-    scale = cast(list[float], spatial["scale"])
-    scale_bounds = cast(list[list[float]], spatial_bounds["scale"])
-    rotations = cast(list[float], spatial["rotation_degrees"])
-    rotation_bounds = cast(list[float], spatial_bounds["rotation_degrees"])
-    shears = cast(list[float], spatial["shear_degrees"])
-    shear_bounds = cast(list[float], spatial_bounds["shear_degrees"])
-    value_scale = cast(Mapping[str, object], coordinate["value_scale"])
-    value_scale_bounds = cast(Mapping[str, object], bounds["value_scale"])
-    return (
-        all(
-            lower <= value <= upper
-            for value, (lower, upper) in zip(translation, translation_bounds, strict=True)
-        )
-        and all(
-            lower <= value <= upper
-            for value, (lower, upper) in zip(scale, scale_bounds, strict=True)
-        )
-        and all(
-            -bound <= value <= bound
-            for value, bound in zip(rotations, rotation_bounds, strict=True)
-        )
-        and all(-bound <= value <= bound for value, bound in zip(shears, shear_bounds, strict=True))
-        and cast(list[float], value_scale_bounds["scale"])[0]
-        <= cast(float, value_scale["scale"])
-        <= cast(list[float], value_scale_bounds["scale"])[1]
+    matrix = cast(list[list[float]], spatial["matrix"])
+    matrix_bounds = cast(list[list[list[float]]], spatial_bounds["matrix"])
+    return all(
+        lower <= value <= upper
+        for row, bound_row in zip(matrix, matrix_bounds, strict=True)
+        for value, (lower, upper) in zip(row, bound_row, strict=True)
     )
 
 

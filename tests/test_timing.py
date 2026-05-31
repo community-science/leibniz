@@ -7,7 +7,8 @@ def test_timing_collector_accumulates_named_spans() -> None:
     timing = TimingCollector()
 
     timing.add("phase_b", seconds=0.25, samples=5)
-    timing.add("phase_b", seconds=0.25, samples=5)
+    timing.add("phase_b", seconds=0.25, samples=5, counters={"items": 2})
+    timing.increment("phase_b", "items", 3)
     with timing.span("phase_a", samples=1):
         pass
 
@@ -21,3 +22,4 @@ def test_timing_collector_accumulates_named_spans() -> None:
     assert phase_b["seconds"] == 0.5
     assert phase_b["seconds_per_call"] == 0.25
     assert phase_b["samples_per_second"] == 20.0
+    assert phase_b["counters"] == {"items": 5.0}
