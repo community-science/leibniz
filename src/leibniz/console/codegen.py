@@ -185,6 +185,7 @@ export type ModelResultRecord = {
   architecture_digest: string;
   benchmark_id: string;
   score: number;
+  score_basis?: Record<string, unknown>;
   observed_complexities: number[];
   points: CompetencePointRecord[];
   cost_summary: CostSummaryRecord;
@@ -373,6 +374,7 @@ function parseModelResult(value: unknown, path: string): ModelResultRecord {
     architecture_digest: requireString(record.architecture_digest, `${path}.architecture_digest`, transportError),
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
+    score_basis: optional(record.score_basis, `${path}.score_basis`, parseScoreBasis),
     observed_complexities: numberArray(record.observed_complexities, `${path}.observed_complexities`),
     points: arrayOf(record.points, `${path}.points`, parseCompetencePoint),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
@@ -514,6 +516,10 @@ function parseCostSummary(value: unknown, path: string): CostSummaryRecord {
         ? undefined
         : numberArray(record.unknown_parameter_components, `${path}.unknown_parameter_components`),
   };
+}
+
+function parseScoreBasis(value: unknown, path: string): Record<string, unknown> {
+  return requireRecord(value, path, transportError);
 }
 
 function parseFrontiers(value: unknown, path: string): Record<string, ModelResultRecord[]> {

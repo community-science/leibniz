@@ -34,6 +34,7 @@ from leibniz.model_inspection import (
     ModelInspectionRecord,
     ModelInspectionValidationError,
 )
+from leibniz.observation_generation import load_observation_generator
 from leibniz.publications import SubmissionPublicationBundle, SubmissionPublicationDocument
 from leibniz.submissions import SubmissionArtifact, SubmissionPackageManifest
 from leibniz.training_runs import TrainingRunRecord
@@ -426,6 +427,7 @@ def materialize_benchmark_result_views(
         benchmark_records.append(
             _benchmark_result_record(
                 manifest=manifest,
+                repository_root=repository_root,
                 runs=benchmark_runs,
                 proposals=_proposal_records(results_root, benchmark_id=benchmark_id),
             )
@@ -1120,10 +1122,17 @@ def _inspection_from_architecture(architecture: ArchitectureManifest) -> ModelIn
 def _benchmark_result_record(
     *,
     manifest: BenchmarkManifest,
+    repository_root: Path,
     runs: tuple[_BenchmarkRunRecord, ...],
     proposals: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
-    models = tuple(_model_result_records(runs, manifest=manifest))
+    models = tuple(
+        _model_result_records(
+            runs,
+            manifest=manifest,
+            repository_root=repository_root,
+        )
+    )
     record: dict[str, object] = {
         "benchmark_id": str(runs[0].benchmark_id),
         "cost_axes": [
@@ -1157,16 +1166,26 @@ def _model_result_records(
     runs: tuple[_BenchmarkRunRecord, ...],
     *,
     manifest: BenchmarkManifest,
+    repository_root: Path,
 ) -> tuple[dict[str, object], ...]:
     grouped: dict[str, list[_BenchmarkRunRecord]] = {}
     for run in runs:
         grouped.setdefault(run.model_key, []).append(run)
 
+    base_complexity = _benchmark_base_complexity(
+        manifest=manifest,
+        repository_root=repository_root,
+    )
+    chance_mass = _chance_mass(manifest)
     records: list[dict[str, object]] = []
     for model_key, model_runs in grouped.items():
         ordered_runs = tuple(sorted(model_runs, key=_run_sort_key))
         points = _competence_points(ordered_runs)
-        score = _competence_integral(points)
+        score = _base_normalized_absolute_score(
+            points,
+            base_complexity=base_complexity,
+            chance_mass=chance_mass,
+        )
         best_run = max(
             ordered_runs,
             key=lambda run: (run.score, -_cost_value(run.cost_summary, "parameter_count")),
@@ -1176,6 +1195,13 @@ def _model_result_records(
             "architecture_digest": str(best_run.architecture_digest),
             "benchmark_id": str(best_run.benchmark_id),
             "score": score,
+            "score_basis": {
+                "kind": "base-normalized-absolute-competent-complexity-v1",
+                "base_complexity": base_complexity,
+                "chance_mass": chance_mass,
+                "point_score": "accepted-mass",
+                "local_competence": "above-chance-accepted-mass",
+            },
             "observed_complexities": [point["complexity"] for point in points],
             "points": list(points),
             "cost_summary": dict(best_run.cost_summary),
@@ -1418,6 +1444,75 @@ def _competence_integral(points: tuple[dict[str, object], ...]) -> float:
         width = _point_complexity(right) - _point_complexity(left)
         area += width * (_point_score(left) + _point_score(right)) / 2.0
     return area / total_width
+
+
+def _base_normalized_absolute_score(
+    points: tuple[dict[str, object], ...],
+    *,
+    base_complexity: float,
+    chance_mass: float,
+) -> float:
+    if not points:
+        return 0.0
+    if base_complexity <= 0.0:
+        raise LocalResultImportError("base_complexity must be positive")
+    ordered = tuple(sorted(points, key=_point_complexity))
+    first_complexity = _point_complexity(ordered[0])
+    first_competence = _above_chance_competence(
+        _point_score(ordered[0]),
+        chance_mass=chance_mass,
+    )
+    area = first_complexity * first_competence
+    for left, right in zip(ordered, ordered[1:], strict=False):
+        left_complexity = _point_complexity(left)
+        right_complexity = _point_complexity(right)
+        width = right_complexity - left_complexity
+        if width <= 0.0:
+            continue
+        left_competence = _above_chance_competence(
+            _point_score(left),
+            chance_mass=chance_mass,
+        )
+        right_competence = _above_chance_competence(
+            _point_score(right),
+            chance_mass=chance_mass,
+        )
+        area += width * (left_competence + right_competence) / 2.0
+    return area / base_complexity
+
+
+def _above_chance_competence(score: float, *, chance_mass: float) -> float:
+    if chance_mass >= 1.0:
+        return 0.0
+    return max(0.0, min(1.0, (score - chance_mass) / (1.0 - chance_mass)))
+
+
+def _benchmark_base_complexity(
+    *,
+    manifest: BenchmarkManifest,
+    repository_root: Path,
+) -> float:
+    generator = load_observation_generator(
+        repository_root / "src" / "leibniz" / "benchmarks" / _identifier_atom(manifest.id)
+    )
+    resolution = generator._minimum_discriminatable_resolution_assignment(
+        component_count=1,
+        minimum_assignment=generator.materialization.minimum_resolution(),
+    )
+    width = resolution.require_axis(generator.formation.width_axis)
+    height = resolution.require_axis(generator.formation.height_axis)
+    return generator._distinguishable_state_complexity(
+        component_count=1,
+        width=width,
+        height=height,
+    )
+
+
+def _chance_mass(manifest: BenchmarkManifest) -> float:
+    outcome_count = len(manifest.outcome_space.outcomes)
+    if outcome_count < 1:
+        return 0.0
+    return 1.0 / outcome_count
 
 
 def _frontier_records(

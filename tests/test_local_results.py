@@ -1,3 +1,4 @@
+import math
 import subprocess
 from pathlib import Path
 from typing import cast
@@ -30,6 +31,44 @@ _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "
 _digits_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool" / "manifest.json"
 )
+
+
+def test_base_normalized_absolute_score_rewards_complexity_above_chance() -> None:
+    base_complexity = 20.0
+    chance_mass = 0.1
+
+    assert math.isclose(
+        local_results._base_normalized_absolute_score(
+            ({"complexity": base_complexity, "score": 1.0},),
+            base_complexity=base_complexity,
+            chance_mass=chance_mass,
+        ),
+        1.0,
+    )
+    assert math.isclose(
+        local_results._base_normalized_absolute_score(
+            ({"complexity": base_complexity * 2.0, "score": 1.0},),
+            base_complexity=base_complexity,
+            chance_mass=chance_mass,
+        ),
+        2.0,
+    )
+    assert math.isclose(
+        local_results._base_normalized_absolute_score(
+            ({"complexity": base_complexity, "score": 0.55},),
+            base_complexity=base_complexity,
+            chance_mass=chance_mass,
+        ),
+        0.5,
+    )
+    assert math.isclose(
+        local_results._base_normalized_absolute_score(
+            ({"complexity": base_complexity * 4.0, "score": chance_mass},),
+            base_complexity=base_complexity,
+            chance_mass=chance_mass,
+        ),
+        0.0,
+    )
 
 
 def test_import_submission_publications_materializes_runs_views(tmp_path: Path) -> None:

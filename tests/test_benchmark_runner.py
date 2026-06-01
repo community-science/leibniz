@@ -447,6 +447,10 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
         "training-summary",
     }
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
+    score_basis = cast(dict[str, object], leaderboard[0]["score_basis"])
+    assert score_basis["kind"] == "base-normalized-absolute-competent-complexity-v1"
+    assert math.isclose(cast(float, score_basis["base_complexity"]), 19.965784284662085)
+    assert math.isclose(cast(float, score_basis["chance_mass"]), 0.1)
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
     assert math.isclose(observed_complexities[0], 20.273212809854332)
     assert observed_complexities == sorted(observed_complexities)
