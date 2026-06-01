@@ -1194,19 +1194,28 @@ class ObservationFormationDeclaration:
         for sequence_index, component_index in enumerate(sequence):
             target_values = values
             if variation_coordinates is not None:
-                target_values = [0.0] * len(values)
-            component = self.components[component_index]
-            for mark in component.marks:
-                _draw_mark(
-                    values=target_values,
-                    channel_count=self.channel_count,
-                    width=width,
-                    height=height,
-                    sequence_length=len(sequence),
-                    sequence_index=sequence_index,
-                    placement_axis=self.sequence_layout.placement_axis,
-                    mark=mark,
+                target_values = list(
+                    self._cached_component_analysis_field(
+                        width=width,
+                        height=height,
+                        sequence_length=len(sequence),
+                        sequence_index=sequence_index,
+                        component_index=component_index,
+                    ).values
                 )
+            else:
+                component = self.components[component_index]
+                for mark in component.marks:
+                    _draw_mark(
+                        values=target_values,
+                        channel_count=self.channel_count,
+                        width=width,
+                        height=height,
+                        sequence_length=len(sequence),
+                        sequence_index=sequence_index,
+                        placement_axis=self.sequence_layout.placement_axis,
+                        mark=mark,
+                    )
             if variation_coordinates is not None:
                 _merge_transformed_sequence_element(
                     values=values,

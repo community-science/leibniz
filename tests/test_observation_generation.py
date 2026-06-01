@@ -30,7 +30,7 @@ def test_digits_observation_generator_is_deterministic() -> None:
     assert left == right
     assert left.component_count == 1
     assert left.samples[0].field.shape == (1, 42, 118)
-    assert math.isclose(left.samples[0].complexity, math.log2(49286227620))
+    assert math.isclose(left.samples[0].complexity, math.log2(343699200))
     assert len(left.samples[0].observation.component_sequence) == 1
     assert left.samples[0].outcome_id == "digit-8"
     assert _coordinate(left.samples[0].latent_coordinates, role="content")["values"] == list(
@@ -162,7 +162,7 @@ def test_digits_observation_generator_samples_resolution_from_memory_bound() -> 
 
     assert sample.field.shape == (1, 82, 42)
     assert sample.materialization_plan.resolution_assignment.values == {"W": 42, "H": 82}
-    assert math.isclose(sample.complexity, math.log2(17659483380))
+    assert math.isclose(sample.complexity, math.log2(119808000))
     assert sample.outcome_id == "digit-1"
 
 
@@ -177,10 +177,10 @@ def test_digits_observation_generator_counts_discretized_nuisance_state_space() 
     )
 
     assert {round(sample.complexity, 12) for sample in scale_one.samples} == {
-        round(math.log2(15103350800), 12)
+        round(math.log2(103672800), 12)
     }
     assert {round(sample.complexity, 12) for sample in scale_one_other_seed.samples} == {
-        round(math.log2(68520684960), 12)
+        round(math.log2(497155120), 12)
     }
     assert [(sample.width, sample.height) for sample in scale_one.samples] == [
         (115, 28),
