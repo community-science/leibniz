@@ -722,7 +722,9 @@ def _imported_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]
                 benchmark_id=package.benchmark_manifest.id,
                 architecture_digest=package.architecture_manifest.digest,
                 model_key=str(package.architecture_manifest.digest),
-                complexity=None,
+                complexity=_sampled_competence_record_complexity(
+                    package.sampled_competence,
+                ),
                 measurement_count=len(bundle.measurement_dataset.measurements),
                 score=_mean_accepted_mass(bundle.measurement_dataset),
                 cost_summary=inspection.cost_summary.to_record(),
@@ -737,6 +739,7 @@ def _imported_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]
                 model_inspection_path=None,
                 measurement_dataset=bundle.measurement_dataset,
                 measurement_dataset_digest=bundle.measurement_dataset.digest,
+                sampled_competence=package.sampled_competence,
             )
         )
     return tuple(records)
@@ -751,6 +754,12 @@ def _sampled_competence(summary: Mapping[str, object]) -> Mapping[str, object] |
 
 def _sampled_competence_complexity(summary: Mapping[str, object]) -> float | None:
     record = _sampled_competence(summary)
+    return _sampled_competence_record_complexity(record)
+
+
+def _sampled_competence_record_complexity(
+    record: Mapping[str, object] | None,
+) -> float | None:
     if record is None:
         return None
     return _as_nonnegative_number(record.get("complexity"), "sampled_competence.complexity")
@@ -1053,6 +1062,7 @@ def _publication_bundle_for_local_run(
             run=run,
         ),
         measurement_dataset=run.measurement_dataset,
+        sampled_competence=run.sampled_competence,
         artifacts=_submission_artifacts_for_local_run(run),
     )
     score_view = MeasurementScoreView.from_dataset(

@@ -339,6 +339,10 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
             train_steps=0,
         )
     )
+    local_result_summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=local_results_root,
+    )
 
     publish_summary = publish_local_benchmark_results(
         repository_root=_repository_root,
@@ -363,14 +367,21 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
         "submissions.digits.digits-arch-bb0dde9254dc-c1-seed101-samples1-steps0"
         "-train-2fde1ae4a9a9@0.1.0"
     )
+    assert publication_document.bundle.submission_package.sampled_competence is not None
     assert imported_summary.publication_bundle_count == 1
     assert result_summary.run_count == 1
+    local_view = load_console_result_view(local_result_summary.view_file.read_bytes())
+    local_results = cast(list[dict[str, object]], local_view["benchmark_results"])
+    local_leaderboard = cast(list[dict[str, object]], local_results[0]["leaderboard"])
     view = load_console_result_view(result_summary.view_file.read_bytes())
     results = cast(list[dict[str, object]], view["benchmark_results"])
     history = cast(list[dict[str, object]], results[0]["training_history"])
     leaderboard = cast(list[dict[str, object]], results[0]["leaderboard"])
     assert history[0]["source_kind"] == "imported-publication"
     assert history[0]["measurement_count"] == publish_summary.measurement_count
+    assert "sampled_competence" in history[0]
+    assert leaderboard[0]["score"] == local_leaderboard[0]["score"]
+    assert leaderboard[0]["observed_complexities"] == local_leaderboard[0]["observed_complexities"]
     assert leaderboard[0]["run_ids"] == [history[0]["run_id"]]
 
 
