@@ -58,8 +58,8 @@ _discriminatable_resolution_cache: dict[
     tuple[str, int, str, str, int, int, float],
     tuple[int, int],
 ] = {}
-_minimum_isotropic_scale_cache: dict[
-    tuple[str, int, int, int, int, float],
+_readable_isotropic_scale_cache: dict[
+    tuple[str, int, int, int, int, float, float],
     float,
 ] = {}
 _rejection_cache_bins_per_axis = 8
@@ -871,6 +871,10 @@ def _accepted_variation_coordinate(
                     else:
                         _increment_counter(counters, "rejection_cache_saturated_count")
                 continue
+            if sampler is _readable_variation_coordinate_record:
+                _increment_counter(counters, "readable_certificate_accept_count")
+                _increment_counter(counters, "accepted_count")
+                return coordinate
             try:
                 analysis_coordinate = dict(coordinate)
                 analysis_coordinate["sequence_index"] = 0
@@ -932,13 +936,16 @@ def _readable_variation_coordinate_record(
             generator=generator,
             sequence_index=sequence_index,
         )
-    minimum_scale = _minimum_resolvable_isotropic_scale(
+    minimum_scale = _minimum_certified_readable_isotropic_scale(
         formation=formation,
-        sequence_length=1,
         sequence_index=sequence_index,
         width=width,
         height=height,
         minimum_pairwise_l1=minimum_pairwise_l1,
+        preferred_minimum_scale=max(
+            0.9,
+            thresholds.get("affine_minimum_singular_value", 0.0),
+        ),
     )
     maximum_scale = _maximum_canvas_fit_isotropic_scale(
         formation=formation,
@@ -977,55 +984,56 @@ def _readable_affine_acceptance_thresholds(
     return relaxed
 
 
-def _minimum_resolvable_isotropic_scale(
+def _minimum_certified_readable_isotropic_scale(
     *,
     formation: ObservationFormationDeclaration,
-    sequence_length: int,
     sequence_index: int,
     width: int,
     height: int,
     minimum_pairwise_l1: float,
+    preferred_minimum_scale: float,
 ) -> float:
+    # Certify the conservative Digits readable envelope once per canvas, then
+    # trust samples drawn inside it instead of rerendering every candidate.
+    preferred = min(1.0, max(0.0, preferred_minimum_scale))
     cache_key = (
         str(formation.digest),
-        sequence_length,
+        1,
         sequence_index,
         width,
         height,
         minimum_pairwise_l1,
+        preferred,
     )
-    cached = _minimum_isotropic_scale_cache.get(cache_key)
+    cached = _readable_isotropic_scale_cache.get(cache_key)
     if cached is not None:
         return cached
-    if _isotropic_scale_passes_discriminability(
+    if _isotropic_translation_box_passes_discriminability(
         formation=formation,
-        sequence_length=sequence_length,
         sequence_index=sequence_index,
         width=width,
         height=height,
-        scale=0.0,
+        scale=preferred,
         minimum_pairwise_l1=minimum_pairwise_l1,
     ):
-        _minimum_isotropic_scale_cache[cache_key] = 0.0
-        return 0.0
+        _readable_isotropic_scale_cache[cache_key] = preferred
+        return preferred
     upper = 1.0
-    if not _isotropic_scale_passes_discriminability(
+    if not _isotropic_translation_box_passes_discriminability(
         formation=formation,
-        sequence_length=sequence_length,
         sequence_index=sequence_index,
         width=width,
         height=height,
         scale=upper,
         minimum_pairwise_l1=minimum_pairwise_l1,
     ):
-        _minimum_isotropic_scale_cache[cache_key] = upper
+        _readable_isotropic_scale_cache[cache_key] = upper
         return upper
-    lower = 0.0
-    for _iteration in range(12):
+    lower = preferred
+    for _iteration in range(8):
         midpoint = (lower + upper) / 2.0
-        if _isotropic_scale_passes_discriminability(
+        if _isotropic_translation_box_passes_discriminability(
             formation=formation,
-            sequence_length=sequence_length,
             sequence_index=sequence_index,
             width=width,
             height=height,
@@ -1035,7 +1043,7 @@ def _minimum_resolvable_isotropic_scale(
             upper = midpoint
         else:
             lower = midpoint
-    _minimum_isotropic_scale_cache[cache_key] = upper
+    _readable_isotropic_scale_cache[cache_key] = upper
     return upper
 
 
@@ -1051,28 +1059,37 @@ def _maximum_canvas_fit_isotropic_scale(
     return 1.0
 
 
-def _isotropic_scale_passes_discriminability(
+def _isotropic_translation_box_passes_discriminability(
     *,
     formation: ObservationFormationDeclaration,
-    sequence_length: int,
     sequence_index: int,
     width: int,
     height: int,
     scale: float,
     minimum_pairwise_l1: float,
 ) -> bool:
-    coordinate = _isotropic_scale_variation_coordinate(
-        transform=formation.variation_transform,
-        sequence_index=sequence_index,
-        scale=scale,
+    margin = max(0.0, 1.0 - min(scale, 1.0)) / 2.0
+    coordinates = tuple(
+        _isotropic_scale_variation_coordinate(
+            transform=formation.variation_transform,
+            sequence_index=sequence_index,
+            scale=scale,
+            translation=translation,
+        )
+        for translation in (
+            (-margin, -margin),
+            (-margin, margin),
+            (margin, -margin),
+            (margin, margin),
+        )
     )
     try:
         return formation.component_discriminability_passes(
             width=width,
             height=height,
-            sequence_length=sequence_length,
-            sequence_index=sequence_index,
-            variation_coordinates=(coordinate,),
+            sequence_length=1,
+            sequence_index=0,
+            variation_coordinates=coordinates,
             minimum_pairwise_l1=minimum_pairwise_l1,
         )
     except ObservationFormationValidationError:
@@ -1084,15 +1101,17 @@ def _isotropic_scale_variation_coordinate(
     transform: VariationTransformDeclaration,
     sequence_index: int,
     scale: float,
+    translation: tuple[float, float] = (0.0, 0.0),
 ) -> Mapping[str, object]:
     spatial = transform.spatial_affine
+    tx, ty = translation
     return {
         "kind": "field-variation-transform-coordinate",
         "sequence_index": sequence_index,
         "spatial_affine": {
             "kind": "spatial-affine-coordinate",
             "coordinate_system": spatial.coordinate_system,
-            "matrix": [[scale, 0.0, 0.0], [0.0, scale, 0.0], [0.0, 0.0, 1.0]],
+            "matrix": [[scale, 0.0, tx], [0.0, scale, ty], [0.0, 0.0, 1.0]],
         },
     }
 
