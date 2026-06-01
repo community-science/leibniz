@@ -6,6 +6,7 @@ LEIBNIZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MINIFORGE_ROOT="${LEIBNIZ_MINIFORGE_ROOT:-$LEIBNIZ_ROOT/.miniforge}"
 ENV_NAME="${LEIBNIZ_ENV_NAME:-leibniz-dev}"
 CONDA_BIN="$MINIFORGE_ROOT/bin/conda"
+CONSOLE_WEB_ROOT="$LEIBNIZ_ROOT/src/leibniz/console/_web_src"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -44,5 +45,11 @@ else
         "$CONDA_BIN" env create -n "$ENV_NAME" -f environment.yml
     )
 fi
+
+echo "Syncing console npm dependencies"
+(
+    cd "$CONSOLE_WEB_ROOT"
+    "$CONDA_BIN" run -n "$ENV_NAME" npm ci
+)
 
 echo "Environment ready. Run: source scripts/activate_environment.sh"

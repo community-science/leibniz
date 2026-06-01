@@ -1161,7 +1161,9 @@ function BenchmarkSampleCard({
       type="button"
     >
       <div className="benchmark-image-shell">
-        <img alt={sample.outcome_id} src={sample.image_data_url} />
+        <div className="benchmark-image-fit">
+          <img alt={sample.outcome_id} src={sample.image_data_url} />
+        </div>
       </div>
     </button>
   );

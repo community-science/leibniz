@@ -10,6 +10,7 @@ def test_miniforge_environment_declares_development_toolchain() -> None:
     assert "name: leibniz-dev" in lines
     assert "  - conda-forge" in lines
     assert "  - python=3.12" in lines
+    assert "  - nodejs=24" in lines
     assert "  - pip>=24" in lines
     assert '      - "-e .[dev]"' in lines
 
@@ -24,6 +25,9 @@ def test_environment_scripts_use_repo_local_miniforge() -> None:
     assert "ENV_NAME=\"${LEIBNIZ_ENV_NAME:-leibniz-dev}\"" in setup_script
     assert "conda-forge/miniforge/releases/latest/download" in setup_script
     assert "env create -n \"$ENV_NAME\" -f environment.yml" in setup_script
+    assert "CONSOLE_WEB_ROOT=\"$LEIBNIZ_ROOT/src/leibniz/console/_web_src\"" in setup_script
+    assert "Syncing console npm dependencies" in setup_script
+    assert "\"$CONDA_BIN\" run -n \"$ENV_NAME\" npm ci" in setup_script
     assert "This script must be sourced" in activate_script
     assert "source \"$CONDA_SH\"" in activate_script
     assert "conda activate \"$ENV_NAME\"" in activate_script

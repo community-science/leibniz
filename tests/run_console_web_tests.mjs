@@ -188,6 +188,7 @@ function assertBenchmarkSamplePaneStructure() {
   );
   const requiredPanelMarkers = [
     'BenchmarkSampleCoordinateInspector',
+    'benchmark-image-fit',
     'benchmark-sample-coordinate-inspector',
   ];
   for (const marker of requiredPanelMarkers) {
@@ -197,6 +198,9 @@ function assertBenchmarkSamplePaneStructure() {
   }
   const requiredStyleMarkers = [
     '--benchmark-sample-tile-size',
+    '.benchmark-image-fit',
+    'box-sizing: border-box',
+    'inset: 0',
     '.benchmark-sample-coordinate-inspector',
     'object-fit: contain',
   ];
