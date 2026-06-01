@@ -136,11 +136,13 @@ The digits benchmark samples rectangular canvases with independently varying
 height and width. Observation formation now derives the lower canvas floor from
 generic component discriminability analysis rather than a fixed pixel extent per
 digit; the benchmark manifest declares the scalar discriminability margin used
-by that live analysis. Candidate architectures must therefore accept variable
-spatial input shapes, for example by using adaptive pooling before any fixed
-readout. Fixed `input_shape`-only architectures are rejected for sampled digits
-runs because later training batches may have different canvas dimensions than
-the validation batch used during initial inspection.
+by that live analysis. Spatial variation is sampled as affine matrix coordinates
+and accepted by rejection sampling only when the transformed components preserve
+that margin. Candidate architectures must therefore accept
+variable spatial input shapes, for example by using adaptive pooling before any
+fixed readout. Fixed `input_shape`-only architectures are rejected for sampled
+digits runs because later training batches may have different canvas dimensions
+than the validation batch used during initial inspection.
 
 While a benchmark loop is training a reserved candidate, validation checkpoints
 are written under `results/training-progress/` and materialized into the local

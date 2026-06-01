@@ -92,8 +92,9 @@ def test_digits_materialization_declaration_loads_source_artifact() -> None:
         kind="latent-factor-declaration",
         protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
     )
+    assert declaration.requirements == ()
     assert declaration.minimum_resolution(AxisAssignment(values={"L": 4})) == AxisAssignment(
-        values={"W": 4, "H": 1}
+        values={"W": 1, "H": 1}
     )
     assert document.digest == ContentDigest.from_value(declaration.to_record())
 
@@ -145,7 +146,7 @@ def test_materialization_plan_resolves_from_declaration_deterministically() -> N
     )
 
     assert left == right
-    assert left.resolution_assignment == AxisAssignment(values={"W": 3, "H": 1})
+    assert left.resolution_assignment == AxisAssignment(values={"W": 1, "H": 1})
     assert left.complexity_assignment.require_axis("C") == 3
     left.validate_declaration(declaration)
 
@@ -190,12 +191,12 @@ def test_materialization_plan_rejects_under_resolved_request() -> None:
         ),
         scale_assignment=AxisAssignment(values={"L": 3}),
         complexity_assignment=AxisAssignment(values={"C": 3}),
-        resolution_assignment=AxisAssignment(values={"W": 2, "H": 1}),
+        resolution_assignment=AxisAssignment(values={"W": 0, "H": 1}),
         seed=101,
     )
 
     assert str(capture_materialization_error(lambda: plan.validate_declaration(declaration))) == (
-        "W=2 is below minimum 3 for L=3"
+        "W=0 is below layout minimum 1"
     )
 
 

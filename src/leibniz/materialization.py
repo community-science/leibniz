@@ -241,8 +241,6 @@ class MaterializationDeclaration:
             self.benchmark_id.require_unreleased()
         except ValueError as error:
             raise MaterializationValidationError(str(error)) from error
-        if not self.requirements:
-            raise MaterializationValidationError("requirements must not be empty")
         duplicate = _first_duplicate(tuple(requirement.name for requirement in self.requirements))
         if duplicate is not None:
             raise MaterializationValidationError(f"duplicate requirement: {duplicate}")
@@ -281,7 +279,9 @@ class MaterializationDeclaration:
         )
 
     def minimum_resolution(self, scale_assignment: AxisAssignment) -> AxisAssignment:
-        values: dict[str, int] = {}
+        values: dict[str, int] = (
+            _layout_resolution_floor(self.layout) if self.layout is not None else {}
+        )
         for requirement in self.requirements:
             minimum = requirement.minimum_resolution(scale_assignment)
             current = values.get(requirement.resolution_axis)
@@ -295,6 +295,13 @@ class MaterializationDeclaration:
         scale_assignment: AxisAssignment,
         resolution_assignment: AxisAssignment,
     ) -> None:
+        if self.layout is not None:
+            for axis, minimum in _layout_resolution_floor(self.layout).items():
+                actual = resolution_assignment.require_axis(axis)
+                if actual < minimum:
+                    raise MaterializationValidationError(
+                        f"{axis}={actual} is below layout minimum {minimum}"
+                    )
         for requirement in self.requirements:
             requirement.require_resolution(
                 scale_assignment=scale_assignment,
@@ -563,6 +570,18 @@ def _optional_reference(value: object, *, field: str) -> ArtifactReference | Non
 
 def _canonical_mapping(value: Mapping[str, object]) -> dict[str, object]:
     return {str(key): value[key] for key in sorted(value)}
+
+
+def _layout_resolution_floor(layout: Mapping[str, object]) -> dict[str, int]:
+    if layout.get("kind") != "sequence-layout":
+        return {}
+    width_axis = layout.get("width_axis")
+    height_axis = layout.get("height_axis")
+    if not isinstance(width_axis, str) or not width_axis:
+        return {}
+    if not isinstance(height_axis, str) or not height_axis:
+        return {}
+    return {width_axis: 1, height_axis: 1}
 
 
 def _first_duplicate(values: tuple[object, ...]) -> object | None:

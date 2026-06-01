@@ -165,7 +165,7 @@ def _digits_declaration(sequence_length: int) -> LatentFactorDeclaration:
             SampleLatentFactor(
                 name=ProtocolName.parse("benchmarks.digits.sample.field-variation-transform"),
                 role="variation",
-                degree_measure=DegreeMeasure.vector_dimension(7),
+                degree_measure=DegreeMeasure.vector_dimension(6),
                 multiplicity=sequence_length,
             ),
             SampleLatentFactor(

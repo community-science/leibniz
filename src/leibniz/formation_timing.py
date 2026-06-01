@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,8 +14,10 @@ from leibniz.tensor_runtime import (
     TensorRuntimeDevice,
     TensorRuntimeError,
     resolve_tensor_runtime,
+    runtime_roofline_record,
     validate_tensor_runtime_device,
 )
+from leibniz.timing import TimingCollector
 
 __all__ = [
     "FormationTimingError",
@@ -71,6 +73,9 @@ class FormationTimingSummary:
     tensor_device: str
     pure_observation_seconds: float
     tensor_batch_seconds: float
+    pure_phase_timing: Mapping[str, object]
+    tensor_phase_timing: Mapping[str, object]
+    roofline: Mapping[str, object]
 
     @property
     def pure_observation_samples_per_second(self) -> float:
@@ -99,6 +104,9 @@ class FormationTimingSummary:
                 self.pure_observation_samples_per_second
             ),
             "tensor_batch_samples_per_second": self.tensor_batch_samples_per_second,
+            "pure_phase_timing": dict(self.pure_phase_timing),
+            "tensor_phase_timing": dict(self.tensor_phase_timing),
+            "roofline": dict(self.roofline),
         }
 
     def _samples_per_second(self, seconds: float) -> float:
@@ -123,18 +131,22 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
         ).outcomes
     )
 
-    def pure_once(seed: int) -> None:
+    def pure_once(seed: int, timing: TimingCollector | None = None) -> None:
         generator.sample_batch(
             scale=plan.scale,
             sample_count=plan.sample_count,
             seed=seed,
+            timing=timing,
+            timing_prefix="pure.",
         )
 
-    def tensor_once(seed: int) -> None:
+    def tensor_once(seed: int, timing: TimingCollector | None = None) -> None:
         batch = generator.sample_formation_batch(
             scale=plan.scale,
             sample_count=plan.sample_count,
             seed=seed,
+            timing=timing,
+            timing_prefix="tensor.",
         )
         cache.batch_tensors(batch=batch, outcome_ids=outcome_ids)
 
@@ -142,11 +154,14 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
         pure_once(plan.seed + offset)
         tensor_once(plan.seed + 100_003 + offset)
     _synchronize(runtime)
+    pure_timing = TimingCollector()
+    tensor_timing = TimingCollector()
+
     def timed_pure_once(offset: int) -> None:
-        pure_once(plan.seed + 1_000_003 + offset)
+        pure_once(plan.seed + 1_000_003 + offset, timing=pure_timing)
 
     def timed_tensor_once(offset: int) -> None:
-        tensor_once(plan.seed + 2_000_003 + offset)
+        tensor_once(plan.seed + 2_000_003 + offset, timing=tensor_timing)
 
     pure_seconds = _time_repeats(
         timed_pure_once,
@@ -168,6 +183,9 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
         tensor_device=runtime.device_kind,
         pure_observation_seconds=pure_seconds,
         tensor_batch_seconds=tensor_seconds,
+        pure_phase_timing=pure_timing.to_record(kind="pure-formation-phase-timing"),
+        tensor_phase_timing=tensor_timing.to_record(kind="tensor-formation-phase-timing"),
+        roofline=runtime_roofline_record(runtime),
     )
 
 

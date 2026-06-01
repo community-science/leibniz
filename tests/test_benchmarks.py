@@ -333,8 +333,26 @@ def test_digits_benchmark_manifest_loads_source_artifact() -> None:
             "Minimum rendered component separation required when choosing live "
             "observation resolution."
         ),
+        "affine_minimum_absolute_determinant": 0.25,
+        "affine_minimum_axis_alignment": 0.95,
+        "affine_minimum_cell_overlap_ratio": 0.55,
+        "affine_minimum_singular_value": 0.72,
+        "affine_maximum_singular_value": 1.28,
+        "affine_maximum_condition_number": 1.6,
+        "affine_minimum_projected_extent": 0.65,
+        "affine_maximum_projected_extent": 1.35,
     }
     assert manifest.resolution_discriminability_margin() == 20.0
+    assert manifest.affine_acceptance_thresholds() == {
+        "affine_minimum_absolute_determinant": 0.25,
+        "affine_minimum_axis_alignment": 0.95,
+        "affine_minimum_cell_overlap_ratio": 0.55,
+        "affine_minimum_singular_value": 0.72,
+        "affine_maximum_singular_value": 1.28,
+        "affine_maximum_condition_number": 1.6,
+        "affine_minimum_projected_extent": 0.65,
+        "affine_maximum_projected_extent": 1.35,
+    }
     assert document.digest == ContentDigest.from_value(manifest.to_record())
 
 

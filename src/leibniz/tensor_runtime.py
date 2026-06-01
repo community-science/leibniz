@@ -33,6 +33,11 @@ TensorRuntimeDevice = Literal["auto", "cpu", "cuda", "mps"]
 TensorRuntimeDeviceKind = Literal["cpu", "cuda", "mps"]
 _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
 _roofline_cache: dict[str, dict[str, object]] = {}
+_AffineMatrix2D = tuple[
+    tuple[float, float, float],
+    tuple[float, float, float],
+    tuple[float, float, float],
+]
 
 
 class TensorRuntimeError(ValueError):
@@ -104,7 +109,6 @@ class FormationTensorCache:
             raise TensorRuntimeError("variation_coordinates length must match sequence length")
         source_tensors: list[Any] = []
         affine_rows: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
-        value_scales: list[float] = []
         for sequence_index, component_index in enumerate(sequence):
             coordinate = _variation_coordinate(
                 coordinates[sequence_index],
@@ -129,7 +133,6 @@ class FormationTensorCache:
                     height=height,
                 )
             )
-            value_scales.append(coordinate.value_scale)
         torch = self.runtime.torch
         sources = torch.stack(source_tensors)
         theta = torch.tensor(
@@ -149,12 +152,7 @@ class FormationTensorCache:
             padding_mode="zeros",
             align_corners=False,
         )
-        scales = torch.tensor(
-            value_scales,
-            dtype=torch.float32,
-            device=self.runtime.device,
-        ).reshape((len(value_scales), 1, 1, 1))
-        return torch.clamp(transformed * scales, min=0.0, max=1.0).amax(dim=0)
+        return transformed.amax(dim=0)
 
     def batch_tensors(
         self,
@@ -185,7 +183,6 @@ class FormationTensorCache:
             raise TensorRuntimeError("component_sequence must not be empty")
         source_tensors: list[Any] = []
         affine_rows: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
-        value_scales: list[float] = []
         for sample in batch.samples:
             if sample.width != width or sample.height != height:
                 raise TensorRuntimeError("batch sample canvas shapes must match")
@@ -203,16 +200,16 @@ class FormationTensorCache:
                         component_index=component_index,
                     )
                 )
-                row, value_scale = _generated_affine_grid_row_and_value_scale(
-                    sample.variation_coordinates[sequence_index],
-                    sequence_length=sequence_length,
-                    sequence_index=sequence_index,
-                    placement_axis=self.formation.sequence_layout.placement_axis,
-                    width=width,
-                    height=height,
+                affine_rows.append(
+                    _generated_affine_grid_row(
+                        sample.variation_coordinates[sequence_index],
+                        sequence_length=sequence_length,
+                        sequence_index=sequence_index,
+                        placement_axis=self.formation.sequence_layout.placement_axis,
+                        width=width,
+                        height=height,
+                    )
                 )
-                affine_rows.append(row)
-                value_scales.append(value_scale)
         torch = self.runtime.torch
         sources = torch.stack(source_tensors)
         theta = torch.tensor(
@@ -232,12 +229,6 @@ class FormationTensorCache:
             padding_mode="zeros",
             align_corners=False,
         )
-        scales = torch.tensor(
-            value_scales,
-            dtype=torch.float32,
-            device=self.runtime.device,
-        ).reshape((len(value_scales), 1, 1, 1))
-        transformed = torch.clamp(transformed * scales, min=0.0, max=1.0)
         channels, height, width = transformed.shape[1:]
         return transformed.reshape((sample_count, sequence_length, channels, height, width)).amax(
             dim=1
@@ -551,11 +542,7 @@ def _require_sequence_index(*, sequence_index: int, sequence_length: int) -> Non
 @dataclass(frozen=True, slots=True)
 class _VariationCoordinate:
     sequence_index: int
-    translation: tuple[float, float]
-    scale: tuple[float, float]
-    rotation_degrees: float
-    shear_degrees: float
-    value_scale: float
+    matrix: _AffineMatrix2D
 
 
 def _variation_coordinate(
@@ -579,32 +566,14 @@ def _variation_coordinate(
         raise TensorRuntimeError(
             "spatial_affine coordinate_system must be normalized-sequence-element"
         )
-    value_scale = _mapping(record.get("value_scale"), "value_scale")
-    if str(value_scale.get("kind")) != "value-scale-coordinate":
-        raise TensorRuntimeError("value_scale kind must be value-scale-coordinate")
-    scale = _pair(spatial.get("scale"), "spatial_affine.scale")
-    if scale[0] <= 0.0 or scale[1] <= 0.0:
-        raise TensorRuntimeError("spatial_affine.scale values must be positive")
-    scale_value = _number(value_scale.get("scale"), "value_scale.scale")
-    if scale_value <= 0.0:
-        raise TensorRuntimeError("value_scale.scale must be positive")
+    matrix = _matrix(spatial.get("matrix"), "spatial_affine.matrix")
     return _VariationCoordinate(
         sequence_index=sequence_index,
-        translation=_pair(spatial.get("translation"), "spatial_affine.translation"),
-        scale=scale,
-        rotation_degrees=_single_number(
-            spatial.get("rotation_degrees"),
-            "spatial_affine.rotation_degrees",
-        ),
-        shear_degrees=_single_number(
-            spatial.get("shear_degrees"),
-            "spatial_affine.shear_degrees",
-        ),
-        value_scale=scale_value,
+        matrix=matrix,
     )
 
 
-def _generated_affine_grid_row_and_value_scale(
+def _generated_affine_grid_row(
     record: Mapping[str, object],
     *,
     width: int,
@@ -612,22 +581,15 @@ def _generated_affine_grid_row_and_value_scale(
     sequence_length: int,
     sequence_index: int,
     placement_axis: str,
-) -> tuple[tuple[tuple[float, float, float], tuple[float, float, float]], float]:
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     spatial = cast(Mapping[str, object], record["spatial_affine"])
-    value_scale = cast(Mapping[str, object], record["value_scale"])
-    return (
-        _affine_grid_row_from_values(
-            translation=_trusted_pair(spatial["translation"]),
-            scale=_trusted_pair(spatial["scale"]),
-            rotation_degrees=_trusted_single_number(spatial["rotation_degrees"]),
-            shear_degrees=_trusted_single_number(spatial["shear_degrees"]),
-            width=width,
-            height=height,
-            sequence_length=sequence_length,
-            sequence_index=sequence_index,
-            placement_axis=placement_axis,
-        ),
-        _trusted_float(value_scale["scale"]),
+    return _affine_grid_row_from_values(
+        matrix=_trusted_matrix(spatial["matrix"]),
+        width=width,
+        height=height,
+        sequence_length=sequence_length,
+        sequence_index=sequence_index,
+        placement_axis=placement_axis,
     )
 
 
@@ -641,10 +603,7 @@ def _affine_grid_row(
     placement_axis: str,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     return _affine_grid_row_from_values(
-        translation=coordinate.translation,
-        scale=coordinate.scale,
-        rotation_degrees=coordinate.rotation_degrees,
-        shear_degrees=coordinate.shear_degrees,
+        matrix=coordinate.matrix,
         width=width,
         height=height,
         sequence_length=sequence_length,
@@ -655,21 +614,15 @@ def _affine_grid_row(
 
 def _affine_grid_row_from_values(
     *,
-    translation: tuple[float, float],
-    scale: tuple[float, float],
-    rotation_degrees: float,
-    shear_degrees: float,
+    matrix: _AffineMatrix2D,
     width: int,
     height: int,
     sequence_length: int,
     sequence_index: int,
     placement_axis: str,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    inverse = _inverse_affine_matrix_from_values(
-        scale=scale,
-        rotation_degrees=rotation_degrees,
-        shear_degrees=shear_degrees,
-    )
+    linear_matrix = _linear_affine_matrix(matrix)
+    inverse = _inverse_affine_matrix_from_values(matrix=linear_matrix)
     center = _sequence_center(
         width=width,
         height=height,
@@ -680,7 +633,7 @@ def _affine_grid_row_from_values(
     center_x = 2.0 * center[0] - 1.0
     center_y = 2.0 * center[1] - 1.0
     field_translation = _sequence_relative_translation(
-        translation,
+        _affine_translation(matrix),
         sequence_length=sequence_length,
         placement_axis=placement_axis,
     )
@@ -706,23 +659,25 @@ def _affine_grid_row_from_values(
 
 def _inverse_affine_matrix_from_values(
     *,
-    scale: tuple[float, float],
-    rotation_degrees: float,
-    shear_degrees: float,
+    matrix: tuple[tuple[float, float], tuple[float, float]],
 ) -> tuple[tuple[float, float], tuple[float, float]]:
-    angle = math.radians(rotation_degrees)
-    shear = math.tan(math.radians(shear_degrees))
-    scale_x, scale_y = scale
-    cos_angle = math.cos(angle)
-    sin_angle = math.sin(angle)
-    a = cos_angle * scale_x
-    b = (cos_angle * shear - sin_angle) * scale_y
-    c = sin_angle * scale_x
-    d = (sin_angle * shear + cos_angle) * scale_y
+    (a, b), (c, d) = matrix
     determinant = a * d - b * c
     if not math.isfinite(determinant) or determinant == 0.0:
         raise TensorRuntimeError("variation affine transform is singular")
     return ((d / determinant, -b / determinant), (-c / determinant, a / determinant))
+
+
+def _linear_affine_matrix(
+    matrix: _AffineMatrix2D,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    return ((matrix[0][0], matrix[0][1]), (matrix[1][0], matrix[1][1]))
+
+
+def _affine_translation(
+    matrix: _AffineMatrix2D,
+) -> tuple[float, float]:
+    return (matrix[0][2], matrix[1][2])
 
 
 def _sequence_center(
@@ -755,32 +710,54 @@ def _mapping(value: object, name: str) -> Mapping[str, object]:
     return cast(Mapping[str, object], value)
 
 
-def _pair(value: object, name: str) -> tuple[float, float]:
+def _matrix(
+    value: object,
+    name: str,
+) -> _AffineMatrix2D:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        raise TensorRuntimeError(f"{name} must contain two values")
+        raise TensorRuntimeError(f"{name} must contain three rows")
     sequence = cast(Sequence[object], value)
-    if len(sequence) != 2:
-        raise TensorRuntimeError(f"{name} must contain two values")
-    return (_number(sequence[0], f"{name}.0"), _number(sequence[1], f"{name}.1"))
+    if len(sequence) != 3:
+        raise TensorRuntimeError(f"{name} must contain three rows")
+    matrix = (
+        _triple(sequence[0], f"{name}.0"),
+        _triple(sequence[1], f"{name}.1"),
+        _triple(sequence[2], f"{name}.2"),
+    )
+    if matrix[2] != (0.0, 0.0, 1.0):
+        raise TensorRuntimeError(f"{name} final row must be fixed affine coordinates")
+    return matrix
 
 
-def _trusted_pair(value: object) -> tuple[float, float]:
+def _trusted_matrix(value: object) -> _AffineMatrix2D:
     sequence = cast(Sequence[object], value)
-    return (_trusted_float(sequence[0]), _trusted_float(sequence[1]))
+    return (
+        _trusted_triple(sequence[0]),
+        _trusted_triple(sequence[1]),
+        _trusted_triple(sequence[2]),
+    )
 
 
-def _single_number(value: object, name: str) -> float:
+def _triple(value: object, name: str) -> tuple[float, float, float]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        raise TensorRuntimeError(f"{name} must contain one value")
+        raise TensorRuntimeError(f"{name} must contain three values")
     sequence = cast(Sequence[object], value)
-    if len(sequence) != 1:
-        raise TensorRuntimeError(f"{name} must contain one value")
-    return _number(sequence[0], f"{name}.0")
+    if len(sequence) != 3:
+        raise TensorRuntimeError(f"{name} must contain three values")
+    return (
+        _number(sequence[0], f"{name}.0"),
+        _number(sequence[1], f"{name}.1"),
+        _number(sequence[2], f"{name}.2"),
+    )
 
 
-def _trusted_single_number(value: object) -> float:
+def _trusted_triple(value: object) -> tuple[float, float, float]:
     sequence = cast(Sequence[object], value)
-    return _trusted_float(sequence[0])
+    return (
+        _trusted_float(sequence[0]),
+        _trusted_float(sequence[1]),
+        _trusted_float(sequence[2]),
+    )
 
 
 def _trusted_float(value: object) -> float:
