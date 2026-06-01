@@ -545,9 +545,14 @@ def test_digits_benchmark_runner_materializes_running_training_history(
         list[dict[str, object]],
         cast(list[dict[str, object]], result["leaderboard"])[0]["points"],
     )
+    sampled_competence = cast(dict[str, object], running_run["sampled_competence"])
     assert points
     assert points[0]["sample_count"] == 2
-    assert points[0]["score"] == running_run["score"]
+    assert sampled_competence["validation_competence"] == running_run["score"]
+    assert math.isclose(
+        (cast(float, points[0]["score"]) - 0.1) / 0.9,
+        cast(float, running_run["score"]),
+    )
 
     final_view_summary = materialize_benchmark_result_views(
         repository_root=_repository_root,

@@ -1143,6 +1143,8 @@ def _training_progress_record(
         best_validation_loss=training_run.best_validation_loss,
         outcome_count=len(outcome_space.outcomes),
     )
+    chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
+    accepted_mass_equivalent = chance_mass + provisional_score * (1.0 - chance_mass)
     complexities = {sample.complexity for sample in evaluation_batch.samples}
     progress_complexity = next(iter(complexities)) if len(complexities) == 1 else None
     record: dict[str, object] = {
@@ -1186,7 +1188,8 @@ def _training_progress_record(
             "complexity": progress_complexity,
             "seed": evaluation_batch.seed,
             "sample_count": len(evaluation_batch.samples),
-            "mean_accepted_mass": provisional_score,
+            "mean_accepted_mass": accepted_mass_equivalent,
+            "validation_competence": provisional_score,
         }
     return record
 
