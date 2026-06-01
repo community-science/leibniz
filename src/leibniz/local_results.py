@@ -1366,7 +1366,10 @@ def _run_competence_points(run: _BenchmarkRunRecord) -> tuple[tuple[float, float
                 )
                 for point in (
                     _as_mapping(value, "sampled_competence.points")
-                    for value in _as_sequence(points, "sampled_competence.points")
+                    for value in _as_sequence(
+                        cast(object, points),
+                        "sampled_competence.points",
+                    )
                 )
             )
         return (
@@ -2095,14 +2098,6 @@ def _as_identifier(value: object, field: str) -> ProtocolIdentifier:
         except ValueError as error:
             raise LocalResultImportError(str(error)) from error
     raise LocalResultImportError(f"{field}: expected identifier")
-
-
-def _optional_int(value: object, field: str) -> int | None:
-    if value is None:
-        return None
-    if type(value) is not int:
-        raise LocalResultImportError(f"{field}: expected integer")
-    return value
 
 
 def _as_digest(value: object, *, field: str) -> ContentDigest:

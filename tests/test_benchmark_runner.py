@@ -1,3 +1,4 @@
+import math
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -24,7 +25,7 @@ from leibniz.tensor_runtime import (
     TensorRuntimeDeviceKind,
     resolve_tensor_runtime,
 )
-from leibniz.training_runs import TrainingHistoryPoint, TrainingProtocol, TrainingRunRecord
+from leibniz.training_runs import TrainingHistoryPoint, TrainingRunRecord
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -191,13 +192,13 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         == "approximately-uniform-within-complexity-class"
     )
     assert sampled_competence["complexity_axis"] is None
-    assert sampled_competence["complexity"] == pytest.approx(25.76024888988623)
+    assert math.isclose(cast(float, sampled_competence["complexity"]), 25.76024888988623)
     assert sampled_competence["sample_count"] == 12
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
     assert len(points) == 4
     assert [point["sample_count"] for point in points] == [3, 3, 3, 3]
-    assert points[0]["complexity"] == pytest.approx(25.76024888988623)
+    assert math.isclose(cast(float, points[0]["complexity"]), 25.76024888988623)
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
     )
@@ -424,7 +425,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     }
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    assert observed_complexities[0] == pytest.approx(25.76024888988623)
+    assert math.isclose(observed_complexities[0], 25.76024888988623)
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
     assert points[0]["sample_count"] == 2
@@ -569,36 +570,4 @@ def _history_point(
         best_validation_step=step,
         best_validation_check=check,
         stale_checks=stale_checks,
-    )
-
-
-def _training_run(*, best_loss: float) -> TrainingRunRecord:
-    history = (_history_point(check=0, step=0, loss=best_loss, best=best_loss),)
-    return TrainingRunRecord(
-        status="completed",
-        stop_reason="no-training-steps",
-        steps_run=0,
-        validation_checks=len(history),
-        best_validation_loss=best_loss,
-        best_validation_step=0,
-        best_validation_check=0,
-        protocol=TrainingProtocol(
-            kind="fixed-step-local-batch",
-            objective="cross-entropy",
-            optimizer="sgd",
-            learning_rate=0.01,
-            schedule="none",
-            seed=101,
-            batch_size=2,
-            max_steps=0,
-            validation_interval=250,
-            validation_sample_count=2,
-            min_delta=1e-3,
-            patience=12,
-            validation_source="generator-resample",
-            min_steps=500,
-            tensor_runtime="pytorch",
-            tensor_device="cpu",
-        ),
-        validation_history=history,
     )

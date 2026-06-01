@@ -29,7 +29,7 @@ def test_digits_observation_generator_is_deterministic() -> None:
     assert left == right
     assert left.component_count == 1
     assert left.samples[0].field.shape == (1, 42, 118)
-    assert left.samples[0].complexity == pytest.approx(math.log2(49286227620))
+    assert math.isclose(left.samples[0].complexity, math.log2(49286227620))
     assert len(left.samples[0].observation.component_sequence) == 1
     assert left.samples[0].outcome_id == "digit-8"
     assert _coordinate(left.samples[0].latent_coordinates, role="content")["values"] == list(
@@ -154,7 +154,7 @@ def test_digits_observation_generator_samples_resolution_from_memory_bound() -> 
 
     assert sample.field.shape == (1, 82, 42)
     assert sample.materialization_plan.resolution_assignment.values == {"W": 42, "H": 82}
-    assert sample.complexity == pytest.approx(math.log2(17659483380))
+    assert math.isclose(sample.complexity, math.log2(17659483380))
     assert sample.outcome_id == "digit-1"
 
 

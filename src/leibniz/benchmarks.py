@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
+from typing import Protocol, cast
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.content import ContentDigest
@@ -39,6 +39,10 @@ class BenchmarkManifestValidationError(ValueError):
     """Raised when a benchmark manifest is invalid."""
 
 
+class _RecordSerializable(Protocol):
+    def to_record(self) -> Mapping[str, object]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class BenchmarkManifest:
     """A benchmark manifest for fixed finite outcomes."""
@@ -59,8 +63,6 @@ class BenchmarkManifest:
             raise BenchmarkManifestValidationError(
                 f"name {self.name} does not match id name {self.id.name}"
             )
-        if self.outcome_space is None:
-            raise BenchmarkManifestValidationError("manifest must declare outcome_space")
         if self.observation_ids is not None:
             if not self.observation_ids:
                 raise BenchmarkManifestValidationError(
@@ -157,16 +159,12 @@ class BenchmarkManifest:
             resolution_analysis=_manifest_resolution_analysis(validated),
         )
 
-    def validate_latent_factor_declaration(self, declaration: object) -> None:
+    def validate_latent_factor_declaration(self, declaration: _RecordSerializable) -> None:
         """Validate this manifest's latent factor declaration reference."""
 
         if self.latent_factor_declaration is None:
             raise BenchmarkManifestValidationError(
                 "manifest does not declare a latent factor reference"
-            )
-        if not hasattr(declaration, "to_record"):
-            raise BenchmarkManifestValidationError(
-                "latent factor declaration must be record-serializable"
             )
         if not self.latent_factor_declaration.matches_record(declaration.to_record()):
             raise BenchmarkManifestValidationError(
@@ -264,20 +262,6 @@ def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise BenchmarkManifestValidationError(f"{field}: expected record")
     return cast(Mapping[str, object], value)
-
-
-def _as_int(value: object, *, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise BenchmarkManifestValidationError(f"{field}: expected integer")
-    return value
-
-
-def _optional_string(value: object, *, field: str) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise BenchmarkManifestValidationError(f"{field}: expected string")
-    return value
 
 
 def _manifest_name(validated: Mapping[str, object]) -> ProtocolName:

@@ -585,12 +585,7 @@ def _host_memory_bytes() -> int:
         page_count = os.sysconf("SC_PHYS_PAGES")
     except (AttributeError, OSError, ValueError):
         page_size = page_count = -1
-    if (
-        isinstance(page_size, int)
-        and isinstance(page_count, int)
-        and page_size > 0
-        and page_count > 0
-    ):
+    if page_size > 0 and page_count > 0:
         return page_size * page_count
     return 1_073_741_824
 
