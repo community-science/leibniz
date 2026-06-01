@@ -88,7 +88,7 @@ def test_prediction_result_contract_matches_interface_metadata() -> None:
 def test_token_sequence_prediction_records_exact_sequence_probabilities() -> None:
     prediction_space = FiniteTokenSequenceSpace(
         vocabulary=FiniteTokenVocabulary(token_count=10, token_name="digit"),
-        sequence_boundary="eos-terminated",
+        sequence_boundary="variable-length",
     )
     prediction = TokenSequencePrediction(
         id=ProtocolIdentifier.parse("benchmarks.digits.predictions.sample-1@0.1.0"),
@@ -103,7 +103,7 @@ def test_token_sequence_prediction_records_exact_sequence_probabilities() -> Non
     assert prediction.probability_of((9,)) == 0.0
     assert prediction.contract == PredictionResultContract(
         prediction_space=prediction_space,
-        prediction_kind="autoregressive-finite-token-sequence",
+        prediction_kind="finite-token-sequence-probability",
         output_encoding="sequence-probability",
     )
     assert TokenSequencePrediction.from_record(prediction.to_record()) == prediction

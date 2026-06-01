@@ -28,7 +28,12 @@ from leibniz.views import MeasurementScoreView
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
 _digits_architecture = (
-    _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool" / "manifest.json"
+    _repository_root
+    / "tests"
+    / "fixtures"
+    / "architecture"
+    / "digits_sequence_pool"
+    / "manifest.json"
 )
 
 
@@ -321,7 +326,7 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
         publish_summary.publication_files[0].read_bytes()
     )
     assert publication_document.bundle.submission_package.id == ProtocolIdentifier.parse(
-        "submissions.digits.digits-arch-bb0dde9254dc-l1-seed101-samples1-steps0"
+        "submissions.digits.digits-arch-6ae9f2cf0314-l1-seed101-samples1-steps0"
         "-train-d83ad78f1b6c@0.1.0"
     )
     assert imported_summary.publication_bundle_count == 1

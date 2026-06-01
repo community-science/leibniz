@@ -14,7 +14,12 @@ from leibniz.console.data import ConsoleDataBuilder
 _repository_root = Path(__file__).parents[1]
 _benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
 _architecture_path = (
-    _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool" / "manifest.json"
+    _repository_root
+    / "tests"
+    / "fixtures"
+    / "architecture"
+    / "digits_sequence_pool"
+    / "manifest.json"
 )
 
 

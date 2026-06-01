@@ -20,7 +20,7 @@ __all__ = [
     "parse_prediction_space",
 ]
 
-_SequenceBoundary: TypeAlias = Literal["fixed-length", "eos-terminated"]
+_SequenceBoundary: TypeAlias = Literal["fixed-length", "variable-length"]
 _RealCoordinateMeasure: TypeAlias = Literal["lebesgue"]
 
 _token_vocabulary_record = RecordSpec(
@@ -113,9 +113,9 @@ class FiniteTokenSequenceSpace:
     minimum_length: int = 1
 
     def __post_init__(self) -> None:
-        if self.sequence_boundary not in {"fixed-length", "eos-terminated"}:
+        if self.sequence_boundary not in {"fixed-length", "variable-length"}:
             raise PredictionSpaceValidationError(
-                "sequence_boundary must be fixed-length or eos-terminated"
+                "sequence_boundary must be fixed-length or variable-length"
             )
         if type(self.minimum_length) is not int or self.minimum_length < 0:
             raise PredictionSpaceValidationError(
@@ -132,7 +132,7 @@ class FiniteTokenSequenceSpace:
             return
         if self.length is not None:
             raise PredictionSpaceValidationError(
-                "eos-terminated sequence spaces must not declare length"
+                "variable-length sequence spaces must not declare length"
             )
 
     @classmethod
@@ -158,7 +158,7 @@ class FiniteTokenSequenceSpace:
     def cardinality(self) -> int:
         if self.length is None:
             raise PredictionSpaceValidationError(
-                "eos-terminated sequence spaces do not have finite cardinality"
+                "variable-length sequence spaces do not have finite cardinality"
             )
         return self.vocabulary.token_count**self.length
 
@@ -167,7 +167,7 @@ class FiniteTokenSequenceSpace:
 
         if self.length is None:
             raise PredictionSpaceValidationError(
-                "eos-terminated sequence spaces do not have finite outcome indices"
+                "variable-length sequence spaces do not have finite outcome indices"
             )
         token_values = tuple(_as_int(token, field="tokens") for token in tokens)
         if len(token_values) != self.length:
@@ -184,7 +184,7 @@ class FiniteTokenSequenceSpace:
 
         if self.length is None:
             raise PredictionSpaceValidationError(
-                "eos-terminated sequence spaces do not have finite outcome indices"
+                "variable-length sequence spaces do not have finite outcome indices"
             )
         if type(index) is not int or index < 0 or index >= self.cardinality:
             raise PredictionSpaceValidationError("sequence index is outside token space")
@@ -242,7 +242,7 @@ class FiniteTokenSequenceSpace:
         }
         if self.length is not None:
             record["length"] = self.length
-        if self.sequence_boundary == "eos-terminated" or self.minimum_length != self.length:
+        if self.sequence_boundary == "variable-length" or self.minimum_length != self.length:
             record["minimum_length"] = self.minimum_length
         return record
 

@@ -102,15 +102,15 @@ def test_model_interface_validates_direct_finite_prediction_results() -> None:
     ) == "prediction result does not expose prediction_space"
 
 
-def test_model_interface_declares_autoregressive_token_sequence_outputs() -> None:
+def test_model_interface_declares_token_sequence_probability_outputs() -> None:
     prediction_space = FiniteTokenSequenceSpace(
         vocabulary=FiniteTokenVocabulary(token_count=10, token_name="digit"),
-        sequence_boundary="eos-terminated",
+        sequence_boundary="variable-length",
     )
     interface = ModelInterface(
         id=ProtocolIdentifier.parse("model-interfaces.digits-sequence@0.1.0"),
         prediction_space=prediction_space,
-        prediction_kind="autoregressive-finite-token-sequence",
+        prediction_kind="finite-token-sequence-probability",
         output_encoding="sequence-probability",
     )
     prediction = TokenSequencePrediction(
@@ -165,7 +165,7 @@ def test_model_interface_rejects_unsupported_prediction_contracts() -> None:
         )
     ) == (
         "model interface must pair finite probability measures with finite outcome spaces, "
-        "or autoregressive sequence probabilities with eos-terminated finite token "
+        "or finite token sequence probabilities with variable-length finite token "
         "sequence spaces"
     )
 
@@ -177,7 +177,7 @@ def test_model_interface_rejects_unsupported_prediction_contracts() -> None:
         )
     ) == (
         "model interface must pair finite probability measures with finite outcome spaces, "
-        "or autoregressive sequence probabilities with eos-terminated finite token "
+        "or finite token sequence probabilities with variable-length finite token "
         "sequence spaces"
     )
 

@@ -1,0 +1,28 @@
+{
+  "input_shape": [
+    1,
+    32,
+    32
+  ],
+  "output_shape": [
+    55
+  ],
+  "layers": [
+    {
+      "kind": "adaptive-pooling",
+      "parameters": {
+        "dimension": 2,
+        "size": 2
+      }
+    },
+    {
+      "kind": "flatten"
+    },
+    {
+      "kind": "dense",
+      "parameters": {
+        "out": 55
+      }
+    }
+  ]
+}

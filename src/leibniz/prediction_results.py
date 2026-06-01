@@ -61,7 +61,7 @@ _token_sequence_prediction_record = RecordSpec(
         "prediction_space": FieldSpec(kind="record"),
         "prediction_kind": FieldSpec(
             kind="literal",
-            literal="autoregressive-finite-token-sequence",
+            literal="finite-token-sequence-probability",
         ),
         "output_encoding": FieldSpec(
             kind="literal",
@@ -214,7 +214,7 @@ class TokenSequenceProbability:
 class TokenSequencePrediction:
     """A sparse exact-sequence probability prediction.
 
-    The prediction space may be unbounded when sequences are EOS-terminated. A
+    The prediction space may be unbounded when sequences are variable length. A
     concrete prediction record only needs to expose the sequence probabilities
     being scored for evaluated observations.
     """
@@ -222,7 +222,7 @@ class TokenSequencePrediction:
     id: ProtocolIdentifier
     prediction_space: FiniteTokenSequenceSpace
     sequence_probabilities: tuple[TokenSequenceProbability, ...]
-    prediction_kind: str = "autoregressive-finite-token-sequence"
+    prediction_kind: str = "finite-token-sequence-probability"
     output_encoding: str = "sequence-probability"
 
     def __post_init__(self) -> None:
@@ -230,7 +230,7 @@ class TokenSequencePrediction:
             self.id.require_unreleased()
         except ValueError as error:
             raise PredictionResultValidationError(str(error)) from error
-        if self.prediction_kind != "autoregressive-finite-token-sequence":
+        if self.prediction_kind != "finite-token-sequence-probability":
             raise PredictionResultValidationError(
                 f"unsupported prediction_kind: {self.prediction_kind}"
             )

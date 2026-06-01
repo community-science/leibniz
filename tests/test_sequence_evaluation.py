@@ -64,7 +64,7 @@ def _prediction() -> TokenSequencePrediction:
         id=ProtocolIdentifier.parse("benchmarks.digits.predictions.sample-1@0.1.0"),
         prediction_space=FiniteTokenSequenceSpace(
             vocabulary=FiniteTokenVocabulary(token_count=10, token_name="digit"),
-            sequence_boundary="eos-terminated",
+            sequence_boundary="variable-length",
         ),
         sequence_probabilities=(
             TokenSequenceProbability(tokens=(1, 2, 3), probability=0.25),
@@ -79,10 +79,10 @@ def _prediction_record_bytes() -> bytes:
         b'"prediction_space":{'
         b'"kind":"finite-token-sequence",'
         b'"vocabulary":{"token_count":10,"token_name":"digit"},'
-        b'"sequence_boundary":"eos-terminated",'
+        b'"sequence_boundary":"variable-length",'
         b'"minimum_length":1'
         b"},"
-        b'"prediction_kind":"autoregressive-finite-token-sequence",'
+        b'"prediction_kind":"finite-token-sequence-probability",'
         b'"output_encoding":"sequence-probability",'
         b'"sequence_probabilities":[{"tokens":[1,2,3],"probability":0.25}]'
         b"}"

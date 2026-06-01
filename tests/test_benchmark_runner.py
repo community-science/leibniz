@@ -31,7 +31,12 @@ from leibniz.training_runs import TrainingHistoryPoint, TrainingProtocol, Traini
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
 _digits_architecture = (
-    _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool" / "manifest.json"
+    _repository_root
+    / "tests"
+    / "fixtures"
+    / "architecture"
+    / "digits_sequence_pool"
+    / "manifest.json"
 )
 
 
@@ -50,7 +55,7 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     assert summary.dry_run is True
     assert summary.measurement_count == 2
     assert summary.run_slug.startswith(
-        "digits-arch-bb0dde9254dc-l1-seed101-samples2-steps1-train-"
+        "digits-arch-6ae9f2cf0314-l1-seed101-samples2-steps1-train-"
     )
     assert summary.measurement_dataset_path == (
         tmp_path
@@ -97,6 +102,39 @@ def test_digits_benchmark_runner_rejects_fixed_shape_architecture(
         )
 
 
+def test_digits_benchmark_runner_rejects_finite_classifier_for_sequence_benchmark(
+    tmp_path: Path,
+) -> None:
+    architecture = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 32, 32],
+            "output_shape": [10],
+            "layers": [
+                {
+                    "kind": "adaptive-pooling",
+                    "parameters": {"dimension": 2, "size": 2},
+                },
+                {"kind": "flatten"},
+                {"kind": "dense", "parameters": {"out": 10}},
+            ],
+        }
+    )
+    architecture_path = tmp_path / "finite-classifier-architecture.json"
+    architecture_path.write_bytes(canonical_document_bytes(architecture.to_record()))
+
+    with pytest.raises(BenchmarkRunnerError, match="sequence benchmarks require"):
+        run_benchmark(
+            BenchmarkRunPlan(
+                architecture_path=architecture_path,
+                benchmark_root=_digits_benchmark_root,
+                results_root=tmp_path / "results",
+                sample_count=2,
+                train_steps=1,
+                dry_run=True,
+            )
+        )
+
+
 def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -> None:
     summary = run_benchmark(
         BenchmarkRunPlan(
@@ -124,8 +162,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     dataset_document.dataset.validate_manifest(manifest, scale=1)
     assert summary.measurement_count == 3
     assert len(dataset_document.dataset.measurements) == 3
-    assert inspection_document.inspection.cost_summary.parameter_count == 50
-    assert inspection_document.inspection.cost_summary.inference_flops == 1104
+    assert inspection_document.inspection.cost_summary.parameter_count == 275
+    assert inspection_document.inspection.cost_summary.inference_flops == 1464
     assert summary.training_summary_path.exists()
     training_summary = load_object_document(
         summary.training_summary_path.read_bytes(),
@@ -135,7 +173,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         cast(Mapping[str, object], training_summary["training_run"])
     )
     assert training_run.protocol.optimizer == "sgd"
-    assert training_run.protocol.objective == "cross-entropy"
+    assert training_run.protocol.objective == "sequence-probability-cross-entropy"
     assert training_run.protocol.tensor_runtime == "pytorch"
     assert training_run.protocol.tensor_device == "cpu"
     assert training_run.protocol.max_steps == 1
@@ -196,6 +234,55 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert sampled_competence["complexity"] == 1
     assert sampled_competence["sample_count"] == 3
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
+    assert training_summary["sequence_training"] == {
+        "kind": "factored-sequence-probability",
+        "token_name": "digit",
+        "token_count": 10,
+        "output_count": 55,
+        "length_logit_count": 5,
+        "token_logit_count": 50,
+        "minimum_complexity": 1,
+        "maximum_complexity": 5,
+        "batch_complexity_sampling": "uniform-per-batch",
+        "parameterization": "length-categorical-and-positionwise-token-categorical",
+    }
+
+
+def test_digits_benchmark_runner_sequence_training_samples_model_accepted_complexities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sampled_training_scales: list[int] = []
+    original = benchmark_runner.ObservationGenerator.sample_formation_batch
+
+    def record_scale(self: object, **kwargs: object) -> object:
+        prefix = cast(str, kwargs.get("timing_prefix", ""))
+        if prefix.startswith(
+            ("training_formation_generation.", "validation_formation_generation.")
+        ):
+            sampled_training_scales.append(cast(int, kwargs["scale"]))
+        return original(cast(Any, self), **kwargs)
+
+    monkeypatch.setattr(
+        benchmark_runner.ObservationGenerator,
+        "sample_formation_batch",
+        record_scale,
+    )
+
+    run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=tmp_path / "results",
+            sample_count=2,
+            seed=101,
+            train_steps=1,
+            validation_interval=1,
+            tensor_device="cpu",
+        )
+    )
+
+    assert {1, 2}.issubset(sampled_training_scales)
 
 
 def test_digits_benchmark_runner_records_convergence_protocol_controls(
@@ -321,7 +408,7 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
     throughput = cast(dict[str, object], training_summary["throughput"])
     fallbacks = cast(list[dict[str, object]], throughput["runtime_fallbacks"])
 
-    assert calls == ["mps", "cpu"]
+    assert calls[:2] == ["mps", "cpu"]
     assert training_summary["tensor_device"] == "cpu"
     assert throughput["tensor_device"] == "cpu"
     assert fallbacks == [
@@ -514,14 +601,12 @@ def test_digits_benchmark_runner_records_adaptive_scale_boundary(tmp_path: Path)
     trace = cast(Mapping[str, object], training_summary["scale_evaluation_trace"])
     levels = cast(list[Mapping[str, object]], trace["levels"])
 
-    assert trace["stop_reason"] == "model-scale-boundary"
+    assert trace["stop_reason"] == "zero-marginal-score"
     assert levels[0]["scale"] == 1
     assert levels[0]["score_weight"] == 1.0
     assert levels[1]["scale"] == 2
-    assert levels[1]["competence"] == 0.0
     assert levels[1]["score_weight"] == 2.0
     assert trace["integrated_score"] == levels[0]["competence"]
-    assert "output_shape" in cast(str, levels[1]["boundary_reason"])
 
 
 def test_adaptive_scale_trace_retrains_until_zero_marginal_score(
@@ -609,7 +694,7 @@ def test_cli_runs_digits_benchmark_dry_run(
     assert captured.err == ""
     assert captured.out.startswith(
         "planned benchmark run "
-        "digits-arch-bb0dde9254dc-l1-seed101-samples2-stepsconverge-train-"
+        "digits-arch-6ae9f2cf0314-l1-seed101-samples2-stepsconverge-train-"
     )
     assert not (tmp_path / "results").exists()
 

@@ -146,10 +146,11 @@ during initial inspection.
 
 Digits is a variable-length token-sequence benchmark. The task contract is to
 predict the complete digit sequence visible in the observation; exact-sequence
-scoring gives probability credit only to that full sequence. Autoregressive
-finite-token sequence interfaces represent this directly by predicting digit
-tokens until an end-of-sequence decision. The local PyTorch training workflow in
-this repository is transitional and remains separate from the benchmark task
+scoring gives probability credit only to that full sequence. Sequence model
+interfaces assign probability to finite token sequences with model-determined
+length; the benchmark does not require an end-of-sequence token or an enumerated
+vector over every possible sequence. The local PyTorch training workflow in this
+repository is transitional and remains separate from the benchmark task
 definition so richer training recipes can move to a separate repository.
 
 While a benchmark loop is training a reserved candidate, validation checkpoints

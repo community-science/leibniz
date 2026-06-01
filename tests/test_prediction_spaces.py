@@ -55,10 +55,10 @@ def test_finite_token_sequence_space_requires_exact_length() -> None:
         space.sequence_index((1,))
 
 
-def test_eos_terminated_token_sequence_space_accepts_variable_lengths() -> None:
+def test_variable_length_token_sequence_space_accepts_variable_lengths() -> None:
     space = FiniteTokenSequenceSpace(
         vocabulary=FiniteTokenVocabulary(token_count=10, token_name="digit"),
-        sequence_boundary="eos-terminated",
+        sequence_boundary="variable-length",
     )
 
     assert space.require_sequence((1,)) == (1,)
@@ -67,7 +67,7 @@ def test_eos_terminated_token_sequence_space_accepts_variable_lengths() -> None:
     assert space.to_record() == {
         "kind": "finite-token-sequence",
         "vocabulary": {"token_count": 10, "token_name": "digit"},
-        "sequence_boundary": "eos-terminated",
+        "sequence_boundary": "variable-length",
         "minimum_length": 1,
     }
     with pytest.raises(ValueError, match="do not have finite cardinality"):
