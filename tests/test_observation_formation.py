@@ -53,8 +53,8 @@ def test_digits_observation_formation_declaration_loads_source_artifact() -> Non
         == "normalized-sequence-element"
     )
     assert declaration.variation_transform.spatial_affine.matrix == (
-        ((0.8, 1.2), (-0.08, 0.08), (-0.05, 0.05)),
-        ((-0.08, 0.08), (0.8, 1.2), (-0.05, 0.05)),
+        ((0.0, 1.2), (-0.08, 0.08), (-0.5, 0.5)),
+        ((-0.08, 0.08), (0.0, 1.2), (-0.5, 0.5)),
         ((0.0, 0.0), (0.0, 0.0), (1.0, 1.0)),
     )
     assert [component.id for component in declaration.components] == [

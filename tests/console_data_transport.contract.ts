@@ -159,14 +159,14 @@ if (generatedSample === undefined) {
   throw new Error('expected generated sample');
 }
 assertEqual(generatedSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
-assertEqual(generatedSample.field_shape.join('x'), '1x34x28', 'sample field shape');
+assertEqual(generatedSample.field_shape.join('x'), '1x79x72', 'sample field shape');
 assertEqual(
   [
     generatedSample.preview_crop.left,
     generatedSample.preview_crop.top,
     generatedSample.preview_crop.size,
   ].join(','),
-  '2,5,23',
+  '20,26,29',
   'sample preview crop',
 );
 assertEqual(
@@ -201,7 +201,7 @@ assertEqual(
 const materializationPlan = generatedSample.materialization_plan as Record<string, unknown>;
 assertEqual(
   assignmentLabel(materializationPlan.resolution_assignment),
-  'H=34,W=28',
+  'H=79,W=72',
   'sample resolution assignment',
 );
 assertDataError(

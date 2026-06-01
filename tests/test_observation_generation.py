@@ -28,8 +28,8 @@ def test_digits_observation_generator_is_deterministic() -> None:
 
     assert left == right
     assert left.component_count == 1
-    assert left.samples[0].field.shape == (1, 22, 21)
-    assert left.samples[0].complexity == pytest.approx(math.log2(116640))
+    assert left.samples[0].field.shape == (1, 42, 118)
+    assert left.samples[0].complexity == pytest.approx(math.log2(49286227620))
     assert len(left.samples[0].observation.component_sequence) == 1
     assert left.samples[0].outcome_id == "digit-8"
     assert _coordinate(left.samples[0].latent_coordinates, role="content")["values"] == list(
@@ -74,8 +74,8 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
     assert formation_batch.component_count == observation_batch.component_count
     assert formation_batch.seed == observation_batch.seed
     assert [(sample.width, sample.height) for sample in formation_batch.samples] == [
-        (21, 22),
-        (21, 22),
+        (118, 42),
+        (118, 42),
     ]
     assert [sample.component_sequence for sample in formation_batch.samples] == [
         sample.observation.component_sequence for sample in observation_batch.samples
@@ -102,7 +102,7 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
     )
     generated_plan = formation_batch.samples[0].materialization_plan
     assert minimum_plan.resolution_assignment.values == {"W": 1, "H": 1}
-    assert generated_plan.resolution_assignment.values == {"W": 21, "H": 22}
+    assert generated_plan.resolution_assignment.values == {"W": 118, "H": 42}
 
 
 def test_digits_observation_generator_records_optional_timing() -> None:
@@ -152,9 +152,9 @@ def test_digits_observation_generator_samples_resolution_from_memory_bound() -> 
     )
     sample = batch.samples[0]
 
-    assert sample.field.shape == (1, 20, 21)
-    assert sample.materialization_plan.resolution_assignment.values == {"W": 21, "H": 20}
-    assert sample.complexity == pytest.approx(math.log2(103680))
+    assert sample.field.shape == (1, 82, 42)
+    assert sample.materialization_plan.resolution_assignment.values == {"W": 42, "H": 82}
+    assert sample.complexity == pytest.approx(math.log2(17659483380))
     assert sample.outcome_id == "digit-1"
 
 
@@ -169,23 +169,23 @@ def test_digits_observation_generator_counts_discretized_nuisance_state_space() 
     )
 
     assert {round(sample.complexity, 12) for sample in scale_one.samples} == {
-        round(math.log2(116640), 12)
+        round(math.log2(15103350800), 12)
     }
     assert {round(sample.complexity, 12) for sample in scale_one_other_seed.samples} == {
-        round(math.log2(116640), 12)
+        round(math.log2(68520684960), 12)
     }
     assert [(sample.width, sample.height) for sample in scale_one.samples] == [
-        (21, 22),
-        (21, 22),
-        (21, 22),
+        (115, 28),
+        (115, 28),
+        (115, 28),
     ]
     assert [(sample.width, sample.height) for sample in scale_one_other_seed.samples] == [
-        (21, 21),
-        (21, 21),
-        (21, 21),
+        (75, 72),
+        (75, 72),
+        (75, 72),
     ]
-    assert 20 <= scale_one.samples[0].width <= 22
-    assert 20 <= scale_one.samples[0].height <= 22
+    assert 20 <= scale_one.samples[0].width <= 130
+    assert 20 <= scale_one.samples[0].height <= 130
     assert (scale_one.samples[0].width, scale_one.samples[0].height) != (20, 20)
 
 

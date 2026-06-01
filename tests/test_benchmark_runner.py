@@ -1,4 +1,3 @@
-import math
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -192,13 +191,13 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         == "approximately-uniform-within-complexity-class"
     )
     assert sampled_competence["complexity_axis"] is None
-    assert sampled_competence["complexity"] == pytest.approx(math.log2(116640))
+    assert sampled_competence["complexity"] == pytest.approx(25.76024888988623)
     assert sampled_competence["sample_count"] == 12
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
     assert len(points) == 4
     assert [point["sample_count"] for point in points] == [3, 3, 3, 3]
-    assert points[0]["complexity"] == pytest.approx(math.log2(116640))
+    assert points[0]["complexity"] == pytest.approx(25.76024888988623)
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
     )
@@ -425,7 +424,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     }
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    assert observed_complexities[0] == pytest.approx(math.log2(116640))
+    assert observed_complexities[0] == pytest.approx(25.76024888988623)
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
     assert points[0]["sample_count"] == 2

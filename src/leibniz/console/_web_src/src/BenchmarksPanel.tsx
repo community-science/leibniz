@@ -6,7 +6,7 @@ import {
   PackageCheck,
   type LucideIcon,
 } from 'lucide-react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useMemo } from 'react';
 
 import { BenchmarkResultDashboard } from './BenchmarkResultDashboard.tsx';
@@ -1161,25 +1161,10 @@ function BenchmarkSampleCard({
       type="button"
     >
       <div className="benchmark-image-shell">
-        <img
-          alt={sample.outcome_id}
-          src={sample.image_data_url}
-          style={samplePreviewStyle(sample)}
-        />
+        <img alt={sample.outcome_id} src={sample.image_data_url} />
       </div>
     </button>
   );
-}
-
-function samplePreviewStyle(sample: GeneratedObservationSampleRecord): CSSProperties {
-  const [, fieldHeight = 1, fieldWidth = 1] = sample.field_shape;
-  const { left, top, size } = sample.preview_crop;
-  return {
-    height: `${(fieldHeight / size) * 100}%`,
-    left: `${(-left / size) * 100}%`,
-    top: `${(-top / size) * 100}%`,
-    width: `${(fieldWidth / size) * 100}%`,
-  };
 }
 
 function BenchmarkSampleCoordinateInspector({

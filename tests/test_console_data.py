@@ -221,11 +221,11 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert all(".sample-0@" in str(plan["id"]) for plan in materialization_plans)
     assert len({plan["seed"] for plan in materialization_plans}) == len(materialization_plans)
     assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
-    assert samples[0]["field_shape"] == [1, 34, 28]
-    assert _png_dimensions(str(samples[0]["image_data_url"])) == (28, 34)
-    assert _png_dimensions(str(samples[1]["image_data_url"])) == (24, 39)
-    assert samples[0]["preview_crop"] == {"left": 2, "top": 5, "size": 23}
-    assert samples[1]["preview_crop"] == {"left": -2, "top": 6, "size": 28}
+    assert samples[0]["field_shape"] == [1, 79, 72]
+    assert _png_dimensions(str(samples[0]["image_data_url"])) == (72, 79)
+    assert _png_dimensions(str(samples[1]["image_data_url"])) == (147, 192)
+    assert samples[0]["preview_crop"] == {"left": 20, "top": 26, "size": 29}
+    assert samples[1]["preview_crop"] == {"left": 56, "top": 95, "size": 58}
     latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])
     variation = next(
         coordinate for coordinate in latent_coordinates if coordinate["role"] == "variation"

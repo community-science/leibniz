@@ -49,7 +49,7 @@ def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> 
     )
     sample = batch.samples[0]
 
-    assert (sample.width, sample.height) == (34, 39)
+    assert (sample.width, sample.height) == (103, 211)
     for sequence_index, coordinate in enumerate(sample.variation_coordinates):
         report = generator.formation.component_discriminability_report(
             width=sample.width,

@@ -63,7 +63,7 @@ _rejection_cache_cell_limit = 4096
 _variation_state_bins_per_axis = 8
 _field_scalar_construction_bytes = 64
 _default_memory_budget_fraction = 0.10
-_default_generation_memory_limit_bytes = 1_024_000
+_default_generation_memory_limit_bytes = 32_768_000
 
 class ObservationGenerationError(ValueError):
     """Raised when observation generation cannot satisfy benchmark declarations."""
@@ -337,12 +337,11 @@ class ObservationGenerator:
         width = resolution_assignment.require_axis(self.formation.width_axis)
         height = resolution_assignment.require_axis(self.formation.height_axis)
         with _timing_span(timing, f"{timing_prefix}complexity"):
-            distinguishable_state_count = self._distinguishable_state_count(
+            complexity = self._distinguishable_state_complexity(
                 component_count=component_count,
                 width=width,
                 height=height,
             )
-            complexity = math.log2(distinguishable_state_count)
         materialization_declaration = ArtifactReference(
             kind="materialization-declaration",
             protocol_id=self.materialization.id,
@@ -442,21 +441,21 @@ class ObservationGenerator:
             samples=tuple(samples),
         )
 
-    def _distinguishable_state_count(
+    def _distinguishable_state_complexity(
         self,
         *,
         component_count: int,
         width: int,
         height: int,
-    ) -> int:
-        component_states = len(self.formation.components) ** component_count
-        variation_states = _variation_transform_state_count(
+    ) -> float:
+        component_complexity = component_count * math.log2(len(self.formation.components))
+        variation_complexity = component_count * _variation_transform_complexity(
             self.formation.variation_transform,
             sequence_length=component_count,
             width=width,
             height=height,
-        ) ** component_count
-        return component_states * variation_states
+        )
+        return component_complexity + variation_complexity
 
     def _materialization_plan(
         self,
@@ -812,21 +811,40 @@ def _accepted_variation_coordinate(
         thresholds=affine_acceptance_thresholds,
     )
     for sampler, attempt_count in (
-        (_variation_coordinate_record, 512),
-        (_readable_variation_coordinate_record, 128),
+        (_readable_variation_coordinate_record, 512),
+        (_variation_coordinate_record, 128),
     ):
         sampler_name = "broad" if sampler is _variation_coordinate_record else "readable"
         for _attempt in range(attempt_count):
             _increment_counter(counters, "candidate_count")
             _increment_counter(counters, f"{sampler_name}_candidate_count")
-            coordinate = dict(
-                sampler(
-                    transform=transform,
-                    generator=generator,
-                    sequence_index=sequence_index,
-                    thresholds=affine_acceptance_thresholds,
+            if sampler is _readable_variation_coordinate_record:
+                coordinate = dict(
+                    _readable_variation_coordinate_record(
+                        formation=formation,
+                        transform=transform,
+                        generator=generator,
+                        sequence_length=sequence_length,
+                        sequence_index=sequence_index,
+                        width=width,
+                        height=height,
+                        minimum_pairwise_l1=minimum_pairwise_l1,
+                        thresholds=affine_acceptance_thresholds,
+                    )
                 )
-            )
+                candidate_thresholds = _readable_affine_acceptance_thresholds(
+                    affine_acceptance_thresholds
+                )
+            else:
+                coordinate = dict(
+                    _variation_coordinate_record(
+                        transform=transform,
+                        generator=generator,
+                        sequence_index=sequence_index,
+                        thresholds=affine_acceptance_thresholds,
+                    )
+                )
+                candidate_thresholds = affine_acceptance_thresholds
             cache_cell = _rejection_cache_cell_key(
                 coordinate=coordinate,
                 transform=transform,
@@ -839,17 +857,14 @@ def _accepted_variation_coordinate(
             ):
                 _increment_counter(counters, "cached_reject_count")
                 continue
-            if not _affine_coordinate_passes_fast_thresholds(
-                coordinate,
-                affine_acceptance_thresholds,
-            ):
+            if not _affine_coordinate_passes_fast_thresholds(coordinate, candidate_thresholds):
                 _increment_counter(counters, "fast_reject_count")
                 if (
                     rejection_cache is not None
                     and cache_cell is not None
                     and _affine_cell_is_certified_fast_reject(
                         cell_bounds=cache_cell[1],
-                        thresholds=affine_acceptance_thresholds,
+                        thresholds=candidate_thresholds,
                     )
                 ):
                     _increment_counter(counters, "rejection_certificate_count")
@@ -920,9 +935,14 @@ def _accepted_variation_coordinate(
 
 def _readable_variation_coordinate_record(
     *,
+    formation: ObservationFormationDeclaration,
     transform: VariationTransformDeclaration,
     generator: random.Random,
+    sequence_length: int,
     sequence_index: int,
+    width: int,
+    height: int,
+    minimum_pairwise_l1: float,
     thresholds: Mapping[str, float],
 ) -> Mapping[str, object]:
     spatial = transform.spatial_affine
@@ -932,33 +952,153 @@ def _readable_variation_coordinate_record(
             generator=generator,
             sequence_index=sequence_index,
         )
-    minimum_scale = thresholds.get("affine_minimum_singular_value", 0.75)
-    maximum_scale = thresholds.get("affine_maximum_singular_value", 1.25)
-    maximum_condition = thresholds.get("affine_maximum_condition_number", 1.35)
-    minimum_alignment = thresholds.get("affine_minimum_axis_alignment", 0.9)
-    maximum_angle = math.acos(max(-1.0, min(1.0, minimum_alignment)))
-    rotation = generator.uniform(-maximum_angle, maximum_angle)
-    scale_x = generator.uniform(minimum_scale, maximum_scale)
-    scale_y = generator.uniform(
-        max(minimum_scale, scale_x / maximum_condition),
-        min(maximum_scale, scale_x * maximum_condition),
+    minimum_scale = _minimum_resolvable_isotropic_scale(
+        formation=formation,
+        sequence_length=sequence_length,
+        sequence_index=sequence_index,
+        width=width,
+        height=height,
+        minimum_pairwise_l1=minimum_pairwise_l1,
     )
-    shear = generator.uniform(-math.tan(maximum_angle) * 0.25, math.tan(maximum_angle) * 0.25)
-    cos_angle = math.cos(rotation)
-    sin_angle = math.sin(rotation)
-    a = scale_x * cos_angle
-    c = scale_x * sin_angle
-    b = scale_y * (shear * cos_angle - sin_angle)
-    d = scale_y * (shear * sin_angle + cos_angle)
-    tx = generator.uniform(-0.15, 0.15)
-    ty = generator.uniform(-0.15, 0.15)
+    maximum_scale = _maximum_canvas_fit_isotropic_scale(
+        formation=formation,
+        sequence_length=sequence_length,
+        sequence_index=sequence_index,
+        width=width,
+        height=height,
+    )
+    if maximum_scale < minimum_scale:
+        maximum_scale = minimum_scale
+    scale = generator.uniform(minimum_scale, maximum_scale)
+    margin = max(0.0, 1.0 - min(scale, 1.0)) / 2.0
+    tx = generator.uniform(-margin, margin)
+    ty = generator.uniform(-margin, margin)
     return {
         "kind": "field-variation-transform-coordinate",
         "sequence_index": sequence_index,
         "spatial_affine": {
             "kind": "spatial-affine-coordinate",
             "coordinate_system": spatial.coordinate_system,
-            "matrix": [[a, b, tx], [c, d, ty], [0.0, 0.0, 1.0]],
+            "matrix": [[scale, 0.0, tx], [0.0, scale, ty], [0.0, 0.0, 1.0]],
+        },
+    }
+
+
+def _readable_affine_acceptance_thresholds(
+    thresholds: Mapping[str, float],
+) -> Mapping[str, float]:
+    relaxed = dict(thresholds)
+    for key in (
+        "affine_minimum_absolute_determinant",
+        "affine_minimum_singular_value",
+        "affine_minimum_projected_extent",
+    ):
+        relaxed.pop(key, None)
+    return relaxed
+
+
+def _minimum_resolvable_isotropic_scale(
+    *,
+    formation: ObservationFormationDeclaration,
+    sequence_length: int,
+    sequence_index: int,
+    width: int,
+    height: int,
+    minimum_pairwise_l1: float,
+) -> float:
+    if _isotropic_scale_passes_discriminability(
+        formation=formation,
+        sequence_length=sequence_length,
+        sequence_index=sequence_index,
+        width=width,
+        height=height,
+        scale=0.0,
+        minimum_pairwise_l1=minimum_pairwise_l1,
+    ):
+        return 0.0
+    upper = 1.0
+    if not _isotropic_scale_passes_discriminability(
+        formation=formation,
+        sequence_length=sequence_length,
+        sequence_index=sequence_index,
+        width=width,
+        height=height,
+        scale=upper,
+        minimum_pairwise_l1=minimum_pairwise_l1,
+    ):
+        return upper
+    lower = 0.0
+    for _iteration in range(12):
+        midpoint = (lower + upper) / 2.0
+        if _isotropic_scale_passes_discriminability(
+            formation=formation,
+            sequence_length=sequence_length,
+            sequence_index=sequence_index,
+            width=width,
+            height=height,
+            scale=midpoint,
+            minimum_pairwise_l1=minimum_pairwise_l1,
+        ):
+            upper = midpoint
+        else:
+            lower = midpoint
+    return upper
+
+
+def _maximum_canvas_fit_isotropic_scale(
+    *,
+    formation: ObservationFormationDeclaration,
+    sequence_length: int,
+    sequence_index: int,
+    width: int,
+    height: int,
+) -> float:
+    del formation, sequence_length, sequence_index, width, height
+    return 1.0
+
+
+def _isotropic_scale_passes_discriminability(
+    *,
+    formation: ObservationFormationDeclaration,
+    sequence_length: int,
+    sequence_index: int,
+    width: int,
+    height: int,
+    scale: float,
+    minimum_pairwise_l1: float,
+) -> bool:
+    coordinate = _isotropic_scale_variation_coordinate(
+        transform=formation.variation_transform,
+        sequence_index=sequence_index,
+        scale=scale,
+    )
+    try:
+        return formation.component_discriminability_passes(
+            width=width,
+            height=height,
+            sequence_length=sequence_length,
+            sequence_index=sequence_index,
+            variation_coordinates=(coordinate,),
+            minimum_pairwise_l1=minimum_pairwise_l1,
+        )
+    except ObservationFormationValidationError:
+        return False
+
+
+def _isotropic_scale_variation_coordinate(
+    *,
+    transform: VariationTransformDeclaration,
+    sequence_index: int,
+    scale: float,
+) -> Mapping[str, object]:
+    spatial = transform.spatial_affine
+    return {
+        "kind": "field-variation-transform-coordinate",
+        "sequence_index": sequence_index,
+        "spatial_affine": {
+            "kind": "spatial-affine-coordinate",
+            "coordinate_system": spatial.coordinate_system,
+            "matrix": [[scale, 0.0, 0.0], [0.0, scale, 0.0], [0.0, 0.0, 1.0]],
         },
     }
 
@@ -1299,39 +1439,39 @@ def _resolution_sampling(
     )
 
 
-def _variation_transform_state_count(
+def _variation_transform_complexity(
     transform: VariationTransformDeclaration,
     *,
     sequence_length: int,
     width: int,
     height: int,
-) -> int:
+) -> float:
     if sequence_length < 1:
         raise ObservationGenerationError("sequence_length must be positive")
     element_width = max(1, width // sequence_length)
     row_extents = (element_width, height, 1)
-    count = 1
+    complexity = 0.0
     for row_index, row in enumerate(transform.spatial_affine.matrix):
         extent = row_extents[row_index] if row_index < len(row_extents) else 1
         for lower, upper in row:
             if upper > lower:
-                count *= _distinguishable_interval_count(
+                complexity += _distinguishable_interval_complexity(
                     lower=lower,
                     upper=upper,
                     extent=extent,
                 )
-    return count
+    return complexity
 
 
-def _distinguishable_interval_count(
+def _distinguishable_interval_complexity(
     *,
     lower: float,
     upper: float,
     extent: int,
-) -> int:
+) -> float:
     if extent < 1:
-        return 1
-    return max(1, math.floor((upper - lower) * extent) + 1)
+        return 0.0
+    return math.log2(max(1, math.floor((upper - lower) * extent) + 1))
 
 
 def _sampled_resolution_maximum(
