@@ -295,6 +295,35 @@ def test_windowed_plateau_continues_after_material_best_loss_improvement() -> No
     )
 
 
+def test_training_curriculum_advances_only_after_actual_stage_convergence() -> None:
+    assert benchmark_runner.training_stage_converged("validation-plateau")
+    assert not benchmark_runner.training_stage_converged("max-steps")
+    assert not benchmark_runner.training_stage_converged("training-stopped")
+    assert not benchmark_runner.training_stage_converged("no-training-steps")
+
+
+def test_training_curriculum_is_not_step_indexed() -> None:
+    source = Path(benchmark_runner.__file__).read_text(encoding="utf-8")
+
+    assert "curriculum_step" not in source
+    assert "_generation_curriculum_growth_interval" not in source
+    assert "step // _generation_curriculum" not in source
+
+
+def test_loss_threshold_is_not_a_training_option() -> None:
+    snake_name = "target_" + "validation_loss"
+    flag_name = "--target-" + "validation-loss"
+    for path in (
+        Path(benchmark_runner.__file__),
+        _repository_root / "src" / "leibniz" / "active_loop.py",
+        _repository_root / "src" / "leibniz" / "cli.py",
+        _repository_root / "src" / "leibniz" / "proposal_generation.py",
+    ):
+        source = path.read_text(encoding="utf-8")
+        assert snake_name not in source
+        assert flag_name not in source
+
+
 def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

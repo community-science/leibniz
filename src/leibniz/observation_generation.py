@@ -450,6 +450,19 @@ class ObservationGenerator:
         width: int,
         height: int,
     ) -> float:
+        return self.distinguishable_state_complexity(
+            component_count=component_count,
+            width=width,
+            height=height,
+        )
+
+    def distinguishable_state_complexity(
+        self,
+        *,
+        component_count: int,
+        width: int,
+        height: int,
+    ) -> float:
         component_complexity = component_count * math.log2(len(self.formation.components))
         variation_complexity = component_count * _variation_transform_complexity(
             self.formation.variation_transform,
@@ -527,6 +540,17 @@ class ObservationGenerator:
         return AxisAssignment(values=values)
 
     def _minimum_discriminatable_resolution_assignment(
+        self,
+        *,
+        component_count: int,
+        minimum_assignment: AxisAssignment,
+    ) -> AxisAssignment:
+        return self.minimum_discriminatable_resolution_assignment(
+            component_count=component_count,
+            minimum_assignment=minimum_assignment,
+        )
+
+    def minimum_discriminatable_resolution_assignment(
         self,
         *,
         component_count: int,

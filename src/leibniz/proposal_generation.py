@@ -80,7 +80,6 @@ class ProposalGenerationPlan:
     convergence_patience: int = 12
     convergence_min_delta: float = 1e-3
     convergence_min_steps: int = 500
-    target_validation_loss: float | None = None
     tensor_device: TensorRuntimeDevice = "auto"
 
     def __post_init__(self) -> None:
@@ -110,14 +109,8 @@ class ProposalGenerationPlan:
             raise ProposalGenerationError("train_steps must be nonnegative")
         if self.train_steps is None and self.schedule == "cosine":
             raise ProposalGenerationError("cosine schedule requires train_steps")
-        if (
-            self.train_steps is None
-            and self.convergence_patience == 0
-            and self.target_validation_loss is None
-        ):
-            raise ProposalGenerationError(
-                "uncapped training requires convergence_patience or target_validation_loss"
-            )
+        if self.train_steps is None and self.convergence_patience == 0:
+            raise ProposalGenerationError("uncapped training requires convergence_patience")
         if self.learning_rate <= 0:
             raise ProposalGenerationError("learning_rate must be positive")
         if self.optimizer not in {"sgd", "adam", "adamw"}:
@@ -132,8 +125,6 @@ class ProposalGenerationPlan:
             raise ProposalGenerationError("convergence_min_delta must be nonnegative")
         if type(self.convergence_min_steps) is not int or self.convergence_min_steps < 0:
             raise ProposalGenerationError("convergence_min_steps must be nonnegative")
-        if self.target_validation_loss is not None and self.target_validation_loss < 0:
-            raise ProposalGenerationError("target_validation_loss must be nonnegative")
         try:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
@@ -318,14 +309,6 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                     str(plan.convergence_min_steps),
                     "--device",
                     plan.tensor_device,
-                    *(
-                        ()
-                        if plan.target_validation_loss is None
-                        else (
-                            "--target-validation-loss",
-                            str(float(plan.target_validation_loss)),
-                        )
-                    ),
                 ),
             )
         )

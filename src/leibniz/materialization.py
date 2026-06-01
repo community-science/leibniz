@@ -598,8 +598,9 @@ def _layout_resolution_floor(layout: Mapping[str, object]) -> dict[str, int]:
         return floor
     if not isinstance(floor_record, Mapping):
         raise MaterializationValidationError("layout resolution_floor must be a record")
+    floor_mapping = cast(Mapping[str, object], floor_record)
     for axis in (width_axis, height_axis):
-        value = floor_record.get(axis)
+        value = floor_mapping.get(axis)
         if value is None:
             continue
         if not isinstance(value, int) or isinstance(value, bool):

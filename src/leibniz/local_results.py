@@ -47,6 +47,7 @@ __all__ = [
     "LocalPublicationPushSummary",
     "LocalResultImportError",
     "LocalResultImportSummary",
+    "base_normalized_absolute_score",
     "import_submission_publications",
     "initialize_publication_checkout",
     "load_console_result_view",
@@ -1181,7 +1182,7 @@ def _model_result_records(
     for model_key, model_runs in grouped.items():
         ordered_runs = tuple(sorted(model_runs, key=_run_sort_key))
         points = _competence_points(ordered_runs)
-        score = _base_normalized_absolute_score(
+        score = base_normalized_absolute_score(
             points,
             base_complexity=base_complexity,
             chance_mass=chance_mass,
@@ -1431,22 +1432,7 @@ def _run_competence_points(run: _BenchmarkRunRecord) -> tuple[tuple[float, float
     return ((run.complexity, run.score, run.measurement_count),)
 
 
-def _competence_integral(points: tuple[dict[str, object], ...]) -> float:
-    if not points:
-        return 0.0
-    if len(points) == 1:
-        return _point_score(points[0])
-    total_width = _point_complexity(points[-1]) - _point_complexity(points[0])
-    if total_width <= 0:
-        return _point_score(points[-1])
-    area = 0.0
-    for left, right in zip(points, points[1:], strict=False):
-        width = _point_complexity(right) - _point_complexity(left)
-        area += width * (_point_score(left) + _point_score(right)) / 2.0
-    return area / total_width
-
-
-def _base_normalized_absolute_score(
+def base_normalized_absolute_score(
     points: tuple[dict[str, object], ...],
     *,
     base_complexity: float,
@@ -1495,13 +1481,13 @@ def _benchmark_base_complexity(
     generator = load_observation_generator(
         repository_root / "src" / "leibniz" / "benchmarks" / _identifier_atom(manifest.id)
     )
-    resolution = generator._minimum_discriminatable_resolution_assignment(
+    resolution = generator.minimum_discriminatable_resolution_assignment(
         component_count=1,
         minimum_assignment=generator.materialization.minimum_resolution(),
     )
     width = resolution.require_axis(generator.formation.width_axis)
     height = resolution.require_axis(generator.formation.height_axis)
-    return generator._distinguishable_state_complexity(
+    return generator.distinguishable_state_complexity(
         component_count=1,
         width=width,
         height=height,

@@ -50,6 +50,7 @@ __all__ = [
     "BenchmarkRunSummary",
     "has_windowed_validation_plateau",
     "run_benchmark",
+    "training_stage_converged",
 ]
 
 _document_suffix = document_filename_suffix()
@@ -63,8 +64,9 @@ _default_convergence_min_delta = 1e-3
 _default_convergence_min_steps = 500
 _component_count = 1
 _initial_generation_memory_limit_bytes = 1_024_000
-_generation_curriculum_growth_interval = 100
-_evaluation_curriculum_max_rungs = 4
+_generation_curriculum_growth_factor = 4
+_generation_curriculum_max_rungs = 4
+_converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
 _adaptive_pooling_alias = model_operator_semantic_registry().operators[0].syntax_aliases[0]
 
 
@@ -76,6 +78,12 @@ class _TrainingResult:
     ]
     training_run: TrainingRunRecord
     throughput: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _TrainingStageResult:
+    validation_history: tuple[TrainingHistoryPoint, ...]
+    stop_reason: str
 
 
 @dataclass(slots=True)
@@ -99,14 +107,17 @@ class _ThroughputCounter:
         return record
 
 
-def _curriculum_memory_limit(maximum_memory_limit: int, *, step: int) -> int:
+def _curriculum_memory_limits(maximum_memory_limit: int) -> tuple[int, ...]:
     if maximum_memory_limit < 1:
         raise BenchmarkRunnerError("generation memory limit must be positive")
-    if step < 0:
-        raise BenchmarkRunnerError("generation curriculum step must be nonnegative")
-    growth_exponent = step // _generation_curriculum_growth_interval
-    limit = _initial_generation_memory_limit_bytes * (4**growth_exponent)
-    return min(maximum_memory_limit, limit)
+    limits: list[int] = []
+    limit = min(maximum_memory_limit, _initial_generation_memory_limit_bytes)
+    while True:
+        limits.append(limit)
+        if limit >= maximum_memory_limit or len(limits) >= _generation_curriculum_max_rungs:
+            break
+        limit = min(maximum_memory_limit, limit * _generation_curriculum_growth_factor)
+    return tuple(limits)
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,7 +174,6 @@ class BenchmarkRunPlan:
     convergence_patience: int = _default_convergence_patience
     convergence_min_delta: float = _default_convergence_min_delta
     convergence_min_steps: int = _default_convergence_min_steps
-    target_validation_loss: float | None = None
     tensor_device: TensorRuntimeDevice = "auto"
     dry_run: bool = False
 
@@ -186,14 +196,8 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError("train_steps must be a nonnegative integer")
         if self.train_steps is None and self.schedule == "cosine":
             raise BenchmarkRunnerError("cosine schedule requires train_steps")
-        if (
-            self.train_steps is None
-            and self.convergence_patience == 0
-            and self.target_validation_loss is None
-        ):
-            raise BenchmarkRunnerError(
-                "uncapped training requires convergence_patience or target_validation_loss"
-            )
+        if self.train_steps is None and self.convergence_patience == 0:
+            raise BenchmarkRunnerError("uncapped training requires convergence_patience")
         if self.learning_rate <= 0:
             raise BenchmarkRunnerError("learning_rate must be positive")
         if self.optimizer not in {"sgd", "adam", "adamw"}:
@@ -208,8 +212,6 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError("convergence_min_delta must be nonnegative")
         if type(self.convergence_min_steps) is not int or self.convergence_min_steps < 0:
             raise BenchmarkRunnerError("convergence_min_steps must be nonnegative")
-        if self.target_validation_loss is not None and self.target_validation_loss < 0:
-            raise BenchmarkRunnerError("target_validation_loss must be nonnegative")
         try:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
@@ -239,9 +241,6 @@ class BenchmarkRunPlan:
             "convergence_patience": self.convergence_patience,
             "convergence_min_delta": float(self.convergence_min_delta),
             "convergence_min_steps": self.convergence_min_steps,
-            "target_validation_loss": (
-                None if self.target_validation_loss is None else float(self.target_validation_loss)
-            ),
             "tensor_device": self.tensor_device,
         }
         return f"train-{ContentDigest.from_value(controls).hex[:12]}"
@@ -308,7 +307,7 @@ def run_benchmark(
         component_count=_component_count,
         sample_count=plan.resolved_evaluation_sample_count,
         seed=plan.seed,
-        memory_limit_bytes=_curriculum_memory_limit(generation_memory_limit, step=0),
+        memory_limit_bytes=_curriculum_memory_limits(generation_memory_limit)[0],
     )
     outcome_space = generator.benchmark_manifest.resolve_outcome_space()
     _validate_architecture_for_batch(
@@ -368,7 +367,6 @@ def run_benchmark(
         convergence_patience=plan.convergence_patience,
         convergence_min_delta=float(plan.convergence_min_delta),
         convergence_min_steps=plan.convergence_min_steps,
-        target_validation_loss=plan.target_validation_loss,
         tensor_device=plan.tensor_device,
         memory_limit_bytes=generation_memory_limit,
         work_estimates=_training_work_estimates(
@@ -586,7 +584,6 @@ def _train_and_predict(
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
-    target_validation_loss: float | None,
     tensor_device: TensorRuntimeDevice,
     memory_limit_bytes: int,
     work_estimates: _TrainingWorkEstimates | None,
@@ -615,7 +612,6 @@ def _train_and_predict(
                 convergence_patience=convergence_patience,
                 convergence_min_delta=convergence_min_delta,
                 convergence_min_steps=convergence_min_steps,
-                target_validation_loss=target_validation_loss,
                 tensor_device=device_kind,
                 memory_limit_bytes=memory_limit_bytes,
                 work_estimates=work_estimates,
@@ -646,7 +642,6 @@ def _train_and_predict_on_device(
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
-    target_validation_loss: float | None,
     tensor_device: TensorRuntimeDeviceKind,
     memory_limit_bytes: int,
     work_estimates: _TrainingWorkEstimates | None,
@@ -687,17 +682,14 @@ def _train_and_predict_on_device(
         *,
         generation_phase: str,
         tensor_phase: str,
-        curriculum_step: int,
+        memory_limit: int,
     ) -> tuple[Any, Any]:
         with phase_timings.span(generation_phase, samples=sample_count):
             generated = generator.sample_formation_batch(
                 component_count=component_count,
                 sample_count=sample_count,
                 seed=batch_seed,
-                memory_limit_bytes=_curriculum_memory_limit(
-                    memory_limit_bytes,
-                    step=curriculum_step,
-                ),
+                memory_limit_bytes=memory_limit,
                 timing=phase_timings,
                 timing_prefix=f"{generation_phase}.",
             )
@@ -705,70 +697,83 @@ def _train_and_predict_on_device(
             tensors = formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
         return tensors
 
-    validation_history = _train_until_convergence(
-        torch=torch,
-        module=module,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        loss_function=loss_function,
-        train_batch=lambda step: batch_for_seed(
-            seed + step,
-            generation_phase="training_formation_generation",
-            tensor_phase="training_tensor_batch",
-            curriculum_step=step,
-        ),
-        validation_batch=lambda check: batch_for_seed(
-            seed + 1_000_003 + check,
-            generation_phase="validation_formation_generation",
-            tensor_phase="validation_tensor_batch",
-            curriculum_step=check,
-        ),
-        max_steps=train_steps,
-        validation_interval=validation_interval,
-        patience=convergence_patience,
-        min_delta=convergence_min_delta,
-        min_steps=convergence_min_steps,
-        target_validation_loss=target_validation_loss,
-        batch_size=sample_count,
-        training_counter=training_counter,
-        validation_counter=validation_counter,
-        phase_timings=phase_timings,
-        on_validation=lambda history: (
-            progress_callback(
-                _running_training_run_record(
-                    seed=seed,
-                    batch_size=sample_count,
-                    max_steps=train_steps,
-                    learning_rate=float(learning_rate),
-                    optimizer_name=optimizer_name,
-                    schedule_name=schedule_name,
-                    validation_interval=validation_interval,
-                    convergence_patience=convergence_patience,
-                    convergence_min_delta=convergence_min_delta,
-                    convergence_min_steps=convergence_min_steps,
-                    tensor_device=runtime.device_kind,
-                    validation_history=tuple(history),
-                ),
-                _throughput_record(
-                    runtime_device=runtime.device_kind,
-                    training_counter=training_counter,
-                    validation_counter=validation_counter,
-                    evaluation_counter=evaluation_counter,
-                    roofline=runtime_roofline_record(runtime),
-                    work_estimates=work_estimates,
-                    phase_timings=phase_timings,
-                    fallback_errors=fallback_errors,
-                ),
-            )
-            if progress_callback is not None
-            else None
-        ),
-    )
+    validation_history: list[TrainingHistoryPoint] = []
+    final_training_stop_reason = "training-stopped"
+    for memory_limit in _curriculum_memory_limits(memory_limit_bytes):
+        start_step = validation_history[-1].step if validation_history else 0
+        start_check = validation_history[-1].validation_check + 1 if validation_history else 0
+        stage_result = _train_until_convergence(
+            torch=torch,
+            module=module,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            loss_function=loss_function,
+            train_batch=lambda step, limit=memory_limit: batch_for_seed(
+                seed + step,
+                generation_phase="training_formation_generation",
+                tensor_phase="training_tensor_batch",
+                memory_limit=limit,
+            ),
+            validation_batch=lambda check, limit=memory_limit: batch_for_seed(
+                seed + 1_000_003 + check,
+                generation_phase="validation_formation_generation",
+                tensor_phase="validation_tensor_batch",
+                memory_limit=limit,
+            ),
+            max_steps=train_steps,
+            validation_interval=validation_interval,
+            patience=convergence_patience,
+            min_delta=convergence_min_delta,
+            min_steps=convergence_min_steps,
+            batch_size=sample_count,
+            start_step=start_step,
+            start_check=start_check,
+            training_counter=training_counter,
+            validation_counter=validation_counter,
+            phase_timings=phase_timings,
+            on_validation=lambda history: (
+                progress_callback(
+                    _running_training_run_record(
+                        seed=seed,
+                        batch_size=sample_count,
+                        max_steps=train_steps,
+                        learning_rate=float(learning_rate),
+                        optimizer_name=optimizer_name,
+                        schedule_name=schedule_name,
+                        validation_interval=validation_interval,
+                        convergence_patience=convergence_patience,
+                        convergence_min_delta=convergence_min_delta,
+                        convergence_min_steps=convergence_min_steps,
+                        tensor_device=runtime.device_kind,
+                        validation_history=(*validation_history, *history),
+                    ),
+                    _throughput_record(
+                        runtime_device=runtime.device_kind,
+                        training_counter=training_counter,
+                        validation_counter=validation_counter,
+                        evaluation_counter=evaluation_counter,
+                        roofline=runtime_roofline_record(runtime),
+                        work_estimates=work_estimates,
+                        phase_timings=phase_timings,
+                        fallback_errors=fallback_errors,
+                    ),
+                )
+                if progress_callback is not None
+                else None
+            ),
+        )
+        validation_history.extend(stage_result.validation_history)
+        final_training_stop_reason = stage_result.stop_reason
+        if not training_stage_converged(stage_result.stop_reason):
+            break
+        if memory_limit >= memory_limit_bytes:
+            break
+    if train_steps is None and not training_stage_converged(final_training_stop_reason):
+        raise BenchmarkRunnerError("uncapped training curriculum ended before convergence")
     module.eval()
     evaluation_results: list[tuple[GeneratedObservationBatch, tuple[tuple[float, ...], ...]]] = []
     evaluated_complexities: set[float] = set()
-    for rung_index, rung_step in enumerate(_evaluation_curriculum_steps()):
-        memory_limit = _curriculum_memory_limit(memory_limit_bytes, step=rung_step)
+    for rung_index, memory_limit in enumerate(_curriculum_memory_limits(memory_limit_bytes)):
         if rung_index == 0:
             candidate_batch = evaluation_batch
         else:
@@ -837,9 +842,9 @@ def _train_and_predict_on_device(
         convergence_patience=convergence_patience,
         convergence_min_delta=convergence_min_delta,
         convergence_min_steps=convergence_min_steps,
-        target_validation_loss=target_validation_loss,
         tensor_device=runtime.device_kind,
         validation_history=tuple(validation_history),
+        stop_reason=final_training_stop_reason,
     )
     return _TrainingResult(
         evaluation_results=tuple(evaluation_results),
@@ -857,6 +862,10 @@ def _train_and_predict_on_device(
     )
 
 
+def training_stage_converged(stop_reason: str) -> bool:
+    return stop_reason in _converged_training_stage_stop_reasons
+
+
 def _train_until_convergence(
     *,
     torch: Any,
@@ -871,18 +880,20 @@ def _train_until_convergence(
     patience: int,
     min_delta: float,
     min_steps: int,
-    target_validation_loss: float | None,
     batch_size: int,
     training_counter: _ThroughputCounter,
     validation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
+    start_step: int = 0,
+    start_check: int = 0,
     on_validation: Callable[[tuple[TrainingHistoryPoint, ...]], None] | None = None,
-) -> list[TrainingHistoryPoint]:
+) -> _TrainingStageResult:
     validation_history: list[TrainingHistoryPoint] = []
     best_loss = float("inf")
-    best_step = 0
-    best_check = 0
+    best_step = start_step
+    best_check = start_check
     stale_checks = 0
+    stop_reason = "training-stopped"
 
     def append_validation(*, step: int, check: int) -> None:
         nonlocal best_loss, best_step, best_check, stale_checks
@@ -927,9 +938,14 @@ def _train_until_convergence(
         if on_validation is not None:
             on_validation(tuple(validation_history))
 
-    append_validation(step=0, check=0)
-    validation_check = 1
-    steps = count(1) if max_steps is None else range(1, max_steps + 1)
+    append_validation(step=start_step, check=start_check)
+    if max_steps == start_step:
+        return _TrainingStageResult(
+            validation_history=tuple(validation_history),
+            stop_reason="no-training-steps" if start_step == 0 else "max-steps",
+        )
+    validation_check = start_check + 1
+    steps = count(start_step + 1) if max_steps is None else range(start_step + 1, max_steps + 1)
     for step in steps:
         training_started = time.perf_counter()
         fields, labels = train_batch(step)
@@ -955,22 +971,23 @@ def _train_until_convergence(
         append_validation(step=step, check=validation_check)
         validation_check += 1
         if (
-            target_validation_loss is not None
-            and step >= min_steps
-            and best_loss <= target_validation_loss
-        ):
-            break
-        if (
             patience > 0
-            and step >= min_steps
+            and step - start_step >= min_steps
             and has_windowed_validation_plateau(
                 validation_history,
                 window_checks=patience,
                 min_delta=min_delta,
             )
         ):
+            stop_reason = "validation-plateau"
             break
-    return validation_history
+        if max_steps is not None and step >= max_steps:
+            stop_reason = "max-steps"
+            break
+    return _TrainingStageResult(
+        validation_history=tuple(validation_history),
+        stop_reason=stop_reason,
+    )
 
 
 def _validation_loss(
@@ -1015,30 +1032,19 @@ def _training_run_record(
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
-    target_validation_loss: float | None,
     tensor_device: str,
     validation_history: tuple[TrainingHistoryPoint, ...],
+    stop_reason: str,
 ) -> TrainingRunRecord:
     best = validation_history[-1]
     last_step = validation_history[-1].step
-    if max_steps == 0:
-        stop_reason = "no-training-steps"
+    if stop_reason == "no-training-steps":
         status = "completed"
-    elif has_windowed_validation_plateau(
-        validation_history,
-        window_checks=convergence_patience,
-        min_delta=convergence_min_delta,
-    ):
-        stop_reason = "validation-plateau"
+    elif stop_reason == "validation-plateau":
         status = "converged"
-    elif target_validation_loss is not None and best.best_validation_loss <= target_validation_loss:
-        stop_reason = "target-validation-loss"
-        status = "converged"
-    elif max_steps is not None and last_step >= max_steps:
-        stop_reason = "max-steps"
+    elif stop_reason == "max-steps":
         status = "budget-exhausted"
     else:
-        stop_reason = "training-stopped"
         status = "completed"
     return TrainingRunRecord(
         status=status,
@@ -1160,11 +1166,6 @@ def _training_progress_record(
         "convergence_min_steps": plan.convergence_min_steps,
         "tensor_runtime": "pytorch",
         "tensor_device": training_run.protocol.tensor_device,
-        "target_validation_loss": (
-            None
-            if plan.target_validation_loss is None
-            else float(plan.target_validation_loss)
-        ),
         "training_run": training_run.to_record(),
         "throughput": throughput,
         "architecture": inspection.architecture.to_record(),
@@ -1466,13 +1467,6 @@ def _renormalized_probabilities(probabilities: Sequence[float]) -> tuple[float, 
         return (1.0,)
     normalized[-1] = max(0.0, 1.0 - sum(normalized[:-1]))
     return tuple(normalized)
-
-
-def _evaluation_curriculum_steps() -> tuple[int, ...]:
-    return tuple(
-        index * _generation_curriculum_growth_interval
-        for index in range(_evaluation_curriculum_max_rungs)
-    )
 
 
 def _mean_prediction_accepted_mass(

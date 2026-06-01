@@ -383,7 +383,6 @@ def _parser() -> argparse.ArgumentParser:
     propose_results.add_argument("--convergence-patience", default=12, type=int)
     propose_results.add_argument("--convergence-min-delta", default=1e-3, type=float)
     propose_results.add_argument("--convergence-min-steps", default=500, type=int)
-    propose_results.add_argument("--target-validation-loss", default=None, type=float)
     propose_results.add_argument(
         "--device",
         default="auto",
@@ -425,7 +424,6 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--convergence-patience", default=12, type=int)
     run.add_argument("--convergence-min-delta", default=1e-3, type=float)
     run.add_argument("--convergence-min-steps", default=500, type=int)
-    run.add_argument("--target-validation-loss", default=None, type=float)
     run.add_argument(
         "--device",
         default="auto",
@@ -461,7 +459,6 @@ def _parser() -> argparse.ArgumentParser:
     loop.add_argument("--convergence-patience", default=12, type=int)
     loop.add_argument("--convergence-min-delta", default=1e-3, type=float)
     loop.add_argument("--convergence-min-steps", default=500, type=int)
-    loop.add_argument("--target-validation-loss", default=None, type=float)
     loop.add_argument(
         "--device",
         default="auto",
@@ -497,7 +494,6 @@ def _parser() -> argparse.ArgumentParser:
     shakedown.add_argument("--convergence-patience", default=0, type=int)
     shakedown.add_argument("--convergence-min-delta", default=0.0, type=float)
     shakedown.add_argument("--convergence-min-steps", default=0, type=int)
-    shakedown.add_argument("--target-validation-loss", default=None, type=float)
     shakedown.add_argument(
         "--device",
         default="auto",
@@ -585,7 +581,6 @@ def _benchmark(args: argparse.Namespace) -> int:
                     convergence_patience=args.convergence_patience,
                     convergence_min_delta=args.convergence_min_delta,
                     convergence_min_steps=args.convergence_min_steps,
-                    target_validation_loss=args.target_validation_loss,
                     tensor_device=args.device,
                     dry_run=args.dry_run,
                 )
@@ -692,7 +687,6 @@ def _active_training_loop_plan(
         convergence_patience=args.convergence_patience,
         convergence_min_delta=args.convergence_min_delta,
         convergence_min_steps=args.convergence_min_steps,
-        target_validation_loss=args.target_validation_loss,
         tensor_device=args.device,
         dry_run=dry_run,
         progress_callback=progress_callback,
@@ -915,7 +909,6 @@ def _results(args: argparse.Namespace) -> int:
                     convergence_patience=args.convergence_patience,
                     convergence_min_delta=args.convergence_min_delta,
                     convergence_min_steps=args.convergence_min_steps,
-                    target_validation_loss=args.target_validation_loss,
                     tensor_device=args.device,
                 )
             )

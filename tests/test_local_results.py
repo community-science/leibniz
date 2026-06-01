@@ -38,7 +38,7 @@ def test_base_normalized_absolute_score_rewards_complexity_above_chance() -> Non
     chance_mass = 0.1
 
     assert math.isclose(
-        local_results._base_normalized_absolute_score(
+        local_results.base_normalized_absolute_score(
             ({"complexity": base_complexity, "score": 1.0},),
             base_complexity=base_complexity,
             chance_mass=chance_mass,
@@ -46,7 +46,7 @@ def test_base_normalized_absolute_score_rewards_complexity_above_chance() -> Non
         1.0,
     )
     assert math.isclose(
-        local_results._base_normalized_absolute_score(
+        local_results.base_normalized_absolute_score(
             ({"complexity": base_complexity * 2.0, "score": 1.0},),
             base_complexity=base_complexity,
             chance_mass=chance_mass,
@@ -54,7 +54,7 @@ def test_base_normalized_absolute_score_rewards_complexity_above_chance() -> Non
         2.0,
     )
     assert math.isclose(
-        local_results._base_normalized_absolute_score(
+        local_results.base_normalized_absolute_score(
             ({"complexity": base_complexity, "score": 0.55},),
             base_complexity=base_complexity,
             chance_mass=chance_mass,
@@ -62,7 +62,7 @@ def test_base_normalized_absolute_score_rewards_complexity_above_chance() -> Non
         0.5,
     )
     assert math.isclose(
-        local_results._base_normalized_absolute_score(
+        local_results.base_normalized_absolute_score(
             ({"complexity": base_complexity * 4.0, "score": chance_mass},),
             base_complexity=base_complexity,
             chance_mass=chance_mass,
@@ -361,7 +361,7 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
     )
     assert publication_document.bundle.submission_package.id == ProtocolIdentifier.parse(
         "submissions.digits.digits-arch-bb0dde9254dc-c1-seed101-samples1-steps0"
-        "-train-d83ad78f1b6c@0.1.0"
+        "-train-2fde1ae4a9a9@0.1.0"
     )
     assert imported_summary.publication_bundle_count == 1
     assert result_summary.run_count == 1
