@@ -192,7 +192,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert task["kind"] == "generated-observations"
     assert task["benchmark_id"] == "benchmarks.digits@0.1.0"
     assert task["scale_axis"] == "L"
-    assert task["complexity_axis"] == "C"
+    assert task["complexity_axis"] is None
     assert task["outcome_atom_count"] == 10
     batches = cast(list[dict[str, object]], task["batches"])
     assert [(batch["mode"], batch["scale"], batch["sample_count"]) for batch in batches] == [
@@ -208,19 +208,9 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     component_sequences = [
         cast(list[int], sample["component_sequence"]) for sample in samples
     ]
-    assert Counter(len(sequence) for sequence in component_sequences) == dict.fromkeys(
-        range(1, 9), 5
-    )
+    assert Counter(len(sequence) for sequence in component_sequences) == {1: 40}
     digit_counts = Counter(digit for sequence in component_sequences for digit in sequence)
-    assert digit_counts == dict.fromkeys(range(10), 18)
-    assert any(
-        sequence
-        != [
-            (sequence[0] + sequence_index) % 10
-            for sequence_index in range(len(sequence))
-        ]
-        for sequence in component_sequences
-    )
+    assert digit_counts == dict.fromkeys(range(10), 4)
     field_shapes = [tuple(cast(list[int], sample["field_shape"])) for sample in samples]
     assert len(set(field_shapes)) == len(field_shapes)
     materialization_plans = [
@@ -231,9 +221,9 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
     assert samples[0]["field_shape"] == [1, 28, 40]
     assert _png_dimensions(str(samples[0]["image_data_url"])) == (40, 28)
-    assert _png_dimensions(str(samples[1]["image_data_url"])) == (169, 23)
-    assert samples[0]["preview_crop"] == {"left": 5, "top": 0, "size": 26}
-    assert samples[1]["preview_crop"] == {"left": 8, "top": -64, "size": 154}
+    assert _png_dimensions(str(samples[1]["image_data_url"])) == (40, 20)
+    assert samples[0]["preview_crop"] == {"left": 9, "top": 2, "size": 21}
+    assert samples[1]["preview_crop"] == {"left": 10, "top": 0, "size": 21}
     latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])
     variation = next(
         coordinate for coordinate in latent_coordinates if coordinate["role"] == "variation"

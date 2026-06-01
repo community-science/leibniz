@@ -90,6 +90,7 @@ _latent_factor_declaration_record = RecordSpec(
         "complexity_projections": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="record"),
+            required=False,
         ),
         "resolution_requirements": FieldSpec(
             kind="sequence",
@@ -415,7 +416,6 @@ class LatentFactorDeclaration:
             raise LatentFactorValidationError(str(error)) from error
         _require_nonempty(self.construction_factors, "construction_factors")
         _require_nonempty(self.sample_factors, "sample_factors")
-        _require_nonempty(self.complexity_projections, "complexity_projections")
         _reject_duplicate_names(
             (factor.name for factor in self.construction_factors),
             description="construction factor",
@@ -459,7 +459,7 @@ class LatentFactorDeclaration:
                     _as_mapping(projection, field="complexity_projections")
                 )
                 for projection in _as_sequence(
-                    validated["complexity_projections"],
+                    validated.get("complexity_projections", ()),
                     field="complexity_projections",
                 )
             ),
@@ -500,10 +500,11 @@ class LatentFactorDeclaration:
                 factor.to_record() for factor in self.construction_factors
             ],
             "sample_factors": [factor.to_record() for factor in self.sample_factors],
-            "complexity_projections": [
-                projection.to_record() for projection in self.complexity_projections
-            ],
         }
+        if self.complexity_projections:
+            record["complexity_projections"] = [
+                projection.to_record() for projection in self.complexity_projections
+            ]
         if self.resolution_requirements:
             record["resolution_requirements"] = [
                 requirement.to_record() for requirement in self.resolution_requirements

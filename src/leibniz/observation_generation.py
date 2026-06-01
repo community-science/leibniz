@@ -60,6 +60,8 @@ _discriminatable_resolution_cache: dict[
 ] = {}
 _rejection_cache_bins_per_axis = 8
 _rejection_cache_cell_limit = 4096
+_distinguishable_state_count_axis = "distinguishable_state_count"
+_variation_state_bins_per_axis = 8
 
 class ObservationGenerationError(ValueError):
     """Raised when observation generation cannot satisfy benchmark declarations."""
@@ -299,21 +301,19 @@ class ObservationGenerator:
             raise ObservationGenerationError("sample_count must be a positive integer")
         if type(seed) is not int or seed < 0:
             raise ObservationGenerationError("seed must be a nonnegative integer")
-        with _timing_span(timing, f"{timing_prefix}scaled_factors"):
-            scaled_factors = tuple(self._scaled_sample_factors(scale))
-        with _timing_span(timing, f"{timing_prefix}complexity"):
-            complexity = self._complexity(scaled_factors)
-            complexity_axis = self._complexity_axis()
+        if type(scale) is not int or scale < 1:
+            raise ObservationGenerationError("scale must be a positive integer")
+        if self.benchmark_manifest.outcome_sequence is None and scale != 1:
+            raise ObservationGenerationError(
+                "fixed-outcome component observations require scale 1"
+            )
         with _timing_span(timing, f"{timing_prefix}component_sequences"):
             sequences = tuple(component_sequences) if component_sequences is not None else ()
         if sequences and len(sequences) != sample_count:
             raise ObservationGenerationError("component_sequences length must match sample_count")
-        if self.benchmark_manifest.scale_parameter is None:
-            raise ObservationGenerationError("benchmark manifest must declare scale")
         scale_assignment = AxisAssignment(
-            values={self.benchmark_manifest.scale_parameter.symbol: scale}
+            values={self._scale_axis(): scale}
         )
-        complexity_assignment = AxisAssignment(values={complexity_axis: int(complexity)})
         resolution_assignment = self.materialization.minimum_resolution(scale_assignment)
         resolution_assignment = self._minimum_discriminatable_resolution_assignment(
             scale=scale,
@@ -327,6 +327,18 @@ class ObservationGenerator:
         self.materialization.require_resolution(
             scale_assignment=scale_assignment,
             resolution_assignment=resolution_assignment,
+        )
+        width = resolution_assignment.require_axis(self.formation.width_axis)
+        height = resolution_assignment.require_axis(self.formation.height_axis)
+        with _timing_span(timing, f"{timing_prefix}complexity"):
+            distinguishable_state_count = self._distinguishable_state_count(
+                scale=scale,
+                width=width,
+                height=height,
+            )
+            complexity = math.log2(distinguishable_state_count)
+        complexity_assignment = AxisAssignment(
+            values={_distinguishable_state_count_axis: distinguishable_state_count}
         )
         materialization_declaration = ArtifactReference(
             kind="materialization-declaration",
@@ -458,17 +470,26 @@ class ObservationGenerator:
                 factors.append(factor)
         return tuple(factors)
 
-    def _complexity(self, scaled_factors: tuple[SampleLatentFactor, ...]) -> float:
-        value = self.latent_factors.projection(self._complexity_axis()).evaluate(scaled_factors)
-        if not value.is_integer():
-            raise ObservationGenerationError("complexity coordinate must be integral")
-        return value
+    def _scale_axis(self) -> str:
+        if self.benchmark_manifest.scale_parameter is not None:
+            return self.benchmark_manifest.scale_parameter.symbol
+        return self.formation.sequence_layout.sequence_axis
 
-    def _complexity_axis(self) -> str:
-        axis = self.benchmark_manifest.complexity_coordinate
-        if axis is None:
-            raise ObservationGenerationError("benchmark manifest must declare complexity")
-        return axis
+    def _distinguishable_state_count(
+        self,
+        *,
+        scale: int,
+        width: int,
+        height: int,
+    ) -> int:
+        component_states = len(self.formation.components) ** scale
+        variation_states = _variation_transform_state_count(
+            self.formation.variation_transform,
+            sequence_length=scale,
+            width=width,
+            height=height,
+        ) ** scale
+        return component_states * variation_states
 
     def _materialization_plan(
         self,
@@ -504,9 +525,11 @@ class ObservationGenerator:
             return minimum_assignment
         minimum_width = minimum_assignment.require_axis(sampling.width_axis)
         minimum_height = minimum_assignment.require_axis(sampling.height_axis)
-        side_multiplier = math.sqrt(sampling.maximum_pixel_multiplier)
-        maximum_width = math.floor(minimum_width * side_multiplier)
-        maximum_height = math.floor(minimum_height * side_multiplier)
+        maximum_width, maximum_height = _sampled_resolution_maximum(
+            minimum_width=minimum_width,
+            minimum_height=minimum_height,
+            maximum_pixel_multiplier=sampling.maximum_pixel_multiplier,
+        )
         if maximum_width < minimum_width:
             raise ObservationGenerationError(
                 f"{sampling.width_axis} maximum {maximum_width} is below "
@@ -567,7 +590,18 @@ class ObservationGenerator:
 
     def _outcome_id(self, sequence: tuple[int, ...]) -> str:
         if self.benchmark_manifest.outcome_sequence is None:
-            raise ObservationGenerationError("benchmark manifest must declare outcome sequence")
+            if self.benchmark_manifest.outcome_space is None:
+                raise ObservationGenerationError("benchmark manifest must declare outcomes")
+            if len(sequence) != 1:
+                raise ObservationGenerationError(
+                    "fixed-outcome component observations require one component"
+                )
+            index = sequence[0]
+            if index >= len(self.benchmark_manifest.outcome_space.outcomes):
+                raise ObservationGenerationError(
+                    "component index is outside outcome space"
+                )
+            return self.benchmark_manifest.outcome_space.outcomes[index].id
         return self.benchmark_manifest.outcome_sequence.outcome_id(sequence)
 
     def _latent_coordinates(
@@ -1292,6 +1326,54 @@ def _resolution_sampling(
         width_axis=width_axis,
         height_axis=height_axis,
         maximum_pixel_multiplier=float(multiplier),
+    )
+
+
+def _variation_transform_state_count(
+    transform: VariationTransformDeclaration,
+    *,
+    sequence_length: int,
+    width: int,
+    height: int,
+) -> int:
+    if sequence_length < 1:
+        raise ObservationGenerationError("sequence_length must be positive")
+    element_width = max(1, width // sequence_length)
+    row_extents = (element_width, height, 1)
+    count = 1
+    for row_index, row in enumerate(transform.spatial_affine.matrix):
+        extent = row_extents[row_index] if row_index < len(row_extents) else 1
+        for lower, upper in row:
+            if upper > lower:
+                count *= _distinguishable_interval_count(
+                    lower=lower,
+                    upper=upper,
+                    extent=extent,
+                )
+    return count
+
+
+def _distinguishable_interval_count(
+    *,
+    lower: float,
+    upper: float,
+    extent: int,
+) -> int:
+    if extent < 1:
+        return 1
+    return max(1, math.floor((upper - lower) * extent) + 1)
+
+
+def _sampled_resolution_maximum(
+    *,
+    minimum_width: int,
+    minimum_height: int,
+    maximum_pixel_multiplier: float,
+) -> tuple[int, int]:
+    side_multiplier = math.sqrt(maximum_pixel_multiplier)
+    return (
+        math.floor(minimum_width * side_multiplier),
+        math.floor(minimum_height * side_multiplier),
     )
 
 

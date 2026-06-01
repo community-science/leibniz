@@ -1,3 +1,4 @@
+import math
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import cast
@@ -22,20 +23,20 @@ _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "
 def test_digits_observation_generator_is_deterministic() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
-    left = generator.sample_batch(scale=3, sample_count=2, seed=101)
-    right = generator.sample_batch(scale=3, sample_count=2, seed=101)
+    left = generator.sample_batch(scale=1, sample_count=2, seed=101)
+    right = generator.sample_batch(scale=1, sample_count=2, seed=101)
 
     assert left == right
-    assert left.scale == 3
-    assert left.samples[0].field.shape == (1, 35, 115)
-    assert left.samples[0].complexity == 3.0
-    assert len(left.samples[0].observation.component_sequence) == 3
-    assert left.samples[0].outcome_id.startswith("digit-")
+    assert left.scale == 1
+    assert left.samples[0].field.shape == (1, 40, 22)
+    assert left.samples[0].complexity == pytest.approx(math.log2(604800))
+    assert len(left.samples[0].observation.component_sequence) == 1
+    assert left.samples[0].outcome_id == "digit-8"
     assert _coordinate(left.samples[0].latent_coordinates, role="content")["values"] == list(
         left.samples[0].observation.component_sequence
     )
     variation = _coordinate(left.samples[0].latent_coordinates, role="variation")
-    assert variation["multiplicity"] == 3
+    assert variation["multiplicity"] == 1
     assert variation["name"] == "benchmarks.digits.sample.field-variation-transform"
     assert variation["degree_measure"] == {"kind": "vector-dimension", "count": 6.0}
     variation_values = cast(dict[str, object], variation["values"])
@@ -44,8 +45,8 @@ def test_digits_observation_generator_is_deterministic() -> None:
         generator.formation.variation_transform.to_record()
     )
     coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
-    assert [coordinate["sequence_index"] for coordinate in coordinates] == [0, 1, 2]
-    assert len(coordinates) == 3
+    assert [coordinate["sequence_index"] for coordinate in coordinates] == [0]
+    assert len(coordinates) == 1
     assert _within_transform_bounds(
         coordinates[0],
         bounds=generator.formation.variation_transform.to_record(),
@@ -66,15 +67,15 @@ def test_digits_observation_generator_is_deterministic() -> None:
 def test_digits_observation_generator_samples_formation_batch_without_fields() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
-    observation_batch = generator.sample_batch(scale=3, sample_count=2, seed=101)
-    formation_batch = generator.sample_formation_batch(scale=3, sample_count=2, seed=101)
+    observation_batch = generator.sample_batch(scale=1, sample_count=2, seed=101)
+    formation_batch = generator.sample_formation_batch(scale=1, sample_count=2, seed=101)
 
     assert formation_batch.benchmark_id == observation_batch.benchmark_id
     assert formation_batch.scale == observation_batch.scale
     assert formation_batch.seed == observation_batch.seed
     assert [(sample.width, sample.height) for sample in formation_batch.samples] == [
-        (115, 35),
-        (115, 35),
+        (22, 40),
+        (22, 40),
     ]
     assert [sample.component_sequence for sample in formation_batch.samples] == [
         sample.observation.component_sequence for sample in observation_batch.samples
@@ -97,15 +98,15 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
     minimum_plan = MaterializationPlan.resolve(
         id=formation_batch.samples[0].materialization_plan.id,
         declaration=generator.materialization,
-        scale_assignment=AxisAssignment(values={"L": 3}),
-        complexity_assignment=AxisAssignment(values={"C": 3}),
+        scale_assignment=AxisAssignment(values={"L": 1}),
+        complexity_assignment=AxisAssignment(values={"distinguishable_state_count": 604800}),
         seed=101,
     )
     generated_plan = formation_batch.samples[0].materialization_plan
     assert generated_plan.scale_assignment == minimum_plan.scale_assignment
     assert generated_plan.complexity_assignment == minimum_plan.complexity_assignment
     assert minimum_plan.resolution_assignment.values == {"W": 1, "H": 1}
-    assert generated_plan.resolution_assignment.values == {"W": 115, "H": 35}
+    assert generated_plan.resolution_assignment.values == {"W": 22, "H": 40}
 
 
 def test_digits_observation_generator_records_optional_timing() -> None:
@@ -113,7 +114,7 @@ def test_digits_observation_generator_records_optional_timing() -> None:
     timing = TimingCollector()
 
     generator.sample_batch(
-        scale=2,
+        scale=1,
         sample_count=2,
         seed=303,
         timing=timing,
@@ -137,69 +138,84 @@ def test_digits_observation_generator_records_optional_timing() -> None:
     assert variation["sample_count"] == 2
     variation_counters = cast(dict[str, float], variation["counters"])
     assert variation_counters["candidate_count"] >= variation_counters["accepted_count"]
-    assert variation_counters["accepted_count"] == 4.0
+    assert variation_counters["accepted_count"] == 2.0
     assert variation_counters["candidate_count"] == variation_counters["accepted_count"]
     assert "fast_reject_count" not in variation_counters
     assert observation["sample_count"] == 2
     assert cast(float, observation["seconds"]) > 0
 
 
-def test_digits_observation_generator_samples_resolution_from_complexity_bound() -> None:
+def test_digits_observation_generator_samples_resolution_from_state_count_bound() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
     batch = generator.sample_batch(
-        scale=4,
+        scale=1,
         sample_count=1,
         seed=202,
-        component_sequences=((1, 2, 3, 4),),
+        component_sequences=((1,),),
     )
     sample = batch.samples[0]
 
-    assert sample.field.shape == (1, 22, 88)
-    assert sample.materialization_plan.scale_assignment.require_axis("L") == 4
-    assert sample.materialization_plan.resolution_assignment.values == {"W": 88, "H": 22}
-    assert sample.materialization_plan.complexity_assignment.require_axis("C") == 4
-    assert sample.complexity == 4.0
-    assert sample.outcome_id == "digit-1-2-3-4"
+    assert sample.field.shape == (1, 31, 36)
+    assert sample.materialization_plan.scale_assignment.require_axis("L") == 1
+    assert sample.materialization_plan.resolution_assignment.values == {"W": 36, "H": 31}
+    assert (
+        sample.materialization_plan.complexity_assignment.require_axis(
+            "distinguishable_state_count"
+        )
+        == 936000
+    )
+    assert sample.complexity == pytest.approx(math.log2(936000))
+    assert sample.outcome_id == "digit-1"
 
 
-def test_digits_observation_generator_decouples_canvas_size_from_complexity() -> None:
+def test_digits_observation_generator_counts_discretized_nuisance_state_space() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
     scale_one = generator.sample_formation_batch(scale=1, sample_count=3, seed=101)
-    scale_three = generator.sample_formation_batch(scale=3, sample_count=3, seed=101)
-    scale_three_other_seed = generator.sample_formation_batch(
-        scale=3,
+    scale_one_other_seed = generator.sample_formation_batch(
+        scale=1,
         sample_count=3,
         seed=102,
     )
 
-    assert {sample.complexity for sample in scale_one.samples} == {1.0}
-    assert {sample.complexity for sample in scale_three.samples} == {3.0}
-    assert [(sample.width, sample.height) for sample in scale_three.samples] == [
-        (115, 35),
-        (115, 35),
-        (115, 35),
+    assert {round(sample.complexity, 12) for sample in scale_one.samples} == {
+        round(math.log2(604800), 12)
+    }
+    assert [
+        sample.materialization_plan.complexity_assignment.require_axis(
+            "distinguishable_state_count"
+        )
+        for sample in scale_one.samples
+    ] == [604800, 604800, 604800]
+    assert [
+        sample.materialization_plan.complexity_assignment.require_axis(
+            "distinguishable_state_count"
+        )
+        for sample in scale_one_other_seed.samples
+    ] == [676000, 676000, 676000]
+    assert [(sample.width, sample.height) for sample in scale_one.samples] == [
+        (22, 40),
+        (22, 40),
+        (22, 40),
     ]
-    assert [(sample.width, sample.height) for sample in scale_three_other_seed.samples] == [
-        (70, 28),
-        (70, 28),
-        (70, 28),
+    assert [(sample.width, sample.height) for sample in scale_one_other_seed.samples] == [
+        (31, 31),
+        (31, 31),
+        (31, 31),
     ]
     assert 20 <= scale_one.samples[0].width <= 40
     assert 20 <= scale_one.samples[0].height <= 40
-    assert 60 <= scale_three.samples[0].width <= 120
-    assert 20 <= scale_three.samples[0].height <= 40
-    assert (scale_three.samples[0].width, scale_three.samples[0].height) != (60, 20)
+    assert (scale_one.samples[0].width, scale_one.samples[0].height) != (20, 20)
 
 
 def test_digits_observation_generator_applies_recorded_variation_coordinates() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
     sample = generator.sample_batch(
-        scale=2,
+        scale=1,
         sample_count=1,
         seed=909,
-        component_sequences=((1, 2),),
+        component_sequences=((1,),),
     ).samples[0]
     variation = _coordinate(sample.latent_coordinates, role="variation")
     variation_values = cast(dict[str, object], variation["values"])

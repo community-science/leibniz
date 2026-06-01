@@ -109,7 +109,7 @@ def test_latent_factor_declaration_document_loads_digits_source_artifact() -> No
     assert document.declaration.id == ProtocolIdentifier.parse(
         "benchmarks.digits.latent-factors@0.1.0"
     )
-    assert document.declaration.evaluate_complexity("C") == 1.0
+    assert document.declaration.complexity_projections == ()
     assert document.digest == ContentDigest.from_value(document.declaration.to_record())
 
 

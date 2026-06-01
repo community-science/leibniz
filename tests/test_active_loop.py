@@ -1,3 +1,4 @@
+import math
 import os
 import subprocess
 import sys
@@ -14,12 +15,7 @@ from leibniz.console.data import ConsoleDataBuilder
 _repository_root = Path(__file__).parents[1]
 _benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
 _architecture_path = (
-    _repository_root
-    / "tests"
-    / "fixtures"
-    / "architecture"
-    / "digits_sequence_pool"
-    / "manifest.json"
+    _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool" / "manifest.json"
 )
 
 
@@ -153,7 +149,7 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
     assert "--scale-curriculum" not in command
     assert "--curriculum-max-scale" not in command
     assert len(leaderboard) == 1
-    assert leaderboard[0]["observed_complexities"] == [1.0]
+    assert leaderboard[0]["observed_complexities"] == [pytest.approx(math.log2(604800))]
     assert results_root.joinpath("measurements").is_dir()
     assert results_root.joinpath("proposals").is_dir()
     assert results_root.joinpath("views", "benchmark_results.json").is_file()

@@ -358,14 +358,11 @@ class BenchmarkManifest:
             raise BenchmarkManifestValidationError(
                 "latent_factor_declaration reference does not match declaration"
             )
-        if self.complexity_coordinate is None:
-            raise BenchmarkManifestValidationError(
-                "manifest does not declare a complexity coordinate"
-            )
-        try:
-            declaration.projection(self.complexity_coordinate)
-        except ValueError as error:
-            raise BenchmarkManifestValidationError(str(error)) from error
+        if self.complexity_coordinate is not None:
+            try:
+                declaration.projection(self.complexity_coordinate)
+            except ValueError as error:
+                raise BenchmarkManifestValidationError(str(error)) from error
 
     def resolve_outcome_space(self, *, scale: int) -> OutcomeSpace:
         """Resolve this benchmark's finite outcome space at one scale."""

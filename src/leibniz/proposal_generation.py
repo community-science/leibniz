@@ -15,7 +15,6 @@ from leibniz.architecture_candidates import (
     sample_architecture_candidates,
 )
 from leibniz.architectures import ArchitectureManifest
-from leibniz.benchmarks import BenchmarkManifest
 from leibniz.candidate_observations import (
     ArchitectureCandidateObservation,
     ArchitectureMeasurementEvidence,
@@ -56,7 +55,6 @@ __all__ = [
 
 _document_suffix = document_filename_suffix()
 _initial_scale = 1
-_transitional_sequence_candidate_max_complexity = 5
 
 
 class ProposalGenerationError(ValueError):
@@ -202,10 +200,6 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
     generator = load_observation_generator(plan.benchmark_root)
     manifest = generator.benchmark_manifest
     outcome_space = manifest.resolve_outcome_space(scale=_initial_scale)
-    output_count = _candidate_output_count(
-        manifest=manifest,
-        finite_output_count=len(outcome_space.outcomes),
-    )
     sample = generator.sample_batch(
         scale=_initial_scale,
         sample_count=1,
@@ -220,7 +214,7 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
         for candidate in sample_architecture_candidates(
             search_distribution,
             input_shape=sample.field.shape,
-            output_count=output_count,
+            output_count=len(outcome_space.outcomes),
             sample_count=plan.candidate_sample_count,
             seed=plan.seed,
         )
@@ -243,7 +237,7 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
     candidates = _candidate_architectures(
         candidate_observations=candidate_observations,
         input_shape=sample.field.shape,
-        output_count=output_count,
+        output_count=len(outcome_space.outcomes),
         candidate_budget=plan.candidate_budget,
         search_distribution=search_distribution,
         measured=tuple(measured),
@@ -352,15 +346,6 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
         architecture_paths=tuple(architecture_paths),
         benchmark_id=manifest.id,
         proposal_count=len(proposals),
-    )
-
-
-def _candidate_output_count(*, manifest: BenchmarkManifest, finite_output_count: int) -> int:
-    if manifest.outcome_sequence is None:
-        return finite_output_count
-    return (
-        (manifest.outcome_sequence.atom_count + 1)
-        * _transitional_sequence_candidate_max_complexity
     )
 
 

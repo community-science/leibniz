@@ -5,7 +5,7 @@ from leibniz.artifacts import ArtifactReference
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlanDocument
-from leibniz.measurements import MeasurementDataset, MeasurementRecord
+from leibniz.measurements import MeasurementRecord
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
 from leibniz.outcomes import (
     AcceptedEvent,
@@ -13,7 +13,6 @@ from leibniz.outcomes import (
     ProbabilityMass,
     RawScoringEvidence,
 )
-from leibniz.views import CompetenceIntegralSource, CompetenceIntegralView
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -59,100 +58,14 @@ def test_digits_length_one_uniform_and_wrong_measurements_score_expected_mass() 
     assert wrong.raw_scoring_evidence.negative_log_score == math.inf
 
 
-def test_digits_length_three_measurements_use_resolved_sequence_outcome_space() -> None:
-    perfect = _measurement_for_sequence(
-        sequence=(1, 2, 3),
-        plan_name="materialization_plan_l3.json",
-        measure_kind="perfect",
-    )
-    uniform = _measurement_for_sequence(
-        sequence=(1, 2, 3),
-        plan_name="materialization_plan_l3.json",
-        measure_kind="uniform",
-    )
-    dataset = MeasurementDataset(measurements=(uniform, perfect))
-
-    dataset.validate_manifest(_digits_manifest(), scale=3)
-
-    assert perfect.outcome_space.id == ProtocolIdentifier.parse(
-        "benchmarks.digits.outcomes.l3@0.1.0"
-    )
-    assert len(perfect.outcome_space.outcomes) == 1000
-    assert perfect.accepted_event.outcomes == frozenset({"digit-1-2-3"})
-    assert perfect.raw_scoring_evidence.accepted_mass == 1.0
-    assert math.isclose(uniform.raw_scoring_evidence.accepted_mass, 0.001)
-    assert math.isclose(uniform.raw_scoring_evidence.negative_log_score, math.log(1000))
-    assert [str(measurement.raw_scoring_evidence.id) for measurement in dataset.measurements] == [
-        "benchmarks.digits.evidence.l3.digit-1-2-3.perfect@0.1.0",
-        "benchmarks.digits.evidence.l3.digit-1-2-3.uniform@0.1.0",
-    ]
-
-
-def test_digits_outcome_sequence_encodes_lexicographic_token_indices() -> None:
+def test_digits_manifest_declares_single_digit_outcomes() -> None:
     manifest = _digits_manifest()
-    assert manifest.outcome_sequence is not None
 
-    assert manifest.outcome_sequence.outcome_count(3) == 1000
-    assert manifest.outcome_sequence.outcome_index((1, 2, 3)) == 123
-    assert manifest.outcome_sequence.atoms_for_outcome_index(index=123, length=3) == (
-        1,
-        2,
-        3,
-    )
-    assert manifest.outcome_sequence.token_sequence_space(length=3).to_record() == {
-        "kind": "finite-token-sequence",
-        "vocabulary": {
-            "token_count": 10,
-            "token_name": "digit",
-        },
-        "length": 3,
-        "sequence_boundary": "fixed-length",
-    }
-
-
-def test_digits_competence_integral_uses_materialization_complexity_assignments() -> None:
-    length_one = _measurement_for_sequence(
-        sequence=(7,),
-        plan_name="materialization_plan_l1.json",
-        measure_kind="perfect",
-    )
-    length_three = _measurement_for_sequence(
-        sequence=(1, 2, 3),
-        plan_name="materialization_plan_l3.json",
-        measure_kind="uniform",
-    )
-    l1_plan = MaterializationPlanDocument.from_bytes(
-        (_digits_fixture_root / "materialization_plan_l1.json").read_bytes()
-    ).plan
-    l3_plan = MaterializationPlanDocument.from_bytes(
-        (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
-    ).plan
-    dataset = MeasurementDataset(measurements=(length_one, length_three))
-
-    view = CompetenceIntegralView.from_sources(
-        id=ProtocolIdentifier.parse("views.competence-integrals.digits@0.1.0"),
-        dataset=dataset,
-        sources=(
-            CompetenceIntegralSource(
-                measurement=length_one,
-                materialization_plan=l1_plan,
-            ),
-            CompetenceIntegralSource(
-                measurement=length_three,
-                materialization_plan=l3_plan,
-            ),
-        ),
-        complexity_axis="C",
-        expected_complexities=(1.0, 2.0, 3.0),
-    )
-
-    assert view.entries[0].benchmark_id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
-    assert view.entries[0].observed_complexities == (1.0, 3.0)
-    assert view.entries[0].missing_complexities == (2.0,)
-    assert view.entries[0].coverage == 2 / 3
-    assert view.entries[0].points[0].competence == 1.0
-    assert view.entries[0].points[1].competence == 0.001
-    assert view.entries[0].integral == 0.25025
+    assert manifest.outcome_sequence is None
+    assert manifest.outcome_space is not None
+    assert [outcome.id for outcome in manifest.outcome_space.outcomes] == [
+        f"digit-{index}" for index in range(10)
+    ]
 
 
 def _measurement_for_sequence(
@@ -170,8 +83,9 @@ def _measurement_for_sequence(
     ).plan
     scale = len(sequence)
     outcome_space = manifest.resolve_outcome_space(scale=scale)
-    assert manifest.outcome_sequence is not None
-    accepted_outcome = manifest.outcome_sequence.outcome_id(sequence)
+    assert manifest.outcome_space is not None
+    assert len(sequence) == 1
+    accepted_outcome = f"digit-{sequence[0]}"
     sequence_label = accepted_outcome.removeprefix("digit-")
     observation_id = ProtocolIdentifier.parse(
         f"benchmarks.digits.observations.l{scale}.digit-{sequence_label}@0.1.0"

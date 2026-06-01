@@ -144,14 +144,18 @@ architectures are rejected for sampled digits runs because later training
 batches may have different canvas dimensions than the validation batch used
 during initial inspection.
 
-Digits is a variable-length token-sequence benchmark. The task contract is to
-predict the complete digit sequence visible in the observation; exact-sequence
-scoring gives probability credit only to that full sequence. Sequence model
-interfaces assign probability to finite token sequences with model-determined
-length; the benchmark does not require an end-of-sequence token or an enumerated
-vector over every possible sequence. The local PyTorch training workflow in this
-repository is transitional and remains separate from the benchmark task
-definition so richer training recipes can move to a separate repository.
+Digits is a single-label finite-outcome benchmark. The task contract is to
+predict which one of the ten digit identities is visible in the observation.
+The benchmark does not use an explicit sequence-length or complexity coordinate
+for scoring; observation difficulty is derived from the number of possible
+distinguishable states under the active scoring contract. In the current
+single-digit task this includes the ten digit identities and a finite grid over
+the identity-preserving affine nuisance envelope as perceived on the sampled
+canvas. Larger canvases can therefore expose more distinguishable affine states;
+sampled canvas shape is not counted as extra score-bearing difficulty by itself
+unless it changes what nuisance states can be distinguished. This keeps the
+model output fixed at a 10-way probability measure while allowing absolute
+score to grow as formation rules add real distinguishable observation states.
 
 While a benchmark loop is training a reserved candidate, validation checkpoints
 are written under `results/training-progress/` and materialized into the local

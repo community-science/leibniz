@@ -308,24 +308,18 @@ def test_digits_benchmark_manifest_loads_source_artifact() -> None:
     manifest = document.manifest
 
     assert manifest.id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
-    assert manifest.outcome_sequence == BenchmarkOutcomeSequence(
-        atom_count=10,
-        atom_name="digit",
-        length_parameter="L",
-    )
-    assert manifest.scale_parameter == BenchmarkScaleParameter(
-        symbol="L",
-        minimum=1,
-        description="Number of digits in the ordered sequence.",
-    )
-    assert manifest.outcome_sequence is not None
-    assert manifest.outcome_sequence.outcome_count(4) == 10000
+    assert manifest.outcome_sequence is None
+    assert manifest.scale_parameter is None
+    assert manifest.outcome_space is not None
+    assert [outcome.id for outcome in manifest.outcome_space.outcomes] == [
+        f"digit-{index}" for index in range(10)
+    ]
     assert manifest.latent_factor_declaration is not None
     assert manifest.latent_factor_declaration.kind == "latent-factor-declaration"
     assert str(manifest.latent_factor_declaration.protocol_id) == (
         "benchmarks.digits.latent-factors@0.1.0"
     )
-    assert manifest.complexity_coordinate == "C"
+    assert manifest.complexity_coordinate is None
     assert manifest.resolution_analysis == {
         "kind": "component-discriminability-margin",
         "discriminability_margin": 20.0,

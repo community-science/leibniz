@@ -31,7 +31,7 @@ __all__ = [
 
 _PredictionKind: TypeAlias = Literal[
     "direct-finite-probability-measure",
-    "finite-token-sequence-probability",
+    "autoregressive-finite-token-sequence",
 ]
 _OutputEncoding: TypeAlias = Literal["probability-mass-sequence", "sequence-probability"]
 
@@ -75,15 +75,15 @@ class ModelInterface:
         ):
             return
         if (
-            self.prediction_kind == "finite-token-sequence-probability"
+            self.prediction_kind == "autoregressive-finite-token-sequence"
             and self.output_encoding == "sequence-probability"
             and isinstance(self.prediction_space, FiniteTokenSequenceSpace)
-            and self.prediction_space.sequence_boundary == "variable-length"
+            and self.prediction_space.sequence_boundary == "eos-terminated"
         ):
             return
         raise ModelInterfaceValidationError(
             "model interface must pair finite probability measures with finite outcome "
-            "spaces, or finite token sequence probabilities with variable-length "
+            "spaces, or autoregressive sequence probabilities with eos-terminated "
             "finite token sequence spaces"
         )
 
@@ -128,11 +128,11 @@ class ModelInterface:
                 "direct-finite-probability-measure requires finite-outcome-space prediction_space"
             )
         if (
-            validated["prediction_kind"] == "finite-token-sequence-probability"
+            validated["prediction_kind"] == "autoregressive-finite-token-sequence"
             and not isinstance(prediction_space, FiniteTokenSequenceSpace)
         ):
             raise ModelInterfaceValidationError(
-                "finite-token-sequence-probability requires finite-token-sequence "
+                "autoregressive-finite-token-sequence requires finite-token-sequence "
                 "prediction_space"
             )
         interface = cls(

@@ -16,12 +16,7 @@ from leibniz.tensor_runtime import TensorRuntimeDevice, TensorRuntimeDeviceKind
 _repository_root = Path(__file__).parents[1]
 _benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
 _architecture_path = (
-    _repository_root
-    / "tests"
-    / "fixtures"
-    / "architecture"
-    / "digits_sequence_pool"
-    / "manifest.json"
+    _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool" / "manifest.json"
 )
 
 
@@ -92,7 +87,7 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
         "count": document.proposal_set.proposals[0].resource_stratum_count,
     }
     nearest = cast(dict[str, object], search_diagnostics["nearest_measured_support"])
-    assert nearest["parameter_count"] == 275
+    assert nearest["parameter_count"] == 50
     assert document.proposal_set.proposals[0].candidate_id in {
         architecture.id for architecture in architectures
     }

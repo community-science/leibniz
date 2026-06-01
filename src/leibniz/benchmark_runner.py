@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import random
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -111,24 +110,6 @@ class _TrainingWorkEstimates:
     validation: _PhaseWorkEstimate
     evaluation: _PhaseWorkEstimate
     assumptions: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class _SequenceOutputContract:
-    atom_count: int
-    output_count: int
-
-    @property
-    def max_sequence_length(self) -> int:
-        return self.output_count // (self.atom_count + 1)
-
-    @property
-    def length_logit_count(self) -> int:
-        return self.max_sequence_length
-
-    @property
-    def token_logit_count(self) -> int:
-        return self.max_sequence_length * self.atom_count
 
 
 @dataclass(slots=True)
@@ -314,11 +295,6 @@ def run_benchmark(
         architecture=architecture,
         batch=evaluation_batch,
         outcome_space=outcome_space,
-        sequence_atom_count=(
-            None
-            if generator.benchmark_manifest.outcome_sequence is None
-            else generator.benchmark_manifest.outcome_sequence.atom_count
-        ),
     )
 
     summary = _run_summary(
@@ -423,10 +399,6 @@ def run_benchmark(
             "convergence_min_steps": plan.convergence_min_steps,
             "tensor_runtime": "pytorch",
             "tensor_device": training_result.training_run.protocol.tensor_device,
-            **_sequence_training_summary(
-                architecture=architecture,
-                generator=generator,
-            ),
             "training_run": training_result.training_run.to_record(),
             "throughput": training_result.throughput,
             **(
@@ -479,36 +451,6 @@ def _run_summary(
     )
 
 
-def _sequence_training_summary(
-    *,
-    architecture: ArchitectureManifest,
-    generator: ObservationGenerator,
-) -> dict[str, object]:
-    outcome_sequence = generator.benchmark_manifest.outcome_sequence
-    if outcome_sequence is None:
-        return {}
-    contract = _sequence_output_contract(
-        architecture=architecture,
-        atom_count=outcome_sequence.atom_count,
-    )
-    if contract is None:
-        return {}
-    return {
-        "sequence_training": {
-            "kind": "factored-sequence-probability",
-            "token_name": outcome_sequence.atom_name,
-            "token_count": outcome_sequence.atom_count,
-            "output_count": contract.output_count,
-            "length_logit_count": contract.length_logit_count,
-            "token_logit_count": contract.token_logit_count,
-            "minimum_complexity": _initial_scale,
-            "maximum_complexity": contract.max_sequence_length,
-            "batch_complexity_sampling": "uniform-per-batch",
-            "parameterization": "length-categorical-and-positionwise-token-categorical",
-        }
-    }
-
-
 def _training_progress_path(summary: BenchmarkRunSummary) -> Path:
     return (
         summary.training_summary_path.parent.parent.parent
@@ -523,7 +465,6 @@ def _validate_architecture_for_batch(
     architecture: ArchitectureManifest,
     batch: GeneratedObservationBatch,
     outcome_space: OutcomeSpace,
-    sequence_atom_count: int | None = None,
 ) -> None:
     sample_shape = batch.samples[0].field.shape
     input_reason = _input_shape_boundary_reason(
@@ -532,16 +473,6 @@ def _validate_architecture_for_batch(
     )
     if input_reason is not None:
         raise BenchmarkRunnerError(input_reason)
-    if sequence_atom_count is not None:
-        if _sequence_output_contract(
-            architecture=architecture,
-            atom_count=sequence_atom_count,
-        ) is None:
-            raise BenchmarkRunnerError(
-                "sequence benchmarks require architecture output_shape to be a "
-                "rank-1 probability vector over possible output sequences"
-            )
-        return
     outcome_count = len(outcome_space.outcomes)
     if architecture.output_shape != (outcome_count,):
         raise BenchmarkRunnerError(
@@ -708,22 +639,6 @@ def _direct_prediction_boundary_reason(
     )
     if input_reason is not None:
         return input_reason
-    if generator.benchmark_manifest.outcome_sequence is not None:
-        contract = _sequence_output_contract(
-            architecture=architecture,
-            atom_count=generator.benchmark_manifest.outcome_sequence.atom_count,
-        )
-        if contract is None:
-            return (
-                "architecture output_shape must be a rank-1 probability vector "
-                "for sequence benchmark evaluation"
-            )
-        if scale > contract.max_sequence_length:
-            return (
-                f"architecture sequence output accepts C <= {contract.max_sequence_length}, "
-                f"not scale {scale}"
-            )
-        return None
     outcome_count = len(generator.benchmark_manifest.resolve_outcome_space(scale=scale).outcomes)
     if architecture.output_shape != (outcome_count,):
         return (
@@ -731,22 +646,6 @@ def _direct_prediction_boundary_reason(
             f"{outcome_count} resolved benchmark sequence outcomes at scale {scale}"
         )
     return None
-
-
-def _sequence_output_contract(
-    *,
-    architecture: ArchitectureManifest,
-    atom_count: int,
-) -> _SequenceOutputContract | None:
-    if atom_count < 2 or len(architecture.output_shape) != 1:
-        return None
-    output_count = architecture.output_shape[0]
-    if output_count < atom_count + 1 or output_count % (atom_count + 1) != 0:
-        return None
-    contract = _SequenceOutputContract(atom_count=atom_count, output_count=output_count)
-    if contract.max_sequence_length < 1:
-        return None
-    return contract
 
 
 def _input_shape_boundary_reason(
@@ -903,30 +802,8 @@ def _train_and_predict_on_device(
     torch.manual_seed(seed)
     module = ExecutableModelOperator(architecture).torch_module().to(runtime.device)
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    sequence_contract = (
-        None
-        if generator.benchmark_manifest.outcome_sequence is None
-        else _sequence_output_contract(
-            architecture=architecture,
-            atom_count=generator.benchmark_manifest.outcome_sequence.atom_count,
-        )
-    )
-    if generator.benchmark_manifest.outcome_sequence is not None and sequence_contract is None:
-        raise BenchmarkRunnerError(
-            "architecture output_shape must be a rank-1 probability vector "
-            "for sequence benchmark training"
-        )
     formation_cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
-    objective_name = (
-        "sequence-probability-cross-entropy"
-        if sequence_contract is not None
-        else "cross-entropy"
-    )
-    loss_function = (
-        _sequence_cross_entropy_loss(torch=torch)
-        if sequence_contract is not None
-        else torch.nn.CrossEntropyLoss()
-    )
+    loss_function = torch.nn.CrossEntropyLoss()
     optimizer = _make_optimizer(
         torch=torch,
         parameters=module.parameters(),
@@ -951,37 +828,16 @@ def _train_and_predict_on_device(
         generation_phase: str,
         tensor_phase: str,
     ) -> tuple[Any, Any]:
-        batch_scale = (
-            scale
-            if sequence_contract is None
-            else _sample_training_sequence_length(
-                seed=batch_seed,
-                minimum=scale,
-                maximum=sequence_contract.max_sequence_length,
-            )
-        )
         with phase_timings.span(generation_phase, samples=sample_count):
             generated = generator.sample_formation_batch(
-                scale=batch_scale,
+                scale=scale,
                 sample_count=sample_count,
                 seed=batch_seed,
                 timing=phase_timings,
                 timing_prefix=f"{generation_phase}.",
             )
         with phase_timings.span(tensor_phase, samples=sample_count):
-            tensors = (
-                (
-                    formation_cache.field_tensors(batch=generated),
-                    _sequence_label_tensor(
-                        torch=torch,
-                        batch=generated,
-                        contract=sequence_contract,
-                        device=runtime.device,
-                    ),
-                )
-                if sequence_contract is not None
-                else formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
-            )
+            tensors = formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
         return tensors
 
     validation_history = _train_until_convergence(
@@ -1016,7 +872,6 @@ def _train_and_predict_on_device(
                     seed=seed,
                     batch_size=sample_count,
                     max_steps=train_steps,
-                    objective_name=objective_name,
                     learning_rate=float(learning_rate),
                     optimizer_name=optimizer_name,
                     schedule_name=schedule_name,
@@ -1044,38 +899,18 @@ def _train_and_predict_on_device(
     )
     evaluation_started = time.perf_counter()
     with phase_timings.span("evaluation_tensorization", samples=len(evaluation_batch.samples)):
-        eval_fields, _eval_labels = (
-            (
-                _batch_tensor(
-                    torch=torch,
-                    batch=evaluation_batch,
-                    device=runtime.device,
-                ),
-                None,
-            )
-            if sequence_contract is not None
-            else _batch_tensors(
-                torch=torch,
-                batch=evaluation_batch,
-                outcome_ids=outcome_ids,
-                device=runtime.device,
-            )
+        eval_fields, _eval_labels = _batch_tensors(
+            torch=torch,
+            batch=evaluation_batch,
+            outcome_ids=outcome_ids,
+            device=runtime.device,
         )
     module.eval()
     with (
         phase_timings.span("evaluation_forward", samples=len(evaluation_batch.samples)),
         torch.no_grad(),
     ):
-        predictions = (
-            _sequence_finite_scale_probabilities(
-                torch=torch,
-                outputs=module(eval_fields),
-                contract=sequence_contract,
-                scale=scale,
-            )
-            if sequence_contract is not None
-            else torch.softmax(module(eval_fields), dim=1).tolist()
-        )
+        predictions = torch.softmax(module(eval_fields), dim=1).tolist()
     evaluation_counter.add(
         seconds=time.perf_counter() - evaluation_started,
         samples=len(evaluation_batch.samples),
@@ -1084,7 +919,6 @@ def _train_and_predict_on_device(
         seed=seed,
         batch_size=sample_count,
         max_steps=train_steps,
-        objective_name=objective_name,
         learning_rate=float(learning_rate),
         optimizer_name=optimizer_name,
         schedule_name=schedule_name,
@@ -1245,128 +1079,6 @@ def _validation_loss(
     return loss
 
 
-def _sequence_cross_entropy_loss(*, torch: Any) -> Any:
-    def loss(outputs: Any, labels: Any) -> Any:
-        length_labels = labels[:, 0]
-        token_labels = labels[:, 1:]
-        max_sequence_length = token_labels.shape[1]
-        atom_count = (outputs.shape[1] // max_sequence_length) - 1
-        length_logits = outputs[:, :max_sequence_length]
-        token_logits = outputs[:, max_sequence_length:].reshape(
-            outputs.shape[0],
-            max_sequence_length,
-            atom_count,
-        )
-        length_loss = torch.nn.functional.cross_entropy(length_logits, length_labels)
-        token_losses = [
-            torch.nn.functional.cross_entropy(
-                token_logits[:, position, :],
-                token_labels[:, position],
-            )
-            for position in range(max_sequence_length)
-            if bool((token_labels[:, position] >= 0).any().item())
-        ]
-        if not token_losses:
-            return length_loss
-        return length_loss + torch.stack(token_losses).sum()
-
-    return loss
-
-
-def _sequence_label_tensor(
-    *,
-    torch: Any,
-    batch: Any,
-    contract: _SequenceOutputContract,
-    device: Any,
-) -> Any:
-    rows: list[list[int]] = []
-    for sample in batch.samples:
-        sequence = tuple(int(token) for token in sample.component_sequence)
-        if len(sequence) > contract.max_sequence_length:
-            raise BenchmarkRunnerError(
-                f"sample sequence length {len(sequence)} exceeds architecture maximum "
-                f"{contract.max_sequence_length}"
-            )
-        for token in sequence:
-            if token < 0 or token >= contract.atom_count:
-                raise BenchmarkRunnerError("sample token is outside benchmark atom vocabulary")
-        row = [len(sequence) - 1, *sequence]
-        row.extend([-100] * (contract.max_sequence_length - len(sequence)))
-        rows.append(row)
-    return torch.tensor(rows, dtype=torch.long, device=device)
-
-
-def _sequence_finite_scale_probabilities(
-    *,
-    torch: Any,
-    outputs: Any,
-    contract: _SequenceOutputContract,
-    scale: int,
-) -> list[list[float]]:
-    if scale > contract.max_sequence_length:
-        raise BenchmarkRunnerError(
-            f"architecture sequence output accepts C <= {contract.max_sequence_length}, "
-            f"not C {scale}"
-        )
-    length_logits, token_logits = _sequence_distribution_logits(
-        outputs=outputs,
-        contract=contract,
-    )
-    length_probabilities = torch.softmax(length_logits, dim=1)
-    token_probabilities = torch.softmax(token_logits, dim=2)
-    outcome_count = contract.atom_count**scale
-    rows: list[list[float]] = []
-    for sample_index in range(outputs.shape[0]):
-        row: list[float] = []
-        for index in range(outcome_count):
-            sequence = _sequence_for_index(
-                index=index,
-                length=scale,
-                atom_count=contract.atom_count,
-            )
-            value = length_probabilities[sample_index, scale - 1]
-            for position, token in enumerate(sequence):
-                value = value * token_probabilities[sample_index, position, token]
-            row.append(float(value.item()))
-        rows.append(row)
-    return rows
-
-
-def _sequence_distribution_logits(
-    *,
-    outputs: Any,
-    contract: _SequenceOutputContract,
-) -> tuple[Any, Any]:
-    length_logits = outputs[:, : contract.length_logit_count]
-    token_logits = outputs[:, contract.length_logit_count :].reshape(
-        outputs.shape[0],
-        contract.max_sequence_length,
-        contract.atom_count,
-    )
-    return length_logits, token_logits
-
-
-def _sequence_for_index(*, index: int, length: int, atom_count: int) -> tuple[int, ...]:
-    tokens = [0] * length
-    cursor = index
-    for position in range(length - 1, -1, -1):
-        tokens[position] = cursor % atom_count
-        cursor //= atom_count
-    return tuple(tokens)
-
-
-def _sample_training_sequence_length(*, seed: int, minimum: int, maximum: int) -> int:
-    if maximum < minimum:
-        raise BenchmarkRunnerError(
-            f"architecture sequence output accepts C <= {maximum}, below required C {minimum}"
-        )
-    return random.Random(f"{seed}:training-sequence-length:{minimum}:{maximum}").randint(
-        minimum,
-        maximum,
-    )
-
-
 def has_windowed_validation_plateau(
     validation_history: Sequence[TrainingHistoryPoint],
     *,
@@ -1385,7 +1097,6 @@ def _training_run_record(
     seed: int,
     batch_size: int,
     max_steps: int | None,
-    objective_name: str,
     learning_rate: float,
     optimizer_name: str,
     schedule_name: str,
@@ -1428,7 +1139,7 @@ def _training_run_record(
         best_validation_check=best.best_validation_check,
         protocol=TrainingProtocol(
             kind="fixed-step-local-batch",
-            objective=objective_name,
+            objective="cross-entropy",
             optimizer=cast(Any, optimizer_name),
             learning_rate=learning_rate,
             schedule=cast(Any, schedule_name),
@@ -1453,7 +1164,6 @@ def _running_training_run_record(
     seed: int,
     batch_size: int,
     max_steps: int | None,
-    objective_name: str,
     learning_rate: float,
     optimizer_name: str,
     schedule_name: str,
@@ -1475,7 +1185,7 @@ def _running_training_run_record(
         best_validation_check=best.best_validation_check,
         protocol=TrainingProtocol(
             kind="fixed-step-local-batch",
-            objective=objective_name,
+            objective="cross-entropy",
             optimizer=cast(Any, optimizer_name),
             learning_rate=learning_rate,
             schedule=cast(Any, schedule_name),

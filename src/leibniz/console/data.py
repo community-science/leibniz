@@ -201,7 +201,7 @@ class ConsoleDataBuilder:
                 "id": record["id"],
                 "construction_factors": record["construction_factors"],
                 "sample_factors": record["sample_factors"],
-                "complexity_projections": record["complexity_projections"],
+                "complexity_projections": record.get("complexity_projections", ()),
                 "resolution_requirements": record.get("resolution_requirements", ()),
             }
         if kind == "materialization-declaration":
@@ -313,22 +313,31 @@ class ConsoleDataBuilder:
                 continue
             generator = load_observation_generator(benchmark_root)
             manifest = generator.benchmark_manifest
-            if manifest.outcome_sequence is None:
-                continue
-            if manifest.scale_parameter is None:
-                raise ConsoleDataValidationError(
-                    f"{entry.source_path}: benchmark task requires scale_parameter"
+            if manifest.outcome_sequence is not None:
+                atom_count = manifest.outcome_sequence.atom_count
+                outcome_atom_name = manifest.outcome_sequence.atom_name
+                scale_axis = (
+                    manifest.scale_parameter.symbol
+                    if manifest.scale_parameter is not None
+                    else generator.formation.sequence_layout.sequence_axis
                 )
-            atom_count = manifest.outcome_sequence.atom_count
+            elif manifest.outcome_space is not None:
+                atom_count = len(manifest.outcome_space.outcomes)
+                outcome_atom_name = _outcome_atom_name(
+                    tuple(outcome.id for outcome in manifest.outcome_space.outcomes)
+                )
+                scale_axis = generator.formation.sequence_layout.sequence_axis
+            else:
+                continue
             tasks.append(
                 {
                     "kind": "generated-observations",
                     "benchmark_id": str(manifest.id),
                     "label": _title_from_protocol_name(str(manifest.name)),
                     "source_path": entry.source_path.as_posix(),
-                    "scale_axis": manifest.scale_parameter.symbol,
+                    "scale_axis": scale_axis,
                     "complexity_axis": manifest.complexity_coordinate,
-                    "outcome_atom_name": manifest.outcome_sequence.atom_name,
+                    "outcome_atom_name": outcome_atom_name,
                     "outcome_atom_count": atom_count,
                     "batches": [
                         self._balanced_observation_batch(
@@ -351,8 +360,8 @@ class ConsoleDataBuilder:
         if cached is not None:
             return cached
         samples: list[Mapping[str, object]] = []
-        samples_per_scale = 5
-        scales = tuple(range(1, 9))
+        samples_per_scale = 40
+        scales = (1,)
         component_sequences = _balanced_component_sequences(
             scales=scales,
             samples_per_scale=samples_per_scale,
@@ -483,6 +492,17 @@ def _sample_display_key(sample: Mapping[str, object], sample_count: int) -> int:
     if not isinstance(index, int):
         raise ConsoleDataValidationError("generated sample index must be an integer")
     return (index * 17) % (sample_count + 1)
+
+
+def _outcome_atom_name(outcome_ids: tuple[str, ...]) -> str:
+    prefixes = {
+        outcome_id.rsplit("-", 1)[0]
+        for outcome_id in outcome_ids
+        if "-" in outcome_id
+    }
+    if len(prefixes) == 1:
+        return prefixes.pop()
+    return "outcome"
 
 
 def _square_content_crop(field: FieldObservation, *, padding: int) -> Mapping[str, object]:

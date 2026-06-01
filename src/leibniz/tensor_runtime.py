@@ -172,11 +172,6 @@ class FormationTensorCache:
         )
         return fields, labels
 
-    def field_tensors(self, *, batch: GeneratedFormationBatch) -> Any:
-        """Return field tensors for a generated formation batch."""
-
-        return self._varied_batch_tensor(batch=batch)
-
     def _varied_batch_tensor(self, *, batch: GeneratedFormationBatch) -> Any:
         sample_count = len(batch.samples)
         if sample_count < 1:
