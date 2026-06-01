@@ -508,6 +508,7 @@ class ObservationFormationDeclaration:
     variation_transform: VariationTransformDeclaration = field(
         default_factory=VariationTransformDeclaration.identity
     )
+    _digest: ContentDigest = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         try:
@@ -544,6 +545,7 @@ class ObservationFormationDeclaration:
                     raise ObservationFormationValidationError(
                         f"mark channel {mark.channel} is outside channel_count {self.channel_count}"
                     )
+        object.__setattr__(self, "_digest", ContentDigest.from_value(self.to_record()))
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ObservationFormationDeclaration:
@@ -1136,7 +1138,7 @@ class ObservationFormationDeclaration:
 
     @property
     def digest(self) -> ContentDigest:
-        return ContentDigest.from_value(self.to_record())
+        return self._digest
 
     def to_record(self) -> dict[str, object]:
         return {

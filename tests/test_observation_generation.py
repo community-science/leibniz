@@ -136,6 +136,7 @@ def test_digits_observation_generator_records_optional_timing() -> None:
     assert variation_counters["candidate_count"] >= variation_counters["accepted_count"]
     assert variation_counters["accepted_count"] == 2.0
     assert variation_counters["candidate_count"] == variation_counters["accepted_count"]
+    assert "canvas_discriminability_check_count" not in variation_counters
     assert "fast_reject_count" not in variation_counters
     assert observation["sample_count"] == 2
     assert cast(float, observation["seconds"]) > 0

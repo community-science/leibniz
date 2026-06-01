@@ -351,7 +351,6 @@ class ObservationGenerator:
             protocol_id=self.materialization.id,
             record_digest=self.materialization.digest,
         )
-        sequence_length = component_count
         variation_transform_record = self.formation.variation_transform.to_record()
         variation_transform_digest = str(ContentDigest.from_value(variation_transform_record))
         component_generator = random.Random(f"{seed}:component-sequence")
@@ -379,11 +378,15 @@ class ObservationGenerator:
                     if sequences
                     else _sample_component_sequence(
                         generator=component_generator,
-                        sequence_length=sequence_length,
+                        sequence_length=1,
                         component_count=len(self.formation.components),
                     )
                 )
                 for index in range(sample_count)
+            )
+        if any(len(sequence) != 1 for sequence in sequence_samples):
+            raise ObservationGenerationError(
+                "fixed-outcome component observations require one component"
             )
         variation_samples: list[
             tuple[
@@ -393,14 +396,13 @@ class ObservationGenerator:
         ] = []
         variation_timing_phase = f"{timing_prefix}variation_coordinates"
         with _timing_span(timing, variation_timing_phase, samples=sample_count):
-            for sequence, plan in zip(sequence_samples, plans, strict=True):
+            for plan in plans:
                 variation_samples.append(
                     _variation_transform_values_and_coordinates(
                         formation=self.formation,
                         transform=self.formation.variation_transform,
                         transform_record=variation_transform_record,
                         generator=variation_generator,
-                        sequence_length=len(sequence),
                         width=plan.resolution_assignment.require_axis(self.formation.width_axis),
                         height=plan.resolution_assignment.require_axis(self.formation.height_axis),
                         minimum_pairwise_l1=(
@@ -753,7 +755,6 @@ def _variation_transform_values_and_coordinates(
     transform: VariationTransformDeclaration,
     transform_record: Mapping[str, object],
     generator: random.Random,
-    sequence_length: int,
     width: int,
     height: int,
     minimum_pairwise_l1: float,
@@ -765,32 +766,27 @@ def _variation_transform_values_and_coordinates(
     Mapping[str, object],
     tuple[Mapping[str, object], ...],
 ]:
-    if sequence_length < 1:
-        raise ObservationGenerationError("sequence_length must be positive")
     counters: dict[str, float] = {}
-    coordinates = tuple(
-        _accepted_variation_coordinate(
-            formation=formation,
-            transform=transform,
-            generator=generator,
-            sequence_length=sequence_length,
-            sequence_index=sequence_index,
-            width=width,
-            height=height,
-            minimum_pairwise_l1=minimum_pairwise_l1,
-            affine_acceptance_thresholds=affine_acceptance_thresholds,
-            rejection_cache=rejection_cache,
-            counters=counters,
-        )
-        for sequence_index in range(sequence_length)
+    coordinate = _accepted_variation_coordinate(
+        formation=formation,
+        transform=transform,
+        generator=generator,
+        sequence_index=0,
+        width=width,
+        height=height,
+        minimum_pairwise_l1=minimum_pairwise_l1,
+        affine_acceptance_thresholds=affine_acceptance_thresholds,
+        rejection_cache=rejection_cache,
+        counters=counters,
     )
+    coordinates = (coordinate,)
     if timing is not None and counters:
         timing.add_counters(timing_phase, counters)
     return (
         {
             "kind": "field-variation-transform-samples",
             "bounds": transform_record,
-            "coordinates": [dict(coordinate) for coordinate in coordinates],
+            "coordinates": [dict(item) for item in coordinates],
         },
         coordinates,
     )
@@ -801,7 +797,6 @@ def _accepted_variation_coordinate(
     formation: ObservationFormationDeclaration,
     transform: VariationTransformDeclaration,
     generator: random.Random,
-    sequence_length: int,
     sequence_index: int,
     width: int,
     height: int,
@@ -828,7 +823,6 @@ def _accepted_variation_coordinate(
                         formation=formation,
                         transform=transform,
                         generator=generator,
-                        sequence_length=sequence_length,
                         sequence_index=sequence_index,
                         width=width,
                         height=height,
@@ -878,18 +872,12 @@ def _accepted_variation_coordinate(
                         _increment_counter(counters, "rejection_cache_saturated_count")
                 continue
             try:
-                analysis_width, analysis_height = _variation_analysis_extent(
-                    formation=formation,
-                    sequence_length=sequence_length,
-                    width=width,
-                    height=height,
-                )
                 analysis_coordinate = dict(coordinate)
                 analysis_coordinate["sequence_index"] = 0
                 _increment_counter(counters, "analysis_discriminability_check_count")
                 if not formation.component_discriminability_passes(
-                    width=analysis_width,
-                    height=analysis_height,
+                    width=width,
+                    height=height,
                     sequence_length=1,
                     sequence_index=0,
                     variation_coordinates=(analysis_coordinate,),
@@ -897,22 +885,11 @@ def _accepted_variation_coordinate(
                 ):
                     _increment_counter(counters, "analysis_reject_count")
                     continue
-                _increment_counter(counters, "canvas_discriminability_check_count")
-                accepted = formation.component_discriminability_passes(
-                    width=width,
-                    height=height,
-                    sequence_length=sequence_length,
-                    sequence_index=sequence_index,
-                    variation_coordinates=(coordinate,),
-                    minimum_pairwise_l1=minimum_pairwise_l1,
-                )
             except ObservationFormationValidationError:
                 _increment_counter(counters, "validation_error_count")
                 continue
-            if accepted:
-                _increment_counter(counters, "accepted_count")
-                return coordinate
-            _increment_counter(counters, "canvas_reject_count")
+            _increment_counter(counters, "accepted_count")
+            return coordinate
     identity_coordinate = _identity_variation_coordinate_record(
         transform=transform,
         sequence_index=sequence_index,
@@ -922,8 +899,8 @@ def _accepted_variation_coordinate(
         if formation.component_discriminability_passes(
             width=width,
             height=height,
-            sequence_length=sequence_length,
-            sequence_index=sequence_index,
+            sequence_length=1,
+            sequence_index=0,
             variation_coordinates=(identity_coordinate,),
             minimum_pairwise_l1=minimum_pairwise_l1,
         ):
@@ -942,7 +919,6 @@ def _readable_variation_coordinate_record(
     formation: ObservationFormationDeclaration,
     transform: VariationTransformDeclaration,
     generator: random.Random,
-    sequence_length: int,
     sequence_index: int,
     width: int,
     height: int,
@@ -958,7 +934,7 @@ def _readable_variation_coordinate_record(
         )
     minimum_scale = _minimum_resolvable_isotropic_scale(
         formation=formation,
-        sequence_length=sequence_length,
+        sequence_length=1,
         sequence_index=sequence_index,
         width=width,
         height=height,
@@ -966,7 +942,7 @@ def _readable_variation_coordinate_record(
     )
     maximum_scale = _maximum_canvas_fit_isotropic_scale(
         formation=formation,
-        sequence_length=sequence_length,
+        sequence_length=1,
         sequence_index=sequence_index,
         width=width,
         height=height,
@@ -1275,24 +1251,6 @@ def _projected_unit_interval(
         )
         possible_ranges.append(max(points) - min(points))
     return (min(possible_ranges), max(possible_ranges))
-
-
-def _variation_analysis_extent(
-    *,
-    formation: ObservationFormationDeclaration,
-    sequence_length: int,
-    width: int,
-    height: int,
-) -> tuple[int, int]:
-    if formation.variation_transform.spatial_affine.coordinate_system != (
-        "normalized-sequence-element"
-    ):
-        return (width, height)
-    if formation.sequence_layout.placement_axis == "x":
-        return (max(1, width // sequence_length), height)
-    return (width, max(1, height // sequence_length))
-
-
 def _identity_variation_coordinate_record(
     *,
     transform: VariationTransformDeclaration,
