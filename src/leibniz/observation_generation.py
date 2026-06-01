@@ -35,7 +35,6 @@ from leibniz.observation_formation import (
     FormedObservation,
     ObservationFormationDeclaration,
     ObservationFormationDeclarationDocument,
-    ObservationFormationValidationError,
     VariationTransformDeclaration,
 )
 from leibniz.timing import TimingCollector
@@ -405,9 +404,6 @@ class ObservationGenerator:
                         generator=variation_generator,
                         width=plan.resolution_assignment.require_axis(self.formation.width_axis),
                         height=plan.resolution_assignment.require_axis(self.formation.height_axis),
-                        minimum_pairwise_l1=(
-                            self.benchmark_manifest.resolution_discriminability_margin()
-                        ),
                         affine_acceptance_thresholds=(
                             self.benchmark_manifest.affine_acceptance_thresholds()
                         ),
@@ -757,7 +753,6 @@ def _variation_transform_values_and_coordinates(
     generator: random.Random,
     width: int,
     height: int,
-    minimum_pairwise_l1: float,
     affine_acceptance_thresholds: Mapping[str, float],
     rejection_cache: _BoundedRejectionCache | None = None,
     timing: TimingCollector | None = None,
@@ -774,7 +769,6 @@ def _variation_transform_values_and_coordinates(
         sequence_index=0,
         width=width,
         height=height,
-        minimum_pairwise_l1=minimum_pairwise_l1,
         affine_acceptance_thresholds=affine_acceptance_thresholds,
         rejection_cache=rejection_cache,
         counters=counters,
@@ -800,7 +794,6 @@ def _accepted_variation_coordinate(
     sequence_index: int,
     width: int,
     height: int,
-    minimum_pairwise_l1: float,
     affine_acceptance_thresholds: Mapping[str, float],
     rejection_cache: _BoundedRejectionCache | None,
     counters: dict[str, float],
@@ -859,42 +852,14 @@ def _accepted_variation_coordinate(
         ):
             _increment_counter(counters, "canvas_fit_reject_count")
             continue
-        try:
-            _increment_counter(counters, "discriminability_check_count")
-            if not formation.component_discriminability_passes(
-                width=width,
-                height=height,
-                sequence_length=1,
-                sequence_index=0,
-                variation_coordinates=(coordinate,),
-                minimum_pairwise_l1=minimum_pairwise_l1,
-            ):
-                _increment_counter(counters, "discriminability_reject_count")
-                continue
-        except ObservationFormationValidationError:
-            _increment_counter(counters, "validation_error_count")
-            continue
         _increment_counter(counters, "accepted_count")
         return coordinate
     identity_coordinate = _identity_variation_coordinate_record(
         transform=transform,
         sequence_index=sequence_index,
     )
-    try:
-        _increment_counter(counters, "identity_fallback_check_count")
-        if formation.component_discriminability_passes(
-            width=width,
-            height=height,
-            sequence_length=1,
-            sequence_index=0,
-            variation_coordinates=(identity_coordinate,),
-            minimum_pairwise_l1=minimum_pairwise_l1,
-        ):
-            _increment_counter(counters, "identity_fallback_count")
-            return identity_coordinate
-    except ObservationFormationValidationError:
-        _increment_counter(counters, "validation_error_count")
-        pass
+    _increment_counter(counters, "identity_fallback_count")
+    return identity_coordinate
     raise ObservationGenerationError(
         "could not sample an identity-preserving affine coordinate"
     )

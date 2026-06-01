@@ -11,8 +11,8 @@
   },
   "resolution_assignment": {
     "values": [
-      {"axis": "H", "value": 16},
-      {"axis": "W", "value": 48}
+      {"axis": "H", "value": 24},
+      {"axis": "W", "value": 72}
     ]
   },
   "seed": 101

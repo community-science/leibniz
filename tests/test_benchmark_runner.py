@@ -215,13 +215,13 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         == "approximately-uniform-within-complexity-class"
     )
     assert sampled_competence["complexity_axis"] is None
-    assert math.isclose(cast(float, sampled_competence["complexity"]), 25.76024888988623)
+    assert math.isclose(cast(float, sampled_competence["complexity"]), 19.965784284662085)
     assert sampled_competence["sample_count"] == 12
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
     assert len(points) == 4
     assert [point["sample_count"] for point in points] == [3, 3, 3, 3]
-    assert math.isclose(cast(float, points[0]["complexity"]), 25.76024888988623)
+    assert math.isclose(cast(float, points[0]["complexity"]), 19.965784284662085)
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
     )
@@ -448,7 +448,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     }
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    assert math.isclose(observed_complexities[0], 25.76024888988623)
+    assert math.isclose(observed_complexities[0], 20.273212809854332)
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
     assert points[0]["sample_count"] == 2

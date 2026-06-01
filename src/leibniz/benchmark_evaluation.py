@@ -127,17 +127,26 @@ def sampled_competence_curriculum_record(
 
     if not points:
         raise ValueError("sampled competence curriculum requires at least one point")
-    first = points[0]
+    sorted_points = tuple(
+        sorted(
+            points,
+            key=lambda point: _finite_nonnegative_number(
+                point.get("complexity"),
+                field="sampled_competence.complexity",
+            ),
+        )
+    )
+    first = sorted_points[0]
     sample_counts = tuple(
         _positive_int(point.get("sample_count"), field="sampled_competence.sample_count")
-        for point in points
+        for point in sorted_points
     )
     accepted_masses = tuple(
         _finite_score(
             point.get("mean_accepted_mass"),
             field="sampled_competence.mean_accepted_mass",
         )
-        for point in points
+        for point in sorted_points
     )
     total_samples = sum(sample_counts)
     weighted_score = (
@@ -157,7 +166,7 @@ def sampled_competence_curriculum_record(
         "complexity": first.get("complexity"),
         "sample_count": total_samples,
         "mean_accepted_mass": weighted_score,
-        "points": [dict(point) for point in points],
+        "points": [dict(point) for point in sorted_points],
     }
 
 
@@ -183,6 +192,15 @@ def _finite_score(value: object, *, field: str) -> float:
     if score < 0.0 or score > 1.0:
         raise ValueError(f"{field} must be between 0 and 1")
     return score
+
+
+def _finite_nonnegative_number(value: object, *, field: str) -> float:
+    if not isinstance(value, int | float) or not math.isfinite(float(value)):
+        raise ValueError(f"{field} must be finite")
+    number = float(value)
+    if number < 0.0:
+        raise ValueError(f"{field} must be nonnegative")
+    return number
 
 
 def _sample_identifier(

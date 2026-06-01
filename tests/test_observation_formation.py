@@ -53,8 +53,8 @@ def test_digits_observation_formation_declaration_loads_source_artifact() -> Non
         == "normalized-sequence-element"
     )
     assert declaration.variation_transform.spatial_affine.matrix == (
-        ((0.0, 1.2), (-0.08, 0.08), (-0.5, 0.5)),
-        ((-0.08, 0.08), (0.0, 1.2), (-0.5, 0.5)),
+        ((0.76, 1.14), (-0.07, 0.07), (-0.15, 0.15)),
+        ((-0.07, 0.07), (0.76, 1.14), (-0.15, 0.15)),
         ((0.0, 0.0), (0.0, 0.0), (1.0, 1.0)),
     )
     assert [component.id for component in declaration.components] == [
@@ -132,7 +132,7 @@ def test_digits_observation_formation_is_deterministic_for_materialization_plan(
         sample_index=0,
     )
     assert left == right
-    assert left.field.shape == (1, 16, 48)
+    assert left.field.shape == (1, 24, 72)
     assert max(left.field.values) == 1.0
     assert sum(1 for value in left.field.values if value > 0) > 0
     assert left.to_record()["component_sequence"] == list(sequence)

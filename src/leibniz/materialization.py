@@ -592,7 +592,26 @@ def _layout_resolution_floor(layout: Mapping[str, object]) -> dict[str, int]:
         return {}
     if not isinstance(height_axis, str) or not height_axis:
         return {}
-    return {width_axis: 1, height_axis: 1}
+    floor = {width_axis: 1, height_axis: 1}
+    floor_record = layout.get("resolution_floor")
+    if floor_record is None:
+        return floor
+    if not isinstance(floor_record, Mapping):
+        raise MaterializationValidationError("layout resolution_floor must be a record")
+    for axis in (width_axis, height_axis):
+        value = floor_record.get(axis)
+        if value is None:
+            continue
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise MaterializationValidationError(
+                f"layout resolution_floor {axis} must be an integer"
+            )
+        if value < 1:
+            raise MaterializationValidationError(
+                f"layout resolution_floor {axis} must be positive"
+            )
+        floor[axis] = value
+    return floor
 
 
 def _first_duplicate(values: tuple[object, ...]) -> object | None:

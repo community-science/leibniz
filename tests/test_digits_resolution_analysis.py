@@ -49,7 +49,7 @@ def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> 
     )
     sample = batch.samples[0]
 
-    assert (sample.width, sample.height) == (103, 211)
+    assert (sample.width, sample.height) == (89, 144)
     for sequence_index, coordinate in enumerate(sample.variation_coordinates):
         report = generator.formation.component_discriminability_report(
             width=sample.width,
@@ -68,6 +68,31 @@ def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> 
             variation_coordinates=(coordinate,),
             minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
         )
+
+
+def test_digits_resolution_analysis_certifies_sampled_training_affines() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    batch = generator.sample_formation_batch(
+        component_count=1,
+        sample_count=64,
+        seed=123,
+        memory_limit_bytes=100_000_000,
+    )
+
+    assert (batch.samples[0].width, batch.samples[0].height) == (32, 42)
+    for sample in batch.samples:
+        for coordinate in sample.variation_coordinates:
+            assert generator.formation.component_discriminability_passes(
+                width=sample.width,
+                height=sample.height,
+                sequence_length=len(sample.component_sequence),
+                sequence_index=0,
+                variation_coordinates=(coordinate,),
+                minimum_pairwise_l1=(
+                    generator.benchmark_manifest.resolution_discriminability_margin()
+                ),
+            )
 
 
 def test_digits_resolution_analysis_detects_destroyed_discriminability() -> None:

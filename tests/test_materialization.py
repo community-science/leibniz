@@ -93,7 +93,7 @@ def test_digits_materialization_declaration_loads_source_artifact() -> None:
         protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
     )
     assert declaration.requirements == ()
-    assert declaration.minimum_resolution() == AxisAssignment(values={"W": 1, "H": 1})
+    assert declaration.minimum_resolution() == AxisAssignment(values={"W": 24, "H": 24})
     assert document.digest == ContentDigest.from_value(declaration.to_record())
 
 
@@ -117,7 +117,7 @@ def test_materialization_declaration_uses_strongest_requirement_per_resolution_a
     )
 
     assert declaration.minimum_resolution(AxisAssignment(values={"L": 3})) == AxisAssignment(
-        values={"W": 120, "H": 1}
+        values={"W": 120, "H": 24}
     )
 
 
@@ -138,7 +138,7 @@ def test_materialization_plan_resolves_from_declaration_deterministically() -> N
     )
 
     assert left == right
-    assert left.resolution_assignment == AxisAssignment(values={"W": 1, "H": 1})
+    assert left.resolution_assignment == AxisAssignment(values={"W": 24, "H": 24})
     left.validate_declaration(declaration)
 
 
@@ -183,8 +183,8 @@ def test_materialization_plan_documents_validate_digits_fixtures() -> None:
     l1.plan.validate_declaration(declaration)
     l3.plan.validate_declaration(declaration)
 
-    assert l1.plan.resolution_assignment.values == {"W": 16, "H": 16}
-    assert l3.plan.resolution_assignment.values == {"W": 48, "H": 16}
+    assert l1.plan.resolution_assignment.values == {"W": 24, "H": 24}
+    assert l3.plan.resolution_assignment.values == {"W": 72, "H": 24}
     assert l3.digest == ContentDigest.from_value(l3.plan.to_record())
 
 
@@ -208,7 +208,7 @@ def test_materialization_plan_rejects_under_resolved_request() -> None:
     )
 
     assert str(capture_materialization_error(lambda: plan.validate_declaration(declaration))) == (
-        "W=0 is below layout minimum 1"
+        "W=0 is below layout minimum 24"
     )
 
 
