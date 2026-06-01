@@ -24,7 +24,11 @@ from leibniz.console.protocol import (
 )
 from leibniz.documents import canonical_document_bytes, document_filename_suffix
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
-from leibniz.local_results import LocalResultImportError, load_console_result_view
+from leibniz.local_results import (
+    LocalResultImportError,
+    load_console_result_view,
+    materialize_benchmark_result_views,
+)
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_operators import model_operator_vocabulary
 from leibniz.observation_generation import (
@@ -430,7 +434,7 @@ class ConsoleDataBuilder:
             if root_path in seen_paths:
                 continue
             seen_paths.add(root_path)
-            for path in self._result_view_files(root_path):
+            for path in self._result_view_files(self._materialized_result_view_root(root_path)):
                 try:
                     record = dict(load_console_result_view(path.read_bytes()))
                 except LocalResultImportError as error:
@@ -448,11 +452,33 @@ class ConsoleDataBuilder:
         path = root.resolve() if root.is_absolute() else (self._repository_root / root).resolve()
         if path.is_relative_to(self._repository_root):
             relative = path.relative_to(self._repository_root)
-            if "results" in relative.parts and relative.parts[:2] != ("results", "views"):
-                raise ConsoleDataValidationError("result root inside results must be results/views")
+            if relative.parts[:1] == ("results",) and relative.parts not in {
+                ("results",),
+                ("results", "views"),
+            }:
+                raise ConsoleDataValidationError(
+                    "result root inside results must be results or results/views"
+                )
         if not path.is_dir():
             raise ConsoleDataValidationError(f"result root does not name a directory: {root}")
         return path
+
+    def _materialized_result_view_root(self, root: Path) -> Path:
+        if root.name == "views":
+            return root
+        try:
+            summary = materialize_benchmark_result_views(
+                repository_root=self._repository_root,
+                results_root=root,
+            )
+        except LocalResultImportError as error:
+            if str(error) == "no benchmark result records found":
+                view_root = root / "views"
+                return view_root if view_root.is_dir() else root
+            raise ConsoleDataValidationError(
+                f"{root}: could not materialize console result views: {error}"
+            ) from error
+        return summary.view_file.parent
 
     def _result_view_files(self, root: Path) -> tuple[Path, ...]:
         return tuple(sorted(path for path in root.rglob("*" + _document_suffix) if path.is_file()))

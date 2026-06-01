@@ -10,7 +10,7 @@ const consoleDataModuleId = 'virtual:leibniz-console-data';
 const resolvedConsoleDataModuleId = `\0${consoleDataModuleId}`;
 const consoleDataUpdateEvent = 'leibniz-console-data:update';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-const defaultResultRoot = 'results/views';
+const defaultResultRoot = 'results';
 const consoleDataCachePath = resolve(
   repositoryRoot,
   'src/leibniz/console/_web_src/src/generated/consoleDataPayload.json',
@@ -120,7 +120,7 @@ export function consoleResultWatchRoots(env = process.env, root = repositoryRoot
   const raw = env.LEIBNIZ_CONSOLE_RESULT_ROOTS ?? '';
   if (raw.trim() === '') {
     const runsRoot = resolve(root, 'results');
-    return existingDirectories([runsRoot]);
+    return [runsRoot];
   }
   return consoleResultRoots(env, root);
 }

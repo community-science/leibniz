@@ -369,16 +369,56 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
     assert results[0]["benchmark_id"] == "benchmarks.digits@0.1.0"
 
 
+def test_console_data_discovers_materialized_result_root_views(tmp_path: Path) -> None:
+    result_root = tmp_path / "results"
+    view_root = result_root / "views"
+    view_root.mkdir(parents=True)
+    (view_root / "benchmark_results.json").write_text(
+        """
+{
+  "format": "leibniz.console.benchmark-results",
+  "format_version": 1,
+  "benchmark_results": [
+    {
+      "benchmark_id": "benchmarks.digits@0.1.0",
+      "cost_axes": [{"key": "parameter_count", "label": "Parameters"}],
+      "leaderboard": [],
+      "frontiers": {
+        "parameter_count": [],
+        "inference_flops": [],
+        "parameter_bytes": []
+      },
+      "training_history": []
+    }
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+
+    data = ConsoleDataBuilder(_repository_root).discover(
+        (PurePosixPath("tests/fixtures"),),
+        result_roots=(result_root,),
+    )
+    record = data.to_record()
+    result_views = cast(list[dict[str, object]], record["result_views"])
+
+    assert len(result_views) == 1
+    assert result_views[0]["source_path"] == (
+        view_root / "benchmark_results.json"
+    ).as_posix()
+
+
 def test_console_data_rejects_local_state_roots() -> None:
     with pytest.raises(ConsoleDataValidationError, match="local state"):
         ConsoleDataBuilder(_repository_root).discover((PurePosixPath("results"),))
 
 
-def test_console_data_rejects_raw_result_roots() -> None:
-    with pytest.raises(ConsoleDataValidationError, match="results/views"):
+def test_console_data_rejects_nested_local_result_roots() -> None:
+    with pytest.raises(ConsoleDataValidationError, match="results or results/views"):
         ConsoleDataBuilder(_repository_root).discover(
             (PurePosixPath("tests/fixtures"),),
-            result_roots=(Path("results"),),
+            result_roots=(Path("results/training-progress"),),
         )
 
 
