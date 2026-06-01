@@ -334,12 +334,65 @@ def test_plateau_scheduler_requires_progressive_learning_rate_reductions() -> No
     assert schedule.learning_rates() == (0.0010000000000000002,)
 
 
+def test_training_stage_carries_prior_global_best(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prior_best = TrainingHistoryPoint(
+        step=100,
+        validation_check=8,
+        validation_loss=1.0,
+        best_validation_loss=1.0,
+        best_validation_step=100,
+        best_validation_check=8,
+        stale_checks=0,
+        learning_rates=(0.01,),
+    )
+
+    def constant_validation_loss(**_kwargs: object) -> float:
+        return 2.0
+
+    def fake_batch(_index: int) -> tuple[object, object]:
+        return object(), object()
+
+    monkeypatch.setattr(benchmark_runner, "_validation_loss", constant_validation_loss)
+    stage_result = cast(Any, benchmark_runner)._train_until_convergence(
+        torch=object(),
+        module=object(),
+        optimizer=type("FakeOptimizer", (), {"param_groups": [{"lr": 0.01}]})(),
+        scheduler=None,
+        loss_function=object(),
+        train_batch=fake_batch,
+        validation_batch=fake_batch,
+        max_steps=100,
+        validation_interval=1,
+        patience=1,
+        min_delta=0.0,
+        min_steps=0,
+        batch_size=1,
+        training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        phase_timings=benchmark_runner.TimingCollector(),
+        start_step=100,
+        start_check=9,
+        initial_best=prior_best,
+    )
+
+    point = stage_result.validation_history[0]
+    assert point.validation_loss == 2.0
+    assert point.best_validation_loss == prior_best.best_validation_loss
+    assert point.best_validation_step == prior_best.best_validation_step
+    assert point.best_validation_check == prior_best.best_validation_check
+
+
 def test_training_curriculum_is_not_step_indexed() -> None:
     source = Path(benchmark_runner.__file__).read_text(encoding="utf-8")
 
     assert "curriculum_step" not in source
     assert "_generation_curriculum_growth_interval" not in source
     assert "step // _generation_curriculum" not in source
+    assert "for memory_limit in _curriculum_memory_limits(memory_limit_bytes):" not in source
+    assert "on_plateau=advance_memory_limit" in source
+    assert "current_memory_limit()" in source
 
 
 def test_loss_threshold_is_not_a_training_option() -> None:

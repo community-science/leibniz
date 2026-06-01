@@ -162,6 +162,9 @@ class _LearningRateSchedule:
             return True
         return self.lr_reduction_count >= _minimum_plateau_lr_reductions
 
+    def reset_plateau_response_count(self) -> None:
+        self.lr_reduction_count = 0
+
 
 class BenchmarkRunnerError(ValueError):
     """Raised when a local benchmark run cannot be planned or executed."""
@@ -708,77 +711,82 @@ def _train_and_predict_on_device(
             tensors = formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
         return tensors
 
-    validation_history: list[TrainingHistoryPoint] = []
-    final_training_stop_reason = "training-stopped"
-    for memory_limit in _curriculum_memory_limits(memory_limit_bytes):
-        start_step = validation_history[-1].step if validation_history else 0
-        start_check = validation_history[-1].validation_check + 1 if validation_history else 0
-        stage_result = _train_until_convergence(
-            torch=torch,
-            module=module,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            loss_function=loss_function,
-            train_batch=lambda step, limit=memory_limit: batch_for_seed(
-                seed + step,
-                generation_phase="training_formation_generation",
-                tensor_phase="training_tensor_batch",
-                memory_limit=limit,
-            ),
-            validation_batch=lambda check, limit=memory_limit: batch_for_seed(
-                seed + 1_000_003 + check,
-                generation_phase="validation_formation_generation",
-                tensor_phase="validation_tensor_batch",
-                memory_limit=limit,
-            ),
-            max_steps=train_steps,
-            validation_interval=validation_interval,
-            patience=convergence_patience,
-            min_delta=convergence_min_delta,
-            min_steps=convergence_min_steps,
-            batch_size=sample_count,
-            start_step=start_step,
-            start_check=start_check,
-            training_counter=training_counter,
-            validation_counter=validation_counter,
-            phase_timings=phase_timings,
-            on_validation=lambda history: (
-                progress_callback(
-                    _running_training_run_record(
-                        seed=seed,
-                        batch_size=sample_count,
-                        max_steps=train_steps,
-                        learning_rate=float(learning_rate),
-                        optimizer_name=optimizer_name,
-                        schedule_name=schedule_name,
-                        validation_interval=validation_interval,
-                        convergence_patience=convergence_patience,
-                        convergence_min_delta=convergence_min_delta,
-                        convergence_min_steps=convergence_min_steps,
-                        tensor_device=runtime.device_kind,
-                        validation_history=(*validation_history, *history),
-                    ),
-                    _throughput_record(
-                        runtime_device=runtime.device_kind,
-                        training_counter=training_counter,
-                        validation_counter=validation_counter,
-                        evaluation_counter=evaluation_counter,
-                        roofline=runtime_roofline_record(runtime),
-                        work_estimates=work_estimates,
-                        phase_timings=phase_timings,
-                        fallback_errors=fallback_errors,
-                    ),
-                )
-                if progress_callback is not None
-                else None
-            ),
-        )
-        validation_history.extend(stage_result.validation_history)
-        final_training_stop_reason = stage_result.stop_reason
-        if not training_stage_converged(stage_result.stop_reason):
-            break
-        if memory_limit >= memory_limit_bytes:
-            break
+    memory_limits = _curriculum_memory_limits(memory_limit_bytes)
+    memory_limit_index = 0
+
+    def current_memory_limit() -> int:
+        return memory_limits[memory_limit_index]
+
+    def advance_memory_limit() -> bool:
+        nonlocal memory_limit_index
+        if memory_limit_index >= len(memory_limits) - 1:
+            return False
+        memory_limit_index += 1
+        if scheduler is not None:
+            scheduler.reset_plateau_response_count()
+        return True
+
+    training_result = _train_until_convergence(
+        torch=torch,
+        module=module,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        loss_function=loss_function,
+        train_batch=lambda step: batch_for_seed(
+            seed + step,
+            generation_phase="training_formation_generation",
+            tensor_phase="training_tensor_batch",
+            memory_limit=current_memory_limit(),
+        ),
+        validation_batch=lambda check: batch_for_seed(
+            seed + 1_000_003 + check,
+            generation_phase="validation_formation_generation",
+            tensor_phase="validation_tensor_batch",
+            memory_limit=current_memory_limit(),
+        ),
+        max_steps=train_steps,
+        validation_interval=validation_interval,
+        patience=convergence_patience,
+        min_delta=convergence_min_delta,
+        min_steps=convergence_min_steps,
+        batch_size=sample_count,
+        training_counter=training_counter,
+        validation_counter=validation_counter,
+        phase_timings=phase_timings,
+        on_plateau=advance_memory_limit,
+        on_validation=lambda history: (
+            progress_callback(
+                _running_training_run_record(
+                    seed=seed,
+                    batch_size=sample_count,
+                    max_steps=train_steps,
+                    learning_rate=float(learning_rate),
+                    optimizer_name=optimizer_name,
+                    schedule_name=schedule_name,
+                    validation_interval=validation_interval,
+                    convergence_patience=convergence_patience,
+                    convergence_min_delta=convergence_min_delta,
+                    convergence_min_steps=convergence_min_steps,
+                    tensor_device=runtime.device_kind,
+                    validation_history=history,
+                ),
+                _throughput_record(
+                    runtime_device=runtime.device_kind,
+                    training_counter=training_counter,
+                    validation_counter=validation_counter,
+                    evaluation_counter=evaluation_counter,
+                    roofline=runtime_roofline_record(runtime),
+                    work_estimates=work_estimates,
+                    phase_timings=phase_timings,
+                    fallback_errors=fallback_errors,
+                ),
+            )
+            if progress_callback is not None
+            else None
+        ),
+    )
+    validation_history = training_result.validation_history
+    final_training_stop_reason = training_result.stop_reason
     if train_steps is None and not training_stage_converged(final_training_stop_reason):
         raise BenchmarkRunnerError("uncapped training curriculum ended before convergence")
     module.eval()
@@ -897,14 +905,20 @@ def _train_until_convergence(
     phase_timings: TimingCollector,
     start_step: int = 0,
     start_check: int = 0,
+    initial_best: TrainingHistoryPoint | None = None,
+    on_plateau: Callable[[], bool] | None = None,
     on_validation: Callable[[tuple[TrainingHistoryPoint, ...]], None] | None = None,
 ) -> _TrainingStageResult:
     validation_history: list[TrainingHistoryPoint] = []
-    best_loss = float("inf")
-    best_step = start_step
-    best_check = start_check
+    best_loss = (
+        float("inf") if initial_best is None else initial_best.best_validation_loss
+    )
+    best_step = start_step if initial_best is None else initial_best.best_validation_step
+    best_check = start_check if initial_best is None else initial_best.best_validation_check
     stale_checks = 0
     stop_reason = "training-stopped"
+    plateau_window_start_index = 0
+    plateau_window_start_step = start_step
 
     def append_validation(*, step: int, check: int) -> None:
         nonlocal best_loss, best_step, best_check, stale_checks
@@ -983,9 +997,9 @@ def _train_until_convergence(
         validation_check += 1
         if (
             patience > 0
-            and step - start_step >= min_steps
+            and step - plateau_window_start_step >= min_steps
             and has_windowed_validation_plateau(
-                validation_history,
+                validation_history[plateau_window_start_index:],
                 window_checks=patience,
                 min_delta=min_delta,
             )
@@ -994,6 +1008,10 @@ def _train_until_convergence(
                 or scheduler.has_exhausted_plateau_response()
             )
         ):
+            if on_plateau is not None and on_plateau():
+                plateau_window_start_index = len(validation_history) - 1
+                plateau_window_start_step = step
+                continue
             stop_reason = "validation-plateau"
             break
         if max_steps is not None and step >= max_steps:
