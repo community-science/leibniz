@@ -55,6 +55,27 @@ def test_finite_token_sequence_space_requires_exact_length() -> None:
         space.sequence_index((1,))
 
 
+def test_eos_terminated_token_sequence_space_accepts_variable_lengths() -> None:
+    space = FiniteTokenSequenceSpace(
+        vocabulary=FiniteTokenVocabulary(token_count=10, token_name="digit"),
+        sequence_boundary="eos-terminated",
+    )
+
+    assert space.require_sequence((1,)) == (1,)
+    assert space.require_sequence((1, 2, 3)) == (1, 2, 3)
+    assert FiniteTokenSequenceSpace.from_record(space.to_record()) == space
+    assert space.to_record() == {
+        "kind": "finite-token-sequence",
+        "vocabulary": {"token_count": 10, "token_name": "digit"},
+        "sequence_boundary": "eos-terminated",
+        "minimum_length": 1,
+    }
+    with pytest.raises(ValueError, match="do not have finite cardinality"):
+        _ = space.cardinality
+    with pytest.raises(ValueError, match="do not have finite outcome indices"):
+        space.sequence_index((1,))
+
+
 def test_real_vector_space_records_continuous_prediction_targets() -> None:
     space = RealVectorSpace(dimension=2, coordinate_name="position")
 

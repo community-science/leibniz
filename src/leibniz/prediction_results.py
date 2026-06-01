@@ -11,6 +11,7 @@ from leibniz.identifiers import ProtocolIdentifier
 from leibniz.outcomes import FiniteProbabilityMeasure, OutcomeSpace, ProbabilityMass
 from leibniz.prediction_spaces import (
     FiniteOutcomeSpace,
+    FiniteTokenSequenceSpace,
     PredictionSpaceValidationError,
 )
 from leibniz.records import FieldSpec, RecordSpec
@@ -20,6 +21,8 @@ __all__ = [
     "PredictionMass",
     "PredictionResultContract",
     "PredictionResultValidationError",
+    "TokenSequenceProbability",
+    "TokenSequencePrediction",
 ]
 
 _prediction_mass_record = RecordSpec(
@@ -43,6 +46,30 @@ _direct_finite_probability_prediction_record = RecordSpec(
         "probabilities": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="record", record=_prediction_mass_record),
+        ),
+    }
+)
+_token_sequence_probability_record = RecordSpec(
+    fields={
+        "tokens": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
+        "probability": FieldSpec(kind="number"),
+    }
+)
+_token_sequence_prediction_record = RecordSpec(
+    fields={
+        "id": FieldSpec(kind="identifier"),
+        "prediction_space": FieldSpec(kind="record"),
+        "prediction_kind": FieldSpec(
+            kind="literal",
+            literal="autoregressive-finite-token-sequence",
+        ),
+        "output_encoding": FieldSpec(
+            kind="literal",
+            literal="sequence-probability",
+        ),
+        "sequence_probabilities": FieldSpec(
+            kind="sequence",
+            item=FieldSpec(kind="record", record=_token_sequence_probability_record),
         ),
     }
 )
@@ -142,6 +169,146 @@ class PredictionMass:
         return {
             "outcome_index": self.outcome_index,
             "probability": self.probability,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TokenSequenceProbability:
+    """Probability assigned to one concrete token sequence."""
+
+    tokens: tuple[int, ...]
+    probability: float
+
+    def __post_init__(self) -> None:
+        if not self.tokens:
+            raise PredictionResultValidationError("tokens must be nonempty")
+        if not all(type(token) is int for token in self.tokens):
+            raise PredictionResultValidationError("tokens must be integers")
+        if not math.isfinite(self.probability):
+            raise PredictionResultValidationError("probability must be finite")
+        if self.probability < 0 or self.probability > 1:
+            raise PredictionResultValidationError("probability must be in [0, 1]")
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> TokenSequenceProbability:
+        try:
+            validated = _token_sequence_probability_record.validate(record)
+        except ValueError as error:
+            raise PredictionResultValidationError(str(error)) from error
+        return cls(
+            tokens=tuple(
+                _as_int(token, field="tokens")
+                for token in _as_tuple(validated["tokens"], field="tokens")
+            ),
+            probability=float(cast(float | int, validated["probability"])),
+        )
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "tokens": list(self.tokens),
+            "probability": self.probability,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TokenSequencePrediction:
+    """A sparse exact-sequence probability prediction.
+
+    The prediction space may be unbounded when sequences are EOS-terminated. A
+    concrete prediction record only needs to expose the sequence probabilities
+    being scored for evaluated observations.
+    """
+
+    id: ProtocolIdentifier
+    prediction_space: FiniteTokenSequenceSpace
+    sequence_probabilities: tuple[TokenSequenceProbability, ...]
+    prediction_kind: str = "autoregressive-finite-token-sequence"
+    output_encoding: str = "sequence-probability"
+
+    def __post_init__(self) -> None:
+        try:
+            self.id.require_unreleased()
+        except ValueError as error:
+            raise PredictionResultValidationError(str(error)) from error
+        if self.prediction_kind != "autoregressive-finite-token-sequence":
+            raise PredictionResultValidationError(
+                f"unsupported prediction_kind: {self.prediction_kind}"
+            )
+        if self.output_encoding != "sequence-probability":
+            raise PredictionResultValidationError(
+                f"unsupported output_encoding: {self.output_encoding}"
+            )
+        sequences = tuple(item.tokens for item in self.sequence_probabilities)
+        if len(set(sequences)) != len(sequences):
+            raise PredictionResultValidationError("token sequences must be unique")
+        object.__setattr__(
+            self,
+            "sequence_probabilities",
+            tuple(sorted(self.sequence_probabilities, key=lambda item: item.tokens)),
+        )
+        for item in self.sequence_probabilities:
+            try:
+                self.prediction_space.require_sequence(item.tokens)
+            except PredictionSpaceValidationError as error:
+                raise PredictionResultValidationError(str(error)) from error
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> TokenSequencePrediction:
+        try:
+            validated = _token_sequence_prediction_record.validate(record)
+            prediction_space = FiniteTokenSequenceSpace.from_record(
+                _as_mapping(validated["prediction_space"], field="prediction_space")
+            )
+        except (ValueError, PredictionSpaceValidationError) as error:
+            raise PredictionResultValidationError(str(error)) from error
+        return cls(
+            id=_as_identifier(validated["id"], field="id"),
+            prediction_space=prediction_space,
+            prediction_kind=str(validated["prediction_kind"]),
+            output_encoding=str(validated["output_encoding"]),
+            sequence_probabilities=tuple(
+                TokenSequenceProbability.from_record(
+                    _as_mapping(item, field="sequence_probabilities")
+                )
+                for item in _as_tuple(
+                    validated["sequence_probabilities"],
+                    field="sequence_probabilities",
+                )
+            ),
+        )
+
+    @property
+    def contract(self) -> PredictionResultContract:
+        return PredictionResultContract(
+            prediction_space=self.prediction_space,
+            prediction_kind=self.prediction_kind,
+            output_encoding=self.output_encoding,
+        )
+
+    def probability_of(self, tokens: Sequence[int]) -> float:
+        token_values = tuple(_as_int(token, field="tokens") for token in tokens)
+        try:
+            self.prediction_space.require_sequence(token_values)
+        except PredictionSpaceValidationError as error:
+            raise PredictionResultValidationError(str(error)) from error
+        for item in self.sequence_probabilities:
+            if item.tokens == token_values:
+                return item.probability
+        return 0.0
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "id": str(self.id),
+            "prediction_space": self.prediction_space.to_record(),
+            "prediction_kind": self.prediction_kind,
+            "output_encoding": self.output_encoding,
+            "sequence_probabilities": [
+                item.to_record()
+                for item in sorted(
+                    self.sequence_probabilities,
+                    key=lambda probability: probability.tokens,
+                )
+            ],
         }
 
 

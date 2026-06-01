@@ -9,8 +9,14 @@ from leibniz.prediction_results import (
     PredictionMass,
     PredictionResultContract,
     PredictionResultValidationError,
+    TokenSequencePrediction,
+    TokenSequenceProbability,
 )
-from leibniz.prediction_spaces import FiniteOutcomeSpace
+from leibniz.prediction_spaces import (
+    FiniteOutcomeSpace,
+    FiniteTokenSequenceSpace,
+    FiniteTokenVocabulary,
+)
 
 
 def test_direct_finite_probability_prediction_records_indexed_mass_sequence() -> None:
@@ -77,6 +83,30 @@ def test_prediction_result_contract_matches_interface_metadata() -> None:
             )
         )
     ) == "prediction_kind does not match model interface"
+
+
+def test_token_sequence_prediction_records_exact_sequence_probabilities() -> None:
+    prediction_space = FiniteTokenSequenceSpace(
+        vocabulary=FiniteTokenVocabulary(token_count=10, token_name="digit"),
+        sequence_boundary="eos-terminated",
+    )
+    prediction = TokenSequencePrediction(
+        id=ProtocolIdentifier.parse("benchmarks.digits.predictions.sample-1@0.1.0"),
+        prediction_space=prediction_space,
+        sequence_probabilities=(
+            TokenSequenceProbability(tokens=(1, 2, 3), probability=0.7),
+            TokenSequenceProbability(tokens=(1, 2), probability=0.2),
+        ),
+    )
+
+    assert prediction.probability_of((1, 2, 3)) == 0.7
+    assert prediction.probability_of((9,)) == 0.0
+    assert prediction.contract == PredictionResultContract(
+        prediction_space=prediction_space,
+        prediction_kind="autoregressive-finite-token-sequence",
+        output_encoding="sequence-probability",
+    )
+    assert TokenSequencePrediction.from_record(prediction.to_record()) == prediction
 
 
 def test_direct_finite_probability_prediction_converts_to_probability_measure() -> None:
