@@ -67,6 +67,7 @@ _initial_generation_memory_limit_bytes = 1_024_000
 _generation_curriculum_growth_factor = 4
 _generation_curriculum_max_rungs = 4
 _converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
+_minimum_plateau_lr_reductions = 3
 _adaptive_pooling_alias = model_operator_semantic_registry().operators[0].syntax_aliases[0]
 
 
@@ -139,6 +140,7 @@ class _LearningRateSchedule:
     scheduler: Any
     optimizer: Any
     update_on: str
+    lr_reduction_count: int = 0
 
     def learning_rates(self) -> tuple[float, ...]:
         return tuple(float(group["lr"]) for group in self.optimizer.param_groups)
@@ -149,7 +151,16 @@ class _LearningRateSchedule:
 
     def step_after_validation(self, validation_loss: float) -> None:
         if self.update_on == "validation-loss":
+            before = self.learning_rates()
             self.scheduler.step(validation_loss)
+            after = self.learning_rates()
+            if any(new < old for old, new in zip(before, after, strict=True)):
+                self.lr_reduction_count += 1
+
+    def has_exhausted_plateau_response(self) -> bool:
+        if self.update_on != "validation-loss":
+            return True
+        return self.lr_reduction_count >= _minimum_plateau_lr_reductions
 
 
 class BenchmarkRunnerError(ValueError):
@@ -168,8 +179,8 @@ class BenchmarkRunPlan:
     seed: int = 101
     train_steps: int | None = _default_train_steps
     learning_rate: float = 0.01
-    optimizer: str = "sgd"
-    schedule: str = "none"
+    optimizer: str = "adam"
+    schedule: str = "reduce-on-plateau"
     validation_interval: int = _default_validation_interval
     convergence_patience: int = _default_convergence_patience
     convergence_min_delta: float = _default_convergence_min_delta
@@ -977,6 +988,10 @@ def _train_until_convergence(
                 validation_history,
                 window_checks=patience,
                 min_delta=min_delta,
+            )
+            and (
+                scheduler is None
+                or scheduler.has_exhausted_plateau_response()
             )
         ):
             stop_reason = "validation-plateau"

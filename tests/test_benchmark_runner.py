@@ -156,7 +156,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     training_run = TrainingRunRecord.from_record(
         cast(Mapping[str, object], training_summary["training_run"])
     )
-    assert training_run.protocol.optimizer == "sgd"
+    assert training_run.protocol.optimizer == "adam"
     assert training_run.protocol.objective == "cross-entropy"
     assert training_run.protocol.tensor_runtime == "pytorch"
     assert training_run.protocol.tensor_device == "cpu"
@@ -302,6 +302,38 @@ def test_training_curriculum_advances_only_after_actual_stage_convergence() -> N
     assert not benchmark_runner.training_stage_converged("no-training-steps")
 
 
+def test_plateau_scheduler_requires_progressive_learning_rate_reductions() -> None:
+    class FakeOptimizer:
+        param_groups: list[dict[str, float]]
+
+        def __init__(self) -> None:
+            self.param_groups = [{"lr": 1.0}]
+
+    class FakeScheduler:
+        def __init__(self, optimizer: FakeOptimizer) -> None:
+            self.optimizer = optimizer
+
+        def step(self, _validation_loss: float) -> None:
+            for group in self.optimizer.param_groups:
+                group["lr"] *= 0.1
+
+    optimizer = FakeOptimizer()
+    schedule_class = cast(Any, benchmark_runner)._LearningRateSchedule
+    schedule = schedule_class(
+        scheduler=FakeScheduler(optimizer),
+        optimizer=optimizer,
+        update_on="validation-loss",
+    )
+
+    for _index in range(2):
+        schedule.step_after_validation(1.0)
+        assert not schedule.has_exhausted_plateau_response()
+    schedule.step_after_validation(1.0)
+
+    assert schedule.has_exhausted_plateau_response()
+    assert schedule.learning_rates() == (0.0010000000000000002,)
+
+
 def test_training_curriculum_is_not_step_indexed() -> None:
     source = Path(benchmark_runner.__file__).read_text(encoding="utf-8")
 
@@ -445,8 +477,8 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     throughput = cast(dict[str, object], diagnostics["throughput"])
     phase_timing = cast(dict[str, object], throughput["phase_timing"])
     roofline_comparison = cast(dict[str, object], throughput["roofline_comparison"])
-    assert protocol["optimizer"] == "sgd"
-    assert protocol["schedule"] == "none"
+    assert protocol["optimizer"] == "adam"
+    assert protocol["schedule"] == "reduce-on-plateau"
     assert diagnostics["stop_reason"] == "max-steps"
     assert diagnostics["steps_run"] == 1
     assert diagnostics["validation_checks"] == 2

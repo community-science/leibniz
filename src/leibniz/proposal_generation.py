@@ -74,8 +74,8 @@ class ProposalGenerationPlan:
     seed: int = 101
     train_steps: int | None = None
     learning_rate: float = 0.01
-    optimizer: str = "sgd"
-    schedule: str = "none"
+    optimizer: str = "adam"
+    schedule: str = "reduce-on-plateau"
     validation_interval: int = 250
     convergence_patience: int = 12
     convergence_min_delta: float = 1e-3

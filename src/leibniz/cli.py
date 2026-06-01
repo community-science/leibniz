@@ -373,10 +373,10 @@ def _parser() -> argparse.ArgumentParser:
     propose_results.add_argument("--seed", default=101, type=int)
     propose_results.add_argument("--train-steps", default=None, type=int)
     propose_results.add_argument("--learning-rate", default=0.01, type=float)
-    propose_results.add_argument("--optimizer", default="sgd", choices=("sgd", "adam", "adamw"))
+    propose_results.add_argument("--optimizer", default="adam", choices=("sgd", "adam", "adamw"))
     propose_results.add_argument(
         "--schedule",
-        default="none",
+        default="reduce-on-plateau",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
     propose_results.add_argument("--validation-interval", default=250, type=int)
@@ -414,10 +414,10 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--seed", default=101, type=int)
     run.add_argument("--train-steps", default=None, type=int)
     run.add_argument("--learning-rate", default=0.01, type=float)
-    run.add_argument("--optimizer", default="sgd", choices=("sgd", "adam", "adamw"))
+    run.add_argument("--optimizer", default="adam", choices=("sgd", "adam", "adamw"))
     run.add_argument(
         "--schedule",
-        default="none",
+        default="reduce-on-plateau",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
     run.add_argument("--validation-interval", default=250, type=int)
@@ -449,10 +449,10 @@ def _parser() -> argparse.ArgumentParser:
     loop.add_argument("--seed", default=101, type=int)
     loop.add_argument("--train-steps", default=None, type=int)
     loop.add_argument("--learning-rate", default=0.01, type=float)
-    loop.add_argument("--optimizer", default="sgd", choices=("sgd", "adam", "adamw"))
+    loop.add_argument("--optimizer", default="adam", choices=("sgd", "adam", "adamw"))
     loop.add_argument(
         "--schedule",
-        default="none",
+        default="reduce-on-plateau",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
     loop.add_argument("--validation-interval", default=250, type=int)
@@ -484,10 +484,10 @@ def _parser() -> argparse.ArgumentParser:
     shakedown.add_argument("--seed", default=101, type=int)
     shakedown.add_argument("--train-steps", default=0, type=int)
     shakedown.add_argument("--learning-rate", default=0.01, type=float)
-    shakedown.add_argument("--optimizer", default="sgd", choices=("sgd", "adam", "adamw"))
+    shakedown.add_argument("--optimizer", default="adam", choices=("sgd", "adam", "adamw"))
     shakedown.add_argument(
         "--schedule",
-        default="none",
+        default="reduce-on-plateau",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
     shakedown.add_argument("--validation-interval", default=1, type=int)
