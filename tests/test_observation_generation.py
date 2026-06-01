@@ -218,6 +218,19 @@ def test_digits_observation_generator_uses_runtime_memory_limit_as_canvas_cap() 
     assert large.samples[0].complexity > small.samples[0].complexity
 
 
+def test_digits_observation_generator_keeps_minimum_canvas_when_memory_cap_is_tiny() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    batch = generator.sample_formation_batch(
+        component_count=1,
+        sample_count=8,
+        seed=101,
+        memory_limit_bytes=1,
+    )
+
+    assert [(sample.width, sample.height) for sample in batch.samples] == [(20, 20)] * 8
+
+
 def test_digits_observation_generator_applies_recorded_variation_coordinates() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
     sample = generator.sample_batch(

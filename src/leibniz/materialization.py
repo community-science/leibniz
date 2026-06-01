@@ -66,6 +66,7 @@ _materialization_plan_record = RecordSpec(
         "id": FieldSpec(kind="identifier"),
         "benchmark_id": FieldSpec(kind="identifier"),
         "materialization_declaration": FieldSpec(kind="record"),
+        "source_assignment": FieldSpec(kind="record", required=False),
         "resolution_assignment": FieldSpec(kind="record"),
         "seed": FieldSpec(kind="integer"),
         "latent_factor_declaration": FieldSpec(kind="record", required=False),
@@ -362,6 +363,7 @@ class MaterializationPlan:
     materialization_declaration: ArtifactReference
     resolution_assignment: AxisAssignment
     seed: int
+    source_assignment: AxisAssignment | None = None
     latent_factor_declaration: ArtifactReference | None = None
 
     def __post_init__(self) -> None:
@@ -405,6 +407,10 @@ class MaterializationPlan:
                 _as_mapping(validated["resolution_assignment"], field="resolution_assignment")
             ),
             seed=_as_int(validated["seed"], field="seed"),
+            source_assignment=_optional_axis_assignment(
+                validated.get("source_assignment"),
+                field="source_assignment",
+            ),
             latent_factor_declaration=_optional_reference(
                 validated.get("latent_factor_declaration"),
                 field="latent_factor_declaration",
@@ -431,6 +437,7 @@ class MaterializationPlan:
             materialization_declaration=declaration_reference,
             resolution_assignment=declaration.minimum_resolution(source_assignment),
             seed=seed,
+            source_assignment=source_assignment,
             latent_factor_declaration=declaration.latent_factor_declaration,
         )
 
@@ -445,7 +452,7 @@ class MaterializationPlan:
                 "materialization_declaration reference does not match declaration"
             )
         declaration.require_resolution(
-            source_assignment=None,
+            source_assignment=self.source_assignment,
             resolution_assignment=self.resolution_assignment,
         )
         if self.latent_factor_declaration != declaration.latent_factor_declaration:
@@ -465,6 +472,8 @@ class MaterializationPlan:
             "resolution_assignment": self.resolution_assignment.to_record(),
             "seed": self.seed,
         }
+        if self.source_assignment is not None:
+            record["source_assignment"] = self.source_assignment.to_record()
         if self.latent_factor_declaration is not None:
             record["latent_factor_declaration"] = self.latent_factor_declaration.to_record()
         return record
@@ -562,6 +571,12 @@ def _optional_reference(value: object, *, field: str) -> ArtifactReference | Non
     if value is None:
         return None
     return _reference(value, field=field)
+
+
+def _optional_axis_assignment(value: object, *, field: str) -> AxisAssignment | None:
+    if value is None:
+        return None
+    return AxisAssignment.from_record(_as_mapping(value, field=field))
 
 
 def _canonical_mapping(value: Mapping[str, object]) -> dict[str, object]:

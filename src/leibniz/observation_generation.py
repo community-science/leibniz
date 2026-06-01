@@ -1482,9 +1482,7 @@ def _sampled_resolution_maximum(
 ) -> tuple[int, int]:
     minimum_pixel_count = minimum_width * minimum_height
     if maximum_pixel_count < minimum_pixel_count:
-        raise ObservationGenerationError(
-            "resource budget cannot fit minimum observation canvas"
-        )
+        return (minimum_width, minimum_height)
     side_multiplier = math.sqrt(maximum_pixel_count / minimum_pixel_count)
     return (
         math.floor(minimum_width * side_multiplier),

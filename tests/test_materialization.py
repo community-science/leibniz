@@ -142,6 +142,33 @@ def test_materialization_plan_resolves_from_declaration_deterministically() -> N
     left.validate_declaration(declaration)
 
 
+def test_materialization_plan_preserves_source_assignment_for_requirement_validation() -> None:
+    declaration = MaterializationDeclaration(
+        id=ProtocolIdentifier.parse("benchmarks.example.materialization@0.1.0"),
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.example@0.1.0"),
+        requirements=(
+            LinearResolutionRequirement(
+                name=ProtocolName.parse("benchmarks.example.resolution.width"),
+                source_axis="L",
+                resolution_axis="W",
+                coefficient=10,
+                basis="analytic-bound",
+            ),
+        ),
+    )
+
+    plan = MaterializationPlan.resolve(
+        id=ProtocolIdentifier.parse("benchmarks.example.materialization-plan.seed101@0.1.0"),
+        declaration=declaration,
+        seed=101,
+        source_assignment=AxisAssignment(values={"L": 3}),
+    )
+
+    assert plan.resolution_assignment == AxisAssignment(values={"W": 30})
+    plan.validate_declaration(declaration)
+    assert MaterializationPlan.from_record(plan.to_record()) == plan
+
+
 def test_materialization_plan_documents_validate_digits_fixtures() -> None:
     declaration = MaterializationDeclarationDocument.from_bytes(
         (_digits_benchmark_root / "materialization.json").read_bytes()
