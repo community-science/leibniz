@@ -342,6 +342,7 @@ def run_benchmark(
                 summary=summary,
                 architecture=architecture,
                 outcome_space=outcome_space,
+                evaluation_batch=evaluation_batch,
                 training_run=training_run,
                 throughput=throughput,
             ),
@@ -1118,6 +1119,7 @@ def _training_progress_record(
     summary: BenchmarkRunSummary,
     architecture: ArchitectureManifest,
     outcome_space: OutcomeSpace,
+    evaluation_batch: GeneratedObservationBatch,
     training_run: TrainingRunRecord,
     throughput: Mapping[str, object],
 ) -> Mapping[str, object]:
@@ -1128,7 +1130,13 @@ def _training_progress_record(
         ),
         architecture_manifest=architecture,
     )
-    return {
+    provisional_score = validation_competence(
+        best_validation_loss=training_run.best_validation_loss,
+        outcome_count=len(outcome_space.outcomes),
+    )
+    complexities = {sample.complexity for sample in evaluation_batch.samples}
+    progress_complexity = next(iter(complexities)) if len(complexities) == 1 else None
+    record: dict[str, object] = {
         "format": _progress_format,
         "format_version": _progress_format_version,
         "run_slug": summary.run_slug,
@@ -1161,11 +1169,22 @@ def _training_progress_record(
         "model_inspection": inspection.to_record(),
         "architecture_digest": str(architecture.digest),
         "model_inspection_digest": str(inspection.digest),
-        "provisional_score": validation_competence(
-            best_validation_loss=training_run.best_validation_loss,
-            outcome_count=len(outcome_space.outcomes),
-        ),
+        "provisional_score": provisional_score,
     }
+    if progress_complexity is not None:
+        record["sampled_competence"] = {
+            "kind": "provisional-validation-competence",
+            "sampling_rule": "generator-validation-resample-v1",
+            "difficulty_assumption": "validation-loss-proxy-for-sampled-competence",
+            "benchmark_id": str(summary.benchmark_id),
+            "component_count": evaluation_batch.component_count,
+            "complexity_axis": None,
+            "complexity": progress_complexity,
+            "seed": evaluation_batch.seed,
+            "sample_count": len(evaluation_batch.samples),
+            "mean_accepted_mass": provisional_score,
+        }
+    return record
 
 
 def _throughput_record(

@@ -3,7 +3,11 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from '
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { consoleDataPayloadPath, refreshConsoleDataPayload } from '../vite.config.mjs';
+import {
+  consoleDataPayloadPath,
+  consoleResultRoots,
+  refreshConsoleDataPayload,
+} from '../vite.config.mjs';
 
 const scriptRoot = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(scriptRoot, '..');
@@ -58,6 +62,7 @@ function generatorInputFiles() {
     resolve(packageRoot, 'scripts/prepareConsoleData.mjs'),
     ...sourceFiles(resolve(repositoryRoot, 'src/leibniz')),
     ...sourceFiles(resolve(repositoryRoot, 'tests/fixtures')),
+    ...consoleResultRoots().flatMap((root) => sourceFiles(root)),
   ])).sort();
 }
 

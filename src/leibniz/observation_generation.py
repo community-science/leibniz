@@ -58,6 +58,10 @@ _discriminatable_resolution_cache: dict[
     tuple[str, int, str, str, int, int, float],
     tuple[int, int],
 ] = {}
+_minimum_isotropic_scale_cache: dict[
+    tuple[str, int, int, int, int, float],
+    float,
+] = {}
 _rejection_cache_bins_per_axis = 8
 _rejection_cache_cell_limit = 4096
 _variation_state_bins_per_axis = 8
@@ -1006,6 +1010,17 @@ def _minimum_resolvable_isotropic_scale(
     height: int,
     minimum_pairwise_l1: float,
 ) -> float:
+    cache_key = (
+        str(formation.digest),
+        sequence_length,
+        sequence_index,
+        width,
+        height,
+        minimum_pairwise_l1,
+    )
+    cached = _minimum_isotropic_scale_cache.get(cache_key)
+    if cached is not None:
+        return cached
     if _isotropic_scale_passes_discriminability(
         formation=formation,
         sequence_length=sequence_length,
@@ -1015,6 +1030,7 @@ def _minimum_resolvable_isotropic_scale(
         scale=0.0,
         minimum_pairwise_l1=minimum_pairwise_l1,
     ):
+        _minimum_isotropic_scale_cache[cache_key] = 0.0
         return 0.0
     upper = 1.0
     if not _isotropic_scale_passes_discriminability(
@@ -1026,6 +1042,7 @@ def _minimum_resolvable_isotropic_scale(
         scale=upper,
         minimum_pairwise_l1=minimum_pairwise_l1,
     ):
+        _minimum_isotropic_scale_cache[cache_key] = upper
         return upper
     lower = 0.0
     for _iteration in range(12):
@@ -1042,6 +1059,7 @@ def _minimum_resolvable_isotropic_scale(
             upper = midpoint
         else:
             lower = midpoint
+    _minimum_isotropic_scale_cache[cache_key] = upper
     return upper
 
 

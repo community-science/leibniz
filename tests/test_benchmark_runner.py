@@ -485,6 +485,13 @@ def test_digits_benchmark_runner_materializes_running_training_history(
     assert cast(list[dict[str, object]], result["leaderboard"])[0]["source_kinds"] == [
         "local-progress"
     ]
+    points = cast(
+        list[dict[str, object]],
+        cast(list[dict[str, object]], result["leaderboard"])[0]["points"],
+    )
+    assert points
+    assert points[0]["sample_count"] == 2
+    assert points[0]["score"] == running_run["score"]
 
     final_view_summary = materialize_benchmark_result_views(
         repository_root=_repository_root,

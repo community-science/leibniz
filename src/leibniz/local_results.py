@@ -653,6 +653,10 @@ def _local_progress_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord
             summary.get("model_inspection_digest"),
             field="model_inspection_digest",
         )
+        sampled_competence = _optional_mapping(
+            summary.get("sampled_competence"),
+            "sampled_competence",
+        )
         measurement_dataset_digest = empty_dataset.digest
         records.append(
             _BenchmarkRunRecord(
@@ -663,7 +667,14 @@ def _local_progress_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord
                 benchmark_id=_as_identifier(summary.get("benchmark_id"), "benchmark_id"),
                 architecture_digest=architecture_digest,
                 model_key=str(architecture_digest),
-                complexity=None,
+                complexity=(
+                    None
+                    if sampled_competence is None
+                    else _as_nonnegative_number(
+                        sampled_competence.get("complexity"),
+                        "sampled_competence.complexity",
+                    )
+                ),
                 measurement_count=0,
                 score=_as_nonnegative_number(
                     summary.get("provisional_score"),
@@ -681,6 +692,7 @@ def _local_progress_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord
                 model_inspection_path=None,
                 measurement_dataset=empty_dataset,
                 measurement_dataset_digest=measurement_dataset_digest,
+                sampled_competence=sampled_competence,
                 training_summary=summary,
             )
         )
@@ -2073,6 +2085,12 @@ def _as_mapping(value: object, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise LocalResultImportError(f"{field}: expected record")
     return cast(Mapping[str, object], value)
+
+
+def _optional_mapping(value: object, field: str) -> Mapping[str, object] | None:
+    if value is None:
+        return None
+    return _as_mapping(value, field)
 
 
 def _as_sequence(value: object, field: str) -> tuple[object, ...]:
