@@ -11,27 +11,24 @@ from pathlib import Path
 from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
-from leibniz.artifacts import ArtifactReference
+from leibniz.benchmark_evaluation import (
+    finite_measurements_for_predictions,
+    sampled_competence_record,
+    validation_competence,
+)
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes, document_filename_suffix
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.measurements import MeasurementDataset, MeasurementRecord
+from leibniz.measurements import MeasurementDataset
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_operators import ExecutableModelOperator
 from leibniz.observation_generation import (
     GeneratedObservationBatch,
-    GeneratedObservationSample,
     ObservationGenerator,
     load_observation_generator,
 )
 from leibniz.operator_semantics import model_operator_semantic_registry
-from leibniz.outcomes import (
-    AcceptedEvent,
-    OutcomeSpace,
-    RawScoringEvidence,
-)
-from leibniz.prediction_results import DirectFiniteProbabilityPrediction
-from leibniz.prediction_spaces import FiniteOutcomeSpace
+from leibniz.outcomes import OutcomeSpace
 from leibniz.scale_evaluation import (
     AdaptiveScaleEvaluation,
     PerScaleScore,
@@ -361,8 +358,7 @@ def run_benchmark(
         seed=plan.seed,
         progress_callback=publish_progress,
     )
-    measurements = _measurements_for_predictions(
-        generator=generator,
+    measurements = finite_measurements_for_predictions(
         batch=evaluation_batch,
         outcome_space=outcome_space,
         probabilities=training_result.probabilities,
@@ -410,10 +406,10 @@ def run_benchmark(
                 if scale_evaluation_trace is None
                 else {"scale_evaluation_trace": scale_evaluation_trace.to_record()}
             ),
-            "sampled_competence": _sampled_competence_record(
-                generator=generator,
+            "sampled_competence": sampled_competence_record(
                 batch=evaluation_batch,
                 measurements=measurements,
+                complexity_axis=generator.benchmark_manifest.complexity_coordinate,
             ),
             "architecture": model_inspection.architecture.to_record(),
             "cost_summary": model_inspection.cost_summary.to_record(),
@@ -510,7 +506,7 @@ def _scale_evaluation_trace(
     levels = [
         ScaleEvaluationLevel(
             scale=_initial_scale,
-            competence=_validation_competence(
+            competence=validation_competence(
                 best_validation_loss=training_run.best_validation_loss,
                 outcome_count=len(outcome_space.outcomes),
             ),
@@ -585,7 +581,7 @@ def _scale_evaluation_trace(
             ),
             seed=plan.seed + 10_000_019 * next_scale,
         )
-        competence = _validation_competence(
+        competence = validation_competence(
             best_validation_loss=next_training.training_run.best_validation_loss,
             outcome_count=len(next_outcome_space.outcomes),
         )
@@ -1258,18 +1254,11 @@ def _training_progress_record(
         "model_inspection": inspection.to_record(),
         "architecture_digest": str(architecture.digest),
         "model_inspection_digest": str(inspection.digest),
-        "provisional_score": _validation_competence(
+        "provisional_score": validation_competence(
             best_validation_loss=training_run.best_validation_loss,
             outcome_count=len(outcome_space.outcomes),
         ),
     }
-
-
-def _validation_competence(*, best_validation_loss: float, outcome_count: int) -> float:
-    reference_cross_entropy = math.log(outcome_count)
-    if reference_cross_entropy <= 0:
-        return 0.0
-    return max(0.0, min(1.0, 1.0 - best_validation_loss / reference_cross_entropy))
 
 
 def _throughput_record(
@@ -1539,113 +1528,6 @@ def _batch_tensor(*, torch: Any, batch: GeneratedObservationBatch, device: Any) 
     return fields.reshape((len(batch.samples), *batch.samples[0].field.shape))
 
 
-def _measurements_for_predictions(
-    *,
-    generator: ObservationGenerator,
-    batch: GeneratedObservationBatch,
-    outcome_space: OutcomeSpace,
-    probabilities: tuple[tuple[float, ...], ...],
-    run_slug: str,
-) -> tuple[MeasurementRecord, ...]:
-    prediction_space = FiniteOutcomeSpace.from_outcome_space(outcome_space)
-    measurements: list[MeasurementRecord] = []
-    for sample, sample_probabilities in zip(batch.samples, probabilities, strict=True):
-        accepted_event = AcceptedEvent.from_record(
-            {
-                "id": str(_sample_identifier("events", run_slug, sample)),
-                "outcome_space_id": str(outcome_space.id),
-                "outcomes": [sample.outcome_id],
-            },
-            outcome_space=outcome_space,
-        )
-        prediction = DirectFiniteProbabilityPrediction.from_probabilities(
-            id=_sample_identifier("measures", run_slug, sample),
-            prediction_space=prediction_space,
-            probabilities=sample_probabilities,
-        )
-        probability_measure = prediction.to_probability_measure(
-            outcome_space=outcome_space,
-        )
-        measurements.append(
-            MeasurementRecord(
-                benchmark_id=generator.benchmark_manifest.id,
-                outcome_space=outcome_space,
-                accepted_event=accepted_event,
-                probability_measure=probability_measure,
-                raw_scoring_evidence=RawScoringEvidence.from_event_and_measure(
-                    id=_sample_identifier("evidence", run_slug, sample),
-                    observation_id=str(sample.observation.id),
-                    event=accepted_event,
-                    measure=probability_measure,
-                ),
-                evidence_artifacts=(
-                    sample.observation.formation_declaration,
-                    sample.observation.materialization_plan,
-                    ArtifactReference(
-                        kind="formed-observation",
-                        protocol_id=sample.observation.id,
-                        record_digest=sample.observation.digest,
-                    ),
-                ),
-            )
-        )
-    return tuple(measurements)
-
-
-def _sampled_competence_record(
-    *,
-    generator: ObservationGenerator,
-    batch: GeneratedObservationBatch,
-    measurements: tuple[MeasurementRecord, ...],
-) -> dict[str, object]:
-    if len(batch.samples) != len(measurements):
-        raise BenchmarkRunnerError("sampled competence requires one measurement per sample")
-    complexities = {sample.complexity for sample in batch.samples}
-    if len(complexities) != 1:
-        raise BenchmarkRunnerError("sampled competence requires one complexity class")
-    accepted_mass = tuple(
-        measurement.raw_scoring_evidence.accepted_mass for measurement in measurements
-    )
-    finite_losses = tuple(
-        measurement.raw_scoring_evidence.negative_log_score
-        for measurement in measurements
-        if math.isfinite(measurement.raw_scoring_evidence.negative_log_score)
-    )
-    mean_negative_log_score: float | str
-    if len(finite_losses) != len(measurements):
-        mean_negative_log_score = "infinity"
-    else:
-        mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
-    return {
-        "kind": "sampled-complexity-class",
-        "sampling_rule": "generator-uniform-component-sequence-v1",
-        "difficulty_assumption": "approximately-uniform-within-complexity-class",
-        "benchmark_id": str(generator.benchmark_manifest.id),
-        "scale": batch.scale,
-        "complexity_axis": generator.benchmark_manifest.complexity_coordinate,
-        "complexity": next(iter(complexities)),
-        "seed": batch.seed,
-        "sample_count": len(batch.samples),
-        "mean_accepted_mass": math.fsum(accepted_mass) / len(accepted_mass),
-        "mean_negative_log_score": mean_negative_log_score,
-        "observation_ids": [str(sample.observation.id) for sample in batch.samples],
-        "measurement_ids": [
-            str(measurement.raw_scoring_evidence.id) for measurement in measurements
-        ],
-    }
-
-
-def _sample_identifier(
-    family: str,
-    run_slug: str,
-    sample: GeneratedObservationSample,
-) -> ProtocolIdentifier:
-    return _child_identifier(
-        sample.observation.benchmark_id,
-        f"{family}.{run_slug}.sample-{sample.index}",
-    )
-
-
 def _renormalized_probabilities(probabilities: Sequence[float]) -> tuple[float, ...]:
     total = sum(float(probability) for probability in probabilities)
     if total <= 0:
@@ -1671,7 +1553,3 @@ def _write_document_atomic(path: Path, record: object) -> None:
 
 def _identifier_atom(identifier: ProtocolIdentifier) -> str:
     return str(identifier.name).rsplit(".", maxsplit=1)[-1]
-
-
-def _child_identifier(parent: ProtocolIdentifier, suffix: str) -> ProtocolIdentifier:
-    return ProtocolIdentifier.parse(f"{parent.name}.{suffix}@{parent.version}")

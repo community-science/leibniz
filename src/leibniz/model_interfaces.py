@@ -16,6 +16,8 @@ from leibniz.prediction_results import (
 )
 from leibniz.prediction_spaces import (
     FiniteOutcomeSpace,
+    FiniteTokenSequenceSpace,
+    PredictionSpace,
     PredictionSpaceValidationError,
     parse_prediction_space,
 )
@@ -27,21 +29,18 @@ __all__ = [
     "ModelInterfaceValidationError",
 ]
 
-_PredictionKind: TypeAlias = Literal["direct-finite-probability-measure"]
-_OutputEncoding: TypeAlias = Literal["probability-mass-sequence"]
+_PredictionKind: TypeAlias = Literal[
+    "direct-finite-probability-measure",
+    "autoregressive-finite-token-sequence",
+]
+_OutputEncoding: TypeAlias = Literal["probability-mass-sequence", "sequence-probability"]
 
 _model_interface_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
         "prediction_space": FieldSpec(kind="record"),
-        "prediction_kind": FieldSpec(
-            kind="literal",
-            literal="direct-finite-probability-measure",
-        ),
-        "output_encoding": FieldSpec(
-            kind="literal",
-            literal="probability-mass-sequence",
-        ),
+        "prediction_kind": FieldSpec(kind="string"),
+        "output_encoding": FieldSpec(kind="string"),
     }
 )
 
@@ -58,7 +57,7 @@ class ModelInterface:
     """A model-output contract over a prediction target space."""
 
     id: ProtocolIdentifier
-    prediction_space: FiniteOutcomeSpace
+    prediction_space: PredictionSpace
     prediction_kind: _PredictionKind = "direct-finite-probability-measure"
     output_encoding: _OutputEncoding = "probability-mass-sequence"
 
@@ -69,14 +68,24 @@ class ModelInterface:
             raise ModelInterfaceValidationError(str(error)) from error
         if not str(self.id.name).startswith("model-interfaces."):
             raise ModelInterfaceValidationError("id must be a valid model interface id")
-        if self.prediction_kind != "direct-finite-probability-measure":
-            raise ModelInterfaceValidationError(
-                f"unsupported prediction_kind: {self.prediction_kind}"
-            )
-        if self.output_encoding != "probability-mass-sequence":
-            raise ModelInterfaceValidationError(
-                f"unsupported output_encoding: {self.output_encoding}"
-            )
+        if (
+            self.prediction_kind == "direct-finite-probability-measure"
+            and self.output_encoding == "probability-mass-sequence"
+            and isinstance(self.prediction_space, FiniteOutcomeSpace)
+        ):
+            return
+        if (
+            self.prediction_kind == "autoregressive-finite-token-sequence"
+            and self.output_encoding == "sequence-probability"
+            and isinstance(self.prediction_space, FiniteTokenSequenceSpace)
+            and self.prediction_space.sequence_boundary == "eos-terminated"
+        ):
+            return
+        raise ModelInterfaceValidationError(
+            "model interface must pair finite probability measures with finite outcome "
+            "spaces, or autoregressive sequence probabilities with eos-terminated "
+            "finite token sequence spaces"
+        )
 
     @classmethod
     def from_outcome_space(
@@ -111,9 +120,20 @@ class ModelInterface:
             )
         except PredictionSpaceValidationError as error:
             raise ModelInterfaceValidationError(str(error)) from error
-        if not isinstance(prediction_space, FiniteOutcomeSpace):
+        if (
+            validated["prediction_kind"] == "direct-finite-probability-measure"
+            and not isinstance(prediction_space, FiniteOutcomeSpace)
+        ):
             raise ModelInterfaceValidationError(
                 "direct-finite-probability-measure requires finite-outcome-space prediction_space"
+            )
+        if (
+            validated["prediction_kind"] == "autoregressive-finite-token-sequence"
+            and not isinstance(prediction_space, FiniteTokenSequenceSpace)
+        ):
+            raise ModelInterfaceValidationError(
+                "autoregressive-finite-token-sequence requires finite-token-sequence "
+                "prediction_space"
             )
         interface = cls(
             id=_record.identifier(validated["id"], "id"),
@@ -121,7 +141,8 @@ class ModelInterface:
             prediction_kind=cast(_PredictionKind, validated["prediction_kind"]),
             output_encoding=cast(_OutputEncoding, validated["output_encoding"]),
         )
-        interface.validate_outcome_space(outcome_space)
+        if isinstance(interface.prediction_space, FiniteOutcomeSpace):
+            interface.validate_outcome_space(outcome_space)
         return interface
 
     @property
@@ -129,6 +150,10 @@ class ModelInterface:
         return ContentDigest.from_value(self.to_record())
 
     def validate_outcome_space(self, outcome_space: OutcomeSpace) -> None:
+        if not isinstance(self.prediction_space, FiniteOutcomeSpace):
+            raise ModelInterfaceValidationError(
+                "sequence model interfaces do not validate against finite outcome spaces"
+            )
         try:
             self.prediction_space.validate_outcome_space(outcome_space)
         except PredictionSpaceValidationError as error:

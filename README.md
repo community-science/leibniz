@@ -125,24 +125,32 @@ leibniz benchmark shakedown \
 ```
 
 `benchmark shakedown` is the fast smoke-test path. The default `benchmark run`,
-`benchmark loop`, and `results propose` training profile is a full convergence
-run: 50,000 maximum optimizer steps, 500 minimum steps before early stopping,
-validation every 250 steps, patience 12, and convergence min delta `1e-3`.
-Override those with `--train-steps`, `--convergence-min-steps`,
-`--validation-interval`, `--convergence-patience`, and
-`--convergence-min-delta` when you need a shorter diagnostic run.
+`benchmark loop`, and `results propose` local training profile is an uncapped
+convergence run: validation every 250 steps, 500 minimum steps before early
+stopping, patience 12, and convergence min delta `1e-3`. Override those with
+`--train-steps`, `--convergence-min-steps`, `--validation-interval`,
+`--convergence-patience`, and `--convergence-min-delta` when you need a shorter
+diagnostic run.
 
 The digits benchmark samples rectangular canvases with independently varying
 height and width. Observation formation now derives the lower canvas floor from
 generic component discriminability analysis rather than a fixed pixel extent per
 digit; the benchmark manifest declares the scalar discriminability margin used
-by that live analysis. Spatial variation is sampled as affine matrix coordinates
-and accepted by rejection sampling only when the transformed components preserve
-that margin. Candidate architectures must therefore accept
-variable spatial input shapes, for example by using adaptive pooling before any
-fixed readout. Fixed `input_shape`-only architectures are rejected for sampled
-digits runs because later training batches may have different canvas dimensions
-than the validation batch used during initial inspection.
+by that live analysis. Spatial variation is sampled as affine matrix
+coordinates inside the benchmark-owned identity-preserving envelope. Candidate
+architectures must therefore accept variable spatial input shapes, for example
+by using adaptive pooling before any fixed readout. Fixed `input_shape`-only
+architectures are rejected for sampled digits runs because later training
+batches may have different canvas dimensions than the validation batch used
+during initial inspection.
+
+Digits is a variable-length token-sequence benchmark. The task contract is to
+predict the complete digit sequence visible in the observation; exact-sequence
+scoring gives probability credit only to that full sequence. Autoregressive
+finite-token sequence interfaces represent this directly by predicting digit
+tokens until an end-of-sequence decision. The local PyTorch training workflow in
+this repository is transitional and remains separate from the benchmark task
+definition so richer training recipes can move to a separate repository.
 
 While a benchmark loop is training a reserved candidate, validation checkpoints
 are written under `results/training-progress/` and materialized into the local

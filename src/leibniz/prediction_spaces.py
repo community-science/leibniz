@@ -20,7 +20,7 @@ __all__ = [
     "parse_prediction_space",
 ]
 
-_SequenceBoundary: TypeAlias = Literal["fixed-length"]
+_SequenceBoundary: TypeAlias = Literal["fixed-length", "eos-terminated"]
 _RealCoordinateMeasure: TypeAlias = Literal["lebesgue"]
 
 _token_vocabulary_record = RecordSpec(
@@ -33,8 +33,9 @@ _finite_token_sequence_space_record = RecordSpec(
     fields={
         "kind": FieldSpec(kind="literal", literal="finite-token-sequence"),
         "vocabulary": FieldSpec(kind="record", record=_token_vocabulary_record),
-        "length": FieldSpec(kind="integer"),
-        "sequence_boundary": FieldSpec(kind="literal", literal="fixed-length"),
+        "length": FieldSpec(kind="integer", required=False),
+        "minimum_length": FieldSpec(kind="integer", required=False),
+        "sequence_boundary": FieldSpec(kind="string"),
     }
 )
 _real_vector_space_record = RecordSpec(
@@ -104,17 +105,35 @@ class FiniteTokenVocabulary:
 
 @dataclass(frozen=True, slots=True)
 class FiniteTokenSequenceSpace:
-    """Fixed-length sequences over a finite token vocabulary."""
+    """Sequences over a finite token vocabulary."""
 
     vocabulary: FiniteTokenVocabulary
-    length: int
+    length: int | None = None
     sequence_boundary: _SequenceBoundary = "fixed-length"
+    minimum_length: int = 1
 
     def __post_init__(self) -> None:
-        if type(self.length) is not int or self.length < 1:
-            raise PredictionSpaceValidationError("length must be a positive integer")
-        if self.sequence_boundary != "fixed-length":
-            raise PredictionSpaceValidationError("sequence_boundary must be fixed-length")
+        if self.sequence_boundary not in {"fixed-length", "eos-terminated"}:
+            raise PredictionSpaceValidationError(
+                "sequence_boundary must be fixed-length or eos-terminated"
+            )
+        if type(self.minimum_length) is not int or self.minimum_length < 0:
+            raise PredictionSpaceValidationError(
+                "minimum_length must be a nonnegative integer"
+            )
+        if self.sequence_boundary == "fixed-length":
+            if type(self.length) is not int or self.length < 1:
+                raise PredictionSpaceValidationError("length must be a positive integer")
+            if self.minimum_length not in {0, 1, self.length}:
+                raise PredictionSpaceValidationError(
+                    "fixed-length minimum_length must be omitted or match length"
+                )
+            object.__setattr__(self, "minimum_length", self.length)
+            return
+        if self.length is not None:
+            raise PredictionSpaceValidationError(
+                "eos-terminated sequence spaces must not declare length"
+            )
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> FiniteTokenSequenceSpace:
@@ -126,17 +145,30 @@ class FiniteTokenSequenceSpace:
             vocabulary=FiniteTokenVocabulary.from_record(
                 _as_mapping(validated["vocabulary"], field="vocabulary")
             ),
-            length=_as_int(validated["length"], field="length"),
+            length=(
+                None
+                if "length" not in validated
+                else _as_int(validated["length"], field="length")
+            ),
             sequence_boundary=cast(_SequenceBoundary, validated["sequence_boundary"]),
+            minimum_length=_as_int(validated.get("minimum_length", 1), field="minimum_length"),
         )
 
     @property
     def cardinality(self) -> int:
+        if self.length is None:
+            raise PredictionSpaceValidationError(
+                "eos-terminated sequence spaces do not have finite cardinality"
+            )
         return self.vocabulary.token_count**self.length
 
     def sequence_index(self, tokens: Sequence[int]) -> int:
         """Return the lexicographic outcome index for a token sequence."""
 
+        if self.length is None:
+            raise PredictionSpaceValidationError(
+                "eos-terminated sequence spaces do not have finite outcome indices"
+            )
         token_values = tuple(_as_int(token, field="tokens") for token in tokens)
         if len(token_values) != self.length:
             raise PredictionSpaceValidationError(
@@ -150,6 +182,10 @@ class FiniteTokenSequenceSpace:
     def sequence_for_index(self, index: int) -> tuple[int, ...]:
         """Return the token sequence at one lexicographic outcome index."""
 
+        if self.length is None:
+            raise PredictionSpaceValidationError(
+                "eos-terminated sequence spaces do not have finite outcome indices"
+            )
         if type(index) is not int or index < 0 or index >= self.cardinality:
             raise PredictionSpaceValidationError("sequence index is outside token space")
         tokens = [0] * self.length
@@ -161,8 +197,24 @@ class FiniteTokenSequenceSpace:
 
     def outcome_id(self, tokens: Sequence[int]) -> str:
         token_values = tuple(_as_int(token, field="tokens") for token in tokens)
-        self.sequence_index(token_values)
+        self.require_sequence(token_values)
         return "-".join((self.vocabulary.token_name, *(str(token) for token in token_values)))
+
+    def require_sequence(self, tokens: Sequence[int]) -> tuple[int, ...]:
+        """Validate and return a concrete token sequence in this space."""
+
+        token_values = tuple(_as_int(token, field="tokens") for token in tokens)
+        if len(token_values) < self.minimum_length:
+            raise PredictionSpaceValidationError(
+                f"token sequence length must be at least {self.minimum_length}"
+            )
+        if self.length is not None and len(token_values) != self.length:
+            raise PredictionSpaceValidationError(
+                f"token sequence length must be {self.length}"
+            )
+        for token in token_values:
+            self.vocabulary.require_token(token)
+        return token_values
 
     def outcome_space(self, *, id: ProtocolIdentifier) -> OutcomeSpace:
         return OutcomeSpace(
@@ -183,12 +235,16 @@ class FiniteTokenSequenceSpace:
         )
 
     def to_record(self) -> dict[str, object]:
-        return {
+        record: dict[str, object] = {
             "kind": "finite-token-sequence",
             "vocabulary": self.vocabulary.to_record(),
-            "length": self.length,
             "sequence_boundary": self.sequence_boundary,
         }
+        if self.length is not None:
+            record["length"] = self.length
+        if self.sequence_boundary == "eos-terminated" or self.minimum_length != self.length:
+            record["minimum_length"] = self.minimum_length
+        return record
 
 
 @dataclass(frozen=True, slots=True)

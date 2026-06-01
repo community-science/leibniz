@@ -10,7 +10,11 @@ from leibniz.model_interfaces import (
     ModelInterfaceValidationError,
 )
 from leibniz.outcomes import OutcomeSpace
-from leibniz.prediction_results import DirectFiniteProbabilityPrediction
+from leibniz.prediction_results import (
+    DirectFiniteProbabilityPrediction,
+    TokenSequencePrediction,
+    TokenSequenceProbability,
+)
 from leibniz.prediction_spaces import (
     FiniteOutcomeSpace,
     FiniteTokenSequenceSpace,
@@ -68,6 +72,7 @@ def test_model_interface_can_record_finite_token_sequence_source_space() -> None
 def test_model_interface_validates_direct_finite_prediction_results() -> None:
     outcome_space = _outcome_space()
     interface = ModelInterface.from_record(_model_interface_record(), outcome_space=outcome_space)
+    assert isinstance(interface.prediction_space, FiniteOutcomeSpace)
     prediction = DirectFiniteProbabilityPrediction.from_probabilities(
         id=ProtocolIdentifier.parse("core.boolean-prediction@0.1.0"),
         prediction_space=interface.prediction_space,
@@ -95,6 +100,32 @@ def test_model_interface_validates_direct_finite_prediction_results() -> None:
     assert str(
         capture_model_interface_error(lambda: interface.validate_prediction_result(object()))
     ) == "prediction result does not expose prediction_space"
+
+
+def test_model_interface_declares_autoregressive_token_sequence_outputs() -> None:
+    prediction_space = FiniteTokenSequenceSpace(
+        vocabulary=FiniteTokenVocabulary(token_count=10, token_name="digit"),
+        sequence_boundary="eos-terminated",
+    )
+    interface = ModelInterface(
+        id=ProtocolIdentifier.parse("model-interfaces.digits-sequence@0.1.0"),
+        prediction_space=prediction_space,
+        prediction_kind="autoregressive-finite-token-sequence",
+        output_encoding="sequence-probability",
+    )
+    prediction = TokenSequencePrediction(
+        id=ProtocolIdentifier.parse("benchmarks.digits.predictions.sample-1@0.1.0"),
+        prediction_space=prediction_space,
+        sequence_probabilities=(
+            TokenSequenceProbability(tokens=(1, 2, 3), probability=0.75),
+        ),
+    )
+
+    interface.validate_prediction_result(prediction)
+    assert ModelInterface.from_record(
+        interface.to_record(),
+        outcome_space=_outcome_space(),
+    ) == interface
 
 
 def test_model_interface_document_loads_bytes_with_digest() -> None:
@@ -132,7 +163,11 @@ def test_model_interface_rejects_unsupported_prediction_contracts() -> None:
         capture_model_interface_error(
             lambda: ModelInterface.from_record(record, outcome_space=_outcome_space())
         )
-    ) == "prediction_kind: expected literal 'direct-finite-probability-measure'"
+    ) == (
+        "model interface must pair finite probability measures with finite outcome spaces, "
+        "or autoregressive sequence probabilities with eos-terminated finite token "
+        "sequence spaces"
+    )
 
     record = _model_interface_record()
     record["output_encoding"] = "tensor"
@@ -140,7 +175,11 @@ def test_model_interface_rejects_unsupported_prediction_contracts() -> None:
         capture_model_interface_error(
             lambda: ModelInterface.from_record(record, outcome_space=_outcome_space())
         )
-    ) == "output_encoding: expected literal 'probability-mass-sequence'"
+    ) == (
+        "model interface must pair finite probability measures with finite outcome spaces, "
+        "or autoregressive sequence probabilities with eos-terminated finite token "
+        "sequence spaces"
+    )
 
 
 def test_model_interface_rejects_scoring_benchmark_and_tensor_fields() -> None:
