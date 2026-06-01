@@ -58,9 +58,9 @@ _discriminatable_resolution_cache: dict[
     tuple[str, int, str, str, int, int, float],
     tuple[int, int],
 ] = {}
-_readable_isotropic_scale_cache: dict[
-    tuple[str, int, int, int, int, float, float],
-    float,
+_canvas_fit_component_bounds_cache: dict[
+    tuple[str, int, int, int],
+    tuple[tuple[int, int, int, int] | None, ...],
 ] = {}
 _rejection_cache_bins_per_axis = 8
 _rejection_cache_cell_limit = 4096
@@ -809,91 +809,73 @@ def _accepted_variation_coordinate(
         transform=transform,
         thresholds=affine_acceptance_thresholds,
     )
-    for sampler, attempt_count in (
-        (_readable_variation_coordinate_record, 512),
-        (_variation_coordinate_record, 128),
-    ):
-        sampler_name = "broad" if sampler is _variation_coordinate_record else "readable"
-        for _attempt in range(attempt_count):
-            _increment_counter(counters, "candidate_count")
-            _increment_counter(counters, f"{sampler_name}_candidate_count")
-            if sampler is _readable_variation_coordinate_record:
-                coordinate = dict(
-                    _readable_variation_coordinate_record(
-                        formation=formation,
-                        transform=transform,
-                        generator=generator,
-                        sequence_index=sequence_index,
-                        width=width,
-                        height=height,
-                        minimum_pairwise_l1=minimum_pairwise_l1,
-                        thresholds=affine_acceptance_thresholds,
-                    )
-                )
-                candidate_thresholds = _readable_affine_acceptance_thresholds(
-                    affine_acceptance_thresholds
-                )
-            else:
-                coordinate = dict(
-                    _variation_coordinate_record(
-                        transform=transform,
-                        generator=generator,
-                        sequence_index=sequence_index,
-                        thresholds=affine_acceptance_thresholds,
-                    )
-                )
-                candidate_thresholds = affine_acceptance_thresholds
-            cache_cell = _rejection_cache_cell_key(
-                coordinate=coordinate,
+    for _attempt in range(640):
+        _increment_counter(counters, "candidate_count")
+        _increment_counter(counters, "declared_distribution_candidate_count")
+        coordinate = dict(
+            _variation_coordinate_record(
                 transform=transform,
-                cache_scope=cache_scope,
+                generator=generator,
+                sequence_index=sequence_index,
             )
+        )
+        cache_cell = _rejection_cache_cell_key(
+            coordinate=coordinate,
+            transform=transform,
+            cache_scope=cache_scope,
+        )
+        if (
+            rejection_cache is not None
+            and cache_cell is not None
+            and rejection_cache.contains(cache_cell[0])
+        ):
+            _increment_counter(counters, "cached_reject_count")
+            continue
+        if not _affine_coordinate_passes_fast_thresholds(
+            coordinate,
+            affine_acceptance_thresholds,
+        ):
+            _increment_counter(counters, "fast_reject_count")
             if (
                 rejection_cache is not None
                 and cache_cell is not None
-                and rejection_cache.contains(cache_cell[0])
+                and _affine_cell_is_certified_fast_reject(
+                    cell_bounds=cache_cell[1],
+                    thresholds=affine_acceptance_thresholds,
+                )
             ):
-                _increment_counter(counters, "cached_reject_count")
+                _increment_counter(counters, "rejection_certificate_count")
+                if rejection_cache.add(cache_cell[0]):
+                    _increment_counter(counters, "rejection_cache_insert_count")
+                else:
+                    _increment_counter(counters, "rejection_cache_saturated_count")
+            continue
+        if not _affine_coordinate_fits_canvas(
+            formation=formation,
+            width=width,
+            height=height,
+            sequence_index=sequence_index,
+            coordinate=coordinate,
+        ):
+            _increment_counter(counters, "canvas_fit_reject_count")
+            continue
+        try:
+            _increment_counter(counters, "discriminability_check_count")
+            if not formation.component_discriminability_passes(
+                width=width,
+                height=height,
+                sequence_length=1,
+                sequence_index=0,
+                variation_coordinates=(coordinate,),
+                minimum_pairwise_l1=minimum_pairwise_l1,
+            ):
+                _increment_counter(counters, "discriminability_reject_count")
                 continue
-            if not _affine_coordinate_passes_fast_thresholds(coordinate, candidate_thresholds):
-                _increment_counter(counters, "fast_reject_count")
-                if (
-                    rejection_cache is not None
-                    and cache_cell is not None
-                    and _affine_cell_is_certified_fast_reject(
-                        cell_bounds=cache_cell[1],
-                        thresholds=candidate_thresholds,
-                    )
-                ):
-                    _increment_counter(counters, "rejection_certificate_count")
-                    if rejection_cache.add(cache_cell[0]):
-                        _increment_counter(counters, "rejection_cache_insert_count")
-                    else:
-                        _increment_counter(counters, "rejection_cache_saturated_count")
-                continue
-            if sampler is _readable_variation_coordinate_record:
-                _increment_counter(counters, "readable_certificate_accept_count")
-                _increment_counter(counters, "accepted_count")
-                return coordinate
-            try:
-                analysis_coordinate = dict(coordinate)
-                analysis_coordinate["sequence_index"] = 0
-                _increment_counter(counters, "analysis_discriminability_check_count")
-                if not formation.component_discriminability_passes(
-                    width=width,
-                    height=height,
-                    sequence_length=1,
-                    sequence_index=0,
-                    variation_coordinates=(analysis_coordinate,),
-                    minimum_pairwise_l1=minimum_pairwise_l1,
-                ):
-                    _increment_counter(counters, "analysis_reject_count")
-                    continue
-            except ObservationFormationValidationError:
-                _increment_counter(counters, "validation_error_count")
-                continue
-            _increment_counter(counters, "accepted_count")
-            return coordinate
+        except ObservationFormationValidationError:
+            _increment_counter(counters, "validation_error_count")
+            continue
+        _increment_counter(counters, "accepted_count")
+        return coordinate
     identity_coordinate = _identity_variation_coordinate_record(
         transform=transform,
         sequence_index=sequence_index,
@@ -916,204 +898,6 @@ def _accepted_variation_coordinate(
     raise ObservationGenerationError(
         "could not sample an identity-preserving affine coordinate"
     )
-
-
-def _readable_variation_coordinate_record(
-    *,
-    formation: ObservationFormationDeclaration,
-    transform: VariationTransformDeclaration,
-    generator: random.Random,
-    sequence_index: int,
-    width: int,
-    height: int,
-    minimum_pairwise_l1: float,
-    thresholds: Mapping[str, float],
-) -> Mapping[str, object]:
-    spatial = transform.spatial_affine
-    if spatial.spatial_rank != 2:
-        return _variation_coordinate_record(
-            transform=transform,
-            generator=generator,
-            sequence_index=sequence_index,
-        )
-    minimum_scale = _minimum_certified_readable_isotropic_scale(
-        formation=formation,
-        sequence_index=sequence_index,
-        width=width,
-        height=height,
-        minimum_pairwise_l1=minimum_pairwise_l1,
-        preferred_minimum_scale=max(
-            0.9,
-            thresholds.get("affine_minimum_singular_value", 0.0),
-        ),
-    )
-    maximum_scale = _maximum_canvas_fit_isotropic_scale(
-        formation=formation,
-        sequence_length=1,
-        sequence_index=sequence_index,
-        width=width,
-        height=height,
-    )
-    if maximum_scale < minimum_scale:
-        maximum_scale = minimum_scale
-    scale = generator.uniform(minimum_scale, maximum_scale)
-    margin = max(0.0, 1.0 - min(scale, 1.0)) / 2.0
-    tx = generator.uniform(-margin, margin)
-    ty = generator.uniform(-margin, margin)
-    return {
-        "kind": "field-variation-transform-coordinate",
-        "sequence_index": sequence_index,
-        "spatial_affine": {
-            "kind": "spatial-affine-coordinate",
-            "coordinate_system": spatial.coordinate_system,
-            "matrix": [[scale, 0.0, tx], [0.0, scale, ty], [0.0, 0.0, 1.0]],
-        },
-    }
-
-
-def _readable_affine_acceptance_thresholds(
-    thresholds: Mapping[str, float],
-) -> Mapping[str, float]:
-    relaxed = dict(thresholds)
-    for key in (
-        "affine_minimum_absolute_determinant",
-        "affine_minimum_singular_value",
-        "affine_minimum_projected_extent",
-    ):
-        relaxed.pop(key, None)
-    return relaxed
-
-
-def _minimum_certified_readable_isotropic_scale(
-    *,
-    formation: ObservationFormationDeclaration,
-    sequence_index: int,
-    width: int,
-    height: int,
-    minimum_pairwise_l1: float,
-    preferred_minimum_scale: float,
-) -> float:
-    # Certify the conservative Digits readable envelope once per canvas, then
-    # trust samples drawn inside it instead of rerendering every candidate.
-    preferred = min(1.0, max(0.0, preferred_minimum_scale))
-    cache_key = (
-        str(formation.digest),
-        1,
-        sequence_index,
-        width,
-        height,
-        minimum_pairwise_l1,
-        preferred,
-    )
-    cached = _readable_isotropic_scale_cache.get(cache_key)
-    if cached is not None:
-        return cached
-    if _isotropic_translation_box_passes_discriminability(
-        formation=formation,
-        sequence_index=sequence_index,
-        width=width,
-        height=height,
-        scale=preferred,
-        minimum_pairwise_l1=minimum_pairwise_l1,
-    ):
-        _readable_isotropic_scale_cache[cache_key] = preferred
-        return preferred
-    upper = 1.0
-    if not _isotropic_translation_box_passes_discriminability(
-        formation=formation,
-        sequence_index=sequence_index,
-        width=width,
-        height=height,
-        scale=upper,
-        minimum_pairwise_l1=minimum_pairwise_l1,
-    ):
-        _readable_isotropic_scale_cache[cache_key] = upper
-        return upper
-    lower = preferred
-    for _iteration in range(8):
-        midpoint = (lower + upper) / 2.0
-        if _isotropic_translation_box_passes_discriminability(
-            formation=formation,
-            sequence_index=sequence_index,
-            width=width,
-            height=height,
-            scale=midpoint,
-            minimum_pairwise_l1=minimum_pairwise_l1,
-        ):
-            upper = midpoint
-        else:
-            lower = midpoint
-    _readable_isotropic_scale_cache[cache_key] = upper
-    return upper
-
-
-def _maximum_canvas_fit_isotropic_scale(
-    *,
-    formation: ObservationFormationDeclaration,
-    sequence_length: int,
-    sequence_index: int,
-    width: int,
-    height: int,
-) -> float:
-    del formation, sequence_length, sequence_index, width, height
-    return 1.0
-
-
-def _isotropic_translation_box_passes_discriminability(
-    *,
-    formation: ObservationFormationDeclaration,
-    sequence_index: int,
-    width: int,
-    height: int,
-    scale: float,
-    minimum_pairwise_l1: float,
-) -> bool:
-    margin = max(0.0, 1.0 - min(scale, 1.0)) / 2.0
-    coordinates = tuple(
-        _isotropic_scale_variation_coordinate(
-            transform=formation.variation_transform,
-            sequence_index=sequence_index,
-            scale=scale,
-            translation=translation,
-        )
-        for translation in (
-            (-margin, -margin),
-            (-margin, margin),
-            (margin, -margin),
-            (margin, margin),
-        )
-    )
-    try:
-        return formation.component_discriminability_passes(
-            width=width,
-            height=height,
-            sequence_length=1,
-            sequence_index=0,
-            variation_coordinates=coordinates,
-            minimum_pairwise_l1=minimum_pairwise_l1,
-        )
-    except ObservationFormationValidationError:
-        return False
-
-
-def _isotropic_scale_variation_coordinate(
-    *,
-    transform: VariationTransformDeclaration,
-    sequence_index: int,
-    scale: float,
-    translation: tuple[float, float] = (0.0, 0.0),
-) -> Mapping[str, object]:
-    spatial = transform.spatial_affine
-    tx, ty = translation
-    return {
-        "kind": "field-variation-transform-coordinate",
-        "sequence_index": sequence_index,
-        "spatial_affine": {
-            "kind": "spatial-affine-coordinate",
-            "coordinate_system": spatial.coordinate_system,
-            "matrix": [[scale, 0.0, tx], [0.0, scale, ty], [0.0, 0.0, 1.0]],
-        },
-    }
 
 
 def _increment_counter(counters: dict[str, float], name: str, value: float = 1.0) -> None:
@@ -1362,6 +1146,94 @@ def _affine_coordinate_passes_fast_thresholds(
     overlap_width = max(0.0, min(maximum_x, 1.0) - max(minimum_x, 0.0))
     overlap_height = max(0.0, min(maximum_y, 1.0) - max(minimum_y, 0.0))
     return (overlap_width * overlap_height) / envelope_area >= minimum_overlap
+
+
+def _affine_coordinate_fits_canvas(
+    *,
+    formation: ObservationFormationDeclaration,
+    width: int,
+    height: int,
+    sequence_index: int,
+    coordinate: Mapping[str, object],
+) -> bool:
+    matrix = _affine_coordinate_matrix(coordinate)
+    a, b, tx = matrix[0]
+    c, d, ty = matrix[1]
+    center = (0.5, 0.5)
+    for bounds in _canvas_fit_component_bounds(
+        formation=formation,
+        width=width,
+        height=height,
+        sequence_index=sequence_index,
+    ):
+        if bounds is None:
+            continue
+        min_x, min_y, max_x, max_y = bounds
+        source_corners = (
+            ((min_x - 1.5) / width, (min_y - 1.5) / height),
+            ((max_x + 2.5) / width, (min_y - 1.5) / height),
+            ((min_x - 1.5) / width, (max_y + 2.5) / height),
+            ((max_x + 2.5) / width, (max_y + 2.5) / height),
+        )
+        for x, y in source_corners:
+            transformed_x = center[0] + a * (x - center[0]) + b * (y - center[1]) + tx
+            transformed_y = center[1] + c * (x - center[0]) + d * (y - center[1]) + ty
+            if transformed_x < 0.0 or transformed_x > 1.0:
+                return False
+            if transformed_y < 0.0 or transformed_y > 1.0:
+                return False
+    return True
+
+
+def _canvas_fit_component_bounds(
+    *,
+    formation: ObservationFormationDeclaration,
+    width: int,
+    height: int,
+    sequence_index: int,
+) -> tuple[tuple[int, int, int, int] | None, ...]:
+    key = (str(formation.digest), width, height, sequence_index)
+    cached = _canvas_fit_component_bounds_cache.get(key)
+    if cached is not None:
+        return cached
+    bounds = tuple(
+        _positive_field_bounds(
+            formation.component_field(
+                width=width,
+                height=height,
+                sequence_length=1,
+                sequence_index=sequence_index,
+                component_index=component_index,
+            )
+        )
+        for component_index in range(len(formation.components))
+    )
+    _canvas_fit_component_bounds_cache[key] = bounds
+    return bounds
+
+
+def _positive_field_bounds(
+    field: FieldObservation,
+) -> tuple[int, int, int, int] | None:
+    channels, height, width = field.shape
+    min_x = width
+    min_y = height
+    max_x = -1
+    max_y = -1
+    for channel in range(channels):
+        channel_offset = channel * width * height
+        for y_index in range(height):
+            row_offset = channel_offset + y_index * width
+            for x_index in range(width):
+                if field.values[row_offset + x_index] <= 0.0:
+                    continue
+                min_x = min(min_x, x_index)
+                min_y = min(min_y, y_index)
+                max_x = max(max_x, x_index)
+                max_y = max(max_y, y_index)
+    if max_x < min_x or max_y < min_y:
+        return None
+    return (min_x, min_y, max_x, max_y)
 
 
 def _affine_singular_values(

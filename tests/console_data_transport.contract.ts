@@ -161,13 +161,9 @@ if (generatedSample === undefined) {
 assertEqual(generatedSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
 assertEqual(generatedSample.field_shape.join('x'), '1x79x72', 'sample field shape');
 assertEqual(
-  [
-    generatedSample.preview_crop.left,
-    generatedSample.preview_crop.top,
-    generatedSample.preview_crop.size,
-  ].join(','),
-  '20,26,29',
-  'sample preview crop',
+  Object.hasOwn(generatedSample, 'preview_crop'),
+  false,
+  'sample preview crop omitted',
 );
 assertEqual(
   generatedSample.latent_coordinates.map((coordinate) => coordinate.role).join(','),

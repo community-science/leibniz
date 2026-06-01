@@ -27,7 +27,6 @@ from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.local_results import LocalResultImportError, load_console_result_view
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_operators import model_operator_vocabulary
-from leibniz.observation_formation import FieldObservation
 from leibniz.observation_generation import (
     ObservationGenerator,
     field_to_png_data_url,
@@ -378,7 +377,6 @@ class ConsoleDataBuilder:
                         "complexity": sample.complexity,
                         "field_shape": list(sample.field.shape),
                         "image_data_url": field_to_png_data_url(sample.field),
-                        "preview_crop": _square_content_crop(sample.field, padding=2),
                         "materialization_plan": sample.materialization_plan.to_record(),
                         "latent_coordinates": [
                             dict(coordinate) for coordinate in sample.latent_coordinates
@@ -482,21 +480,6 @@ def _outcome_atom_name(outcome_ids: tuple[str, ...]) -> str:
     if len(prefixes) == 1:
         return prefixes.pop()
     return "outcome"
-
-
-def _square_content_crop(field: FieldObservation, *, padding: int) -> Mapping[str, object]:
-    _channels, height, width = field.shape
-    pixels = [index for index, value in enumerate(field.values) if value > 0.0]
-    if not pixels:
-        return {"left": 0, "top": 0, "size": max(width, height)}
-    xs = [index % width for index in pixels]
-    ys = [index // width for index in pixels]
-    min_x, max_x = min(xs), max(xs)
-    min_y, max_y = min(ys), max(ys)
-    side = max(max_x - min_x + 1, max_y - min_y + 1) + padding * 2
-    left = round((min_x + max_x + 1 - side) / 2.0)
-    top = round((min_y + max_y + 1 - side) / 2.0)
-    return {"left": left, "top": top, "size": side}
 
 
 def _balanced_component_sequences(

@@ -62,6 +62,29 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     assert not (tmp_path / "results").exists()
 
 
+def test_digits_benchmark_runner_dry_run_does_not_discover_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_runtime_discovery(_requested: object) -> TensorRuntime:
+        raise AssertionError("dry-run should not resolve a tensor runtime")
+
+    monkeypatch.setattr(benchmark_runner, "resolve_tensor_runtime", fail_runtime_discovery)
+
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=tmp_path / "results",
+            sample_count=2,
+            train_steps=1,
+            dry_run=True,
+        )
+    )
+
+    assert summary.dry_run is True
+
+
 def test_digits_benchmark_runner_rejects_fixed_shape_architecture(
     tmp_path: Path,
 ) -> None:

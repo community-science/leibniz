@@ -224,8 +224,8 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert samples[0]["field_shape"] == [1, 79, 72]
     assert _png_dimensions(str(samples[0]["image_data_url"])) == (72, 79)
     assert _png_dimensions(str(samples[1]["image_data_url"])) == (147, 192)
-    assert samples[0]["preview_crop"] == {"left": 20, "top": 26, "size": 29}
-    assert samples[1]["preview_crop"] == {"left": 56, "top": 95, "size": 58}
+    assert "preview_crop" not in samples[0]
+    assert "preview_crop" not in samples[1]
     latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])
     variation = next(
         coordinate for coordinate in latent_coordinates if coordinate["role"] == "variation"

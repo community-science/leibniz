@@ -296,11 +296,14 @@ def run_benchmark(
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
-    try:
-        generation_runtime = resolve_tensor_runtime(plan.tensor_device)
-        generation_memory_limit = tensor_runtime_available_memory_bytes(generation_runtime)
-    except TensorRuntimeError as error:
-        raise BenchmarkRunnerError(str(error)) from error
+    if plan.dry_run:
+        generation_memory_limit = _initial_generation_memory_limit_bytes
+    else:
+        try:
+            generation_runtime = resolve_tensor_runtime(plan.tensor_device)
+            generation_memory_limit = tensor_runtime_available_memory_bytes(generation_runtime)
+        except TensorRuntimeError as error:
+            raise BenchmarkRunnerError(str(error)) from error
     evaluation_batch = generator.sample_batch(
         component_count=_component_count,
         sample_count=plan.resolved_evaluation_sample_count,

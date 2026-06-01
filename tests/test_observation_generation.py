@@ -7,6 +7,7 @@ import pytest
 
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlan
+from leibniz.observation_formation import FieldObservation
 from leibniz.observation_generation import (
     ObservationGenerationError,
     field_to_png_bytes,
@@ -135,11 +136,15 @@ def test_digits_observation_generator_records_optional_timing() -> None:
     variation_counters = cast(dict[str, float], variation["counters"])
     assert variation_counters["candidate_count"] >= variation_counters["accepted_count"]
     assert variation_counters["accepted_count"] == 2.0
-    assert variation_counters["candidate_count"] == variation_counters["accepted_count"]
+    assert variation_counters["declared_distribution_candidate_count"] == variation_counters[
+        "candidate_count"
+    ]
     assert "canvas_discriminability_check_count" not in variation_counters
     assert "analysis_discriminability_check_count" not in variation_counters
-    assert variation_counters["readable_certificate_accept_count"] == 2.0
-    assert "fast_reject_count" not in variation_counters
+    assert "readable_certificate_accept_count" not in variation_counters
+    assert variation_counters["discriminability_check_count"] >= variation_counters[
+        "accepted_count"
+    ]
     assert observation["sample_count"] == 2
     assert cast(float, observation["seconds"]) > 0
 
@@ -264,6 +269,15 @@ def test_digits_observation_generator_applies_recorded_variation_coordinates() -
     assert all(0.0 <= value <= 1.0 for value in sample.field.values)
 
 
+def test_digits_observation_generator_rejects_edge_clipped_affine_samples() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    batch = generator.sample_batch(component_count=1, sample_count=3, seed=1)
+
+    for sample in batch.samples:
+        assert not _field_has_positive_edge(sample.field)
+
+
 def test_generated_observation_records_can_include_fields() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
     batch = generator.sample_batch(component_count=1, sample_count=1, seed=303)
@@ -385,6 +399,23 @@ def _within_transform_bounds(
         for row, bound_row in zip(matrix, matrix_bounds, strict=True)
         for value, (lower, upper) in zip(row, bound_row, strict=True)
     )
+
+
+def _field_has_positive_edge(field: FieldObservation) -> bool:
+    channels, height, width = field.shape
+    for channel in range(channels):
+        channel_offset = channel * width * height
+        for x_index in range(width):
+            if field.values[channel_offset + x_index] > 0.0:
+                return True
+            if field.values[channel_offset + (height - 1) * width + x_index] > 0.0:
+                return True
+        for y_index in range(height):
+            if field.values[channel_offset + y_index * width] > 0.0:
+                return True
+            if field.values[channel_offset + y_index * width + width - 1] > 0.0:
+                return True
+    return False
 
 
 def capture_generation_error(call: Callable[[], object]) -> ObservationGenerationError:

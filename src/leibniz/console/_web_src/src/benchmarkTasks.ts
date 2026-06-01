@@ -33,15 +33,8 @@ export type GeneratedObservationSampleRecord = {
   complexity: number;
   field_shape: number[];
   image_data_url: string;
-  preview_crop: GeneratedObservationPreviewCropRecord;
   materialization_plan: Record<string, unknown>;
   latent_coordinates: GeneratedLatentCoordinateRecord[];
-};
-
-export type GeneratedObservationPreviewCropRecord = {
-  left: number;
-  top: number;
-  size: number;
 };
 
 export type GeneratedLatentCoordinateRecord = {
