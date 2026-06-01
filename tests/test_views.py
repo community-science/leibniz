@@ -407,10 +407,12 @@ def _competence_dataset(
             CompetenceIntegralSource(
                 measurement=measurements[f"{prefix}.boolean-evidence-a@0.1.0"],
                 materialization_plan=first_plan,
+                complexity=first_complexity,
             ),
             CompetenceIntegralSource(
                 measurement=measurements[f"{prefix}.boolean-evidence-b@0.1.0"],
                 materialization_plan=second_plan,
+                complexity=second_complexity,
             ),
         ),
     )
@@ -429,8 +431,6 @@ def _materialization_plan(
             kind="materialization-declaration",
             protocol_id=ProtocolIdentifier.parse("core.boolean.materialization@0.1.0"),
         ),
-        scale_assignment=AxisAssignment(values={"L": complexity}),
-        complexity_assignment=AxisAssignment(values={"C": complexity}),
         resolution_assignment=AxisAssignment(values={"N": complexity}),
         seed=101,
     )

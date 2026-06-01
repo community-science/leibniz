@@ -243,7 +243,6 @@ function emptyBenchmarkResult(benchmark: BenchmarkTaskRecord): BenchmarkResultRe
     leaderboard: [],
     model_inspections: [],
     proposals: [],
-    scale_axis: benchmark.scale_axis,
     training_history: [],
   };
 }
@@ -1133,7 +1132,7 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
         {visibleSamples.map(({ batch, sample }) => (
           <BenchmarkSampleCard
             density={batch.presentation.sample_card_density}
-            key={`${batch.mode}-${batch.scale}-${sample.index}-${sample.outcome_id}`}
+            key={`${batch.mode}-${batch.component_count}-${sample.index}-${sample.outcome_id}`}
             onSelect={() => setSelectedSampleKey(sampleKey(batch, sample))}
             sample={sample}
             selected={sampleKey(batch, sample) === selectedKey}
@@ -1215,5 +1214,5 @@ function sampleKey(
   batch: GeneratedObservationBatchRecord,
   sample: GeneratedObservationSampleRecord,
 ): string {
-  return `${batch.mode}:${batch.scale}:${batch.seed}:${batch.sample_count}:${sample.index}:${sample.outcome_id}`;
+  return `${batch.mode}:${batch.component_count}:${batch.seed}:${batch.sample_count}:${sample.index}:${sample.outcome_id}`;
 }

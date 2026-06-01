@@ -842,7 +842,7 @@ function RunHistoryTable({
               <span role="cell">{run.run_slug}</span>
               <span role="cell">{run.score.toFixed(4)}</span>
               <span role="cell">{formatCost(costValue(run.cost_summary, costAxis))}</span>
-              <span role="cell">{run.complexity ?? run.scale ?? 'n/a'}</span>
+              <span role="cell">{run.complexity ?? 'n/a'}</span>
               <span role="cell">{run.measurement_count}</span>
             </button>
           );

@@ -5,7 +5,6 @@ export type BenchmarkTaskRecord = {
   benchmark_id: string;
   label: string;
   source_path: string;
-  scale_axis: string;
   complexity_axis: string;
   outcome_atom_name: string;
   outcome_atom_count: number;
@@ -15,7 +14,7 @@ export type BenchmarkTaskRecord = {
 export type GeneratedObservationBatchRecord = {
   mode: string;
   label: string;
-  scale: number;
+  component_count: number;
   seed: number;
   sample_count: number;
   presentation: GeneratedObservationBatchPresentationRecord;

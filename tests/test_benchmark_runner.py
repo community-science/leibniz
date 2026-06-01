@@ -49,7 +49,7 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     assert summary.dry_run is True
     assert summary.measurement_count == 2
     assert summary.run_slug.startswith(
-        "digits-arch-bb0dde9254dc-l1-seed101-samples2-steps1-train-"
+        "digits-arch-bb0dde9254dc-c1-seed101-samples2-steps1-train-"
     )
     assert summary.measurement_dataset_path == (
         tmp_path
@@ -66,7 +66,7 @@ def test_digits_benchmark_runner_rejects_fixed_shape_architecture(
     tmp_path: Path,
 ) -> None:
     sample = load_observation_generator(_digits_benchmark_root).sample_batch(
-        scale=1,
+        component_count=1,
         sample_count=1,
         seed=101,
     ).samples[0]
@@ -120,9 +120,9 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         (_digits_benchmark_root / "manifest.json").read_bytes()
     ).manifest
 
-    dataset_document.dataset.validate_manifest(manifest, scale=1)
-    assert summary.measurement_count == 3
-    assert len(dataset_document.dataset.measurements) == 3
+    dataset_document.dataset.validate_manifest(manifest)
+    assert summary.measurement_count == 12
+    assert len(dataset_document.dataset.measurements) == 12
     assert inspection_document.inspection.cost_summary.parameter_count == 50
     assert inspection_document.inspection.cost_summary.inference_flops == 1104
     assert summary.training_summary_path.exists()
@@ -172,7 +172,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert cast(float, roofline["peak_bytes_per_second"]) > 0
     assert training_throughput["sample_count"] == 2
     assert cast(float, training_throughput["samples_per_second"]) > 0
-    assert evaluation_throughput["sample_count"] == 3
+    assert evaluation_throughput["sample_count"] == 12
     assert cast(float, evaluation_throughput["samples_per_second"]) > 0
     assert roofline_comparison["status"] == "available"
     assert roofline_comparison["model"] == "operational-intensity"
@@ -185,16 +185,23 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_run.validation_history[0].step == 0
     assert training_run.validation_history[-1].step == 1
     sampled_competence = cast(dict[str, object], training_summary["sampled_competence"])
-    assert sampled_competence["kind"] == "sampled-complexity-class"
+    assert sampled_competence["kind"] == "sampled-competence-curriculum"
     assert sampled_competence["sampling_rule"] == "generator-uniform-component-sequence-v1"
     assert (
         sampled_competence["difficulty_assumption"]
         == "approximately-uniform-within-complexity-class"
     )
     assert sampled_competence["complexity_axis"] is None
-    assert sampled_competence["complexity"] == pytest.approx(math.log2(604800))
-    assert sampled_competence["sample_count"] == 3
+    assert sampled_competence["complexity"] == pytest.approx(math.log2(116640))
+    assert sampled_competence["sample_count"] == 12
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
+    points = cast(list[dict[str, object]], sampled_competence["points"])
+    assert len(points) == 4
+    assert [point["sample_count"] for point in points] == [3, 3, 3, 3]
+    assert points[0]["complexity"] == pytest.approx(math.log2(116640))
+    assert [cast(float, point["complexity"]) for point in points] == sorted(
+        cast(float, point["complexity"]) for point in points
+    )
 
 
 def test_digits_benchmark_runner_records_convergence_protocol_controls(
@@ -320,7 +327,7 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
     throughput = cast(dict[str, object], training_summary["throughput"])
     fallbacks = cast(list[dict[str, object]], throughput["runtime_fallbacks"])
 
-    assert calls == ["mps", "cpu"]
+    assert calls == ["auto", "mps", "cpu"]
     assert training_summary["tensor_device"] == "cpu"
     assert throughput["tensor_device"] == "cpu"
     assert fallbacks == [
@@ -350,8 +357,8 @@ def test_digits_benchmark_runner_run_slug_includes_training_controls() -> None:
         optimizer="adam",
     )
 
-    assert base_plan.run_slug.startswith("l1-seed401-samples4-steps10-train-")
-    assert alternate_plan.run_slug.startswith("l1-seed401-samples4-steps10-train-")
+    assert base_plan.run_slug.startswith("c1-seed401-samples4-steps10-train-")
+    assert alternate_plan.run_slug.startswith("c1-seed401-samples4-steps10-train-")
     assert base_plan.run_slug != alternate_plan.run_slug
 
 
@@ -417,7 +424,9 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
         "training-summary",
     }
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
-    assert leaderboard[0]["observed_complexities"] == [pytest.approx(math.log2(604800))]
+    observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
+    assert observed_complexities[0] == pytest.approx(math.log2(116640))
+    assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
     assert points[0]["sample_count"] == 2
     inspections = cast(list[dict[str, object]], result["model_inspections"])
@@ -494,7 +503,7 @@ def test_digits_benchmark_runner_materializes_running_training_history(
     assert not progress_path.exists()
 
 
-def test_digits_benchmark_runner_omits_scale_trace_for_fixed_outcome_task(
+def test_digits_benchmark_runner_records_fixed_component_count(
     tmp_path: Path,
 ) -> None:
     summary = run_benchmark(
@@ -512,7 +521,7 @@ def test_digits_benchmark_runner_omits_scale_trace_for_fixed_outcome_task(
         summary.training_summary_path.read_bytes(),
         description="training summary",
     )
-    assert "scale_evaluation_trace" not in training_summary
+    assert training_summary["component_count"] == 1
 
 
 def test_cli_runs_digits_benchmark_dry_run(
@@ -540,7 +549,7 @@ def test_cli_runs_digits_benchmark_dry_run(
     assert captured.err == ""
     assert captured.out.startswith(
         "planned benchmark run "
-        "digits-arch-bb0dde9254dc-l1-seed101-samples2-stepsconverge-train-"
+        "digits-arch-bb0dde9254dc-c1-seed101-samples2-stepsconverge-train-"
     )
     assert not (tmp_path / "results").exists()
 

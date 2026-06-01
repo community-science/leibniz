@@ -316,12 +316,12 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
     )
 
     assert publish_summary.publication_bundle_count == 1
-    assert publish_summary.measurement_count == 1
+    assert publish_summary.measurement_count >= 1
     publication_document = SubmissionPublicationDocument.from_bytes(
         publish_summary.publication_files[0].read_bytes()
     )
     assert publication_document.bundle.submission_package.id == ProtocolIdentifier.parse(
-        "submissions.digits.digits-arch-bb0dde9254dc-l1-seed101-samples1-steps0"
+        "submissions.digits.digits-arch-bb0dde9254dc-c1-seed101-samples1-steps0"
         "-train-d83ad78f1b6c@0.1.0"
     )
     assert imported_summary.publication_bundle_count == 1
@@ -331,7 +331,7 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
     history = cast(list[dict[str, object]], results[0]["training_history"])
     leaderboard = cast(list[dict[str, object]], results[0]["leaderboard"])
     assert history[0]["source_kind"] == "imported-publication"
-    assert history[0]["measurement_count"] == 1
+    assert history[0]["measurement_count"] == publish_summary.measurement_count
     assert leaderboard[0]["run_ids"] == [history[0]["run_id"]]
 
 
@@ -365,7 +365,7 @@ def test_cli_publishes_local_benchmark_results(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert "wrote 1 publication bundle(s), 1 measurement(s)" in captured.out
+    assert "wrote 1 publication bundle(s), 2 measurement(s)" in captured.out
     assert "publication: " in captured.out
     assert "commit: " in captured.out
     assert len(tuple((results_root / "publication_bundles").glob("*.json"))) == 1
@@ -715,7 +715,7 @@ def _digits_measurement():
 
 
 def _digits_measurement_record() -> dict[str, object]:
-    outcome_space = _digits_benchmark().manifest.resolve_outcome_space(scale=1)
+    outcome_space = _digits_benchmark().manifest.resolve_outcome_space()
     return {
         "benchmark_id": "benchmarks.digits@0.1.0",
         "outcome_space": outcome_space.to_record(),

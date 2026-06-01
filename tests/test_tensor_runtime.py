@@ -176,11 +176,11 @@ def test_formation_tensor_cache_matches_varied_pure_digits_formation() -> None:
 def test_formation_tensor_cache_batch_tensors_match_pure_observation_batch() -> None:
     runtime = resolve_tensor_runtime("cpu")
     generator = load_observation_generator(_digits_benchmark_root)
-    observation_batch = generator.sample_batch(scale=2, sample_count=3, seed=515)
-    formation_batch = generator.sample_formation_batch(scale=2, sample_count=3, seed=515)
+    observation_batch = generator.sample_batch(component_count=1, sample_count=3, seed=515)
+    formation_batch = generator.sample_formation_batch(component_count=1, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
-        for outcome in generator.benchmark_manifest.resolve_outcome_space(scale=2).outcomes
+        for outcome in generator.benchmark_manifest.resolve_outcome_space().outcomes
     )
     cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
 
@@ -203,10 +203,10 @@ def test_formation_tensor_cache_batches_grid_sampling_once(
 ) -> None:
     runtime = resolve_tensor_runtime("cpu")
     generator = load_observation_generator(_digits_benchmark_root)
-    formation_batch = generator.sample_formation_batch(scale=2, sample_count=3, seed=515)
+    formation_batch = generator.sample_formation_batch(component_count=1, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
-        for outcome in generator.benchmark_manifest.resolve_outcome_space(scale=2).outcomes
+        for outcome in generator.benchmark_manifest.resolve_outcome_space().outcomes
     )
     cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
     calls = {"affine_grid": 0, "grid_sample": 0}
@@ -242,10 +242,10 @@ def test_formation_tensor_cache_batch_tensors_use_generated_coordinate_values(
 ) -> None:
     runtime = resolve_tensor_runtime("cpu")
     generator = load_observation_generator(_digits_benchmark_root)
-    formation_batch = generator.sample_formation_batch(scale=2, sample_count=3, seed=515)
+    formation_batch = generator.sample_formation_batch(component_count=1, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
-        for outcome in generator.benchmark_manifest.resolve_outcome_space(scale=2).outcomes
+        for outcome in generator.benchmark_manifest.resolve_outcome_space().outcomes
     )
     cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
 

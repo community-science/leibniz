@@ -510,7 +510,7 @@ def _parser() -> argparse.ArgumentParser:
         help="time benchmark formation paths",
     )
     time_formation.add_argument("--benchmark-root", type=Path, required=True)
-    time_formation.add_argument("--scale", default=1, type=int)
+    time_formation.add_argument("--component-count", default=1, type=int)
     time_formation.add_argument("--sample-count", default=64, type=int)
     time_formation.add_argument("--seed", default=101, type=int)
     time_formation.add_argument("--repeats", default=3, type=int)
@@ -650,7 +650,7 @@ def _benchmark(args: argparse.Namespace) -> int:
             summary = time_formation_paths(
                 FormationTimingPlan(
                     benchmark_root=args.benchmark_root,
-                    scale=args.scale,
+                    component_count=args.component_count,
                     sample_count=args.sample_count,
                     seed=args.seed,
                     repeats=args.repeats,

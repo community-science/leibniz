@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.identifiers import ProtocolIdentifier
@@ -14,6 +15,7 @@ from leibniz.prediction_spaces import FiniteOutcomeSpace
 
 __all__ = [
     "finite_measurements_for_predictions",
+    "sampled_competence_curriculum_record",
     "sampled_competence_record",
     "validation_competence",
 ]
@@ -104,7 +106,7 @@ def sampled_competence_record(
         "sampling_rule": "generator-uniform-component-sequence-v1",
         "difficulty_assumption": "approximately-uniform-within-complexity-class",
         "benchmark_id": str(batch.benchmark_id),
-        "scale": batch.scale,
+        "component_count": batch.component_count,
         "complexity_axis": complexity_axis,
         "complexity": next(iter(complexities)),
         "seed": batch.seed,
@@ -118,6 +120,47 @@ def sampled_competence_record(
     }
 
 
+def sampled_competence_curriculum_record(
+    points: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Return aggregate competence evidence for a progressive complexity sweep."""
+
+    if not points:
+        raise ValueError("sampled competence curriculum requires at least one point")
+    first = points[0]
+    sample_counts = tuple(
+        _positive_int(point.get("sample_count"), field="sampled_competence.sample_count")
+        for point in points
+    )
+    accepted_masses = tuple(
+        _finite_score(
+            point.get("mean_accepted_mass"),
+            field="sampled_competence.mean_accepted_mass",
+        )
+        for point in points
+    )
+    total_samples = sum(sample_counts)
+    weighted_score = (
+        math.fsum(
+            mass * sample_count
+            for mass, sample_count in zip(accepted_masses, sample_counts, strict=True)
+        )
+        / total_samples
+    )
+    return {
+        "kind": "sampled-competence-curriculum",
+        "sampling_rule": first.get("sampling_rule"),
+        "difficulty_assumption": first.get("difficulty_assumption"),
+        "benchmark_id": first.get("benchmark_id"),
+        "component_count": first.get("component_count"),
+        "complexity_axis": first.get("complexity_axis"),
+        "complexity": first.get("complexity"),
+        "sample_count": total_samples,
+        "mean_accepted_mass": weighted_score,
+        "points": [dict(point) for point in points],
+    }
+
+
 def validation_competence(*, best_validation_loss: float, outcome_count: int) -> float:
     """Convert finite-outcome cross-entropy to bounded local competence."""
 
@@ -125,6 +168,21 @@ def validation_competence(*, best_validation_loss: float, outcome_count: int) ->
     if reference_cross_entropy <= 0:
         return 0.0
     return max(0.0, min(1.0, 1.0 - best_validation_loss / reference_cross_entropy))
+
+
+def _positive_int(value: object, *, field: str) -> int:
+    if type(value) is not int or value < 1:
+        raise ValueError(f"{field} must be a positive integer")
+    return value
+
+
+def _finite_score(value: object, *, field: str) -> float:
+    if not isinstance(value, int | float) or not math.isfinite(float(value)):
+        raise ValueError(f"{field} must be finite")
+    score = float(value)
+    if score < 0.0 or score > 1.0:
+        raise ValueError(f"{field} must be between 0 and 1")
+    return score
 
 
 def _sample_identifier(

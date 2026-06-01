@@ -152,7 +152,6 @@ export type ImportedPublicationBundleRecord = {
 export type BenchmarkResultRecord = {
   benchmark_id: string;
   complexity_axis?: string;
-  scale_axis?: string;
   cost_axes: CostAxisRecord[];
   leaderboard: ModelResultRecord[];
   frontiers: Record<string, ModelResultRecord[]>;
@@ -203,7 +202,6 @@ export type RunResultRecord = {
   benchmark_id: string;
   architecture_digest: string;
   model_key: string;
-  scale?: number;
   complexity?: number;
   measurement_count: number;
   score: number;

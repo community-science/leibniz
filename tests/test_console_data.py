@@ -191,11 +191,13 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     task = benchmark_tasks[0]
     assert task["kind"] == "generated-observations"
     assert task["benchmark_id"] == "benchmarks.digits@0.1.0"
-    assert task["scale_axis"] == "L"
     assert task["complexity_axis"] is None
     assert task["outcome_atom_count"] == 10
     batches = cast(list[dict[str, object]], task["batches"])
-    assert [(batch["mode"], batch["scale"], batch["sample_count"]) for batch in batches] == [
+    assert [
+        (batch["mode"], batch["component_count"], batch["sample_count"])
+        for batch in batches
+    ] == [
         ("balanced", 1, 40),
     ]
     batch = batches[0]
@@ -219,11 +221,11 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert all(".sample-0@" in str(plan["id"]) for plan in materialization_plans)
     assert len({plan["seed"] for plan in materialization_plans}) == len(materialization_plans)
     assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
-    assert samples[0]["field_shape"] == [1, 28, 40]
-    assert _png_dimensions(str(samples[0]["image_data_url"])) == (40, 28)
-    assert _png_dimensions(str(samples[1]["image_data_url"])) == (40, 20)
-    assert samples[0]["preview_crop"] == {"left": 9, "top": 2, "size": 21}
-    assert samples[1]["preview_crop"] == {"left": 10, "top": 0, "size": 21}
+    assert samples[0]["field_shape"] == [1, 34, 28]
+    assert _png_dimensions(str(samples[0]["image_data_url"])) == (28, 34)
+    assert _png_dimensions(str(samples[1]["image_data_url"])) == (24, 39)
+    assert samples[0]["preview_crop"] == {"left": 2, "top": 5, "size": 23}
+    assert samples[1]["preview_crop"] == {"left": -2, "top": 6, "size": 28}
     latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])
     variation = next(
         coordinate for coordinate in latent_coordinates if coordinate["role"] == "variation"
@@ -288,7 +290,6 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
     {
       "benchmark_id": "benchmarks.digits@0.1.0",
       "complexity_axis": "C",
-      "scale_axis": "L",
       "cost_axes": [{"key": "parameter_count", "label": "Parameters"}],
       "leaderboard": [
         {
@@ -324,7 +325,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
           "benchmark_id": "benchmarks.digits@0.1.0",
           "architecture_digest": "sha256:model",
           "model_key": "sha256:model",
-          "scale": 1,
+          "complexity": 10,
           "measurement_count": 1,
           "score": 1.0,
           "cost_summary": {

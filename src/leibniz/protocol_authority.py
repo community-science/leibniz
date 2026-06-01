@@ -346,7 +346,7 @@ def _routes() -> tuple[ProtocolArtifactRoute, ...]:
             kind="benchmark-manifest",
             semantic_kind="benchmark family",
             interpreter="leibniz.benchmarks.BenchmarkManifestDocument",
-            required_fields=frozenset(("id", "scale_parameter")),
+            required_fields=frozenset(("id", "name")),
             load_document=BenchmarkManifestDocument.from_bytes,
             document_identity=lambda document: str(
                 cast(BenchmarkManifestDocument, document).manifest.id
@@ -356,9 +356,7 @@ def _routes() -> tuple[ProtocolArtifactRoute, ...]:
             kind="latent-factor-declaration",
             semantic_kind="latent factor declaration",
             interpreter="leibniz.latent_factors.LatentFactorDeclarationDocument",
-            required_fields=frozenset(
-                ("id", "construction_factors", "sample_factors", "complexity_projections")
-            ),
+            required_fields=frozenset(("id", "construction_factors", "sample_factors")),
             load_document=LatentFactorDeclarationDocument.from_bytes,
             document_identity=lambda document: str(
                 cast(LatentFactorDeclarationDocument, document).declaration.id

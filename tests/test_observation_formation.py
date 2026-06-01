@@ -71,8 +71,6 @@ def test_digits_spatial_variation_bounds_leave_canvas_margin() -> None:
             kind="materialization-declaration",
             protocol_id=ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0"),
         ),
-        scale_assignment=AxisAssignment(values={"L": 1}),
-        complexity_assignment=AxisAssignment(values={"C": 1}),
         resolution_assignment=AxisAssignment(values={"W": 32, "H": 32}),
         seed=101,
     )
@@ -111,7 +109,11 @@ def test_digits_observation_formation_is_deterministic_for_materialization_plan(
     plan = MaterializationPlanDocument.from_bytes(
         (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
     ).plan
-    sequence = declaration.sample_component_sequence(plan=plan, sample_index=0)
+    sequence = declaration.sample_component_sequence(
+        seed=plan.seed,
+        component_count=3,
+        sample_index=0,
+    )
 
     left = declaration.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.observations.l3-sample-zero@0.1.0"),
@@ -124,7 +126,11 @@ def test_digits_observation_formation_is_deterministic_for_materialization_plan(
         component_sequence=sequence,
     )
 
-    assert sequence == declaration.sample_component_sequence(plan=plan, sample_index=0)
+    assert sequence == declaration.sample_component_sequence(
+        seed=plan.seed,
+        component_count=3,
+        sample_index=0,
+    )
     assert left == right
     assert left.field.shape == (1, 16, 48)
     assert max(left.field.values) == 1.0
@@ -159,8 +165,6 @@ def test_digits_observation_formation_uses_sampled_canvas_extent() -> None:
             kind="materialization-declaration",
             protocol_id=ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0"),
         ),
-        scale_assignment=AxisAssignment(values={"L": 3}),
-        complexity_assignment=AxisAssignment(values={"C": 3}),
         resolution_assignment=AxisAssignment(values={"W": 128, "H": 64}),
         seed=101,
     )
@@ -187,8 +191,6 @@ def test_digits_observation_formation_keeps_stroke_width_in_pixel_space() -> Non
             kind="materialization-declaration",
             protocol_id=ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0"),
         ),
-        scale_assignment=AxisAssignment(values={"L": 7}),
-        complexity_assignment=AxisAssignment(values={"C": 7}),
         resolution_assignment=AxisAssignment(values={"W": 339, "H": 41}),
         seed=407,
     )
@@ -212,7 +214,7 @@ def test_digits_observation_formation_keeps_stroke_width_in_pixel_space() -> Non
         assert 0.04 < nonzero_fraction < 0.15
 
 
-def test_observation_formation_rejects_component_sequence_mismatch() -> None:
+def test_observation_formation_rejects_empty_component_sequence() -> None:
     declaration = _digits_declaration()
     plan = MaterializationPlanDocument.from_bytes(
         (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
@@ -224,11 +226,11 @@ def test_observation_formation_rejects_component_sequence_mismatch() -> None:
                 lambda: declaration.form_observation(
                     id=ProtocolIdentifier.parse("benchmarks.digits.observations.bad@0.1.0"),
                     plan=plan,
-                    component_sequence=(1, 2),
+                    component_sequence=(),
                 )
             )
         )
-        == "component_sequence length 2 does not match sequence length 3"
+        == "component_sequence must not be empty"
     )
 
 
@@ -261,7 +263,11 @@ def test_variation_identity_coordinates_preserve_observation_field() -> None:
     plan = MaterializationPlanDocument.from_bytes(
         (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
     ).plan
-    sequence = declaration.sample_component_sequence(plan=plan, sample_index=0)
+    sequence = declaration.sample_component_sequence(
+        seed=plan.seed,
+        component_count=3,
+        sample_index=0,
+    )
 
     untransformed = declaration.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.observations.identity-left@0.1.0"),
@@ -462,8 +468,6 @@ def test_non_digits_declaration_uses_same_interpreter_path() -> None:
             kind="materialization-declaration",
             protocol_id=ProtocolIdentifier.parse("benchmarks.synthetic-bars.materialization@0.1.0"),
         ),
-        scale_assignment=AxisAssignment(values={"S": 3}),
-        complexity_assignment=AxisAssignment(values={"C": 3}),
         resolution_assignment=AxisAssignment(values={"W": 96, "H": 96}),
         seed=101,
     )
@@ -582,8 +586,6 @@ def _synthetic_plan_with(*, sequence_length: int, resolution: int) -> Materializ
                 "benchmarks.synthetic-marks.materialization@0.1.0"
             ),
         ),
-        scale_assignment=AxisAssignment(values={"S": sequence_length}),
-        complexity_assignment=AxisAssignment(values={"C": sequence_length}),
         resolution_assignment=AxisAssignment(values={"W": resolution, "H": resolution}),
         seed=101,
     )

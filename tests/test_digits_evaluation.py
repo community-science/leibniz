@@ -26,7 +26,7 @@ def test_digits_length_one_perfect_measurement_scores_full_accepted_mass() -> No
         measure_kind="perfect",
     )
 
-    measurement.validate_manifest(_digits_manifest(), scale=1)
+    measurement.validate_manifest(_digits_manifest())
 
     assert measurement.raw_scoring_evidence.observation_id == (
         "benchmarks.digits.observations.l1.digit-7@0.1.0"
@@ -61,7 +61,6 @@ def test_digits_length_one_uniform_and_wrong_measurements_score_expected_mass() 
 def test_digits_manifest_declares_single_digit_outcomes() -> None:
     manifest = _digits_manifest()
 
-    assert manifest.outcome_sequence is None
     assert manifest.outcome_space is not None
     assert [outcome.id for outcome in manifest.outcome_space.outcomes] == [
         f"digit-{index}" for index in range(10)
@@ -82,7 +81,7 @@ def _measurement_for_sequence(
         (_digits_fixture_root / plan_name).read_bytes()
     ).plan
     scale = len(sequence)
-    outcome_space = manifest.resolve_outcome_space(scale=scale)
+    outcome_space = manifest.resolve_outcome_space()
     assert manifest.outcome_space is not None
     assert len(sequence) == 1
     accepted_outcome = f"digit-{sequence[0]}"

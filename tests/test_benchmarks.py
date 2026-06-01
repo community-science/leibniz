@@ -6,8 +6,6 @@ from leibniz.benchmarks import (
     BenchmarkManifest,
     BenchmarkManifestDocument,
     BenchmarkManifestValidationError,
-    BenchmarkOutcomeSequence,
-    BenchmarkScaleParameter,
 )
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes
@@ -34,40 +32,6 @@ def test_benchmark_manifest_parses_finite_outcome_contract() -> None:
         outcome_space=OutcomeSpace.from_record(_outcome_space_record()),
     )
     assert manifest.to_record() == _benchmark_manifest_record()
-
-
-def test_benchmark_manifest_parses_scale_indexed_outcome_sequence() -> None:
-    manifest = BenchmarkManifest.from_record(_scale_indexed_manifest_record())
-
-    assert manifest == BenchmarkManifest(
-        id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
-        name=ProtocolIdentifier.parse("benchmarks.digits@0.1.0").name,
-        outcome_sequence=BenchmarkOutcomeSequence(
-            atom_count=10,
-            atom_name="digit",
-            length_parameter="L",
-        ),
-        scale_parameter=BenchmarkScaleParameter(symbol="L", minimum=1),
-    )
-    assert manifest.outcome_sequence is not None
-    assert manifest.outcome_sequence.outcome_count(1) == 10
-    assert manifest.outcome_sequence.outcome_count(3) == 1000
-    assert manifest.scale_parameter is not None
-    assert manifest.scale_parameter.contains(1)
-    assert manifest.scale_parameter.contains(100)
-    assert not manifest.scale_parameter.contains(0)
-
-
-def test_benchmark_manifest_resolves_scale_indexed_outcome_space() -> None:
-    manifest = BenchmarkManifest.from_record(_scale_indexed_manifest_record())
-    outcome_space = manifest.resolve_outcome_space(scale=3)
-
-    assert outcome_space.id == ProtocolIdentifier.parse("benchmarks.digits.outcomes.l3@0.1.0")
-    assert len(outcome_space.outcomes) == 1000
-    assert outcome_space.outcomes[0].id == "digit-0-0-0"
-    assert outcome_space.outcomes[-1].id == "digit-9-9-9"
-    assert manifest.outcome_sequence is not None
-    assert manifest.outcome_sequence.outcome_id((1, 2, 3)) == "digit-1-2-3"
 
 
 def test_benchmark_manifest_parses_minimal_authoring_record() -> None:
@@ -200,35 +164,23 @@ def test_benchmark_manifest_rejects_missing_outcome_declaration() -> None:
                 )
             )
         )
-        == "manifest must declare exactly one of outcome_space or outcome_sequence"
+        == "manifest must declare outcome_space"
     )
 
 
-def test_benchmark_manifest_rejects_ambiguous_outcome_declaration() -> None:
+def test_benchmark_manifest_rejects_retired_sequence_fields() -> None:
     record = _benchmark_manifest_record()
-    record["outcome_sequence"] = _outcome_sequence_record()
-    record["scale_parameter"] = _scale_parameter_record()
+    record["outcome_sequence"] = {"atom_count": 10, "atom_name": "digit"}
 
     assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
-        "manifest must declare exactly one of outcome_space or outcome_sequence"
+        "outcome_sequence: unknown field"
     )
 
-
-def test_benchmark_manifest_rejects_sequence_without_matching_scale_parameter() -> None:
-    record = _scale_indexed_manifest_record()
-    del record["scale_parameter"]
+    record = _benchmark_manifest_record()
+    record["scale_parameter"] = {"symbol": "L", "minimum": 1}
 
     assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
-        "outcome_sequence requires scale_parameter"
-    )
-
-    record = _scale_indexed_manifest_record()
-    scale_parameter = dict(_scale_parameter_record())
-    scale_parameter["symbol"] = "N"
-    record["scale_parameter"] = scale_parameter
-
-    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
-        "outcome_sequence length_parameter must match scale_parameter symbol"
+        "scale_parameter: unknown field"
     )
 
 
@@ -308,9 +260,6 @@ def test_digits_benchmark_manifest_loads_source_artifact() -> None:
     manifest = document.manifest
 
     assert manifest.id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
-    assert manifest.outcome_sequence is None
-    assert manifest.scale_parameter is None
-    assert manifest.outcome_space is not None
     assert [outcome.id for outcome in manifest.outcome_space.outcomes] == [
         f"digit-{index}" for index in range(10)
     ]
@@ -319,7 +268,6 @@ def test_digits_benchmark_manifest_loads_source_artifact() -> None:
     assert str(manifest.latent_factor_declaration.protocol_id) == (
         "benchmarks.digits.latent-factors@0.1.0"
     )
-    assert manifest.complexity_coordinate is None
     assert manifest.resolution_analysis == {
         "kind": "component-discriminability-margin",
         "discriminability_margin": 20.0,
@@ -359,22 +307,12 @@ def test_digits_benchmark_manifest_validates_complexity_declaration() -> None:
     manifest.validate_latent_factor_declaration(declaration)
 
 
-def test_benchmark_manifest_rejects_complexity_coordinate_without_declaration() -> None:
-    record = _two_field_benchmark_manifest_record()
-    record["complexity_coordinate"] = "C"
-
-    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
-        "complexity_coordinate requires latent_factor_declaration"
-    )
-
-
 def test_benchmark_manifest_rejects_wrong_latent_factor_reference_kind() -> None:
     record = _two_field_benchmark_manifest_record()
     record["latent_factor_declaration"] = {
         "kind": "benchmark-manifest",
         "protocol_id": "benchmarks.digits.latent-factors@0.1.0",
     }
-    record["complexity_coordinate"] = "C"
 
     assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
         "latent_factor_declaration reference must have kind latent-factor-declaration"
@@ -421,29 +359,6 @@ def _two_field_benchmark_manifest_record() -> dict[str, object]:
     return {
         "id": "core.boolean-benchmark@0.1.0",
         "outcome_space": _outcome_space_record(),
-    }
-
-
-def _scale_indexed_manifest_record() -> dict[str, object]:
-    return {
-        "id": "benchmarks.digits@0.1.0",
-        "outcome_sequence": _outcome_sequence_record(),
-        "scale_parameter": _scale_parameter_record(),
-    }
-
-
-def _outcome_sequence_record() -> dict[str, object]:
-    return {
-        "atom_count": 10,
-        "atom_name": "digit",
-        "length_parameter": "L",
-    }
-
-
-def _scale_parameter_record() -> dict[str, object]:
-    return {
-        "symbol": "L",
-        "minimum": 1,
     }
 
 

@@ -17,8 +17,7 @@
       "kind": "uniform-integer-rectangle",
       "width_axis": "W",
       "height_axis": "H",
-      "maximum_pixel_multiplier": 4,
-      "description": "Batch canvas area is sampled up to a fixed multiple of the minimum area needed for the sequence."
+      "description": "Batch canvas area is sampled up to the active runtime memory budget."
     }
   }
 }

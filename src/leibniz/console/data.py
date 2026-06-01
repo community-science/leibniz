@@ -185,16 +185,10 @@ class ConsoleDataBuilder:
             }
             if "outcome_space" in record:
                 summary["outcome_space"] = record["outcome_space"]
-            if "outcome_sequence" in record:
-                summary["outcome_sequence"] = record["outcome_sequence"]
-            if "scale_parameter" in record:
-                summary["scale_parameter"] = record["scale_parameter"]
             if "observation_ids" in record:
                 summary["observation_ids"] = record["observation_ids"]
             if "latent_factor_declaration" in record:
                 summary["latent_factor_declaration"] = record["latent_factor_declaration"]
-            if "complexity_coordinate" in record:
-                summary["complexity_coordinate"] = record["complexity_coordinate"]
             return summary
         if kind == "latent-factor-declaration":
             return {
@@ -220,8 +214,6 @@ class ConsoleDataBuilder:
                 "id": record["id"],
                 "benchmark_id": record["benchmark_id"],
                 "materialization_declaration": record["materialization_declaration"],
-                "scale_assignment": record["scale_assignment"],
-                "complexity_assignment": record["complexity_assignment"],
                 "resolution_assignment": record["resolution_assignment"],
                 "seed": record["seed"],
             }
@@ -313,30 +305,17 @@ class ConsoleDataBuilder:
                 continue
             generator = load_observation_generator(benchmark_root)
             manifest = generator.benchmark_manifest
-            if manifest.outcome_sequence is not None:
-                atom_count = manifest.outcome_sequence.atom_count
-                outcome_atom_name = manifest.outcome_sequence.atom_name
-                scale_axis = (
-                    manifest.scale_parameter.symbol
-                    if manifest.scale_parameter is not None
-                    else generator.formation.sequence_layout.sequence_axis
-                )
-            elif manifest.outcome_space is not None:
-                atom_count = len(manifest.outcome_space.outcomes)
-                outcome_atom_name = _outcome_atom_name(
-                    tuple(outcome.id for outcome in manifest.outcome_space.outcomes)
-                )
-                scale_axis = generator.formation.sequence_layout.sequence_axis
-            else:
-                continue
+            atom_count = len(manifest.outcome_space.outcomes)
+            outcome_atom_name = _outcome_atom_name(
+                tuple(outcome.id for outcome in manifest.outcome_space.outcomes)
+            )
             tasks.append(
                 {
                     "kind": "generated-observations",
                     "benchmark_id": str(manifest.id),
                     "label": _title_from_protocol_name(str(manifest.name)),
                     "source_path": entry.source_path.as_posix(),
-                    "scale_axis": scale_axis,
-                    "complexity_axis": manifest.complexity_coordinate,
+                    "complexity_axis": None,
                     "outcome_atom_name": outcome_atom_name,
                     "outcome_atom_count": atom_count,
                     "batches": [
@@ -355,23 +334,23 @@ class ConsoleDataBuilder:
         generator: ObservationGenerator,
         atom_count: int,
     ) -> Mapping[str, object]:
-        cache_key = (str(generator.benchmark_manifest.id), "balanced-l-samples")
+        cache_key = (str(generator.benchmark_manifest.id), "balanced-component-samples")
         cached = _generated_batch_cache.get(cache_key)
         if cached is not None:
             return cached
         samples: list[Mapping[str, object]] = []
-        samples_per_scale = 40
-        scales = (1,)
+        samples_per_component_count = 40
+        component_counts = (1,)
         component_sequences = _balanced_component_sequences(
-            scales=scales,
-            samples_per_scale=samples_per_scale,
+            component_counts=component_counts,
+            samples_per_component_count=samples_per_component_count,
             atom_count=atom_count,
             seed=f"{generator.benchmark_manifest.id}:balanced-console-samples",
         )
         used_field_shapes: set[tuple[int, ...]] = set()
-        for scale in scales:
-            for sample_index, sequence in enumerate(component_sequences[scale]):
-                seed = 4000 + scale * 100 + sample_index
+        for component_count in component_counts:
+            for sample_index, sequence in enumerate(component_sequences[component_count]):
+                seed = 4000 + component_count * 100 + sample_index
                 attempt_count = 0
                 while True:
                     attempt_count += 1
@@ -380,7 +359,7 @@ class ConsoleDataBuilder:
                             "could not generate unique console sample canvas shapes"
                         )
                     batch = generator.sample_batch(
-                        scale=scale,
+                        component_count=component_count,
                         sample_count=1,
                         seed=seed,
                         component_sequences=(sequence,),
@@ -411,7 +390,7 @@ class ConsoleDataBuilder:
         record = {
             "mode": "balanced",
             "label": "Balanced samples",
-            "scale": 1,
+            "component_count": 1,
             "seed": 401,
             "sample_count": len(samples),
             "presentation": {
@@ -522,12 +501,12 @@ def _square_content_crop(field: FieldObservation, *, padding: int) -> Mapping[st
 
 def _balanced_component_sequences(
     *,
-    scales: tuple[int, ...],
-    samples_per_scale: int,
+    component_counts: tuple[int, ...],
+    samples_per_component_count: int,
     atom_count: int,
     seed: str,
 ) -> dict[int, tuple[tuple[int, ...], ...]]:
-    total_tokens = samples_per_scale * sum(scales)
+    total_tokens = samples_per_component_count * sum(component_counts)
     if total_tokens % atom_count != 0:
         raise ConsoleDataValidationError(
             "balanced console samples require total token count to divide atom count"
@@ -541,11 +520,11 @@ def _balanced_component_sequences(
     generator.shuffle(tokens)
     token_iter = iter(tokens)
     return {
-        scale: tuple(
-            tuple(next(token_iter) for _token in range(scale))
-            for _sample in range(samples_per_scale)
+        component_count: tuple(
+            tuple(next(token_iter) for _token in range(component_count))
+            for _sample in range(samples_per_component_count)
         )
-        for scale in scales
+        for component_count in component_counts
     }
 
 def _main(argv: list[str] | None = None) -> int:

@@ -145,7 +145,7 @@ const result: BenchmarkResultRecord = {
       model_key: 'model-a',
       run_id: 'run-a',
       run_slug: 'train-a',
-      scale: 1,
+      complexity: 10,
       score: 0.75,
       source_kind: 'local',
       source_path: 'results/training/run-a.json',

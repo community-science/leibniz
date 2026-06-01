@@ -27,12 +27,10 @@ def test_digits_observation_showcase_loads_benchmark_owned_samples() -> None:
     assert manifest.materialization_declaration.kind == "materialization-declaration"
     assert [sample.label for sample in manifest.samples] == [
         "Single digit 7",
-        "Three digit sequence 123",
+        "Single digit 3",
     ]
     assert manifest.samples[0].component_sequence == (7,)
-    assert manifest.samples[1].component_sequence == (1, 2, 3)
-    assert manifest.samples[1].scale_assignment.values == {"L": 3}
-    assert manifest.samples[1].complexity_assignment.values == {"C": 3}
+    assert manifest.samples[1].component_sequence == (3,)
 
 
 def test_observation_showcase_round_trips_canonically() -> None:

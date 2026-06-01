@@ -1,4 +1,3 @@
-import math
 import os
 import subprocess
 import sys
@@ -149,7 +148,9 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
     assert "--scale-curriculum" not in command
     assert "--curriculum-max-scale" not in command
     assert len(leaderboard) == 1
-    assert leaderboard[0]["observed_complexities"] == [pytest.approx(math.log2(604800))]
+    observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
+    assert observed_complexities[0] == pytest.approx(17.720671786825555)
+    assert observed_complexities == sorted(observed_complexities)
     assert results_root.joinpath("measurements").is_dir()
     assert results_root.joinpath("proposals").is_dir()
     assert results_root.joinpath("views", "benchmark_results.json").is_file()

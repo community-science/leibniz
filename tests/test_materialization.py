@@ -67,13 +67,13 @@ def test_linear_resolution_requirement_derives_minimum_resolution() -> None:
     assert requirement.minimum_resolution(AxisAssignment(values={"L": 3})) == 96
 
     requirement.require_resolution(
-        scale_assignment=AxisAssignment(values={"L": 3}),
+        source_assignment=AxisAssignment(values={"L": 3}),
         resolution_assignment=AxisAssignment(values={"N": 96}),
     )
     assert str(
         capture_materialization_error(
             lambda: requirement.require_resolution(
-                scale_assignment=AxisAssignment(values={"L": 3}),
+                source_assignment=AxisAssignment(values={"L": 3}),
                 resolution_assignment=AxisAssignment(values={"N": 95}),
             )
         )
@@ -93,9 +93,7 @@ def test_digits_materialization_declaration_loads_source_artifact() -> None:
         protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
     )
     assert declaration.requirements == ()
-    assert declaration.minimum_resolution(AxisAssignment(values={"L": 4})) == AxisAssignment(
-        values={"W": 1, "H": 1}
-    )
+    assert declaration.minimum_resolution() == AxisAssignment(values={"W": 1, "H": 1})
     assert document.digest == ContentDigest.from_value(declaration.to_record())
 
 
@@ -127,27 +125,20 @@ def test_materialization_plan_resolves_from_declaration_deterministically() -> N
     declaration = MaterializationDeclarationDocument.from_bytes(
         (_digits_benchmark_root / "materialization.json").read_bytes()
     ).declaration
-    scale = AxisAssignment(values={"L": 3})
-    complexity = AxisAssignment(values={"C": 3})
 
     left = MaterializationPlan.resolve(
         id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.l3.seed101@0.1.0"),
         declaration=declaration,
-        scale_assignment=scale,
-        complexity_assignment=complexity,
         seed=101,
     )
     right = MaterializationPlan.resolve(
         id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.l3.seed101@0.1.0"),
         declaration=declaration,
-        scale_assignment=scale,
-        complexity_assignment=complexity,
         seed=101,
     )
 
     assert left == right
     assert left.resolution_assignment == AxisAssignment(values={"W": 1, "H": 1})
-    assert left.complexity_assignment.require_axis("C") == 3
     left.validate_declaration(declaration)
 
 
@@ -165,11 +156,7 @@ def test_materialization_plan_documents_validate_digits_fixtures() -> None:
     l1.plan.validate_declaration(declaration)
     l3.plan.validate_declaration(declaration)
 
-    assert l1.plan.scale_assignment.require_axis("L") == 1
-    assert l1.plan.complexity_assignment.require_axis("C") == 1
     assert l1.plan.resolution_assignment.values == {"W": 16, "H": 16}
-    assert l3.plan.scale_assignment.require_axis("L") == 3
-    assert l3.plan.complexity_assignment.require_axis("C") == 3
     assert l3.plan.resolution_assignment.values == {"W": 48, "H": 16}
     assert l3.digest == ContentDigest.from_value(l3.plan.to_record())
 
@@ -189,8 +176,6 @@ def test_materialization_plan_rejects_under_resolved_request() -> None:
             kind="latent-factor-declaration",
             protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
         ),
-        scale_assignment=AxisAssignment(values={"L": 3}),
-        complexity_assignment=AxisAssignment(values={"C": 3}),
         resolution_assignment=AxisAssignment(values={"W": 0, "H": 1}),
         seed=101,
     )

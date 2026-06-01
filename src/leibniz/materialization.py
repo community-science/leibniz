@@ -66,8 +66,6 @@ _materialization_plan_record = RecordSpec(
         "id": FieldSpec(kind="identifier"),
         "benchmark_id": FieldSpec(kind="identifier"),
         "materialization_declaration": FieldSpec(kind="record"),
-        "scale_assignment": FieldSpec(kind="record"),
-        "complexity_assignment": FieldSpec(kind="record"),
         "resolution_assignment": FieldSpec(kind="record"),
         "seed": FieldSpec(kind="integer"),
         "latent_factor_declaration": FieldSpec(kind="record", required=False),
@@ -81,7 +79,7 @@ class MaterializationValidationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class AxisAssignment:
-    """Integer values assigned to named scale, complexity, or resolution axes."""
+    """Integer values assigned to named complexity or resolution axes."""
 
     values: Mapping[str, int]
 
@@ -197,15 +195,15 @@ class LinearResolutionRequirement:
     def require_resolution(
         self,
         *,
-        scale_assignment: AxisAssignment,
+        source_assignment: AxisAssignment,
         resolution_assignment: AxisAssignment,
     ) -> None:
         actual = resolution_assignment.require_axis(self.resolution_axis)
-        minimum = self.minimum_resolution(scale_assignment)
+        minimum = self.minimum_resolution(source_assignment)
         if actual < minimum:
             raise MaterializationValidationError(
                 f"{self.resolution_axis}={actual} is below minimum {minimum} "
-                f"for {self.source_axis}={scale_assignment.require_axis(self.source_axis)}"
+                f"for {self.source_axis}={source_assignment.require_axis(self.source_axis)}"
             )
 
     def to_record(self) -> dict[str, object]:
@@ -278,12 +276,19 @@ class MaterializationDeclaration:
             layout=_optional_mapping(validated.get("layout"), field="layout"),
         )
 
-    def minimum_resolution(self, scale_assignment: AxisAssignment) -> AxisAssignment:
+    def minimum_resolution(
+        self,
+        source_assignment: AxisAssignment | None = None,
+    ) -> AxisAssignment:
         values: dict[str, int] = (
             _layout_resolution_floor(self.layout) if self.layout is not None else {}
         )
         for requirement in self.requirements:
-            minimum = requirement.minimum_resolution(scale_assignment)
+            if source_assignment is None:
+                raise MaterializationValidationError(
+                    "source_assignment is required by materialization requirements"
+                )
+            minimum = requirement.minimum_resolution(source_assignment)
             current = values.get(requirement.resolution_axis)
             if current is None or minimum > current:
                 values[requirement.resolution_axis] = minimum
@@ -292,7 +297,7 @@ class MaterializationDeclaration:
     def require_resolution(
         self,
         *,
-        scale_assignment: AxisAssignment,
+        source_assignment: AxisAssignment | None = None,
         resolution_assignment: AxisAssignment,
     ) -> None:
         if self.layout is not None:
@@ -303,8 +308,12 @@ class MaterializationDeclaration:
                         f"{axis}={actual} is below layout minimum {minimum}"
                     )
         for requirement in self.requirements:
+            if source_assignment is None:
+                raise MaterializationValidationError(
+                    "source_assignment is required by materialization requirements"
+                )
             requirement.require_resolution(
-                scale_assignment=scale_assignment,
+                source_assignment=source_assignment,
                 resolution_assignment=resolution_assignment,
             )
 
@@ -351,8 +360,6 @@ class MaterializationPlan:
     id: ProtocolIdentifier
     benchmark_id: ProtocolIdentifier
     materialization_declaration: ArtifactReference
-    scale_assignment: AxisAssignment
-    complexity_assignment: AxisAssignment
     resolution_assignment: AxisAssignment
     seed: int
     latent_factor_declaration: ArtifactReference | None = None
@@ -394,12 +401,6 @@ class MaterializationPlan:
                 validated["materialization_declaration"],
                 field="materialization_declaration",
             ),
-            scale_assignment=AxisAssignment.from_record(
-                _as_mapping(validated["scale_assignment"], field="scale_assignment")
-            ),
-            complexity_assignment=AxisAssignment.from_record(
-                _as_mapping(validated["complexity_assignment"], field="complexity_assignment")
-            ),
             resolution_assignment=AxisAssignment.from_record(
                 _as_mapping(validated["resolution_assignment"], field="resolution_assignment")
             ),
@@ -416,9 +417,8 @@ class MaterializationPlan:
         *,
         id: ProtocolIdentifier,
         declaration: MaterializationDeclaration,
-        scale_assignment: AxisAssignment,
-        complexity_assignment: AxisAssignment,
         seed: int,
+        source_assignment: AxisAssignment | None = None,
     ) -> MaterializationPlan:
         declaration_reference = ArtifactReference(
             kind="materialization-declaration",
@@ -429,9 +429,7 @@ class MaterializationPlan:
             id=id,
             benchmark_id=declaration.benchmark_id,
             materialization_declaration=declaration_reference,
-            scale_assignment=scale_assignment,
-            complexity_assignment=complexity_assignment,
-            resolution_assignment=declaration.minimum_resolution(scale_assignment),
+            resolution_assignment=declaration.minimum_resolution(source_assignment),
             seed=seed,
             latent_factor_declaration=declaration.latent_factor_declaration,
         )
@@ -447,7 +445,7 @@ class MaterializationPlan:
                 "materialization_declaration reference does not match declaration"
             )
         declaration.require_resolution(
-            scale_assignment=self.scale_assignment,
+            source_assignment=None,
             resolution_assignment=self.resolution_assignment,
         )
         if self.latent_factor_declaration != declaration.latent_factor_declaration:
@@ -464,8 +462,6 @@ class MaterializationPlan:
             "id": str(self.id),
             "benchmark_id": str(self.benchmark_id),
             "materialization_declaration": self.materialization_declaration.to_record(),
-            "scale_assignment": self.scale_assignment.to_record(),
-            "complexity_assignment": self.complexity_assignment.to_record(),
             "resolution_assignment": self.resolution_assignment.to_record(),
             "seed": self.seed,
         }

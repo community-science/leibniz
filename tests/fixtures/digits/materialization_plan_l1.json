@@ -9,16 +9,6 @@
     "kind": "latent-factor-declaration",
     "protocol_id": "benchmarks.digits.latent-factors@0.1.0"
   },
-  "scale_assignment": {
-    "values": [
-      {"axis": "L", "value": 1}
-    ]
-  },
-  "complexity_assignment": {
-    "values": [
-      {"axis": "C", "value": 1}
-    ]
-  },
   "resolution_assignment": {
     "values": [
       {"axis": "H", "value": 16},

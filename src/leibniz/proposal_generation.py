@@ -54,7 +54,7 @@ __all__ = [
 ]
 
 _document_suffix = document_filename_suffix()
-_initial_scale = 1
+_component_count = 1
 
 
 class ProposalGenerationError(ValueError):
@@ -199,9 +199,9 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
 
     generator = load_observation_generator(plan.benchmark_root)
     manifest = generator.benchmark_manifest
-    outcome_space = manifest.resolve_outcome_space(scale=_initial_scale)
+    outcome_space = manifest.resolve_outcome_space()
     sample = generator.sample_batch(
-        scale=_initial_scale,
+        component_count=_component_count,
         sample_count=1,
         seed=plan.seed,
     ).samples[0]

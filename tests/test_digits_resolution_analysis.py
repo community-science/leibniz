@@ -38,18 +38,18 @@ def test_digits_resolution_analysis_finds_minimum_live_resolution() -> None:
     ) == (60, 20)
 
 
-def test_digits_resolution_analysis_keeps_reported_console_sequence_readable() -> None:
+def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
     batch = generator.sample_formation_batch(
-        scale=7,
+        component_count=1,
         sample_count=1,
         seed=4703,
-        component_sequences=((1, 0, 6, 1, 0, 0, 4),),
+        component_sequences=((1,),),
     )
     sample = batch.samples[0]
 
-    assert (sample.width, sample.height) == (143, 25)
+    assert (sample.width, sample.height) == (34, 39)
     for sequence_index, coordinate in enumerate(sample.variation_coordinates):
         report = generator.formation.component_discriminability_report(
             width=sample.width,
