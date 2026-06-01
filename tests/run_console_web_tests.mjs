@@ -8,6 +8,7 @@ import {
   consoleBasePath,
   consoleResultRoots,
   consoleResultWatchRoots,
+  isMaterializedResultViewEvent,
   resultRootArguments,
 } from '../src/leibniz/console/_web_src/vite.config.mjs';
 
@@ -416,6 +417,23 @@ function assertConsoleResultRootPolicy() {
       resultRootArguments([explicitRoot]).join('|'),
       ['--result-root', explicitRoot].join('|'),
       'result root arguments',
+    );
+    assertEqual(
+      isMaterializedResultViewEvent(
+        resolve(defaultRoot, 'views', 'benchmark_results.json'),
+        [defaultRoot],
+      ),
+      true,
+      'default result root ignores materialized view events',
+    );
+    const explicitViewsRoot = resolve(defaultRoot, 'views');
+    assertEqual(
+      isMaterializedResultViewEvent(
+        resolve(explicitViewsRoot, 'benchmark_results.json'),
+        [explicitViewsRoot],
+      ),
+      false,
+      'explicit views root still refreshes on view events',
     );
     assertEqual(
       consoleDataPayloadPath().endsWith('src/leibniz/console/_web_src/src/generated/consoleDataPayload.json'),

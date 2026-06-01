@@ -57,7 +57,7 @@ function leibnizConsoleData() {
       }
       server.watcher.add(roots);
       server.watcher.on('all', (_event, path) => {
-        if (!isInsideAnyRoot(path, roots)) {
+        if (!isInsideAnyRoot(path, roots) || isMaterializedResultViewEvent(path, roots)) {
           return;
         }
         const module = server.moduleGraph.getModuleById(resolvedConsoleDataModuleId);
@@ -154,5 +154,14 @@ function isInsideAnyRoot(path, roots) {
   return roots.some((root) => {
     const relativePath = relative(root, resolvedPath);
     return relativePath === '' || (!relativePath.startsWith('..') && !relativePath.startsWith('/'));
+  });
+}
+
+export function isMaterializedResultViewEvent(path, roots) {
+  const resolvedPath = resolve(path);
+  return roots.some((root) => {
+    const relativePath = relative(root, resolvedPath);
+    const parts = relativePath.split(/[\\/]+/);
+    return parts[0] === 'views' && parts.length > 1;
   });
 }
