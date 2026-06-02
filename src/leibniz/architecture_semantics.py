@@ -8,7 +8,11 @@ from leibniz.model_operators import (
     ModelOperatorPlan,
     summarize_architecture_operators,
 )
-from leibniz.operator_semantics import model_operator_semantic_registry
+from leibniz.operator_semantics import (
+    ModelOperatorParameterRole,
+    ModelOperatorSemantic,
+    model_operator_semantic_registry,
+)
 
 __all__ = [
     "ArchitectureSemanticValidationError",
@@ -57,14 +61,40 @@ def _validate_layer_parameters(architecture: ArchitectureManifest) -> None:
             raise ArchitectureSemanticValidationError(
                 f"layer {index} ({layer.kind}): unsupported operator kind"
             )
-        for role in semantic.parameter_roles:
+        for role in _required_parameter_roles(layer.kind, semantic):
             if role.name not in layer.parameters:
                 raise ArchitectureSemanticValidationError(
                     f"layer {index} ({layer.kind}): missing required parameter {role.name}"
                 )
             value = layer.parameters[role.name]
-            if type(value) is not int or value < 1:
+            minimum = 0 if role.value_kind == "nonnegative-integer" else 1
+            if role.value_kind not in {"positive-integer", "nonnegative-integer"}:
                 raise ArchitectureSemanticValidationError(
                     f"layer {index} ({layer.kind}): "
-                    f"parameter {role.name} must be a positive integer"
+                    f"unsupported parameter value kind {role.value_kind}"
                 )
+            if type(value) is not int or value < minimum:
+                requirement = (
+                    "a nonnegative integer"
+                    if role.value_kind == "nonnegative-integer"
+                    else "a positive integer"
+                )
+                raise ArchitectureSemanticValidationError(
+                    f"layer {index} ({layer.kind}): parameter {role.name} must be "
+                    f"{requirement}"
+                )
+
+
+def _required_parameter_roles(
+    layer_kind: str,
+    semantic: ModelOperatorSemantic,
+) -> tuple[ModelOperatorParameterRole, ...]:
+    roles = semantic.parameter_roles
+    if semantic.kind == "local-aggregation" and layer_kind in semantic.syntax_aliases:
+        required_names = {"dimension", "size"}
+    elif layer_kind == "local-aggregation":
+        required_names = {"dimension", "out_height", "out_width"}
+    else:
+        required_names = {role.name for role in roles}
+    return tuple(role for role in roles if role.name in required_names)
+    return roles

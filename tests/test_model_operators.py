@@ -110,6 +110,130 @@ def test_torch_instantiation_is_a_minimal_sequential_specialization() -> None:
     assert output.shape == (2, 10)
 
 
+def test_convolution_alias_routes_through_local_affine_semantics() -> None:
+    torch = cast(Any, importlib.import_module("torch"))
+    local_affine_manifest = _local_affine_manifest("local-affine")
+    convolution_manifest = _local_affine_manifest("convolution")
+
+    local_affine_plan = summarize_architecture_operators(local_affine_manifest)
+    convolution_plan = summarize_architecture_operators(convolution_manifest)
+    module = ExecutableModelOperator(convolution_manifest).torch_module()
+    output = module(torch.zeros(2, 1, 24, 24))
+
+    assert [operator.descriptor.kind for operator in local_affine_plan.operators] == [
+        "local-affine",
+        "local-aggregation",
+        "rank-collapse",
+        "affine-readout",
+    ]
+    assert [
+        operator.descriptor.kind for operator in convolution_plan.operators
+    ] == [
+        operator.descriptor.kind for operator in local_affine_plan.operators
+    ]
+    assert convolution_plan.operators[0].descriptor.aliases == ("convolution",)
+    assert (
+        convolution_plan.operators[0].output_shape
+        == local_affine_plan.operators[0].output_shape
+        == (8, 24, 24)
+    )
+    assert (
+        convolution_plan.operators[0].parameter_count
+        == local_affine_plan.operators[0].parameter_count
+        == 80
+    )
+    assert (
+        convolution_plan.operators[0].inference_compute
+        == local_affine_plan.operators[0].inference_compute
+        == 82944
+    )
+    assert (
+        convolution_plan.operators[0].training_compute_per_sample
+        == local_affine_plan.operators[0].training_compute_per_sample
+        == 248832
+    )
+    assert output.shape == (2, 10)
+
+
+def test_fixed_support_affine_projects_variable_canvas_to_fixed_convnet_shape() -> None:
+    torch = cast(Any, importlib.import_module("torch"))
+    manifest = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 31, 47],
+            "output_shape": [10],
+            "layers": [
+                {
+                    "kind": "fixed-support-affine",
+                    "parameters": {
+                        "dimension": 2,
+                        "out_channels": 6,
+                        "out_height": 12,
+                        "out_width": 8,
+                    },
+                },
+                {
+                    "kind": "convolution",
+                    "parameters": {
+                        "dimension": 2,
+                        "size": 3,
+                        "out_channels": 4,
+                        "stride": 1,
+                        "padding": 1,
+                    },
+                },
+                {"kind": "rank-collapse"},
+                {"kind": "affine-readout", "parameters": {"out": 10}},
+            ],
+        }
+    )
+
+    plan = summarize_architecture_operators(manifest)
+    output = ExecutableModelOperator(manifest).torch_module()(torch.zeros(2, 1, 31, 47))
+
+    assert [operator.descriptor.kind for operator in plan.operators] == [
+        "fixed-support-affine",
+        "local-affine",
+        "rank-collapse",
+        "affine-readout",
+    ]
+    assert [operator.output_shape for operator in plan.operators] == [
+        (6, 12, 8),
+        (4, 12, 8),
+        (384,),
+        (10,),
+    ]
+    assert plan.operators[0].parameter_count == 12
+    assert plan.operators[0].inference_compute == 2609
+    assert output.shape == (2, 10)
+
+
+def _local_affine_manifest(kind: str) -> ArchitectureManifest:
+    return ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 24, 24],
+            "output_shape": [10],
+            "layers": [
+                {
+                    "kind": kind,
+                    "parameters": {
+                        "dimension": 2,
+                        "size": 3,
+                        "out_channels": 8,
+                        "stride": 1,
+                        "padding": 1,
+                    },
+                },
+                {
+                    "kind": "local-aggregation",
+                    "parameters": {"dimension": 2, "size": 2},
+                },
+                {"kind": "rank-collapse"},
+                {"kind": "affine-readout", "parameters": {"out": 10}},
+            ],
+        }
+    )
+
+
 def test_semantic_search_point_materialization_routes_aliases_through_operator_registry() -> None:
     manifest = materialize_model_operator_search_point(
         input_shape=(1, 32, 32),
@@ -125,6 +249,11 @@ def test_semantic_search_point_materialization_routes_aliases_through_operator_r
     assert manifest.model_scale_contract is not None
     assert manifest.model_scale_contract.minimum == 3
     assert manifest.output_shape == (10,)
+    assert [layer.kind for layer in manifest.layers] == [
+        "local-aggregation",
+        "rank-collapse",
+        "affine-readout",
+    ]
     assert [operator.descriptor.kind for operator in plan.operators] == [
         "local-aggregation",
         "rank-collapse",
@@ -173,14 +302,29 @@ def test_model_operator_vocabulary_exports_registry_metadata() -> None:
 
     assert [operator["kind"] for operator in operators] == [
         "local-aggregation",
+        "local-affine",
+        "fixed-support-affine",
         "rank-collapse",
         "affine-readout",
     ]
     assert [alias["alias"] for alias in aliases] == [
         "adaptive-pooling",
+        "convolution",
         "flatten",
         "dense",
     ]
+    assert aliases[1]["specialization"] == {
+        "kind": "local-affine",
+        "tensor_relation": "affine",
+        "state": "learned",
+        "support": "local-window",
+        "projection_law": "sliding-window",
+        "aggregation_law": "weighted-sum-plus-bias",
+        "parameter_sharing": "shared-local-window",
+        "shape_law": "preserve-prefix-local-window",
+        "cost_law": "local-window-multiply-add",
+        "aliases": ["convolution"],
+    }
     assert operators[0]["display_name"] == "Local aggregation"
     assert descriptor_axis_descriptors[0] == {
         "name": "tensor_relation",
@@ -327,6 +471,7 @@ def test_operator_vocabulary_sections_have_console_consumers() -> None:
 def test_layer_alias_literals_are_defined_only_in_the_operator_registry() -> None:
     observed_locations: dict[str, list[str]] = {
         "adaptive-pooling": [],
+        "convolution": [],
         "flatten": [],
         "dense": [],
     }
@@ -347,6 +492,7 @@ def test_layer_alias_literals_are_defined_only_in_the_operator_registry() -> Non
         for alias, locations in observed_locations.items()
     } == {
         "adaptive-pooling": ["operator_semantics.py"],
+        "convolution": ["operator_semantics.py"],
         "flatten": ["operator_semantics.py"],
         "dense": ["operator_semantics.py"],
     }

@@ -75,7 +75,7 @@ class ModelOperatorSemantic:
         _require_nonempty(self.parameter_sharing, field="operator parameter_sharing")
         _require_nonempty(self.shape_law, field="operator shape_law")
         _require_nonempty(self.cost_law, field="operator cost_law")
-        _require_unique_nonempty(self.syntax_aliases, field="operator syntax_aliases")
+        _require_unique(self.syntax_aliases, field="operator syntax_aliases")
         _require_unique(
             (role.name for role in self.parameter_roles),
             field=f"{self.kind} parameter roles",
@@ -190,6 +190,14 @@ class ModelOperatorSemanticRegistry:
     def __post_init__(self) -> None:
         _require_unique((operator.kind for operator in self.operators), field="operator kinds")
         _require_unique(
+            (
+                alias
+                for operator in self.operators
+                for alias in (operator.kind, *operator.syntax_aliases)
+            ),
+            field="operator public names",
+        )
+        _require_unique(
             (alias for operator in self.operators for alias in operator.syntax_aliases),
             field="operator syntax aliases",
         )
@@ -200,7 +208,7 @@ class ModelOperatorSemanticRegistry:
         )
 
     def semantic_for_alias(self, alias: str) -> ModelOperatorSemantic | None:
-        """Return the semantic declaration for a public architecture syntax alias."""
+        """Return the semantic declaration for a public architecture name or syntax alias."""
 
         return self._semantic_by_alias().get(alias)
 
@@ -209,7 +217,7 @@ class ModelOperatorSemanticRegistry:
 
         return [operator.operator_record() for operator in self.operators]
 
-    def syntax_alias_records(self) -> list[dict[str, str]]:
+    def syntax_alias_records(self) -> list[dict[str, object]]:
         """Return ordered public syntax alias records."""
 
         return [
@@ -217,6 +225,7 @@ class ModelOperatorSemanticRegistry:
                 "alias": alias,
                 "operator_kind": operator.kind,
                 "display_name": operator.display_name,
+                "specialization": operator.descriptor_record(aliases=(alias,)),
             }
             for operator in self.operators
             for alias in operator.syntax_aliases
@@ -239,9 +248,9 @@ class ModelOperatorSemanticRegistry:
 
     def _semantic_by_alias(self) -> dict[str, ModelOperatorSemantic]:
         return {
-            alias: operator
+            name: operator
             for operator in self.operators
-            for alias in operator.syntax_aliases
+            for name in (operator.kind, *operator.syntax_aliases)
         }
 
 
@@ -276,12 +285,6 @@ def _require_nonempty(value: str, *, field: str) -> None:
         raise OperatorSemanticValidationError(f"{field} must be nonempty")
 
 
-def _require_unique_nonempty(values: tuple[str, ...], *, field: str) -> None:
-    if not values:
-        raise OperatorSemanticValidationError(f"{field} must not be empty")
-    _require_unique(values, field=field)
-
-
 def _require_unique(values: Iterable[str], *, field: str) -> None:
     sequence = tuple(values)
     if any(not value for value in sequence):
@@ -310,9 +313,95 @@ _operator_semantics = (
                 description="number of trailing axes aggregated",
             ),
             ModelOperatorParameterRole(
+                name="out_height",
+                display_name="Output height",
+                description="fixed extent of the first aggregated output support axis",
+            ),
+            ModelOperatorParameterRole(
+                name="out_width",
+                display_name="Output width",
+                description="fixed extent of the second aggregated output support axis",
+            ),
+            ModelOperatorParameterRole(
                 name="size",
                 display_name="Output support size",
-                description="extent of each aggregated output axis",
+                description="square output support extent for adaptive-pooling syntax",
+            ),
+        ),
+    ),
+    ModelOperatorSemantic(
+        kind="local-affine",
+        display_name="Local affine",
+        tensor_relation="affine",
+        state="learned",
+        support="local-window",
+        projection_law="sliding-window",
+        aggregation_law="weighted-sum-plus-bias",
+        parameter_sharing="shared-local-window",
+        shape_law="preserve-prefix-local-window",
+        cost_law="local-window-multiply-add",
+        syntax_aliases=("convolution",),
+        parameter_roles=(
+            ModelOperatorParameterRole(
+                name="dimension",
+                display_name="Support rank",
+                description="number of trailing axes in each local support window",
+            ),
+            ModelOperatorParameterRole(
+                name="size",
+                display_name="Support size",
+                description="extent of each local support axis",
+            ),
+            ModelOperatorParameterRole(
+                name="out_channels",
+                display_name="Output channels",
+                description="number of learned output coordinates per local window",
+            ),
+            ModelOperatorParameterRole(
+                name="stride",
+                display_name="Stride",
+                description="step size between adjacent local windows",
+            ),
+            ModelOperatorParameterRole(
+                name="padding",
+                display_name="Padding",
+                description="zero padding on each local support axis",
+                value_kind="nonnegative-integer",
+            ),
+        ),
+    ),
+    ModelOperatorSemantic(
+        kind="fixed-support-affine",
+        display_name="Fixed support affine",
+        tensor_relation="affine",
+        state="learned",
+        support="global",
+        projection_law="adaptive-support-partition",
+        aggregation_law="mean-then-weighted-sum-plus-bias",
+        parameter_sharing="shared-support-position",
+        shape_law="fixed-support-affine",
+        cost_law="adaptive-support-pointwise-affine",
+        syntax_aliases=(),
+        parameter_roles=(
+            ModelOperatorParameterRole(
+                name="dimension",
+                display_name="Support rank",
+                description="number of trailing support axes projected to fixed extent",
+            ),
+            ModelOperatorParameterRole(
+                name="out_height",
+                display_name="Output height",
+                description="fixed extent of the first output support axis",
+            ),
+            ModelOperatorParameterRole(
+                name="out_width",
+                display_name="Output width",
+                description="fixed extent of the second output support axis",
+            ),
+            ModelOperatorParameterRole(
+                name="out_channels",
+                display_name="Output channels",
+                description="number of learned output coordinates per fixed support position",
             ),
         ),
     ),
@@ -447,6 +536,31 @@ _coordinate_descriptors = (
     SemanticCoordinateDescriptor(
         name="operator.{index}.local_support_size",
         display_name="Local support size",
+        value_kind="integer",
+    ),
+    SemanticCoordinateDescriptor(
+        name="operator.{index}.local_stride",
+        display_name="Local stride",
+        value_kind="integer",
+    ),
+    SemanticCoordinateDescriptor(
+        name="operator.{index}.local_padding",
+        display_name="Local padding",
+        value_kind="integer",
+    ),
+    SemanticCoordinateDescriptor(
+        name="operator.{index}.output_channels",
+        display_name="Output channels",
+        value_kind="integer",
+    ),
+    SemanticCoordinateDescriptor(
+        name="operator.{index}.output_height",
+        display_name="Output height",
+        value_kind="integer",
+    ),
+    SemanticCoordinateDescriptor(
+        name="operator.{index}.output_width",
+        display_name="Output width",
         value_kind="integer",
     ),
     SemanticCoordinateDescriptor(

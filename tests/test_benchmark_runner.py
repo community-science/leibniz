@@ -32,6 +32,14 @@ _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "
 _digits_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool" / "manifest.json"
 )
+_digits_fixed_support_convnet_architecture = (
+    _repository_root
+    / "tests"
+    / "fixtures"
+    / "architecture"
+    / "digits_fixed_support_convnet"
+    / "manifest.json"
+)
 
 
 def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) -> None:
@@ -266,6 +274,42 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
     )
+
+
+def test_digits_benchmark_runner_accepts_fixed_support_convnet_architecture(
+    tmp_path: Path,
+) -> None:
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_fixed_support_convnet_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=tmp_path / "results",
+            sample_count=2,
+            evaluation_sample_count=2,
+            seed=101,
+            train_steps=1,
+            tensor_device="cpu",
+        )
+    )
+
+    inspection = ModelInspectionDocument.from_bytes(
+        summary.model_inspection_path.read_bytes()
+    ).inspection
+
+    assert summary.measurement_count == 4
+    assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
+        "fixed-support-affine",
+        "local-affine",
+        "rank-collapse",
+        "affine-readout",
+    ]
+    assert [stage.output_shape for stage in inspection.architecture_trace.stages] == [
+        (4, 12, 8),
+        (4, 12, 8),
+        (384,),
+        (10,),
+    ]
+    assert inspection.cost_summary.parameter_count == 4006
 
 
 def test_digits_benchmark_runner_records_convergence_protocol_controls(

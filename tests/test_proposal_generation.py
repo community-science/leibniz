@@ -154,9 +154,22 @@ def test_generate_experiment_proposals_filters_mps_incompatible_candidates(
     assert 1 <= summary.proposal_count <= 3
     assert summary.proposal_count == len(architectures)
     for architecture in architectures:
-        size = cast(int, architecture.layers[0].parameters["size"])
-        assert architecture.input_shape[-2] % size == 0
-        assert architecture.input_shape[-1] % size == 0
+        out_height = cast(
+            int,
+            architecture.layers[0].parameters.get(
+                "out_height",
+                architecture.layers[0].parameters.get("size"),
+            ),
+        )
+        out_width = cast(
+            int,
+            architecture.layers[0].parameters.get(
+                "out_width",
+                architecture.layers[0].parameters.get("size"),
+            ),
+        )
+        assert architecture.input_shape[-2] % out_height == 0
+        assert architecture.input_shape[-1] % out_width == 0
 
 
 def test_cli_generates_experiment_proposals(

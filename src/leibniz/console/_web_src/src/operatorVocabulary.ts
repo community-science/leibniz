@@ -40,6 +40,7 @@ export type OperatorSyntaxAlias = {
   alias: string;
   operator_kind: string;
   display_name: string;
+  specialization: Record<string, unknown>;
 };
 
 export type OperatorCoordinateDescriptor = {

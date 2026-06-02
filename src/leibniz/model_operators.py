@@ -45,9 +45,11 @@ _ProgramEffectKind = Literal[
     "route",
 ]
 _operator_registry = model_operator_semantic_registry()
-_operator_local_aggregation = _operator_registry.operators[0].kind
-_operator_rank_collapse = _operator_registry.operators[1].kind
-_operator_affine_readout = _operator_registry.operators[2].kind
+_operator_local_aggregation = "local-aggregation"
+_operator_fixed_support_affine = "fixed-support-affine"
+_operator_local_affine = "local-affine"
+_operator_rank_collapse = "rank-collapse"
+_operator_affine_readout = "affine-readout"
 _program_effect_registry = program_effect_semantic_registry()
 _program_effect_kinds = frozenset(
     effect.kind for effect in _program_effect_registry.effects
@@ -426,14 +428,83 @@ class ExecutableModelOperator:
         for layer in self.architecture.layers:
             descriptor = _descriptor_for_layer(layer)
             if descriptor.kind == _operator_local_aggregation:
-                size = _positive_int_parameter(layer.parameters, "size")
                 dimension = _positive_int_parameter(layer.parameters, "dimension")
                 if dimension != 2:
                     raise ModelOperatorExecutionError(
                         "local aggregation currently supports dimension 2"
                     )
-                modules.append(torch.nn.AdaptiveAvgPool2d(size))
-                shape = (*shape[: len(shape) - dimension], size, size)
+                out_height, out_width = _fixed_support_axes(layer.parameters)
+                modules.append(torch.nn.AdaptiveAvgPool2d((out_height, out_width)))
+                shape = (*shape[: len(shape) - dimension], out_height, out_width)
+            elif descriptor.kind == _operator_fixed_support_affine:
+                dimension = _positive_int_parameter(layer.parameters, "dimension")
+                if dimension != 2:
+                    raise ModelOperatorExecutionError(
+                        "fixed support affine currently supports dimension 2"
+                    )
+                if len(shape) <= dimension:
+                    raise ModelOperatorExecutionError(
+                        "fixed support affine requires a channel axis before support axes"
+                    )
+                channel_axis_index = len(shape) - dimension - 1
+                out_channels = _positive_int_parameter(layer.parameters, "out_channels")
+                out_height = _positive_int_parameter(layer.parameters, "out_height")
+                out_width = _positive_int_parameter(layer.parameters, "out_width")
+                modules.append(
+                    torch.nn.Sequential(
+                        torch.nn.AdaptiveAvgPool2d((out_height, out_width)),
+                        torch.nn.Conv2d(
+                            in_channels=shape[channel_axis_index],
+                            out_channels=out_channels,
+                            kernel_size=1,
+                        ),
+                    )
+                )
+                shape = (
+                    *shape[:channel_axis_index],
+                    out_channels,
+                    out_height,
+                    out_width,
+                )
+            elif descriptor.kind == _operator_local_affine:
+                dimension = _positive_int_parameter(layer.parameters, "dimension")
+                if dimension != 2:
+                    raise ModelOperatorExecutionError(
+                        "local affine currently supports dimension 2"
+                    )
+                if len(shape) <= dimension:
+                    raise ModelOperatorExecutionError(
+                        "local affine requires a channel axis before local support axes"
+                    )
+                channel_axis_index = len(shape) - dimension - 1
+                spatial_axis_start = len(shape) - dimension
+                size = _positive_int_parameter(layer.parameters, "size")
+                out_channels = _positive_int_parameter(layer.parameters, "out_channels")
+                stride = _positive_int_parameter(layer.parameters, "stride")
+                padding = _nonnegative_int_parameter(layer.parameters, "padding")
+                modules.append(
+                    torch.nn.Conv2d(
+                        in_channels=shape[channel_axis_index],
+                        out_channels=out_channels,
+                        kernel_size=size,
+                        stride=stride,
+                        padding=padding,
+                    )
+                )
+                output_spatial_axes = tuple(
+                    _local_window_output_axis(
+                        axis,
+                        size=size,
+                        stride=stride,
+                        padding=padding,
+                    )
+                    for axis in shape[spatial_axis_start:]
+                )
+                shape = (
+                    *shape[:channel_axis_index],
+                    out_channels,
+                    *output_spatial_axes,
+                )
             elif descriptor.kind == _operator_rank_collapse:
                 modules.append(torch.nn.Flatten())
                 shape = (TensorShape.from_axes(shape).element_count,)
@@ -644,17 +715,18 @@ def materialize_model_operator_search_point(
             "output_shape": [output_count],
             "layers": [
                 {
-                    "kind": _operator_registry.operators[0].syntax_aliases[0],
+                    "kind": _operator_local_aggregation,
                     "parameters": {
                         "dimension": point.local_support_dimension,
-                        "size": point.local_support_size,
+                        "out_height": point.local_support_size,
+                        "out_width": point.local_support_size,
                     },
                 },
                 {
-                    "kind": _operator_registry.operators[1].syntax_aliases[0],
+                    "kind": _operator_rank_collapse,
                 },
                 {
-                    "kind": _operator_registry.operators[2].syntax_aliases[0],
+                    "kind": _operator_affine_readout,
                     "parameters": {
                         "out": output_count,
                     },
@@ -723,11 +795,87 @@ def _append_salient_parameter_coordinates(
             layer,
             "dimension",
         )
+        if "size" in layer.parameters:
+            _append_required_parameter_coordinate(
+                coordinates,
+                f"{prefix}.local_support_size",
+                layer,
+                "size",
+            )
+        else:
+            out_height, out_width = _fixed_support_axes(layer.parameters)
+            if out_height == out_width:
+                coordinates.append(
+                    ModelOperatorCoordinate(f"{prefix}.local_support_size", out_height)
+                )
+            else:
+                _append_required_parameter_coordinate(
+                    coordinates,
+                    f"{prefix}.output_height",
+                    layer,
+                    "out_height",
+                )
+                _append_required_parameter_coordinate(
+                    coordinates,
+                    f"{prefix}.output_width",
+                    layer,
+                    "out_width",
+                )
+    elif summary.descriptor.kind == _operator_local_affine:
+        _append_required_parameter_coordinate(
+            coordinates,
+            f"{prefix}.local_support_dimension",
+            layer,
+            "dimension",
+        )
         _append_required_parameter_coordinate(
             coordinates,
             f"{prefix}.local_support_size",
             layer,
             "size",
+        )
+        _append_required_parameter_coordinate(
+            coordinates,
+            f"{prefix}.output_channels",
+            layer,
+            "out_channels",
+        )
+        _append_required_parameter_coordinate(
+            coordinates,
+            f"{prefix}.local_stride",
+            layer,
+            "stride",
+        )
+        coordinates.append(
+            ModelOperatorCoordinate(
+                f"{prefix}.local_padding",
+                _nonnegative_int_parameter(layer.parameters, "padding"),
+            )
+        )
+    elif summary.descriptor.kind == _operator_fixed_support_affine:
+        _append_required_parameter_coordinate(
+            coordinates,
+            f"{prefix}.local_support_dimension",
+            layer,
+            "dimension",
+        )
+        _append_required_parameter_coordinate(
+            coordinates,
+            f"{prefix}.output_channels",
+            layer,
+            "out_channels",
+        )
+        _append_required_parameter_coordinate(
+            coordinates,
+            f"{prefix}.output_height",
+            layer,
+            "out_height",
+        )
+        _append_required_parameter_coordinate(
+            coordinates,
+            f"{prefix}.output_width",
+            layer,
+            "out_width",
         )
     elif summary.descriptor.kind == _operator_affine_readout:
         _append_required_parameter_coordinate(
@@ -759,6 +907,19 @@ def _append_optional_coordinate(
 ) -> None:
     if value is not None:
         coordinates.append(ModelOperatorCoordinate(name, value))
+
+
+def _local_window_output_axis(
+    axis: int,
+    *,
+    size: int,
+    stride: int,
+    padding: int,
+) -> int:
+    result = ((axis + 2 * padding - size) // stride) + 1
+    if result < 1:
+        raise ModelOperatorExecutionError("local affine output axis must be positive")
+    return result
 
 
 def _reject_duplicate_coordinate_names(
@@ -842,6 +1003,22 @@ def _positive_int_parameter(parameters: Mapping[str, object], key: str) -> int:
     if value is None:
         raise ModelOperatorExecutionError(f"{key} must be a positive integer")
     return value
+
+
+def _nonnegative_int_parameter(parameters: Mapping[str, object], key: str) -> int:
+    value = parameters.get(key)
+    if type(value) is not int or value < 0:
+        raise ModelOperatorExecutionError(f"{key} must be a nonnegative integer")
+    return value
+
+
+def _fixed_support_axes(parameters: Mapping[str, object]) -> tuple[int, int]:
+    out_height = _optional_positive_int_parameter(parameters, "out_height")
+    out_width = _optional_positive_int_parameter(parameters, "out_width")
+    if out_height is not None and out_width is not None:
+        return out_height, out_width
+    size = _positive_int_parameter(parameters, "size")
+    return size, size
 
 
 def _optional_positive_int_parameter(parameters: Mapping[str, object], key: str) -> int | None:
