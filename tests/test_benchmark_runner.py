@@ -302,10 +302,11 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     )
     assert training_curriculum == {
         "kind": "competence-gated-training-curriculum",
-        "source": "evaluation_curriculum",
+        "source": "structured-training-curriculum",
         "frontier_sampling_weight": 0.7,
         "replay_sampling_weight": 0.3,
         "gating_metric": "frontier-validation-loss-plateau",
+        "nuisance_policy": "warmup-to-full-then-fixed",
     }
     sampled_competence = cast(dict[str, object], training_summary["sampled_competence"])
     assert sampled_competence["kind"] == "sampled-competence-curriculum"
@@ -621,7 +622,7 @@ def test_evaluation_curriculum_candidates_are_complexity_sorted() -> None:
     assert candidates[0].nuisance_extent == 0.0
 
 
-def test_training_curriculum_candidates_reset_nuisance_on_resolution_growth() -> None:
+def test_training_curriculum_candidates_keep_full_nuisance_after_warmup() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
     candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
@@ -642,14 +643,14 @@ def test_training_curriculum_candidates_reset_nuisance_on_resolution_growth() ->
         ({"W": 24, "H": 24}, 0.25),
         ({"W": 24, "H": 24}, 0.5),
         ({"W": 24, "H": 24}, 1.0),
-        ({"W": 24, "H": 48}, 0.0),
-        ({"W": 24, "H": 48}, 0.25),
-        ({"W": 24, "H": 48}, 0.5),
         ({"W": 24, "H": 48}, 1.0),
-        ({"W": 48, "H": 24}, 0.0),
-        ({"W": 48, "H": 24}, 0.25),
-        ({"W": 48, "H": 24}, 0.5),
         ({"W": 48, "H": 24}, 1.0),
+        ({"W": 48, "H": 48}, 1.0),
+        ({"W": 24, "H": 72}, 1.0),
+        ({"W": 48, "H": 72}, 1.0),
+        ({"W": 72, "H": 24}, 1.0),
+        ({"W": 72, "H": 48}, 1.0),
+        ({"W": 72, "H": 72}, 1.0),
     ]
     assert all(
         candidate.resolution_assignment.values["W"] % 24 == 0

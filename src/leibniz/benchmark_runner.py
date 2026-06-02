@@ -506,10 +506,11 @@ def run_benchmark(
             ),
             "training_curriculum": {
                 "kind": "competence-gated-training-curriculum",
-                "source": "evaluation_curriculum",
+                "source": "structured-training-curriculum",
                 "frontier_sampling_weight": 0.7,
                 "replay_sampling_weight": 0.3,
                 "gating_metric": "frontier-validation-loss-plateau",
+                "nuisance_policy": "warmup-to-full-then-fixed",
             },
             "seed": plan.seed,
             "train_steps": plan.train_steps,
@@ -694,12 +695,15 @@ def _logarithmic_curriculum_candidates(
     component_count: int,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
-    candidates = list(
-        _structured_training_curriculum_candidates(
-            generator=generator,
-            component_count=component_count,
-            start_index=start_index,
-        )
+    candidates = _curriculum_candidate_grid(
+        generator=generator,
+        component_count=component_count,
+        start_index=start_index,
+        nuisance_extents_for_stage=lambda stage: (
+            _nuisance_extent_curriculum
+            if stage == 0
+            else tuple(extent for extent in _nuisance_extent_curriculum if extent > 0.0)
+        ),
     )
     return tuple(sorted(candidates, key=lambda candidate: candidate.complexity))
 
@@ -709,6 +713,23 @@ def _structured_training_curriculum_candidates(
     generator: ObservationGenerator,
     component_count: int,
     start_index: int,
+) -> Sequence[_CurriculumCandidate]:
+    return _curriculum_candidate_grid(
+        generator=generator,
+        component_count=component_count,
+        start_index=start_index,
+        nuisance_extents_for_stage=lambda stage: (
+            _nuisance_extent_curriculum if stage == 0 else (1.0,)
+        ),
+    )
+
+
+def _curriculum_candidate_grid(
+    *,
+    generator: ObservationGenerator,
+    component_count: int,
+    start_index: int,
+    nuisance_extents_for_stage: Callable[[int], tuple[float, ...]],
 ) -> Sequence[_CurriculumCandidate]:
     minimum_assignment = generator.minimum_discriminatable_resolution_assignment(
         component_count=component_count,
@@ -738,7 +759,7 @@ def _structured_training_curriculum_candidates(
             for height_index, height in enumerate(heights[: stage + 1]):
                 if max(width_index, height_index) != stage:
                     continue
-                for nuisance_extent in _nuisance_extent_curriculum:
+                for nuisance_extent in nuisance_extents_for_stage(stage):
                     complexity = generator.distinguishable_state_complexity(
                         component_count=component_count,
                         width=width,
