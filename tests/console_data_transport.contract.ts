@@ -74,7 +74,7 @@ assertEqual(
 );
 assertEqual(
   modelInspection.cost_summary.inference_flops,
-  1104,
+  656,
   'model inspection flops',
 );
 assertEqual(

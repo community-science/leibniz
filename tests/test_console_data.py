@@ -96,13 +96,13 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert model_inspection["source_path"] == (
         "tests/fixtures/architecture/digits_pool/manifest.json"
     )
-    assert model_inspection["input_shape"] == [1, 32, 32]
+    assert model_inspection["input_shape"] == [1, 24, 24]
     assert model_inspection["output_shape"] == [10]
     assert model_inspection["cost_summary"] == {
         "component_count": 3,
         "parameter_count": 50,
         "parameter_bytes": 200,
-        "inference_flops": 1104,
+        "inference_flops": 656,
         "unknown_parameter_components": [],
     }
     model_components = cast(list[dict[str, object]], model_inspection["components"])

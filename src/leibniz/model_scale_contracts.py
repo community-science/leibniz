@@ -54,7 +54,7 @@ class ModelScaleContractValidationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ModelScaleContract:
-    """A positive integer input-shape envelope hidden from the model itself."""
+    """A variable-shape input envelope over positive integer tensor axes."""
 
     axis_symbol: str
     anchor_shape: tuple[int, ...]
@@ -82,9 +82,9 @@ class ModelScaleContract:
                     raise ModelScaleContractValidationError(
                         "scaled axis symbol must match axis_symbol"
                     )
-                if int(self.anchor_shape[index]) != self.minimum:
+                if int(self.anchor_shape[index]) < self.minimum:
                     raise ModelScaleContractValidationError(
-                        "scaled anchor axes must equal minimum"
+                        "scaled anchor axes must be at least minimum"
                     )
             elif kind == _fixed_axis_kind:
                 if _as_int(axis.get("size"), "axes.size") != self.anchor_shape[index]:

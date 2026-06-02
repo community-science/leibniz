@@ -6,7 +6,7 @@ from typing import Any, cast
 import pytest
 
 import leibniz.benchmark_runner as benchmark_runner
-from leibniz.architectures import ArchitectureManifest
+from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_runner import (
     BenchmarkRunnerError,
     BenchmarkRunPlan,
@@ -49,7 +49,7 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     assert summary.dry_run is True
     assert summary.measurement_count == 2
     assert summary.run_slug.startswith(
-        "digits-arch-bb0dde9254dc-c1-seed101-samples2-steps1-train-"
+        "digits-arch-4a2277aa9fd5-c1-seed101-samples2-steps1-train-"
     )
     assert summary.measurement_dataset_path == (
         tmp_path
@@ -106,7 +106,7 @@ def test_digits_benchmark_runner_rejects_fixed_shape_architecture(
     architecture_path = tmp_path / "fixed-shape-architecture.json"
     architecture_path.write_bytes(canonical_document_bytes(architecture.to_record()))
 
-    with pytest.raises(BenchmarkRunnerError, match="variable-shape contract"):
+    with pytest.raises(BenchmarkRunnerError, match="variable-shape scale contract"):
         run_benchmark(
             BenchmarkRunPlan(
                 architecture_path=architecture_path,
@@ -117,6 +117,47 @@ def test_digits_benchmark_runner_rejects_fixed_shape_architecture(
                 dry_run=True,
             )
         )
+
+
+def test_digits_benchmark_runner_rejects_adaptive_pool_without_scale_contract(
+    tmp_path: Path,
+) -> None:
+    architecture = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 32, 32],
+            "output_shape": [10],
+            "layers": [
+                {"kind": "adaptive-pooling", "parameters": {"dimension": 2, "size": 2}},
+                {"kind": "flatten"},
+                {"kind": "dense", "parameters": {"out": 10}},
+            ],
+        }
+    )
+    architecture_path = tmp_path / "adaptive-pool-no-contract.json"
+    architecture_path.write_bytes(canonical_document_bytes(architecture.to_record()))
+
+    with pytest.raises(BenchmarkRunnerError, match="variable-shape scale contract"):
+        run_benchmark(
+            BenchmarkRunPlan(
+                architecture_path=architecture_path,
+                benchmark_root=_digits_benchmark_root,
+                results_root=tmp_path / "results",
+                sample_count=2,
+                train_steps=1,
+                dry_run=True,
+            )
+        )
+
+
+def test_digits_scale_contract_accepts_rectangular_generated_shapes() -> None:
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+
+    assert cast(Any, benchmark_runner)._input_shape_boundary_reason(
+        architecture=architecture,
+        sample_shape=(1, 27, 24),
+    ) is None
 
 
 def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -> None:
@@ -147,7 +188,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert summary.measurement_count == 12
     assert len(dataset_document.dataset.measurements) == 12
     assert inspection_document.inspection.cost_summary.parameter_count == 50
-    assert inspection_document.inspection.cost_summary.inference_flops == 1104
+    assert inspection_document.inspection.cost_summary.inference_flops == 656
     assert summary.training_summary_path.exists()
     training_summary = load_object_document(
         summary.training_summary_path.read_bytes(),
@@ -786,7 +827,7 @@ def test_cli_runs_digits_benchmark_dry_run(
     assert captured.err == ""
     assert captured.out.startswith(
         "planned benchmark run "
-        "digits-arch-bb0dde9254dc-c1-seed101-samples2-stepsconverge-train-"
+        "digits-arch-4a2277aa9fd5-c1-seed101-samples2-stepsconverge-train-"
     )
     assert not (tmp_path / "results").exists()
 

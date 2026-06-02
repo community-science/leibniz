@@ -1,9 +1,38 @@
 {
   "input_shape": [
     1,
-    32,
-    32
+    24,
+    24
   ],
+  "model_scale_contract": {
+    "kind": "positive-variable-shape-envelope",
+    "axis_symbol": "S",
+    "anchor_shape": [
+      1,
+      24,
+      24
+    ],
+    "axes": [
+      {
+        "index": 0,
+        "kind": "fixed",
+        "size": 1
+      },
+      {
+        "index": 1,
+        "kind": "scaled",
+        "symbol": "S"
+      },
+      {
+        "index": 2,
+        "kind": "scaled",
+        "symbol": "S"
+      }
+    ],
+    "scale_domain": {
+      "minimum": 24
+    }
+  },
   "output_shape": [
     10
   ],

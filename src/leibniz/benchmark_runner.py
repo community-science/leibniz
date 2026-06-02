@@ -28,7 +28,6 @@ from leibniz.observation_generation import (
     ObservationGenerator,
     load_observation_generator,
 )
-from leibniz.operator_semantics import model_operator_semantic_registry
 from leibniz.outcomes import OutcomeSpace
 from leibniz.tensor_runtime import (
     FormationTensorCache,
@@ -68,7 +67,6 @@ _generation_curriculum_growth_factor = 4
 _generation_curriculum_max_rungs = 4
 _converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
 _minimum_plateau_lr_reductions = 3
-_adaptive_pooling_alias = model_operator_semantic_registry().operators[0].syntax_aliases[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -553,14 +551,12 @@ def _input_shape_boundary_reason(
         if _shape_matches_scale_contract(contract=contract, sample_shape=sample_shape):
             return None
         return (
-            f"architecture model_scale_contract does not accept generated "
+            f"architecture variable-shape scale contract does not accept generated "
             f"observation shape {sample_shape}"
         )
-    if _adaptive_pooling_input_compatible(architecture=architecture, sample_shape=sample_shape):
-        return None
     return (
-        "architecture must declare a variable-shape contract or compatible "
-        "adaptive-pooling input for generated observation shape "
+        "architecture must declare a variable-shape scale contract for generated "
+        "observation shape "
         f"{sample_shape}"
     )
 
@@ -574,38 +570,17 @@ def _shape_matches_scale_contract(
         return False
     if len(contract.axes) != len(sample_shape):
         return False
-    scaled_values: list[int] = []
+    saw_scaled_axis = False
     for axis in contract.axes:
         index = cast(int, axis["index"])
         if axis["kind"] == "fixed":
             if sample_shape[index] != cast(int, axis["size"]):
                 return False
         else:
-            scaled_values.append(sample_shape[index])
-    return bool(scaled_values) and len(set(scaled_values)) == 1 and contract.accepts_scale(
-        scaled_values[0]
-    )
-
-
-def _adaptive_pooling_input_compatible(
-    *,
-    architecture: ArchitectureManifest,
-    sample_shape: tuple[int, ...],
-) -> bool:
-    if not architecture.layers or architecture.layers[0].kind != _adaptive_pooling_alias:
-        return False
-    if len(architecture.input_shape) != len(sample_shape) or len(sample_shape) < 3:
-        return False
-    dimension_value = architecture.layers[0].parameters.get("dimension")
-    size_value = architecture.layers[0].parameters.get("size")
-    if type(dimension_value) is not int or type(size_value) is not int:
-        return False
-    if dimension_value != 2 or size_value < 1:
-        return False
-    fixed_prefix = len(sample_shape) - dimension_value
-    return architecture.input_shape[:fixed_prefix] == sample_shape[:fixed_prefix] and all(
-        axis >= size_value for axis in sample_shape[-dimension_value:]
-    )
+            saw_scaled_axis = True
+            if not contract.accepts_scale(sample_shape[index]):
+                return False
+    return saw_scaled_axis
 
 
 def _train_and_predict(

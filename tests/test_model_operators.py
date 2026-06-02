@@ -25,7 +25,7 @@ _console_src_root = _src_root / "console" / "_web_src" / "src"
 def test_model_operator_summary_classifies_formal_semantics() -> None:
     plan = summarize_architecture_operators(_architecture_manifest())
 
-    assert plan.input_shape == (1, 32, 32)
+    assert plan.input_shape == (1, 24, 24)
     assert plan.output_shape == (10,)
     assert [operator.descriptor.kind for operator in plan.operators] == [
         "local-aggregation",
@@ -56,10 +56,10 @@ def test_model_operator_summary_classifies_formal_semantics() -> None:
     ]
     assert [operator.parameter_count for operator in plan.operators] == [0, 0, 50]
     assert [operator.parameter_bytes for operator in plan.operators] == [0, 0, 200]
-    assert [operator.inference_flops for operator in plan.operators] == [1024, 0, 80]
+    assert [operator.inference_flops for operator in plan.operators] == [576, 0, 80]
     assert plan.parameter_count == 50
     assert plan.parameter_bytes == 200
-    assert plan.inference_flops == 1104
+    assert plan.inference_flops == 656
 
 
 def test_model_operator_summary_rejects_unknown_operator_kind() -> None:
@@ -116,6 +116,8 @@ def test_semantic_search_point_materialization_routes_aliases_through_operator_r
     plan = summarize_architecture_operators(manifest)
 
     assert manifest.input_shape == (1, 32, 32)
+    assert manifest.model_scale_contract is not None
+    assert manifest.model_scale_contract.minimum == 3
     assert manifest.output_shape == (10,)
     assert [operator.descriptor.kind for operator in plan.operators] == [
         "local-aggregation",
@@ -140,7 +142,7 @@ def test_model_operator_semantic_coordinates_are_derived_from_operator_summaries
     assert by_name["operator.2.tensor_relation"] == "affine"
     assert by_name["operator.2.output_count"] == 10
     assert by_name["resource.parameter_count"] == 50
-    assert by_name["resource.inference_flops"] == 1104
+    assert by_name["resource.inference_flops"] == 656
     assert len(by_name) == len(coordinates)
 
 

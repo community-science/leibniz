@@ -364,7 +364,7 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
         publish_summary.publication_files[0].read_bytes()
     )
     assert publication_document.bundle.submission_package.id == ProtocolIdentifier.parse(
-        "submissions.digits.digits-arch-bb0dde9254dc-c1-seed101-samples1-steps0"
+        "submissions.digits.digits-arch-4a2277aa9fd5-c1-seed101-samples1-steps0"
         "-train-e4b2ff9c5722@0.1.0"
     )
     assert publication_document.bundle.submission_package.sampled_competence is not None

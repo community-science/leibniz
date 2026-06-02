@@ -245,14 +245,14 @@ def test_architecture_manifest_document_loads_fixture_with_digest() -> None:
         (_fixtures_root / "architecture" / "digits_pool" / "manifest.json").read_bytes()
     )
 
-    assert document.manifest.input_shape == (1, 32, 32)
+    assert document.manifest.input_shape == (1, 24, 24)
     assert document.manifest.output_shape == (10,)
     assert tuple(layer.kind for layer in document.manifest.layers) == (
         "adaptive-pooling",
         "flatten",
         "dense",
     )
-    assert document.manifest.to_record()["input_shape"] == [1, 32, 32]
+    assert document.manifest.to_record()["input_shape"] == [1, 24, 24]
     assert document.manifest.to_record()["output_shape"] == [10]
     assert document.digest == ContentDigest.from_value(document.manifest.to_record())
 

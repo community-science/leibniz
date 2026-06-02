@@ -28,20 +28,20 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
         architecture_manifest=_architecture_manifest(),
     )
 
-    assert inspection.input_shape == (1, 32, 32)
+    assert inspection.input_shape == (1, 24, 24)
     assert inspection.output_shape == (10,)
     assert tuple(component.kind for component in inspection.components) == (
         "adaptive-pooling",
         "flatten",
         "dense",
     )
-    assert inspection.components[0].input_shape == (1, 32, 32)
+    assert inspection.components[0].input_shape == (1, 24, 24)
     assert inspection.components[0].output_shape == (1, 2, 2)
     assert inspection.components[0].operator is not None
     assert inspection.components[0].operator["kind"] == "local-aggregation"
     assert inspection.components[0].operator["aliases"] == ["adaptive-pooling"]
     assert inspection.components[0].parameter_count == 0
-    assert inspection.components[0].inference_flops == 1024
+    assert inspection.components[0].inference_flops == 576
     assert inspection.components[1].input_shape == (1, 2, 2)
     assert inspection.components[1].output_shape == (4,)
     assert inspection.components[1].operator is not None
@@ -57,7 +57,7 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
     assert inspection.cost_summary.component_count == 3
     assert inspection.cost_summary.parameter_count == 50
     assert inspection.cost_summary.parameter_bytes == 200
-    assert inspection.cost_summary.inference_flops == 1104
+    assert inspection.cost_summary.inference_flops == 656
     assert inspection.cost_summary.unknown_parameter_components == ()
     assert inspection.cost_summary.unknown_flop_components == ()
     assert inspection.architecture_summary.component_count == 3
@@ -71,7 +71,7 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
     )
     assert inspection.architecture_summary.unsupported_parameter_components == ()
     assert inspection.architecture_summary.unsupported_flop_components == ()
-    assert inspection.architecture_trace.input_shape == (1, 32, 32)
+    assert inspection.architecture_trace.input_shape == (1, 24, 24)
     assert inspection.architecture_trace.output_shape == (10,)
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
         "local-aggregation",
