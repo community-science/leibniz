@@ -26,7 +26,6 @@ from leibniz.record_contracts import (
     RecordContractValidationError,
     ScalarKind,
     record_contract_set_from_contract,
-    record_contract_set_from_package,
 )
 
 __all__ = [
@@ -40,7 +39,6 @@ __all__ = [
     "RecordViolation",
     "ScalarKind",
     "ValidatedRecord",
-    "record_specs_from_package_contract",
     "record_specs_from_contract",
 ]
 
@@ -150,30 +148,6 @@ def record_specs_from_contract(contract: Mapping[str, object]) -> dict[str, Reco
 
     try:
         contract_set = record_contract_set_from_contract(contract)
-    except RecordContractValidationError as error:
-        raise RecordValidationError(
-            tuple(
-                RecordViolation(path=violation.path, message=violation.message)
-                for violation in error.violations
-            )
-        ) from error
-    return _record_specs_from_contract_set(tuple(contract_set.records.values()))
-
-
-def record_specs_from_package_contract(
-    package: str,
-    name: str,
-    *,
-    description: str,
-) -> dict[str, RecordSpec]:
-    """Generate record specs from a bundled authored record-contract document."""
-
-    try:
-        contract_set = record_contract_set_from_package(
-            package,
-            name,
-            description=description,
-        )
     except RecordContractValidationError as error:
         raise RecordValidationError(
             tuple(
