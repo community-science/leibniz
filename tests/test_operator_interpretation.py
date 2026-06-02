@@ -9,19 +9,50 @@ from leibniz.operator_semantics import ModelOperatorSemantic, model_operator_sem
 
 def test_operator_interpreter_preserves_current_public_shape_and_cost_laws() -> None:
     registry = model_operator_semantic_registry()
+    local_aggregation = registry.semantic_for_alias("local-aggregation")
+    local_affine = registry.semantic_for_alias("local-affine")
+    fixed_support_affine = registry.semantic_for_alias("fixed-support-affine")
+    rank_collapse = registry.semantic_for_alias("rank-collapse")
+    affine_readout = registry.semantic_for_alias("affine-readout")
+    assert local_aggregation is not None
+    assert local_affine is not None
+    assert fixed_support_affine is not None
+    assert rank_collapse is not None
+    assert affine_readout is not None
 
     local = interpret_operator_semantic(
-        registry.operators[0],
+        local_aggregation,
         parameters={"dimension": 2, "size": 2},
         input_shape=(1, 32, 32),
     )
+    local_learned = interpret_operator_semantic(
+        local_affine,
+        parameters={
+            "dimension": 2,
+            "size": 3,
+            "out_channels": 8,
+            "stride": 1,
+            "padding": 1,
+        },
+        input_shape=(1, 32, 32),
+    )
+    fixed_support_learned = interpret_operator_semantic(
+        fixed_support_affine,
+        parameters={
+            "dimension": 2,
+            "out_channels": 6,
+            "out_height": 12,
+            "out_width": 8,
+        },
+        input_shape=(1, 32, 48),
+    )
     flattened = interpret_operator_semantic(
-        registry.operators[1],
+        rank_collapse,
         parameters={},
         input_shape=local.output_shape,
     )
     readout = interpret_operator_semantic(
-        registry.operators[2],
+        affine_readout,
         parameters={"out": 10},
         input_shape=flattened.output_shape,
     )
@@ -36,6 +67,28 @@ def test_operator_interpreter_preserves_current_public_shape_and_cost_laws() -> 
         0,
         1024,
         2048,
+    )
+    assert (
+        local_learned.output_shape,
+        local_learned.parameter_count,
+        local_learned.inference_compute,
+        local_learned.training_compute_per_sample,
+    ) == (
+        (8, 32, 32),
+        80,
+        147456,
+        442368,
+    )
+    assert (
+        fixed_support_learned.output_shape,
+        fixed_support_learned.parameter_count,
+        fixed_support_learned.inference_compute,
+        fixed_support_learned.training_compute_per_sample,
+    ) == (
+        (6, 12, 8),
+        12,
+        2688,
+        6528,
     )
     assert (
         flattened.output_shape,
@@ -63,19 +116,36 @@ def test_operator_interpreter_preserves_current_public_shape_and_cost_laws() -> 
 
 def test_operator_interpreter_returns_unknown_values_for_unresolved_inputs() -> None:
     registry = model_operator_semantic_registry()
+    local_aggregation = registry.semantic_for_alias("local-aggregation")
+    local_affine = registry.semantic_for_alias("local-affine")
+    affine_readout = registry.semantic_for_alias("affine-readout")
+    assert local_aggregation is not None
+    assert local_affine is not None
+    assert affine_readout is not None
 
     assert interpret_operator_semantic(
-        registry.operators[0],
+        local_aggregation,
         parameters={"dimension": 2, "size": 2},
         input_shape=None,
     ).output_shape is None
     assert interpret_operator_semantic(
-        registry.operators[0],
+        local_aggregation,
         parameters={"dimension": 4, "size": 2},
         input_shape=(1, 32, 32),
     ).parameter_count is None
     assert interpret_operator_semantic(
-        registry.operators[2],
+        local_affine,
+        parameters={
+            "dimension": 2,
+            "size": 3,
+            "out_channels": 8,
+            "stride": 1,
+            "padding": 0,
+        },
+        input_shape=(1, 2, 2),
+    ).inference_compute is None
+    assert interpret_operator_semantic(
+        affine_readout,
         parameters={"out": 10},
         input_shape=(1, 2, 2),
     ).inference_compute is None

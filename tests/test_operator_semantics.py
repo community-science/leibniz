@@ -17,15 +17,26 @@ def test_model_operator_semantic_registry_declares_current_public_vocabulary() -
 
     assert [operator.kind for operator in registry.operators] == [
         "local-aggregation",
+        "local-affine",
+        "fixed-support-affine",
         "rank-collapse",
         "affine-readout",
     ]
     assert [record["alias"] for record in registry.syntax_alias_records()] == [
         "adaptive-pooling",
+        "convolution",
         "flatten",
         "dense",
     ]
+    assert registry.semantic_for_alias("local-aggregation") == registry.operators[0]
     assert registry.semantic_for_alias("adaptive-pooling") == registry.operators[0]
+    assert registry.semantic_for_alias("local-affine") == registry.operators[1]
+    assert registry.semantic_for_alias("convolution") == registry.operators[1]
+    assert registry.semantic_for_alias("fixed-support-affine") == registry.operators[2]
+    assert registry.semantic_for_alias("rank-collapse") == registry.operators[3]
+    assert registry.semantic_for_alias("flatten") == registry.operators[3]
+    assert registry.semantic_for_alias("affine-readout") == registry.operators[4]
+    assert registry.semantic_for_alias("dense") == registry.operators[4]
     assert registry.operators[0].descriptor_record(aliases=("adaptive-pooling",)) == {
         "kind": "local-aggregation",
         "tensor_relation": "aggregation",
@@ -52,9 +63,21 @@ def test_model_operator_semantic_registry_exports_console_metadata() -> None:
             "value_kind": "positive-integer",
         },
         {
+            "name": "out_height",
+            "display_name": "Output height",
+            "description": "fixed extent of the first aggregated output support axis",
+            "value_kind": "positive-integer",
+        },
+        {
+            "name": "out_width",
+            "display_name": "Output width",
+            "description": "fixed extent of the second aggregated output support axis",
+            "value_kind": "positive-integer",
+        },
+        {
             "name": "size",
             "display_name": "Output support size",
-            "description": "extent of each aggregated output axis",
+            "description": "square output support extent for adaptive-pooling syntax",
             "value_kind": "positive-integer",
         },
     ]
@@ -70,6 +93,57 @@ def test_model_operator_semantic_registry_exports_console_metadata() -> None:
         descriptor["name"]: descriptor["display_name"]
         for descriptor in registry.coordinate_descriptor_records()
     }["operator.{index}.local_support_size"] == "Local support size"
+    assert registry.operator_records()[1]["parameter_roles"] == [
+        {
+            "name": "dimension",
+            "display_name": "Support rank",
+            "description": "number of trailing axes in each local support window",
+            "value_kind": "positive-integer",
+        },
+        {
+            "name": "size",
+            "display_name": "Support size",
+            "description": "extent of each local support axis",
+            "value_kind": "positive-integer",
+        },
+        {
+            "name": "out_channels",
+            "display_name": "Output channels",
+            "description": "number of learned output coordinates per local window",
+            "value_kind": "positive-integer",
+        },
+        {
+            "name": "stride",
+            "display_name": "Stride",
+            "description": "step size between adjacent local windows",
+            "value_kind": "positive-integer",
+        },
+        {
+            "name": "padding",
+            "display_name": "Padding",
+            "description": "zero padding on each local support axis",
+            "value_kind": "nonnegative-integer",
+        },
+    ]
+    assert registry.syntax_alias_records()[1]["specialization"] == {
+        "kind": "local-affine",
+        "tensor_relation": "affine",
+        "state": "learned",
+        "support": "local-window",
+        "projection_law": "sliding-window",
+        "aggregation_law": "weighted-sum-plus-bias",
+        "parameter_sharing": "shared-local-window",
+        "shape_law": "preserve-prefix-local-window",
+        "cost_law": "local-window-multiply-add",
+        "aliases": ["convolution"],
+    }
+    for alias_record in registry.syntax_alias_records():
+        alias = str(alias_record["alias"])
+        semantic = registry.semantic_for_alias(alias)
+        assert semantic is not None
+        assert alias_record["specialization"] == semantic.descriptor_record(
+            aliases=(str(alias),)
+        )
 
 
 def test_model_operator_semantic_registry_rejects_duplicates() -> None:
@@ -105,7 +179,7 @@ def test_model_operator_semantic_registry_rejects_duplicates() -> None:
                 coordinate_descriptors=(coordinate,),
             )
         )
-    ) == "operator syntax aliases must be unique"
+    ) == "operator public names must be unique"
 
 
 def test_model_operator_semantic_records_reject_empty_fields() -> None:

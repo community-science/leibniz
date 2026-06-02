@@ -12,7 +12,9 @@ declare const consoleDataPayload: unknown;
 
 const parsed = parseConsoleDataRecord(consoleDataPayload);
 const rawConsoleData = consoleDataPayload as Record<string, unknown>;
-const modelInspection = parsed.model_inspections[0];
+const modelInspection = parsed.model_inspections.find(
+  (inspection) => inspection.source_path === 'tests/fixtures/architecture/digits_pool/manifest.json',
+);
 if (modelInspection === undefined) {
   throw new Error('expected model inspection fixture');
 }
@@ -20,11 +22,11 @@ if (modelInspection === undefined) {
 assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
 assertEqual(parsed.result_views.length, 0, 'result view count');
-assertEqual(parsed.model_inspections.length, 1, 'model inspection count');
+assertEqual(parsed.model_inspections.length, 2, 'model inspection count');
 assertEqual(parsed.benchmark_tasks.length, 1, 'benchmark task count');
 assertEqual(
   parsed.operator_vocabulary.operators.map((operator) => operator.kind).join(','),
-  'local-aggregation,rank-collapse,affine-readout',
+  'local-aggregation,local-affine,fixed-support-affine,rank-collapse,affine-readout',
   'operator vocabulary order',
 );
 assertEqual(
@@ -41,6 +43,22 @@ assertEqual(
   syntaxAliasDisplayName(parsed.operator_vocabulary, 'adaptive-pooling'),
   'Local aggregation',
   'operator vocabulary syntax display',
+);
+assertEqual(
+  operatorDisplayName(parsed.operator_vocabulary, 'local-affine'),
+  'Local affine',
+  'operator vocabulary local affine display',
+);
+assertEqual(
+  syntaxAliasDisplayName(parsed.operator_vocabulary, 'convolution'),
+  'Local affine',
+  'operator vocabulary convolution syntax display',
+);
+assertEqual(
+  (parsed.operator_vocabulary.syntax_aliases.find((entry) => entry.alias === 'convolution')
+    ?.specialization as Record<string, unknown> | undefined)?.kind,
+  'local-affine',
+  'operator vocabulary convolution specialization',
 );
 assertEqual(
   parameterDisplayName(parsed.operator_vocabulary, 'local-aggregation', 'size'),

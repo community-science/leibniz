@@ -44,13 +44,22 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert {
         alias["alias"]
         for alias in cast(list[dict[str, object]], operator_vocabulary["syntax_aliases"])
-    } == {"adaptive-pooling", "flatten", "dense"}
+    } == {
+        "adaptive-pooling",
+        "convolution",
+        "flatten",
+        "dense",
+    }
 
     artifact_index = cast(dict[str, object], record["artifact_index"])
     artifacts = cast(list[dict[str, object]], artifact_index["artifacts"])
     details = cast(list[dict[str, object]], record["artifact_details"])
 
     assert [(artifact["kind"], artifact["source_path"]) for artifact in artifacts] == [
+        (
+            "architecture-manifest",
+            "tests/fixtures/architecture/digits_fixed_support_convnet/manifest.json",
+        ),
         ("architecture-manifest", "tests/fixtures/architecture/digits_pool/manifest.json"),
         ("benchmark-manifest", "src/leibniz/benchmarks/digits/manifest.json"),
         ("benchmark-manifest", "tests/fixtures/chess/mate_in_one/manifest.json"),
@@ -70,7 +79,11 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert [(detail["kind"], detail["source_path"]) for detail in details] == [
         (artifact["kind"], artifact["source_path"]) for artifact in artifacts
     ]
-    architecture_detail = details[0]
+    architecture_detail = next(
+        detail
+        for detail in details
+        if detail["source_path"] == "tests/fixtures/architecture/digits_pool/manifest.json"
+    )
     architecture_graph = cast(dict[str, object], architecture_detail["architecture_graph"])
     assert [node["id"] for node in cast(list[dict[str, object]], architecture_graph["nodes"])] == [
         "component-0",
@@ -91,8 +104,17 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert "performance_views" not in record
 
     model_inspections = cast(list[dict[str, object]], record["model_inspections"])
-    assert len(model_inspections) == 1
-    model_inspection = model_inspections[0]
+    assert [
+        inspection["source_path"] for inspection in model_inspections
+    ] == [
+        "tests/fixtures/architecture/digits_fixed_support_convnet/manifest.json",
+        "tests/fixtures/architecture/digits_pool/manifest.json",
+    ]
+    model_inspection = next(
+        inspection
+        for inspection in model_inspections
+        if inspection["source_path"] == "tests/fixtures/architecture/digits_pool/manifest.json"
+    )
     assert model_inspection["source_path"] == (
         "tests/fixtures/architecture/digits_pool/manifest.json"
     )
