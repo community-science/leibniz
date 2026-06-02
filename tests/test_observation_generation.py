@@ -6,7 +6,7 @@ from typing import cast
 import pytest
 
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import MaterializationPlan
+from leibniz.materialization import AxisAssignment, MaterializationPlan
 from leibniz.observation_formation import FieldObservation
 from leibniz.observation_generation import (
     ObservationGenerationError,
@@ -104,6 +104,22 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
     generated_plan = formation_batch.samples[0].materialization_plan
     assert minimum_plan.resolution_assignment.values == {"W": 24, "H": 24}
     assert generated_plan.resolution_assignment.values == {"W": 136, "H": 147}
+
+
+def test_digits_observation_generator_accepts_requested_resolution_assignment() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    batch = generator.sample_formation_batch(
+        component_count=1,
+        sample_count=2,
+        seed=101,
+        resolution_assignment=AxisAssignment(values={"W": 32, "H": 32}),
+    )
+
+    assert [
+        sample.materialization_plan.resolution_assignment.values
+        for sample in batch.samples
+    ] == [{"W": 32, "H": 32}, {"W": 32, "H": 32}]
 
 
 def test_digits_observation_generator_records_optional_timing() -> None:

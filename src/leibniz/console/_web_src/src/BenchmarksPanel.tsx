@@ -63,8 +63,6 @@ type ModelLineageNode = {
   value: string;
 };
 type ValidationHistoryPoint = {
-  best_validation_loss: number;
-  best_validation_step: number;
   stale_checks?: number;
   step: number;
   validation_loss: number;
@@ -648,10 +646,6 @@ function ModelTrainingDetail({ runs }: { runs: RunResultRecord[] }) {
               <dd>{parameterValueLabel(diagnostics.stop_reason)}</dd>
             </div>
             <div>
-              <dt>Best Loss</dt>
-              <dd>{diagnostics.best_validation_loss.toFixed(4)}</dd>
-            </div>
-            <div>
               <dt>Final Loss</dt>
               <dd>{diagnostics.final_validation_loss.toFixed(4)}</dd>
             </div>
@@ -988,8 +982,6 @@ function trainingProtocolEntries(protocol: TrainingProtocolRecord): [string, str
 function trainingValidationHistory(run: RunResultRecord): ValidationHistoryPoint[] {
   return (run.training_diagnostics?.validation_history ?? []).map(
     (point: TrainingHistoryPointRecord) => ({
-      best_validation_loss: point.best_validation_loss,
-      best_validation_step: point.best_validation_step,
       stale_checks: point.stale_checks,
       step: point.step,
       validation_loss: point.validation_loss,

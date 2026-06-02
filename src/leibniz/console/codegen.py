@@ -244,9 +244,6 @@ export type TrainingDiagnosticsRecord = {
   stop_reason: string;
   steps_run: number;
   validation_checks: number;
-  best_validation_loss: number;
-  best_validation_step: number;
-  best_validation_check: number;
   final_validation_loss: number;
   final_validation_step: number;
   final_validation_check: number;
@@ -277,9 +274,6 @@ export type TrainingHistoryPointRecord = {
   step: number;
   validation_check: number;
   validation_loss: number;
-  best_validation_loss: number;
-  best_validation_step: number;
-  best_validation_check: number;
   stale_checks: number;
   learning_rates?: number[];
 };
@@ -485,9 +479,6 @@ function parseTrainingDiagnostics(value: unknown, path: string): TrainingDiagnos
   requireNumbers(record, path, [
     'steps_run',
     'validation_checks',
-    'best_validation_loss',
-    'best_validation_step',
-    'best_validation_check',
     'final_validation_loss',
     'final_validation_step',
     'final_validation_check',

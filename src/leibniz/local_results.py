@@ -818,9 +818,6 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
         "stop_reason": training_run.stop_reason,
         "steps_run": training_run.steps_run,
         "validation_checks": training_run.validation_checks,
-        "best_validation_loss": training_run.best_validation_loss,
-        "best_validation_step": training_run.best_validation_step,
-        "best_validation_check": training_run.best_validation_check,
         "final_validation_loss": final.validation_loss,
         "final_validation_step": final.step,
         "final_validation_check": final.validation_check,
@@ -922,14 +919,6 @@ def _run_console_view_model(
                     ("Status", _console_string_value(diagnostics.get("status"))),
                     ("Stop", _console_string_value(diagnostics.get("stop_reason"))),
                     (
-                        "Best Loss",
-                        _console_number_value(
-                            diagnostics.get("best_validation_loss"),
-                            precision=4,
-                        ),
-                    ),
-                    ("Best Step", _console_number_value(diagnostics.get("best_validation_step"))),
-                    (
                         "Final Loss",
                         _console_number_value(
                             diagnostics.get("final_validation_loss"),
@@ -996,7 +985,7 @@ def _run_console_view_model(
                     "title": "Validation History",
                     "table": {
                         "aria_label": "Validation history",
-                        "columns": ["Step", "Loss", "Best", "Stale"],
+                        "columns": ["Step", "Loss", "Stale"],
                         "rows": [_console_validation_history_row(point) for point in history],
                     },
                 }
@@ -1066,7 +1055,6 @@ def _console_validation_history_row(point: object) -> list[str]:
     return [
         _console_number_value(point_record.get("step")),
         _console_number_value(point_record.get("validation_loss"), precision=4),
-        _console_number_value(point_record.get("best_validation_loss"), precision=4),
         _console_number_value(point_record.get("stale_checks")),
     ]
 
@@ -2169,9 +2157,6 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
     numeric_fields = (
         "steps_run",
         "validation_checks",
-        "best_validation_loss",
-        "best_validation_step",
-        "best_validation_check",
         "final_validation_loss",
         "final_validation_step",
         "final_validation_check",

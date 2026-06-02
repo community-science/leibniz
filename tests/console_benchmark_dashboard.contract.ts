@@ -159,9 +159,6 @@ const result: BenchmarkResultRecord = {
           { digest: architectureDigest, kind: 'model-inspection', path: 'results/models/a.json' },
           { digest: 'sha256:training1234', kind: 'training-summary', path: 'results/training/run-a.json' },
         ],
-        best_validation_check: 1,
-        best_validation_loss: 0.4,
-        best_validation_step: 3,
         final_validation_check: 1,
         final_validation_loss: 0.4,
         final_validation_step: 3,
@@ -186,18 +183,12 @@ const result: BenchmarkResultRecord = {
         validation_checks: 2,
         validation_history: [
           {
-            best_validation_check: 0,
-            best_validation_loss: 0.6,
-            best_validation_step: 0,
             stale_checks: 0,
             step: 0,
             validation_check: 0,
             validation_loss: 0.6,
           },
           {
-            best_validation_check: 1,
-            best_validation_loss: 0.4,
-            best_validation_step: 3,
             stale_checks: 0,
             step: 3,
             validation_check: 1,

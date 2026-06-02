@@ -225,6 +225,7 @@ class ObservationGenerator:
         seed: int,
         component_sequences: Iterable[Sequence[int]] | None = None,
         memory_limit_bytes: int | None = None,
+        resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
@@ -238,6 +239,7 @@ class ObservationGenerator:
                 seed=seed,
                 component_sequences=component_sequences,
                 memory_limit_bytes=memory_limit_bytes,
+                resolution_assignment=resolution_assignment,
                 variation_extent=variation_extent,
                 timing=timing,
                 timing_prefix=f"{timing_prefix}formation_batch.",
@@ -306,6 +308,7 @@ class ObservationGenerator:
         seed: int,
         component_sequences: Iterable[Sequence[int]] | None = None,
         memory_limit_bytes: int | None = None,
+        resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
@@ -334,21 +337,29 @@ class ObservationGenerator:
             sequences = tuple(component_sequences) if component_sequences is not None else ()
         if sequences and len(sequences) != sample_count:
             raise ObservationGenerationError("component_sequences length must match sample_count")
-        resolution_assignment = self.materialization.minimum_resolution()
-        resolution_assignment = self._minimum_discriminatable_resolution_assignment(
+        requested_resolution_assignment = resolution_assignment
+        resolved_resolution_assignment = self.materialization.minimum_resolution()
+        resolved_resolution_assignment = self._minimum_discriminatable_resolution_assignment(
             component_count=component_count,
-            minimum_assignment=resolution_assignment,
+            minimum_assignment=resolved_resolution_assignment,
         )
-        resolution_assignment = self._sample_resolution_assignment(
-            component_count=component_count,
-            sample_count=sample_count,
-            seed=seed,
-            minimum_assignment=resolution_assignment,
-            memory_limit_bytes=memory_limit_bytes,
-        )
+        if requested_resolution_assignment is None:
+            resolved_resolution_assignment = self._sample_resolution_assignment(
+                component_count=component_count,
+                sample_count=sample_count,
+                seed=seed,
+                minimum_assignment=resolved_resolution_assignment,
+                memory_limit_bytes=memory_limit_bytes,
+            )
+        else:
+            resolved_resolution_assignment = self._requested_resolution_assignment(
+                minimum_assignment=resolved_resolution_assignment,
+                requested_assignment=requested_resolution_assignment,
+            )
         self.materialization.require_resolution(
-            resolution_assignment=resolution_assignment,
+            resolution_assignment=resolved_resolution_assignment,
         )
+        resolution_assignment = resolved_resolution_assignment
         width = resolution_assignment.require_axis(self.formation.width_axis)
         height = resolution_assignment.require_axis(self.formation.height_axis)
         transform = _variation_transform_at_extent(
@@ -560,6 +571,23 @@ class ObservationGenerator:
         values = dict(minimum_assignment.values)
         values[sampling.width_axis] = generator.randint(minimum_width, maximum_width)
         values[sampling.height_axis] = generator.randint(minimum_height, maximum_height)
+        return AxisAssignment(values=values)
+
+    def _requested_resolution_assignment(
+        self,
+        *,
+        minimum_assignment: AxisAssignment,
+        requested_assignment: AxisAssignment,
+    ) -> AxisAssignment:
+        values = dict(minimum_assignment.values)
+        for axis, requested_value in requested_assignment.values.items():
+            minimum_value = minimum_assignment.require_axis(axis)
+            if requested_value < minimum_value:
+                raise ObservationGenerationError(
+                    f"{axis} requested resolution {requested_value} is below "
+                    f"required minimum {minimum_value}"
+                )
+            values[axis] = requested_value
         return AxisAssignment(values=values)
 
     def _minimum_discriminatable_resolution_assignment(

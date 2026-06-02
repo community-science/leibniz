@@ -193,8 +193,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     ).manifest
 
     dataset_document.dataset.validate_manifest(manifest)
-    assert summary.measurement_count == 15
-    assert len(dataset_document.dataset.measurements) == 15
+    assert summary.measurement_count == 3
+    assert len(dataset_document.dataset.measurements) == 3
     assert inspection_document.inspection.cost_summary.parameter_count == 50
     assert inspection_document.inspection.cost_summary.inference_compute == 656
     assert summary.training_summary_path.exists()
@@ -244,7 +244,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert cast(float, roofline["peak_bytes_per_second"]) > 0
     assert training_throughput["sample_count"] == 2
     assert cast(float, training_throughput["samples_per_second"]) > 0
-    assert evaluation_throughput["sample_count"] == 15
+    assert evaluation_throughput["sample_count"] == 3
     assert cast(float, evaluation_throughput["samples_per_second"]) > 0
     assert roofline_comparison["status"] == "available"
     assert roofline_comparison["model"] == "operational-intensity"
@@ -265,17 +265,22 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         == "internal-distinguishable-state-complexity"
     )
     assert evaluation_curriculum["sampling_levers"] == ["canvas-size", "nuisance-extent"]
-    assert evaluation_curriculum["nuisance_extent_curriculum"] == [0.0, 1.0]
+    assert evaluation_curriculum["nuisance_extent_curriculum"] == [0.0, 0.25, 0.5, 1.0]
+    assert cast(dict[str, object], evaluation_curriculum["canvas_growth"])["kind"] == (
+        "logarithmic"
+    )
+    assert evaluation_curriculum["rung_policy"] == "unbounded-competence-frontier"
     assert evaluation_curriculum["gating_metric"] == "frontier-validation-loss-plateau"
-    assert evaluation_curriculum["frontier_index"] == 4
-    assert [rung["index"] for rung in curriculum_rungs] == [0, 1, 2, 3, 4]
+    assert evaluation_curriculum["frontier_index"] == 0
+    assert [rung["index"] for rung in curriculum_rungs] == [0]
     assert {
         cast(str, rung["complexity_axis"])
         for rung in curriculum_rungs
     } == {"internal-distinguishable-state-complexity"}
-    assert all("generation_memory_limit_bytes" in rung for rung in curriculum_rungs)
-    assert [rung["nuisance_extent"] for rung in curriculum_rungs][:2] == [0.0, 1.0]
-    assert [rung["sample_count"] for rung in curriculum_rungs] == [3, 3, 3, 3, 3]
+    assert all("generation_memory_limit_bytes" not in rung for rung in curriculum_rungs)
+    assert all("resolution_assignment" in rung for rung in curriculum_rungs)
+    assert [rung["nuisance_extent"] for rung in curriculum_rungs] == [0.0]
+    assert [rung["sample_count"] for rung in curriculum_rungs] == [3]
     assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
         cast(float, rung["complexity"]) for rung in curriculum_rungs
     )
@@ -295,13 +300,12 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     )
     assert sampled_competence["complexity_axis"] is None
     assert math.isclose(cast(float, sampled_competence["complexity"]), math.log2(10))
-    assert sampled_competence["sample_count"] == 15
+    assert sampled_competence["sample_count"] == 3
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
-    assert len(points) == 5
-    assert [point["sample_count"] for point in points] == [3, 3, 3, 3, 3]
+    assert len(points) == 1
+    assert [point["sample_count"] for point in points] == [3]
     assert math.isclose(cast(float, points[0]["complexity"]), math.log2(10))
-    assert math.isclose(cast(float, points[1]["complexity"]), 19.965784284662085)
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
     )
@@ -327,7 +331,7 @@ def test_digits_benchmark_runner_accepts_fixed_support_convnet_architecture(
         summary.model_inspection_path.read_bytes()
     ).inspection
 
-    assert summary.measurement_count == 6
+    assert summary.measurement_count == 2
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
         "fixed-support-affine",
         "local-affine",
@@ -385,9 +389,9 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
 
 def test_windowed_plateau_ignores_tiny_recent_best_loss_resets() -> None:
     history = (
-        _history_point(check=0, step=0, loss=1.0, best=1.0),
-        _history_point(check=1, step=250, loss=1.01, best=1.0, stale_checks=1),
-        _history_point(check=2, step=500, loss=0.9995, best=0.9995),
+        _history_point(check=0, step=0, loss=1.0),
+        _history_point(check=1, step=250, loss=1.01, stale_checks=1),
+        _history_point(check=2, step=500, loss=0.9995),
     )
 
     assert benchmark_runner.has_windowed_validation_plateau(
@@ -399,9 +403,9 @@ def test_windowed_plateau_ignores_tiny_recent_best_loss_resets() -> None:
 
 def test_windowed_plateau_continues_after_material_best_loss_improvement() -> None:
     history = (
-        _history_point(check=0, step=0, loss=1.0, best=1.0),
-        _history_point(check=1, step=250, loss=1.01, best=1.0, stale_checks=1),
-        _history_point(check=2, step=500, loss=0.998, best=0.998),
+        _history_point(check=0, step=0, loss=1.0),
+        _history_point(check=1, step=250, loss=1.01, stale_checks=1),
+        _history_point(check=2, step=500, loss=0.998),
     )
 
     assert not benchmark_runner.has_windowed_validation_plateau(
@@ -526,20 +530,9 @@ def test_reduce_on_plateau_scheduler_uses_convergence_patience() -> None:
     assert schedule.scheduler.patience == 6
 
 
-def test_training_stage_carries_prior_global_best(
+def test_training_stage_records_current_validation_loss_without_global_best(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    prior_best = TrainingHistoryPoint(
-        step=100,
-        validation_check=8,
-        validation_loss=1.0,
-        best_validation_loss=1.0,
-        best_validation_step=100,
-        best_validation_check=8,
-        stale_checks=0,
-        learning_rates=(0.01,),
-    )
-
     def constant_validation_loss(**_kwargs: object) -> float:
         return 2.0
 
@@ -568,14 +561,11 @@ def test_training_stage_carries_prior_global_best(
         phase_timings=benchmark_runner.TimingCollector(),
         start_step=100,
         start_check=9,
-        initial_best=prior_best,
     )
 
     point = stage_result.validation_history[0]
     assert point.validation_loss == 2.0
-    assert point.best_validation_loss == prior_best.best_validation_loss
-    assert point.best_validation_step == prior_best.best_validation_step
-    assert point.best_validation_check == prior_best.best_validation_check
+    assert "best_validation_loss" not in point.to_record()
 
 
 def test_training_curriculum_is_not_step_indexed() -> None:
@@ -586,8 +576,30 @@ def test_training_curriculum_is_not_step_indexed() -> None:
     assert "step // _generation_curriculum" not in source
     assert "on_plateau=advance_memory_limit" not in source
     assert "current_memory_limit()" not in source
+    assert "_curriculum_memory_limits" not in source
+    assert "generation_memory_limit_bytes" not in source
     assert "on_plateau=advance_frontier" in source
-    assert "evaluation_rungs" in source
+    assert "initial_evaluation_rung" in source
+
+
+def test_evaluation_curriculum_candidates_are_logarithmic_and_complexity_ordered() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    candidates = cast(Any, benchmark_runner)._logarithmic_curriculum_candidates(
+        generator=generator,
+        component_count=1,
+        start_index=0,
+    )
+    first_resolutions = [
+        candidate.resolution_assignment.values
+        for candidate in candidates[:8]
+    ]
+
+    assert [candidate.complexity for candidate in candidates] == sorted(
+        candidate.complexity for candidate in candidates
+    )
+    assert first_resolutions[0] == {"W": 24, "H": 24}
+    assert {"W": 34, "H": 34} in first_resolutions
 
 
 def test_training_curriculum_does_not_restart_step_counter() -> None:
@@ -666,7 +678,7 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
     throughput = cast(dict[str, object], training_summary["throughput"])
     fallbacks = cast(list[dict[str, object]], throughput["runtime_fallbacks"])
 
-    assert calls == ["auto", "mps", "cpu"]
+    assert calls == ["mps", "cpu"]
     assert training_summary["tensor_device"] == "cpu"
     assert throughput["tensor_device"] == "cpu"
     assert fallbacks == [
@@ -757,7 +769,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
         "Validation History",
     ]
     validation_table = cast(dict[str, object], detail_sections[-1]["table"])
-    assert validation_table["columns"] == ["Step", "Loss", "Best", "Stale"]
+    assert validation_table["columns"] == ["Step", "Loss", "Stale"]
     artifact_kinds = {
         artifact["kind"]
         for artifact in cast(list[dict[str, object]], diagnostics["artifacts"])
@@ -933,15 +945,11 @@ def _history_point(
     check: int,
     step: int,
     loss: float,
-    best: float,
     stale_checks: int = 0,
 ) -> TrainingHistoryPoint:
     return TrainingHistoryPoint(
         step=step,
         validation_check=check,
         validation_loss=loss,
-        best_validation_loss=best,
-        best_validation_step=step,
-        best_validation_check=check,
         stale_checks=stale_checks,
     )

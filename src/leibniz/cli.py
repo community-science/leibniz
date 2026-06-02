@@ -717,7 +717,6 @@ def _print_active_training_progress(summary: BenchmarkRunSummary) -> None:
         f"training {summary.run_slug}: "
         f"step {last.get('step', '?')}/{max_steps} "
         f"validation_loss={_format_progress_number(last.get('validation_loss'))} "
-        f"best={_format_progress_number(training_run.get('best_validation_loss'))} "
         f"stale_checks={last.get('stale_checks', '?')}",
         flush=True,
     )

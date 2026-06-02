@@ -52,9 +52,6 @@ _history_point_record = RecordSpec(
         "step": FieldSpec(kind="integer"),
         "validation_check": FieldSpec(kind="integer"),
         "validation_loss": FieldSpec(kind="number"),
-        "best_validation_loss": FieldSpec(kind="number"),
-        "best_validation_step": FieldSpec(kind="integer"),
-        "best_validation_check": FieldSpec(kind="integer"),
         "stale_checks": FieldSpec(kind="integer"),
         "learning_rates": FieldSpec(
             kind="sequence",
@@ -72,9 +69,6 @@ _training_run_record = RecordSpec(
         "steps_run": FieldSpec(kind="integer"),
         "training_compute": FieldSpec(kind="number", required=False),
         "validation_checks": FieldSpec(kind="integer"),
-        "best_validation_loss": FieldSpec(kind="number"),
-        "best_validation_step": FieldSpec(kind="integer"),
-        "best_validation_check": FieldSpec(kind="integer"),
         "protocol": FieldSpec(kind="record"),
         "validation_history": FieldSpec(
             kind="sequence",
@@ -211,9 +205,6 @@ class TrainingHistoryPoint:
     step: int
     validation_check: int
     validation_loss: float
-    best_validation_loss: float
-    best_validation_step: int
-    best_validation_check: int
     stale_checks: int
     learning_rates: tuple[float, ...] = ()
 
@@ -221,9 +212,6 @@ class TrainingHistoryPoint:
         _require_nonnegative_int(self.step, "step")
         _require_nonnegative_int(self.validation_check, "validation_check")
         _require_nonnegative_finite(self.validation_loss, "validation_loss")
-        _require_nonnegative_finite(self.best_validation_loss, "best_validation_loss")
-        _require_nonnegative_int(self.best_validation_step, "best_validation_step")
-        _require_nonnegative_int(self.best_validation_check, "best_validation_check")
         _require_nonnegative_int(self.stale_checks, "stale_checks")
         for rate in self.learning_rates:
             if not math.isfinite(float(rate)) or rate < 0:
@@ -239,18 +227,6 @@ class TrainingHistoryPoint:
             step=_as_int(validated["step"], "step"),
             validation_check=_as_int(validated["validation_check"], "validation_check"),
             validation_loss=_as_float(validated["validation_loss"], "validation_loss"),
-            best_validation_loss=_as_float(
-                validated["best_validation_loss"],
-                "best_validation_loss",
-            ),
-            best_validation_step=_as_int(
-                validated["best_validation_step"],
-                "best_validation_step",
-            ),
-            best_validation_check=_as_int(
-                validated["best_validation_check"],
-                "best_validation_check",
-            ),
             stale_checks=_as_int(validated["stale_checks"], "stale_checks"),
             learning_rates=tuple(
                 _as_float(rate, "learning_rates")
@@ -263,9 +239,6 @@ class TrainingHistoryPoint:
             "step": self.step,
             "validation_check": self.validation_check,
             "validation_loss": self.validation_loss,
-            "best_validation_loss": self.best_validation_loss,
-            "best_validation_step": self.best_validation_step,
-            "best_validation_check": self.best_validation_check,
             "stale_checks": self.stale_checks,
         }
         if self.learning_rates:
@@ -282,9 +255,6 @@ class TrainingRunRecord:
     steps_run: int
     training_compute: float | None
     validation_checks: int
-    best_validation_loss: float
-    best_validation_step: int
-    best_validation_check: int
     protocol: TrainingProtocol
     validation_history: tuple[TrainingHistoryPoint, ...]
 
@@ -304,9 +274,6 @@ class TrainingRunRecord:
         if self.training_compute is not None:
             _require_nonnegative_finite(self.training_compute, "training_compute")
         _require_positive_int(self.validation_checks, "validation_checks")
-        _require_nonnegative_finite(self.best_validation_loss, "best_validation_loss")
-        _require_nonnegative_int(self.best_validation_step, "best_validation_step")
-        _require_nonnegative_int(self.best_validation_check, "best_validation_check")
         if not self.validation_history:
             raise TrainingRunValidationError("validation_history must contain at least one point")
         if self.validation_checks != len(self.validation_history):
@@ -320,14 +287,6 @@ class TrainingRunRecord:
             )
         ):
             raise TrainingRunValidationError("validation_history must be sorted")
-        best_point = min(
-            self.validation_history,
-            key=lambda point: (point.best_validation_loss, point.best_validation_check),
-        )
-        if not math.isclose(self.best_validation_loss, best_point.best_validation_loss):
-            raise TrainingRunValidationError(
-                "best_validation_loss must match validation_history"
-            )
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> TrainingRunRecord:
@@ -345,18 +304,6 @@ class TrainingRunRecord:
                 else _as_float(validated["training_compute"], "training_compute")
             ),
             validation_checks=_as_int(validated["validation_checks"], "validation_checks"),
-            best_validation_loss=_as_float(
-                validated["best_validation_loss"],
-                "best_validation_loss",
-            ),
-            best_validation_step=_as_int(
-                validated["best_validation_step"],
-                "best_validation_step",
-            ),
-            best_validation_check=_as_int(
-                validated["best_validation_check"],
-                "best_validation_check",
-            ),
             protocol=TrainingProtocol.from_record(
                 _as_mapping(validated["protocol"], "protocol")
             ),
@@ -377,9 +324,6 @@ class TrainingRunRecord:
             "stop_reason": self.stop_reason,
             "steps_run": self.steps_run,
             "validation_checks": self.validation_checks,
-            "best_validation_loss": self.best_validation_loss,
-            "best_validation_step": self.best_validation_step,
-            "best_validation_check": self.best_validation_check,
             "protocol": self.protocol.to_record(),
             "validation_history": [
                 point.to_record() for point in self.validation_history
