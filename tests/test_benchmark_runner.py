@@ -334,6 +334,63 @@ def test_plateau_scheduler_requires_progressive_learning_rate_reductions() -> No
     assert schedule.learning_rates() == (0.0010000000000000002,)
 
 
+def test_plateau_scheduler_exhausts_at_effective_learning_rate_floor() -> None:
+    class FakeScheduler:
+        def step(self, _validation_loss: float) -> None:
+            return None
+
+    class FakeOptimizer:
+        param_groups: list[dict[str, float]]
+
+        def __init__(self) -> None:
+            self.param_groups = [{"lr": 1e-8}]
+
+    schedule_class = cast(Any, benchmark_runner)._LearningRateSchedule
+    schedule = schedule_class(
+        scheduler=FakeScheduler(),
+        optimizer=FakeOptimizer(),
+        update_on="validation-loss",
+        minimum_effective_learning_rate=1e-8,
+    )
+
+    assert schedule.has_exhausted_plateau_response()
+
+
+def test_plateau_scheduler_resets_learning_rate_for_curriculum_expansion() -> None:
+    class FakeScheduler:
+        reset_count: int
+
+        def __init__(self) -> None:
+            self.reset_count = 0
+
+        def _reset(self) -> None:
+            self.reset_count += 1
+
+    class FakeOptimizer:
+        param_groups: list[dict[str, float]]
+
+        def __init__(self) -> None:
+            self.param_groups = [{"lr": 1e-8}]
+
+    scheduler = FakeScheduler()
+    optimizer = FakeOptimizer()
+    schedule_class = cast(Any, benchmark_runner)._LearningRateSchedule
+    schedule = schedule_class(
+        scheduler=scheduler,
+        optimizer=optimizer,
+        update_on="validation-loss",
+        lr_reduction_count=3,
+        minimum_effective_learning_rate=1e-8,
+        base_learning_rates=(0.01,),
+    )
+
+    schedule.reset_for_curriculum_expansion()
+
+    assert schedule.lr_reduction_count == 0
+    assert schedule.learning_rates() == (0.01,)
+    assert scheduler.reset_count == 1
+
+
 def test_training_stage_carries_prior_global_best(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -393,6 +450,13 @@ def test_training_curriculum_is_not_step_indexed() -> None:
     assert "for memory_limit in _curriculum_memory_limits(memory_limit_bytes):" not in source
     assert "on_plateau=advance_memory_limit" in source
     assert "current_memory_limit()" in source
+
+
+def test_training_curriculum_does_not_restart_step_counter() -> None:
+    source = Path(benchmark_runner.__file__).read_text(encoding="utf-8")
+
+    assert "start_step = validation_history[-1].step" not in source
+    assert "start_check = validation_history[-1].validation_check + 1" not in source
 
 
 def test_loss_threshold_is_not_a_training_option() -> None:

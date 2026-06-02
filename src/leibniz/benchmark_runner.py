@@ -141,6 +141,8 @@ class _LearningRateSchedule:
     optimizer: Any
     update_on: str
     lr_reduction_count: int = 0
+    minimum_effective_learning_rate: float | None = None
+    base_learning_rates: tuple[float, ...] = ()
 
     def learning_rates(self) -> tuple[float, ...]:
         return tuple(float(group["lr"]) for group in self.optimizer.param_groups)
@@ -160,10 +162,34 @@ class _LearningRateSchedule:
     def has_exhausted_plateau_response(self) -> bool:
         if self.update_on != "validation-loss":
             return True
-        return self.lr_reduction_count >= _minimum_plateau_lr_reductions
+        return (
+            self.lr_reduction_count >= _minimum_plateau_lr_reductions
+            or self.has_reached_minimum_effective_learning_rate()
+        )
 
     def reset_plateau_response_count(self) -> None:
         self.lr_reduction_count = 0
+
+    def reset_for_curriculum_expansion(self) -> None:
+        self.reset_plateau_response_count()
+        if self.base_learning_rates:
+            for group, base_learning_rate in zip(
+                self.optimizer.param_groups,
+                self.base_learning_rates,
+                strict=True,
+            ):
+                group["lr"] = base_learning_rate
+        reset_scheduler = getattr(self.scheduler, "_reset", None)
+        if callable(reset_scheduler):
+            reset_scheduler()
+
+    def has_reached_minimum_effective_learning_rate(self) -> bool:
+        if self.minimum_effective_learning_rate is None:
+            return False
+        return all(
+            learning_rate <= self.minimum_effective_learning_rate
+            for learning_rate in self.learning_rates()
+        )
 
 
 class BenchmarkRunnerError(ValueError):
@@ -723,7 +749,7 @@ def _train_and_predict_on_device(
             return False
         memory_limit_index += 1
         if scheduler is not None:
-            scheduler.reset_plateau_response_count()
+            scheduler.reset_for_curriculum_expansion()
         return True
 
     training_result = _train_until_convergence(
@@ -1456,17 +1482,24 @@ def _make_scheduler(
             ),
             optimizer=optimizer,
             update_on="optimizer-step",
+            base_learning_rates=tuple(float(group["lr"]) for group in optimizer.param_groups),
         )
     if name == "reduce-on-plateau":
+        factor = 0.1
+        eps = 1e-8
         return _LearningRateSchedule(
             scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer,
                 mode="min",
+                factor=factor,
                 threshold=min_delta,
                 threshold_mode="abs",
+                eps=eps,
             ),
             optimizer=optimizer,
             update_on="validation-loss",
+            minimum_effective_learning_rate=eps / (1.0 - factor),
+            base_learning_rates=tuple(float(group["lr"]) for group in optimizer.param_groups),
         )
     raise BenchmarkRunnerError(f"unsupported schedule: {name}")
 
