@@ -18,7 +18,6 @@ import {
   emptyFrontiersForCostAxes,
   formatCost,
   modelComparisonRows,
-  scoreLabel,
   shortDigest,
 } from './benchmarkDashboardModel.ts';
 import type { ArtifactReferenceRecord } from './artifactReferences.ts';
@@ -119,6 +118,14 @@ export function BenchmarksPanel({
 
   const result = selectedResult?.result;
   const modelRows = modelComparisonRows(result, modelInspections);
+  const [selectedModelKey, setSelectedModelKey] = usePersistentState(
+    `leibniz.console.benchmarks.${selected.benchmark_id}.selectedModel`,
+    modelRows[0]?.model.model_key ?? '',
+  );
+  const effectiveSelectedModelKey =
+    modelRows.some(({ model }) => model.model_key === selectedModelKey)
+      ? selectedModelKey
+      : modelRows[0]?.model.model_key ?? '';
 
   return (
     <section className="benchmark-workbench" aria-label="Benchmarks">
@@ -156,8 +163,10 @@ export function BenchmarksPanel({
           >
             <BenchmarkPerformancePane
               benchmark={selected}
+              onModelSelect={setSelectedModelKey}
               operatorVocabulary={operatorVocabulary}
               resultEntry={selectedResult}
+              selectedModelKey={effectiveSelectedModelKey}
             />
           </CollapsibleBenchmarkSection>
           {modelRows.length === 0 ? null : (
@@ -170,6 +179,7 @@ export function BenchmarksPanel({
                 operatorVocabulary={operatorVocabulary}
                 rows={modelRows}
                 result={result}
+                selectedModelKey={effectiveSelectedModelKey}
               />
             </CollapsibleBenchmarkSection>
           )}
@@ -212,22 +222,28 @@ function CollapsibleBenchmarkSection({
 
 function BenchmarkPerformancePane({
   benchmark,
+  onModelSelect,
   operatorVocabulary,
   resultEntry,
+  selectedModelKey,
 }: {
   benchmark: BenchmarkTaskRecord;
+  onModelSelect: (modelKey: string) => void;
   operatorVocabulary: OperatorVocabularyRecord;
   resultEntry:
     | BenchmarkResultEntry
     | undefined;
+  selectedModelKey: string;
 }) {
   const result = resultEntry?.result ?? emptyBenchmarkResult(benchmark);
 
   return (
     <div className="benchmark-task">
       <BenchmarkResultDashboard
+        onModelSelect={onModelSelect}
         operatorVocabulary={operatorVocabulary}
         result={result}
+        selectedModelKey={selectedModelKey}
       />
     </div>
   );
@@ -251,16 +267,14 @@ function BenchmarkModelsPane({
   operatorVocabulary,
   rows,
   result,
+  selectedModelKey,
 }: {
   operatorVocabulary: OperatorVocabularyRecord;
   rows: ReturnType<typeof modelComparisonRows>;
   result: BenchmarkResultRecord | undefined;
+  selectedModelKey: string;
 }) {
   const costAxis = benchmarkCostAxes(result)[0]?.key ?? 'parameter_count';
-  const [selectedModelKey, setSelectedModelKey] = usePersistentState(
-    `leibniz.console.benchmarks.${result?.benchmark_id ?? 'empty'}.selectedModel`,
-    rows[0]?.model.model_key ?? '',
-  );
   const selectedRow =
     rows.find(({ model }) => model.model_key === selectedModelKey) ?? rows[0];
 
@@ -269,42 +283,9 @@ function BenchmarkModelsPane({
       <section className="benchmark-model-workbench">
         <div className="benchmark-model-workbench-heading">
           <h3>Model Workbench</h3>
-          <span>{rows.length} candidates</span>
+          <span>{selectedRow === undefined ? 'No model selected' : shortDigest(selectedRow.model.architecture_digest)}</span>
         </div>
-        <div className="benchmark-model-inspector-layout">
-          <aside className="benchmark-model-rail" aria-label="Benchmark model candidates">
-            {rows.map(({ inspection, model }) => (
-              <button
-                className={`benchmark-model-card ${model.model_key === selectedRow?.model.model_key ? 'selected' : ''}`}
-                key={model.model_key}
-                onClick={() => setSelectedModelKey(model.model_key)}
-                type="button"
-              >
-                <div className="benchmark-model-heading">
-                  <strong>{shortDigest(model.architecture_digest)}</strong>
-                  <span>{scoreLabel(model.score)}</span>
-                </div>
-                <dl>
-                  <div>
-                    <dt>Cost</dt>
-                    <dd>{formatCost(costValue(model.cost_summary, costAxis))}</dd>
-                  </div>
-                  <div>
-                    <dt>Components</dt>
-                    <dd>{modelComponentCount(inspection, model)}</dd>
-                  </div>
-                  <div>
-                    <dt>Runs</dt>
-                    <dd>{model.run_ids.length}</dd>
-                  </div>
-                  <div>
-                    <dt>Sources</dt>
-                    <dd>{model.source_kinds.length}</dd>
-                  </div>
-                </dl>
-              </button>
-            ))}
-          </aside>
+        <div className="benchmark-model-inspector-layout single">
           {selectedRow === undefined ? null : (
             <BenchmarkModelInspector
               complexityAxis={result?.complexity_axis}
