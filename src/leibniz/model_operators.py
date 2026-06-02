@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from leibniz.architectures import ArchitectureLayer, ArchitectureManifest
+from leibniz.model_scale_contracts import ModelScaleContract
 from leibniz.operator_interpretation import interpret_operator_semantic
 from leibniz.operator_semantics import ModelOperatorSemantic, model_operator_semantic_registry
 from leibniz.program_effect_semantics import program_effect_semantic_registry
@@ -602,9 +603,18 @@ def materialize_model_operator_search_point(
         raise ModelOperatorExecutionError(
             "local_support_dimension must not exceed input rank"
         )
+    scale_axis_indices = tuple(
+        range(len(input_shape) - point.local_support_dimension, len(input_shape))
+    )
     return ArchitectureManifest.from_record(
         {
             "input_shape": list(input_shape),
+            "model_scale_contract": ModelScaleContract.variable_input_shape(
+                input_shape,
+                minimum=point.local_support_size,
+                axis_symbol="S",
+                scale_axis_indices=scale_axis_indices,
+            ).to_record(),
             "output_shape": [output_count],
             "layers": [
                 {

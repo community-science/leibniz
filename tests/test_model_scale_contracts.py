@@ -49,12 +49,12 @@ def test_model_scale_contract_rejects_invalid_axes() -> None:
         capture_scale_contract_error(
             lambda: ModelScaleContract.variable_input_shape(
                 (1, 32, 32),
-                minimum=16,
+                minimum=64,
                 axis_symbol="W",
                 scale_axis_indices=(2,),
             )
         )
-    ) == "scaled anchor axes must equal minimum"
+    ) == "scaled anchor axes must be at least minimum"
 
     assert str(
         capture_scale_contract_error(
