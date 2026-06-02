@@ -42,7 +42,7 @@ def test_operator_interpreter_preserves_current_public_shape_and_cost_laws() -> 
             "dimension": 2,
             "out_channels": 6,
             "out_height": 12,
-            "out_width": 8,
+            "out_width": 12,
         },
         input_shape=(1, 32, 48),
     )
@@ -85,10 +85,10 @@ def test_operator_interpreter_preserves_current_public_shape_and_cost_laws() -> 
         fixed_support_learned.inference_compute,
         fixed_support_learned.training_compute_per_sample,
     ) == (
-        (6, 12, 8),
+        (6, 12, 12),
         12,
-        2688,
-        6528,
+        3264,
+        8256,
     )
     assert (
         flattened.output_shape,

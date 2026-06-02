@@ -339,12 +339,12 @@ def test_digits_benchmark_runner_accepts_fixed_support_convnet_architecture(
         "affine-readout",
     ]
     assert [stage.output_shape for stage in inspection.architecture_trace.stages] == [
-        (4, 12, 8),
-        (4, 12, 8),
-        (384,),
+        (4, 12, 12),
+        (4, 12, 12),
+        (576,),
         (10,),
     ]
-    assert inspection.cost_summary.parameter_count == 4006
+    assert inspection.cost_summary.parameter_count == 5926
 
 
 def test_digits_benchmark_runner_records_convergence_protocol_controls(

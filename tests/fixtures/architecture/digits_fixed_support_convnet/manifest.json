@@ -43,7 +43,7 @@
         "dimension": 2,
         "out_channels": 4,
         "out_height": 12,
-        "out_width": 8
+        "out_width": 12
       }
     },
     {
