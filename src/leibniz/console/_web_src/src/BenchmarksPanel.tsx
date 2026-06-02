@@ -702,10 +702,7 @@ function ModelValidationChart({
   points: Array<ValidationHistoryPoint & { run: RunResultRecord }>;
 }) {
   const steps = points.map((point) => point.step);
-  const losses = points.flatMap((point) => [
-    point.validation_loss,
-    point.best_validation_loss,
-  ]);
+  const losses = points.map((point) => point.validation_loss);
   const xMin = Math.min(...steps);
   const xMax = Math.max(...steps, xMin + 1);
   const yMin = 0;
@@ -716,14 +713,9 @@ function ModelValidationChart({
   const y = (loss: number) =>
     modelValidationPlotMargin.top +
     (1 - (loss - yMin) / (yMax - yMin)) * modelValidationPlotBodyHeight;
-  const line = (key: 'validation_loss' | 'best_validation_loss') =>
-    points.map((point) => `${x(point.step)},${y(point[key])}`).join(' ');
+  const line = points.map((point) => `${x(point.step)},${y(point.validation_loss)}`).join(' ');
   return (
     <div className="benchmark-model-validation-chart">
-      <div className="benchmark-model-validation-legend">
-        <span><i className="loss" />Loss</span>
-        <span><i className="best" />Best</span>
-      </div>
       <svg
         aria-label="Validation loss history"
         role="img"
@@ -763,12 +755,7 @@ function ModelValidationChart({
         <polyline
           className="benchmark-model-validation-loss"
           fill="none"
-          points={line('validation_loss')}
-        />
-        <polyline
-          className="benchmark-model-validation-best"
-          fill="none"
-          points={line('best_validation_loss')}
+          points={line}
         />
         {points.map((point, index) => (
           <circle
