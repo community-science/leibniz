@@ -25,12 +25,12 @@ const architectureDigest = 'sha256:abcdef1234567890';
 
 const standardAxes = benchmarkCostAxes(undefined);
 assertEqual(standardAxes.map((axis) => axis.key).join(','),
-  'parameter_count,inference_flops,parameter_bytes',
+  'parameter_count,storage_bytes,inference_compute,training_compute',
   'standard cost axes',
 );
 assertEqual(
   Object.keys(emptyFrontiersForCostAxes(standardAxes)).join(','),
-  'parameter_count,inference_flops,parameter_bytes',
+  'parameter_count,storage_bytes,inference_compute,training_compute',
   'empty frontier axes',
 );
 assertEqual(
@@ -49,9 +49,10 @@ const result: BenchmarkResultRecord = {
         benchmark_id: targetBenchmark,
         cost_summary: {
           component_count: 1,
-          inference_flops: 20,
-          parameter_bytes: 40,
+          inference_compute: 20,
+          storage_bytes: 40,
           parameter_count: 10,
+          training_compute: 360,
         },
         measurement_count: 2,
         model_key: 'model-a',
@@ -69,9 +70,10 @@ const result: BenchmarkResultRecord = {
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 1,
-        inference_flops: 20,
-        parameter_bytes: 40,
+        inference_compute: 20,
+        storage_bytes: 40,
         parameter_count: 10,
+        training_compute: 360,
       },
       measurement_count: 2,
       model_key: 'model-a',
@@ -86,9 +88,10 @@ const result: BenchmarkResultRecord = {
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 2,
-        inference_flops: 80,
-        parameter_bytes: 160,
+        inference_compute: 80,
+        storage_bytes: 160,
         parameter_count: 40,
+        training_compute: 1440,
       },
       measurement_count: 1,
       model_key: 'model-b',
@@ -136,9 +139,10 @@ const result: BenchmarkResultRecord = {
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 1,
-        inference_flops: 20,
-        parameter_bytes: 40,
+        inference_compute: 20,
+        storage_bytes: 40,
         parameter_count: 10,
+        training_compute: 360,
       },
       measurement_count: 2,
       measurement_dataset_digest: 'sha256:dataset1234',
@@ -228,11 +232,11 @@ const inspections: ModelInspectionRecord[] = [
       record_digest: architectureDigest,
     },
     cost_summary: {
-      inference_flops: 20,
+      inference_compute: 20,
       component_count: 1,
-      parameter_bytes: 40,
+      storage_bytes: 40,
       parameter_count: 10,
-      unknown_flop_components: [],
+      unknown_compute_components: [],
       unknown_parameter_components: [],
     },
     id: 'inspection-a',
@@ -259,7 +263,7 @@ const inspections: ModelInspectionRecord[] = [
       input_node_ids: ['component-0'],
       output_count: 1,
       output_node_ids: ['component-0'],
-      unsupported_flop_components: [],
+      unsupported_compute_components: [],
       unsupported_parameter_components: [],
     },
     architecture_trace: {
@@ -277,7 +281,7 @@ const inspections: ModelInspectionRecord[] = [
             tensor_relation: 'identity',
           },
           index: 0,
-          inference_flops: 0,
+          inference_compute: 0,
           input_shape: [1],
           kind: 'operator',
           operator_kind: 'identity',

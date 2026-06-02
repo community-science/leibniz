@@ -70,6 +70,7 @@ _training_run_record = RecordSpec(
         "status": FieldSpec(kind="string"),
         "stop_reason": FieldSpec(kind="string"),
         "steps_run": FieldSpec(kind="integer"),
+        "training_compute": FieldSpec(kind="number", required=False),
         "validation_checks": FieldSpec(kind="integer"),
         "best_validation_loss": FieldSpec(kind="number"),
         "best_validation_step": FieldSpec(kind="integer"),
@@ -279,6 +280,7 @@ class TrainingRunRecord:
     status: _training_status
     stop_reason: str
     steps_run: int
+    training_compute: float | None
     validation_checks: int
     best_validation_loss: float
     best_validation_step: int
@@ -299,6 +301,8 @@ class TrainingRunRecord:
         if not self.stop_reason:
             raise TrainingRunValidationError("stop_reason must be nonempty")
         _require_nonnegative_int(self.steps_run, "steps_run")
+        if self.training_compute is not None:
+            _require_nonnegative_finite(self.training_compute, "training_compute")
         _require_positive_int(self.validation_checks, "validation_checks")
         _require_nonnegative_finite(self.best_validation_loss, "best_validation_loss")
         _require_nonnegative_int(self.best_validation_step, "best_validation_step")
@@ -335,6 +339,11 @@ class TrainingRunRecord:
             status=cast(_training_status, _as_string(validated["status"], "status")),
             stop_reason=_as_string(validated["stop_reason"], "stop_reason"),
             steps_run=_as_int(validated["steps_run"], "steps_run"),
+            training_compute=(
+                None
+                if "training_compute" not in validated
+                else _as_float(validated["training_compute"], "training_compute")
+            ),
             validation_checks=_as_int(validated["validation_checks"], "validation_checks"),
             best_validation_loss=_as_float(
                 validated["best_validation_loss"],
@@ -361,7 +370,7 @@ class TrainingRunRecord:
         )
 
     def to_record(self) -> dict[str, object]:
-        return {
+        record: dict[str, object] = {
             "format": "leibniz.training-run",
             "format_version": 1,
             "status": self.status,
@@ -376,6 +385,9 @@ class TrainingRunRecord:
                 point.to_record() for point in self.validation_history
             ],
         }
+        if self.training_compute is not None:
+            record["training_compute"] = self.training_compute
+        return record
 
 
 def _as_float(value: object, field: str) -> float:

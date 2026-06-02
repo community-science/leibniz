@@ -487,10 +487,10 @@ def _calibrated_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
     record.update(
         {
             "status": "calibrated",
-            "flop_calibration_seconds": matmul_seconds,
-            "flop_calibration_matrix_size": matrix_size,
-            "flop_calibration_repeats": matmul_repeats,
-            "peak_flops_per_second": (
+            "compute_calibration_seconds": matmul_seconds,
+            "compute_calibration_matrix_size": matrix_size,
+            "compute_calibration_repeats": matmul_repeats,
+            "peak_compute_per_second": (
                 2.0 * matrix_size * matrix_size * matrix_size * matmul_repeats
             )
             / matmul_seconds,

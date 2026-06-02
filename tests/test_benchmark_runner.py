@@ -188,7 +188,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert summary.measurement_count == 12
     assert len(dataset_document.dataset.measurements) == 12
     assert inspection_document.inspection.cost_summary.parameter_count == 50
-    assert inspection_document.inspection.cost_summary.inference_flops == 656
+    assert inspection_document.inspection.cost_summary.inference_compute == 656
     assert summary.training_summary_path.exists()
     training_summary = load_object_document(
         summary.training_summary_path.read_bytes(),
@@ -242,8 +242,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert roofline_comparison["model"] == "operational-intensity"
     assert cast(float, roofline_comparison["training_fraction_of_roofline"]) > 0
     assert training_phase["limiting_resource"] in {"compute", "memory-bandwidth"}
-    assert cast(float, training_phase["arithmetic_intensity_flops_per_byte"]) > 0
-    assert cast(float, training_phase["expected_roofline_flops_per_second"]) > 0
+    assert cast(float, training_phase["arithmetic_intensity_compute_per_byte"]) > 0
+    assert cast(float, training_phase["expected_roofline_compute_per_second"]) > 0
     assert training_run.steps_run == 1
     assert training_run.validation_checks == 2
     assert training_run.validation_history[0].step == 0
@@ -486,7 +486,9 @@ def test_training_stage_carries_prior_global_best(
         min_delta=0.0,
         min_steps=0,
         batch_size=1,
+        training_compute_per_sample=10.0,
         training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
         validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         phase_timings=benchmark_runner.TimingCollector(),
         start_step=100,
@@ -652,6 +654,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     diagnostics = cast(dict[str, object], history[0]["training_diagnostics"])
     protocol = cast(dict[str, object], diagnostics["protocol"])
     throughput = cast(dict[str, object], diagnostics["throughput"])
+    cost_summary = cast(dict[str, object], history[0]["cost_summary"])
     phase_timing = cast(dict[str, object], throughput["phase_timing"])
     roofline_comparison = cast(dict[str, object], throughput["roofline_comparison"])
     assert protocol["optimizer"] == "adam"
@@ -659,6 +662,9 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert protocol["patience"] == 6
     assert diagnostics["stop_reason"] == "max-steps"
     assert diagnostics["steps_run"] == 1
+    assert diagnostics["training_compute"] == 2784.0
+    assert cost_summary["training_compute"] == 2784.0
+    assert cost_summary["training_compute_per_sample"] == 1392
     assert diagnostics["validation_checks"] == 2
     assert "final_validation_loss" in diagnostics
     assert "training_tensor_batch" in cast(dict[str, object], phase_timing["phases"])

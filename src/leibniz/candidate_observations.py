@@ -47,7 +47,7 @@ class ArchitectureCandidateObservation:
     operator_kinds: tuple[str, ...]
     semantic_coordinates: tuple[ModelOperatorCoordinate, ...]
     parameter_count: int
-    inference_flops: int | None
+    inference_compute: int | None
     is_measured: bool
     measured_score: float | None
     best_measured_score_at_or_below_cost: float
@@ -73,10 +73,10 @@ class ArchitectureCandidateObservation:
             )
         if type(self.parameter_count) is not int or self.parameter_count < 0:
             raise CandidateObservationProjectionError("parameter_count must be nonnegative")
-        if self.inference_flops is not None and (
-            type(self.inference_flops) is not int or self.inference_flops < 0
+        if self.inference_compute is not None and (
+            type(self.inference_compute) is not int or self.inference_compute < 0
         ):
-            raise CandidateObservationProjectionError("inference_flops must be nonnegative")
+            raise CandidateObservationProjectionError("inference_compute must be nonnegative")
         if self.is_measured != (self.measured_score is not None):
             raise CandidateObservationProjectionError(
                 "is_measured must agree with measured_score"
@@ -122,7 +122,7 @@ def project_architecture_candidate_observations(
                 ),
                 semantic_coordinates=candidate.semantic_coordinates,
                 parameter_count=parameter_count,
-                inference_flops=candidate.operator_plan.inference_flops,
+                inference_compute=candidate.operator_plan.inference_compute,
                 is_measured=measured_evidence is not None,
                 measured_score=measured_score,
                 best_measured_score_at_or_below_cost=_best_score_at_or_below_cost(

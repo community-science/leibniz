@@ -818,11 +818,15 @@ function ModelCostDetail({
         </div>
         <div>
           <dt>Bytes</dt>
-          <dd>{optionalNumberLabel(summary.parameter_bytes)}</dd>
+          <dd>{optionalNumberLabel(summary.storage_bytes)}</dd>
         </div>
         <div>
-          <dt>FLOPs</dt>
-          <dd>{optionalNumberLabel(summary.inference_flops)}</dd>
+          <dt>Inference Compute</dt>
+          <dd>{optionalNumberLabel(summary.inference_compute)}</dd>
+        </div>
+        <div>
+          <dt>Training Compute / Sample</dt>
+          <dd>{optionalNumberLabel(summary.training_compute_per_sample)}</dd>
         </div>
         <div>
           <dt>Unknown Parameter Components</dt>
@@ -833,9 +837,9 @@ function ModelCostDetail({
           </dd>
         </div>
         <div>
-          <dt>Unknown FLOP Components</dt>
+          <dt>Unknown compute Components</dt>
           <dd>
-            {unknownComponentLabel(inspection?.architecture_summary.unsupported_flop_components)}
+            {unknownComponentLabel(inspection?.architecture_summary.unsupported_compute_components)}
           </dd>
         </div>
       </dl>
@@ -888,8 +892,12 @@ function ModelGraphOperations({
                   <dd>{optionalNumberLabel(stage.parameter_count)}</dd>
                 </div>
                 <div>
-                  <dt>FLOPs</dt>
-                  <dd>{optionalNumberLabel(stage.inference_flops)}</dd>
+                  <dt>Inference Compute</dt>
+                  <dd>{optionalNumberLabel(stage.inference_compute)}</dd>
+                </div>
+                <div>
+                  <dt>Training Compute / Sample</dt>
+                  <dd>{optionalNumberLabel(stage.training_compute_per_sample)}</dd>
                 </div>
               </dl>
               <p className="benchmark-model-operation-config">

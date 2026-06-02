@@ -56,7 +56,7 @@ _resource_report_record = RecordSpec(
         "artifact": FieldSpec(kind="record"),
         "parameter_count": FieldSpec(kind="integer", required=False),
         "parameter_bits": FieldSpec(kind="integer", required=False),
-        "parameter_bytes": FieldSpec(kind="integer", required=False),
+        "storage_bytes": FieldSpec(kind="integer", required=False),
         "payloads": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="record"),
@@ -256,7 +256,7 @@ class ResourceReport:
     artifact: ArtifactReference
     parameter_count: int | None = None
     parameter_bits: int | None = None
-    parameter_bytes: int | None = None
+    storage_bytes: int | None = None
     payloads: tuple[ResourcePayload, ...] = ()
     inference_axes: tuple[ResourceAxis, ...] = ()
 
@@ -271,12 +271,14 @@ class ResourceReport:
             _require_nonnegative_integer(self.parameter_count, field="parameter_count")
         if self.parameter_bits is not None:
             _require_nonnegative_integer(self.parameter_bits, field="parameter_bits")
-        if self.parameter_bytes is not None:
-            if self.parameter_bits is None:
-                raise ResourceValidationError("parameter_bits is required with parameter_bytes")
-            if self.parameter_bytes != _bytes_for_bits(self.parameter_bits):
-                raise ResourceValidationError("parameter_bytes must derive from parameter_bits")
-        if self.parameter_count is None and self.parameter_bits is None and not self.payloads:
+        if self.storage_bytes is not None:
+            _require_nonnegative_integer(self.storage_bytes, field="storage_bytes")
+        if (
+            self.parameter_count is None
+            and self.parameter_bits is None
+            and self.storage_bytes is None
+            and not self.payloads
+        ):
             raise ResourceValidationError("resource report must declare at least one resource")
         duplicate_payload = _first_duplicate(tuple(payload.name for payload in self.payloads))
         if duplicate_payload is not None:
@@ -325,9 +327,9 @@ class ResourceReport:
                 validated.get("parameter_bits"),
                 field="parameter_bits",
             ),
-            parameter_bytes=_as_optional_integer(
-                validated.get("parameter_bytes"),
-                field="parameter_bytes",
+            storage_bytes=_as_optional_integer(
+                validated.get("storage_bytes"),
+                field="storage_bytes",
             ),
             payloads=payloads,
             inference_axes=inference_axes,
@@ -354,8 +356,8 @@ class ResourceReport:
             record["parameter_count"] = self.parameter_count
         if self.parameter_bits is not None:
             record["parameter_bits"] = self.parameter_bits
-        if self.parameter_bytes is not None:
-            record["parameter_bytes"] = self.parameter_bytes
+        if self.storage_bytes is not None:
+            record["storage_bytes"] = self.storage_bytes
         if self.payloads:
             record["payloads"] = [payload.to_record() for payload in self.payloads]
         if self.inference_axes:

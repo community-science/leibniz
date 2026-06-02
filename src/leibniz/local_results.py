@@ -73,6 +73,13 @@ _publication_directories = (
     "training",
     "views",
 )
+_benchmark_cost_axes: tuple[tuple[str, str], ...] = (
+    ("parameter_count", "Parameters"),
+    ("storage_bytes", "Storage"),
+    ("inference_compute", "Compute"),
+    ("training_compute", "Compute"),
+)
+_benchmark_cost_axis_keys = tuple(axis for axis, _label in _benchmark_cost_axes)
 
 
 class _SummaryRecordMixin:
@@ -511,7 +518,7 @@ class _BenchmarkRunRecord:
             "model_key": self.model_key,
             "measurement_count": self.measurement_count,
             "score": self.score,
-            "cost_summary": dict(self.cost_summary),
+            "cost_summary": _run_cost_summary(self),
             "architecture": dict(self.architecture),
             "model_inspection_digest": str(self.model_inspection_digest),
             "measurement_dataset_digest": str(self.measurement_dataset_digest),
@@ -713,6 +720,16 @@ def _imported_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]
         package = bundle.submission_package
         inspection = _inspection_from_architecture(package.architecture_manifest)
         inspection_record = inspection.to_record()
+        cost_summary = inspection.cost_summary.to_record()
+        if package.model_metadata is not None:
+            metadata_cost_summary = package.model_metadata.get("cost_summary")
+            if metadata_cost_summary is not None:
+                cost_summary.update(
+                    _as_mapping(
+                        metadata_cost_summary,
+                        "submission_package.model_metadata.cost_summary",
+                    )
+                )
         records.append(
             _BenchmarkRunRecord(
                 source_kind="imported-publication",
@@ -727,7 +744,7 @@ def _imported_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]
                 ),
                 measurement_count=len(bundle.measurement_dataset.measurements),
                 score=_mean_accepted_mass(bundle.measurement_dataset),
-                cost_summary=inspection.cost_summary.to_record(),
+                cost_summary=cost_summary,
                 architecture=inspection.architecture.to_record(),
                 model_inspection=_model_inspection_view_record(
                     inspection=inspection_record,
@@ -811,6 +828,8 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
         "validation_history": [point.to_record() for point in history],
         "artifacts": _training_artifact_references(run),
     }
+    if training_run.training_compute is not None:
+        record["training_compute"] = training_run.training_compute
     throughput = run.training_summary.get("throughput")
     if isinstance(throughput, Mapping):
         record["throughput"] = dict(cast(Mapping[str, object], throughput))
@@ -1064,6 +1083,9 @@ def _publication_bundle_for_local_run(
         measurement_dataset=run.measurement_dataset,
         sampled_competence=run.sampled_competence,
         artifacts=_submission_artifacts_for_local_run(run),
+        model_metadata={
+            "cost_summary": _run_cost_summary(run),
+        },
     )
     score_view = MeasurementScoreView.from_dataset(
         id=ProtocolIdentifier.parse(f"views.measurement-scores.{identifier_stem}@0.1.0"),
@@ -1146,15 +1168,11 @@ def _benchmark_result_record(
     )
     record: dict[str, object] = {
         "benchmark_id": str(runs[0].benchmark_id),
-        "cost_axes": [
-            {"key": "parameter_count", "label": "Parameters"},
-            {"key": "inference_flops", "label": "FLOPs"},
-            {"key": "parameter_bytes", "label": "Storage"},
-        ],
+        "cost_axes": _benchmark_cost_axis_records(),
         "leaderboard": list(models),
         "frontiers": {
             axis: _frontier_records(models, cost_axis=axis)
-            for axis in ("parameter_count", "inference_flops", "parameter_bytes")
+            for axis in _benchmark_cost_axis_keys
         },
         "training_history": [run.to_record(complexity_axis=None) for run in runs],
         "model_inspections": _model_inspection_records(runs),
@@ -1162,6 +1180,16 @@ def _benchmark_result_record(
     if proposals:
         record["proposals"] = list(proposals)
     return record
+
+
+def _benchmark_cost_axis_records() -> list[dict[str, object]]:
+    return [
+        {
+            "key": key,
+            "label": label,
+        }
+        for key, label in _benchmark_cost_axes
+    ]
 
 
 def _model_inspection_records(
@@ -1215,7 +1243,7 @@ def _model_result_records(
             },
             "observed_complexities": [point["complexity"] for point in points],
             "points": list(points),
-            "cost_summary": dict(best_run.cost_summary),
+            "cost_summary": _model_cost_summary(ordered_runs, best_run=best_run),
             "run_ids": [run.run_id for run in ordered_runs],
             "measurement_count": sum(run.measurement_count for run in ordered_runs),
             "source_kinds": sorted({run.source_kind for run in ordered_runs}),
@@ -1228,6 +1256,48 @@ def _model_result_records(
         )
         records.append(record)
     return tuple(sorted(records, key=_model_sort_key))
+
+
+def _model_cost_summary(
+    runs: tuple[_BenchmarkRunRecord, ...],
+    *,
+    best_run: _BenchmarkRunRecord,
+) -> dict[str, object]:
+    cost_summary = _run_cost_summary(best_run)
+    training_values = tuple(_run_training_compute_value(run) for run in runs)
+    if any(value is None for value in training_values):
+        raise LocalResultImportError(
+            f"model {best_run.model_key} is missing reconstructible training compute"
+        )
+    cost_summary["training_compute"] = sum(cast(float, value) for value in training_values)
+    return cost_summary
+
+
+def _run_training_compute_value(run: _BenchmarkRunRecord) -> float | None:
+    training_compute = _run_training_compute(run)
+    if training_compute is not None:
+        return training_compute
+    return _optional_cost_value(run.cost_summary, "training_compute")
+
+
+def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
+    cost_summary = dict(run.cost_summary)
+    inference_compute = _optional_cost_value(cost_summary, "inference_compute")
+    if inference_compute is not None:
+        cost_summary["inference_compute"] = inference_compute
+    training_compute = _run_training_compute(run)
+    if training_compute is not None:
+        cost_summary["training_compute"] = training_compute
+    return cost_summary
+
+
+def _run_training_compute(run: _BenchmarkRunRecord) -> float | None:
+    if run.training_summary is None:
+        return None
+    training_run = TrainingRunRecord.from_record(
+        _as_mapping(run.training_summary.get("training_run"), "training_run")
+    )
+    return training_run.training_compute
 
 
 def _model_console_view_model(
@@ -1319,8 +1389,15 @@ def _model_console_view_model(
             title="Resources",
             entries=(
                 ("Parameters", _console_number_value(cost_summary.get("parameter_count"))),
-                ("Storage", _console_number_value(cost_summary.get("parameter_bytes"))),
-                ("FLOPs", _console_number_value(cost_summary.get("inference_flops"))),
+                ("Storage", _console_number_value(cost_summary.get("storage_bytes"))),
+                (
+                    "Inference Compute",
+                    _console_number_value(cost_summary.get("inference_compute")),
+                ),
+                (
+                    "Training Compute",
+                    _console_number_value(cost_summary.get("training_compute")),
+                ),
             ),
         ),
     ]
@@ -1575,6 +1652,15 @@ def _cost_value(cost_summary: Mapping[str, object], cost_axis: str) -> float:
     value = cost_summary.get(cost_axis)
     if not isinstance(value, int | float) or isinstance(value, bool):
         raise LocalResultImportError(f"cost summary missing numeric {cost_axis}")
+    return float(value)
+
+
+def _optional_cost_value(cost_summary: Mapping[str, object], cost_axis: str) -> float | None:
+    value = cost_summary.get(cost_axis)
+    if value is None:
+        return None
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise LocalResultImportError(f"cost summary has nonnumeric {cost_axis}")
     return float(value)
 
 
@@ -1955,7 +2041,7 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
     for index, model in enumerate(_record_sequence(record, "leaderboard")):
         _validate_model_result(model, f"leaderboard.{index}")
     frontiers = _as_mapping(record.get("frontiers"), "frontiers")
-    for axis in ("parameter_count", "inference_flops", "parameter_bytes"):
+    for axis in _benchmark_cost_axis_keys:
         for index, model in enumerate(_as_sequence(frontiers.get(axis), f"frontiers.{axis}")):
             field = f"frontiers.{axis}.{index}"
             _validate_model_result(_as_mapping(model, field), field)
@@ -2087,6 +2173,11 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
     )
     for field in numeric_fields:
         _as_nonnegative_number(record.get(field), _field_path(prefix, field))
+    if "training_compute" in record:
+        _as_nonnegative_number(
+            record.get("training_compute"),
+            _field_path(prefix, "training_compute"),
+        )
     protocol = _as_mapping(record.get("protocol"), _field_path(prefix, "protocol"))
     protocol_path = _field_path(prefix, "protocol")
     _require_string_fields(

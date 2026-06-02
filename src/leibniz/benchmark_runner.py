@@ -106,6 +106,16 @@ class _ThroughputCounter:
         return record
 
 
+@dataclass(slots=True)
+class _ComputeCounter:
+    compute: float = 0.0
+
+    def add(self, *, compute_per_sample: float | None, samples: int) -> None:
+        if compute_per_sample is None:
+            return
+        self.compute += float(compute_per_sample) * float(samples)
+
+
 def _curriculum_memory_limits(maximum_memory_limit: int) -> tuple[int, ...]:
     if maximum_memory_limit < 1:
         raise BenchmarkRunnerError("generation memory limit must be positive")
@@ -121,7 +131,7 @@ def _curriculum_memory_limits(maximum_memory_limit: int) -> tuple[int, ...]:
 
 @dataclass(frozen=True, slots=True)
 class _PhaseWorkEstimate:
-    flops_per_sample: float
+    compute_per_sample: float
     bytes_per_sample: float
 
 
@@ -409,8 +419,11 @@ def run_benchmark(
         memory_limit_bytes=generation_memory_limit,
         work_estimates=_training_work_estimates(
             architecture=architecture,
-            inference_flops=model_inspection.cost_summary.inference_flops,
-            parameter_bytes=model_inspection.cost_summary.parameter_bytes,
+            inference_compute=model_inspection.cost_summary.inference_compute,
+            training_compute_per_sample=(
+                model_inspection.cost_summary.training_compute_per_sample
+            ),
+            storage_bytes=model_inspection.cost_summary.storage_bytes,
             batch_size=plan.sample_count,
         ),
         seed=plan.seed,
@@ -689,6 +702,7 @@ def _train_and_predict_on_device(
         patience=convergence_patience,
     )
     training_counter = _ThroughputCounter()
+    training_compute_counter = _ComputeCounter()
     validation_counter = _ThroughputCounter()
     evaluation_counter = _ThroughputCounter()
     phase_timings = TimingCollector()
@@ -752,7 +766,11 @@ def _train_and_predict_on_device(
         min_delta=convergence_min_delta,
         min_steps=convergence_min_steps,
         batch_size=sample_count,
+        training_compute_per_sample=(
+            None if work_estimates is None else work_estimates.training.compute_per_sample
+        ),
         training_counter=training_counter,
+        training_compute_counter=training_compute_counter,
         validation_counter=validation_counter,
         phase_timings=phase_timings,
         on_plateau=advance_memory_limit,
@@ -771,6 +789,7 @@ def _train_and_predict_on_device(
                     convergence_min_steps=convergence_min_steps,
                     tensor_device=runtime.device_kind,
                     validation_history=history,
+                    training_compute=training_compute_counter.compute,
                 ),
                 _throughput_record(
                     runtime_device=runtime.device_kind,
@@ -866,6 +885,7 @@ def _train_and_predict_on_device(
         tensor_device=runtime.device_kind,
         validation_history=tuple(validation_history),
         stop_reason=final_training_stop_reason,
+        training_compute=training_compute_counter.compute,
     )
     return _TrainingResult(
         evaluation_results=tuple(evaluation_results),
@@ -902,7 +922,9 @@ def _train_until_convergence(
     min_delta: float,
     min_steps: int,
     batch_size: int,
+    training_compute_per_sample: float | None,
     training_counter: _ThroughputCounter,
+    training_compute_counter: _ComputeCounter,
     validation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
     start_step: int = 0,
@@ -976,6 +998,7 @@ def _train_until_convergence(
     for step in steps:
         training_started = time.perf_counter()
         fields, labels = train_batch(step)
+        actual_batch_size = _tensor_batch_size(fields, fallback=batch_size)
         module.train()
         with phase_timings.span("training_zero_grad"):
             optimizer.zero_grad(set_to_none=True)
@@ -990,7 +1013,11 @@ def _train_until_convergence(
                 scheduler.step_after_optimizer()
         training_counter.add(
             seconds=time.perf_counter() - training_started,
-            samples=batch_size,
+            samples=actual_batch_size,
+        )
+        training_compute_counter.add(
+            compute_per_sample=training_compute_per_sample,
+            samples=actual_batch_size,
         )
         hit_step_cap = max_steps is not None and step == max_steps
         if step % validation_interval != 0 and not hit_step_cap:
@@ -1042,6 +1069,16 @@ def _validation_loss(
     return loss
 
 
+def _tensor_batch_size(fields: Any, *, fallback: int) -> int:
+    shape = getattr(fields, "shape", None)
+    if shape is None or len(shape) < 1:
+        return fallback
+    value = shape[0]
+    if type(value) is int and value >= 0:
+        return value
+    return fallback
+
+
 def has_windowed_validation_plateau(
     validation_history: Sequence[TrainingHistoryPoint],
     *,
@@ -1070,6 +1107,7 @@ def _training_run_record(
     tensor_device: str,
     validation_history: tuple[TrainingHistoryPoint, ...],
     stop_reason: str,
+    training_compute: float | None,
 ) -> TrainingRunRecord:
     best = validation_history[-1]
     last_step = validation_history[-1].step
@@ -1085,6 +1123,7 @@ def _training_run_record(
         status=status,
         stop_reason=stop_reason,
         steps_run=last_step,
+        training_compute=training_compute,
         validation_checks=len(validation_history),
         best_validation_loss=best.best_validation_loss,
         best_validation_step=best.best_validation_step,
@@ -1125,12 +1164,14 @@ def _running_training_run_record(
     convergence_min_steps: int,
     tensor_device: str,
     validation_history: tuple[TrainingHistoryPoint, ...],
+    training_compute: float | None,
 ) -> TrainingRunRecord:
     best = validation_history[-1]
     return TrainingRunRecord(
         status="running",
         stop_reason="validation-checkpoint",
         steps_run=validation_history[-1].step,
+        training_compute=training_compute,
         validation_checks=len(validation_history),
         best_validation_loss=best.best_validation_loss,
         best_validation_step=best.best_validation_step,
@@ -1280,12 +1321,12 @@ def _roofline_comparison(
     roofline: Mapping[str, object],
     work_estimates: _TrainingWorkEstimates | None,
 ) -> dict[str, object]:
-    peak_flops = roofline.get("peak_flops_per_second")
+    peak_compute = roofline.get("peak_compute_per_second")
     peak_bytes = roofline.get("peak_bytes_per_second")
     if (
-        not isinstance(peak_flops, int | float)
-        or not math.isfinite(float(peak_flops))
-        or peak_flops <= 0
+        not isinstance(peak_compute, int | float)
+        or not math.isfinite(float(peak_compute))
+        or peak_compute <= 0
         or not isinstance(peak_bytes, int | float)
         or not math.isfinite(float(peak_bytes))
         or peak_bytes <= 0
@@ -1298,30 +1339,30 @@ def _roofline_comparison(
                 "system roofline or per-phase work estimates are unavailable",
             ),
         }
-    peak_flops_value = float(peak_flops)
+    peak_compute_value = float(peak_compute)
     peak_bytes_value = float(peak_bytes)
     training_phase = _phase_roofline_record(
         throughput=training,
         work=work_estimates.training,
-        peak_flops_per_second=peak_flops_value,
+        peak_compute_per_second=peak_compute_value,
         peak_bytes_per_second=peak_bytes_value,
     )
     validation_phase = _phase_roofline_record(
         throughput=validation,
         work=work_estimates.validation,
-        peak_flops_per_second=peak_flops_value,
+        peak_compute_per_second=peak_compute_value,
         peak_bytes_per_second=peak_bytes_value,
     )
     evaluation_phase = _phase_roofline_record(
         throughput=evaluation,
         work=work_estimates.evaluation,
-        peak_flops_per_second=peak_flops_value,
+        peak_compute_per_second=peak_compute_value,
         peak_bytes_per_second=peak_bytes_value,
     )
     return {
         "status": "available",
         "model": "operational-intensity",
-        "peak_flops_per_second": peak_flops_value,
+        "peak_compute_per_second": peak_compute_value,
         "peak_bytes_per_second": peak_bytes_value,
         "phases": {
             "training": training_phase,
@@ -1339,34 +1380,34 @@ def _phase_roofline_record(
     *,
     throughput: Mapping[str, object],
     work: _PhaseWorkEstimate,
-    peak_flops_per_second: float,
+    peak_compute_per_second: float,
     peak_bytes_per_second: float,
 ) -> dict[str, object]:
-    arithmetic_intensity = work.flops_per_sample / work.bytes_per_sample
-    expected_flops = min(
-        peak_flops_per_second,
+    arithmetic_intensity = work.compute_per_sample / work.bytes_per_sample
+    expected_compute = min(
+        peak_compute_per_second,
         peak_bytes_per_second * arithmetic_intensity,
     )
     measured = throughput.get("samples_per_second")
-    observed_flops = 0.0
+    observed_compute = 0.0
     if not isinstance(measured, int | float) or not math.isfinite(float(measured)):
         measured_samples = 0.0
     else:
         measured_samples = float(measured)
-        observed_flops = measured_samples * work.flops_per_sample
+        observed_compute = measured_samples * work.compute_per_sample
     return {
-        "flops_per_sample": work.flops_per_sample,
+        "compute_per_sample": work.compute_per_sample,
         "bytes_per_sample": work.bytes_per_sample,
-        "arithmetic_intensity_flops_per_byte": arithmetic_intensity,
-        "expected_roofline_flops_per_second": expected_flops,
-        "observed_flops_per_second": observed_flops,
+        "arithmetic_intensity_compute_per_byte": arithmetic_intensity,
+        "expected_roofline_compute_per_second": expected_compute,
+        "observed_compute_per_second": observed_compute,
         "fraction_of_roofline": (
-            observed_flops / expected_flops if expected_flops > 0 else 0.0
+            observed_compute / expected_compute if expected_compute > 0 else 0.0
         ),
         "samples_per_second": measured_samples,
         "limiting_resource": (
             "memory-bandwidth"
-            if peak_bytes_per_second * arithmetic_intensity < peak_flops_per_second
+            if peak_bytes_per_second * arithmetic_intensity < peak_compute_per_second
             else "compute"
         ),
     }
@@ -1375,41 +1416,47 @@ def _phase_roofline_record(
 def _training_work_estimates(
     *,
     architecture: ArchitectureManifest,
-    inference_flops: int | None,
-    parameter_bytes: int | None,
+    inference_compute: int | None,
+    training_compute_per_sample: int | None,
+    storage_bytes: int | None,
     batch_size: int,
 ) -> _TrainingWorkEstimates | None:
-    if inference_flops is None or inference_flops <= 0:
+    if (
+        inference_compute is None
+        or inference_compute <= 0
+        or training_compute_per_sample is None
+        or training_compute_per_sample <= 0
+    ):
         return None
     input_bytes = _shape_bytes(architecture.input_shape)
     output_bytes = _shape_bytes(architecture.output_shape)
     batch_size_value = max(1, batch_size)
-    parameter_bytes_per_sample = float(parameter_bytes or 0) / batch_size_value
-    inference_bytes = input_bytes + output_bytes + parameter_bytes_per_sample
+    storage_bytes_per_sample = float(storage_bytes or 0) / batch_size_value
+    inference_bytes = input_bytes + output_bytes + storage_bytes_per_sample
     formation_bytes = 8.0 * input_bytes
-    training_flops = 3.0 * float(inference_flops)
-    training_bytes = formation_bytes + 3.0 * inference_bytes + 4.0 * parameter_bytes_per_sample
+    training_compute = float(training_compute_per_sample)
+    training_bytes = formation_bytes + 3.0 * inference_bytes + 4.0 * storage_bytes_per_sample
     validation_bytes = formation_bytes + inference_bytes
     evaluation_bytes = input_bytes + inference_bytes
     return _TrainingWorkEstimates(
         training=_PhaseWorkEstimate(
-            flops_per_sample=training_flops,
+            compute_per_sample=training_compute,
             bytes_per_sample=training_bytes,
         ),
         validation=_PhaseWorkEstimate(
-            flops_per_sample=float(inference_flops),
+            compute_per_sample=float(inference_compute),
             bytes_per_sample=validation_bytes,
         ),
         evaluation=_PhaseWorkEstimate(
-            flops_per_sample=float(inference_flops),
+            compute_per_sample=float(inference_compute),
             bytes_per_sample=evaluation_bytes,
         ),
         assumptions=(
             "float32 tensor elements are four bytes",
-            "training FLOPs are approximated as three times declared inference FLOPs",
-            "parameter bytes are amortized across the local batch",
+            "training compute follows the declared per-operator training trace",
+            "storage bytes are amortized across the local batch",
             "formation bytes are approximated as eight input fields per sample",
-            "optimizer and gradient traffic are approximated from parameter bytes",
+            "optimizer and gradient traffic are approximated from storage bytes",
             "cache reuse and PyTorch dispatch overhead are not modeled as protocol semantics",
         ),
     )
