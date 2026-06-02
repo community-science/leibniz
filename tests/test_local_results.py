@@ -415,7 +415,7 @@ def test_cli_publishes_local_benchmark_results(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert "wrote 1 publication bundle(s), 2 measurement(s)" in captured.out
+    assert "wrote 1 publication bundle(s), 3 measurement(s)" in captured.out
     assert "publication: " in captured.out
     assert "commit: " in captured.out
     assert len(tuple((results_root / "publication_bundles").glob("*.json"))) == 1

@@ -253,6 +253,7 @@ export type TrainingDiagnosticsRecord = {
   protocol: TrainingProtocolRecord;
   validation_history: TrainingHistoryPointRecord[];
   artifacts: TrainingArtifactReferenceRecord[];
+  evaluation_curriculum?: Record<string, unknown>;
 };
 
 export type TrainingProtocolRecord = {
@@ -495,6 +496,10 @@ function parseTrainingDiagnostics(value: unknown, path: string): TrainingDiagnos
     protocol: requireRecord(record.protocol, `${path}.protocol`, transportError) as TrainingProtocolRecord,
     validation_history: requireArray(record.validation_history, `${path}.validation_history`, transportError) as TrainingHistoryPointRecord[],
     artifacts: requireArray(record.artifacts, `${path}.artifacts`, transportError) as TrainingArtifactReferenceRecord[],
+    evaluation_curriculum:
+      record.evaluation_curriculum === undefined
+        ? undefined
+        : requireRecord(record.evaluation_curriculum, `${path}.evaluation_curriculum`, transportError),
   }) as TrainingDiagnosticsRecord;
 }
 

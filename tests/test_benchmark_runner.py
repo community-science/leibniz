@@ -193,8 +193,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     ).manifest
 
     dataset_document.dataset.validate_manifest(manifest)
-    assert summary.measurement_count == 12
-    assert len(dataset_document.dataset.measurements) == 12
+    assert summary.measurement_count == 15
+    assert len(dataset_document.dataset.measurements) == 15
     assert inspection_document.inspection.cost_summary.parameter_count == 50
     assert inspection_document.inspection.cost_summary.inference_compute == 656
     assert summary.training_summary_path.exists()
@@ -244,7 +244,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert cast(float, roofline["peak_bytes_per_second"]) > 0
     assert training_throughput["sample_count"] == 2
     assert cast(float, training_throughput["samples_per_second"]) > 0
-    assert evaluation_throughput["sample_count"] == 12
+    assert evaluation_throughput["sample_count"] == 15
     assert cast(float, evaluation_throughput["samples_per_second"]) > 0
     assert roofline_comparison["status"] == "available"
     assert roofline_comparison["model"] == "operational-intensity"
@@ -256,6 +256,36 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_run.validation_checks == 2
     assert training_run.validation_history[0].step == 0
     assert training_run.validation_history[-1].step == 1
+    evaluation_curriculum = cast(dict[str, object], training_summary["evaluation_curriculum"])
+    training_curriculum = cast(dict[str, object], training_summary["training_curriculum"])
+    curriculum_rungs = cast(list[dict[str, object]], evaluation_curriculum["rungs"])
+    assert evaluation_curriculum["kind"] == "competence-gated-evaluation-curriculum"
+    assert (
+        evaluation_curriculum["curriculum_variable"]
+        == "internal-distinguishable-state-complexity"
+    )
+    assert evaluation_curriculum["sampling_levers"] == ["canvas-size", "nuisance-extent"]
+    assert evaluation_curriculum["nuisance_extent_curriculum"] == [0.0, 1.0]
+    assert evaluation_curriculum["gating_metric"] == "frontier-validation-loss-plateau"
+    assert evaluation_curriculum["frontier_index"] == 4
+    assert [rung["index"] for rung in curriculum_rungs] == [0, 1, 2, 3, 4]
+    assert {
+        cast(str, rung["complexity_axis"])
+        for rung in curriculum_rungs
+    } == {"internal-distinguishable-state-complexity"}
+    assert all("generation_memory_limit_bytes" in rung for rung in curriculum_rungs)
+    assert [rung["nuisance_extent"] for rung in curriculum_rungs][:2] == [0.0, 1.0]
+    assert [rung["sample_count"] for rung in curriculum_rungs] == [3, 3, 3, 3, 3]
+    assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
+        cast(float, rung["complexity"]) for rung in curriculum_rungs
+    )
+    assert training_curriculum == {
+        "kind": "competence-gated-training-curriculum",
+        "source": "evaluation_curriculum",
+        "frontier_sampling_weight": 0.7,
+        "replay_sampling_weight": 0.3,
+        "gating_metric": "frontier-validation-loss-plateau",
+    }
     sampled_competence = cast(dict[str, object], training_summary["sampled_competence"])
     assert sampled_competence["kind"] == "sampled-competence-curriculum"
     assert sampled_competence["sampling_rule"] == "generator-uniform-component-sequence-v1"
@@ -264,13 +294,14 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         == "approximately-uniform-within-complexity-class"
     )
     assert sampled_competence["complexity_axis"] is None
-    assert math.isclose(cast(float, sampled_competence["complexity"]), 19.965784284662085)
-    assert sampled_competence["sample_count"] == 12
+    assert math.isclose(cast(float, sampled_competence["complexity"]), math.log2(10))
+    assert sampled_competence["sample_count"] == 15
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
-    assert len(points) == 4
-    assert [point["sample_count"] for point in points] == [3, 3, 3, 3]
-    assert math.isclose(cast(float, points[0]["complexity"]), 19.965784284662085)
+    assert len(points) == 5
+    assert [point["sample_count"] for point in points] == [3, 3, 3, 3, 3]
+    assert math.isclose(cast(float, points[0]["complexity"]), math.log2(10))
+    assert math.isclose(cast(float, points[1]["complexity"]), 19.965784284662085)
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
     )
@@ -296,7 +327,7 @@ def test_digits_benchmark_runner_accepts_fixed_support_convnet_architecture(
         summary.model_inspection_path.read_bytes()
     ).inspection
 
-    assert summary.measurement_count == 4
+    assert summary.measurement_count == 6
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
         "fixed-support-affine",
         "local-affine",
@@ -553,9 +584,10 @@ def test_training_curriculum_is_not_step_indexed() -> None:
     assert "curriculum_step" not in source
     assert "_generation_curriculum_growth_interval" not in source
     assert "step // _generation_curriculum" not in source
-    assert "for memory_limit in _curriculum_memory_limits(memory_limit_bytes):" not in source
-    assert "on_plateau=advance_memory_limit" in source
-    assert "current_memory_limit()" in source
+    assert "on_plateau=advance_memory_limit" not in source
+    assert "current_memory_limit()" not in source
+    assert "on_plateau=advance_frontier" in source
+    assert "evaluation_rungs" in source
 
 
 def test_training_curriculum_does_not_restart_step_counter() -> None:
@@ -738,10 +770,10 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     score_basis = cast(dict[str, object], leaderboard[0]["score_basis"])
     assert score_basis["kind"] == "base-normalized-absolute-competent-complexity-v1"
-    assert math.isclose(cast(float, score_basis["base_complexity"]), 19.965784284662085)
+    assert math.isclose(cast(float, score_basis["base_complexity"]), math.log2(10))
     assert math.isclose(cast(float, score_basis["chance_mass"]), 0.1)
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    assert math.isclose(observed_complexities[0], 20.273212809854332)
+    assert math.isclose(observed_complexities[0], math.log2(10))
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
     assert points[0]["sample_count"] == 2
@@ -806,8 +838,17 @@ def test_digits_benchmark_runner_materializes_running_training_history(
         cast(list[dict[str, object]], result["leaderboard"])[0]["points"],
     )
     sampled_competence = cast(dict[str, object], running_run["sampled_competence"])
+    evaluation_curriculum = cast(dict[str, object], diagnostics["evaluation_curriculum"])
+    curriculum_rungs = cast(list[dict[str, object]], evaluation_curriculum["rungs"])
     assert points
     assert points[0]["sample_count"] == 2
+    assert evaluation_curriculum["kind"] == "competence-gated-evaluation-curriculum"
+    assert (
+        evaluation_curriculum["curriculum_variable"]
+        == "internal-distinguishable-state-complexity"
+    )
+    assert evaluation_curriculum["frontier_index"] == 0
+    assert curriculum_rungs[0]["status"] == "frontier"
     assert sampled_competence["validation_competence"] == running_run["score"]
     assert math.isclose(
         (cast(float, points[0]["score"]) - 0.1) / 0.9,

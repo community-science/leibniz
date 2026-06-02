@@ -370,6 +370,47 @@ def test_observation_generator_rejects_invalid_requests() -> None:
         )
         == "component_sequences length must match sample_count"
     )
+    assert (
+        str(
+            capture_generation_error(
+                lambda: generator.sample_batch(
+                    component_count=1,
+                    sample_count=1,
+                    seed=1,
+                    variation_extent=1.1,
+                )
+            )
+        )
+        == "variation_extent must be between 0 and 1"
+    )
+
+
+def test_digits_variation_extent_zero_samples_canonical_affine() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    canonical = generator.sample_batch(
+        component_count=1,
+        sample_count=1,
+        seed=101,
+        variation_extent=0.0,
+    )
+    full = generator.sample_batch(
+        component_count=1,
+        sample_count=1,
+        seed=101,
+        variation_extent=1.0,
+    )
+
+    assert math.isclose(canonical.samples[0].complexity, math.log2(10))
+    assert full.samples[0].complexity > canonical.samples[0].complexity
+    variation = _coordinate(canonical.samples[0].latent_coordinates, role="variation")
+    values = cast(dict[str, object], variation["values"])
+    coordinates = cast(list[dict[str, object]], values["coordinates"])
+    assert _spatial_affine_matrix(coordinates[0]) == [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ]
 
 
 def _coordinate(
@@ -382,6 +423,15 @@ def _coordinate(
         if coordinate["role"] == role:
             return coordinate
     raise AssertionError(f"missing coordinate role {role}")
+
+
+def _spatial_affine_matrix(coordinate: Mapping[str, object]) -> list[list[float]]:
+    spatial = cast(Mapping[str, object], coordinate["spatial_affine"])
+    matrix = cast(list[list[int | float]], spatial["matrix"])
+    return [
+        [float(value) for value in row]
+        for row in matrix
+    ]
 
 
 def _within_transform_bounds(

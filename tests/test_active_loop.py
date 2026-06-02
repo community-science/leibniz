@@ -150,7 +150,7 @@ def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:
     assert "--curriculum-max-scale" not in command
     assert len(leaderboard) == 1
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    assert math.isclose(observed_complexities[0], 21.880543123603942)
+    assert math.isclose(observed_complexities[0], math.log2(10))
     assert observed_complexities == sorted(observed_complexities)
     assert results_root.joinpath("measurements").is_dir()
     assert results_root.joinpath("proposals").is_dir()

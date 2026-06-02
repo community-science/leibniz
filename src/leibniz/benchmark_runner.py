@@ -67,6 +67,7 @@ _generation_curriculum_growth_factor = 4
 _generation_curriculum_max_rungs = 4
 _converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
 _minimum_plateau_lr_reductions = 3
+_nuisance_extent_curriculum = (0.0, 1.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +84,31 @@ class _TrainingResult:
 class _TrainingStageResult:
     validation_history: tuple[TrainingHistoryPoint, ...]
     stop_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class _CurriculumRung:
+    index: int
+    memory_limit_bytes: int
+    nuisance_extent: float
+    seed: int
+    batch: GeneratedObservationBatch
+
+    @property
+    def complexity(self) -> float:
+        return self.batch.samples[0].complexity
+
+    def to_record(self, *, status: str) -> dict[str, object]:
+        return {
+            "index": self.index,
+            "status": status,
+            "generation_memory_limit_bytes": self.memory_limit_bytes,
+            "nuisance_extent": self.nuisance_extent,
+            "seed": self.seed,
+            "complexity_axis": "internal-distinguishable-state-complexity",
+            "complexity": self.complexity,
+            "sample_count": len(self.batch.samples),
+        }
 
 
 @dataclass(slots=True)
@@ -351,13 +377,16 @@ def run_benchmark(
             generation_memory_limit = tensor_runtime_available_memory_bytes(generation_runtime)
         except TensorRuntimeError as error:
             raise BenchmarkRunnerError(str(error)) from error
-    evaluation_batch = generator.sample_batch(
+    outcome_space = generator.benchmark_manifest.resolve_outcome_space()
+    evaluation_rungs = _evaluation_curriculum_rungs(
+        architecture=architecture,
+        generator=generator,
         component_count=_component_count,
         sample_count=plan.resolved_evaluation_sample_count,
         seed=plan.seed,
-        memory_limit_bytes=_curriculum_memory_limits(generation_memory_limit)[0],
+        memory_limit_bytes=generation_memory_limit,
     )
-    outcome_space = generator.benchmark_manifest.resolve_outcome_space()
+    evaluation_batch = evaluation_rungs[0].batch
     _validate_architecture_for_batch(
         architecture=architecture,
         batch=evaluation_batch,
@@ -384,6 +413,7 @@ def run_benchmark(
     def publish_progress(
         training_run: TrainingRunRecord,
         throughput: Mapping[str, object],
+        evaluation_curriculum: Mapping[str, object],
     ) -> None:
         _write_document_atomic(
             progress_path,
@@ -392,7 +422,8 @@ def run_benchmark(
                 summary=summary,
                 architecture=architecture,
                 outcome_space=outcome_space,
-                evaluation_batch=evaluation_batch,
+                evaluation_rungs=evaluation_rungs,
+                evaluation_curriculum=evaluation_curriculum,
                 training_run=training_run,
                 throughput=throughput,
             ),
@@ -402,7 +433,7 @@ def run_benchmark(
 
     training_result = _train_and_predict(
         architecture=architecture,
-        evaluation_batch=evaluation_batch,
+        evaluation_rungs=evaluation_rungs,
         generator=generator,
         outcome_space=outcome_space,
         component_count=_component_count,
@@ -456,7 +487,18 @@ def run_benchmark(
             "component_count": _component_count,
             "sample_count": plan.sample_count,
             "evaluation_sample_count": plan.resolved_evaluation_sample_count,
-            "evaluation_curriculum_rung_count": len(training_result.evaluation_results),
+            "evaluation_curriculum_rung_count": len(evaluation_rungs),
+            "evaluation_curriculum": _curriculum_record(
+                rungs=evaluation_rungs,
+                frontier_index=len(evaluation_rungs) - 1,
+            ),
+            "training_curriculum": {
+                "kind": "competence-gated-training-curriculum",
+                "source": "evaluation_curriculum",
+                "frontier_sampling_weight": 0.7,
+                "replay_sampling_weight": 0.3,
+                "gating_metric": "frontier-validation-loss-plateau",
+            },
             "seed": plan.seed,
             "train_steps": plan.train_steps,
             "learning_rate": float(plan.learning_rate),
@@ -533,6 +575,93 @@ def _training_progress_path(summary: BenchmarkRunSummary) -> Path:
     )
 
 
+def _evaluation_curriculum_rungs(
+    *,
+    architecture: ArchitectureManifest,
+    generator: ObservationGenerator,
+    component_count: int,
+    sample_count: int,
+    seed: int,
+    memory_limit_bytes: int,
+) -> tuple[_CurriculumRung, ...]:
+    rungs: list[_CurriculumRung] = []
+    evaluated_complexities: set[float] = set()
+    for memory_index, memory_limit in enumerate(_curriculum_memory_limits(memory_limit_bytes)):
+        for extent_index, nuisance_extent in enumerate(_nuisance_extent_curriculum):
+            rung_seed = seed + 2_000_003 * memory_index + extent_index
+            batch = generator.sample_batch(
+                component_count=component_count,
+                sample_count=sample_count,
+                seed=seed if memory_index == 0 and extent_index == 0 else rung_seed,
+                memory_limit_bytes=memory_limit,
+                variation_extent=nuisance_extent,
+            )
+            input_reason = _input_shape_boundary_reason(
+                architecture=architecture,
+                sample_shape=batch.samples[0].field.shape,
+            )
+            if input_reason is not None:
+                if memory_index == 0 and extent_index == 0:
+                    raise BenchmarkRunnerError(input_reason)
+                return tuple(rungs)
+            complexity = batch.samples[0].complexity
+            if complexity in evaluated_complexities:
+                continue
+            evaluated_complexities.add(complexity)
+            rungs.append(
+                _CurriculumRung(
+                    index=len(rungs),
+                    memory_limit_bytes=memory_limit,
+                    nuisance_extent=nuisance_extent,
+                    seed=batch.seed,
+                    batch=batch,
+                )
+            )
+        if memory_limit >= memory_limit_bytes:
+            break
+    if not rungs:
+        raise BenchmarkRunnerError("evaluation curriculum did not produce any rungs")
+    return tuple(
+        _CurriculumRung(
+            index=index,
+            memory_limit_bytes=rung.memory_limit_bytes,
+            nuisance_extent=rung.nuisance_extent,
+            seed=rung.seed,
+            batch=rung.batch,
+        )
+        for index, rung in enumerate(sorted(rungs, key=lambda item: item.complexity))
+    )
+
+
+def _curriculum_record(
+    *,
+    rungs: Sequence[_CurriculumRung],
+    frontier_index: int,
+) -> dict[str, object]:
+    return {
+        "kind": "competence-gated-evaluation-curriculum",
+        "curriculum_variable": "internal-distinguishable-state-complexity",
+        "complexity_axis": "internal-distinguishable-state-complexity",
+        "sampling_levers": ["canvas-size", "nuisance-extent"],
+        "nuisance_extent_curriculum": list(_nuisance_extent_curriculum),
+        "gating_metric": "frontier-validation-loss-plateau",
+        "frontier_index": frontier_index,
+        "unlocked_rung_count": min(len(rungs), frontier_index + 1),
+        "rungs": [
+            rung.to_record(
+                status=(
+                    "frontier"
+                    if rung.index == frontier_index
+                    else "unlocked"
+                    if rung.index < frontier_index
+                    else "locked"
+                )
+            )
+            for rung in rungs
+        ],
+    }
+
+
 def _validate_architecture_for_batch(
     *,
     architecture: ArchitectureManifest,
@@ -599,7 +728,7 @@ def _shape_matches_scale_contract(
 def _train_and_predict(
     *,
     architecture: ArchitectureManifest,
-    evaluation_batch: GeneratedObservationBatch,
+    evaluation_rungs: tuple[_CurriculumRung, ...],
     generator: ObservationGenerator,
     outcome_space: OutcomeSpace,
     component_count: int,
@@ -616,7 +745,9 @@ def _train_and_predict(
     memory_limit_bytes: int,
     work_estimates: _TrainingWorkEstimates | None,
     seed: int,
-    progress_callback: Callable[[TrainingRunRecord, Mapping[str, object]], None] | None = None,
+    progress_callback: (
+        Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object]], None] | None
+    ) = None,
 ) -> _TrainingResult:
     fallback_errors: list[tuple[str, str]] = []
     try:
@@ -627,7 +758,7 @@ def _train_and_predict(
         try:
             return _train_and_predict_on_device(
                 architecture=architecture,
-                evaluation_batch=evaluation_batch,
+                evaluation_rungs=evaluation_rungs,
                 generator=generator,
                 outcome_space=outcome_space,
                 component_count=component_count,
@@ -657,7 +788,7 @@ def _train_and_predict(
 def _train_and_predict_on_device(
     *,
     architecture: ArchitectureManifest,
-    evaluation_batch: GeneratedObservationBatch,
+    evaluation_rungs: tuple[_CurriculumRung, ...],
     generator: ObservationGenerator,
     outcome_space: OutcomeSpace,
     component_count: int,
@@ -674,7 +805,9 @@ def _train_and_predict_on_device(
     memory_limit_bytes: int,
     work_estimates: _TrainingWorkEstimates | None,
     seed: int,
-    progress_callback: Callable[[TrainingRunRecord, Mapping[str, object]], None] | None = None,
+    progress_callback: (
+        Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object]], None] | None
+    ) = None,
     fallback_errors: tuple[tuple[str, str], ...] = (),
 ) -> _TrainingResult:
     try:
@@ -713,6 +846,7 @@ def _train_and_predict_on_device(
         generation_phase: str,
         tensor_phase: str,
         memory_limit: int,
+        variation_extent: float,
     ) -> tuple[Any, Any]:
         with phase_timings.span(generation_phase, samples=sample_count):
             generated = generator.sample_formation_batch(
@@ -720,6 +854,7 @@ def _train_and_predict_on_device(
                 sample_count=sample_count,
                 seed=batch_seed,
                 memory_limit_bytes=memory_limit,
+                variation_extent=variation_extent,
                 timing=phase_timings,
                 timing_prefix=f"{generation_phase}.",
             )
@@ -727,17 +862,26 @@ def _train_and_predict_on_device(
             tensors = formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
         return tensors
 
-    memory_limits = _curriculum_memory_limits(memory_limit_bytes)
-    memory_limit_index = 0
+    frontier_rung_index = 0
 
-    def current_memory_limit() -> int:
-        return memory_limits[memory_limit_index]
+    def current_frontier() -> _CurriculumRung:
+        return evaluation_rungs[frontier_rung_index]
 
-    def advance_memory_limit() -> bool:
-        nonlocal memory_limit_index
-        if memory_limit_index >= len(memory_limits) - 1:
+    def training_rung_for_step(step: int) -> _CurriculumRung:
+        if frontier_rung_index == 0:
+            return current_frontier()
+        # Keep most updates on the frontier while reserving deterministic replay
+        # for previously unlocked evaluation rungs.
+        if step % 10 < 7:
+            return current_frontier()
+        replay_index = (step // 10) % frontier_rung_index
+        return evaluation_rungs[replay_index]
+
+    def advance_frontier() -> bool:
+        nonlocal frontier_rung_index
+        if frontier_rung_index >= len(evaluation_rungs) - 1:
             return False
-        memory_limit_index += 1
+        frontier_rung_index += 1
         if scheduler is not None:
             scheduler.reset_for_curriculum_expansion()
         return True
@@ -748,17 +892,21 @@ def _train_and_predict_on_device(
         optimizer=optimizer,
         scheduler=scheduler,
         loss_function=loss_function,
-        train_batch=lambda step: batch_for_seed(
-            seed + step,
-            generation_phase="training_formation_generation",
-            tensor_phase="training_tensor_batch",
-            memory_limit=current_memory_limit(),
+        train_batch=lambda step: (
+            batch_for_seed(
+                seed + step,
+                generation_phase="training_formation_generation",
+                tensor_phase="training_tensor_batch",
+                memory_limit=training_rung_for_step(step).memory_limit_bytes,
+                variation_extent=training_rung_for_step(step).nuisance_extent,
+            )
         ),
         validation_batch=lambda check: batch_for_seed(
             seed + 1_000_003 + check,
             generation_phase="validation_formation_generation",
             tensor_phase="validation_tensor_batch",
-            memory_limit=current_memory_limit(),
+            memory_limit=current_frontier().memory_limit_bytes,
+            variation_extent=current_frontier().nuisance_extent,
         ),
         max_steps=train_steps,
         validation_interval=validation_interval,
@@ -773,7 +921,7 @@ def _train_and_predict_on_device(
         training_compute_counter=training_compute_counter,
         validation_counter=validation_counter,
         phase_timings=phase_timings,
-        on_plateau=advance_memory_limit,
+        on_plateau=advance_frontier,
         on_validation=lambda history: (
             progress_callback(
                 _running_training_run_record(
@@ -801,6 +949,10 @@ def _train_and_predict_on_device(
                     phase_timings=phase_timings,
                     fallback_errors=fallback_errors,
                 ),
+                _curriculum_record(
+                    rungs=evaluation_rungs,
+                    frontier_index=frontier_rung_index,
+                ),
             )
             if progress_callback is not None
             else None
@@ -812,33 +964,8 @@ def _train_and_predict_on_device(
         raise BenchmarkRunnerError("uncapped training curriculum ended before convergence")
     module.eval()
     evaluation_results: list[tuple[GeneratedObservationBatch, tuple[tuple[float, ...], ...]]] = []
-    evaluated_complexities: set[float] = set()
-    for rung_index, memory_limit in enumerate(_curriculum_memory_limits(memory_limit_bytes)):
-        if rung_index == 0:
-            candidate_batch = evaluation_batch
-        else:
-            with phase_timings.span(
-                "evaluation_formation_generation",
-                samples=len(evaluation_batch.samples),
-            ):
-                candidate_batch = generator.sample_batch(
-                    component_count=component_count,
-                    sample_count=len(evaluation_batch.samples),
-                    seed=seed + 2_000_003 + rung_index,
-                    memory_limit_bytes=memory_limit,
-                    timing=phase_timings,
-                    timing_prefix="evaluation_formation_generation.",
-                )
-            input_reason = _input_shape_boundary_reason(
-                architecture=architecture,
-                sample_shape=candidate_batch.samples[0].field.shape,
-            )
-            if input_reason is not None:
-                break
-        complexity = candidate_batch.samples[0].complexity
-        if complexity in evaluated_complexities:
-            break
-        evaluated_complexities.add(complexity)
+    for rung in evaluation_rungs:
+        candidate_batch = rung.batch
         evaluation_started = time.perf_counter()
         with phase_timings.span(
             "evaluation_tensorization",
@@ -868,8 +995,6 @@ def _train_and_predict_on_device(
             probabilities=predictions,
             outcome_ids=outcome_ids,
         ) <= _chance_accepted_mass(outcome_ids) + 1e-12:
-            break
-        if memory_limit >= memory_limit_bytes:
             break
     training_run = _training_run_record(
         seed=seed,
@@ -1204,7 +1329,8 @@ def _training_progress_record(
     summary: BenchmarkRunSummary,
     architecture: ArchitectureManifest,
     outcome_space: OutcomeSpace,
-    evaluation_batch: GeneratedObservationBatch,
+    evaluation_rungs: tuple[_CurriculumRung, ...],
+    evaluation_curriculum: Mapping[str, object],
     training_run: TrainingRunRecord,
     throughput: Mapping[str, object],
 ) -> Mapping[str, object]:
@@ -1221,6 +1347,14 @@ def _training_progress_record(
     )
     chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
     accepted_mass_equivalent = chance_mass + provisional_score * (1.0 - chance_mass)
+    frontier_index_value = evaluation_curriculum.get("frontier_index", 0)
+    frontier_index = (
+        frontier_index_value
+        if isinstance(frontier_index_value, int)
+        and 0 <= frontier_index_value < len(evaluation_rungs)
+        else 0
+    )
+    evaluation_batch = evaluation_rungs[frontier_index].batch
     complexities = {sample.complexity for sample in evaluation_batch.samples}
     progress_complexity = next(iter(complexities)) if len(complexities) == 1 else None
     record: dict[str, object] = {
@@ -1246,6 +1380,7 @@ def _training_progress_record(
         "tensor_device": training_run.protocol.tensor_device,
         "training_run": training_run.to_record(),
         "throughput": throughput,
+        "evaluation_curriculum": dict(evaluation_curriculum),
         "architecture": inspection.architecture.to_record(),
         "cost_summary": inspection.cost_summary.to_record(),
         "model_inspection": inspection.to_record(),

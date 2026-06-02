@@ -833,6 +833,11 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
     throughput = run.training_summary.get("throughput")
     if isinstance(throughput, Mapping):
         record["throughput"] = dict(cast(Mapping[str, object], throughput))
+    evaluation_curriculum = run.training_summary.get("evaluation_curriculum")
+    if isinstance(evaluation_curriculum, Mapping):
+        record["evaluation_curriculum"] = dict(
+            cast(Mapping[str, object], evaluation_curriculum)
+        )
     return record
 
 
@@ -1578,6 +1583,7 @@ def _benchmark_base_complexity(
         component_count=1,
         width=width,
         height=height,
+        variation_extent=0.0,
     )
 
 
@@ -2198,6 +2204,19 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
         _as_nonnegative_number(protocol.get(field), f"{prefix}.protocol.{field}")
     for field in ("validation_history", "artifacts"):
         _as_sequence(record.get(field), _field_path(prefix, field))
+    if "evaluation_curriculum" in record:
+        curriculum = _as_mapping(
+            record.get("evaluation_curriculum"),
+            _field_path(prefix, "evaluation_curriculum"),
+        )
+        _as_string(
+            curriculum.get("kind"),
+            _field_path(prefix, "evaluation_curriculum.kind"),
+        )
+        _as_sequence(
+            curriculum.get("rungs"),
+            _field_path(prefix, "evaluation_curriculum.rungs"),
+        )
 
 
 def _validate_proposal_result(record: Mapping[str, object], prefix: str) -> None:

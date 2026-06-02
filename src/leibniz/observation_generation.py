@@ -35,6 +35,7 @@ from leibniz.observation_formation import (
     FormedObservation,
     ObservationFormationDeclaration,
     ObservationFormationDeclarationDocument,
+    SpatialAffineVariation,
     VariationTransformDeclaration,
 )
 from leibniz.timing import TimingCollector
@@ -224,6 +225,7 @@ class ObservationGenerator:
         seed: int,
         component_sequences: Iterable[Sequence[int]] | None = None,
         memory_limit_bytes: int | None = None,
+        variation_extent: float = 1.0,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedObservationBatch:
@@ -236,6 +238,7 @@ class ObservationGenerator:
                 seed=seed,
                 component_sequences=component_sequences,
                 memory_limit_bytes=memory_limit_bytes,
+                variation_extent=variation_extent,
                 timing=timing,
                 timing_prefix=f"{timing_prefix}formation_batch.",
             )
@@ -303,6 +306,7 @@ class ObservationGenerator:
         seed: int,
         component_sequences: Iterable[Sequence[int]] | None = None,
         memory_limit_bytes: int | None = None,
+        variation_extent: float = 1.0,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedFormationBatch:
@@ -314,6 +318,14 @@ class ObservationGenerator:
             raise ObservationGenerationError("seed must be a nonnegative integer")
         if type(component_count) is not int or component_count < 1:
             raise ObservationGenerationError("component_count must be a positive integer")
+        try:
+            variation_extent_value = float(variation_extent)
+        except (TypeError, ValueError) as error:
+            raise ObservationGenerationError("variation_extent must be finite") from error
+        if not math.isfinite(variation_extent_value):
+            raise ObservationGenerationError("variation_extent must be finite")
+        if variation_extent_value < 0.0 or variation_extent_value > 1.0:
+            raise ObservationGenerationError("variation_extent must be between 0 and 1")
         if component_count != 1:
             raise ObservationGenerationError(
                 "fixed-outcome component observations require one component"
@@ -339,19 +351,24 @@ class ObservationGenerator:
         )
         width = resolution_assignment.require_axis(self.formation.width_axis)
         height = resolution_assignment.require_axis(self.formation.height_axis)
+        transform = _variation_transform_at_extent(
+            self.formation.variation_transform,
+            extent=variation_extent_value,
+        )
+        transform_record = transform.to_record()
         with _timing_span(timing, f"{timing_prefix}complexity"):
             complexity = self._distinguishable_state_complexity(
                 component_count=component_count,
                 width=width,
                 height=height,
+                variation_extent=variation_extent_value,
             )
         materialization_declaration = ArtifactReference(
             kind="materialization-declaration",
             protocol_id=self.materialization.id,
             record_digest=self.materialization.digest,
         )
-        variation_transform_record = self.formation.variation_transform.to_record()
-        variation_transform_digest = str(ContentDigest.from_value(variation_transform_record))
+        variation_transform_digest = str(ContentDigest.from_value(transform_record))
         component_generator = random.Random(f"{seed}:component-sequence")
         variation_generator = random.Random(f"{seed}:variation:{variation_transform_digest}")
 
@@ -399,8 +416,8 @@ class ObservationGenerator:
                 variation_samples.append(
                     _variation_transform_values_and_coordinates(
                         formation=self.formation,
-                        transform=self.formation.variation_transform,
-                        transform_record=variation_transform_record,
+                        transform=transform,
+                        transform_record=transform_record,
                         generator=variation_generator,
                         width=plan.resolution_assignment.require_axis(self.formation.width_axis),
                         height=plan.resolution_assignment.require_axis(self.formation.height_axis),
@@ -449,11 +466,13 @@ class ObservationGenerator:
         component_count: int,
         width: int,
         height: int,
+        variation_extent: float = 1.0,
     ) -> float:
         return self.distinguishable_state_complexity(
             component_count=component_count,
             width=width,
             height=height,
+            variation_extent=variation_extent,
         )
 
     def distinguishable_state_complexity(
@@ -462,10 +481,14 @@ class ObservationGenerator:
         component_count: int,
         width: int,
         height: int,
+        variation_extent: float = 1.0,
     ) -> float:
         component_complexity = component_count * math.log2(len(self.formation.components))
         variation_complexity = component_count * _variation_transform_complexity(
-            self.formation.variation_transform,
+            _variation_transform_at_extent(
+                self.formation.variation_transform,
+                extent=variation_extent,
+            ),
             sequence_length=component_count,
             width=width,
             height=height,
@@ -706,6 +729,37 @@ def _variation_random(
 ) -> random.Random:
     return random.Random(
         ":".join((str(seed), str(sample_index), str(sequence_index), transform_digest))
+    )
+
+
+def _variation_transform_at_extent(
+    transform: VariationTransformDeclaration,
+    *,
+    extent: float,
+) -> VariationTransformDeclaration:
+    if extent == 1.0:
+        return transform
+    spatial = transform.spatial_affine
+    matrix: list[tuple[tuple[float, float], ...]] = []
+    for row_index, row in enumerate(spatial.matrix):
+        scaled_row: list[tuple[float, float]] = []
+        for column_index, (lower, upper) in enumerate(row):
+            center = 1.0 if row_index == column_index else 0.0
+            scaled_row.append(
+                (
+                    center + (lower - center) * extent,
+                    center + (upper - center) * extent,
+                )
+            )
+        matrix.append(tuple(scaled_row))
+    return VariationTransformDeclaration(
+        kind=transform.kind,
+        spatial_affine=SpatialAffineVariation(
+            kind=spatial.kind,
+            coordinate_system=spatial.coordinate_system,
+            spatial_rank=spatial.spatial_rank,
+            matrix=tuple(matrix),
+        ),
     )
 
 
