@@ -320,10 +320,6 @@ export function scoreLabel(value: number | undefined): string {
   return value === undefined ? 'n/a' : value.toFixed(4);
 }
 
-export function scoreAxisTickLabel(value: number): string {
-  return `2^${Math.round(value)}`;
-}
-
 export function shortDigest(value: string): string {
   const digest = normalizedDigest(value);
   return digest.slice(0, 12);

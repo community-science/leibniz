@@ -18,7 +18,6 @@ import {
   proposalAssociations,
   runDetails,
   runSelectionId,
-  scoreAxisTickLabel,
   scoreLabel,
   selectionForId,
   shortDigest,
@@ -392,7 +391,7 @@ function BenchmarkFrontierPlot({
                     x={plotMargin.left - plotYTickLabelOffset}
                     y={tickY + plotTickLabelBaselineOffset}
                   >
-                    {scoreAxisTickLabel(tick)}
+                    2<tspan dy="-5" fontSize="0.72em">{Math.round(tick)}</tspan><tspan dy="5"> </tspan>
                   </text>
                 </g>
               );
@@ -523,7 +522,7 @@ function BenchmarkFrontierPlot({
               x={18}
               y={plotMargin.top + plotBodyHeight / 2}
             >
-              Competent states (log2)
+              Score
             </text>
             {model.points.length === 0 ? (
               <text
