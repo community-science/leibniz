@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import random
 import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.console.artifact_index import (
@@ -22,7 +23,11 @@ from leibniz.console.protocol import (
     console_protocol_format_versions,
     console_protocol_formats,
 )
-from leibniz.documents import canonical_document_bytes, document_filename_suffix
+from leibniz.documents import (
+    canonical_document_bytes,
+    document_filename_suffix,
+    load_object_document,
+)
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.local_results import (
     LocalResultImportError,
@@ -48,7 +53,16 @@ _protocol_format_versions = console_protocol_format_versions()
 _format = _protocol_formats.console_data
 _format_version = _protocol_format_versions.console_data
 _document_suffix = document_filename_suffix()
-_generated_batch_cache: dict[tuple[str, str], Mapping[str, object]] = {}
+_generated_batch_cache_format = "leibniz.console.generated-observation-batch-cache"
+_generated_batch_cache_format_version = 1
+_generated_batch_cache_path = (
+    Path(__file__).parent
+    / "_web_src"
+    / "src"
+    / "generated"
+    / ("generatedObservationBatches" + _document_suffix)
+)
+_generated_batch_cache: dict[tuple[str, str, str], Mapping[str, object]] = {}
 
 
 class ConsoleDataValidationError(ValueError):
@@ -306,6 +320,10 @@ class ConsoleDataBuilder:
             )
             if any(not (benchmark_root / (name + _document_suffix)).is_file() for name in required):
                 continue
+            source_fingerprint = self._benchmark_task_cache_fingerprint(
+                benchmark_root=benchmark_root,
+                required_documents=required,
+            )
             generator = load_observation_generator(benchmark_root)
             manifest = generator.benchmark_manifest
             atom_count = len(manifest.outcome_space.outcomes)
@@ -325,21 +343,63 @@ class ConsoleDataBuilder:
                         self._balanced_observation_batch(
                             generator=generator,
                             atom_count=atom_count,
+                            source_fingerprint=source_fingerprint,
                         )
                     ],
                 }
             )
         return tuple(tasks)
 
+    def _benchmark_task_cache_fingerprint(
+        self,
+        *,
+        benchmark_root: Path,
+        required_documents: tuple[str, ...],
+    ) -> str:
+        hasher = hashlib.sha256()
+        hasher.update(b"balanced-observation-batch-v1\0")
+        for name in required_documents:
+            path = benchmark_root / (name + _document_suffix)
+            self._hash_file(hasher, path)
+        self._hash_file(hasher, Path(__file__))
+        for module_name in ("leibniz.observation_generation", "leibniz.observation_formation"):
+            module = sys.modules.get(module_name)
+            module_file = None if module is None else getattr(module, "__file__", None)
+            if module_file is not None:
+                self._hash_file(hasher, Path(module_file))
+        return hasher.hexdigest()
+
+    def _hash_file(self, hasher: Any, path: Path) -> None:
+        resolved = path.resolve()
+        try:
+            display_path = resolved.relative_to(self._repository_root).as_posix()
+        except ValueError:
+            display_path = resolved.as_posix()
+        hasher.update(display_path.encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(resolved.read_bytes())
+        hasher.update(b"\0")
+
     def _balanced_observation_batch(
         self,
         *,
         generator: ObservationGenerator,
         atom_count: int,
+        source_fingerprint: str,
     ) -> Mapping[str, object]:
-        cache_key = (str(generator.benchmark_manifest.id), "balanced-component-samples")
+        cache_key = (
+            str(generator.benchmark_manifest.id),
+            "balanced-component-samples",
+            source_fingerprint,
+        )
         cached = _generated_batch_cache.get(cache_key)
         if cached is not None:
+            return cached
+        persistent_cache = _load_generated_batch_cache()
+        persistent_key = _generated_batch_cache_key(cache_key)
+        cached = persistent_cache.get(persistent_key)
+        if cached is not None:
+            _generated_batch_cache[cache_key] = cached
             return cached
         samples: list[Mapping[str, object]] = []
         samples_per_component_count = 40
@@ -402,6 +462,8 @@ class ConsoleDataBuilder:
             "samples": samples,
         }
         _generated_batch_cache[cache_key] = record
+        persistent_cache[persistent_key] = record
+        _store_generated_batch_cache(persistent_cache)
         return record
 
     def _required_mapping(self, value: object, description: str) -> Mapping[str, object]:
@@ -495,6 +557,52 @@ def _sample_display_key(sample: Mapping[str, object], sample_count: int) -> int:
     if not isinstance(index, int):
         raise ConsoleDataValidationError("generated sample index must be an integer")
     return (index * 17) % (sample_count + 1)
+
+
+def _generated_batch_cache_key(cache_key: tuple[str, str, str]) -> str:
+    return "\0".join(cache_key)
+
+
+def _load_generated_batch_cache() -> dict[str, Mapping[str, object]]:
+    if not _generated_batch_cache_path.is_file():
+        return {}
+    try:
+        record = load_object_document(
+            _generated_batch_cache_path.read_bytes(),
+            description="generated observation batch cache",
+        )
+    except ValueError:
+        return {}
+    if record.get("format") != _generated_batch_cache_format:
+        return {}
+    if record.get("format_version") != _generated_batch_cache_format_version:
+        return {}
+    batches = record.get("batches")
+    if not isinstance(batches, Mapping):
+        return {}
+    typed_batches = cast(Mapping[object, object], batches)
+    return {
+        str(key): cast(Mapping[str, object], value)
+        for key, value in typed_batches.items()
+        if isinstance(value, Mapping)
+    }
+
+
+def _store_generated_batch_cache(cache: Mapping[str, Mapping[str, object]]) -> None:
+    try:
+        _generated_batch_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        _generated_batch_cache_path.write_bytes(
+            canonical_document_bytes(
+                {
+                    "format": _generated_batch_cache_format,
+                    "format_version": _generated_batch_cache_format_version,
+                    "batches": dict(cache),
+                }
+            )
+            + b"\n"
+        )
+    except OSError:
+        return
 
 
 def _outcome_atom_name(outcome_ids: tuple[str, ...]) -> str:

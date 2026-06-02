@@ -1301,8 +1301,7 @@ p {
   border-color: var(--frontier-accent-border);
 }
 
-.benchmark-model-lineage-card span,
-.benchmark-model-validation-legend span {
+.benchmark-model-lineage-card span {
   color: var(--text-dim);
   font-size: var(--font-label);
   font-weight: 700;
@@ -1446,58 +1445,15 @@ p {
   width: 100%;
 }
 
-.benchmark-model-validation-legend {
-  position: absolute;
-  top: var(--space-sm);
-  right: var(--space-sm);
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-}
-
-.benchmark-model-validation-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-xs);
-}
-
-.benchmark-model-validation-legend i {
-  width: var(--space-sm);
-  height: var(--line-accent);
-}
-
-.benchmark-model-validation-legend i.loss,
 .benchmark-model-validation-loss {
   stroke: var(--measured-accent);
-}
-
-.benchmark-model-validation-legend i.best,
-.benchmark-model-validation-best {
-  stroke: var(--frontier-accent);
-}
-
-.benchmark-model-validation-legend i.loss {
-  background: var(--measured-accent);
-}
-
-.benchmark-model-validation-legend i.best {
-  background: var(--frontier-accent);
+  stroke-width: var(--line-accent);
+  stroke-dasharray: 6 5;
 }
 
 .benchmark-model-validation-frame {
   fill: var(--frontier-frame-bg);
   stroke: var(--border-color);
-  stroke-width: var(--line-thin);
-}
-
-.benchmark-model-validation-loss,
-.benchmark-model-validation-best {
-  stroke-width: var(--line-accent);
-}
-
-.benchmark-model-validation-point {
-  fill: var(--measured-accent);
-  stroke: var(--preview-bg);
   stroke-width: var(--line-thin);
 }
 

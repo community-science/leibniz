@@ -295,6 +295,11 @@ class MaterializationDeclaration:
                 values[requirement.resolution_axis] = minimum
         return AxisAssignment(values=values)
 
+    def resolution_lattice_steps(self) -> dict[str, int]:
+        """Return declared per-axis resolution lattice steps."""
+
+        return _layout_resolution_lattice(self.layout) if self.layout is not None else {}
+
     def require_resolution(
         self,
         *,
@@ -307,6 +312,13 @@ class MaterializationDeclaration:
                 if actual < minimum:
                     raise MaterializationValidationError(
                         f"{axis}={actual} is below layout minimum {minimum}"
+                    )
+            for axis, step in _layout_resolution_lattice(self.layout).items():
+                actual = resolution_assignment.require_axis(axis)
+                if actual % step != 0:
+                    raise MaterializationValidationError(
+                        f"{axis}={actual} is not an integer multiple of "
+                        f"layout lattice step {step}"
                     )
         for requirement in self.requirements:
             if source_assignment is None:
@@ -613,6 +625,48 @@ def _layout_resolution_floor(layout: Mapping[str, object]) -> dict[str, int]:
             )
         floor[axis] = value
     return floor
+
+
+def _layout_resolution_lattice(layout: Mapping[str, object]) -> dict[str, int]:
+    if layout.get("kind") != "sequence-layout":
+        return {}
+    lattice = layout.get("resolution_lattice")
+    if lattice is None:
+        return {}
+    if not isinstance(lattice, Mapping):
+        raise MaterializationValidationError("layout resolution_lattice must be a record")
+    lattice_record = cast(Mapping[str, object], lattice)
+    kind = lattice_record.get("kind")
+    if kind != "axis-multiple":
+        raise MaterializationValidationError(
+            f"unsupported layout resolution_lattice kind: {kind}"
+        )
+    steps = lattice_record.get("steps")
+    if not isinstance(steps, Mapping):
+        raise MaterializationValidationError(
+            "layout resolution_lattice steps must be a record"
+        )
+    step_mapping = cast(Mapping[str, object], steps)
+    result: dict[str, int] = {}
+    for axis, value in step_mapping.items():
+        if not axis:
+            raise MaterializationValidationError(
+                "layout resolution_lattice axes must be nonempty strings"
+            )
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise MaterializationValidationError(
+                f"layout resolution_lattice {axis} step must be an integer"
+            )
+        if value < 1:
+            raise MaterializationValidationError(
+                f"layout resolution_lattice {axis} step must be positive"
+            )
+        result[axis] = value
+    if not result:
+        raise MaterializationValidationError(
+            "layout resolution_lattice steps must not be empty"
+        )
+    return result
 
 
 def _first_duplicate(values: tuple[object, ...]) -> object | None:

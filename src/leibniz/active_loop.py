@@ -47,7 +47,10 @@ class ActiveTrainingLoopPlan:
     learning_rate: float = 0.01
     optimizer: str = "adam"
     schedule: str = "reduce-on-plateau"
-    validation_interval: int = 250
+    checkpoint_interval: int = 256
+    gate_check_interval: int = 32
+    gate_sample_count: int | None = None
+    gate_decision_rule: str = "validation-loss-plateau"
     convergence_patience: int = 6
     convergence_min_delta: float = 1e-3
     convergence_min_steps: int = 500
@@ -84,8 +87,22 @@ class ActiveTrainingLoopPlan:
             raise ActiveTrainingLoopError(f"unsupported optimizer: {self.optimizer}")
         if self.schedule not in {"none", "cosine", "reduce-on-plateau"}:
             raise ActiveTrainingLoopError(f"unsupported schedule: {self.schedule}")
-        if type(self.validation_interval) is not int or self.validation_interval < 1:
-            raise ActiveTrainingLoopError("validation_interval must be positive")
+        if type(self.checkpoint_interval) is not int or self.checkpoint_interval < 1:
+            raise ActiveTrainingLoopError("checkpoint_interval must be positive")
+        if type(self.gate_check_interval) is not int or self.gate_check_interval < 1:
+            raise ActiveTrainingLoopError("gate_check_interval must be positive")
+        if self.checkpoint_interval % self.gate_check_interval != 0:
+            raise ActiveTrainingLoopError(
+                "checkpoint_interval must be an integer multiple of gate_check_interval"
+            )
+        if self.gate_sample_count is not None and (
+            type(self.gate_sample_count) is not int or self.gate_sample_count < 1
+        ):
+            raise ActiveTrainingLoopError("gate_sample_count must be positive")
+        if self.gate_decision_rule != "validation-loss-plateau":
+            raise ActiveTrainingLoopError(
+                f"unsupported gate_decision_rule: {self.gate_decision_rule}"
+            )
         if type(self.convergence_patience) is not int or self.convergence_patience < 0:
             raise ActiveTrainingLoopError("convergence_patience must be nonnegative")
         if self.convergence_min_delta < 0:
@@ -143,7 +160,10 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
             learning_rate=plan.learning_rate,
             optimizer=plan.optimizer,
             schedule=plan.schedule,
-            validation_interval=plan.validation_interval,
+            checkpoint_interval=plan.checkpoint_interval,
+            gate_check_interval=plan.gate_check_interval,
+            gate_sample_count=plan.gate_sample_count,
+            gate_decision_rule=plan.gate_decision_rule,
             convergence_patience=plan.convergence_patience,
             convergence_min_delta=plan.convergence_min_delta,
             convergence_min_steps=plan.convergence_min_steps,
@@ -185,7 +205,10 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
             learning_rate=plan.learning_rate,
             optimizer=plan.optimizer,
             schedule=plan.schedule,
-            validation_interval=plan.validation_interval,
+            checkpoint_interval=plan.checkpoint_interval,
+            gate_check_interval=plan.gate_check_interval,
+            gate_sample_count=plan.gate_sample_count,
+            gate_decision_rule=plan.gate_decision_rule,
             convergence_patience=plan.convergence_patience,
             convergence_min_delta=plan.convergence_min_delta,
             convergence_min_steps=plan.convergence_min_steps,

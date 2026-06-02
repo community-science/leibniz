@@ -203,7 +203,6 @@ def test_benchmark_dashboard_renders_python_owned_run_detail_sections() -> None:
         "sampled_competence",
         "training_diagnostics",
         "validation_history",
-        "best_validation_loss",
         "validation_source",
     )
 

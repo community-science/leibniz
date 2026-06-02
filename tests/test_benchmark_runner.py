@@ -93,6 +93,22 @@ def test_digits_benchmark_runner_dry_run_does_not_discover_runtime(
     assert summary.dry_run is True
 
 
+def test_benchmark_run_plan_requires_checkpoint_interval_on_gate_cadence(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        BenchmarkRunnerError,
+        match="checkpoint_interval must be an integer multiple of gate_check_interval",
+    ):
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=tmp_path / "results",
+            checkpoint_interval=250,
+            gate_check_interval=32,
+        )
+
+
 def test_digits_benchmark_runner_rejects_fixed_shape_architecture(
     tmp_path: Path,
 ) -> None:
@@ -193,8 +209,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     ).manifest
 
     dataset_document.dataset.validate_manifest(manifest)
-    assert summary.measurement_count == 12
-    assert len(dataset_document.dataset.measurements) == 12
+    assert summary.measurement_count == 3
+    assert len(dataset_document.dataset.measurements) == 3
     assert inspection_document.inspection.cost_summary.parameter_count == 50
     assert inspection_document.inspection.cost_summary.inference_compute == 656
     assert summary.training_summary_path.exists()
@@ -210,7 +226,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_run.protocol.tensor_runtime == "pytorch"
     assert training_run.protocol.tensor_device == "cpu"
     assert training_run.protocol.max_steps == 1
-    assert training_run.protocol.validation_sample_count == 2
+    assert training_run.protocol.gate_sample_count == 2
     assert training_summary["tensor_runtime"] == "pytorch"
     assert training_summary["tensor_device"] == "cpu"
     throughput = cast(dict[str, object], training_summary["throughput"])
@@ -244,7 +260,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert cast(float, roofline["peak_bytes_per_second"]) > 0
     assert training_throughput["sample_count"] == 2
     assert cast(float, training_throughput["samples_per_second"]) > 0
-    assert evaluation_throughput["sample_count"] == 12
+    assert evaluation_throughput["sample_count"] == 3
     assert cast(float, evaluation_throughput["samples_per_second"]) > 0
     assert roofline_comparison["status"] == "available"
     assert roofline_comparison["model"] == "operational-intensity"
@@ -256,6 +272,42 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_run.validation_checks == 2
     assert training_run.validation_history[0].step == 0
     assert training_run.validation_history[-1].step == 1
+    evaluation_curriculum = cast(dict[str, object], training_summary["evaluation_curriculum"])
+    training_curriculum = cast(dict[str, object], training_summary["training_curriculum"])
+    curriculum_rungs = cast(list[dict[str, object]], evaluation_curriculum["rungs"])
+    assert evaluation_curriculum["kind"] == "competence-gated-evaluation-curriculum"
+    assert (
+        evaluation_curriculum["curriculum_variable"]
+        == "internal-distinguishable-state-complexity"
+    )
+    assert evaluation_curriculum["sampling_levers"] == ["canvas-size", "nuisance-extent"]
+    assert evaluation_curriculum["nuisance_extent_curriculum"] == [0.0, 0.25, 0.5, 1.0]
+    assert cast(dict[str, object], evaluation_curriculum["canvas_growth"])["kind"] == (
+        "logarithmic"
+    )
+    assert evaluation_curriculum["rung_policy"] == "unbounded-competence-frontier"
+    assert evaluation_curriculum["gating_metric"] == "frontier-validation-loss-plateau"
+    assert evaluation_curriculum["frontier_index"] == 0
+    assert [rung["index"] for rung in curriculum_rungs] == [0]
+    assert {
+        cast(str, rung["complexity_axis"])
+        for rung in curriculum_rungs
+    } == {"internal-distinguishable-state-complexity"}
+    assert all("generation_memory_limit_bytes" not in rung for rung in curriculum_rungs)
+    assert all("resolution_assignment" in rung for rung in curriculum_rungs)
+    assert [rung["nuisance_extent"] for rung in curriculum_rungs] == [0.0]
+    assert [rung["sample_count"] for rung in curriculum_rungs] == [3]
+    assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
+        cast(float, rung["complexity"]) for rung in curriculum_rungs
+    )
+    assert training_curriculum == {
+        "kind": "competence-gated-training-curriculum",
+        "source": "structured-training-curriculum",
+        "frontier_sampling_weight": 0.7,
+        "replay_sampling_weight": 0.3,
+        "gating_metric": "frontier-validation-loss-plateau",
+        "nuisance_policy": "warmup-to-full-then-fixed",
+    }
     sampled_competence = cast(dict[str, object], training_summary["sampled_competence"])
     assert sampled_competence["kind"] == "sampled-competence-curriculum"
     assert sampled_competence["sampling_rule"] == "generator-uniform-component-sequence-v1"
@@ -264,13 +316,13 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         == "approximately-uniform-within-complexity-class"
     )
     assert sampled_competence["complexity_axis"] is None
-    assert math.isclose(cast(float, sampled_competence["complexity"]), 19.965784284662085)
-    assert sampled_competence["sample_count"] == 12
+    assert math.isclose(cast(float, sampled_competence["complexity"]), math.log2(10))
+    assert sampled_competence["sample_count"] == 3
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
-    assert len(points) == 4
-    assert [point["sample_count"] for point in points] == [3, 3, 3, 3]
-    assert math.isclose(cast(float, points[0]["complexity"]), 19.965784284662085)
+    assert len(points) == 1
+    assert [point["sample_count"] for point in points] == [3]
+    assert math.isclose(cast(float, points[0]["complexity"]), math.log2(10))
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
     )
@@ -296,7 +348,7 @@ def test_digits_benchmark_runner_accepts_fixed_support_convnet_architecture(
         summary.model_inspection_path.read_bytes()
     ).inspection
 
-    assert summary.measurement_count == 4
+    assert summary.measurement_count == 2
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
         "fixed-support-affine",
         "local-affine",
@@ -304,12 +356,12 @@ def test_digits_benchmark_runner_accepts_fixed_support_convnet_architecture(
         "affine-readout",
     ]
     assert [stage.output_shape for stage in inspection.architecture_trace.stages] == [
-        (4, 12, 8),
-        (4, 12, 8),
-        (384,),
+        (4, 12, 12),
+        (4, 12, 12),
+        (576,),
         (10,),
     ]
-    assert inspection.cost_summary.parameter_count == 4006
+    assert inspection.cost_summary.parameter_count == 5926
 
 
 def test_digits_benchmark_runner_records_convergence_protocol_controls(
@@ -326,7 +378,9 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
             learning_rate=0.005,
             optimizer="adam",
             schedule="cosine",
-            validation_interval=2,
+            gate_check_interval=1,
+            checkpoint_interval=2,
+            gate_sample_count=3,
             convergence_patience=2,
             convergence_min_delta=0.001,
             tensor_device="cpu",
@@ -344,19 +398,22 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert training_run.protocol.optimizer == "adam"
     assert training_run.protocol.schedule == "cosine"
     assert training_run.protocol.learning_rate == 0.005
-    assert training_run.protocol.validation_interval == 2
+    assert training_run.protocol.gate_check_interval == 1
+    assert training_run.protocol.checkpoint_interval == 2
+    assert training_run.protocol.gate_sample_count == 3
+    assert training_run.protocol.gate_decision_rule == "validation-loss-plateau"
     assert training_run.protocol.patience == 2
     assert training_run.protocol.min_delta == 0.001
     assert training_run.protocol.validation_source == "generator-resample"
-    assert [point.step for point in training_run.validation_history] == [0, 2, 3]
+    assert [point.step for point in training_run.validation_history] == [0, 1, 2, 3]
     assert training_run.validation_history[-1].learning_rates
 
 
 def test_windowed_plateau_ignores_tiny_recent_best_loss_resets() -> None:
     history = (
-        _history_point(check=0, step=0, loss=1.0, best=1.0),
-        _history_point(check=1, step=250, loss=1.01, best=1.0, stale_checks=1),
-        _history_point(check=2, step=500, loss=0.9995, best=0.9995),
+        _history_point(check=0, step=0, loss=1.0),
+        _history_point(check=1, step=250, loss=1.01, stale_checks=1),
+        _history_point(check=2, step=500, loss=0.9995),
     )
 
     assert benchmark_runner.has_windowed_validation_plateau(
@@ -368,9 +425,9 @@ def test_windowed_plateau_ignores_tiny_recent_best_loss_resets() -> None:
 
 def test_windowed_plateau_continues_after_material_best_loss_improvement() -> None:
     history = (
-        _history_point(check=0, step=0, loss=1.0, best=1.0),
-        _history_point(check=1, step=250, loss=1.01, best=1.0, stale_checks=1),
-        _history_point(check=2, step=500, loss=0.998, best=0.998),
+        _history_point(check=0, step=0, loss=1.0),
+        _history_point(check=1, step=250, loss=1.01, stale_checks=1),
+        _history_point(check=2, step=500, loss=0.998),
     )
 
     assert not benchmark_runner.has_windowed_validation_plateau(
@@ -495,20 +552,9 @@ def test_reduce_on_plateau_scheduler_uses_convergence_patience() -> None:
     assert schedule.scheduler.patience == 6
 
 
-def test_training_stage_carries_prior_global_best(
+def test_training_stage_records_current_validation_loss_without_global_best(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    prior_best = TrainingHistoryPoint(
-        step=100,
-        validation_check=8,
-        validation_loss=1.0,
-        best_validation_loss=1.0,
-        best_validation_step=100,
-        best_validation_check=8,
-        stale_checks=0,
-        learning_rates=(0.01,),
-    )
-
     def constant_validation_loss(**_kwargs: object) -> float:
         return 2.0
 
@@ -525,11 +571,13 @@ def test_training_stage_carries_prior_global_best(
         train_batch=fake_batch,
         validation_batch=fake_batch,
         max_steps=100,
-        validation_interval=1,
+        gate_check_interval=1,
+        checkpoint_interval=1,
         patience=1,
         min_delta=0.0,
         min_steps=0,
         batch_size=1,
+        gate_sample_count=1,
         training_compute_per_sample=10.0,
         training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
@@ -537,14 +585,11 @@ def test_training_stage_carries_prior_global_best(
         phase_timings=benchmark_runner.TimingCollector(),
         start_step=100,
         start_check=9,
-        initial_best=prior_best,
     )
 
     point = stage_result.validation_history[0]
     assert point.validation_loss == 2.0
-    assert point.best_validation_loss == prior_best.best_validation_loss
-    assert point.best_validation_step == prior_best.best_validation_step
-    assert point.best_validation_check == prior_best.best_validation_check
+    assert "best_validation_loss" not in point.to_record()
 
 
 def test_training_curriculum_is_not_step_indexed() -> None:
@@ -553,9 +598,65 @@ def test_training_curriculum_is_not_step_indexed() -> None:
     assert "curriculum_step" not in source
     assert "_generation_curriculum_growth_interval" not in source
     assert "step // _generation_curriculum" not in source
-    assert "for memory_limit in _curriculum_memory_limits(memory_limit_bytes):" not in source
-    assert "on_plateau=advance_memory_limit" in source
-    assert "current_memory_limit()" in source
+    assert "on_plateau=advance_memory_limit" not in source
+    assert "current_memory_limit()" not in source
+    assert "_curriculum_memory_limits" not in source
+    assert "generation_memory_limit_bytes" not in source
+    assert "on_plateau=advance_frontier" in source
+    assert "initial_evaluation_rung" in source
+
+
+def test_evaluation_curriculum_candidates_are_complexity_sorted() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    candidates = cast(Any, benchmark_runner)._logarithmic_curriculum_candidates(
+        generator=generator,
+        component_count=1,
+        start_index=0,
+    )
+
+    assert [candidate.complexity for candidate in candidates] == sorted(
+        candidate.complexity for candidate in candidates
+    )
+    assert candidates[0].resolution_assignment.values == {"W": 24, "H": 24}
+    assert candidates[0].nuisance_extent == 0.0
+
+
+def test_training_curriculum_candidates_keep_full_nuisance_after_warmup() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
+        generator=generator,
+        component_count=1,
+        start_index=0,
+    )
+    first_pairs = [
+        (
+            candidate.resolution_assignment.values,
+            candidate.nuisance_extent,
+        )
+        for candidate in candidates[:12]
+    ]
+
+    assert first_pairs == [
+        ({"W": 24, "H": 24}, 0.0),
+        ({"W": 24, "H": 24}, 0.25),
+        ({"W": 24, "H": 24}, 0.5),
+        ({"W": 24, "H": 24}, 1.0),
+        ({"W": 24, "H": 48}, 1.0),
+        ({"W": 48, "H": 24}, 1.0),
+        ({"W": 48, "H": 48}, 1.0),
+        ({"W": 24, "H": 72}, 1.0),
+        ({"W": 48, "H": 72}, 1.0),
+        ({"W": 72, "H": 24}, 1.0),
+        ({"W": 72, "H": 48}, 1.0),
+        ({"W": 72, "H": 72}, 1.0),
+    ]
+    assert all(
+        candidate.resolution_assignment.values["W"] % 24 == 0
+        and candidate.resolution_assignment.values["H"] % 24 == 0
+        for candidate in candidates[:12]
+    )
 
 
 def test_training_curriculum_does_not_restart_step_counter() -> None:
@@ -599,21 +700,23 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
             device_kind=cast(Any, device_kind),
         )
 
-    original_torch_module = benchmark_runner.ExecutableModelOperator.torch_module
+    original_torch_operation_modules = (
+        benchmark_runner.ExecutableModelOperator.torch_operation_modules
+    )
 
-    def flaky_torch_module(self: object) -> object:
+    def flaky_torch_operation_modules(self: object, *, torch: object | None = None) -> object:
         nonlocal module_calls
         module_calls += 1
         if module_calls == 1:
             raise RuntimeError("MPS backend failed to compile adaptive pooling")
-        return original_torch_module(cast(Any, self))
+        return original_torch_operation_modules(cast(Any, self), torch=cast(Any, torch))
 
     monkeypatch.setattr(benchmark_runner, "tensor_runtime_device_kinds", fake_device_kinds)
     monkeypatch.setattr(benchmark_runner, "resolve_tensor_runtime", fake_resolve_tensor_runtime)
     monkeypatch.setattr(
         benchmark_runner.ExecutableModelOperator,
-        "torch_module",
-        flaky_torch_module,
+        "torch_operation_modules",
+        flaky_torch_operation_modules,
     )
 
     summary = run_benchmark(
@@ -634,7 +737,7 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
     throughput = cast(dict[str, object], training_summary["throughput"])
     fallbacks = cast(list[dict[str, object]], throughput["runtime_fallbacks"])
 
-    assert calls == ["auto", "mps", "cpu"]
+    assert calls == ["mps", "cpu"]
     assert training_summary["tensor_device"] == "cpu"
     assert throughput["tensor_device"] == "cpu"
     assert fallbacks == [
@@ -642,6 +745,101 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
             "from_device": "mps",
             "to_device": "cpu",
             "reason": "MPS backend failed to compile adaptive pooling",
+        }
+    ]
+
+
+def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_device(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cpu_runtime = resolve_tensor_runtime("cpu")
+    torch = cpu_runtime.torch
+    calls: list[str] = []
+    forward_calls = 0
+
+    class FlakyOperation(torch.nn.Module):  # type: ignore[misc]
+        def forward(self, value: object) -> object:
+            nonlocal forward_calls
+            forward_calls += 1
+            if forward_calls == 1:
+                raise RuntimeError("preferred operation failed to compile")
+            return value
+
+    def fake_device_kinds(_requested: object) -> tuple[TensorRuntimeDeviceKind, ...]:
+        return ("mps",)
+
+    def fake_resolve_tensor_runtime(requested: object) -> TensorRuntime:
+        device_kind = cast(str, requested)
+        calls.append(device_kind)
+        return TensorRuntime(
+            torch=torch,
+            device=cpu_runtime.device,
+            device_kind=cast(Any, device_kind),
+        )
+
+    def fake_roofline_record(_runtime: object) -> dict[str, object]:
+        return {
+            "kind": "system-roofline",
+            "status": "calibrated",
+            "tensor_runtime": "pytorch",
+            "tensor_device": "mps",
+            "method": "test",
+            "peak_compute_per_second": 1_000_000.0,
+            "peak_bytes_per_second": 1_000_000.0,
+        }
+
+    original_torch_operation_modules = (
+        benchmark_runner.ExecutableModelOperator.torch_operation_modules
+    )
+
+    def flaky_first_operation(self: object, *, torch: object | None = None) -> object:
+        torch_module = cast(Any, torch)
+        modules = list(
+            original_torch_operation_modules(cast(Any, self), torch=torch_module)
+        )
+        modules[0] = torch_module.nn.Sequential(FlakyOperation(), modules[0])
+        return tuple(modules)
+
+    monkeypatch.setattr(benchmark_runner, "tensor_runtime_device_kinds", fake_device_kinds)
+    monkeypatch.setattr(benchmark_runner, "resolve_tensor_runtime", fake_resolve_tensor_runtime)
+    monkeypatch.setattr(benchmark_runner, "runtime_roofline_record", fake_roofline_record)
+    monkeypatch.setattr(
+        benchmark_runner.ExecutableModelOperator,
+        "torch_operation_modules",
+        flaky_first_operation,
+    )
+
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=tmp_path / "results",
+            sample_count=2,
+            train_steps=1,
+            tensor_device="auto",
+        )
+    )
+
+    training_summary = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    throughput = cast(dict[str, object], training_summary["throughput"])
+    operation_fallbacks = cast(
+        list[dict[str, object]],
+        throughput["operation_runtime_fallbacks"],
+    )
+
+    assert calls == ["mps"]
+    assert training_summary["tensor_device"] == "mps"
+    assert "runtime_fallbacks" not in throughput
+    assert operation_fallbacks == [
+        {
+            "operation_index": 0,
+            "from_device": "mps",
+            "to_device": "cpu",
+            "reason": "preferred operation failed to compile",
         }
     ]
 
@@ -725,7 +923,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
         "Validation History",
     ]
     validation_table = cast(dict[str, object], detail_sections[-1]["table"])
-    assert validation_table["columns"] == ["Step", "Loss", "Best", "Stale"]
+    assert validation_table["columns"] == ["Step", "Loss", "Stale"]
     artifact_kinds = {
         artifact["kind"]
         for artifact in cast(list[dict[str, object]], diagnostics["artifacts"])
@@ -737,11 +935,16 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     }
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     score_basis = cast(dict[str, object], leaderboard[0]["score_basis"])
-    assert score_basis["kind"] == "base-normalized-absolute-competent-complexity-v1"
-    assert math.isclose(cast(float, score_basis["base_complexity"]), 19.965784284662085)
+    assert score_basis["kind"] == "competence-integral-over-complexity-v1"
+    assert score_basis["score_unit"] == "bits"
+    assert score_basis["complexity_axis"] == "log2-distinguishable-states"
+    assert math.isclose(
+        cast(float, score_basis["reference_baseline_complexity"]),
+        math.log2(10),
+    )
     assert math.isclose(cast(float, score_basis["chance_mass"]), 0.1)
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    assert math.isclose(observed_complexities[0], 20.273212809854332)
+    assert math.isclose(observed_complexities[0], math.log2(10))
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
     assert points[0]["sample_count"] == 2
@@ -773,7 +976,8 @@ def test_digits_benchmark_runner_materializes_running_training_history(
             evaluation_sample_count=2,
             seed=101,
             train_steps=2,
-            validation_interval=1,
+            gate_check_interval=1,
+            checkpoint_interval=1,
             convergence_patience=0,
             convergence_min_delta=0.0,
             convergence_min_steps=0,
@@ -806,8 +1010,17 @@ def test_digits_benchmark_runner_materializes_running_training_history(
         cast(list[dict[str, object]], result["leaderboard"])[0]["points"],
     )
     sampled_competence = cast(dict[str, object], running_run["sampled_competence"])
+    evaluation_curriculum = cast(dict[str, object], diagnostics["evaluation_curriculum"])
+    curriculum_rungs = cast(list[dict[str, object]], evaluation_curriculum["rungs"])
     assert points
     assert points[0]["sample_count"] == 2
+    assert evaluation_curriculum["kind"] == "competence-gated-evaluation-curriculum"
+    assert (
+        evaluation_curriculum["curriculum_variable"]
+        == "internal-distinguishable-state-complexity"
+    )
+    assert evaluation_curriculum["frontier_index"] == 0
+    assert curriculum_rungs[0]["status"] == "frontier"
     assert sampled_competence["validation_competence"] == running_run["score"]
     assert math.isclose(
         (cast(float, points[0]["score"]) - 0.1) / 0.9,
@@ -887,15 +1100,11 @@ def _history_point(
     check: int,
     step: int,
     loss: float,
-    best: float,
     stale_checks: int = 0,
 ) -> TrainingHistoryPoint:
     return TrainingHistoryPoint(
         step=step,
         validation_check=check,
         validation_loss=loss,
-        best_validation_loss=best,
-        best_validation_step=step,
-        best_validation_check=check,
         stale_checks=stale_checks,
     )

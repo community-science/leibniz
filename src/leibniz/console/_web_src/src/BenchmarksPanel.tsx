@@ -63,8 +63,6 @@ type ModelLineageNode = {
   value: string;
 };
 type ValidationHistoryPoint = {
-  best_validation_loss: number;
-  best_validation_step: number;
   stale_checks?: number;
   step: number;
   validation_loss: number;
@@ -648,10 +646,6 @@ function ModelTrainingDetail({ runs }: { runs: RunResultRecord[] }) {
               <dd>{parameterValueLabel(diagnostics.stop_reason)}</dd>
             </div>
             <div>
-              <dt>Best Loss</dt>
-              <dd>{diagnostics.best_validation_loss.toFixed(4)}</dd>
-            </div>
-            <div>
               <dt>Final Loss</dt>
               <dd>{diagnostics.final_validation_loss.toFixed(4)}</dd>
             </div>
@@ -702,10 +696,7 @@ function ModelValidationChart({
   points: Array<ValidationHistoryPoint & { run: RunResultRecord }>;
 }) {
   const steps = points.map((point) => point.step);
-  const losses = points.flatMap((point) => [
-    point.validation_loss,
-    point.best_validation_loss,
-  ]);
+  const losses = points.map((point) => point.validation_loss);
   const xMin = Math.min(...steps);
   const xMax = Math.max(...steps, xMin + 1);
   const yMin = 0;
@@ -716,14 +707,9 @@ function ModelValidationChart({
   const y = (loss: number) =>
     modelValidationPlotMargin.top +
     (1 - (loss - yMin) / (yMax - yMin)) * modelValidationPlotBodyHeight;
-  const line = (key: 'validation_loss' | 'best_validation_loss') =>
-    points.map((point) => `${x(point.step)},${y(point[key])}`).join(' ');
+  const line = points.map((point) => `${x(point.step)},${y(point.validation_loss)}`).join(' ');
   return (
     <div className="benchmark-model-validation-chart">
-      <div className="benchmark-model-validation-legend">
-        <span><i className="loss" />Loss</span>
-        <span><i className="best" />Best</span>
-      </div>
       <svg
         aria-label="Validation loss history"
         role="img"
@@ -763,22 +749,8 @@ function ModelValidationChart({
         <polyline
           className="benchmark-model-validation-loss"
           fill="none"
-          points={line('validation_loss')}
+          points={line}
         />
-        <polyline
-          className="benchmark-model-validation-best"
-          fill="none"
-          points={line('best_validation_loss')}
-        />
-        {points.map((point, index) => (
-          <circle
-            className="benchmark-model-validation-point"
-            cx={x(point.step)}
-            cy={y(point.validation_loss)}
-            key={`${point.run.run_id}:${point.step}:${index}`}
-            r={3}
-          />
-        ))}
       </svg>
     </div>
   );
@@ -989,7 +961,10 @@ function trainingProtocolEntries(protocol: TrainingProtocolRecord): [string, str
     ['Steps', protocol.max_steps],
     ['Min Steps', protocol.min_steps],
     ['Batch', protocol.batch_size],
-    ['Interval', protocol.validation_interval],
+    ['Checkpoint', protocol.checkpoint_interval],
+    ['Gate Check', protocol.gate_check_interval],
+    ['Gate Samples', protocol.gate_sample_count],
+    ['Gate Rule', protocol.gate_decision_rule],
     ['Patience', protocol.patience],
     ['Validation', protocol.validation_source],
   ];
@@ -1001,8 +976,6 @@ function trainingProtocolEntries(protocol: TrainingProtocolRecord): [string, str
 function trainingValidationHistory(run: RunResultRecord): ValidationHistoryPoint[] {
   return (run.training_diagnostics?.validation_history ?? []).map(
     (point: TrainingHistoryPointRecord) => ({
-      best_validation_loss: point.best_validation_loss,
-      best_validation_step: point.best_validation_step,
       stale_checks: point.stale_checks,
       step: point.step,
       validation_loss: point.validation_loss,

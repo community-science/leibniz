@@ -29,12 +29,14 @@ from leibniz.materialization import (
     MaterializationDeclaration,
     MaterializationDeclarationDocument,
     MaterializationPlan,
+    MaterializationValidationError,
 )
 from leibniz.observation_formation import (
     FieldObservation,
     FormedObservation,
     ObservationFormationDeclaration,
     ObservationFormationDeclarationDocument,
+    SpatialAffineVariation,
     VariationTransformDeclaration,
 )
 from leibniz.timing import TimingCollector
@@ -224,6 +226,8 @@ class ObservationGenerator:
         seed: int,
         component_sequences: Iterable[Sequence[int]] | None = None,
         memory_limit_bytes: int | None = None,
+        resolution_assignment: AxisAssignment | None = None,
+        variation_extent: float = 1.0,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedObservationBatch:
@@ -236,6 +240,8 @@ class ObservationGenerator:
                 seed=seed,
                 component_sequences=component_sequences,
                 memory_limit_bytes=memory_limit_bytes,
+                resolution_assignment=resolution_assignment,
+                variation_extent=variation_extent,
                 timing=timing,
                 timing_prefix=f"{timing_prefix}formation_batch.",
             )
@@ -303,6 +309,8 @@ class ObservationGenerator:
         seed: int,
         component_sequences: Iterable[Sequence[int]] | None = None,
         memory_limit_bytes: int | None = None,
+        resolution_assignment: AxisAssignment | None = None,
+        variation_extent: float = 1.0,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedFormationBatch:
@@ -314,6 +322,14 @@ class ObservationGenerator:
             raise ObservationGenerationError("seed must be a nonnegative integer")
         if type(component_count) is not int or component_count < 1:
             raise ObservationGenerationError("component_count must be a positive integer")
+        try:
+            variation_extent_value = float(variation_extent)
+        except (TypeError, ValueError) as error:
+            raise ObservationGenerationError("variation_extent must be finite") from error
+        if not math.isfinite(variation_extent_value):
+            raise ObservationGenerationError("variation_extent must be finite")
+        if variation_extent_value < 0.0 or variation_extent_value > 1.0:
+            raise ObservationGenerationError("variation_extent must be between 0 and 1")
         if component_count != 1:
             raise ObservationGenerationError(
                 "fixed-outcome component observations require one component"
@@ -322,36 +338,52 @@ class ObservationGenerator:
             sequences = tuple(component_sequences) if component_sequences is not None else ()
         if sequences and len(sequences) != sample_count:
             raise ObservationGenerationError("component_sequences length must match sample_count")
-        resolution_assignment = self.materialization.minimum_resolution()
-        resolution_assignment = self._minimum_discriminatable_resolution_assignment(
+        requested_resolution_assignment = resolution_assignment
+        resolved_resolution_assignment = self.materialization.minimum_resolution()
+        resolved_resolution_assignment = self._minimum_discriminatable_resolution_assignment(
             component_count=component_count,
-            minimum_assignment=resolution_assignment,
+            minimum_assignment=resolved_resolution_assignment,
         )
-        resolution_assignment = self._sample_resolution_assignment(
-            component_count=component_count,
-            sample_count=sample_count,
-            seed=seed,
-            minimum_assignment=resolution_assignment,
-            memory_limit_bytes=memory_limit_bytes,
-        )
-        self.materialization.require_resolution(
-            resolution_assignment=resolution_assignment,
-        )
+        if requested_resolution_assignment is None:
+            resolved_resolution_assignment = self._sample_resolution_assignment(
+                component_count=component_count,
+                sample_count=sample_count,
+                seed=seed,
+                minimum_assignment=resolved_resolution_assignment,
+                memory_limit_bytes=memory_limit_bytes,
+            )
+        else:
+            resolved_resolution_assignment = self._requested_resolution_assignment(
+                minimum_assignment=resolved_resolution_assignment,
+                requested_assignment=requested_resolution_assignment,
+            )
+        try:
+            self.materialization.require_resolution(
+                resolution_assignment=resolved_resolution_assignment,
+            )
+        except MaterializationValidationError as error:
+            raise ObservationGenerationError(str(error)) from error
+        resolution_assignment = resolved_resolution_assignment
         width = resolution_assignment.require_axis(self.formation.width_axis)
         height = resolution_assignment.require_axis(self.formation.height_axis)
+        transform = _variation_transform_at_extent(
+            self.formation.variation_transform,
+            extent=variation_extent_value,
+        )
+        transform_record = transform.to_record()
         with _timing_span(timing, f"{timing_prefix}complexity"):
             complexity = self._distinguishable_state_complexity(
                 component_count=component_count,
                 width=width,
                 height=height,
+                variation_extent=variation_extent_value,
             )
         materialization_declaration = ArtifactReference(
             kind="materialization-declaration",
             protocol_id=self.materialization.id,
             record_digest=self.materialization.digest,
         )
-        variation_transform_record = self.formation.variation_transform.to_record()
-        variation_transform_digest = str(ContentDigest.from_value(variation_transform_record))
+        variation_transform_digest = str(ContentDigest.from_value(transform_record))
         component_generator = random.Random(f"{seed}:component-sequence")
         variation_generator = random.Random(f"{seed}:variation:{variation_transform_digest}")
 
@@ -399,8 +431,8 @@ class ObservationGenerator:
                 variation_samples.append(
                     _variation_transform_values_and_coordinates(
                         formation=self.formation,
-                        transform=self.formation.variation_transform,
-                        transform_record=variation_transform_record,
+                        transform=transform,
+                        transform_record=transform_record,
                         generator=variation_generator,
                         width=plan.resolution_assignment.require_axis(self.formation.width_axis),
                         height=plan.resolution_assignment.require_axis(self.formation.height_axis),
@@ -449,11 +481,13 @@ class ObservationGenerator:
         component_count: int,
         width: int,
         height: int,
+        variation_extent: float = 1.0,
     ) -> float:
         return self.distinguishable_state_complexity(
             component_count=component_count,
             width=width,
             height=height,
+            variation_extent=variation_extent,
         )
 
     def distinguishable_state_complexity(
@@ -462,10 +496,14 @@ class ObservationGenerator:
         component_count: int,
         width: int,
         height: int,
+        variation_extent: float = 1.0,
     ) -> float:
         component_complexity = component_count * math.log2(len(self.formation.components))
         variation_complexity = component_count * _variation_transform_complexity(
-            self.formation.variation_transform,
+            _variation_transform_at_extent(
+                self.formation.variation_transform,
+                extent=variation_extent,
+            ),
             sequence_length=component_count,
             width=width,
             height=height,
@@ -504,6 +542,9 @@ class ObservationGenerator:
             return minimum_assignment
         minimum_width = minimum_assignment.require_axis(sampling.width_axis)
         minimum_height = minimum_assignment.require_axis(sampling.height_axis)
+        lattice_steps = self.materialization.resolution_lattice_steps()
+        width_step = lattice_steps.get(sampling.width_axis, 1)
+        height_step = lattice_steps.get(sampling.height_axis, 1)
         maximum_pixel_count = _batch_sample_pixel_limit(
             memory_limit_bytes=(
                 memory_limit_bytes
@@ -529,14 +570,52 @@ class ObservationGenerator:
                 f"{sampling.height_axis} maximum {maximum_height} is below "
                 f"required minimum {minimum_height}"
             )
+        minimum_width_multiplier = _minimum_axis_multiplier(
+            minimum_width,
+            step=width_step,
+        )
+        minimum_height_multiplier = _minimum_axis_multiplier(
+            minimum_height,
+            step=height_step,
+        )
+        maximum_width_multiplier = maximum_width // width_step
+        maximum_height_multiplier = maximum_height // height_step
+        if maximum_width_multiplier < minimum_width_multiplier:
+            maximum_width_multiplier = minimum_width_multiplier
+        if maximum_height_multiplier < minimum_height_multiplier:
+            maximum_height_multiplier = minimum_height_multiplier
         generator = random.Random(
             f"{seed}:resolution:{component_count}:{sampling.width_axis}:{minimum_width}:"
-            f"{maximum_width}:{sampling.height_axis}:{minimum_height}:{maximum_height}:"
+            f"{maximum_width}:{width_step}:{sampling.height_axis}:{minimum_height}:"
+            f"{maximum_height}:{height_step}:"
             f"{maximum_pixel_count}"
         )
         values = dict(minimum_assignment.values)
-        values[sampling.width_axis] = generator.randint(minimum_width, maximum_width)
-        values[sampling.height_axis] = generator.randint(minimum_height, maximum_height)
+        values[sampling.width_axis] = (
+            generator.randint(minimum_width_multiplier, maximum_width_multiplier)
+            * width_step
+        )
+        values[sampling.height_axis] = (
+            generator.randint(minimum_height_multiplier, maximum_height_multiplier)
+            * height_step
+        )
+        return AxisAssignment(values=values)
+
+    def _requested_resolution_assignment(
+        self,
+        *,
+        minimum_assignment: AxisAssignment,
+        requested_assignment: AxisAssignment,
+    ) -> AxisAssignment:
+        values = dict(minimum_assignment.values)
+        for axis, requested_value in requested_assignment.values.items():
+            minimum_value = minimum_assignment.require_axis(axis)
+            if requested_value < minimum_value:
+                raise ObservationGenerationError(
+                    f"{axis} requested resolution {requested_value} is below "
+                    f"required minimum {minimum_value}"
+                )
+            values[axis] = requested_value
         return AxisAssignment(values=values)
 
     def _minimum_discriminatable_resolution_assignment(
@@ -706,6 +785,37 @@ def _variation_random(
 ) -> random.Random:
     return random.Random(
         ":".join((str(seed), str(sample_index), str(sequence_index), transform_digest))
+    )
+
+
+def _variation_transform_at_extent(
+    transform: VariationTransformDeclaration,
+    *,
+    extent: float,
+) -> VariationTransformDeclaration:
+    if extent == 1.0:
+        return transform
+    spatial = transform.spatial_affine
+    matrix: list[tuple[tuple[float, float], ...]] = []
+    for row_index, row in enumerate(spatial.matrix):
+        scaled_row: list[tuple[float, float]] = []
+        for column_index, (lower, upper) in enumerate(row):
+            center = 1.0 if row_index == column_index else 0.0
+            scaled_row.append(
+                (
+                    center + (lower - center) * extent,
+                    center + (upper - center) * extent,
+                )
+            )
+        matrix.append(tuple(scaled_row))
+    return VariationTransformDeclaration(
+        kind=transform.kind,
+        spatial_affine=SpatialAffineVariation(
+            kind=spatial.kind,
+            coordinate_system=spatial.coordinate_system,
+            spatial_rank=spatial.spatial_rank,
+            matrix=tuple(matrix),
+        ),
     )
 
 
@@ -1344,6 +1454,10 @@ def _sampled_resolution_maximum(
         math.floor(minimum_width * side_multiplier),
         math.floor(minimum_height * side_multiplier),
     )
+
+
+def _minimum_axis_multiplier(value: int, *, step: int) -> int:
+    return max(1, math.ceil(value / step))
 
 
 def _batch_sample_pixel_limit(

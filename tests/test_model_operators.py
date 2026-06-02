@@ -168,7 +168,7 @@ def test_fixed_support_affine_projects_variable_canvas_to_fixed_convnet_shape() 
                         "dimension": 2,
                         "out_channels": 6,
                         "out_height": 12,
-                        "out_width": 8,
+                        "out_width": 12,
                     },
                 },
                 {
@@ -197,13 +197,13 @@ def test_fixed_support_affine_projects_variable_canvas_to_fixed_convnet_shape() 
         "affine-readout",
     ]
     assert [operator.output_shape for operator in plan.operators] == [
-        (6, 12, 8),
-        (4, 12, 8),
-        (384,),
+        (6, 12, 12),
+        (4, 12, 12),
+        (576,),
         (10,),
     ]
     assert plan.operators[0].parameter_count == 12
-    assert plan.operators[0].inference_compute == 2609
+    assert plan.operators[0].inference_compute == 3185
     assert output.shape == (2, 10)
 
 

@@ -244,15 +244,13 @@ export type TrainingDiagnosticsRecord = {
   stop_reason: string;
   steps_run: number;
   validation_checks: number;
-  best_validation_loss: number;
-  best_validation_step: number;
-  best_validation_check: number;
   final_validation_loss: number;
   final_validation_step: number;
   final_validation_check: number;
   protocol: TrainingProtocolRecord;
   validation_history: TrainingHistoryPointRecord[];
   artifacts: TrainingArtifactReferenceRecord[];
+  evaluation_curriculum?: Record<string, unknown>;
 };
 
 export type TrainingProtocolRecord = {
@@ -264,8 +262,10 @@ export type TrainingProtocolRecord = {
   seed: number;
   batch_size: number;
   max_steps?: number;
-  validation_interval: number;
-  validation_sample_count: number;
+  checkpoint_interval: number;
+  gate_check_interval: number;
+  gate_sample_count: number;
+  gate_decision_rule: string;
   min_delta: number;
   patience: number;
   min_steps?: number;
@@ -276,9 +276,6 @@ export type TrainingHistoryPointRecord = {
   step: number;
   validation_check: number;
   validation_loss: number;
-  best_validation_loss: number;
-  best_validation_step: number;
-  best_validation_check: number;
   stale_checks: number;
   learning_rates?: number[];
 };
@@ -484,9 +481,6 @@ function parseTrainingDiagnostics(value: unknown, path: string): TrainingDiagnos
   requireNumbers(record, path, [
     'steps_run',
     'validation_checks',
-    'best_validation_loss',
-    'best_validation_step',
-    'best_validation_check',
     'final_validation_loss',
     'final_validation_step',
     'final_validation_check',
@@ -495,6 +489,10 @@ function parseTrainingDiagnostics(value: unknown, path: string): TrainingDiagnos
     protocol: requireRecord(record.protocol, `${path}.protocol`, transportError) as TrainingProtocolRecord,
     validation_history: requireArray(record.validation_history, `${path}.validation_history`, transportError) as TrainingHistoryPointRecord[],
     artifacts: requireArray(record.artifacts, `${path}.artifacts`, transportError) as TrainingArtifactReferenceRecord[],
+    evaluation_curriculum:
+      record.evaluation_curriculum === undefined
+        ? undefined
+        : requireRecord(record.evaluation_curriculum, `${path}.evaluation_curriculum`, transportError),
   }) as TrainingDiagnosticsRecord;
 }
 

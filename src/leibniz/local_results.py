@@ -47,7 +47,7 @@ __all__ = [
     "LocalPublicationPushSummary",
     "LocalResultImportError",
     "LocalResultImportSummary",
-    "base_normalized_absolute_score",
+    "competent_complexity_score",
     "import_submission_publications",
     "initialize_publication_checkout",
     "load_console_result_view",
@@ -818,9 +818,6 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
         "stop_reason": training_run.stop_reason,
         "steps_run": training_run.steps_run,
         "validation_checks": training_run.validation_checks,
-        "best_validation_loss": training_run.best_validation_loss,
-        "best_validation_step": training_run.best_validation_step,
-        "best_validation_check": training_run.best_validation_check,
         "final_validation_loss": final.validation_loss,
         "final_validation_step": final.step,
         "final_validation_check": final.validation_check,
@@ -833,6 +830,11 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
     throughput = run.training_summary.get("throughput")
     if isinstance(throughput, Mapping):
         record["throughput"] = dict(cast(Mapping[str, object], throughput))
+    evaluation_curriculum = run.training_summary.get("evaluation_curriculum")
+    if isinstance(evaluation_curriculum, Mapping):
+        record["evaluation_curriculum"] = dict(
+            cast(Mapping[str, object], evaluation_curriculum)
+        )
     return record
 
 
@@ -905,7 +907,10 @@ def _run_console_view_model(
                     ),
                     ("Steps", _console_number_value(protocol.get("max_steps"))),
                     ("Batch", _console_number_value(protocol.get("batch_size"))),
-                    ("Interval", _console_number_value(protocol.get("validation_interval"))),
+                    ("Checkpoint", _console_number_value(protocol.get("checkpoint_interval"))),
+                    ("Gate Check", _console_number_value(protocol.get("gate_check_interval"))),
+                    ("Gate Samples", _console_number_value(protocol.get("gate_sample_count"))),
+                    ("Gate Rule", _console_string_value(protocol.get("gate_decision_rule"))),
                     ("Validation", _console_string_value(protocol.get("validation_source"))),
                 ),
             )
@@ -916,14 +921,6 @@ def _run_console_view_model(
                 entries=(
                     ("Status", _console_string_value(diagnostics.get("status"))),
                     ("Stop", _console_string_value(diagnostics.get("stop_reason"))),
-                    (
-                        "Best Loss",
-                        _console_number_value(
-                            diagnostics.get("best_validation_loss"),
-                            precision=4,
-                        ),
-                    ),
-                    ("Best Step", _console_number_value(diagnostics.get("best_validation_step"))),
                     (
                         "Final Loss",
                         _console_number_value(
@@ -991,7 +988,7 @@ def _run_console_view_model(
                     "title": "Validation History",
                     "table": {
                         "aria_label": "Validation history",
-                        "columns": ["Step", "Loss", "Best", "Stale"],
+                        "columns": ["Step", "Loss", "Stale"],
                         "rows": [_console_validation_history_row(point) for point in history],
                     },
                 }
@@ -1061,7 +1058,6 @@ def _console_validation_history_row(point: object) -> list[str]:
     return [
         _console_number_value(point_record.get("step")),
         _console_number_value(point_record.get("validation_loss"), precision=4),
-        _console_number_value(point_record.get("best_validation_loss"), precision=4),
         _console_number_value(point_record.get("stale_checks")),
     ]
 
@@ -1211,7 +1207,7 @@ def _model_result_records(
     for run in runs:
         grouped.setdefault(run.model_key, []).append(run)
 
-    base_complexity = _benchmark_base_complexity(
+    reference_baseline_complexity = _benchmark_base_complexity(
         manifest=manifest,
         repository_root=repository_root,
     )
@@ -1220,9 +1216,8 @@ def _model_result_records(
     for model_key, model_runs in grouped.items():
         ordered_runs = tuple(sorted(model_runs, key=_run_sort_key))
         points = _competence_points(ordered_runs)
-        score = base_normalized_absolute_score(
+        score = competent_complexity_score(
             points,
-            base_complexity=base_complexity,
             chance_mass=chance_mass,
         )
         best_run = max(
@@ -1235,11 +1230,14 @@ def _model_result_records(
             "benchmark_id": str(best_run.benchmark_id),
             "score": score,
             "score_basis": {
-                "kind": "base-normalized-absolute-competent-complexity-v1",
-                "base_complexity": base_complexity,
+                "kind": "competence-integral-over-complexity-v1",
+                "score_unit": "bits",
+                "complexity_axis": "log2-distinguishable-states",
+                "reference_baseline_complexity": reference_baseline_complexity,
                 "chance_mass": chance_mass,
                 "point_score": "accepted-mass",
                 "local_competence": "above-chance-accepted-mass",
+                "integration": "trapezoid-over-observed-complexity",
             },
             "observed_complexities": [point["complexity"] for point in points],
             "points": list(points),
@@ -1519,16 +1517,13 @@ def _run_competence_points(run: _BenchmarkRunRecord) -> tuple[tuple[float, float
     return ((run.complexity, run.score, run.measurement_count),)
 
 
-def base_normalized_absolute_score(
+def competent_complexity_score(
     points: tuple[dict[str, object], ...],
     *,
-    base_complexity: float,
     chance_mass: float,
 ) -> float:
     if not points:
         return 0.0
-    if base_complexity <= 0.0:
-        raise LocalResultImportError("base_complexity must be positive")
     ordered = tuple(sorted(points, key=_point_complexity))
     first_complexity = _point_complexity(ordered[0])
     first_competence = _above_chance_competence(
@@ -1551,7 +1546,7 @@ def base_normalized_absolute_score(
             chance_mass=chance_mass,
         )
         area += width * (left_competence + right_competence) / 2.0
-    return area / base_complexity
+    return area
 
 
 def _above_chance_competence(score: float, *, chance_mass: float) -> float:
@@ -1578,6 +1573,7 @@ def _benchmark_base_complexity(
         component_count=1,
         width=width,
         height=height,
+        variation_extent=0.0,
     )
 
 
@@ -2164,9 +2160,6 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
     numeric_fields = (
         "steps_run",
         "validation_checks",
-        "best_validation_loss",
-        "best_validation_step",
-        "best_validation_check",
         "final_validation_loss",
         "final_validation_step",
         "final_validation_check",
@@ -2185,19 +2178,51 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
         protocol_path,
         ("kind", "objective", "optimizer", "schedule", "validation_source"),
     )
-    protocol_numbers = (
-        "learning_rate",
-        "seed",
-        "batch_size",
-        "validation_interval",
-        "validation_sample_count",
-        "min_delta",
-        "patience",
-    )
+    protocol_numbers = ("learning_rate", "min_delta")
     for field in protocol_numbers:
         _as_nonnegative_number(protocol.get(field), f"{prefix}.protocol.{field}")
+    protocol_positive_ints = (
+        "seed",
+        "batch_size",
+        "checkpoint_interval",
+        "gate_check_interval",
+        "gate_sample_count",
+    )
+    for field in protocol_positive_ints:
+        _as_positive_int(protocol.get(field), f"{prefix}.protocol.{field}")
+    _as_nonnegative_number(protocol.get("patience"), f"{prefix}.protocol.patience")
+    checkpoint_interval = _as_positive_int(
+        protocol.get("checkpoint_interval"),
+        f"{prefix}.protocol.checkpoint_interval",
+    )
+    gate_check_interval = _as_positive_int(
+        protocol.get("gate_check_interval"),
+        f"{prefix}.protocol.gate_check_interval",
+    )
+    if checkpoint_interval % gate_check_interval != 0:
+        raise LocalResultImportError(
+            f"{prefix}.protocol.checkpoint_interval: "
+            "expected integer multiple of gate_check_interval"
+        )
+    _as_string(
+        protocol.get("gate_decision_rule"),
+        f"{prefix}.protocol.gate_decision_rule",
+    )
     for field in ("validation_history", "artifacts"):
         _as_sequence(record.get(field), _field_path(prefix, field))
+    if "evaluation_curriculum" in record:
+        curriculum = _as_mapping(
+            record.get("evaluation_curriculum"),
+            _field_path(prefix, "evaluation_curriculum"),
+        )
+        _as_string(
+            curriculum.get("kind"),
+            _field_path(prefix, "evaluation_curriculum.kind"),
+        )
+        _as_sequence(
+            curriculum.get("rungs"),
+            _field_path(prefix, "evaluation_curriculum.rungs"),
+        )
 
 
 def _validate_proposal_result(record: Mapping[str, object], prefix: str) -> None:

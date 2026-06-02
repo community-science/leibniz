@@ -94,6 +94,7 @@ def test_digits_materialization_declaration_loads_source_artifact() -> None:
     )
     assert declaration.requirements == ()
     assert declaration.minimum_resolution() == AxisAssignment(values={"W": 24, "H": 24})
+    assert declaration.resolution_lattice_steps() == {"W": 24, "H": 24}
     assert document.digest == ContentDigest.from_value(declaration.to_record())
 
 
@@ -186,6 +187,31 @@ def test_materialization_plan_documents_validate_digits_fixtures() -> None:
     assert l1.plan.resolution_assignment.values == {"W": 24, "H": 24}
     assert l3.plan.resolution_assignment.values == {"W": 72, "H": 24}
     assert l3.digest == ContentDigest.from_value(l3.plan.to_record())
+
+
+def test_materialization_plan_rejects_off_lattice_resolution() -> None:
+    declaration = MaterializationDeclarationDocument.from_bytes(
+        (_digits_benchmark_root / "materialization.json").read_bytes()
+    ).declaration
+    plan = MaterializationPlan(
+        id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.bad@0.1.0"),
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
+        materialization_declaration=ArtifactReference(
+            kind="materialization-declaration",
+            protocol_id=ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0"),
+            record_digest=declaration.digest,
+        ),
+        latent_factor_declaration=ArtifactReference(
+            kind="latent-factor-declaration",
+            protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
+        ),
+        resolution_assignment=AxisAssignment(values={"W": 48, "H": 28}),
+        seed=101,
+    )
+
+    assert str(capture_materialization_error(lambda: plan.validate_declaration(declaration))) == (
+        "H=28 is not an integer multiple of layout lattice step 24"
+    )
 
 
 def test_materialization_plan_rejects_under_resolved_request() -> None:

@@ -170,13 +170,13 @@ def sampled_competence_curriculum_record(
     }
 
 
-def validation_competence(*, best_validation_loss: float, outcome_count: int) -> float:
+def validation_competence(*, validation_loss: float, outcome_count: int) -> float:
     """Convert finite-outcome cross-entropy to bounded local competence."""
 
     reference_cross_entropy = math.log(outcome_count)
     if reference_cross_entropy <= 0:
         return 0.0
-    return max(0.0, min(1.0, 1.0 - best_validation_loss / reference_cross_entropy))
+    return max(0.0, min(1.0, 1.0 - validation_loss / reference_cross_entropy))
 
 
 def _positive_int(value: object, *, field: str) -> int:

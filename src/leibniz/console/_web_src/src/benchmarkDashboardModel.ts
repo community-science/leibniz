@@ -61,7 +61,6 @@ export type BenchmarkCostAxisGroup = {
 
 const fallbackLogCostDomain: [number, number] = [0, 20];
 const fallbackScoreDomain: [number, number] = [0, 1.05];
-const scoreTickTarget = 6;
 const denseLogTickThreshold = 14;
 const standardCostAxisGroups: BenchmarkCostAxisGroup[] = [
   {
@@ -246,7 +245,7 @@ export function benchmarkPlotModel(
     xTicks: [...xTicks.major, ...xTicks.minor].sort((left, right) => left - right),
     xMajorTicks: xTicks.major,
     xMinorTicks: xTicks.minor,
-    yTicks: niceTicks(yDomain, scoreTickTarget),
+    yTicks: scoreTicks(yDomain),
     staircase: staircasePoints(frontierPoints),
   };
 }
@@ -455,6 +454,20 @@ function scoreDomain(values: number[]): [number, number] {
   return [Math.min(0, Math.floor(Math.min(...finite))), max * 1.05];
 }
 
+function scoreTicks([min, max]: [number, number]): number[] {
+  const first = Math.ceil(min);
+  const last = Math.floor(max);
+  const labelStep = last - first > denseLogTickThreshold ? 2 : 1;
+  const ticks: number[] = [];
+  for (let exponent = first; exponent <= last; exponent += labelStep) {
+    ticks.push(exponent);
+  }
+  if (ticks.length === 0) {
+    ticks.push(Math.round((min + max) / 2));
+  }
+  return ticks;
+}
+
 function logCostTicks([min, max]: [number, number]): { major: number[]; minor: number[] } {
   const first = Math.ceil(min);
   const last = Math.floor(max);
@@ -470,19 +483,6 @@ function logCostTicks([min, max]: [number, number]): { major: number[]; minor: n
     }
   }
   return { major, minor };
-}
-
-function niceTicks([min, max]: [number, number], target: number): number[] {
-  const span = max - min || 1;
-  const rough = span / target;
-  const power = 10 ** Math.floor(Math.log10(rough));
-  const normalized = rough / power;
-  const step = (normalized < 1.5 ? 1 : normalized < 3 ? 2 : normalized < 7 ? 5 : 10) * power;
-  const ticks: number[] = [];
-  for (let value = Math.ceil(min / step) * step; value <= max; value += step) {
-    ticks.push(Number(value.toPrecision(12)));
-  }
-  return ticks;
 }
 
 function staircasePoints(points: BenchmarkPlotModelPoint[]): [number, number][] {

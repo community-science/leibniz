@@ -1,13 +1,17 @@
 import base64
 import struct
 from collections import Counter
+from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
+import leibniz.console.data as console_data
 from leibniz.console.data import ConsoleDataBuilder, ConsoleDataValidationError
-from leibniz.documents import load_object_document
+from leibniz.documents import canonical_document_bytes, load_object_document
+from leibniz.identifiers import ProtocolIdentifier
 
 _repository_root = Path(__file__).parents[1]
 
@@ -29,6 +33,61 @@ def test_console_data_discovery_is_deterministic() -> None:
     )
 
     assert first.to_bytes() == second.to_bytes()
+
+
+def test_console_data_reuses_persistent_generated_observation_batch_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_path = tmp_path / "generatedObservationBatches.leibniz.json"
+    monkeypatch.setattr("leibniz.console.data._generated_batch_cache_path", cache_path)
+    cast(
+        dict[tuple[str, str, str], Mapping[str, object]],
+        console_data._generated_batch_cache,  # type: ignore[reportPrivateUsage]
+    ).clear()
+    cache_key = (
+        "benchmarks.fake@0.1.0",
+        "balanced-component-samples",
+        "source-fingerprint",
+    )
+    cached_batch: Mapping[str, object] = {
+        "mode": "balanced",
+        "label": "Cached samples",
+        "component_count": 1,
+        "seed": 401,
+        "sample_count": 0,
+        "presentation": {"sample_card_density": "standard", "aggregate_mode": False},
+        "samples": [],
+    }
+    cache_path.write_bytes(
+        canonical_document_bytes(
+            {
+                "format": "leibniz.console.generated-observation-batch-cache",
+                "format_version": 1,
+                "batches": {
+                    "\0".join(cache_key): cached_batch,
+                },
+            }
+        )
+        + b"\n"
+    )
+    fake_generator = SimpleNamespace(
+        benchmark_manifest=SimpleNamespace(
+            id=ProtocolIdentifier.parse("benchmarks.fake@0.1.0"),
+        )
+    )
+    balanced_observation_batch = cast(
+        Callable[..., Mapping[str, object]],
+        ConsoleDataBuilder(_repository_root)._balanced_observation_batch,  # type: ignore[reportPrivateUsage]
+    )
+
+    batch = balanced_observation_batch(
+        generator=cast(Any, fake_generator),
+        atom_count=10,
+        source_fingerprint="source-fingerprint",
+    )
+
+    assert batch == cached_batch
 
 
 def test_console_data_discovers_supported_public_fixture_documents() -> None:
@@ -244,9 +303,9 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert all(".sample-0@" in str(plan["id"]) for plan in materialization_plans)
     assert len({plan["seed"] for plan in materialization_plans}) == len(materialization_plans)
     assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
-    assert samples[0]["field_shape"] == [1, 128, 139]
-    assert _png_dimensions(str(samples[0]["image_data_url"])) == (139, 128)
-    assert _png_dimensions(str(samples[1]["image_data_url"])) == (43, 171)
+    assert samples[0]["field_shape"] == [1, 144, 120]
+    assert _png_dimensions(str(samples[0]["image_data_url"])) == (120, 144)
+    assert _png_dimensions(str(samples[1]["image_data_url"])) == (48, 120)
     assert "preview_crop" not in samples[0]
     assert "preview_crop" not in samples[1]
     latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])
