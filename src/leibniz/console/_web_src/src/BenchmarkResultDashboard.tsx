@@ -391,7 +391,7 @@ function BenchmarkFrontierPlot({
                     x={plotMargin.left - plotYTickLabelOffset}
                     y={tickY + plotTickLabelBaselineOffset}
                   >
-                    2<tspan dy="-5" fontSize="0.72em">{Math.round(tick)}</tspan><tspan dy="5"> </tspan>
+                    {tick.toFixed(0)}
                   </text>
                 </g>
               );
