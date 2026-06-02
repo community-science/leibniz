@@ -605,7 +605,7 @@ def test_training_curriculum_is_not_step_indexed() -> None:
     assert "initial_evaluation_rung" in source
 
 
-def test_evaluation_curriculum_candidates_are_logarithmic_and_complexity_ordered() -> None:
+def test_evaluation_curriculum_candidates_are_complexity_sorted() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
     candidates = cast(Any, benchmark_runner)._logarithmic_curriculum_candidates(
@@ -613,20 +613,48 @@ def test_evaluation_curriculum_candidates_are_logarithmic_and_complexity_ordered
         component_count=1,
         start_index=0,
     )
-    first_resolutions = [
-        candidate.resolution_assignment.values
-        for candidate in candidates[:8]
-    ]
 
     assert [candidate.complexity for candidate in candidates] == sorted(
         candidate.complexity for candidate in candidates
     )
-    assert first_resolutions[0] == {"W": 24, "H": 24}
-    assert {"W": 24, "H": 48} in first_resolutions
-    assert {"W": 48, "H": 24} in first_resolutions
+    assert candidates[0].resolution_assignment.values == {"W": 24, "H": 24}
+    assert candidates[0].nuisance_extent == 0.0
+
+
+def test_training_curriculum_candidates_reset_nuisance_on_resolution_growth() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
+        generator=generator,
+        component_count=1,
+        start_index=0,
+    )
+    first_pairs = [
+        (
+            candidate.resolution_assignment.values,
+            candidate.nuisance_extent,
+        )
+        for candidate in candidates[:12]
+    ]
+
+    assert first_pairs == [
+        ({"W": 24, "H": 24}, 0.0),
+        ({"W": 24, "H": 24}, 0.25),
+        ({"W": 24, "H": 24}, 0.5),
+        ({"W": 24, "H": 24}, 1.0),
+        ({"W": 24, "H": 48}, 0.0),
+        ({"W": 24, "H": 48}, 0.25),
+        ({"W": 24, "H": 48}, 0.5),
+        ({"W": 24, "H": 48}, 1.0),
+        ({"W": 48, "H": 24}, 0.0),
+        ({"W": 48, "H": 24}, 0.25),
+        ({"W": 48, "H": 24}, 0.5),
+        ({"W": 48, "H": 24}, 1.0),
+    ]
     assert all(
-        resolution["W"] % 24 == 0 and resolution["H"] % 24 == 0
-        for resolution in first_resolutions
+        candidate.resolution_assignment.values["W"] % 24 == 0
+        and candidate.resolution_assignment.values["H"] % 24 == 0
+        for candidate in candidates[:12]
     )
 
 

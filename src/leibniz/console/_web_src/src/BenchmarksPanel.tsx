@@ -751,15 +751,6 @@ function ModelValidationChart({
           fill="none"
           points={line}
         />
-        {points.map((point, index) => (
-          <circle
-            className="benchmark-model-validation-point"
-            cx={x(point.step)}
-            cy={y(point.validation_loss)}
-            key={`${point.run.run_id}:${point.step}:${index}`}
-            r={3}
-          />
-        ))}
       </svg>
     </div>
   );

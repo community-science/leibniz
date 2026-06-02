@@ -445,6 +445,7 @@ def run_benchmark(
         outcome_space=outcome_space,
         component_count=_component_count,
         sample_count=plan.sample_count,
+        evaluation_sample_count=plan.resolved_evaluation_sample_count,
         gate_sample_count=plan.resolved_gate_sample_count,
         train_steps=plan.train_steps,
         learning_rate=float(plan.learning_rate),
@@ -598,14 +599,58 @@ def _evaluation_curriculum_rung(
     sample_count: int,
     seed: int,
     index: int,
-    prior_complexity: float | None = None,
 ) -> _CurriculumRung:
-    for candidate in _logarithmic_curriculum_candidates(
+    return _curriculum_rung_from_candidates(
+        architecture=architecture,
         generator=generator,
         component_count=component_count,
-        start_index=index,
-    ):
-        if prior_complexity is not None and candidate.complexity <= prior_complexity:
+        sample_count=sample_count,
+        seed=seed,
+        index=index,
+        candidates=_logarithmic_curriculum_candidates(
+            generator=generator,
+            component_count=component_count,
+            start_index=index,
+        ),
+    )
+
+
+def _training_curriculum_rung(
+    *,
+    architecture: ArchitectureManifest,
+    generator: ObservationGenerator,
+    component_count: int,
+    sample_count: int,
+    seed: int,
+    index: int,
+) -> _CurriculumRung:
+    return _curriculum_rung_from_candidates(
+        architecture=architecture,
+        generator=generator,
+        component_count=component_count,
+        sample_count=sample_count,
+        seed=seed,
+        index=index,
+        candidates=_structured_training_curriculum_candidates(
+            generator=generator,
+            component_count=component_count,
+            start_index=index,
+        ),
+    )
+
+
+def _curriculum_rung_from_candidates(
+    *,
+    architecture: ArchitectureManifest,
+    generator: ObservationGenerator,
+    component_count: int,
+    sample_count: int,
+    seed: int,
+    index: int,
+    candidates: Sequence[_CurriculumCandidate],
+) -> _CurriculumRung:
+    for candidate_index, candidate in enumerate(candidates):
+        if candidate_index < index:
             continue
         rung_seed = seed if index == 0 else seed + 2_000_003 * index
         batch = generator.sample_batch(
@@ -649,6 +694,22 @@ def _logarithmic_curriculum_candidates(
     component_count: int,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
+    candidates = list(
+        _structured_training_curriculum_candidates(
+            generator=generator,
+            component_count=component_count,
+            start_index=start_index,
+        )
+    )
+    return tuple(sorted(candidates, key=lambda candidate: candidate.complexity))
+
+
+def _structured_training_curriculum_candidates(
+    *,
+    generator: ObservationGenerator,
+    component_count: int,
+    start_index: int,
+) -> Sequence[_CurriculumCandidate]:
     minimum_assignment = generator.minimum_discriminatable_resolution_assignment(
         component_count=component_count,
         minimum_assignment=generator.materialization.minimum_resolution(),
@@ -660,46 +721,44 @@ def _logarithmic_curriculum_candidates(
     lattice_steps = generator.materialization.resolution_lattice_steps()
     width_step = lattice_steps.get(width_axis, 1)
     height_step = lattice_steps.get(height_axis, 1)
+    stage_count = max(8, start_index + 8)
     widths = _logarithmic_lattice_axis_values(
         minimum=minimum_width,
         step=width_step,
-        count=max(8, start_index + 8),
+        count=stage_count,
     )
     heights = _logarithmic_lattice_axis_values(
         minimum=minimum_height,
         step=height_step,
-        count=max(8, start_index + 8),
+        count=stage_count,
     )
     candidates: list[_CurriculumCandidate] = []
-    for width_index, width in enumerate(widths):
-        for height_index, height in enumerate(heights):
-            stage = max(width_index, height_index)
-            nuisance_extents = (
-                _nuisance_extent_curriculum
-                if stage == 0
-                else tuple(extent for extent in _nuisance_extent_curriculum if extent > 0.0)
-            )
-            for nuisance_extent in nuisance_extents:
-                complexity = generator.distinguishable_state_complexity(
-                    component_count=component_count,
-                    width=width,
-                    height=height,
-                    variation_extent=nuisance_extent,
-                )
-                candidates.append(
-                    _CurriculumCandidate(
-                        nuisance_extent=nuisance_extent,
-                        resolution_assignment=AxisAssignment(
-                            values={
-                                **minimum_assignment.values,
-                                width_axis: width,
-                                height_axis: height,
-                            }
-                        ),
-                        complexity=complexity,
+    for stage in range(stage_count):
+        for width_index, width in enumerate(widths[: stage + 1]):
+            for height_index, height in enumerate(heights[: stage + 1]):
+                if max(width_index, height_index) != stage:
+                    continue
+                for nuisance_extent in _nuisance_extent_curriculum:
+                    complexity = generator.distinguishable_state_complexity(
+                        component_count=component_count,
+                        width=width,
+                        height=height,
+                        variation_extent=nuisance_extent,
                     )
-                )
-    return tuple(sorted(candidates, key=lambda candidate: candidate.complexity))
+                    candidates.append(
+                        _CurriculumCandidate(
+                            nuisance_extent=nuisance_extent,
+                            resolution_assignment=AxisAssignment(
+                                values={
+                                    **minimum_assignment.values,
+                                    width_axis: width,
+                                    height_axis: height,
+                                }
+                            ),
+                            complexity=complexity,
+                        )
+                    )
+    return tuple(candidates)
 
 
 def _logarithmic_lattice_axis_values(
@@ -830,6 +889,7 @@ def _train_and_predict(
     outcome_space: OutcomeSpace,
     component_count: int,
     sample_count: int,
+    evaluation_sample_count: int,
     gate_sample_count: int,
     train_steps: int | None,
     learning_rate: float,
@@ -862,6 +922,7 @@ def _train_and_predict(
                 outcome_space=outcome_space,
                 component_count=component_count,
                 sample_count=sample_count,
+                evaluation_sample_count=evaluation_sample_count,
                 gate_sample_count=gate_sample_count,
                 train_steps=train_steps,
                 learning_rate=learning_rate,
@@ -894,6 +955,7 @@ def _train_and_predict_on_device(
     outcome_space: OutcomeSpace,
     component_count: int,
     sample_count: int,
+    evaluation_sample_count: int,
     gate_sample_count: int,
     train_steps: int | None,
     learning_rate: float,
@@ -971,40 +1033,48 @@ def _train_and_predict_on_device(
             tensors = formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
         return tensors
 
-    evaluation_rungs: list[_CurriculumRung] = [initial_evaluation_rung]
-    frontier_rung_index = 0
+    training_rungs: list[_CurriculumRung] = [
+        _training_curriculum_rung(
+            architecture=architecture,
+            generator=generator,
+            component_count=component_count,
+            sample_count=sample_count,
+            seed=seed,
+            index=0,
+        )
+    ]
+    training_frontier_index = 0
 
     def current_frontier() -> _CurriculumRung:
-        return evaluation_rungs[frontier_rung_index]
+        return training_rungs[training_frontier_index]
 
     def training_rung_for_step(step: int) -> _CurriculumRung:
-        if frontier_rung_index == 0:
+        if training_frontier_index == 0:
             return current_frontier()
         # Keep most updates on the frontier while reserving deterministic replay
-        # for previously unlocked evaluation rungs.
+        # for previously unlocked training rungs.
         if step % 10 < 7:
             return current_frontier()
-        replay_index = (step // 10) % frontier_rung_index
-        return evaluation_rungs[replay_index]
+        replay_index = (step // 10) % training_frontier_index
+        return training_rungs[replay_index]
 
     def advance_frontier(history: Sequence[TrainingHistoryPoint]) -> bool:
-        nonlocal frontier_rung_index
+        nonlocal training_frontier_index
         latest = history[-1]
         if latest.validation_loss >= math.log(len(outcome_ids)) - convergence_min_delta:
             return False
-        next_index = frontier_rung_index + 1
-        evaluation_rungs.append(
-            _evaluation_curriculum_rung(
+        next_index = training_frontier_index + 1
+        training_rungs.append(
+            _training_curriculum_rung(
                 architecture=architecture,
                 generator=generator,
                 component_count=component_count,
                 sample_count=sample_count,
                 seed=seed,
                 index=next_index,
-                prior_complexity=current_frontier().complexity,
             )
         )
-        frontier_rung_index += 1
+        training_frontier_index += 1
         if scheduler is not None:
             scheduler.reset_for_curriculum_expansion()
         return True
@@ -1081,8 +1151,8 @@ def _train_and_predict_on_device(
                     operation_fallbacks=module.operation_fallback_records(),
                 ),
                 _curriculum_record(
-                    rungs=tuple(evaluation_rungs),
-                    frontier_index=frontier_rung_index,
+                    rungs=tuple(training_rungs),
+                    frontier_index=training_frontier_index,
                 ),
             )
             if progress_callback is not None
@@ -1094,6 +1164,17 @@ def _train_and_predict_on_device(
     if train_steps is None and not training_stage_converged(final_training_stop_reason):
         raise BenchmarkRunnerError("uncapped training curriculum ended before convergence")
     module.eval()
+    evaluation_rungs = tuple(
+        _evaluation_curriculum_rung(
+            architecture=architecture,
+            generator=generator,
+            component_count=component_count,
+            sample_count=evaluation_sample_count,
+            seed=seed,
+            index=index,
+        )
+        for index in range(len(training_rungs))
+    )
     evaluation_results: list[tuple[_CurriculumRung, tuple[tuple[float, ...], ...]]] = []
     for rung in evaluation_rungs:
         candidate_batch = rung.batch

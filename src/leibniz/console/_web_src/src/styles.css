@@ -1447,21 +1447,13 @@ p {
 
 .benchmark-model-validation-loss {
   stroke: var(--measured-accent);
+  stroke-width: var(--line-accent);
+  stroke-dasharray: 6 5;
 }
 
 .benchmark-model-validation-frame {
   fill: var(--frontier-frame-bg);
   stroke: var(--border-color);
-  stroke-width: var(--line-thin);
-}
-
-.benchmark-model-validation-loss {
-  stroke-width: var(--line-accent);
-}
-
-.benchmark-model-validation-point {
-  fill: var(--measured-accent);
-  stroke: var(--preview-bg);
   stroke-width: var(--line-thin);
 }
 
