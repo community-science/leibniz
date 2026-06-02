@@ -671,9 +671,7 @@ def test_loss_threshold_is_not_a_training_option() -> None:
     flag_name = "--target-" + "validation-loss"
     for path in (
         Path(benchmark_runner.__file__),
-        _repository_root / "src" / "leibniz" / "active_loop.py",
         _repository_root / "src" / "leibniz" / "cli.py",
-        _repository_root / "src" / "leibniz" / "proposal_generation.py",
     ):
         source = path.read_text(encoding="utf-8")
         assert snake_name not in source
@@ -1072,7 +1070,7 @@ def test_cli_runs_digits_benchmark_dry_run(
     exit_code = main(
         [
             "benchmark",
-            "run",
+            "train",
             "--architecture",
             str(_digits_architecture),
             "--benchmark-root",
@@ -1089,7 +1087,7 @@ def test_cli_runs_digits_benchmark_dry_run(
     assert exit_code == 0
     assert captured.err == ""
     assert captured.out.startswith(
-        "planned benchmark run "
+        "planned benchmark training run "
         "digits-arch-4a2277aa9fd5-c1-seed101-samples2-stepsconverge-train-"
     )
     assert not (tmp_path / "results").exists()

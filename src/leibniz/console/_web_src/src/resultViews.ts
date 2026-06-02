@@ -13,7 +13,6 @@ export type {
   ImportedPublicationBundleRecord,
   ImportedResultViewRecord,
   ModelResultRecord,
-  ProposalRecord,
   ResultViewRecord,
   RunDetailEntryRecord,
   RunDetailSectionRecord,

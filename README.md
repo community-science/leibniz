@@ -117,15 +117,17 @@ local result directory and skip any push step:
 leibniz results init-publication --local-only
 ```
 
-Run benchmarks against that checkout:
+Run the canonical reference trainer against an explicit architecture:
 
 ```bash
-leibniz benchmark shakedown \
-  --benchmark-root src/leibniz/benchmarks/digits
+leibniz benchmark train \
+  --benchmark-root src/leibniz/benchmarks/digits \
+  --architecture tests/fixtures/architecture/digits_pool/manifest.json
 ```
 
-`benchmark shakedown` is the fast smoke-test path. The default `benchmark run`,
-`benchmark loop`, and `results propose` local training profile is an uncapped
+`benchmark train` is a reference implementation for local benchmark training and
+evaluation. It requires an explicit architecture manifest and does not propose
+or choose architectures. The default local training profile is an uncapped
 convergence run: competence gates are checked every 32 steps, progress
 checkpoints are written every 256 steps, training runs at least 500 steps before
 early stopping, patience is 6 gate checks, and convergence min delta is `1e-3`.
@@ -159,11 +161,17 @@ unless it changes what nuisance states can be distinguished. This keeps the
 model output fixed at a 10-way probability measure while allowing absolute
 score to grow as formation rules add real distinguishable observation states.
 
-While a benchmark loop is training a reserved candidate, validation checkpoints
-are written under `results/training-progress/` and materialized into the local
-benchmark result view as running leaderboard entries with accumulated validation
-history. Completed runs replace that progress state with final measurement,
+While a benchmark run is training, validation checkpoints are written under
+`results/training-progress/` and materialized into the local benchmark result
+view as running leaderboard entries with accumulated validation history.
+Completed runs replace that progress state with final measurement,
 model-inspection, and training-summary records.
+
+Submission evaluation is separate from reference training. External
+submissions publish measurement, model-inspection, sampled-competence, and
+protocol metadata artifacts; local result commands import, validate,
+materialize, and publish those artifacts without prescribing the model
+architecture or how it was trained.
 
 Publish the local dirty state as a commit:
 

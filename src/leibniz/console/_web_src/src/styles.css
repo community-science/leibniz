@@ -18,9 +18,6 @@
   --frontier-grid-minor: rgba(255, 255, 255, 0.025);
   --frontier-frame-bg: rgba(255, 255, 255, 0.01);
   --frontier-tooltip-bg: rgba(10, 10, 12, 0.94);
-  --proposal-accent: #7fc97f;
-  --proposal-accent-bg: rgba(127, 201, 127, 0.12);
-  --proposal-accent-border: rgba(127, 201, 127, 0.35);
   --measured-accent: rgba(108, 180, 240, 0.85);
   --measured-accent-bg: rgba(108, 180, 240, 0.08);
   --measured-accent-bg-strong: rgba(108, 180, 240, 0.16);
@@ -61,7 +58,6 @@
   --frontier-chart-height: 440px;
   --result-table-model-column: 2fr;
   --result-table-metric-column: 1fr;
-  --proposal-card-min: 240px;
   --model-operation-min: 220px;
   --artifact-reference-min: 220px;
   --benchmark-sample-tile-size: 128px;
@@ -355,47 +351,6 @@ p {
   stroke-width: var(--line-accent);
 }
 
-.frontier-chart-proposal {
-  cursor: pointer;
-  fill: var(--proposal-accent);
-  stroke: var(--preview-bg);
-  stroke-width: var(--line-thin);
-  transition:
-    fill 120ms ease,
-    r 120ms ease,
-    stroke 120ms ease;
-}
-
-.frontier-chart-proposal.hovered,
-.frontier-chart-proposal.selected {
-  fill: white;
-  stroke: var(--proposal-accent);
-  stroke-width: var(--line-accent);
-}
-
-.frontier-chart-proposal-guide {
-  stroke: var(--proposal-accent);
-  stroke-dasharray: var(--space-2xs) var(--space-2xs);
-  stroke-opacity: 0.55;
-  stroke-width: var(--line-thin);
-  pointer-events: none;
-}
-
-.frontier-chart-proposal-band,
-.frontier-chart-proposal-cap {
-  stroke: var(--proposal-accent);
-  stroke-width: 1.4;
-  pointer-events: none;
-}
-
-.frontier-chart-proposal-band {
-  stroke-opacity: 0.82;
-}
-
-.frontier-chart-proposal-cap {
-  stroke-opacity: 0.9;
-}
-
 .frontier-chart-legend {
   position: absolute;
   top: var(--space-lg);
@@ -431,10 +386,6 @@ p {
 
 .frontier-chart-legend i.measured {
   background: var(--measured-accent);
-}
-
-.frontier-chart-legend i.proposal {
-  background: var(--proposal-accent);
 }
 
 .frontier-chart-axis-selector {
@@ -611,119 +562,6 @@ p {
 
 .benchmark-sort-header.active {
   color: var(--text-primary);
-}
-
-.proposal-card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(var(--proposal-card-min), 1fr));
-  gap: var(--space-lg);
-}
-
-.proposal-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-lg);
-  width: 100%;
-  border: var(--line-thin) solid var(--border-color-strong);
-  border-radius: var(--radius-md);
-  background: var(--control-bg);
-  color: inherit;
-  cursor: pointer;
-  padding: var(--space-xl);
-  text-align: left;
-}
-
-.proposal-card.selected {
-  border-color: var(--accent-border-strong);
-  background: var(--accent-bg);
-}
-
-.proposal-card:hover {
-  border-color: var(--accent-border);
-}
-
-.proposal-card-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-lg);
-}
-
-.proposal-card-heading span,
-.proposal-card code {
-  overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--font-control);
-}
-
-.proposal-card-heading strong {
-  color: var(--neon-blue);
-}
-
-.proposal-card dl {
-  display: grid;
-  grid-template-columns: minmax(var(--inspection-metadata-label-min), auto) minmax(0, 1fr);
-  gap: var(--space-xs) var(--space-lg);
-  margin: 0;
-}
-
-.proposal-card dt {
-  color: var(--text-dim);
-  font-size: var(--font-label);
-  font-weight: 700;
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-}
-
-.proposal-card dd,
-.proposal-card p {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: white;
-  font-size: var(--font-control);
-}
-
-.proposal-card dd {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-.proposal-acquisition-components {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(var(--result-source-metric-min), 1fr));
-  gap: var(--space-sm);
-  margin: 0;
-  border-top: var(--line-thin) solid var(--border-color);
-  padding-top: var(--space-md);
-}
-
-.proposal-acquisition-components div {
-  min-width: 0;
-  border-left: var(--line-accent) solid var(--proposal-accent-border);
-  padding-left: var(--space-sm);
-}
-
-.proposal-acquisition-components dt {
-  overflow: hidden;
-  color: var(--text-dim);
-  font-size: var(--font-label);
-  font-weight: 700;
-  letter-spacing: var(--tracking-label);
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.proposal-acquisition-components dd {
-  margin: var(--space-2xs) 0 0;
-  color: var(--proposal-accent);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--font-control);
-}
-
-.proposal-card-command {
-  display: block;
-  border-top: var(--line-thin) solid var(--border-color);
-  padding-top: var(--space-md);
 }
 
 .run-detail-card {
@@ -1177,7 +1015,7 @@ p {
   border: var(--line-thin) solid var(--measured-accent-border);
   border-radius: var(--radius-md);
   background:
-    linear-gradient(135deg, var(--measured-accent-bg-strong), var(--proposal-accent-bg)),
+    linear-gradient(135deg, var(--measured-accent-bg-strong), var(--frontier-accent-bg)),
     var(--control-bg);
   padding: var(--space-lg);
 }
@@ -1290,7 +1128,7 @@ p {
 }
 
 .benchmark-model-lineage-card.input {
-  border-color: var(--proposal-accent-border);
+  border-color: var(--frontier-accent-border);
 }
 
 .benchmark-model-lineage-card.operation {
@@ -1402,7 +1240,7 @@ p {
 
 .benchmark-model-cost-grid div {
   min-width: 0;
-  border-left: var(--line-accent) solid var(--proposal-accent-border);
+  border-left: var(--line-accent) solid var(--frontier-accent-border);
   padding-left: var(--space-sm);
 }
 
