@@ -68,7 +68,6 @@ _publication_directories = (
     "imports/publication_bundles",
     "measurements",
     "models",
-    "proposals",
     "publication_bundles",
     "training",
     "views",
@@ -437,7 +436,6 @@ def materialize_benchmark_result_views(
                 manifest=manifest,
                 repository_root=repository_root,
                 runs=benchmark_runs,
-                proposals=_proposal_records(results_root, benchmark_id=benchmark_id),
             )
         )
 
@@ -1153,7 +1151,6 @@ def _benchmark_result_record(
     manifest: BenchmarkManifest,
     repository_root: Path,
     runs: tuple[_BenchmarkRunRecord, ...],
-    proposals: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
     models = tuple(
         _model_result_records(
@@ -1173,8 +1170,6 @@ def _benchmark_result_record(
         "training_history": [run.to_record(complexity_axis=None) for run in runs],
         "model_inspections": _model_inspection_records(runs),
     }
-    if proposals:
-        record["proposals"] = list(proposals)
     return record
 
 
@@ -1415,24 +1410,6 @@ def _node_list_label(value: object) -> str:
         return "unknown"
     labels = [str(item) for item in cast(list[object], value) if isinstance(item, str) and item]
     return ", ".join(labels) if labels else "none"
-
-
-def _proposal_records(
-    results_root: Path,
-    *,
-    benchmark_id: ProtocolIdentifier,
-) -> tuple[Mapping[str, object], ...]:
-    proposal_path = (
-        results_root
-        / "proposals"
-        / _identifier_atom(benchmark_id)
-        / ("proposal_set" + _document_suffix)
-    )
-    if not proposal_path.is_file():
-        return ()
-    record = load_object_document(proposal_path.read_bytes(), description="proposal set")
-    proposals = _as_sequence(record.get("proposals"), "proposals")
-    return tuple(_as_mapping(proposal, "proposals") for proposal in proposals)
 
 
 def _competence_points(
@@ -2052,10 +2029,6 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
             ModelInspectionRecord.from_record(inspection_record)
         except ModelInspectionValidationError as error:
             raise LocalResultImportError(f"{field}: invalid model inspection: {error}") from error
-    for index, proposal in enumerate(_record_sequence(record, "proposals", default=())):
-        _validate_proposal_result(proposal, f"proposals.{index}")
-
-
 def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
     _require_string_fields(record, prefix, ("model_key", "architecture_digest", "benchmark_id"))
     _as_nonnegative_number(record.get("score"), _field_path(prefix, "score"))
@@ -2223,25 +2196,6 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
             curriculum.get("rungs"),
             _field_path(prefix, "evaluation_curriculum.rungs"),
         )
-
-
-def _validate_proposal_result(record: Mapping[str, object], prefix: str) -> None:
-    _require_string_fields(record, prefix, ("id", "candidate_kind", "candidate_id", "rationale"))
-    _as_nonnegative_number(record.get("rank"), _field_path(prefix, "rank"))
-    optional_numbers = (
-        "predicted_score",
-        "uncertainty",
-        "acquisition_value",
-        "novelty",
-        "expected_frontier_improvement",
-    )
-    for field in optional_numbers:
-        if field in record:
-            _as_nonnegative_number(record[field], _field_path(prefix, field))
-    if "command" in record:
-        command = _as_sequence(record["command"], _field_path(prefix, "command"))
-        if not all(isinstance(argument, str) and argument for argument in command):
-            raise LocalResultImportError("proposals.command must contain strings")
 
 
 def _record_sequence(

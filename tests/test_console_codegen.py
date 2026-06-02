@@ -37,7 +37,8 @@ def test_generated_console_result_view_records_module_contains_parser_surface() 
     assert "console_view_model?: RunDetailViewModelRecord;" in generated
     assert "from '../transport.ts'" in generated
     assert "parseImportedPublicationBundleRecord" in generated
-    assert "proposals: arrayOf(record.proposals ?? []" in generated
+    assert "ProposalRecord" not in generated
+    assert "record.proposals" not in generated
     assert "parseRunDetailViewModel" in generated
     assert "arrayOf(record.model_inspections ?? []" in generated
     assert "layer_count" not in generated

@@ -6,7 +6,6 @@ import {
   emptyFrontiersForCostAxes,
   modelComparisonRows,
   nextModelResultSort,
-  proposalAssociations,
   runDetails,
   runSelectionId,
   selectionForId,
@@ -103,35 +102,6 @@ const result: BenchmarkResultRecord = {
     },
   ],
   model_inspections: [],
-  proposals: [
-    {
-      acquisition_value: 0.2,
-      candidate_id: 'model-a',
-      candidate_kind: 'architecture',
-      command: [],
-      expected_frontier_improvement: 0.1,
-      id: 'proposal-a',
-      novelty: 0.3,
-      predicted_score: 0.8,
-      rank: 1,
-      rationale: 'probe nearby candidate',
-      search_diagnostics: {
-        nearest_measured_support: {
-          architecture_digest: 'sha256:abcd',
-          log_parameter_distance: 0.5,
-          parameter_count: 10,
-          score: 0.75,
-        },
-        sampled_resource_stratum: { count: 2, index: 0 },
-        search_distribution_id: 'architecture-search-distributions.sha-abc@0.1.0',
-        semantic_coordinates: [
-          { name: 'operator.0.support', value: 'local-window' },
-          { name: 'operator.0.local_support_size', value: 2 },
-        ],
-      },
-      uncertainty: 0.05,
-    },
-  ],
   training_history: [
     {
       architecture: { layers: [] },
@@ -336,8 +306,6 @@ assertEqual(
 const plotModel = benchmarkPlotModel(result, 'parameter_count');
 assertEqual(plotModel.points.length, 2, 'plot point count');
 assertEqual(plotModel.frontierPoints.length, 1, 'plot frontier count');
-assertEqual(plotModel.proposals.length, 1, 'plot proposal count');
-assertEqual(plotModel.proposals[0]?.cost, 10, 'plot proposal cost');
 assertEqual(plotModel.staircase.length, 1, 'plot staircase point count');
 assertEqual(plotModel.xTicks.includes(16), true, 'plot log ticks');
 assertEqual(plotModel.xDomain[0], 0, 'plot default x minimum');
@@ -359,19 +327,7 @@ assertEqual(
   'ascending',
   'sort toggle',
 );
-assertEqual(proposalAssociations(result)[0]?.model?.model_key, 'model-a', 'proposal model match');
 assertEqual(runDetails(result)[0]?.model?.model_key, 'model-a', 'run model match');
-assertEqual(
-  selectionForId(result, 'proposal-a').selectedProposal?.candidate_id,
-  'model-a',
-  'proposal selection',
-);
-assertEqual(
-  selectionForId(result, 'proposal-a').selectedProposal?.search_diagnostics
-    ?.search_distribution_id,
-  'architecture-search-distributions.sha-abc@0.1.0',
-  'proposal search diagnostics',
-);
 assertEqual(
   selectionForId(result, runSelectionId(result.training_history[0]!)).selectedRun?.run_slug,
   'train-a',
@@ -382,7 +338,6 @@ const emptyPlotModel = benchmarkPlotModel(
     ...result,
     frontiers: {},
     leaderboard: [],
-    proposals: [],
   },
   'parameter_count',
 );
@@ -420,7 +375,11 @@ const parsedResultViews = parseResultViewRecords([
             training_provenance: undefined,
           },
         ],
-        proposals: undefined,
+        proposals: [
+          {
+            id: 'legacy-proposal',
+          },
+        ],
       },
     ],
     format: 'leibniz.console.benchmark-results',
@@ -433,9 +392,9 @@ if (parsedBenchmarkResult?.format !== 'leibniz.console.benchmark-results') {
   throw new Error('parsed benchmark result view must keep its discriminant');
 }
 assertEqual(
-  Array.isArray(parsedBenchmarkResult.benchmark_results[0]?.proposals),
-  true,
-  'parser defaults missing proposals',
+  Object.hasOwn(parsedBenchmarkResult.benchmark_results[0] ?? {}, 'proposals'),
+  false,
+  'parser drops retired proposals field',
 );
 assertEqual(
   parsedBenchmarkResult.benchmark_results[0]?.model_inspections[0]?.model_artifacts.length,
@@ -458,31 +417,6 @@ assertThrows(
       },
     ]),
   'parser rejects incomplete imported publication bundles',
-);
-assertThrows(
-  () =>
-    parseResultViewRecords([
-      {
-        benchmark_results: [
-          {
-            ...result,
-            proposals: [
-              {
-                candidate_id: 'model-a',
-                candidate_kind: 'architecture',
-                command: [],
-                rank: 1,
-                rationale: 'missing id',
-              },
-            ],
-          },
-        ],
-        format: 'leibniz.console.benchmark-results',
-        format_version: 1,
-        source_path: 'results/benchmark_results.json',
-      },
-    ]),
-  'parser rejects malformed proposals',
 );
 assertThrows(
   () =>

@@ -157,7 +157,6 @@ export type BenchmarkResultRecord = {
   frontiers: Record<string, ModelResultRecord[]>;
   training_history: RunResultRecord[];
   model_inspections: ModelInspectionRecord[];
-  proposals: ProposalRecord[];
 };
 
 export type CostAxisRecord = {
@@ -286,28 +285,6 @@ export type TrainingArtifactReferenceRecord = {
   path?: string;
 };
 
-export type ProposalRecord = {
-  id: string;
-  rank: number;
-  candidate_kind: string;
-  candidate_id: string;
-  rationale: string;
-  predicted_score?: number;
-  uncertainty?: number;
-  acquisition_value?: number;
-  acquisition_model?: string;
-  acquisition_components?: Record<string, unknown>;
-  search_diagnostics?: Record<string, unknown>;
-  novelty?: number;
-  expected_frontier_improvement?: number;
-  selector_name?: string;
-  source_candidate_rank?: number;
-  comparable_cost_best_score?: number;
-  resource_stratum_index?: number;
-  resource_stratum_count?: number;
-  command: string[];
-};
-
 const transportError = (message: string) => new Error(message);
 
 export function isBenchmarkResultView(
@@ -354,14 +331,15 @@ function parseBenchmarkResultViewRecord(
 
 function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultRecord {
   const record = requireRecord(value, path, transportError);
-  return withFields(record, {
+  const resultRecord = { ...record };
+  delete resultRecord.proposals;
+  return withFields(resultRecord, {
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     cost_axes: arrayOf(record.cost_axes, `${path}.cost_axes`, parseCostAxis),
     leaderboard: arrayOf(record.leaderboard, `${path}.leaderboard`, parseModelResult),
     frontiers: parseFrontiers(record.frontiers, `${path}.frontiers`),
     training_history: arrayOf(record.training_history, `${path}.training_history`, parseRunResult),
     model_inspections: arrayOf(record.model_inspections ?? [], `${path}.model_inspections`, parseModelInspectionRecord),
-    proposals: arrayOf(record.proposals ?? [], `${path}.proposals`, parseProposal),
   }) as BenchmarkResultRecord;
 }
 
@@ -494,15 +472,6 @@ function parseTrainingDiagnostics(value: unknown, path: string): TrainingDiagnos
         ? undefined
         : requireRecord(record.evaluation_curriculum, `${path}.evaluation_curriculum`, transportError),
   }) as TrainingDiagnosticsRecord;
-}
-
-function parseProposal(value: unknown, path: string): ProposalRecord {
-  const record = requireRecord(value, path, transportError);
-  requireStrings(record, path, ['id', 'candidate_kind', 'candidate_id', 'rationale']);
-  return withFields(record, {
-    rank: requireNumber(record.rank, `${path}.rank`, transportError),
-    command: record.command === undefined ? [] : stringArray(record.command, `${path}.command`),
-  }) as ProposalRecord;
 }
 
 function parseCostSummary(value: unknown, path: string): CostSummaryRecord {

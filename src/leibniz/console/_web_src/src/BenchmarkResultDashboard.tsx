@@ -15,14 +15,12 @@ import {
   costValue,
   formatCost,
   nextModelResultSort,
-  proposalAssociations,
   runDetails,
   runSelectionId,
   scoreLabel,
   selectionForId,
   shortDigest,
   sortedModelResults,
-  type BenchmarkProposalAssociation,
   type BenchmarkRunDetail,
   type ModelResultSort,
   type ModelResultSortKey,
@@ -31,13 +29,8 @@ import type {
   BenchmarkResultRecord,
   CostAxisRecord,
   ModelResultRecord,
-  ProposalRecord,
   RunDetailSectionRecord,
 } from './resultViews.ts';
-import {
-  coordinateDisplayName,
-  type OperatorVocabularyRecord,
-} from './operatorVocabulary.ts';
 import { usePersistentState } from './persistentState.ts';
 
 type PlotView = {
@@ -65,7 +58,6 @@ const plotAxisSelectorTopOffset = 20;
 const plotAxisSelectorHeight = 28;
 const plotAxisSelectorMinWidth = 720;
 const plotAxisSelectorButtonWidth = 118;
-const proposalIntervalCapHalfWidth = 7;
 const defaultLeaderboardSort: ModelResultSort = {
   key: 'score',
   direction: 'descending',
@@ -73,12 +65,10 @@ const defaultLeaderboardSort: ModelResultSort = {
 
 export function BenchmarkResultDashboard({
   onModelSelect,
-  operatorVocabulary,
   result,
   selectedModelKey,
 }: {
   onModelSelect: (modelKey: string) => void;
-  operatorVocabulary: OperatorVocabularyRecord;
   result: BenchmarkResultRecord;
   selectedModelKey: string;
 }) {
@@ -104,17 +94,12 @@ export function BenchmarkResultDashboard({
   );
   const plot = benchmarkPlotModel(result, costAxis);
   const selection = selectionForId(result, selectedId);
-  const proposalRows = proposalAssociations(result);
-  const selectedProposalAssociation = proposalRows.find(
-    ({ proposal }) => proposal.id === selection.selectedProposal?.id,
-  );
   const runRows = runDetails(result);
   const selectedRunDetail = runRows.find(
     ({ run }) => runSelectionId(run) === selectedId,
   );
   const selectedSelectionModelKey =
     selection.selectedModel?.model_key ??
-    selectedProposalAssociation?.model?.model_key ??
     selectedRunDetail?.model?.model_key;
   const activeSelectedModelKey = selectedSelectionModelKey ?? selectedModelKey;
   const activeView = plotView ?? {
@@ -160,12 +145,6 @@ export function BenchmarkResultDashboard({
         selectedModelKey={activeSelectedModelKey}
         sort={leaderboardSort}
         title="Leaderboard"
-      />
-      <ProposalCards
-        associations={proposalRows}
-        onSelect={setSelectedId}
-        operatorVocabulary={operatorVocabulary}
-        selectedId={selectedId}
       />
       <RunHistoryTable
         complexityAxis={result.complexity_axis}
@@ -219,19 +198,8 @@ function BenchmarkFrontierPlot({
       point.score >= view.yDomain[0] &&
       point.score <= view.yDomain[1],
   );
-  const visibleProposals = model.proposals.filter(
-    (proposal) =>
-      proposal.logCost >= view.xDomain[0] &&
-      proposal.logCost <= view.xDomain[1] &&
-      proposal.predictedScore >= view.yDomain[0] &&
-      proposal.predictedScore <= view.yDomain[1],
-  );
-  const selectedPoint =
-    model.points.find((point) => point.id === selectedId) ??
-    model.proposals.find((proposal) => proposal.id === selectedId);
-  const hoveredPoint =
-    model.points.find((point) => point.id === hoveredId) ??
-    model.proposals.find((proposal) => proposal.id === hoveredId);
+  const selectedPoint = model.points.find((point) => point.id === selectedId);
+  const hoveredPoint = model.points.find((point) => point.id === hoveredId);
   const activePoint = hoveredPoint ?? selectedPoint;
   const costAxisGroups = benchmarkCostAxisGroups(costAxes);
   const axisButtonCount = costAxisGroups.reduce(
@@ -298,7 +266,6 @@ function BenchmarkFrontierPlot({
         <div className="frontier-chart-legend" aria-label="Measurements plot legend">
           <span><i className="frontier" />Frontier</span>
           <span><i className="measured" />Measured</span>
-          <span><i className="proposal" />Proposal</span>
         </div>
         <svg
           aria-label={`Measurements by ${costAxis}`}
@@ -403,63 +370,6 @@ function BenchmarkFrontierPlot({
                 points={model.staircase.map(([logCost, score]) => `${x(logCost)},${y(score)}`).join(' ')}
               />
             ) : null}
-            {visibleProposals.map((proposal) => {
-              const proposalX = x(proposal.logCost);
-              const proposalY = y(proposal.predictedScore);
-              const uncertainty = proposal.uncertainty;
-              return (
-                <g key={proposal.id}>
-                  {uncertainty === undefined ? null : (
-                    <g className="frontier-chart-proposal-interval">
-                      <line
-                        className="frontier-chart-proposal-band"
-                        x1={proposalX}
-                        x2={proposalX}
-                        y1={y(proposal.predictedScore - uncertainty)}
-                        y2={y(proposal.predictedScore + uncertainty)}
-                      />
-                      <line
-                        className="frontier-chart-proposal-cap"
-                        x1={proposalX - proposalIntervalCapHalfWidth}
-                        x2={proposalX + proposalIntervalCapHalfWidth}
-                        y1={y(proposal.predictedScore - uncertainty)}
-                        y2={y(proposal.predictedScore - uncertainty)}
-                      />
-                      <line
-                        className="frontier-chart-proposal-cap"
-                        x1={proposalX - proposalIntervalCapHalfWidth}
-                        x2={proposalX + proposalIntervalCapHalfWidth}
-                        y1={y(proposal.predictedScore + uncertainty)}
-                        y2={y(proposal.predictedScore + uncertainty)}
-                      />
-                    </g>
-                  )}
-                  <line
-                    className="frontier-chart-proposal-guide"
-                    x1={proposalX}
-                    x2={proposalX}
-                    y1={plotMargin.top}
-                    y2={plotMargin.top + plotBodyHeight}
-                  />
-                  <circle
-                    className={[
-                      'frontier-chart-proposal',
-                      selectedId === proposal.id ? 'selected' : '',
-                      hoveredId === proposal.id ? 'hovered' : '',
-                    ].filter(Boolean).join(' ')}
-                    cx={proposalX}
-                    cy={proposalY}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onSelect(proposal.id);
-                    }}
-                    onMouseEnter={() => onHover(proposal.id)}
-                    onMouseLeave={() => onHover(null)}
-                    r={6}
-                  />
-                </g>
-              );
-            })}
             {visiblePoints.map((point) => (
               <circle
                 className={[
@@ -538,185 +448,16 @@ function BenchmarkFrontierPlot({
         {activePoint === undefined ? null : (
           <div className="frontier-chart-tooltip">
             <span className="frontier-chart-tooltip-kicker">
-              {'predictedScore' in activePoint ? 'Proposal' : activePoint.frontier ? 'Frontier highlight' : 'Measured model'}
+              {activePoint.frontier ? 'Frontier highlight' : 'Measured model'}
             </span>
             <strong>{activePoint.label}</strong>
             <span>{formatCost(activePoint.cost)} cost</span>
-            <span>
-              {'predictedScore' in activePoint
-                ? `prediction ${scoreLabel(activePoint.predictedScore)}`
-                : `score ${scoreLabel(activePoint.score)}`}
-            </span>
-            {'uncertainty' in activePoint && activePoint.uncertainty !== undefined ? (
-              <span>uncertainty +/- {scoreLabel(activePoint.uncertainty)}</span>
-            ) : null}
+            <span>{`score ${scoreLabel(activePoint.score)}`}</span>
           </div>
         )}
       </div>
     </section>
   );
-}
-
-function ProposalCards({
-  associations,
-  onSelect,
-  operatorVocabulary,
-  selectedId,
-}: {
-  associations: BenchmarkProposalAssociation[];
-  onSelect: (id: string) => void;
-  operatorVocabulary: OperatorVocabularyRecord;
-  selectedId: string | null;
-}) {
-  if (associations.length === 0) {
-    return null;
-  }
-
-  return (
-    <section className="benchmark-result-table-section">
-      <h3>Proposals</h3>
-      <div className="proposal-card-grid">
-        {associations.map(({ model, proposal }) => {
-          return (
-            <button
-              className={`proposal-card ${selectedId === proposal.id ? 'selected' : ''}`}
-              key={proposal.id}
-              onClick={() => onSelect(proposal.id)}
-              type="button"
-            >
-              <div className="proposal-card-heading">
-                <span>Rank {proposal.rank}</span>
-                <strong>{scoreLabel(proposal.acquisition_value)}</strong>
-              </div>
-              <dl>
-                <dt>Candidate</dt>
-                <dd>{proposal.candidate_id}</dd>
-                <dt>Acquisition</dt>
-                <dd>{proposal.acquisition_model ?? 'not recorded'}</dd>
-                <dt>Prediction</dt>
-                <dd>{scoreLabel(proposal.predicted_score)}</dd>
-                <dt>Uncertainty</dt>
-                <dd>{scoreLabel(proposal.uncertainty)}</dd>
-                <dt>Improvement</dt>
-                <dd>{scoreLabel(proposal.expected_frontier_improvement)}</dd>
-                <dt>Selector</dt>
-                <dd>{proposal.selector_name ?? 'none'}</dd>
-                <dt>Cost Stratum</dt>
-                <dd>{resourceStratumLabel(proposal)}</dd>
-                <dt>Search</dt>
-                <dd>{searchDistributionLabel(proposal)}</dd>
-                <dt>Coordinates</dt>
-                <dd>{semanticCoordinateSummary(proposal, operatorVocabulary)}</dd>
-                <dt>Nearest Evidence</dt>
-                <dd>{nearestMeasuredSupportLabel(proposal)}</dd>
-                <dt>Comparable Score</dt>
-                <dd>{scoreLabel(proposal.comparable_cost_best_score)}</dd>
-                <dt>Matched Model</dt>
-                <dd>{model === undefined ? 'none' : shortDigest(model.architecture_digest)}</dd>
-              </dl>
-              <ProposalAcquisitionComponents proposal={proposal} />
-              <p>{proposal.rationale}</p>
-              {proposal.command.length === 0 ? null : (
-                <code className="proposal-card-command">{proposal.command.join(' ')}</code>
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-function ProposalAcquisitionComponents({ proposal }: { proposal: ProposalRecord }) {
-  const rows = acquisitionComponentRows(proposal);
-  if (rows.length === 0) {
-    return null;
-  }
-  return (
-    <dl className="proposal-acquisition-components">
-      {rows.map(([label, value]) => (
-        <div key={label}>
-          <dt>{label}</dt>
-          <dd>{scoreLabel(value)}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
-function acquisitionComponentRows(proposal: ProposalRecord): Array<[string, number]> {
-  const components = proposal.acquisition_components;
-  if (components === undefined) {
-    return [];
-  }
-  return [
-    ['Estimated', componentNumber(components, 'estimated_score')],
-    ['Explore', componentNumber(components, 'exploration_value')],
-    ['Novelty', componentNumber(components, 'resource_novelty')],
-    ['Frontier', componentNumber(components, 'expected_frontier_improvement')],
-    ['Baseline', componentNumber(components, 'comparable_cost_best_score')],
-  ].filter((row): row is [string, number] => row[1] !== undefined);
-}
-
-function componentNumber(components: Record<string, unknown>, key: string): number | undefined {
-  const value = components[key];
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function resourceStratumLabel(proposal: ProposalRecord): string {
-  if (
-    proposal.resource_stratum_index === undefined ||
-    proposal.resource_stratum_count === undefined
-  ) {
-    return 'none';
-  }
-  return `${proposal.resource_stratum_index + 1}/${proposal.resource_stratum_count}`;
-}
-
-function searchDistributionLabel(proposal: ProposalRecord): string {
-  const value = proposal.search_diagnostics?.search_distribution_id;
-  return typeof value === 'string' ? shortDigest(value) : 'not recorded';
-}
-
-function semanticCoordinateSummary(
-  proposal: ProposalRecord,
-  operatorVocabulary: OperatorVocabularyRecord,
-): string {
-  const coordinates = proposal.search_diagnostics?.semantic_coordinates;
-  if (!Array.isArray(coordinates)) {
-    return 'not recorded';
-  }
-  const primaryCoordinate = coordinates.find(isNamedCoordinate);
-  if (primaryCoordinate !== undefined) {
-    return `${coordinates.length} coordinates, ${coordinateDisplayName(operatorVocabulary, primaryCoordinate.name)} ${primaryCoordinate.value}`;
-  }
-  return `${coordinates.length} coordinates`;
-}
-
-function nearestMeasuredSupportLabel(proposal: ProposalRecord): string {
-  const support = proposal.search_diagnostics?.nearest_measured_support;
-  if (!isRecord(support)) {
-    return 'none';
-  }
-  const parameterCount = support.parameter_count;
-  const score = support.score;
-  if (typeof parameterCount !== 'number' || typeof score !== 'number') {
-    return 'none';
-  }
-  return `${formatCost(parameterCount)} params at ${scoreLabel(score)}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function isNamedCoordinate(
-  value: unknown,
-): value is { name: string; value: string | number } {
-  if (!isRecord(value) || typeof value.name !== 'string') {
-    return false;
-  }
-  return typeof value.value === 'string' || typeof value.value === 'number';
 }
 
 function ModelResultTable({

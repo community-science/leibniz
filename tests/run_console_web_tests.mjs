@@ -167,7 +167,6 @@ function assertBenchmarkWorkbenchStructure() {
 
   const requiredThemeTokens = [
     '--frontier-accent',
-    '--proposal-accent',
     '--measured-accent',
     '--benchmark-workbench-wide',
   ];
@@ -227,12 +226,7 @@ function assertBenchmarkFrontierPlotStructure() {
   );
   const requiredDashboardMarkers = [
     'frontier-chart-legend',
-    'frontier-chart-proposal-guide',
-    'frontier-chart-proposal-cap',
     'frontier-chart-tooltip-kicker',
-    'ProposalAcquisitionComponents',
-    'acquisitionComponentRows',
-    'proposal-card-command',
   ];
   for (const marker of requiredDashboardMarkers) {
     if (!dashboard.includes(marker)) {
@@ -266,8 +260,6 @@ function assertBenchmarkFrontierPlotStructure() {
     '--frontier-frame-bg',
     '--frontier-tooltip-bg',
     '.frontier-chart-legend',
-    '.frontier-chart-proposal-guide',
-    '.proposal-acquisition-components',
   ];
   for (const marker of requiredStyleMarkers) {
     if (!styles.includes(marker)) {
@@ -354,10 +346,11 @@ function assertConsoleResultRootPolicy() {
     resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/generated/resultViewRecords.ts'),
     'utf8',
   );
-  for (const marker of ['acquisition_model', 'acquisition_components']) {
+  for (const marker of ['ProposalRecord', 'record.proposals']) {
     if (!resultViewRecords.includes(marker)) {
-      throw new Error(`Result view transport must support proposal marker: ${marker}`);
+      continue;
     }
+    throw new Error(`Result view transport must not expose local proposal marker: ${marker}`);
   }
   const viteConfig = readFileSync(
     resolve(repositoryRoot, 'src/leibniz/console/_web_src/vite.config.mjs'),

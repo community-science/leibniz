@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from leibniz.architectures import ArchitectureLayer, ArchitectureManifest
-from leibniz.model_scale_contracts import ModelScaleContract
 from leibniz.operator_interpretation import interpret_operator_semantic
 from leibniz.operator_semantics import ModelOperatorSemantic, model_operator_semantic_registry
 from leibniz.program_effect_semantics import program_effect_semantic_registry
@@ -16,18 +15,14 @@ from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
     "ExecutableModelOperator",
-    "ModelOperatorCoordinate",
     "ModelOperatorDescriptor",
     "ModelOperatorExecutionError",
     "ModelOperatorPlan",
-    "ModelOperatorSearchPoint",
     "ModelOperatorSummary",
     "ModelProgramEffect",
     "ModelProgramEffectDescriptor",
     "ModelProgramEffectPlan",
     "ModelProgramEffectSummary",
-    "materialize_model_operator_search_point",
-    "model_operator_semantic_coordinates",
     "model_operator_vocabulary",
     "summarize_model_program_effects",
     "summarize_architecture_operators",
@@ -150,28 +145,6 @@ class ModelOperatorSummary:
         if self.training_compute_per_sample is not None:
             record["training_compute_per_sample"] = self.training_compute_per_sample
         return record
-
-
-@dataclass(frozen=True, slots=True)
-class ModelOperatorCoordinate:
-    """One stable semantic coordinate derived from an operator manifest."""
-
-    name: str
-    value: int | str
-
-    def __post_init__(self) -> None:
-        if not self.name:
-            raise ModelOperatorExecutionError("coordinate name must be nonempty")
-        if type(self.value) not in {int, str}:
-            raise ModelOperatorExecutionError("coordinate value must be an integer or string")
-        if self.value == "":
-            raise ModelOperatorExecutionError("coordinate value must be nonempty")
-
-    def to_record(self) -> dict[str, object]:
-        return {
-            "name": self.name,
-            "value": self.value,
-        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,26 +357,6 @@ class ModelOperatorPlan:
                 operator.inference_compute is None
                 or operator.training_compute_per_sample is None
             )
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class ModelOperatorSearchPoint:
-    """Semantic coordinates for materializing an executable operator manifest."""
-
-    local_support_dimension: int
-    local_support_size: int
-
-    def __post_init__(self) -> None:
-        if type(self.local_support_dimension) is not int or self.local_support_dimension < 1:
-            raise ModelOperatorExecutionError("local_support_dimension must be positive")
-        if type(self.local_support_size) is not int or self.local_support_size < 1:
-            raise ModelOperatorExecutionError("local_support_size must be positive")
-
-    def to_parameters(self) -> tuple[tuple[str, int], ...]:
-        return (
-            ("local_support_dimension", self.local_support_dimension),
-            ("local_support_size", self.local_support_size),
         )
 
 
@@ -638,121 +591,6 @@ def summarize_architecture_operators(
     )
 
 
-def model_operator_semantic_coordinates(
-    architecture: ArchitectureManifest,
-    *,
-    plan: ModelOperatorPlan | None = None,
-) -> tuple[ModelOperatorCoordinate, ...]:
-    """Return architecture coordinates derived from operator semantics and resources."""
-
-    resolved = summarize_architecture_operators(architecture) if plan is None else plan
-    if resolved.input_shape != architecture.input_shape:
-        raise ModelOperatorExecutionError("operator plan input_shape does not match architecture")
-    if resolved.output_shape != architecture.output_shape:
-        raise ModelOperatorExecutionError("operator plan output_shape does not match architecture")
-    if len(resolved.operators) != len(architecture.layers):
-        raise ModelOperatorExecutionError("operator plan length does not match architecture")
-
-    coordinates: list[ModelOperatorCoordinate] = [
-        ModelOperatorCoordinate("input.rank", len(architecture.input_shape)),
-        ModelOperatorCoordinate("output.rank", len(architecture.output_shape)),
-        ModelOperatorCoordinate("operator.count", len(resolved.operators)),
-    ]
-    for summary, layer in zip(resolved.operators, architecture.layers, strict=True):
-        prefix = f"operator.{summary.index}"
-        descriptor = summary.descriptor
-        coordinates.extend(
-            (
-                ModelOperatorCoordinate(f"{prefix}.kind", descriptor.kind),
-                ModelOperatorCoordinate(
-                    f"{prefix}.tensor_relation",
-                    descriptor.tensor_relation,
-                ),
-                ModelOperatorCoordinate(f"{prefix}.state", descriptor.state),
-                ModelOperatorCoordinate(f"{prefix}.support", descriptor.support),
-                ModelOperatorCoordinate(f"{prefix}.projection_law", descriptor.projection_law),
-                ModelOperatorCoordinate(
-                    f"{prefix}.aggregation_law",
-                    descriptor.aggregation_law,
-                ),
-                ModelOperatorCoordinate(
-                    f"{prefix}.parameter_sharing",
-                    descriptor.parameter_sharing,
-                ),
-                ModelOperatorCoordinate(f"{prefix}.shape_law", descriptor.shape_law),
-                ModelOperatorCoordinate(f"{prefix}.cost_law", descriptor.cost_law),
-            )
-        )
-        _append_shape_coordinates(coordinates, prefix, summary)
-        _append_salient_parameter_coordinates(coordinates, prefix, summary, layer)
-    _append_optional_coordinate(coordinates, "resource.parameter_count", resolved.parameter_count)
-    _append_optional_coordinate(
-        coordinates,
-        "resource.inference_compute",
-        resolved.inference_compute,
-    )
-    _append_optional_coordinate(
-        coordinates,
-        "resource.training_compute_per_sample",
-        resolved.training_compute_per_sample,
-    )
-    _reject_duplicate_coordinate_names(coordinates)
-    return tuple(coordinates)
-
-
-def materialize_model_operator_search_point(
-    *,
-    input_shape: tuple[int, ...],
-    output_count: int,
-    point: ModelOperatorSearchPoint,
-) -> ArchitectureManifest:
-    """Materialize semantic search coordinates through supported operator aliases."""
-
-    _require_optional_shape(input_shape, field="input_shape")
-    if type(output_count) is not int or output_count < 2:
-        raise ModelOperatorExecutionError("output_count must be an integer at least 2")
-    if len(input_shape) < 3:
-        raise ModelOperatorExecutionError("input_shape must have rank at least 3")
-    if point.local_support_dimension >= len(input_shape) + 1:
-        raise ModelOperatorExecutionError(
-            "local_support_dimension must not exceed input rank"
-        )
-    scale_axis_indices = tuple(
-        range(len(input_shape) - point.local_support_dimension, len(input_shape))
-    )
-    return ArchitectureManifest.from_record(
-        {
-            "input_shape": list(input_shape),
-            "model_scale_contract": ModelScaleContract.variable_input_shape(
-                input_shape,
-                minimum=point.local_support_size,
-                axis_symbol="S",
-                scale_axis_indices=scale_axis_indices,
-            ).to_record(),
-            "output_shape": [output_count],
-            "layers": [
-                {
-                    "kind": _operator_local_aggregation,
-                    "parameters": {
-                        "dimension": point.local_support_dimension,
-                        "out_height": point.local_support_size,
-                        "out_width": point.local_support_size,
-                    },
-                },
-                {
-                    "kind": _operator_rank_collapse,
-                },
-                {
-                    "kind": _operator_affine_readout,
-                    "parameters": {
-                        "out": output_count,
-                    },
-                },
-            ],
-        }
-    )
-
-
 def _descriptor_for_layer(layer: ArchitectureLayer) -> ModelOperatorDescriptor:
     semantic = _semantic_for_layer(layer)
     return _descriptor_for_semantic(semantic, aliases=(layer.kind,))
@@ -784,148 +622,6 @@ def _descriptor_for_semantic(
     )
 
 
-def _append_shape_coordinates(
-    coordinates: list[ModelOperatorCoordinate],
-    prefix: str,
-    summary: ModelOperatorSummary,
-) -> None:
-    if summary.input_shape is not None:
-        coordinates.append(
-            ModelOperatorCoordinate(f"{prefix}.input_rank", len(summary.input_shape))
-        )
-    if summary.output_shape is not None:
-        coordinates.append(
-            ModelOperatorCoordinate(f"{prefix}.output_rank", len(summary.output_shape))
-        )
-
-
-def _append_salient_parameter_coordinates(
-    coordinates: list[ModelOperatorCoordinate],
-    prefix: str,
-    summary: ModelOperatorSummary,
-    layer: ArchitectureLayer,
-) -> None:
-    if summary.descriptor.kind == _operator_local_aggregation:
-        _append_required_parameter_coordinate(
-            coordinates,
-            f"{prefix}.local_support_dimension",
-            layer,
-            "dimension",
-        )
-        if "size" in layer.parameters:
-            _append_required_parameter_coordinate(
-                coordinates,
-                f"{prefix}.local_support_size",
-                layer,
-                "size",
-            )
-        else:
-            out_height, out_width = _fixed_support_axes(layer.parameters)
-            if out_height == out_width:
-                coordinates.append(
-                    ModelOperatorCoordinate(f"{prefix}.local_support_size", out_height)
-                )
-            else:
-                _append_required_parameter_coordinate(
-                    coordinates,
-                    f"{prefix}.output_height",
-                    layer,
-                    "out_height",
-                )
-                _append_required_parameter_coordinate(
-                    coordinates,
-                    f"{prefix}.output_width",
-                    layer,
-                    "out_width",
-                )
-    elif summary.descriptor.kind == _operator_local_affine:
-        _append_required_parameter_coordinate(
-            coordinates,
-            f"{prefix}.local_support_dimension",
-            layer,
-            "dimension",
-        )
-        _append_required_parameter_coordinate(
-            coordinates,
-            f"{prefix}.local_support_size",
-            layer,
-            "size",
-        )
-        _append_required_parameter_coordinate(
-            coordinates,
-            f"{prefix}.output_channels",
-            layer,
-            "out_channels",
-        )
-        _append_required_parameter_coordinate(
-            coordinates,
-            f"{prefix}.local_stride",
-            layer,
-            "stride",
-        )
-        coordinates.append(
-            ModelOperatorCoordinate(
-                f"{prefix}.local_padding",
-                _nonnegative_int_parameter(layer.parameters, "padding"),
-            )
-        )
-    elif summary.descriptor.kind == _operator_fixed_support_affine:
-        _append_required_parameter_coordinate(
-            coordinates,
-            f"{prefix}.local_support_dimension",
-            layer,
-            "dimension",
-        )
-        _append_required_parameter_coordinate(
-            coordinates,
-            f"{prefix}.output_channels",
-            layer,
-            "out_channels",
-        )
-        _append_required_parameter_coordinate(
-            coordinates,
-            f"{prefix}.output_height",
-            layer,
-            "out_height",
-        )
-        _append_required_parameter_coordinate(
-            coordinates,
-            f"{prefix}.output_width",
-            layer,
-            "out_width",
-        )
-    elif summary.descriptor.kind == _operator_affine_readout:
-        _append_required_parameter_coordinate(
-            coordinates,
-            f"{prefix}.output_count",
-            layer,
-            "out",
-        )
-
-
-def _append_required_parameter_coordinate(
-    coordinates: list[ModelOperatorCoordinate],
-    coordinate_name: str,
-    layer: ArchitectureLayer,
-    parameter_name: str,
-) -> None:
-    coordinates.append(
-        ModelOperatorCoordinate(
-            coordinate_name,
-            _positive_int_parameter(layer.parameters, parameter_name),
-        )
-    )
-
-
-def _append_optional_coordinate(
-    coordinates: list[ModelOperatorCoordinate],
-    name: str,
-    value: int | None,
-) -> None:
-    if value is not None:
-        coordinates.append(ModelOperatorCoordinate(name, value))
-
-
 def _local_window_output_axis(
     axis: int,
     *,
@@ -937,14 +633,6 @@ def _local_window_output_axis(
     if result < 1:
         raise ModelOperatorExecutionError("local affine output axis must be positive")
     return result
-
-
-def _reject_duplicate_coordinate_names(
-    coordinates: list[ModelOperatorCoordinate],
-) -> None:
-    names = [coordinate.name for coordinate in coordinates]
-    if len(set(names)) != len(names):
-        raise ModelOperatorExecutionError("semantic coordinates must have unique names")
 
 
 def _program_effect_descriptor(effect: ModelProgramEffect) -> ModelProgramEffectDescriptor:

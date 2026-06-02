@@ -5,17 +5,14 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
 
-from leibniz.active_loop import ActiveTrainingLoopPlan, run_active_training_loop
 from leibniz.architecture_semantics import validate_architecture_semantics
 from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
 from leibniz.authority_indexes import AuthorityIndexDocument
-from leibniz.benchmark_runner import BenchmarkRunPlan, BenchmarkRunSummary, run_benchmark
+from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.documents import (
     canonical_document_bytes,
@@ -25,10 +22,8 @@ from leibniz.documents import (
 from leibniz.federation_ingest import FederationIngestPlanDocument
 from leibniz.formation_timing import FormationTimingPlan, time_formation_paths
 from leibniz.local_results import (
-    LocalResultImportError,
     import_submission_publications,
     initialize_publication_checkout,
-    load_console_result_view,
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
     push_publication_checkout,
@@ -46,7 +41,6 @@ from leibniz.model_manifests import ModelArtifactManifestDocument
 from leibniz.model_operations import ModelOperationDocument
 from leibniz.outcomes import OutcomeSpace
 from leibniz.projection_records import ProjectionRecordDocument
-from leibniz.proposal_generation import ProposalGenerationPlan, generate_experiment_proposals
 from leibniz.publications import SubmissionPublicationDocument
 from leibniz.resources import ResourceReportDocument, ResourceReportSetDocument
 from leibniz.submission_registries import SubmissionRegistry, SubmissionRegistryDocument
@@ -55,14 +49,6 @@ from leibniz.view_manifests import ViewManifestDocument
 __all__ = ["main"]
 
 _manifest_filename = "manifest" + document_filename_suffix()
-
-
-@dataclass(frozen=True, slots=True)
-class _FrontierSnapshot:
-    benchmark_id: str
-    best_score: float | None
-    model_count: int
-    run_count: int
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -354,164 +340,50 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="local result checkout; defaults to results",
     )
-    propose_results = results_subcommands.add_parser(
-        "propose",
-        description="generate deterministic local benchmark proposals",
-        help="generate local proposals",
-    )
-    propose_results.add_argument("--benchmark-root", type=Path, required=True)
-    propose_results.add_argument(
-        "--results-root",
-        default=Path("results"),
-        type=Path,
-        help="local result checkout; defaults to results",
-    )
-    propose_results.add_argument("--candidate-budget", default=3, type=int)
-    propose_results.add_argument("--candidate-sample-count", default=64, type=int)
-    propose_results.add_argument("--sample-count", default=512, type=int)
-    propose_results.add_argument("--evaluation-sample-count", default=None, type=int)
-    propose_results.add_argument("--seed", default=101, type=int)
-    propose_results.add_argument("--train-steps", default=None, type=int)
-    propose_results.add_argument("--learning-rate", default=0.01, type=float)
-    propose_results.add_argument("--optimizer", default="adam", choices=("sgd", "adam", "adamw"))
-    propose_results.add_argument(
-        "--schedule",
-        default="reduce-on-plateau",
-        choices=("none", "cosine", "reduce-on-plateau"),
-    )
-    propose_results.add_argument("--checkpoint-interval", default=256, type=int)
-    propose_results.add_argument("--gate-check-interval", default=32, type=int)
-    propose_results.add_argument("--gate-sample-count", default=None, type=int)
-    propose_results.add_argument("--gate-decision-rule", default="validation-loss-plateau")
-    propose_results.add_argument("--convergence-patience", default=6, type=int)
-    propose_results.add_argument("--convergence-min-delta", default=1e-3, type=float)
-    propose_results.add_argument("--convergence-min-steps", default=500, type=int)
-    propose_results.add_argument(
-        "--device",
-        default="auto",
-        choices=("auto", "cpu", "cuda", "mps"),
-        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
-    )
-
     benchmark = subcommands.add_parser(
         "benchmark",
         description="run local benchmark workflows",
         help="run local benchmark workflows",
     )
     benchmark_subcommands = benchmark.add_subparsers(dest="benchmark_command", required=True)
-    run = benchmark_subcommands.add_parser(
-        "run",
-        description="run a benchmark locally",
-        help="run a benchmark locally",
+    train = benchmark_subcommands.add_parser(
+        "train",
+        description="train and evaluate an explicit architecture locally",
+        help="train an explicit architecture",
     )
-    run.add_argument("--architecture", type=Path, required=True)
-    run.add_argument("--benchmark-root", type=Path, required=True)
-    run.add_argument(
+    train.add_argument("--architecture", type=Path, required=True)
+    train.add_argument("--benchmark-root", type=Path, required=True)
+    train.add_argument(
         "--results-root",
         default=Path("results"),
         type=Path,
         help="local result checkout; defaults to results",
     )
-    run.add_argument("--sample-count", default=512, type=int)
-    run.add_argument("--evaluation-sample-count", default=None, type=int)
-    run.add_argument("--seed", default=101, type=int)
-    run.add_argument("--train-steps", default=None, type=int)
-    run.add_argument("--learning-rate", default=0.01, type=float)
-    run.add_argument("--optimizer", default="adam", choices=("sgd", "adam", "adamw"))
-    run.add_argument(
+    train.add_argument("--sample-count", default=512, type=int)
+    train.add_argument("--evaluation-sample-count", default=None, type=int)
+    train.add_argument("--seed", default=101, type=int)
+    train.add_argument("--train-steps", default=None, type=int)
+    train.add_argument("--learning-rate", default=0.01, type=float)
+    train.add_argument("--optimizer", default="adam", choices=("sgd", "adam", "adamw"))
+    train.add_argument(
         "--schedule",
         default="reduce-on-plateau",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
-    run.add_argument("--checkpoint-interval", default=256, type=int)
-    run.add_argument("--gate-check-interval", default=32, type=int)
-    run.add_argument("--gate-sample-count", default=None, type=int)
-    run.add_argument("--gate-decision-rule", default="validation-loss-plateau")
-    run.add_argument("--convergence-patience", default=6, type=int)
-    run.add_argument("--convergence-min-delta", default=1e-3, type=float)
-    run.add_argument("--convergence-min-steps", default=500, type=int)
-    run.add_argument(
+    train.add_argument("--checkpoint-interval", default=256, type=int)
+    train.add_argument("--gate-check-interval", default=32, type=int)
+    train.add_argument("--gate-sample-count", default=None, type=int)
+    train.add_argument("--gate-decision-rule", default="validation-loss-plateau")
+    train.add_argument("--convergence-patience", default=6, type=int)
+    train.add_argument("--convergence-min-delta", default=1e-3, type=float)
+    train.add_argument("--convergence-min-steps", default=500, type=int)
+    train.add_argument(
         "--device",
         default="auto",
         choices=("auto", "cpu", "cuda", "mps"),
         help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
     )
-    run.add_argument("--dry-run", action="store_true")
-    loop = benchmark_subcommands.add_parser(
-        "loop",
-        description="run an active benchmark proposal loop",
-        help="run an active benchmark loop",
-    )
-    loop.add_argument("--benchmark-root", type=Path, required=True)
-    loop.add_argument(
-        "--results-root",
-        default=Path("results"),
-        type=Path,
-        help="local result checkout; defaults to results",
-    )
-    loop.add_argument("--candidate-sample-count", default=64, type=int)
-    loop.add_argument("--sample-count", default=512, type=int)
-    loop.add_argument("--evaluation-sample-count", default=None, type=int)
-    loop.add_argument("--seed", default=101, type=int)
-    loop.add_argument("--train-steps", default=None, type=int)
-    loop.add_argument("--learning-rate", default=0.01, type=float)
-    loop.add_argument("--optimizer", default="adam", choices=("sgd", "adam", "adamw"))
-    loop.add_argument(
-        "--schedule",
-        default="reduce-on-plateau",
-        choices=("none", "cosine", "reduce-on-plateau"),
-    )
-    loop.add_argument("--checkpoint-interval", default=256, type=int)
-    loop.add_argument("--gate-check-interval", default=32, type=int)
-    loop.add_argument("--gate-sample-count", default=None, type=int)
-    loop.add_argument("--gate-decision-rule", default="validation-loss-plateau")
-    loop.add_argument("--convergence-patience", default=6, type=int)
-    loop.add_argument("--convergence-min-delta", default=1e-3, type=float)
-    loop.add_argument("--convergence-min-steps", default=500, type=int)
-    loop.add_argument(
-        "--device",
-        default="auto",
-        choices=("auto", "cpu", "cuda", "mps"),
-        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
-    )
-    loop.add_argument("--dry-run", action="store_true")
-    shakedown = benchmark_subcommands.add_parser(
-        "shakedown",
-        description="run a small active frontier shakedown",
-        help="run an active frontier shakedown",
-    )
-    shakedown.add_argument("--benchmark-root", type=Path, required=True)
-    shakedown.add_argument(
-        "--results-root",
-        default=Path("results"),
-        type=Path,
-        help="local result checkout; defaults to results",
-    )
-    shakedown.add_argument("--candidate-sample-count", default=64, type=int)
-    shakedown.add_argument("--sample-count", default=1, type=int)
-    shakedown.add_argument("--evaluation-sample-count", default=None, type=int)
-    shakedown.add_argument("--seed", default=101, type=int)
-    shakedown.add_argument("--train-steps", default=0, type=int)
-    shakedown.add_argument("--learning-rate", default=0.01, type=float)
-    shakedown.add_argument("--optimizer", default="adam", choices=("sgd", "adam", "adamw"))
-    shakedown.add_argument(
-        "--schedule",
-        default="reduce-on-plateau",
-        choices=("none", "cosine", "reduce-on-plateau"),
-    )
-    shakedown.add_argument("--checkpoint-interval", default=1, type=int)
-    shakedown.add_argument("--gate-check-interval", default=1, type=int)
-    shakedown.add_argument("--gate-sample-count", default=None, type=int)
-    shakedown.add_argument("--gate-decision-rule", default="validation-loss-plateau")
-    shakedown.add_argument("--convergence-patience", default=0, type=int)
-    shakedown.add_argument("--convergence-min-delta", default=0.0, type=float)
-    shakedown.add_argument("--convergence-min-steps", default=0, type=int)
-    shakedown.add_argument(
-        "--device",
-        default="auto",
-        choices=("auto", "cpu", "cuda", "mps"),
-        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
-    )
+    train.add_argument("--dry-run", action="store_true")
     time_formation = benchmark_subcommands.add_parser(
         "time-formation",
         description="time local benchmark observation formation paths",
@@ -576,7 +448,7 @@ def _console_web_source_root() -> Path:
 
 def _benchmark(args: argparse.Namespace) -> int:
     try:
-        if str(args.benchmark_command) == "run":
+        if str(args.benchmark_command) == "train":
             summary = run_benchmark(
                 BenchmarkRunPlan(
                     architecture_path=args.architecture,
@@ -602,59 +474,12 @@ def _benchmark(args: argparse.Namespace) -> int:
             )
             prefix = "planned" if summary.dry_run else "completed"
             print(
-                f"{prefix} benchmark run {summary.run_slug} "
+                f"{prefix} benchmark training run {summary.run_slug} "
                 f"({summary.measurement_count} measurement(s))"
             )
             print(f"measurements: {summary.measurement_dataset_path}")
             print(f"model inspection: {summary.model_inspection_path}")
             print(f"training summary: {summary.training_summary_path}")
-            return 0
-        if str(args.benchmark_command) == "loop":
-            summary = run_active_training_loop(
-                _active_training_loop_plan(
-                    args,
-                    dry_run=args.dry_run,
-                    progress_callback=_print_active_training_progress,
-                )
-            )
-            prefix = "planned" if summary.dry_run else "completed"
-            print(
-                f"{prefix} active benchmark loop for {summary.benchmark_id}: "
-                f"{summary.completed_run_count} run(s)"
-            )
-            for command in summary.planned_commands:
-                print("command: " + " ".join(command))
-            if summary.result_view_path is not None:
-                print(f"view: {summary.result_view_path}")
-            return 0
-        if str(args.benchmark_command) == "shakedown":
-            before = _frontier_snapshot(
-                benchmark_root=args.benchmark_root,
-                results_root=args.results_root,
-            )
-            summary = run_active_training_loop(
-                _active_training_loop_plan(args, dry_run=False)
-            )
-            after = _frontier_snapshot(
-                benchmark_root=args.benchmark_root,
-                results_root=args.results_root,
-            )
-            print(f"completed active frontier shakedown for {summary.benchmark_id}")
-            print(
-                f"runs: {before.run_count} -> {after.run_count} "
-                f"({_delta(after.run_count, before.run_count)})"
-            )
-            print(
-                f"models: {before.model_count} -> {after.model_count} "
-                f"({_delta(after.model_count, before.model_count)})"
-            )
-            print(
-                "best score: "
-                f"{_score_label(before.best_score)} -> {_score_label(after.best_score)} "
-                f"({_score_delta(after.best_score, before.best_score)})"
-            )
-            if summary.result_view_path is not None:
-                print(f"view: {summary.result_view_path}")
             return 0
         if str(args.benchmark_command) == "time-formation":
             summary = time_formation_paths(
@@ -679,145 +504,6 @@ def _benchmark(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     return 2
-
-
-def _active_training_loop_plan(
-    args: argparse.Namespace,
-    *,
-    dry_run: bool,
-    progress_callback: Callable[[BenchmarkRunSummary], None] | None = None,
-) -> ActiveTrainingLoopPlan:
-    return ActiveTrainingLoopPlan(
-        benchmark_root=args.benchmark_root,
-        results_root=args.results_root,
-        candidate_sample_count=args.candidate_sample_count,
-        sample_count=args.sample_count,
-        evaluation_sample_count=args.evaluation_sample_count,
-        seed=args.seed,
-        train_steps=args.train_steps,
-        learning_rate=args.learning_rate,
-        optimizer=args.optimizer,
-        schedule=args.schedule,
-        checkpoint_interval=args.checkpoint_interval,
-        gate_check_interval=args.gate_check_interval,
-        gate_sample_count=args.gate_sample_count,
-        gate_decision_rule=args.gate_decision_rule,
-        convergence_patience=args.convergence_patience,
-        convergence_min_delta=args.convergence_min_delta,
-        convergence_min_steps=args.convergence_min_steps,
-        tensor_device=args.device,
-        dry_run=dry_run,
-        progress_callback=progress_callback,
-    )
-
-
-def _print_active_training_progress(summary: BenchmarkRunSummary) -> None:
-    progress_path = (
-        summary.training_summary_path.parent.parent.parent
-        / "training-progress"
-        / summary.training_summary_path.parent.name
-        / summary.training_summary_path.name
-    )
-    if not progress_path.exists():
-        return
-    progress_record = load_object_document(
-        progress_path.read_bytes(),
-        description="training progress",
-    )
-    training_run = cast(Mapping[str, object], progress_record.get("training_run", {}))
-    history = cast(Sequence[Mapping[str, object]], training_run.get("validation_history", ()))
-    if not history:
-        return
-    last = history[-1]
-    protocol = cast(Mapping[str, object], training_run.get("protocol", {}))
-    max_steps = protocol.get("max_steps", "convergence")
-    print(
-        f"training {summary.run_slug}: "
-        f"step {last.get('step', '?')}/{max_steps} "
-        f"validation_loss={_format_progress_number(last.get('validation_loss'))} "
-        f"stale_checks={last.get('stale_checks', '?')}",
-        flush=True,
-    )
-
-
-def _format_progress_number(value: object) -> str:
-    if isinstance(value, int | float):
-        return f"{float(value):.4f}"
-    return "?"
-
-
-def _frontier_snapshot(*, benchmark_root: Path, results_root: Path) -> _FrontierSnapshot:
-    manifest = _load_manifest(benchmark_root / _manifest_filename)
-    empty = _FrontierSnapshot(
-        benchmark_id=str(manifest.id),
-        best_score=None,
-        model_count=0,
-        run_count=0,
-    )
-    try:
-        summary = materialize_benchmark_result_views(
-            repository_root=Path.cwd(),
-            results_root=results_root,
-        )
-    except LocalResultImportError as error:
-        if "no benchmark result records found" in str(error):
-            return empty
-        raise
-    view = load_console_result_view(summary.view_file.read_bytes())
-    for result in _sequence(view.get("benchmark_results")):
-        if not isinstance(result, dict):
-            continue
-        typed_result = cast(dict[str, object], result)
-        if typed_result.get("benchmark_id") != str(manifest.id):
-            continue
-        leaderboard = tuple(
-            cast(dict[str, object], item)
-            for item in _sequence(typed_result.get("leaderboard"))
-            if isinstance(item, dict)
-        )
-        scores = tuple(
-            score
-            for item in leaderboard
-            for score in [_number(item.get("score"))]
-            if score is not None
-        )
-        return _FrontierSnapshot(
-            benchmark_id=str(manifest.id),
-            best_score=max(scores, default=None),
-            model_count=len(leaderboard),
-            run_count=len(_sequence(typed_result.get("training_history"))),
-        )
-    return empty
-
-
-def _sequence(value: object) -> tuple[object, ...]:
-    if isinstance(value, tuple):
-        return cast(tuple[object, ...], value)
-    if isinstance(value, list):
-        return tuple(cast(list[object], value))
-    return ()
-
-
-def _number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    return float(value)
-
-
-def _delta(after: int, before: int) -> str:
-    difference = after - before
-    return f"+{difference}" if difference >= 0 else str(difference)
-
-
-def _score_label(value: float | None) -> str:
-    return "n/a" if value is None else f"{value:.4f}"
-
-
-def _score_delta(after: float | None, before: float | None) -> str:
-    if after is None or before is None:
-        return "n/a"
-    difference = after - before
-    return f"+{difference:.4f}" if difference >= 0 else f"{difference:.4f}"
 
 
 def _results(args: argparse.Namespace) -> int:
@@ -907,36 +593,6 @@ def _results(args: argparse.Namespace) -> int:
                 f"{summary.run_count} run(s)"
             )
             print(f"view: {summary.view_file}")
-            return 0
-        if results_command == "propose":
-            summary = generate_experiment_proposals(
-                ProposalGenerationPlan(
-                    benchmark_root=args.benchmark_root,
-                    results_root=args.results_root,
-                    candidate_budget=args.candidate_budget,
-                    candidate_sample_count=args.candidate_sample_count,
-                    sample_count=args.sample_count,
-                    evaluation_sample_count=args.evaluation_sample_count,
-                    seed=args.seed,
-                    train_steps=args.train_steps,
-                    learning_rate=args.learning_rate,
-                    optimizer=args.optimizer,
-                    schedule=args.schedule,
-                    checkpoint_interval=args.checkpoint_interval,
-                    gate_check_interval=args.gate_check_interval,
-                    gate_sample_count=args.gate_sample_count,
-                    gate_decision_rule=args.gate_decision_rule,
-                    convergence_patience=args.convergence_patience,
-                    convergence_min_delta=args.convergence_min_delta,
-                    convergence_min_steps=args.convergence_min_steps,
-                    tensor_device=args.device,
-                )
-            )
-            print(
-                f"generated {summary.proposal_count} proposal(s) "
-                f"for {summary.benchmark_id}"
-            )
-            print(f"proposal set: {summary.proposal_set_path}")
             return 0
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)

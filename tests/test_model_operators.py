@@ -8,10 +8,7 @@ from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocu
 from leibniz.model_operators import (
     ExecutableModelOperator,
     ModelOperatorExecutionError,
-    ModelOperatorSearchPoint,
     ModelProgramEffect,
-    materialize_model_operator_search_point,
-    model_operator_semantic_coordinates,
     model_operator_vocabulary,
     summarize_architecture_operators,
     summarize_model_program_effects,
@@ -232,54 +229,6 @@ def _local_affine_manifest(kind: str) -> ArchitectureManifest:
             ],
         }
     )
-
-
-def test_semantic_search_point_materialization_routes_aliases_through_operator_registry() -> None:
-    manifest = materialize_model_operator_search_point(
-        input_shape=(1, 32, 32),
-        output_count=10,
-        point=ModelOperatorSearchPoint(
-            local_support_dimension=2,
-            local_support_size=3,
-        ),
-    )
-    plan = summarize_architecture_operators(manifest)
-
-    assert manifest.input_shape == (1, 32, 32)
-    assert manifest.model_scale_contract is not None
-    assert manifest.model_scale_contract.minimum == 3
-    assert manifest.output_shape == (10,)
-    assert [layer.kind for layer in manifest.layers] == [
-        "local-aggregation",
-        "rank-collapse",
-        "affine-readout",
-    ]
-    assert [operator.descriptor.kind for operator in plan.operators] == [
-        "local-aggregation",
-        "rank-collapse",
-        "affine-readout",
-    ]
-    assert plan.parameter_count == 100
-
-
-def test_model_operator_semantic_coordinates_are_derived_from_operator_summaries() -> None:
-    coordinates = model_operator_semantic_coordinates(_architecture_manifest())
-    by_name = {coordinate.name: coordinate.value for coordinate in coordinates}
-
-    assert by_name["input.rank"] == 3
-    assert by_name["output.rank"] == 1
-    assert by_name["operator.count"] == 3
-    assert by_name["operator.0.tensor_relation"] == "aggregation"
-    assert by_name["operator.0.support"] == "local-window"
-    assert by_name["operator.0.local_support_dimension"] == 2
-    assert by_name["operator.0.local_support_size"] == 2
-    assert by_name["operator.1.shape_law"] == "product-of-input-axes"
-    assert by_name["operator.2.tensor_relation"] == "affine"
-    assert by_name["operator.2.output_count"] == 10
-    assert by_name["resource.parameter_count"] == 50
-    assert by_name["resource.inference_compute"] == 656
-    assert by_name["resource.training_compute_per_sample"] == 1392
-    assert len(by_name) == len(coordinates)
 
 
 def test_model_operator_vocabulary_exports_registry_metadata() -> None:

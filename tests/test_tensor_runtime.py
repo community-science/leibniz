@@ -4,12 +4,9 @@ from typing import Any, cast
 import pytest
 
 import leibniz.tensor_runtime as tensor_runtime
+from leibniz.architectures import ArchitectureManifest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlanDocument
-from leibniz.model_operators import (
-    ModelOperatorSearchPoint,
-    materialize_model_operator_search_point,
-)
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
 from leibniz.observation_generation import (
     load_observation_generator,
@@ -67,15 +64,27 @@ def test_resolve_tensor_runtime_rejects_unavailable_explicit_device() -> None:
 
 
 def test_mps_architecture_support_allows_operation_level_fallback() -> None:
-    supported = materialize_model_operator_search_point(
-        input_shape=(1, 32, 32),
-        output_count=10,
-        point=ModelOperatorSearchPoint(local_support_dimension=2, local_support_size=16),
+    supported = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 32, 32],
+            "output_shape": [10],
+            "layers": [
+                {"kind": "adaptive-pooling", "parameters": {"dimension": 2, "size": 16}},
+                {"kind": "flatten"},
+                {"kind": "dense", "parameters": {"out": 10}},
+            ],
+        }
     )
-    unsupported = materialize_model_operator_search_point(
-        input_shape=(1, 32, 32),
-        output_count=10,
-        point=ModelOperatorSearchPoint(local_support_dimension=2, local_support_size=31),
+    unsupported = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 32, 32],
+            "output_shape": [10],
+            "layers": [
+                {"kind": "adaptive-pooling", "parameters": {"dimension": 2, "size": 31}},
+                {"kind": "flatten"},
+                {"kind": "dense", "parameters": {"out": 10}},
+            ],
+        }
     )
 
     assert architecture_supported_by_tensor_runtime(supported, device_kind="mps")

@@ -162,7 +162,6 @@ export function BenchmarksPanel({
             <BenchmarkPerformancePane
               benchmark={selected}
               onModelSelect={setSelectedModelKey}
-              operatorVocabulary={operatorVocabulary}
               resultEntry={selectedResult}
               selectedModelKey={effectiveSelectedModelKey}
             />
@@ -221,13 +220,11 @@ function CollapsibleBenchmarkSection({
 function BenchmarkPerformancePane({
   benchmark,
   onModelSelect,
-  operatorVocabulary,
   resultEntry,
   selectedModelKey,
 }: {
   benchmark: BenchmarkTaskRecord;
   onModelSelect: (modelKey: string) => void;
-  operatorVocabulary: OperatorVocabularyRecord;
   resultEntry:
     | BenchmarkResultEntry
     | undefined;
@@ -239,7 +236,6 @@ function BenchmarkPerformancePane({
     <div className="benchmark-task">
       <BenchmarkResultDashboard
         onModelSelect={onModelSelect}
-        operatorVocabulary={operatorVocabulary}
         result={result}
         selectedModelKey={selectedModelKey}
       />
@@ -256,7 +252,6 @@ function emptyBenchmarkResult(benchmark: BenchmarkTaskRecord): BenchmarkResultRe
     frontiers: emptyFrontiersForCostAxes(costAxes),
     leaderboard: [],
     model_inspections: [],
-    proposals: [],
     training_history: [],
   };
 }
