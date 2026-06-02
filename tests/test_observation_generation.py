@@ -29,8 +29,8 @@ def test_digits_observation_generator_is_deterministic() -> None:
 
     assert left == right
     assert left.component_count == 1
-    assert left.samples[0].field.shape == (1, 147, 136)
-    assert math.isclose(left.samples[0].complexity, math.log2(22565088000))
+    assert left.samples[0].field.shape == (1, 144, 96)
+    assert math.isclose(left.samples[0].complexity, math.log2(7634180400))
     assert len(left.samples[0].observation.component_sequence) == 1
     assert left.samples[0].outcome_id == "digit-8"
     assert _coordinate(left.samples[0].latent_coordinates, role="content")["values"] == list(
@@ -75,8 +75,8 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
     assert formation_batch.component_count == observation_batch.component_count
     assert formation_batch.seed == observation_batch.seed
     assert [(sample.width, sample.height) for sample in formation_batch.samples] == [
-        (136, 147),
-        (136, 147),
+        (96, 144),
+        (96, 144),
     ]
     assert [sample.component_sequence for sample in formation_batch.samples] == [
         sample.observation.component_sequence for sample in observation_batch.samples
@@ -103,23 +103,38 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
     )
     generated_plan = formation_batch.samples[0].materialization_plan
     assert minimum_plan.resolution_assignment.values == {"W": 24, "H": 24}
-    assert generated_plan.resolution_assignment.values == {"W": 136, "H": 147}
+    assert generated_plan.resolution_assignment.values == {"W": 96, "H": 144}
 
 
-def test_digits_observation_generator_accepts_requested_resolution_assignment() -> None:
+def test_digits_observation_generator_accepts_lattice_resolution_assignment() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
     batch = generator.sample_formation_batch(
         component_count=1,
         sample_count=2,
         seed=101,
-        resolution_assignment=AxisAssignment(values={"W": 32, "H": 32}),
+        resolution_assignment=AxisAssignment(values={"W": 48, "H": 24}),
     )
 
     assert [
         sample.materialization_plan.resolution_assignment.values
         for sample in batch.samples
-    ] == [{"W": 32, "H": 32}, {"W": 32, "H": 32}]
+    ] == [{"W": 48, "H": 24}, {"W": 48, "H": 24}]
+
+
+def test_digits_observation_generator_rejects_off_lattice_resolution_assignment() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    assert str(
+        capture_generation_error(
+            lambda: generator.sample_formation_batch(
+                component_count=1,
+                sample_count=2,
+                seed=101,
+                resolution_assignment=AxisAssignment(values={"W": 32, "H": 32}),
+            )
+        )
+    ) == "W=32 is not an integer multiple of layout lattice step 24"
 
 
 def test_digits_observation_generator_records_optional_timing() -> None:
@@ -175,9 +190,9 @@ def test_digits_observation_generator_samples_resolution_from_memory_bound() -> 
     )
     sample = batch.samples[0]
 
-    assert sample.field.shape == (1, 144, 166)
-    assert sample.materialization_plan.resolution_assignment.values == {"W": 166, "H": 144}
-    assert math.isclose(sample.complexity, math.log2(39029760000))
+    assert sample.field.shape == (1, 192, 24)
+    assert sample.materialization_plan.resolution_assignment.values == {"W": 24, "H": 192}
+    assert math.isclose(sample.complexity, math.log2(365817600))
     assert sample.outcome_id == "digit-1"
 
 
@@ -192,23 +207,23 @@ def test_digits_observation_generator_counts_discretized_nuisance_state_space() 
     )
 
     assert {round(sample.complexity, 12) for sample in scale_one.samples} == {
-        round(math.log2(108927000), 12)
+        round(math.log2(6384000), 12)
     }
     assert {round(sample.complexity, 12) for sample in scale_one_other_seed.samples} == {
-        round(math.log2(608256000), 12)
+        round(math.log2(6384000), 12)
     }
     assert [(sample.width, sample.height) for sample in scale_one.samples] == [
-        (67, 48),
-        (67, 48),
-        (67, 48),
+        (48, 24),
+        (48, 24),
+        (48, 24),
     ]
     assert [(sample.width, sample.height) for sample in scale_one_other_seed.samples] == [
-        (104, 57),
-        (104, 57),
-        (104, 57),
+        (48, 24),
+        (48, 24),
+        (48, 24),
     ]
-    assert 24 <= scale_one.samples[0].width <= 130
-    assert 24 <= scale_one.samples[0].height <= 130
+    assert scale_one.samples[0].width % 24 == 0
+    assert scale_one.samples[0].height % 24 == 0
     assert (scale_one.samples[0].width, scale_one.samples[0].height) != (24, 24)
 
 
@@ -234,9 +249,9 @@ def test_digits_observation_generator_uses_runtime_memory_limit_as_canvas_cap() 
         (24, 24),
     ]
     assert [(sample.width, sample.height) for sample in large.samples] == [
-        (124, 152),
-        (124, 152),
-        (124, 152),
+        (168, 120),
+        (168, 120),
+        (168, 120),
     ]
     assert large.samples[0].complexity > small.samples[0].complexity
 

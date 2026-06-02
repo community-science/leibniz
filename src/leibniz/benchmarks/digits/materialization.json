@@ -15,6 +15,14 @@
       "W": 24,
       "H": 24
     },
+    "resolution_lattice": {
+      "kind": "axis-multiple",
+      "steps": {
+        "W": 24,
+        "H": 24
+      },
+      "description": "Score-bearing sampled canvases lie on independent base-resolution multiples for each spatial axis."
+    },
     "sequence_spacing": "left-to-right",
     "placement_axis": "x",
     "resolution_sampling": {

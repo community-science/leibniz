@@ -622,44 +622,72 @@ def _logarithmic_curriculum_candidates(
     height_axis = generator.formation.height_axis
     minimum_width = minimum_assignment.require_axis(width_axis)
     minimum_height = minimum_assignment.require_axis(height_axis)
+    lattice_steps = generator.materialization.resolution_lattice_steps()
+    width_step = lattice_steps.get(width_axis, 1)
+    height_step = lattice_steps.get(height_axis, 1)
+    widths = _logarithmic_lattice_axis_values(
+        minimum=minimum_width,
+        step=width_step,
+        count=max(8, start_index + 8),
+    )
+    heights = _logarithmic_lattice_axis_values(
+        minimum=minimum_height,
+        step=height_step,
+        count=max(8, start_index + 8),
+    )
     candidates: list[_CurriculumCandidate] = []
-    stage_count = max(8, start_index + 8)
-    for stage in range(stage_count):
-        width = max(
-            minimum_width,
-            math.ceil(minimum_width * (_canvas_logarithmic_growth_factor ** stage)),
-        )
-        height = max(
-            minimum_height,
-            math.ceil(minimum_height * (_canvas_logarithmic_growth_factor ** stage)),
-        )
-        resolution_assignment = AxisAssignment(
-            values={
-                **minimum_assignment.values,
-                width_axis: width,
-                height_axis: height,
-            }
-        )
-        nuisance_extents = (
-            _nuisance_extent_curriculum
-            if stage == 0
-            else tuple(extent for extent in _nuisance_extent_curriculum if extent > 0.0)
-        )
-        for nuisance_extent in nuisance_extents:
-            complexity = generator.distinguishable_state_complexity(
-                component_count=component_count,
-                width=width,
-                height=height,
-                variation_extent=nuisance_extent,
+    for width_index, width in enumerate(widths):
+        for height_index, height in enumerate(heights):
+            stage = max(width_index, height_index)
+            nuisance_extents = (
+                _nuisance_extent_curriculum
+                if stage == 0
+                else tuple(extent for extent in _nuisance_extent_curriculum if extent > 0.0)
             )
-            candidates.append(
-                _CurriculumCandidate(
-                    nuisance_extent=nuisance_extent,
-                    resolution_assignment=resolution_assignment,
-                    complexity=complexity,
+            for nuisance_extent in nuisance_extents:
+                complexity = generator.distinguishable_state_complexity(
+                    component_count=component_count,
+                    width=width,
+                    height=height,
+                    variation_extent=nuisance_extent,
                 )
-            )
+                candidates.append(
+                    _CurriculumCandidate(
+                        nuisance_extent=nuisance_extent,
+                        resolution_assignment=AxisAssignment(
+                            values={
+                                **minimum_assignment.values,
+                                width_axis: width,
+                                height_axis: height,
+                            }
+                        ),
+                        complexity=complexity,
+                    )
+                )
     return tuple(sorted(candidates, key=lambda candidate: candidate.complexity))
+
+
+def _logarithmic_lattice_axis_values(
+    *,
+    minimum: int,
+    step: int,
+    count: int,
+) -> tuple[int, ...]:
+    values: list[int] = []
+    seen: set[int] = set()
+    stage = 0
+    minimum_multiplier = max(1, math.ceil(minimum / step))
+    while len(values) < count:
+        multiplier = max(
+            minimum_multiplier,
+            math.ceil(minimum_multiplier * (_canvas_logarithmic_growth_factor ** stage)),
+        )
+        value = multiplier * step
+        if value not in seen:
+            values.append(value)
+            seen.add(value)
+        stage += 1
+    return tuple(values)
 
 
 def _curriculum_record(

@@ -49,7 +49,9 @@ def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> 
     )
     sample = batch.samples[0]
 
-    assert (sample.width, sample.height) == (89, 144)
+    assert (sample.width, sample.height) == (96, 216)
+    assert sample.width % 24 == 0
+    assert sample.height % 24 == 0
     for sequence_index, coordinate in enumerate(sample.variation_coordinates):
         report = generator.formation.component_discriminability_report(
             width=sample.width,
@@ -80,8 +82,10 @@ def test_digits_resolution_analysis_certifies_sampled_training_affines() -> None
         memory_limit_bytes=100_000_000,
     )
 
-    assert (batch.samples[0].width, batch.samples[0].height) == (32, 42)
+    assert (batch.samples[0].width, batch.samples[0].height) == (24, 48)
     for sample in batch.samples:
+        assert sample.width % 24 == 0
+        assert sample.height % 24 == 0
         for coordinate in sample.variation_coordinates:
             assert generator.formation.component_discriminability_passes(
                 width=sample.width,

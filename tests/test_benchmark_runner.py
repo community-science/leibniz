@@ -599,7 +599,12 @@ def test_evaluation_curriculum_candidates_are_logarithmic_and_complexity_ordered
         candidate.complexity for candidate in candidates
     )
     assert first_resolutions[0] == {"W": 24, "H": 24}
-    assert {"W": 34, "H": 34} in first_resolutions
+    assert {"W": 24, "H": 48} in first_resolutions
+    assert {"W": 48, "H": 24} in first_resolutions
+    assert all(
+        resolution["W"] % 24 == 0 and resolution["H"] % 24 == 0
+        for resolution in first_resolutions
+    )
 
 
 def test_training_curriculum_does_not_restart_step_counter() -> None:

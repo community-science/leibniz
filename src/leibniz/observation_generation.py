@@ -29,6 +29,7 @@ from leibniz.materialization import (
     MaterializationDeclaration,
     MaterializationDeclarationDocument,
     MaterializationPlan,
+    MaterializationValidationError,
 )
 from leibniz.observation_formation import (
     FieldObservation,
@@ -356,9 +357,12 @@ class ObservationGenerator:
                 minimum_assignment=resolved_resolution_assignment,
                 requested_assignment=requested_resolution_assignment,
             )
-        self.materialization.require_resolution(
-            resolution_assignment=resolved_resolution_assignment,
-        )
+        try:
+            self.materialization.require_resolution(
+                resolution_assignment=resolved_resolution_assignment,
+            )
+        except MaterializationValidationError as error:
+            raise ObservationGenerationError(str(error)) from error
         resolution_assignment = resolved_resolution_assignment
         width = resolution_assignment.require_axis(self.formation.width_axis)
         height = resolution_assignment.require_axis(self.formation.height_axis)
@@ -538,6 +542,9 @@ class ObservationGenerator:
             return minimum_assignment
         minimum_width = minimum_assignment.require_axis(sampling.width_axis)
         minimum_height = minimum_assignment.require_axis(sampling.height_axis)
+        lattice_steps = self.materialization.resolution_lattice_steps()
+        width_step = lattice_steps.get(sampling.width_axis, 1)
+        height_step = lattice_steps.get(sampling.height_axis, 1)
         maximum_pixel_count = _batch_sample_pixel_limit(
             memory_limit_bytes=(
                 memory_limit_bytes
@@ -563,14 +570,35 @@ class ObservationGenerator:
                 f"{sampling.height_axis} maximum {maximum_height} is below "
                 f"required minimum {minimum_height}"
             )
+        minimum_width_multiplier = _minimum_axis_multiplier(
+            minimum_width,
+            step=width_step,
+        )
+        minimum_height_multiplier = _minimum_axis_multiplier(
+            minimum_height,
+            step=height_step,
+        )
+        maximum_width_multiplier = maximum_width // width_step
+        maximum_height_multiplier = maximum_height // height_step
+        if maximum_width_multiplier < minimum_width_multiplier:
+            maximum_width_multiplier = minimum_width_multiplier
+        if maximum_height_multiplier < minimum_height_multiplier:
+            maximum_height_multiplier = minimum_height_multiplier
         generator = random.Random(
             f"{seed}:resolution:{component_count}:{sampling.width_axis}:{minimum_width}:"
-            f"{maximum_width}:{sampling.height_axis}:{minimum_height}:{maximum_height}:"
+            f"{maximum_width}:{width_step}:{sampling.height_axis}:{minimum_height}:"
+            f"{maximum_height}:{height_step}:"
             f"{maximum_pixel_count}"
         )
         values = dict(minimum_assignment.values)
-        values[sampling.width_axis] = generator.randint(minimum_width, maximum_width)
-        values[sampling.height_axis] = generator.randint(minimum_height, maximum_height)
+        values[sampling.width_axis] = (
+            generator.randint(minimum_width_multiplier, maximum_width_multiplier)
+            * width_step
+        )
+        values[sampling.height_axis] = (
+            generator.randint(minimum_height_multiplier, maximum_height_multiplier)
+            * height_step
+        )
         return AxisAssignment(values=values)
 
     def _requested_resolution_assignment(
@@ -1426,6 +1454,10 @@ def _sampled_resolution_maximum(
         math.floor(minimum_width * side_multiplier),
         math.floor(minimum_height * side_multiplier),
     )
+
+
+def _minimum_axis_multiplier(value: int, *, step: int) -> int:
+    return max(1, math.ceil(value / step))
 
 
 def _batch_sample_pixel_limit(

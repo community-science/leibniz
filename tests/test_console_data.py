@@ -244,9 +244,9 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert all(".sample-0@" in str(plan["id"]) for plan in materialization_plans)
     assert len({plan["seed"] for plan in materialization_plans}) == len(materialization_plans)
     assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
-    assert samples[0]["field_shape"] == [1, 128, 139]
-    assert _png_dimensions(str(samples[0]["image_data_url"])) == (139, 128)
-    assert _png_dimensions(str(samples[1]["image_data_url"])) == (43, 171)
+    assert samples[0]["field_shape"] == [1, 144, 120]
+    assert _png_dimensions(str(samples[0]["image_data_url"])) == (120, 144)
+    assert _png_dimensions(str(samples[1]["image_data_url"])) == (48, 120)
     assert "preview_crop" not in samples[0]
     assert "preview_crop" not in samples[1]
     latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])
