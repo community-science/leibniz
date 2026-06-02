@@ -33,38 +33,34 @@ _digits_architecture = (
 )
 
 
-def test_base_normalized_absolute_score_rewards_complexity_above_chance() -> None:
-    base_complexity = 20.0
+def test_competent_complexity_score_integrates_bits_above_chance() -> None:
+    complexity = 20.0
     chance_mass = 0.1
 
     assert math.isclose(
-        local_results.base_normalized_absolute_score(
-            ({"complexity": base_complexity, "score": 1.0},),
-            base_complexity=base_complexity,
+        local_results.competent_complexity_score(
+            ({"complexity": complexity, "score": 1.0},),
             chance_mass=chance_mass,
         ),
-        1.0,
+        20.0,
     )
     assert math.isclose(
-        local_results.base_normalized_absolute_score(
-            ({"complexity": base_complexity * 2.0, "score": 1.0},),
-            base_complexity=base_complexity,
+        local_results.competent_complexity_score(
+            ({"complexity": complexity * 2.0, "score": 1.0},),
             chance_mass=chance_mass,
         ),
-        2.0,
+        40.0,
     )
     assert math.isclose(
-        local_results.base_normalized_absolute_score(
-            ({"complexity": base_complexity, "score": 0.55},),
-            base_complexity=base_complexity,
+        local_results.competent_complexity_score(
+            ({"complexity": complexity, "score": 0.55},),
             chance_mass=chance_mass,
         ),
-        0.5,
+        10.0,
     )
     assert math.isclose(
-        local_results.base_normalized_absolute_score(
-            ({"complexity": base_complexity * 4.0, "score": chance_mass},),
-            base_complexity=base_complexity,
+        local_results.competent_complexity_score(
+            ({"complexity": complexity * 4.0, "score": chance_mass},),
             chance_mass=chance_mass,
         ),
         0.0,

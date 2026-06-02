@@ -47,7 +47,7 @@ __all__ = [
     "LocalPublicationPushSummary",
     "LocalResultImportError",
     "LocalResultImportSummary",
-    "base_normalized_absolute_score",
+    "competent_complexity_score",
     "import_submission_publications",
     "initialize_publication_checkout",
     "load_console_result_view",
@@ -1216,7 +1216,7 @@ def _model_result_records(
     for run in runs:
         grouped.setdefault(run.model_key, []).append(run)
 
-    base_complexity = _benchmark_base_complexity(
+    reference_baseline_complexity = _benchmark_base_complexity(
         manifest=manifest,
         repository_root=repository_root,
     )
@@ -1225,9 +1225,8 @@ def _model_result_records(
     for model_key, model_runs in grouped.items():
         ordered_runs = tuple(sorted(model_runs, key=_run_sort_key))
         points = _competence_points(ordered_runs)
-        score = base_normalized_absolute_score(
+        score = competent_complexity_score(
             points,
-            base_complexity=base_complexity,
             chance_mass=chance_mass,
         )
         best_run = max(
@@ -1240,11 +1239,14 @@ def _model_result_records(
             "benchmark_id": str(best_run.benchmark_id),
             "score": score,
             "score_basis": {
-                "kind": "base-normalized-absolute-competent-complexity-v1",
-                "base_complexity": base_complexity,
+                "kind": "competence-integral-over-complexity-v1",
+                "score_unit": "bits",
+                "complexity_axis": "log2-distinguishable-states",
+                "reference_baseline_complexity": reference_baseline_complexity,
                 "chance_mass": chance_mass,
                 "point_score": "accepted-mass",
                 "local_competence": "above-chance-accepted-mass",
+                "integration": "trapezoid-over-observed-complexity",
             },
             "observed_complexities": [point["complexity"] for point in points],
             "points": list(points),
@@ -1524,16 +1526,13 @@ def _run_competence_points(run: _BenchmarkRunRecord) -> tuple[tuple[float, float
     return ((run.complexity, run.score, run.measurement_count),)
 
 
-def base_normalized_absolute_score(
+def competent_complexity_score(
     points: tuple[dict[str, object], ...],
     *,
-    base_complexity: float,
     chance_mass: float,
 ) -> float:
     if not points:
         return 0.0
-    if base_complexity <= 0.0:
-        raise LocalResultImportError("base_complexity must be positive")
     ordered = tuple(sorted(points, key=_point_complexity))
     first_complexity = _point_complexity(ordered[0])
     first_competence = _above_chance_competence(
@@ -1556,7 +1555,7 @@ def base_normalized_absolute_score(
             chance_mass=chance_mass,
         )
         area += width * (left_competence + right_competence) / 2.0
-    return area / base_complexity
+    return area
 
 
 def _above_chance_competence(score: float, *, chance_mass: float) -> float:

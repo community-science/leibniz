@@ -769,8 +769,13 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     }
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     score_basis = cast(dict[str, object], leaderboard[0]["score_basis"])
-    assert score_basis["kind"] == "base-normalized-absolute-competent-complexity-v1"
-    assert math.isclose(cast(float, score_basis["base_complexity"]), math.log2(10))
+    assert score_basis["kind"] == "competence-integral-over-complexity-v1"
+    assert score_basis["score_unit"] == "bits"
+    assert score_basis["complexity_axis"] == "log2-distinguishable-states"
+    assert math.isclose(
+        cast(float, score_basis["reference_baseline_complexity"]),
+        math.log2(10),
+    )
     assert math.isclose(cast(float, score_basis["chance_mass"]), 0.1)
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
     assert math.isclose(observed_complexities[0], math.log2(10))
