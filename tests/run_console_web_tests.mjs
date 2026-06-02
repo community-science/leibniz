@@ -287,7 +287,8 @@ function assertBenchmarkModelWorkbenchStructure() {
   );
   const requiredPanelMarkers = [
     'benchmark-model-workbench',
-    'benchmark-model-rail',
+    'selectedModelKey',
+    'onModelSelect',
     'benchmark-model-artifact-hero',
     'benchmark-model-artifact-flow',
     'benchmark-model-lineage-graph',
@@ -302,10 +303,14 @@ function assertBenchmarkModelWorkbenchStructure() {
       throw new Error(`BenchmarksPanel must expose model workbench marker: ${marker}`);
     }
   }
+  if (panel.includes('benchmark-model-rail') || panel.includes('benchmark-model-card')) {
+    throw new Error('BenchmarksPanel must not preserve the retired model selector rail');
+  }
 
   const requiredStyleMarkers = [
     '--measured-accent-bg',
     '--measured-accent-border',
+    'grid-template-columns: minmax(0, 1fr)',
     '.benchmark-model-artifact-flow',
     '.benchmark-model-lineage-graph',
     '.benchmark-model-validation-chart',
@@ -315,6 +320,9 @@ function assertBenchmarkModelWorkbenchStructure() {
     if (!styles.includes(marker)) {
       throw new Error(`Console styles must preserve model workbench marker: ${marker}`);
     }
+  }
+  if (styles.includes('.benchmark-model-rail') || styles.includes('.benchmark-model-card')) {
+    throw new Error('Console styles must not preserve the retired model selector rail');
   }
 }
 

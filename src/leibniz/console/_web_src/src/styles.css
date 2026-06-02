@@ -68,7 +68,6 @@
   --benchmark-preview-size: 128px;
   --benchmark-compact-preview-size: var(--benchmark-preview-size);
   --benchmark-label-min: 88px;
-  --benchmark-model-card-min: 240px;
   --metric-min: 84px;
   --font-label: 0.65rem;
   --font-status: 0.7rem;
@@ -1118,74 +1117,11 @@ p {
 
 .benchmark-model-inspector-layout {
   display: grid;
-  grid-template-columns: minmax(var(--benchmark-model-card-min), 3fr) minmax(0, 8fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-xl);
   align-items: start;
 }
 
-.benchmark-model-rail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-}
-
-.benchmark-model-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-  width: 100%;
-  border: var(--line-thin) solid var(--border-color-strong);
-  border-radius: var(--radius-sm);
-  background: var(--control-bg);
-  color: inherit;
-  cursor: pointer;
-  padding: var(--space-lg);
-  text-align: left;
-}
-
-.benchmark-model-card.selected {
-  border-color: var(--measured-accent);
-  background: var(--measured-accent-bg);
-}
-
-.benchmark-model-card:hover {
-  border-color: var(--accent-border);
-}
-
-.benchmark-model-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-lg);
-}
-
-.benchmark-model-heading strong,
-.benchmark-model-heading span {
-  overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-.benchmark-model-heading strong {
-  font-size: var(--font-body);
-}
-
-.benchmark-model-heading span {
-  color: var(--neon-blue);
-  font-size: var(--font-control);
-}
-
-.benchmark-model-card dl {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-sm);
-  margin: 0;
-}
-
-.benchmark-model-card dl div {
-  min-width: 0;
-}
-
-.benchmark-model-card dt,
 .benchmark-model-artifact-hero span,
 .benchmark-model-artifact-flow span {
   color: var(--text-dim);
@@ -1193,14 +1129,6 @@ p {
   font-weight: 700;
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-}
-
-.benchmark-model-card dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--text-primary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--font-control);
 }
 
 .benchmark-model-detail {

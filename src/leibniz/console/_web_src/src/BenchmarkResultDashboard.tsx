@@ -5,7 +5,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import {
   benchmarkPlotModel,
@@ -71,11 +71,15 @@ const defaultLeaderboardSort: ModelResultSort = {
 };
 
 export function BenchmarkResultDashboard({
+  onModelSelect,
   operatorVocabulary,
   result,
+  selectedModelKey,
 }: {
+  onModelSelect: (modelKey: string) => void;
   operatorVocabulary: OperatorVocabularyRecord;
   result: BenchmarkResultRecord;
+  selectedModelKey: string;
 }) {
   const costAxes = benchmarkCostAxes(result);
   const stateKeyPrefix = `leibniz.console.benchmarks.${result.benchmark_id}.performance`;
@@ -107,14 +111,24 @@ export function BenchmarkResultDashboard({
   const selectedRunDetail = runRows.find(
     ({ run }) => runSelectionId(run) === selectedId,
   );
-  const selectedModelKey =
+  const selectedSelectionModelKey =
     selection.selectedModel?.model_key ??
     selectedProposalAssociation?.model?.model_key ??
     selectedRunDetail?.model?.model_key;
+  const activeSelectedModelKey = selectedSelectionModelKey ?? selectedModelKey;
   const activeView = plotView ?? {
     xDomain: plot.xDomain,
     yDomain: plot.yDomain,
   };
+
+  useEffect(() => {
+    if (
+      selectedSelectionModelKey !== undefined &&
+      selectedSelectionModelKey !== selectedModelKey
+    ) {
+      onModelSelect(selectedSelectionModelKey);
+    }
+  }, [onModelSelect, selectedModelKey, selectedSelectionModelKey]);
 
   return (
     <section className="performance-section benchmark-result-dashboard">
@@ -126,7 +140,6 @@ export function BenchmarkResultDashboard({
           setSelectedCostAxis(axis);
           setPlotView(null);
           setHoveredId(null);
-          setSelectedId(null);
         }}
         onHover={setHoveredId}
         onPan={(direction) => setPlotView(pannedView(activeView, direction, plot))}
@@ -143,7 +156,7 @@ export function BenchmarkResultDashboard({
         models={result.leaderboard}
         onSelect={setSelectedId}
         onSort={(key) => setLeaderboardSort((current) => nextModelResultSort(current, key))}
-        selectedModelKey={selectedModelKey}
+        selectedModelKey={activeSelectedModelKey}
         sort={leaderboardSort}
         title="Leaderboard"
       />
