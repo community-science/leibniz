@@ -29,6 +29,7 @@ _submission_package_record = RecordSpec(
         "architecture_manifest": FieldSpec(kind="record"),
         "measurement_dataset": FieldSpec(kind="record"),
         "sampled_competence": FieldSpec(kind="record", required=False),
+        "model_metadata": FieldSpec(kind="record", required=False),
         "artifacts": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="record"),
@@ -96,6 +97,7 @@ class SubmissionPackageManifest:
     architecture_manifest: ArchitectureManifest
     measurement_dataset: MeasurementDataset
     sampled_competence: Mapping[str, object] | None = None
+    model_metadata: Mapping[str, object] | None = None
     artifacts: tuple[SubmissionArtifact, ...] = ()
 
     def __post_init__(self) -> None:
@@ -115,6 +117,8 @@ class SubmissionPackageManifest:
                 self.sampled_competence,
                 benchmark_manifest=self.benchmark_manifest,
             )
+        if self.model_metadata is not None:
+            _validate_model_metadata(self.model_metadata)
         try:
             _validate_measurement_dataset_manifest(
                 dataset=self.measurement_dataset,
@@ -144,6 +148,10 @@ class SubmissionPackageManifest:
                 validated.get("sampled_competence"),
                 field="sampled_competence",
             )
+            model_metadata = _optional_mapping(
+                validated.get("model_metadata"),
+                field="model_metadata",
+            )
         except ValueError as error:
             raise SubmissionPackageValidationError(str(error)) from error
         return cls(
@@ -152,6 +160,7 @@ class SubmissionPackageManifest:
             architecture_manifest=architecture_manifest,
             measurement_dataset=measurement_dataset,
             sampled_competence=sampled_competence,
+            model_metadata=model_metadata,
             artifacts=artifacts,
         )
 
@@ -168,6 +177,8 @@ class SubmissionPackageManifest:
         }
         if self.sampled_competence is not None:
             record["sampled_competence"] = dict(self.sampled_competence)
+        if self.model_metadata is not None:
+            record["model_metadata"] = dict(self.model_metadata)
         if self.artifacts:
             record["artifacts"] = [
                 artifact.to_record()
@@ -288,6 +299,18 @@ def _validate_sampled_competence(
                 point_record.get("complexity"),
                 field="sampled_competence.points.complexity",
             )
+
+
+def _validate_model_metadata(record: Mapping[str, object]) -> None:
+    cost_summary = record.get("cost_summary")
+    if cost_summary is None:
+        return
+    summary = _as_mapping(cost_summary, field="model_metadata.cost_summary")
+    for key, value in summary.items():
+        if key.endswith("_components"):
+            _as_sequence(value, field=f"model_metadata.cost_summary.{key}")
+        else:
+            _nonnegative_number(value, field=f"model_metadata.cost_summary.{key}")
 
 
 def _positive_int(value: object, *, field: str) -> int:

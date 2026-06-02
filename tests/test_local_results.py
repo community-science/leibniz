@@ -721,6 +721,11 @@ def _digits_publication_bundle_record(
                 else architecture_manifest
             ),
             "measurement_dataset": dataset.to_record(),
+            "model_metadata": {
+                "cost_summary": {
+                    "training_compute": 3000,
+                }
+            },
             "artifacts": [
                 {
                     "id": "artifacts.digits-weights@0.1.0",

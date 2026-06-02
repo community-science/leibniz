@@ -68,14 +68,14 @@ assertEqual(
   'model inspection parameter count',
 );
 assertEqual(
-  modelInspection.cost_summary.parameter_bytes,
+  modelInspection.cost_summary.storage_bytes,
   200,
-  'model inspection parameter bytes',
+  'model inspection storage bytes',
 );
 assertEqual(
-  modelInspection.cost_summary.inference_flops,
+  modelInspection.cost_summary.inference_compute,
   656,
-  'model inspection flops',
+  'model inspection compute',
 );
 assertEqual(
   modelInspection.components.map((component) => component.kind).join(','),

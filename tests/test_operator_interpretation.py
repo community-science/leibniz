@@ -26,20 +26,38 @@ def test_operator_interpreter_preserves_current_public_shape_and_cost_laws() -> 
         input_shape=flattened.output_shape,
     )
 
-    assert (local.output_shape, local.parameter_count, local.inference_flops) == (
+    assert (
+        local.output_shape,
+        local.parameter_count,
+        local.inference_compute,
+        local.training_compute_per_sample,
+    ) == (
         (1, 2, 2),
         0,
         1024,
+        2048,
     )
-    assert (flattened.output_shape, flattened.parameter_count, flattened.inference_flops) == (
+    assert (
+        flattened.output_shape,
+        flattened.parameter_count,
+        flattened.inference_compute,
+        flattened.training_compute_per_sample,
+    ) == (
         (4,),
         0,
         0,
+        0,
     )
-    assert (readout.output_shape, readout.parameter_count, readout.inference_flops) == (
+    assert (
+        readout.output_shape,
+        readout.parameter_count,
+        readout.inference_compute,
+        readout.training_compute_per_sample,
+    ) == (
         (10,),
         50,
         80,
+        240,
     )
 
 
@@ -60,7 +78,7 @@ def test_operator_interpreter_returns_unknown_values_for_unresolved_inputs() -> 
         registry.operators[2],
         parameters={"out": 10},
         input_shape=(1, 2, 2),
-    ).inference_flops is None
+    ).inference_compute is None
 
 
 def test_operator_interpreter_rejects_undeclared_laws() -> None:

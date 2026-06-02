@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react';
 
 import {
   benchmarkPlotModel,
+  benchmarkCostAxisGroups,
   benchmarkCostAxes,
   benchmarkCostAxis,
   costValue,
@@ -47,7 +48,7 @@ type PlotView = {
 const plotWidth = 960;
 const plotHeight = 440;
 const plotMargin = {
-  bottom: 58,
+  bottom: 78,
   left: 72,
   right: 26,
   top: 26,
@@ -60,10 +61,10 @@ const plotPanFraction = 0.18;
 const plotTickOffset = 18;
 const plotYTickLabelOffset = 10;
 const plotTickLabelBaselineOffset = 4;
-const plotAxisSelectorTopOffset = 31;
-const plotAxisSelectorHeight = 25;
-const plotAxisSelectorMinWidth = 264;
-const plotAxisSelectorButtonWidth = 84;
+const plotAxisSelectorTopOffset = 20;
+const plotAxisSelectorHeight = 28;
+const plotAxisSelectorMinWidth = 720;
+const plotAxisSelectorButtonWidth = 118;
 const proposalIntervalCapHalfWidth = 7;
 const defaultLeaderboardSort: ModelResultSort = {
   key: 'score',
@@ -232,9 +233,14 @@ function BenchmarkFrontierPlot({
     model.points.find((point) => point.id === hoveredId) ??
     model.proposals.find((proposal) => proposal.id === hoveredId);
   const activePoint = hoveredPoint ?? selectedPoint;
+  const costAxisGroups = benchmarkCostAxisGroups(costAxes);
+  const axisButtonCount = costAxisGroups.reduce(
+    (count, group) => count + group.axes.length,
+    0,
+  );
   const axisSelectorWidth = Math.min(
     plotBodyWidth,
-    Math.max(plotAxisSelectorMinWidth, costAxes.length * plotAxisSelectorButtonWidth),
+    Math.max(plotAxisSelectorMinWidth, axisButtonCount * plotAxisSelectorButtonWidth),
   );
   const axisSelectorX = plotMargin.left + plotBodyWidth / 2 - axisSelectorWidth / 2;
   const axisSelectorY = plotMargin.top + plotBodyHeight + plotAxisSelectorTopOffset;
@@ -481,20 +487,31 @@ function BenchmarkFrontierPlot({
               y={axisSelectorY}
             >
               <div className="frontier-chart-axis-selector">
-                {costAxes.map((axis) => (
-                  <button
-                    aria-pressed={axis.key === costAxis}
-                    className={axis.key === costAxis ? 'active' : ''}
-                    key={axis.key}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCostAxisChange(axis.key);
-                    }}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    type="button"
+                {costAxisGroups.map((group) => (
+                  <div
+                    className="frontier-chart-axis-group"
+                    key={group.key}
+                    style={{ flexGrow: group.axes.length }}
                   >
-                    {axis.label}
-                  </button>
+                    <span>{group.label}</span>
+                    <div>
+                      {group.axes.map((axis) => (
+                        <button
+                          aria-pressed={axis.key === costAxis}
+                          className={axis.key === costAxis ? 'active' : ''}
+                          key={axis.key}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onCostAxisChange(axis.key);
+                          }}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          type="button"
+                        >
+                          {axis.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             </foreignObject>

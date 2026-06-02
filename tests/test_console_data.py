@@ -101,8 +101,9 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert model_inspection["cost_summary"] == {
         "component_count": 3,
         "parameter_count": 50,
-        "parameter_bytes": 200,
-        "inference_flops": 656,
+        "storage_bytes": 200,
+        "inference_compute": 656,
+        "training_compute_per_sample": 1392,
         "unknown_parameter_components": [],
     }
     model_components = cast(list[dict[str, object]], model_inspection["components"])
@@ -131,7 +132,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         "output_node_ids": ["component-2"],
         "component_kinds": ["adaptive-pooling", "flatten", "dense"],
         "unsupported_parameter_components": [],
-        "unsupported_flop_components": [],
+        "unsupported_compute_components": [],
     }
     assert [
         evidence["node_path"]
@@ -302,8 +303,9 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
           "cost_summary": {
             "component_count": 1,
             "parameter_count": 10,
-            "parameter_bytes": 40,
-            "inference_flops": 20,
+            "storage_bytes": 40,
+            "inference_compute": 20,
+            "training_compute": 60,
             "unknown_parameter_components": []
           },
           "run_ids": ["run-1"],
@@ -313,8 +315,9 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
       ],
       "frontiers": {
         "parameter_count": [],
-        "inference_flops": [],
-        "parameter_bytes": []
+        "storage_bytes": [],
+        "inference_compute": [],
+        "training_compute": []
       },
       "training_history": [
         {
@@ -331,8 +334,9 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
           "cost_summary": {
             "component_count": 1,
             "parameter_count": 10,
-            "parameter_bytes": 40,
-            "inference_flops": 20,
+            "storage_bytes": 40,
+            "inference_compute": 20,
+            "training_compute": 60,
             "unknown_parameter_components": []
           },
           "architecture": {"kind": "architecture-manifest"},
@@ -385,8 +389,9 @@ def test_console_data_discovers_materialized_result_root_views(tmp_path: Path) -
       "leaderboard": [],
       "frontiers": {
         "parameter_count": [],
-        "inference_flops": [],
-        "parameter_bytes": []
+        "storage_bytes": [],
+        "inference_compute": [],
+        "training_compute": []
       },
       "training_history": []
     }

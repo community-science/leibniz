@@ -55,11 +55,17 @@ def test_model_operator_summary_classifies_formal_semantics() -> None:
         (10,),
     ]
     assert [operator.parameter_count for operator in plan.operators] == [0, 0, 50]
-    assert [operator.parameter_bytes for operator in plan.operators] == [0, 0, 200]
-    assert [operator.inference_flops for operator in plan.operators] == [576, 0, 80]
+    assert [operator.storage_bytes for operator in plan.operators] == [0, 0, 200]
+    assert [operator.inference_compute for operator in plan.operators] == [576, 0, 80]
+    assert [operator.training_compute_per_sample for operator in plan.operators] == [
+        1152,
+        0,
+        240,
+    ]
     assert plan.parameter_count == 50
-    assert plan.parameter_bytes == 200
-    assert plan.inference_flops == 656
+    assert plan.storage_bytes == 200
+    assert plan.inference_compute == 656
+    assert plan.training_compute_per_sample == 1392
 
 
 def test_model_operator_summary_rejects_unknown_operator_kind() -> None:
@@ -142,7 +148,8 @@ def test_model_operator_semantic_coordinates_are_derived_from_operator_summaries
     assert by_name["operator.2.tensor_relation"] == "affine"
     assert by_name["operator.2.output_count"] == 10
     assert by_name["resource.parameter_count"] == 50
-    assert by_name["resource.inference_flops"] == 656
+    assert by_name["resource.inference_compute"] == 656
+    assert by_name["resource.training_compute_per_sample"] == 1392
     assert len(by_name) == len(coordinates)
 
 
@@ -213,7 +220,7 @@ def test_program_effect_summary_resolves_branch_share_and_merge_trace() -> None:
 
     assert plan.output_shape == (1, 8, 8)
     assert plan.parameter_count == 0
-    assert plan.inference_flops == 0
+    assert plan.inference_compute == 0
     assert [summary.descriptor.kind for summary in plan.effects] == [
         "branch",
         "parameter-sharing",
@@ -241,19 +248,19 @@ def test_program_effect_summary_scales_nested_repeat_cost() -> None:
                 kind="repeat",
                 repetitions=3,
                 nested_parameter_count=5,
-                nested_inference_flops=11,
+                nested_inference_compute=11,
             ),
         ),
     )
 
     assert plan.output_shape == (4,)
     assert plan.parameter_count == 15
-    assert plan.inference_flops == 33
+    assert plan.inference_compute == 33
     assert plan.effects[0].descriptor.shape_law == "preserve-shape"
     assert plan.effects[0].trace == (
         "repeat count=3",
         "nested_parameter_count=5",
-        "nested_inference_flops=11",
+        "nested_inference_compute=11",
     )
 
 

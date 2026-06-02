@@ -175,8 +175,10 @@ export type CompetencePointRecord = {
 export type CostSummaryRecord = {
   component_count: number;
   parameter_count?: number;
-  parameter_bytes?: number;
-  inference_flops?: number;
+  storage_bytes?: number;
+  inference_compute?: number;
+  training_compute_per_sample?: number;
+  training_compute?: number;
   unknown_parameter_components?: number[];
 };
 
@@ -511,6 +513,10 @@ function parseCostSummary(value: unknown, path: string): CostSummaryRecord {
     ...record,
     component_count: requireNumber(record.component_count, `${path}.component_count`, transportError),
     parameter_count: optionalNumber(record.parameter_count, `${path}.parameter_count`, transportError),
+    storage_bytes: optionalNumber(record.storage_bytes, `${path}.storage_bytes`, transportError),
+    inference_compute: optionalNumber(record.inference_compute, `${path}.inference_compute`, transportError),
+    training_compute_per_sample: optionalNumber(record.training_compute_per_sample, `${path}.training_compute_per_sample`, transportError),
+    training_compute: optionalNumber(record.training_compute, `${path}.training_compute`, transportError),
     unknown_parameter_components:
       record.unknown_parameter_components === undefined
         ? undefined

@@ -460,8 +460,13 @@ _coordinate_descriptors = (
         value_kind="integer",
     ),
     SemanticCoordinateDescriptor(
-        name="resource.inference_flops",
-        display_name="Inference FLOPs",
+        name="resource.inference_compute",
+        display_name="Inference Compute",
+        value_kind="integer",
+    ),
+    SemanticCoordinateDescriptor(
+        name="resource.training_compute_per_sample",
+        display_name="Training Compute Per Sample",
         value_kind="integer",
     ),
 )

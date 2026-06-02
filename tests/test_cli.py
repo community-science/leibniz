@@ -557,7 +557,7 @@ def _resource_report_record() -> dict[str, object]:
         "artifact": _model_manifest_reference().to_record(),
         "parameter_count": 1,
         "parameter_bits": 8,
-        "parameter_bytes": 1,
+        "storage_bytes": 1,
     }
 
 

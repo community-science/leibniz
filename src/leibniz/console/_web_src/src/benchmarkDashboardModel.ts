@@ -53,16 +53,37 @@ export type BenchmarkPlotModel = {
   yTicks: number[];
   staircase: [number, number][];
 };
+export type BenchmarkCostAxisGroup = {
+  axes: CostAxisRecord[];
+  key: string;
+  label: string;
+};
 
 const fallbackLogCostDomain: [number, number] = [0, 20];
 const fallbackScoreDomain: [number, number] = [0, 1.05];
 const scoreTickTarget = 6;
 const denseLogTickThreshold = 14;
-const standardCostAxes: CostAxisRecord[] = [
-  { key: 'parameter_count', label: 'Parameters' },
-  { key: 'inference_flops', label: 'FLOPs' },
-  { key: 'parameter_bytes', label: 'Storage' },
+const standardCostAxisGroups: BenchmarkCostAxisGroup[] = [
+  {
+    axes: [
+      { key: 'parameter_count', label: 'Parameters' },
+      { key: 'storage_bytes', label: 'Storage' },
+    ],
+    key: 'model',
+    label: 'Model',
+  },
+  {
+    axes: [{ key: 'inference_compute', label: 'Compute' }],
+    key: 'inference',
+    label: 'Inference',
+  },
+  {
+    axes: [{ key: 'training_compute', label: 'Compute' }],
+    key: 'training',
+    label: 'Training',
+  },
 ];
+const standardCostAxes = standardCostAxisGroups.flatMap((group) => group.axes);
 
 export type ModelResultSortKey = 'score' | 'cost' | 'model' | 'runs' | 'measurements';
 export type SortDirection = 'ascending' | 'descending';
@@ -97,6 +118,25 @@ export function benchmarkCostAxes(
     ...axes,
     ...standardCostAxes.filter((axis) => !seen.has(axis.key)),
   ];
+}
+
+export function benchmarkCostAxisGroups(costAxes: CostAxisRecord[]): BenchmarkCostAxisGroup[] {
+  const axesByKey = new Map(costAxes.map((axis) => [axis.key, axis]));
+  const standardKeys = new Set(standardCostAxes.map((axis) => axis.key));
+  const groups = standardCostAxisGroups.map((group) => ({
+    ...group,
+    axes: group.axes
+      .map((axis) => axesByKey.get(axis.key))
+      .filter((axis): axis is CostAxisRecord => axis !== undefined),
+  }));
+  const customAxes = costAxes.filter((axis) => !standardKeys.has(axis.key));
+  if (customAxes.length > 0) {
+    groups[0] = {
+      ...groups[0]!,
+      axes: [...groups[0]!.axes, ...customAxes],
+    };
+  }
+  return groups.filter((group) => group.axes.length > 0);
 }
 
 export function benchmarkCostAxis(

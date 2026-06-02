@@ -46,7 +46,7 @@ def test_resource_payloads_canonicalize_and_sum_deterministically() -> None:
             "artifact": _architecture_reference_record(),
             "parameter_count": 15,
             "parameter_bits": 120,
-            "parameter_bytes": 15,
+            "storage_bytes": 15,
             "payloads": [table.to_record(), tensor.to_record()],
             "inference_axes": [
                 {"name": "multiply-adds", "value": 32, "unit": "operation"},
@@ -188,16 +188,9 @@ def test_resource_records_reject_negative_or_inconsistent_report_fields() -> Non
     )
 
     record = _resource_report_record()
-    record["parameter_bits"] = 121
+    record["storage_bytes"] = -1
     assert str(capture_resource_error(lambda: ResourceReport.from_record(record))) == (
-        "parameter_bytes must derive from parameter_bits"
-    )
-
-    record = _resource_report_record()
-    record["parameter_bytes"] = 15
-    del record["parameter_bits"]
-    assert str(capture_resource_error(lambda: ResourceReport.from_record(record))) == (
-        "parameter_bits is required with parameter_bytes"
+        "storage_bytes must be nonnegative"
     )
 
     record = _resource_report_record()
@@ -240,7 +233,7 @@ def _resource_report_record(*, id_suffix: str = "digits-pool") -> dict[str, obje
         "artifact": _architecture_reference_record(),
         "parameter_count": 15,
         "parameter_bits": 120,
-        "parameter_bytes": 15,
+        "storage_bytes": 15,
         "payloads": [
             ResourcePayload.tensor(name="weights", shape=(3, 5), element_bits=8).to_record()
         ],

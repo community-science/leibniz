@@ -25,7 +25,8 @@ class OperatorInterpretation:
 
     output_shape: tuple[int, ...] | None
     parameter_count: int | None
-    inference_flops: int | None
+    inference_compute: int | None
+    training_compute_per_sample: int | None
 
 
 def interpret_operator_semantic(
@@ -40,7 +41,8 @@ def interpret_operator_semantic(
         return OperatorInterpretation(
             output_shape=None,
             parameter_count=None,
-            inference_flops=None,
+            inference_compute=None,
+            training_compute_per_sample=None,
         )
     if semantic.shape_law == "product-of-input-axes":
         return _interpret_product_of_input_axes(semantic, input_shape)
@@ -63,7 +65,8 @@ def _interpret_product_of_input_axes(
     return OperatorInterpretation(
         output_shape=(TensorShape.from_axes(input_shape).element_count,),
         parameter_count=0,
-        inference_flops=0,
+        inference_compute=0,
+        training_compute_per_sample=0,
     )
 
 
@@ -82,7 +85,8 @@ def _interpret_rank_1_output(
     return OperatorInterpretation(
         output_shape=(output_count,),
         parameter_count=(input_count + 1) * output_count,
-        inference_flops=(2 * input_count) * output_count,
+        inference_compute=(2 * input_count) * output_count,
+        training_compute_per_sample=(6 * input_count) * output_count,
     )
 
 
@@ -99,10 +103,12 @@ def _interpret_preserve_prefix_replace_trailing_axes(
     if size is None or dimension is None or dimension >= len(input_shape) + 1:
         return _unknown_interpretation()
     preserved = input_shape[: len(input_shape) - dimension]
+    input_elements = TensorShape.from_axes(input_shape).element_count
     return OperatorInterpretation(
         output_shape=(*preserved, *(size for _index in range(dimension))),
         parameter_count=0,
-        inference_flops=TensorShape.from_axes(input_shape).element_count,
+        inference_compute=input_elements,
+        training_compute_per_sample=2 * input_elements,
     )
 
 
@@ -125,5 +131,6 @@ def _unknown_interpretation() -> OperatorInterpretation:
     return OperatorInterpretation(
         output_shape=None,
         parameter_count=None,
-        inference_flops=None,
+        inference_compute=None,
+        training_compute_per_sample=None,
     )
