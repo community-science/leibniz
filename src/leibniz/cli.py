@@ -380,7 +380,7 @@ def _parser() -> argparse.ArgumentParser:
         choices=("none", "cosine", "reduce-on-plateau"),
     )
     propose_results.add_argument("--validation-interval", default=250, type=int)
-    propose_results.add_argument("--convergence-patience", default=12, type=int)
+    propose_results.add_argument("--convergence-patience", default=6, type=int)
     propose_results.add_argument("--convergence-min-delta", default=1e-3, type=float)
     propose_results.add_argument("--convergence-min-steps", default=500, type=int)
     propose_results.add_argument(
@@ -421,7 +421,7 @@ def _parser() -> argparse.ArgumentParser:
         choices=("none", "cosine", "reduce-on-plateau"),
     )
     run.add_argument("--validation-interval", default=250, type=int)
-    run.add_argument("--convergence-patience", default=12, type=int)
+    run.add_argument("--convergence-patience", default=6, type=int)
     run.add_argument("--convergence-min-delta", default=1e-3, type=float)
     run.add_argument("--convergence-min-steps", default=500, type=int)
     run.add_argument(
@@ -456,7 +456,7 @@ def _parser() -> argparse.ArgumentParser:
         choices=("none", "cosine", "reduce-on-plateau"),
     )
     loop.add_argument("--validation-interval", default=250, type=int)
-    loop.add_argument("--convergence-patience", default=12, type=int)
+    loop.add_argument("--convergence-patience", default=6, type=int)
     loop.add_argument("--convergence-min-delta", default=1e-3, type=float)
     loop.add_argument("--convergence-min-steps", default=500, type=int)
     loop.add_argument(

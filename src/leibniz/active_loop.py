@@ -48,7 +48,7 @@ class ActiveTrainingLoopPlan:
     optimizer: str = "adam"
     schedule: str = "reduce-on-plateau"
     validation_interval: int = 250
-    convergence_patience: int = 12
+    convergence_patience: int = 6
     convergence_min_delta: float = 1e-3
     convergence_min_steps: int = 500
     tensor_device: TensorRuntimeDevice = "auto"

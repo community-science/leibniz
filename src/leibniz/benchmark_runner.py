@@ -59,7 +59,7 @@ _progress_format_version = 1
 _default_sample_count = 512
 _default_train_steps: int | None = None
 _default_validation_interval = 250
-_default_convergence_patience = 12
+_default_convergence_patience = 6
 _default_convergence_min_delta = 1e-3
 _default_convergence_min_steps = 500
 _component_count = 1
@@ -711,6 +711,7 @@ def _train_and_predict_on_device(
         name=schedule_name,
         max_steps=train_steps,
         min_delta=convergence_min_delta,
+        patience=convergence_patience,
     )
     training_counter = _ThroughputCounter()
     validation_counter = _ThroughputCounter()
@@ -1469,6 +1470,7 @@ def _make_scheduler(
     name: str,
     max_steps: int | None,
     min_delta: float,
+    patience: int,
 ) -> _LearningRateSchedule | None:
     if name == "none":
         return None
@@ -1494,6 +1496,7 @@ def _make_scheduler(
                 factor=factor,
                 threshold=min_delta,
                 threshold_mode="abs",
+                patience=patience,
                 eps=eps,
             ),
             optimizer=optimizer,

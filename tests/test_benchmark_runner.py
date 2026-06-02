@@ -391,6 +391,25 @@ def test_plateau_scheduler_resets_learning_rate_for_curriculum_expansion() -> No
     assert scheduler.reset_count == 1
 
 
+def test_reduce_on_plateau_scheduler_uses_convergence_patience() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    parameter = torch.nn.Parameter(torch.tensor(1.0))
+    optimizer = torch.optim.Adam([parameter], lr=0.01)
+
+    schedule = cast(Any, benchmark_runner)._make_scheduler(
+        torch=torch,
+        optimizer=optimizer,
+        name="reduce-on-plateau",
+        max_steps=None,
+        min_delta=1e-3,
+        patience=6,
+    )
+
+    assert schedule is not None
+    assert schedule.scheduler.patience == 6
+
+
 def test_training_stage_carries_prior_global_best(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -596,6 +615,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     roofline_comparison = cast(dict[str, object], throughput["roofline_comparison"])
     assert protocol["optimizer"] == "adam"
     assert protocol["schedule"] == "reduce-on-plateau"
+    assert protocol["patience"] == 6
     assert diagnostics["stop_reason"] == "max-steps"
     assert diagnostics["steps_run"] == 1
     assert diagnostics["validation_checks"] == 2
