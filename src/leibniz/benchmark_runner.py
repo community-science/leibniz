@@ -58,7 +58,8 @@ _progress_format = "leibniz.benchmark-training-progress"
 _progress_format_version = 1
 _default_sample_count = 512
 _default_train_steps: int | None = None
-_default_validation_interval = 250
+_default_checkpoint_interval = 256
+_default_gate_check_interval = 32
 _default_convergence_patience = 6
 _default_convergence_min_delta = 1e-3
 _default_convergence_min_steps = 500
@@ -230,7 +231,10 @@ class BenchmarkRunPlan:
     learning_rate: float = 0.01
     optimizer: str = "adam"
     schedule: str = "reduce-on-plateau"
-    validation_interval: int = _default_validation_interval
+    checkpoint_interval: int = _default_checkpoint_interval
+    gate_check_interval: int = _default_gate_check_interval
+    gate_sample_count: int | None = None
+    gate_decision_rule: str = "validation-loss-plateau"
     convergence_patience: int = _default_convergence_patience
     convergence_min_delta: float = _default_convergence_min_delta
     convergence_min_steps: int = _default_convergence_min_steps
@@ -264,8 +268,22 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError(f"unsupported optimizer: {self.optimizer}")
         if self.schedule not in {"none", "cosine", "reduce-on-plateau"}:
             raise BenchmarkRunnerError(f"unsupported schedule: {self.schedule}")
-        if type(self.validation_interval) is not int or self.validation_interval < 1:
-            raise BenchmarkRunnerError("validation_interval must be a positive integer")
+        if type(self.checkpoint_interval) is not int or self.checkpoint_interval < 1:
+            raise BenchmarkRunnerError("checkpoint_interval must be a positive integer")
+        if type(self.gate_check_interval) is not int or self.gate_check_interval < 1:
+            raise BenchmarkRunnerError("gate_check_interval must be a positive integer")
+        if self.checkpoint_interval % self.gate_check_interval != 0:
+            raise BenchmarkRunnerError(
+                "checkpoint_interval must be an integer multiple of gate_check_interval"
+            )
+        if self.gate_sample_count is not None and (
+            type(self.gate_sample_count) is not int or self.gate_sample_count < 1
+        ):
+            raise BenchmarkRunnerError("gate_sample_count must be a positive integer")
+        if self.gate_decision_rule != "validation-loss-plateau":
+            raise BenchmarkRunnerError(
+                f"unsupported gate_decision_rule: {self.gate_decision_rule}"
+            )
         if type(self.convergence_patience) is not int or self.convergence_patience < 0:
             raise BenchmarkRunnerError("convergence_patience must be nonnegative")
         if self.convergence_min_delta < 0:
@@ -297,7 +315,10 @@ class BenchmarkRunPlan:
             "learning_rate": float(self.learning_rate),
             "optimizer": self.optimizer,
             "schedule": self.schedule,
-            "validation_interval": self.validation_interval,
+            "checkpoint_interval": self.checkpoint_interval,
+            "gate_check_interval": self.gate_check_interval,
+            "gate_sample_count": self.resolved_gate_sample_count,
+            "gate_decision_rule": self.gate_decision_rule,
             "convergence_patience": self.convergence_patience,
             "convergence_min_delta": float(self.convergence_min_delta),
             "convergence_min_steps": self.convergence_min_steps,
@@ -312,6 +333,14 @@ class BenchmarkRunPlan:
         if self.evaluation_sample_count is None:
             return self.sample_count
         return self.evaluation_sample_count
+
+    @property
+    def resolved_gate_sample_count(self) -> int:
+        """Return the generated validation sample count for competence gates."""
+
+        if self.gate_sample_count is None:
+            return self.sample_count
+        return self.gate_sample_count
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,11 +445,14 @@ def run_benchmark(
         outcome_space=outcome_space,
         component_count=_component_count,
         sample_count=plan.sample_count,
+        gate_sample_count=plan.resolved_gate_sample_count,
         train_steps=plan.train_steps,
         learning_rate=float(plan.learning_rate),
         optimizer_name=plan.optimizer,
         schedule_name=plan.schedule,
-        validation_interval=plan.validation_interval,
+        gate_check_interval=plan.gate_check_interval,
+        checkpoint_interval=plan.checkpoint_interval,
+        gate_decision_rule=plan.gate_decision_rule,
         convergence_patience=plan.convergence_patience,
         convergence_min_delta=float(plan.convergence_min_delta),
         convergence_min_steps=plan.convergence_min_steps,
@@ -483,7 +515,10 @@ def run_benchmark(
             "learning_rate": float(plan.learning_rate),
             "optimizer": plan.optimizer,
             "schedule": plan.schedule,
-            "validation_interval": plan.validation_interval,
+            "checkpoint_interval": plan.checkpoint_interval,
+            "gate_check_interval": plan.gate_check_interval,
+            "gate_sample_count": plan.resolved_gate_sample_count,
+            "gate_decision_rule": plan.gate_decision_rule,
             "convergence_patience": plan.convergence_patience,
             "convergence_min_delta": float(plan.convergence_min_delta),
             "convergence_min_steps": plan.convergence_min_steps,
@@ -795,11 +830,14 @@ def _train_and_predict(
     outcome_space: OutcomeSpace,
     component_count: int,
     sample_count: int,
+    gate_sample_count: int,
     train_steps: int | None,
     learning_rate: float,
     optimizer_name: str,
     schedule_name: str,
-    validation_interval: int,
+    gate_check_interval: int,
+    checkpoint_interval: int,
+    gate_decision_rule: str,
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
@@ -824,11 +862,14 @@ def _train_and_predict(
                 outcome_space=outcome_space,
                 component_count=component_count,
                 sample_count=sample_count,
+                gate_sample_count=gate_sample_count,
                 train_steps=train_steps,
                 learning_rate=learning_rate,
                 optimizer_name=optimizer_name,
                 schedule_name=schedule_name,
-                validation_interval=validation_interval,
+                gate_check_interval=gate_check_interval,
+                checkpoint_interval=checkpoint_interval,
+                gate_decision_rule=gate_decision_rule,
                 convergence_patience=convergence_patience,
                 convergence_min_delta=convergence_min_delta,
                 convergence_min_steps=convergence_min_steps,
@@ -853,11 +894,14 @@ def _train_and_predict_on_device(
     outcome_space: OutcomeSpace,
     component_count: int,
     sample_count: int,
+    gate_sample_count: int,
     train_steps: int | None,
     learning_rate: float,
     optimizer_name: str,
     schedule_name: str,
-    validation_interval: int,
+    gate_check_interval: int,
+    checkpoint_interval: int,
+    gate_decision_rule: str,
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
@@ -907,22 +951,23 @@ def _train_and_predict_on_device(
     def batch_for_seed(
         batch_seed: int,
         *,
+        batch_sample_count: int,
         generation_phase: str,
         tensor_phase: str,
         resolution_assignment: AxisAssignment,
         variation_extent: float,
     ) -> tuple[Any, Any]:
-        with phase_timings.span(generation_phase, samples=sample_count):
+        with phase_timings.span(generation_phase, samples=batch_sample_count):
             generated = generator.sample_formation_batch(
                 component_count=component_count,
-                sample_count=sample_count,
+                sample_count=batch_sample_count,
                 seed=batch_seed,
                 resolution_assignment=resolution_assignment,
                 variation_extent=variation_extent,
                 timing=phase_timings,
                 timing_prefix=f"{generation_phase}.",
             )
-        with phase_timings.span(tensor_phase, samples=sample_count):
+        with phase_timings.span(tensor_phase, samples=batch_sample_count):
             tensors = formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
         return tensors
 
@@ -973,6 +1018,7 @@ def _train_and_predict_on_device(
         train_batch=lambda step: (
             batch_for_seed(
                 seed + step,
+                batch_sample_count=sample_count,
                 generation_phase="training_formation_generation",
                 tensor_phase="training_tensor_batch",
                 resolution_assignment=training_rung_for_step(step).resolution_assignment,
@@ -981,17 +1027,20 @@ def _train_and_predict_on_device(
         ),
         validation_batch=lambda check: batch_for_seed(
             seed + 1_000_003 + check,
+            batch_sample_count=gate_sample_count,
             generation_phase="validation_formation_generation",
             tensor_phase="validation_tensor_batch",
             resolution_assignment=current_frontier().resolution_assignment,
             variation_extent=current_frontier().nuisance_extent,
         ),
         max_steps=train_steps,
-        validation_interval=validation_interval,
+        gate_check_interval=gate_check_interval,
+        checkpoint_interval=checkpoint_interval,
         patience=convergence_patience,
         min_delta=convergence_min_delta,
         min_steps=convergence_min_steps,
         batch_size=sample_count,
+        gate_sample_count=gate_sample_count,
         training_compute_per_sample=(
             None if work_estimates is None else work_estimates.training.compute_per_sample
         ),
@@ -1000,7 +1049,7 @@ def _train_and_predict_on_device(
         validation_counter=validation_counter,
         phase_timings=phase_timings,
         on_plateau=advance_frontier,
-        on_validation=lambda history: (
+        on_checkpoint=lambda history: (
             progress_callback(
                 _running_training_run_record(
                     seed=seed,
@@ -1009,7 +1058,10 @@ def _train_and_predict_on_device(
                     learning_rate=float(learning_rate),
                     optimizer_name=optimizer_name,
                     schedule_name=schedule_name,
-                    validation_interval=validation_interval,
+                    gate_check_interval=gate_check_interval,
+                    checkpoint_interval=checkpoint_interval,
+                    gate_sample_count=gate_sample_count,
+                    gate_decision_rule=gate_decision_rule,
                     convergence_patience=convergence_patience,
                     convergence_min_delta=convergence_min_delta,
                     convergence_min_steps=convergence_min_steps,
@@ -1082,7 +1134,10 @@ def _train_and_predict_on_device(
         learning_rate=float(learning_rate),
         optimizer_name=optimizer_name,
         schedule_name=schedule_name,
-        validation_interval=validation_interval,
+        gate_check_interval=gate_check_interval,
+        checkpoint_interval=checkpoint_interval,
+        gate_sample_count=gate_sample_count,
+        gate_decision_rule=gate_decision_rule,
         convergence_patience=convergence_patience,
         convergence_min_delta=convergence_min_delta,
         convergence_min_steps=convergence_min_steps,
@@ -1122,11 +1177,13 @@ def _train_until_convergence(
     train_batch: Callable[[int], tuple[Any, Any]],
     validation_batch: Callable[[int], tuple[Any, Any]],
     max_steps: int | None,
-    validation_interval: int,
+    gate_check_interval: int,
+    checkpoint_interval: int,
     patience: int,
     min_delta: float,
     min_steps: int,
     batch_size: int,
+    gate_sample_count: int,
     training_compute_per_sample: float | None,
     training_counter: _ThroughputCounter,
     training_compute_counter: _ComputeCounter,
@@ -1135,7 +1192,7 @@ def _train_until_convergence(
     start_step: int = 0,
     start_check: int = 0,
     on_plateau: Callable[[tuple[TrainingHistoryPoint, ...]], bool] | None = None,
-    on_validation: Callable[[tuple[TrainingHistoryPoint, ...]], None] | None = None,
+    on_checkpoint: Callable[[tuple[TrainingHistoryPoint, ...]], None] | None = None,
 ) -> _TrainingStageResult:
     validation_history: list[TrainingHistoryPoint] = []
     best_loss = float("inf")
@@ -1148,7 +1205,8 @@ def _train_until_convergence(
         nonlocal best_loss, stale_checks
         validation_started = time.perf_counter()
         fields, labels = validation_batch(check)
-        with phase_timings.span("validation_forward_loss", samples=batch_size):
+        actual_gate_sample_count = _tensor_batch_size(fields, fallback=gate_sample_count)
+        with phase_timings.span("validation_forward_loss", samples=actual_gate_sample_count):
             validation_loss = _validation_loss(
                 torch=torch,
                 module=module,
@@ -1168,7 +1226,7 @@ def _train_until_convergence(
             learning_rates = tuple(float(group["lr"]) for group in optimizer.param_groups)
         validation_counter.add(
             seconds=time.perf_counter() - validation_started,
-            samples=batch_size,
+            samples=actual_gate_sample_count,
         )
         validation_history.append(
             TrainingHistoryPoint(
@@ -1179,8 +1237,11 @@ def _train_until_convergence(
                 learning_rates=learning_rates,
             )
         )
-        if on_validation is not None:
-            on_validation(tuple(validation_history))
+        if (
+            on_checkpoint is not None
+            and (step == start_step or step % checkpoint_interval == 0)
+        ):
+            on_checkpoint(tuple(validation_history))
 
     append_validation(step=start_step, check=start_check)
     if max_steps == start_step:
@@ -1215,7 +1276,7 @@ def _train_until_convergence(
             samples=actual_batch_size,
         )
         hit_step_cap = max_steps is not None and step == max_steps
-        if step % validation_interval != 0 and not hit_step_cap:
+        if step % gate_check_interval != 0 and not hit_step_cap:
             continue
         append_validation(step=step, check=validation_check)
         validation_check += 1
@@ -1297,7 +1358,10 @@ def _training_run_record(
     learning_rate: float,
     optimizer_name: str,
     schedule_name: str,
-    validation_interval: int,
+    gate_check_interval: int,
+    checkpoint_interval: int,
+    gate_sample_count: int,
+    gate_decision_rule: str,
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
@@ -1330,8 +1394,10 @@ def _training_run_record(
             seed=seed,
             batch_size=batch_size,
             max_steps=max_steps,
-            validation_interval=validation_interval,
-            validation_sample_count=batch_size,
+            checkpoint_interval=checkpoint_interval,
+            gate_check_interval=gate_check_interval,
+            gate_sample_count=gate_sample_count,
+            gate_decision_rule=gate_decision_rule,
             min_delta=convergence_min_delta,
             patience=convergence_patience,
             validation_source="generator-resample",
@@ -1351,7 +1417,10 @@ def _running_training_run_record(
     learning_rate: float,
     optimizer_name: str,
     schedule_name: str,
-    validation_interval: int,
+    gate_check_interval: int,
+    checkpoint_interval: int,
+    gate_sample_count: int,
+    gate_decision_rule: str,
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
@@ -1374,8 +1443,10 @@ def _running_training_run_record(
             seed=seed,
             batch_size=batch_size,
             max_steps=max_steps,
-            validation_interval=validation_interval,
-            validation_sample_count=batch_size,
+            checkpoint_interval=checkpoint_interval,
+            gate_check_interval=gate_check_interval,
+            gate_sample_count=gate_sample_count,
+            gate_decision_rule=gate_decision_rule,
             min_delta=convergence_min_delta,
             patience=convergence_patience,
             validation_source="generator-resample",
@@ -1436,7 +1507,10 @@ def _training_progress_record(
         "learning_rate": float(plan.learning_rate),
         "optimizer": plan.optimizer,
         "schedule": plan.schedule,
-        "validation_interval": plan.validation_interval,
+        "checkpoint_interval": plan.checkpoint_interval,
+        "gate_check_interval": plan.gate_check_interval,
+        "gate_sample_count": plan.resolved_gate_sample_count,
+        "gate_decision_rule": plan.gate_decision_rule,
         "convergence_patience": plan.convergence_patience,
         "convergence_min_delta": float(plan.convergence_min_delta),
         "convergence_min_steps": plan.convergence_min_steps,

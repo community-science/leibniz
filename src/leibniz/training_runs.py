@@ -37,8 +37,10 @@ _protocol_record = RecordSpec(
         "seed": FieldSpec(kind="integer"),
         "batch_size": FieldSpec(kind="integer"),
         "max_steps": FieldSpec(kind="integer", required=False),
-        "validation_interval": FieldSpec(kind="integer"),
-        "validation_sample_count": FieldSpec(kind="integer"),
+        "checkpoint_interval": FieldSpec(kind="integer"),
+        "gate_check_interval": FieldSpec(kind="integer"),
+        "gate_sample_count": FieldSpec(kind="integer"),
+        "gate_decision_rule": FieldSpec(kind="string"),
         "min_delta": FieldSpec(kind="number"),
         "patience": FieldSpec(kind="integer"),
         "min_steps": FieldSpec(kind="integer", required=False),
@@ -94,8 +96,10 @@ class TrainingProtocol:
     seed: int
     batch_size: int
     max_steps: int | None
-    validation_interval: int
-    validation_sample_count: int
+    checkpoint_interval: int
+    gate_check_interval: int
+    gate_sample_count: int
+    gate_decision_rule: str
     min_delta: float
     patience: int
     validation_source: str
@@ -118,8 +122,15 @@ class TrainingProtocol:
         _require_positive_int(self.batch_size, "batch_size")
         if self.max_steps is not None:
             _require_nonnegative_int(self.max_steps, "max_steps")
-        _require_positive_int(self.validation_interval, "validation_interval")
-        _require_positive_int(self.validation_sample_count, "validation_sample_count")
+        _require_positive_int(self.checkpoint_interval, "checkpoint_interval")
+        _require_positive_int(self.gate_check_interval, "gate_check_interval")
+        if self.checkpoint_interval % self.gate_check_interval != 0:
+            raise TrainingRunValidationError(
+                "checkpoint_interval must be an integer multiple of gate_check_interval"
+            )
+        _require_positive_int(self.gate_sample_count, "gate_sample_count")
+        if not self.gate_decision_rule:
+            raise TrainingRunValidationError("gate_decision_rule must be nonempty")
         _require_nonnegative_finite(self.min_delta, "min_delta")
         _require_nonnegative_int(self.patience, "patience")
         _require_nonnegative_int(self.min_steps, "min_steps")
@@ -149,13 +160,21 @@ class TrainingProtocol:
                 if "max_steps" not in validated
                 else _as_int(validated["max_steps"], "max_steps")
             ),
-            validation_interval=_as_int(
-                validated["validation_interval"],
-                "validation_interval",
+            checkpoint_interval=_as_int(
+                validated["checkpoint_interval"],
+                "checkpoint_interval",
             ),
-            validation_sample_count=_as_int(
-                validated["validation_sample_count"],
-                "validation_sample_count",
+            gate_check_interval=_as_int(
+                validated["gate_check_interval"],
+                "gate_check_interval",
+            ),
+            gate_sample_count=_as_int(
+                validated["gate_sample_count"],
+                "gate_sample_count",
+            ),
+            gate_decision_rule=_as_string(
+                validated["gate_decision_rule"],
+                "gate_decision_rule",
             ),
             min_delta=_as_float(validated["min_delta"], "min_delta"),
             patience=_as_int(validated["patience"], "patience"),
@@ -183,8 +202,10 @@ class TrainingProtocol:
             "schedule": self.schedule,
             "seed": self.seed,
             "batch_size": self.batch_size,
-            "validation_interval": self.validation_interval,
-            "validation_sample_count": self.validation_sample_count,
+            "checkpoint_interval": self.checkpoint_interval,
+            "gate_check_interval": self.gate_check_interval,
+            "gate_sample_count": self.gate_sample_count,
+            "gate_decision_rule": self.gate_decision_rule,
             "min_delta": self.min_delta,
             "patience": self.patience,
             "tensor_runtime": self.tensor_runtime,

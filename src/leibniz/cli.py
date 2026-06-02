@@ -379,7 +379,10 @@ def _parser() -> argparse.ArgumentParser:
         default="reduce-on-plateau",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
-    propose_results.add_argument("--validation-interval", default=250, type=int)
+    propose_results.add_argument("--checkpoint-interval", default=256, type=int)
+    propose_results.add_argument("--gate-check-interval", default=32, type=int)
+    propose_results.add_argument("--gate-sample-count", default=None, type=int)
+    propose_results.add_argument("--gate-decision-rule", default="validation-loss-plateau")
     propose_results.add_argument("--convergence-patience", default=6, type=int)
     propose_results.add_argument("--convergence-min-delta", default=1e-3, type=float)
     propose_results.add_argument("--convergence-min-steps", default=500, type=int)
@@ -420,7 +423,10 @@ def _parser() -> argparse.ArgumentParser:
         default="reduce-on-plateau",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
-    run.add_argument("--validation-interval", default=250, type=int)
+    run.add_argument("--checkpoint-interval", default=256, type=int)
+    run.add_argument("--gate-check-interval", default=32, type=int)
+    run.add_argument("--gate-sample-count", default=None, type=int)
+    run.add_argument("--gate-decision-rule", default="validation-loss-plateau")
     run.add_argument("--convergence-patience", default=6, type=int)
     run.add_argument("--convergence-min-delta", default=1e-3, type=float)
     run.add_argument("--convergence-min-steps", default=500, type=int)
@@ -455,7 +461,10 @@ def _parser() -> argparse.ArgumentParser:
         default="reduce-on-plateau",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
-    loop.add_argument("--validation-interval", default=250, type=int)
+    loop.add_argument("--checkpoint-interval", default=256, type=int)
+    loop.add_argument("--gate-check-interval", default=32, type=int)
+    loop.add_argument("--gate-sample-count", default=None, type=int)
+    loop.add_argument("--gate-decision-rule", default="validation-loss-plateau")
     loop.add_argument("--convergence-patience", default=6, type=int)
     loop.add_argument("--convergence-min-delta", default=1e-3, type=float)
     loop.add_argument("--convergence-min-steps", default=500, type=int)
@@ -490,7 +499,10 @@ def _parser() -> argparse.ArgumentParser:
         default="reduce-on-plateau",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
-    shakedown.add_argument("--validation-interval", default=1, type=int)
+    shakedown.add_argument("--checkpoint-interval", default=1, type=int)
+    shakedown.add_argument("--gate-check-interval", default=1, type=int)
+    shakedown.add_argument("--gate-sample-count", default=None, type=int)
+    shakedown.add_argument("--gate-decision-rule", default="validation-loss-plateau")
     shakedown.add_argument("--convergence-patience", default=0, type=int)
     shakedown.add_argument("--convergence-min-delta", default=0.0, type=float)
     shakedown.add_argument("--convergence-min-steps", default=0, type=int)
@@ -577,7 +589,10 @@ def _benchmark(args: argparse.Namespace) -> int:
                     learning_rate=args.learning_rate,
                     optimizer=args.optimizer,
                     schedule=args.schedule,
-                    validation_interval=args.validation_interval,
+                    checkpoint_interval=args.checkpoint_interval,
+                    gate_check_interval=args.gate_check_interval,
+                    gate_sample_count=args.gate_sample_count,
+                    gate_decision_rule=args.gate_decision_rule,
                     convergence_patience=args.convergence_patience,
                     convergence_min_delta=args.convergence_min_delta,
                     convergence_min_steps=args.convergence_min_steps,
@@ -683,7 +698,10 @@ def _active_training_loop_plan(
         learning_rate=args.learning_rate,
         optimizer=args.optimizer,
         schedule=args.schedule,
-        validation_interval=args.validation_interval,
+        checkpoint_interval=args.checkpoint_interval,
+        gate_check_interval=args.gate_check_interval,
+        gate_sample_count=args.gate_sample_count,
+        gate_decision_rule=args.gate_decision_rule,
         convergence_patience=args.convergence_patience,
         convergence_min_delta=args.convergence_min_delta,
         convergence_min_steps=args.convergence_min_steps,
@@ -904,7 +922,10 @@ def _results(args: argparse.Namespace) -> int:
                     learning_rate=args.learning_rate,
                     optimizer=args.optimizer,
                     schedule=args.schedule,
-                    validation_interval=args.validation_interval,
+                    checkpoint_interval=args.checkpoint_interval,
+                    gate_check_interval=args.gate_check_interval,
+                    gate_sample_count=args.gate_sample_count,
+                    gate_decision_rule=args.gate_decision_rule,
                     convergence_patience=args.convergence_patience,
                     convergence_min_delta=args.convergence_min_delta,
                     convergence_min_steps=args.convergence_min_steps,

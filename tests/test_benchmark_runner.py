@@ -93,6 +93,22 @@ def test_digits_benchmark_runner_dry_run_does_not_discover_runtime(
     assert summary.dry_run is True
 
 
+def test_benchmark_run_plan_requires_checkpoint_interval_on_gate_cadence(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        BenchmarkRunnerError,
+        match="checkpoint_interval must be an integer multiple of gate_check_interval",
+    ):
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=tmp_path / "results",
+            checkpoint_interval=250,
+            gate_check_interval=32,
+        )
+
+
 def test_digits_benchmark_runner_rejects_fixed_shape_architecture(
     tmp_path: Path,
 ) -> None:
@@ -210,7 +226,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_run.protocol.tensor_runtime == "pytorch"
     assert training_run.protocol.tensor_device == "cpu"
     assert training_run.protocol.max_steps == 1
-    assert training_run.protocol.validation_sample_count == 2
+    assert training_run.protocol.gate_sample_count == 2
     assert training_summary["tensor_runtime"] == "pytorch"
     assert training_summary["tensor_device"] == "cpu"
     throughput = cast(dict[str, object], training_summary["throughput"])
@@ -361,7 +377,9 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
             learning_rate=0.005,
             optimizer="adam",
             schedule="cosine",
-            validation_interval=2,
+            gate_check_interval=1,
+            checkpoint_interval=2,
+            gate_sample_count=3,
             convergence_patience=2,
             convergence_min_delta=0.001,
             tensor_device="cpu",
@@ -379,11 +397,14 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert training_run.protocol.optimizer == "adam"
     assert training_run.protocol.schedule == "cosine"
     assert training_run.protocol.learning_rate == 0.005
-    assert training_run.protocol.validation_interval == 2
+    assert training_run.protocol.gate_check_interval == 1
+    assert training_run.protocol.checkpoint_interval == 2
+    assert training_run.protocol.gate_sample_count == 3
+    assert training_run.protocol.gate_decision_rule == "validation-loss-plateau"
     assert training_run.protocol.patience == 2
     assert training_run.protocol.min_delta == 0.001
     assert training_run.protocol.validation_source == "generator-resample"
-    assert [point.step for point in training_run.validation_history] == [0, 2, 3]
+    assert [point.step for point in training_run.validation_history] == [0, 1, 2, 3]
     assert training_run.validation_history[-1].learning_rates
 
 
@@ -549,11 +570,13 @@ def test_training_stage_records_current_validation_loss_without_global_best(
         train_batch=fake_batch,
         validation_batch=fake_batch,
         max_steps=100,
-        validation_interval=1,
+        gate_check_interval=1,
+        checkpoint_interval=1,
         patience=1,
         min_delta=0.0,
         min_steps=0,
         batch_size=1,
+        gate_sample_count=1,
         training_compute_per_sample=10.0,
         training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
@@ -924,7 +947,8 @@ def test_digits_benchmark_runner_materializes_running_training_history(
             evaluation_sample_count=2,
             seed=101,
             train_steps=2,
-            validation_interval=1,
+            gate_check_interval=1,
+            checkpoint_interval=1,
             convergence_patience=0,
             convergence_min_delta=0.0,
             convergence_min_steps=0,

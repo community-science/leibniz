@@ -7,7 +7,11 @@ from typing import cast
 
 import pytest
 
-from leibniz.active_loop import ActiveTrainingLoopPlan, run_active_training_loop
+from leibniz.active_loop import (
+    ActiveTrainingLoopError,
+    ActiveTrainingLoopPlan,
+    run_active_training_loop,
+)
 from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
 from leibniz.cli import main
 from leibniz.console.data import ConsoleDataBuilder
@@ -78,6 +82,21 @@ def test_active_training_loop_always_generates_one_proposal(
     assert summary.completed_run_count == 1
     assert len(summary.planned_commands) == 1
     assert len(summary.measurement_dataset_paths) == 1
+
+
+def test_active_training_loop_plan_requires_checkpoint_interval_on_gate_cadence(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        ActiveTrainingLoopError,
+        match="checkpoint_interval must be an integer multiple of gate_check_interval",
+    ):
+        ActiveTrainingLoopPlan(
+            benchmark_root=_benchmark_root,
+            results_root=tmp_path / "results",
+            checkpoint_interval=250,
+            gate_check_interval=32,
+        )
 
 
 def test_cli_active_loop_outputs_feed_console_data(tmp_path: Path) -> None:

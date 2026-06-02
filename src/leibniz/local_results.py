@@ -907,7 +907,10 @@ def _run_console_view_model(
                     ),
                     ("Steps", _console_number_value(protocol.get("max_steps"))),
                     ("Batch", _console_number_value(protocol.get("batch_size"))),
-                    ("Interval", _console_number_value(protocol.get("validation_interval"))),
+                    ("Checkpoint", _console_number_value(protocol.get("checkpoint_interval"))),
+                    ("Gate Check", _console_number_value(protocol.get("gate_check_interval"))),
+                    ("Gate Samples", _console_number_value(protocol.get("gate_sample_count"))),
+                    ("Gate Rule", _console_string_value(protocol.get("gate_decision_rule"))),
                     ("Validation", _console_string_value(protocol.get("validation_source"))),
                 ),
             )
@@ -2175,17 +2178,36 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
         protocol_path,
         ("kind", "objective", "optimizer", "schedule", "validation_source"),
     )
-    protocol_numbers = (
-        "learning_rate",
-        "seed",
-        "batch_size",
-        "validation_interval",
-        "validation_sample_count",
-        "min_delta",
-        "patience",
-    )
+    protocol_numbers = ("learning_rate", "min_delta")
     for field in protocol_numbers:
         _as_nonnegative_number(protocol.get(field), f"{prefix}.protocol.{field}")
+    protocol_positive_ints = (
+        "seed",
+        "batch_size",
+        "checkpoint_interval",
+        "gate_check_interval",
+        "gate_sample_count",
+    )
+    for field in protocol_positive_ints:
+        _as_positive_int(protocol.get(field), f"{prefix}.protocol.{field}")
+    _as_nonnegative_number(protocol.get("patience"), f"{prefix}.protocol.patience")
+    checkpoint_interval = _as_positive_int(
+        protocol.get("checkpoint_interval"),
+        f"{prefix}.protocol.checkpoint_interval",
+    )
+    gate_check_interval = _as_positive_int(
+        protocol.get("gate_check_interval"),
+        f"{prefix}.protocol.gate_check_interval",
+    )
+    if checkpoint_interval % gate_check_interval != 0:
+        raise LocalResultImportError(
+            f"{prefix}.protocol.checkpoint_interval: "
+            "expected integer multiple of gate_check_interval"
+        )
+    _as_string(
+        protocol.get("gate_decision_rule"),
+        f"{prefix}.protocol.gate_decision_rule",
+    )
     for field in ("validation_history", "artifacts"):
         _as_sequence(record.get(field), _field_path(prefix, field))
     if "evaluation_curriculum" in record:

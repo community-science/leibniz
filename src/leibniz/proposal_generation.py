@@ -76,7 +76,10 @@ class ProposalGenerationPlan:
     learning_rate: float = 0.01
     optimizer: str = "adam"
     schedule: str = "reduce-on-plateau"
-    validation_interval: int = 250
+    checkpoint_interval: int = 256
+    gate_check_interval: int = 32
+    gate_sample_count: int | None = None
+    gate_decision_rule: str = "validation-loss-plateau"
     convergence_patience: int = 6
     convergence_min_delta: float = 1e-3
     convergence_min_steps: int = 500
@@ -117,8 +120,22 @@ class ProposalGenerationPlan:
             raise ProposalGenerationError(f"unsupported optimizer: {self.optimizer}")
         if self.schedule not in {"none", "cosine", "reduce-on-plateau"}:
             raise ProposalGenerationError(f"unsupported schedule: {self.schedule}")
-        if type(self.validation_interval) is not int or self.validation_interval < 1:
-            raise ProposalGenerationError("validation_interval must be positive")
+        if type(self.checkpoint_interval) is not int or self.checkpoint_interval < 1:
+            raise ProposalGenerationError("checkpoint_interval must be positive")
+        if type(self.gate_check_interval) is not int or self.gate_check_interval < 1:
+            raise ProposalGenerationError("gate_check_interval must be positive")
+        if self.checkpoint_interval % self.gate_check_interval != 0:
+            raise ProposalGenerationError(
+                "checkpoint_interval must be an integer multiple of gate_check_interval"
+            )
+        if self.gate_sample_count is not None and (
+            type(self.gate_sample_count) is not int or self.gate_sample_count < 1
+        ):
+            raise ProposalGenerationError("gate_sample_count must be positive")
+        if self.gate_decision_rule != "validation-loss-plateau":
+            raise ProposalGenerationError(
+                f"unsupported gate_decision_rule: {self.gate_decision_rule}"
+            )
         if type(self.convergence_patience) is not int or self.convergence_patience < 0:
             raise ProposalGenerationError("convergence_patience must be nonnegative")
         if self.convergence_min_delta < 0:
@@ -299,8 +316,18 @@ def generate_experiment_proposals(plan: ProposalGenerationPlan) -> ProposalGener
                     plan.optimizer,
                     "--schedule",
                     plan.schedule,
-                    "--validation-interval",
-                    str(plan.validation_interval),
+                    "--checkpoint-interval",
+                    str(plan.checkpoint_interval),
+                    "--gate-check-interval",
+                    str(plan.gate_check_interval),
+                    "--gate-sample-count",
+                    str(
+                        plan.gate_sample_count
+                        if plan.gate_sample_count is not None
+                        else plan.sample_count
+                    ),
+                    "--gate-decision-rule",
+                    plan.gate_decision_rule,
                     "--convergence-patience",
                     str(plan.convergence_patience),
                     "--convergence-min-delta",

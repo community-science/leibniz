@@ -224,6 +224,37 @@ def test_console_result_view_validates_training_diagnostics_records(tmp_path: Pa
         load_console_result_view(canonical_document_bytes(view))
 
 
+def test_console_result_view_validates_training_protocol_io_cadence(tmp_path: Path) -> None:
+    results_root = tmp_path / "results"
+    run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=results_root,
+            sample_count=1,
+            train_steps=0,
+            tensor_device="cpu",
+        )
+    )
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=results_root,
+    )
+
+    view = dict(load_console_result_view(summary.view_file.read_bytes()))
+    results = cast(list[dict[str, object]], view["benchmark_results"])
+    history = cast(list[dict[str, object]], results[0]["training_history"])
+    protocol = cast(dict[str, object], history[0]["training_diagnostics"])["protocol"]
+    cast(dict[str, object], protocol)["checkpoint_interval"] = 250
+    cast(dict[str, object], protocol)["gate_check_interval"] = 32
+
+    with pytest.raises(
+        LocalResultImportError,
+        match="expected integer multiple of gate_check_interval",
+    ):
+        load_console_result_view(canonical_document_bytes(view))
+
+
 def test_materialize_benchmark_result_views_projects_imported_publications(
     tmp_path: Path,
 ) -> None:
@@ -361,7 +392,7 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
     )
     assert publication_document.bundle.submission_package.id == ProtocolIdentifier.parse(
         "submissions.digits.digits-arch-4a2277aa9fd5-c1-seed101-samples1-steps0"
-        "-train-e4b2ff9c5722@0.1.0"
+        "-train-ea9e5b79ce26@0.1.0"
     )
     assert publication_document.bundle.submission_package.sampled_competence is not None
     assert imported_summary.publication_bundle_count == 1

@@ -126,9 +126,11 @@ leibniz benchmark shakedown \
 
 `benchmark shakedown` is the fast smoke-test path. The default `benchmark run`,
 `benchmark loop`, and `results propose` local training profile is an uncapped
-convergence run: validation every 250 steps, 500 minimum steps before early
-stopping, patience 12, and convergence min delta `1e-3`. Override those with
-`--train-steps`, `--convergence-min-steps`, `--validation-interval`,
+convergence run: competence gates are checked every 32 steps, progress
+checkpoints are written every 256 steps, training runs at least 500 steps before
+early stopping, patience is 6 gate checks, and convergence min delta is `1e-3`.
+Override those with `--train-steps`, `--convergence-min-steps`,
+`--gate-check-interval`, `--gate-sample-count`, `--checkpoint-interval`,
 `--convergence-patience`, and `--convergence-min-delta` when you need a shorter
 diagnostic run.
 

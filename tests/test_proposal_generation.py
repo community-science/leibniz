@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 import leibniz.proposal_generation as proposal_generation
 from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
@@ -94,7 +96,10 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
     assert document.proposal_set.proposals[0].acquisition_value is not None
     assert "--optimizer" in document.proposal_set.proposals[0].command
     assert "--schedule" in document.proposal_set.proposals[0].command
-    assert "--validation-interval" in document.proposal_set.proposals[0].command
+    assert "--checkpoint-interval" in document.proposal_set.proposals[0].command
+    assert "--gate-check-interval" in document.proposal_set.proposals[0].command
+    assert "--gate-sample-count" in document.proposal_set.proposals[0].command
+    assert "--gate-decision-rule" in document.proposal_set.proposals[0].command
     assert "--evaluation-sample-count" in document.proposal_set.proposals[0].command
     assert "--device" in document.proposal_set.proposals[0].command
     command = document.proposal_set.proposals[0].command
@@ -122,6 +127,21 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
     assert result_search_diagnostics["sampled_resource_stratum"] == search_diagnostics[
         "sampled_resource_stratum"
     ]
+
+
+def test_proposal_generation_plan_requires_checkpoint_interval_on_gate_cadence(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        proposal_generation.ProposalGenerationError,
+        match="checkpoint_interval must be an integer multiple of gate_check_interval",
+    ):
+        ProposalGenerationPlan(
+            benchmark_root=_benchmark_root,
+            results_root=tmp_path / "results",
+            checkpoint_interval=250,
+            gate_check_interval=32,
+        )
 
 
 def test_generate_experiment_proposals_keeps_operation_fallback_candidates(
@@ -197,8 +217,14 @@ def test_cli_generates_experiment_proposals(
             "adamw",
             "--schedule",
             "reduce-on-plateau",
-            "--validation-interval",
+            "--checkpoint-interval",
             "2",
+            "--gate-check-interval",
+            "1",
+            "--gate-sample-count",
+            "4",
+            "--gate-decision-rule",
+            "validation-loss-plateau",
             "--convergence-patience",
             "3",
             "--convergence-min-delta",
