@@ -66,7 +66,7 @@ def test_resolve_tensor_runtime_rejects_unavailable_explicit_device() -> None:
             resolve_tensor_runtime("cuda")
 
 
-def test_mps_architecture_support_rejects_nondivisible_adaptive_pooling() -> None:
+def test_mps_architecture_support_allows_operation_level_fallback() -> None:
     supported = materialize_model_operator_search_point(
         input_shape=(1, 32, 32),
         output_count=10,
@@ -80,11 +80,8 @@ def test_mps_architecture_support_rejects_nondivisible_adaptive_pooling() -> Non
 
     assert architecture_supported_by_tensor_runtime(supported, device_kind="mps")
     assert architecture_supported_by_tensor_runtime(unsupported, device_kind="cpu")
-    assert not architecture_supported_by_tensor_runtime(unsupported, device_kind="mps")
-    assert architecture_tensor_runtime_issue(unsupported, device_kind="mps") == (
-        "mps adaptive pooling requires trailing input axes to be divisible "
-        "by the requested output axes"
-    )
+    assert architecture_supported_by_tensor_runtime(unsupported, device_kind="mps")
+    assert architecture_tensor_runtime_issue(unsupported, device_kind="mps") is None
 
 
 def test_runtime_roofline_record_calibrates_cpu_ceiling() -> None:

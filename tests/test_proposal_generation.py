@@ -124,7 +124,7 @@ def test_generate_experiment_proposals_writes_unmeasured_architecture_candidates
     ]
 
 
-def test_generate_experiment_proposals_filters_mps_incompatible_candidates(
+def test_generate_experiment_proposals_keeps_operation_fallback_candidates(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
@@ -153,6 +153,7 @@ def test_generate_experiment_proposals_filters_mps_incompatible_candidates(
     )
     assert 1 <= summary.proposal_count <= 3
     assert summary.proposal_count == len(architectures)
+    nondivisible_candidates = 0
     for architecture in architectures:
         out_height = cast(
             int,
@@ -168,8 +169,12 @@ def test_generate_experiment_proposals_filters_mps_incompatible_candidates(
                 architecture.layers[0].parameters.get("size"),
             ),
         )
-        assert architecture.input_shape[-2] % out_height == 0
-        assert architecture.input_shape[-1] % out_width == 0
+        if (
+            architecture.input_shape[-2] % out_height != 0
+            or architecture.input_shape[-1] % out_width != 0
+        ):
+            nondivisible_candidates += 1
+    assert nondivisible_candidates > 0
 
 
 def test_cli_generates_experiment_proposals(

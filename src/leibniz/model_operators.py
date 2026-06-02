@@ -416,107 +416,124 @@ class ExecutableModelOperator:
     def torch_module(self) -> Any:
         """Instantiate a minimal PyTorch module for supported operator specializations."""
 
-        try:
-            torch = cast(Any, importlib.import_module("torch"))
-        except ImportError as error:  # pragma: no cover - depends on local environment
-            raise ModelOperatorExecutionError(
-                "PyTorch is required to instantiate operators"
-            ) from error
+        torch = _torch()
+        return torch.nn.Sequential(*self.torch_operation_modules(torch=torch))
 
-        modules: list[Any] = []
-        shape = self.architecture.input_shape
-        for layer in self.architecture.layers:
-            descriptor = _descriptor_for_layer(layer)
-            if descriptor.kind == _operator_local_aggregation:
-                dimension = _positive_int_parameter(layer.parameters, "dimension")
-                if dimension != 2:
-                    raise ModelOperatorExecutionError(
-                        "local aggregation currently supports dimension 2"
-                    )
-                out_height, out_width = _fixed_support_axes(layer.parameters)
-                modules.append(torch.nn.AdaptiveAvgPool2d((out_height, out_width)))
-                shape = (*shape[: len(shape) - dimension], out_height, out_width)
-            elif descriptor.kind == _operator_fixed_support_affine:
-                dimension = _positive_int_parameter(layer.parameters, "dimension")
-                if dimension != 2:
-                    raise ModelOperatorExecutionError(
-                        "fixed support affine currently supports dimension 2"
-                    )
-                if len(shape) <= dimension:
-                    raise ModelOperatorExecutionError(
-                        "fixed support affine requires a channel axis before support axes"
-                    )
-                channel_axis_index = len(shape) - dimension - 1
-                out_channels = _positive_int_parameter(layer.parameters, "out_channels")
-                out_height = _positive_int_parameter(layer.parameters, "out_height")
-                out_width = _positive_int_parameter(layer.parameters, "out_width")
-                modules.append(
-                    torch.nn.Sequential(
-                        torch.nn.AdaptiveAvgPool2d((out_height, out_width)),
-                        torch.nn.Conv2d(
-                            in_channels=shape[channel_axis_index],
-                            out_channels=out_channels,
-                            kernel_size=1,
-                        ),
-                    )
+    def torch_operation_modules(self, *, torch: Any | None = None) -> tuple[Any, ...]:
+        """Instantiate one PyTorch module per supported operator specialization."""
+
+        torch = _torch() if torch is None else torch
+        return _torch_operation_modules(architecture=self.architecture, torch=torch)
+
+
+def _torch() -> Any:
+    try:
+        return cast(Any, importlib.import_module("torch"))
+    except ImportError as error:  # pragma: no cover - depends on local environment
+        raise ModelOperatorExecutionError(
+            "PyTorch is required to instantiate operators"
+        ) from error
+
+
+def _torch_operation_modules(
+    *,
+    architecture: ArchitectureManifest,
+    torch: Any,
+) -> tuple[Any, ...]:
+    modules: list[Any] = []
+    shape = architecture.input_shape
+    for layer in architecture.layers:
+        descriptor = _descriptor_for_layer(layer)
+        if descriptor.kind == _operator_local_aggregation:
+            dimension = _positive_int_parameter(layer.parameters, "dimension")
+            if dimension != 2:
+                raise ModelOperatorExecutionError(
+                    "local aggregation currently supports dimension 2"
                 )
-                shape = (
-                    *shape[:channel_axis_index],
-                    out_channels,
-                    out_height,
-                    out_width,
+            out_height, out_width = _fixed_support_axes(layer.parameters)
+            modules.append(torch.nn.AdaptiveAvgPool2d((out_height, out_width)))
+            shape = (*shape[: len(shape) - dimension], out_height, out_width)
+        elif descriptor.kind == _operator_fixed_support_affine:
+            dimension = _positive_int_parameter(layer.parameters, "dimension")
+            if dimension != 2:
+                raise ModelOperatorExecutionError(
+                    "fixed support affine currently supports dimension 2"
                 )
-            elif descriptor.kind == _operator_local_affine:
-                dimension = _positive_int_parameter(layer.parameters, "dimension")
-                if dimension != 2:
-                    raise ModelOperatorExecutionError(
-                        "local affine currently supports dimension 2"
-                    )
-                if len(shape) <= dimension:
-                    raise ModelOperatorExecutionError(
-                        "local affine requires a channel axis before local support axes"
-                    )
-                channel_axis_index = len(shape) - dimension - 1
-                spatial_axis_start = len(shape) - dimension
-                size = _positive_int_parameter(layer.parameters, "size")
-                out_channels = _positive_int_parameter(layer.parameters, "out_channels")
-                stride = _positive_int_parameter(layer.parameters, "stride")
-                padding = _nonnegative_int_parameter(layer.parameters, "padding")
-                modules.append(
+            if len(shape) <= dimension:
+                raise ModelOperatorExecutionError(
+                    "fixed support affine requires a channel axis before support axes"
+                )
+            channel_axis_index = len(shape) - dimension - 1
+            out_channels = _positive_int_parameter(layer.parameters, "out_channels")
+            out_height = _positive_int_parameter(layer.parameters, "out_height")
+            out_width = _positive_int_parameter(layer.parameters, "out_width")
+            modules.append(
+                torch.nn.Sequential(
+                    torch.nn.AdaptiveAvgPool2d((out_height, out_width)),
                     torch.nn.Conv2d(
                         in_channels=shape[channel_axis_index],
                         out_channels=out_channels,
-                        kernel_size=size,
-                        stride=stride,
-                        padding=padding,
-                    )
+                        kernel_size=1,
+                    ),
                 )
-                output_spatial_axes = tuple(
-                    _local_window_output_axis(
-                        axis,
-                        size=size,
-                        stride=stride,
-                        padding=padding,
-                    )
-                    for axis in shape[spatial_axis_start:]
+            )
+            shape = (
+                *shape[:channel_axis_index],
+                out_channels,
+                out_height,
+                out_width,
+            )
+        elif descriptor.kind == _operator_local_affine:
+            dimension = _positive_int_parameter(layer.parameters, "dimension")
+            if dimension != 2:
+                raise ModelOperatorExecutionError(
+                    "local affine currently supports dimension 2"
                 )
-                shape = (
-                    *shape[:channel_axis_index],
-                    out_channels,
-                    *output_spatial_axes,
+            if len(shape) <= dimension:
+                raise ModelOperatorExecutionError(
+                    "local affine requires a channel axis before local support axes"
                 )
-            elif descriptor.kind == _operator_rank_collapse:
-                modules.append(torch.nn.Flatten())
-                shape = (TensorShape.from_axes(shape).element_count,)
-            elif descriptor.kind == _operator_affine_readout:
-                if len(shape) != 1:
-                    raise ModelOperatorExecutionError("affine readout requires rank-1 input")
-                out = _positive_int_parameter(layer.parameters, "out")
-                modules.append(torch.nn.Linear(shape[0], out))
-                shape = (out,)
-            else:
-                raise ModelOperatorExecutionError(f"unsupported operator kind: {layer.kind}")
-        return torch.nn.Sequential(*modules)
+            channel_axis_index = len(shape) - dimension - 1
+            spatial_axis_start = len(shape) - dimension
+            size = _positive_int_parameter(layer.parameters, "size")
+            out_channels = _positive_int_parameter(layer.parameters, "out_channels")
+            stride = _positive_int_parameter(layer.parameters, "stride")
+            padding = _nonnegative_int_parameter(layer.parameters, "padding")
+            modules.append(
+                torch.nn.Conv2d(
+                    in_channels=shape[channel_axis_index],
+                    out_channels=out_channels,
+                    kernel_size=size,
+                    stride=stride,
+                    padding=padding,
+                )
+            )
+            output_spatial_axes = tuple(
+                _local_window_output_axis(
+                    axis,
+                    size=size,
+                    stride=stride,
+                    padding=padding,
+                )
+                for axis in shape[spatial_axis_start:]
+            )
+            shape = (
+                *shape[:channel_axis_index],
+                out_channels,
+                *output_spatial_axes,
+            )
+        elif descriptor.kind == _operator_rank_collapse:
+            modules.append(torch.nn.Flatten())
+            shape = (TensorShape.from_axes(shape).element_count,)
+        elif descriptor.kind == _operator_affine_readout:
+            if len(shape) != 1:
+                raise ModelOperatorExecutionError("affine readout requires rank-1 input")
+            out = _positive_int_parameter(layer.parameters, "out")
+            modules.append(torch.nn.Linear(shape[0], out))
+            shape = (out,)
+        else:
+            raise ModelOperatorExecutionError(f"unsupported operator kind: {layer.kind}")
+    return tuple(modules)
 
 
 def model_operator_vocabulary() -> dict[str, object]:

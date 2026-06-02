@@ -32,6 +32,7 @@ from leibniz.observation_generation import (
 from leibniz.outcomes import OutcomeSpace
 from leibniz.tensor_runtime import (
     FormationTensorCache,
+    OperationFallbackSequential,
     TensorRuntimeDevice,
     TensorRuntimeDeviceKind,
     TensorRuntimeError,
@@ -846,7 +847,11 @@ def _train_and_predict_on_device(
         raise BenchmarkRunnerError(str(error)) from error
     torch = runtime.torch
     torch.manual_seed(seed)
-    module = ExecutableModelOperator(architecture).torch_module().to(runtime.device)
+    executable = ExecutableModelOperator(architecture)
+    module = OperationFallbackSequential(
+        runtime=runtime,
+        operations=executable.torch_operation_modules(torch=torch),
+    )
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     formation_cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
     loss_function = torch.nn.CrossEntropyLoss()
@@ -856,6 +861,7 @@ def _train_and_predict_on_device(
         name=optimizer_name,
         learning_rate=learning_rate,
     )
+    module.attach_optimizer(optimizer)
     scheduler = _make_scheduler(
         torch=torch,
         optimizer=optimizer,
@@ -992,6 +998,7 @@ def _train_and_predict_on_device(
                     work_estimates=work_estimates,
                     phase_timings=phase_timings,
                     fallback_errors=fallback_errors,
+                    operation_fallbacks=module.operation_fallback_records(),
                 ),
                 _curriculum_record(
                     rungs=tuple(evaluation_rungs),
@@ -1068,6 +1075,7 @@ def _train_and_predict_on_device(
             work_estimates=work_estimates,
             phase_timings=phase_timings,
             fallback_errors=fallback_errors,
+            operation_fallbacks=module.operation_fallback_records(),
         ),
     )
 
@@ -1443,6 +1451,7 @@ def _throughput_record(
     work_estimates: _TrainingWorkEstimates | None,
     phase_timings: TimingCollector,
     fallback_errors: tuple[tuple[str, str], ...] = (),
+    operation_fallbacks: Sequence[Mapping[str, object]] = (),
 ) -> dict[str, object]:
     training = training_counter.to_record(kind="training-throughput")
     validation = validation_counter.to_record(kind="validation-throughput")
@@ -1472,6 +1481,10 @@ def _throughput_record(
                 "reason": reason,
             }
             for device_kind, reason in fallback_errors
+        ]
+    if operation_fallbacks:
+        record["operation_runtime_fallbacks"] = [
+            dict(fallback) for fallback in operation_fallbacks
         ]
     return record
 

@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 from leibniz.architectures import ArchitectureManifest
-from leibniz.model_operators import summarize_architecture_operators
 from leibniz.observation_formation import ObservationFormationDeclaration
 from leibniz.observation_generation import GeneratedFormationBatch
 
@@ -19,6 +18,7 @@ __all__ = [
     "architecture_tensor_runtime_issue",
     "architecture_supported_by_tensor_runtime",
     "FormationTensorCache",
+    "OperationFallbackSequential",
     "preferred_tensor_runtime_device_kind",
     "TensorRuntime",
     "TensorRuntimeError",
@@ -53,6 +53,125 @@ class TensorRuntime:
     torch: Any
     device: Any
     device_kind: Literal["cpu", "cuda", "mps"]
+
+
+@dataclass(slots=True)
+class _OperationPlacement:
+    device: Any
+    device_kind: TensorRuntimeDeviceKind
+
+
+class OperationFallbackSequential:
+    """Sequential module with per-operation CPU fallback for backend failures."""
+
+    def __new__(
+        cls,
+        *,
+        runtime: TensorRuntime,
+        operations: Sequence[Any],
+    ) -> Any:
+        torch = runtime.torch
+
+        class Module(torch.nn.Module):  # type: ignore[misc]
+            def __init__(self) -> None:
+                torch.nn.Module.__init__(self)
+                self._preferred = _OperationPlacement(
+                    device=runtime.device,
+                    device_kind=runtime.device_kind,
+                )
+                self._fallback = _OperationPlacement(
+                    device=torch.device("cpu"),
+                    device_kind="cpu",
+                )
+                self._operations = torch.nn.ModuleList(
+                    operation.to(self._preferred.device) for operation in operations
+                )
+                self._placements = [
+                    _OperationPlacement(
+                        device=self._preferred.device,
+                        device_kind=self._preferred.device_kind,
+                    )
+                    for _operation in self._operations
+                ]
+                self._optimizer: Any | None = None
+                self._fallback_records: list[dict[str, object]] = []
+
+            def attach_optimizer(self, optimizer: Any) -> None:
+                self._optimizer = optimizer
+
+            def operation_fallback_records(self) -> tuple[dict[str, object], ...]:
+                return tuple(dict(record) for record in self._fallback_records)
+
+            def forward(self, value: Any) -> Any:
+                current = value
+                for index, operation in enumerate(self._operations):
+                    placement = self._placements[index]
+                    current = current.to(placement.device)
+                    try:
+                        current = operation(current)
+                    except RuntimeError as error:
+                        if placement.device_kind == "cpu":
+                            raise
+                        reason = str(error)
+                        self._move_operation_to_fallback(index=index, reason=reason)
+                        current = self._operations[index](current.to(self._fallback.device))
+                return current.to(self._preferred.device)
+
+            def _move_operation_to_fallback(self, *, index: int, reason: str) -> None:
+                operation = self._operations[index]
+                operation.to(self._fallback.device)
+                self._move_optimizer_state(operation=operation, device=self._fallback.device)
+                previous = self._placements[index]
+                self._placements[index] = _OperationPlacement(
+                    device=self._fallback.device,
+                    device_kind=self._fallback.device_kind,
+                )
+                self._fallback_records.append(
+                    {
+                        "operation_index": index,
+                        "from_device": previous.device_kind,
+                        "to_device": self._fallback.device_kind,
+                        "reason": reason,
+                    }
+                )
+
+            def _move_optimizer_state(self, *, operation: Any, device: Any) -> None:
+                if self._optimizer is None:
+                    return
+                for parameter in operation.parameters():
+                    state = self._optimizer.state.get(parameter)
+                    if state is not None:
+                        _optimizer_state_to_device(state, device=device)
+
+        return Module()
+
+
+def _optimizer_state_to_device(
+    value: dict[object, object] | list[object],
+    *,
+    device: Any,
+) -> None:
+    if isinstance(value, dict):
+        for key, item in tuple(value.items()):
+            value[key] = _optimizer_state_value_to_device(item, device=device)
+    else:
+        for index, item in enumerate(value):
+            value[index] = _optimizer_state_value_to_device(item, device=device)
+
+
+def _optimizer_state_value_to_device(value: object, *, device: Any) -> object:
+    to_device = getattr(value, "to", None)
+    if callable(to_device):
+        return to_device(device)
+    if isinstance(value, dict):
+        mapping = cast(dict[object, object], value)
+        _optimizer_state_to_device(mapping, device=device)
+        return mapping
+    if isinstance(value, list):
+        sequence = cast(list[object], value)
+        _optimizer_state_to_device(sequence, device=device)
+        return sequence
+    return value
 
 
 def tensor_runtime_available_memory_bytes(runtime: TensorRuntime) -> int:
@@ -388,24 +507,8 @@ def architecture_tensor_runtime_issue(
 ) -> str | None:
     """Return the first known runtime-specific architecture incompatibility."""
 
-    if device_kind != "mps":
-        return None
-    for operator in summarize_architecture_operators(architecture).operators:
-        if operator.descriptor.kind != "local-aggregation":
-            continue
-        input_shape = operator.input_shape
-        output_shape = operator.output_shape
-        if input_shape is None or output_shape is None:
-            continue
-        if len(input_shape) < 2 or len(output_shape) < 2:
-            continue
-        input_height, input_width = input_shape[-2:]
-        output_height, output_width = output_shape[-2:]
-        if input_height % output_height != 0 or input_width % output_width != 0:
-            return (
-                "mps adaptive pooling requires trailing input axes to be divisible "
-                "by the requested output axes"
-            )
+    _ = architecture
+    _ = device_kind
     return None
 
 

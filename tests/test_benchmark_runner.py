@@ -643,21 +643,23 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
             device_kind=cast(Any, device_kind),
         )
 
-    original_torch_module = benchmark_runner.ExecutableModelOperator.torch_module
+    original_torch_operation_modules = (
+        benchmark_runner.ExecutableModelOperator.torch_operation_modules
+    )
 
-    def flaky_torch_module(self: object) -> object:
+    def flaky_torch_operation_modules(self: object, *, torch: object | None = None) -> object:
         nonlocal module_calls
         module_calls += 1
         if module_calls == 1:
             raise RuntimeError("MPS backend failed to compile adaptive pooling")
-        return original_torch_module(cast(Any, self))
+        return original_torch_operation_modules(cast(Any, self), torch=cast(Any, torch))
 
     monkeypatch.setattr(benchmark_runner, "tensor_runtime_device_kinds", fake_device_kinds)
     monkeypatch.setattr(benchmark_runner, "resolve_tensor_runtime", fake_resolve_tensor_runtime)
     monkeypatch.setattr(
         benchmark_runner.ExecutableModelOperator,
-        "torch_module",
-        flaky_torch_module,
+        "torch_operation_modules",
+        flaky_torch_operation_modules,
     )
 
     summary = run_benchmark(
@@ -686,6 +688,101 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
             "from_device": "mps",
             "to_device": "cpu",
             "reason": "MPS backend failed to compile adaptive pooling",
+        }
+    ]
+
+
+def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_device(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cpu_runtime = resolve_tensor_runtime("cpu")
+    torch = cpu_runtime.torch
+    calls: list[str] = []
+    forward_calls = 0
+
+    class FlakyOperation(torch.nn.Module):  # type: ignore[misc]
+        def forward(self, value: object) -> object:
+            nonlocal forward_calls
+            forward_calls += 1
+            if forward_calls == 1:
+                raise RuntimeError("preferred operation failed to compile")
+            return value
+
+    def fake_device_kinds(_requested: object) -> tuple[TensorRuntimeDeviceKind, ...]:
+        return ("mps",)
+
+    def fake_resolve_tensor_runtime(requested: object) -> TensorRuntime:
+        device_kind = cast(str, requested)
+        calls.append(device_kind)
+        return TensorRuntime(
+            torch=torch,
+            device=cpu_runtime.device,
+            device_kind=cast(Any, device_kind),
+        )
+
+    def fake_roofline_record(_runtime: object) -> dict[str, object]:
+        return {
+            "kind": "system-roofline",
+            "status": "calibrated",
+            "tensor_runtime": "pytorch",
+            "tensor_device": "mps",
+            "method": "test",
+            "peak_compute_per_second": 1_000_000.0,
+            "peak_bytes_per_second": 1_000_000.0,
+        }
+
+    original_torch_operation_modules = (
+        benchmark_runner.ExecutableModelOperator.torch_operation_modules
+    )
+
+    def flaky_first_operation(self: object, *, torch: object | None = None) -> object:
+        torch_module = cast(Any, torch)
+        modules = list(
+            original_torch_operation_modules(cast(Any, self), torch=torch_module)
+        )
+        modules[0] = torch_module.nn.Sequential(FlakyOperation(), modules[0])
+        return tuple(modules)
+
+    monkeypatch.setattr(benchmark_runner, "tensor_runtime_device_kinds", fake_device_kinds)
+    monkeypatch.setattr(benchmark_runner, "resolve_tensor_runtime", fake_resolve_tensor_runtime)
+    monkeypatch.setattr(benchmark_runner, "runtime_roofline_record", fake_roofline_record)
+    monkeypatch.setattr(
+        benchmark_runner.ExecutableModelOperator,
+        "torch_operation_modules",
+        flaky_first_operation,
+    )
+
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=tmp_path / "results",
+            sample_count=2,
+            train_steps=1,
+            tensor_device="auto",
+        )
+    )
+
+    training_summary = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    throughput = cast(dict[str, object], training_summary["throughput"])
+    operation_fallbacks = cast(
+        list[dict[str, object]],
+        throughput["operation_runtime_fallbacks"],
+    )
+
+    assert calls == ["mps"]
+    assert training_summary["tensor_device"] == "mps"
+    assert "runtime_fallbacks" not in throughput
+    assert operation_fallbacks == [
+        {
+            "operation_index": 0,
+            "from_device": "mps",
+            "to_device": "cpu",
+            "reason": "preferred operation failed to compile",
         }
     ]
 
