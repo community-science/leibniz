@@ -15,6 +15,7 @@ from leibniz.tensor_runtime import (
     TensorRuntimeError,
     resolve_tensor_runtime,
     runtime_roofline_record,
+    tensor_runtime_available_memory_bytes,
     validate_tensor_runtime_device,
 )
 from leibniz.timing import TimingCollector
@@ -26,6 +27,8 @@ __all__ = [
     "time_formation_paths",
 ]
 
+_initial_generation_memory_limit_bytes = 1_024_000
+
 
 class FormationTimingError(ValueError):
     """Raised when formation timing cannot be planned or executed."""
@@ -36,7 +39,7 @@ class FormationTimingPlan:
     """Plan for timing pure and tensor-backed formation paths."""
 
     benchmark_root: Path
-    scale: int = 1
+    component_count: int = 1
     sample_count: int = 64
     seed: int = 101
     repeats: int = 3
@@ -44,8 +47,8 @@ class FormationTimingPlan:
     tensor_device: TensorRuntimeDevice = "auto"
 
     def __post_init__(self) -> None:
-        if type(self.scale) is not int or self.scale < 1:
-            raise FormationTimingError("scale must be a positive integer")
+        if type(self.component_count) is not int or self.component_count < 1:
+            raise FormationTimingError("component_count must be a positive integer")
         if type(self.sample_count) is not int or self.sample_count < 1:
             raise FormationTimingError("sample_count must be a positive integer")
         if type(self.seed) is not int or self.seed < 0:
@@ -65,7 +68,7 @@ class FormationTimingSummary:
     """Measured wall-time summary for formation paths."""
 
     benchmark_id: str
-    scale: int
+    component_count: int
     sample_count: int
     repeats: int
     seed: int
@@ -92,7 +95,7 @@ class FormationTimingSummary:
             "format": "leibniz.formation-timing",
             "format_version": 1,
             "benchmark_id": self.benchmark_id,
-            "scale": self.scale,
+            "component_count": self.component_count,
             "sample_count": self.sample_count,
             "repeats": self.repeats,
             "seed": self.seed,
@@ -123,28 +126,31 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
         runtime = resolve_tensor_runtime(plan.tensor_device)
     except TensorRuntimeError as error:
         raise FormationTimingError(str(error)) from error
+    memory_limit_bytes = min(
+        tensor_runtime_available_memory_bytes(runtime),
+        _initial_generation_memory_limit_bytes,
+    )
     cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
     outcome_ids = tuple(
-        outcome.id
-        for outcome in generator.benchmark_manifest.resolve_outcome_space(
-            scale=plan.scale
-        ).outcomes
+        outcome.id for outcome in generator.benchmark_manifest.resolve_outcome_space().outcomes
     )
 
     def pure_once(seed: int, timing: TimingCollector | None = None) -> None:
         generator.sample_batch(
-            scale=plan.scale,
+            component_count=plan.component_count,
             sample_count=plan.sample_count,
             seed=seed,
+            memory_limit_bytes=memory_limit_bytes,
             timing=timing,
             timing_prefix="pure.",
         )
 
     def tensor_once(seed: int, timing: TimingCollector | None = None) -> None:
         batch = generator.sample_formation_batch(
-            scale=plan.scale,
+            component_count=plan.component_count,
             sample_count=plan.sample_count,
             seed=seed,
+            memory_limit_bytes=memory_limit_bytes,
             timing=timing,
             timing_prefix="tensor.",
         )
@@ -175,7 +181,7 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
     )
     return FormationTimingSummary(
         benchmark_id=str(generator.benchmark_manifest.id),
-        scale=plan.scale,
+        component_count=plan.component_count,
         sample_count=plan.sample_count,
         repeats=plan.repeats,
         seed=plan.seed,

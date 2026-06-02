@@ -35,7 +35,6 @@ from leibniz.observation_formation import (
     FormedObservation,
     ObservationFormationDeclaration,
     ObservationFormationDeclarationDocument,
-    ObservationFormationValidationError,
     VariationTransformDeclaration,
 )
 from leibniz.timing import TimingCollector
@@ -58,8 +57,16 @@ _discriminatable_resolution_cache: dict[
     tuple[str, int, str, str, int, int, float],
     tuple[int, int],
 ] = {}
+_canvas_fit_component_bounds_cache: dict[
+    tuple[str, int, int, int],
+    tuple[tuple[int, int, int, int] | None, ...],
+] = {}
 _rejection_cache_bins_per_axis = 8
 _rejection_cache_cell_limit = 4096
+_variation_state_bins_per_axis = 8
+_field_scalar_construction_bytes = 64
+_default_memory_budget_fraction = 0.10
+_default_generation_memory_limit_bytes = 32_768_000
 
 class ObservationGenerationError(ValueError):
     """Raised when observation generation cannot satisfy benchmark declarations."""
@@ -69,7 +76,6 @@ class ObservationGenerationError(ValueError):
 class _ResolutionSampling:
     width_axis: str
     height_axis: str
-    maximum_pixel_multiplier: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,13 +115,13 @@ class GeneratedObservationBatch:
     """A deterministic batch of generated observations."""
 
     benchmark_id: ProtocolIdentifier
-    scale: int
+    component_count: int
     seed: int
     samples: tuple[GeneratedObservationSample, ...]
 
     def __post_init__(self) -> None:
-        if type(self.scale) is not int or self.scale < 1:
-            raise ObservationGenerationError("scale must be a positive integer")
+        if type(self.component_count) is not int or self.component_count < 1:
+            raise ObservationGenerationError("component_count must be a positive integer")
         if type(self.seed) is not int or self.seed < 0:
             raise ObservationGenerationError("seed must be a nonnegative integer")
         if not self.samples:
@@ -124,7 +130,7 @@ class GeneratedObservationBatch:
     def to_record(self, *, include_fields: bool = False) -> dict[str, object]:
         return {
             "benchmark_id": str(self.benchmark_id),
-            "scale": self.scale,
+            "component_count": self.component_count,
             "seed": self.seed,
             "samples": [sample.to_record(include_field=include_fields) for sample in self.samples],
         }
@@ -150,13 +156,13 @@ class GeneratedFormationBatch:
     """A deterministic batch of formation specifications."""
 
     benchmark_id: ProtocolIdentifier
-    scale: int
+    component_count: int
     seed: int
     samples: tuple[GeneratedFormationSample, ...]
 
     def __post_init__(self) -> None:
-        if type(self.scale) is not int or self.scale < 1:
-            raise ObservationGenerationError("scale must be a positive integer")
+        if type(self.component_count) is not int or self.component_count < 1:
+            raise ObservationGenerationError("component_count must be a positive integer")
         if type(self.seed) is not int or self.seed < 0:
             raise ObservationGenerationError("seed must be a nonnegative integer")
         if not self.samples:
@@ -213,26 +219,28 @@ class ObservationGenerator:
     def sample_batch(
         self,
         *,
-        scale: int,
+        component_count: int,
         sample_count: int,
         seed: int,
         component_sequences: Iterable[Sequence[int]] | None = None,
+        memory_limit_bytes: int | None = None,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedObservationBatch:
-        """Generate a deterministic batch at one scale."""
+        """Generate a deterministic batch with one internal component count."""
 
         with _timing_span(timing, f"{timing_prefix}formation_batch", samples=sample_count):
             formation_batch = self.sample_formation_batch(
-                scale=scale,
+                component_count=component_count,
                 sample_count=sample_count,
                 seed=seed,
                 component_sequences=component_sequences,
+                memory_limit_bytes=memory_limit_bytes,
                 timing=timing,
                 timing_prefix=f"{timing_prefix}formation_batch.",
             )
         with _timing_span(timing, f"{timing_prefix}scaled_factors"):
-            scaled_factors = tuple(self._scaled_sample_factors(scale))
+            scaled_factors = tuple(self.latent_factors.sample_factors)
         samples: list[GeneratedObservationSample] = []
         with _timing_span(
             timing,
@@ -241,7 +249,11 @@ class ObservationGenerator:
         ):
             observations = tuple(
                 self.formation.form_observation(
-                    id=self._observation_id(scale=scale, seed=seed, index=spec.index),
+                    id=self._observation_id(
+                        component_count=component_count,
+                        seed=seed,
+                        index=spec.index,
+                    ),
                     plan=spec.materialization_plan,
                     component_sequence=spec.component_sequence,
                     variation_coordinates=spec.variation_coordinates,
@@ -278,7 +290,7 @@ class ObservationGenerator:
 
         return GeneratedObservationBatch(
             benchmark_id=self.benchmark_manifest.id,
-            scale=scale,
+            component_count=component_count,
             seed=seed,
             samples=tuple(samples),
         )
@@ -286,10 +298,11 @@ class ObservationGenerator:
     def sample_formation_batch(
         self,
         *,
-        scale: int,
+        component_count: int,
         sample_count: int,
         seed: int,
         component_sequences: Iterable[Sequence[int]] | None = None,
+        memory_limit_bytes: int | None = None,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedFormationBatch:
@@ -299,42 +312,43 @@ class ObservationGenerator:
             raise ObservationGenerationError("sample_count must be a positive integer")
         if type(seed) is not int or seed < 0:
             raise ObservationGenerationError("seed must be a nonnegative integer")
-        with _timing_span(timing, f"{timing_prefix}scaled_factors"):
-            scaled_factors = tuple(self._scaled_sample_factors(scale))
-        with _timing_span(timing, f"{timing_prefix}complexity"):
-            complexity = self._complexity(scaled_factors)
-            complexity_axis = self._complexity_axis()
+        if type(component_count) is not int or component_count < 1:
+            raise ObservationGenerationError("component_count must be a positive integer")
+        if component_count != 1:
+            raise ObservationGenerationError(
+                "fixed-outcome component observations require one component"
+            )
         with _timing_span(timing, f"{timing_prefix}component_sequences"):
             sequences = tuple(component_sequences) if component_sequences is not None else ()
         if sequences and len(sequences) != sample_count:
             raise ObservationGenerationError("component_sequences length must match sample_count")
-        if self.benchmark_manifest.scale_parameter is None:
-            raise ObservationGenerationError("benchmark manifest must declare scale")
-        scale_assignment = AxisAssignment(
-            values={self.benchmark_manifest.scale_parameter.symbol: scale}
-        )
-        complexity_assignment = AxisAssignment(values={complexity_axis: int(complexity)})
-        resolution_assignment = self.materialization.minimum_resolution(scale_assignment)
+        resolution_assignment = self.materialization.minimum_resolution()
         resolution_assignment = self._minimum_discriminatable_resolution_assignment(
-            scale=scale,
+            component_count=component_count,
             minimum_assignment=resolution_assignment,
         )
         resolution_assignment = self._sample_resolution_assignment(
-            scale=scale,
+            component_count=component_count,
+            sample_count=sample_count,
             seed=seed,
             minimum_assignment=resolution_assignment,
+            memory_limit_bytes=memory_limit_bytes,
         )
         self.materialization.require_resolution(
-            scale_assignment=scale_assignment,
             resolution_assignment=resolution_assignment,
         )
+        width = resolution_assignment.require_axis(self.formation.width_axis)
+        height = resolution_assignment.require_axis(self.formation.height_axis)
+        with _timing_span(timing, f"{timing_prefix}complexity"):
+            complexity = self._distinguishable_state_complexity(
+                component_count=component_count,
+                width=width,
+                height=height,
+            )
         materialization_declaration = ArtifactReference(
             kind="materialization-declaration",
             protocol_id=self.materialization.id,
             record_digest=self.materialization.digest,
-        )
-        sequence_length = scale_assignment.require_axis(
-            self.formation.sequence_layout.sequence_axis
         )
         variation_transform_record = self.formation.variation_transform.to_record()
         variation_transform_digest = str(ContentDigest.from_value(variation_transform_record))
@@ -348,11 +362,9 @@ class ObservationGenerator:
         ):
             plans = tuple(
                 self._materialization_plan(
-                    scale=scale,
+                    component_count=component_count,
                     seed=seed,
                     index=index,
-                    scale_assignment=scale_assignment,
-                    complexity_assignment=complexity_assignment,
                     resolution_assignment=resolution_assignment,
                     materialization_declaration=materialization_declaration,
                 )
@@ -365,11 +377,15 @@ class ObservationGenerator:
                     if sequences
                     else _sample_component_sequence(
                         generator=component_generator,
-                        sequence_length=sequence_length,
+                        sequence_length=1,
                         component_count=len(self.formation.components),
                     )
                 )
                 for index in range(sample_count)
+            )
+        if any(len(sequence) != 1 for sequence in sequence_samples):
+            raise ObservationGenerationError(
+                "fixed-outcome component observations require one component"
             )
         variation_samples: list[
             tuple[
@@ -379,19 +395,15 @@ class ObservationGenerator:
         ] = []
         variation_timing_phase = f"{timing_prefix}variation_coordinates"
         with _timing_span(timing, variation_timing_phase, samples=sample_count):
-            for sequence, plan in zip(sequence_samples, plans, strict=True):
+            for plan in plans:
                 variation_samples.append(
                     _variation_transform_values_and_coordinates(
                         formation=self.formation,
                         transform=self.formation.variation_transform,
                         transform_record=variation_transform_record,
                         generator=variation_generator,
-                        sequence_length=len(sequence),
                         width=plan.resolution_assignment.require_axis(self.formation.width_axis),
                         height=plan.resolution_assignment.require_axis(self.formation.height_axis),
-                        minimum_pairwise_l1=(
-                            self.benchmark_manifest.resolution_discriminability_margin()
-                        ),
                         affine_acceptance_thresholds=(
                             self.benchmark_manifest.affine_acceptance_thresholds()
                         ),
@@ -426,67 +438,53 @@ class ObservationGenerator:
 
         return GeneratedFormationBatch(
             benchmark_id=self.benchmark_manifest.id,
-            scale=scale,
+            component_count=component_count,
             seed=seed,
             samples=tuple(samples),
         )
 
-    def _scaled_sample_factors(self, scale: int) -> tuple[SampleLatentFactor, ...]:
-        if type(scale) is not int or scale < 1:
-            raise ObservationGenerationError("scale must be a positive integer")
-        if self.benchmark_manifest.outcome_sequence is None:
-            return self.latent_factors.sample_factors
-        scale_axis = self.benchmark_manifest.outcome_sequence.length_parameter
-        if self.benchmark_manifest.scale_parameter is None:
-            raise ObservationGenerationError("sequence benchmarks require scale_parameter")
-        if scale_axis != self.benchmark_manifest.scale_parameter.symbol:
-            raise ObservationGenerationError("outcome sequence scale axis mismatch")
+    def _distinguishable_state_complexity(
+        self,
+        *,
+        component_count: int,
+        width: int,
+        height: int,
+    ) -> float:
+        return self.distinguishable_state_complexity(
+            component_count=component_count,
+            width=width,
+            height=height,
+        )
 
-        factors: list[SampleLatentFactor] = []
-        for factor in self.latent_factors.sample_factors:
-            if factor.role in {"content", "variation"} and factor.multiplicity == 1:
-                factors.append(
-                    SampleLatentFactor(
-                        name=factor.name,
-                        role=factor.role,
-                        degree_measure=factor.degree_measure,
-                        multiplicity=scale,
-                        description=factor.description,
-                    )
-                )
-            else:
-                factors.append(factor)
-        return tuple(factors)
-
-    def _complexity(self, scaled_factors: tuple[SampleLatentFactor, ...]) -> float:
-        value = self.latent_factors.projection(self._complexity_axis()).evaluate(scaled_factors)
-        if not value.is_integer():
-            raise ObservationGenerationError("complexity coordinate must be integral")
-        return value
-
-    def _complexity_axis(self) -> str:
-        axis = self.benchmark_manifest.complexity_coordinate
-        if axis is None:
-            raise ObservationGenerationError("benchmark manifest must declare complexity")
-        return axis
+    def distinguishable_state_complexity(
+        self,
+        *,
+        component_count: int,
+        width: int,
+        height: int,
+    ) -> float:
+        component_complexity = component_count * math.log2(len(self.formation.components))
+        variation_complexity = component_count * _variation_transform_complexity(
+            self.formation.variation_transform,
+            sequence_length=component_count,
+            width=width,
+            height=height,
+        )
+        return component_complexity + variation_complexity
 
     def _materialization_plan(
         self,
         *,
-        scale: int,
+        component_count: int,
         seed: int,
         index: int,
-        scale_assignment: AxisAssignment,
-        complexity_assignment: AxisAssignment,
         resolution_assignment: AxisAssignment,
         materialization_declaration: ArtifactReference,
     ) -> MaterializationPlan:
         return MaterializationPlan(
-            id=self._plan_id(scale=scale, seed=seed, index=index),
+            id=self._plan_id(component_count=component_count, seed=seed, index=index),
             benchmark_id=self.materialization.benchmark_id,
             materialization_declaration=materialization_declaration,
-            scale_assignment=scale_assignment,
-            complexity_assignment=complexity_assignment,
             resolution_assignment=resolution_assignment,
             seed=seed,
             latent_factor_declaration=self.materialization.latent_factor_declaration,
@@ -495,18 +493,32 @@ class ObservationGenerator:
     def _sample_resolution_assignment(
         self,
         *,
-        scale: int,
+        component_count: int,
+        sample_count: int,
         seed: int,
         minimum_assignment: AxisAssignment,
+        memory_limit_bytes: int | None,
     ) -> AxisAssignment:
         sampling = _resolution_sampling(self.materialization.layout)
         if sampling is None:
             return minimum_assignment
         minimum_width = minimum_assignment.require_axis(sampling.width_axis)
         minimum_height = minimum_assignment.require_axis(sampling.height_axis)
-        side_multiplier = math.sqrt(sampling.maximum_pixel_multiplier)
-        maximum_width = math.floor(minimum_width * side_multiplier)
-        maximum_height = math.floor(minimum_height * side_multiplier)
+        maximum_pixel_count = _batch_sample_pixel_limit(
+            memory_limit_bytes=(
+                memory_limit_bytes
+                if memory_limit_bytes is not None
+                else _default_generation_memory_limit_bytes
+            ),
+            memory_budget_fraction=_default_memory_budget_fraction,
+            sample_count=sample_count,
+            channel_count=self.formation.channel_count,
+        )
+        maximum_width, maximum_height = _sampled_resolution_maximum(
+            minimum_width=minimum_width,
+            minimum_height=minimum_height,
+            maximum_pixel_count=maximum_pixel_count,
+        )
         if maximum_width < minimum_width:
             raise ObservationGenerationError(
                 f"{sampling.width_axis} maximum {maximum_width} is below "
@@ -518,9 +530,9 @@ class ObservationGenerator:
                 f"required minimum {minimum_height}"
             )
         generator = random.Random(
-            f"{seed}:resolution:{scale}:{sampling.width_axis}:{minimum_width}:"
+            f"{seed}:resolution:{component_count}:{sampling.width_axis}:{minimum_width}:"
             f"{maximum_width}:{sampling.height_axis}:{minimum_height}:{maximum_height}:"
-            f"{sampling.maximum_pixel_multiplier}"
+            f"{maximum_pixel_count}"
         )
         values = dict(minimum_assignment.values)
         values[sampling.width_axis] = generator.randint(minimum_width, maximum_width)
@@ -530,7 +542,18 @@ class ObservationGenerator:
     def _minimum_discriminatable_resolution_assignment(
         self,
         *,
-        scale: int,
+        component_count: int,
+        minimum_assignment: AxisAssignment,
+    ) -> AxisAssignment:
+        return self.minimum_discriminatable_resolution_assignment(
+            component_count=component_count,
+            minimum_assignment=minimum_assignment,
+        )
+
+    def minimum_discriminatable_resolution_assignment(
+        self,
+        *,
+        component_count: int,
         minimum_assignment: AxisAssignment,
     ) -> AxisAssignment:
         sampling = _resolution_sampling(self.materialization.layout)
@@ -541,7 +564,7 @@ class ObservationGenerator:
         margin = self.benchmark_manifest.resolution_discriminability_margin()
         cache_key = (
             str(self.formation.digest),
-            scale,
+            component_count,
             sampling.width_axis,
             sampling.height_axis,
             minimum_width,
@@ -553,8 +576,8 @@ class ObservationGenerator:
             cached = self.formation.minimum_discriminatable_resolution(
                 minimum_width=minimum_width,
                 minimum_height=minimum_height,
-                sequence_length=scale,
-                maximum_width=max(minimum_width * 64, scale * 64),
+                sequence_length=component_count,
+                maximum_width=max(minimum_width * 64, component_count * 64),
                 maximum_height=max(minimum_height * 64, 64),
                 minimum_pairwise_l1=margin,
             )
@@ -566,9 +589,14 @@ class ObservationGenerator:
         return AxisAssignment(values=values)
 
     def _outcome_id(self, sequence: tuple[int, ...]) -> str:
-        if self.benchmark_manifest.outcome_sequence is None:
-            raise ObservationGenerationError("benchmark manifest must declare outcome sequence")
-        return self.benchmark_manifest.outcome_sequence.outcome_id(sequence)
+        if len(sequence) != 1:
+            raise ObservationGenerationError(
+                "fixed-outcome component observations require one component"
+            )
+        index = sequence[0]
+        if index >= len(self.benchmark_manifest.outcome_space.outcomes):
+            raise ObservationGenerationError("component index is outside outcome space")
+        return self.benchmark_manifest.outcome_space.outcomes[index].id
 
     def _latent_coordinates(
         self,
@@ -597,16 +625,28 @@ class ObservationGenerator:
             )
         return tuple(records)
 
-    def _plan_id(self, *, scale: int, seed: int, index: int) -> ProtocolIdentifier:
+    def _plan_id(
+        self,
+        *,
+        component_count: int,
+        seed: int,
+        index: int,
+    ) -> ProtocolIdentifier:
         return _child_identifier(
             self.benchmark_manifest.id,
-            f"materialization-plans.l{scale}.seed{seed}.sample-{index}",
+            f"materialization-plans.c{component_count}.seed{seed}.sample-{index}",
         )
 
-    def _observation_id(self, *, scale: int, seed: int, index: int) -> ProtocolIdentifier:
+    def _observation_id(
+        self,
+        *,
+        component_count: int,
+        seed: int,
+        index: int,
+    ) -> ProtocolIdentifier:
         return _child_identifier(
             self.benchmark_manifest.id,
-            f"observations.l{scale}.seed{seed}.sample-{index}",
+            f"observations.c{component_count}.seed{seed}.sample-{index}",
         )
 
 
@@ -735,10 +775,8 @@ def _variation_transform_values_and_coordinates(
     transform: VariationTransformDeclaration,
     transform_record: Mapping[str, object],
     generator: random.Random,
-    sequence_length: int,
     width: int,
     height: int,
-    minimum_pairwise_l1: float,
     affine_acceptance_thresholds: Mapping[str, float],
     rejection_cache: _BoundedRejectionCache | None = None,
     timing: TimingCollector | None = None,
@@ -747,32 +785,26 @@ def _variation_transform_values_and_coordinates(
     Mapping[str, object],
     tuple[Mapping[str, object], ...],
 ]:
-    if sequence_length < 1:
-        raise ObservationGenerationError("sequence_length must be positive")
     counters: dict[str, float] = {}
-    coordinates = tuple(
-        _accepted_variation_coordinate(
-            formation=formation,
-            transform=transform,
-            generator=generator,
-            sequence_length=sequence_length,
-            sequence_index=sequence_index,
-            width=width,
-            height=height,
-            minimum_pairwise_l1=minimum_pairwise_l1,
-            affine_acceptance_thresholds=affine_acceptance_thresholds,
-            rejection_cache=rejection_cache,
-            counters=counters,
-        )
-        for sequence_index in range(sequence_length)
+    coordinate = _accepted_variation_coordinate(
+        formation=formation,
+        transform=transform,
+        generator=generator,
+        sequence_index=0,
+        width=width,
+        height=height,
+        affine_acceptance_thresholds=affine_acceptance_thresholds,
+        rejection_cache=rejection_cache,
+        counters=counters,
     )
+    coordinates = (coordinate,)
     if timing is not None and counters:
         timing.add_counters(timing_phase, counters)
     return (
         {
             "kind": "field-variation-transform-samples",
             "bounds": transform_record,
-            "coordinates": [dict(coordinate) for coordinate in coordinates],
+            "coordinates": [dict(item) for item in coordinates],
         },
         coordinates,
     )
@@ -783,11 +815,9 @@ def _accepted_variation_coordinate(
     formation: ObservationFormationDeclaration,
     transform: VariationTransformDeclaration,
     generator: random.Random,
-    sequence_length: int,
     sequence_index: int,
     width: int,
     height: int,
-    minimum_pairwise_l1: float,
     affine_acceptance_thresholds: Mapping[str, float],
     rejection_cache: _BoundedRejectionCache | None,
     counters: dict[str, float],
@@ -796,156 +826,67 @@ def _accepted_variation_coordinate(
         transform=transform,
         thresholds=affine_acceptance_thresholds,
     )
-    for sampler, attempt_count in (
-        (_variation_coordinate_record, 512),
-        (_readable_variation_coordinate_record, 128),
-    ):
-        sampler_name = "broad" if sampler is _variation_coordinate_record else "readable"
-        for _attempt in range(attempt_count):
-            _increment_counter(counters, "candidate_count")
-            _increment_counter(counters, f"{sampler_name}_candidate_count")
-            coordinate = dict(
-                sampler(
-                    transform=transform,
-                    generator=generator,
-                    sequence_index=sequence_index,
-                    thresholds=affine_acceptance_thresholds,
-                )
-            )
-            cache_cell = _rejection_cache_cell_key(
-                coordinate=coordinate,
+    for _attempt in range(640):
+        _increment_counter(counters, "candidate_count")
+        _increment_counter(counters, "declared_distribution_candidate_count")
+        coordinate = dict(
+            _variation_coordinate_record(
                 transform=transform,
-                cache_scope=cache_scope,
+                generator=generator,
+                sequence_index=sequence_index,
             )
+        )
+        cache_cell = _rejection_cache_cell_key(
+            coordinate=coordinate,
+            transform=transform,
+            cache_scope=cache_scope,
+        )
+        if (
+            rejection_cache is not None
+            and cache_cell is not None
+            and rejection_cache.contains(cache_cell[0])
+        ):
+            _increment_counter(counters, "cached_reject_count")
+            continue
+        if not _affine_coordinate_passes_fast_thresholds(
+            coordinate,
+            affine_acceptance_thresholds,
+        ):
+            _increment_counter(counters, "fast_reject_count")
             if (
                 rejection_cache is not None
                 and cache_cell is not None
-                and rejection_cache.contains(cache_cell[0])
-            ):
-                _increment_counter(counters, "cached_reject_count")
-                continue
-            if not _affine_coordinate_passes_fast_thresholds(
-                coordinate,
-                affine_acceptance_thresholds,
-            ):
-                _increment_counter(counters, "fast_reject_count")
-                if (
-                    rejection_cache is not None
-                    and cache_cell is not None
-                    and _affine_cell_is_certified_fast_reject(
-                        cell_bounds=cache_cell[1],
-                        thresholds=affine_acceptance_thresholds,
-                    )
-                ):
-                    _increment_counter(counters, "rejection_certificate_count")
-                    if rejection_cache.add(cache_cell[0]):
-                        _increment_counter(counters, "rejection_cache_insert_count")
-                    else:
-                        _increment_counter(counters, "rejection_cache_saturated_count")
-                continue
-            try:
-                analysis_width, analysis_height = _variation_analysis_extent(
-                    formation=formation,
-                    sequence_length=sequence_length,
-                    width=width,
-                    height=height,
+                and _affine_cell_is_certified_fast_reject(
+                    cell_bounds=cache_cell[1],
+                    thresholds=affine_acceptance_thresholds,
                 )
-                analysis_coordinate = dict(coordinate)
-                analysis_coordinate["sequence_index"] = 0
-                _increment_counter(counters, "analysis_discriminability_check_count")
-                if not formation.component_discriminability_passes(
-                    width=analysis_width,
-                    height=analysis_height,
-                    sequence_length=1,
-                    sequence_index=0,
-                    variation_coordinates=(analysis_coordinate,),
-                    minimum_pairwise_l1=minimum_pairwise_l1,
-                ):
-                    _increment_counter(counters, "analysis_reject_count")
-                    continue
-                _increment_counter(counters, "canvas_discriminability_check_count")
-                accepted = formation.component_discriminability_passes(
-                    width=width,
-                    height=height,
-                    sequence_length=sequence_length,
-                    sequence_index=sequence_index,
-                    variation_coordinates=(coordinate,),
-                    minimum_pairwise_l1=minimum_pairwise_l1,
-                )
-            except ObservationFormationValidationError:
-                _increment_counter(counters, "validation_error_count")
-                continue
-            if accepted:
-                _increment_counter(counters, "accepted_count")
-                return coordinate
-            _increment_counter(counters, "canvas_reject_count")
+            ):
+                _increment_counter(counters, "rejection_certificate_count")
+                if rejection_cache.add(cache_cell[0]):
+                    _increment_counter(counters, "rejection_cache_insert_count")
+                else:
+                    _increment_counter(counters, "rejection_cache_saturated_count")
+            continue
+        if not _affine_coordinate_fits_canvas(
+            formation=formation,
+            width=width,
+            height=height,
+            sequence_index=sequence_index,
+            coordinate=coordinate,
+        ):
+            _increment_counter(counters, "canvas_fit_reject_count")
+            continue
+        _increment_counter(counters, "accepted_count")
+        return coordinate
     identity_coordinate = _identity_variation_coordinate_record(
         transform=transform,
         sequence_index=sequence_index,
     )
-    try:
-        _increment_counter(counters, "identity_fallback_check_count")
-        if formation.component_discriminability_passes(
-            width=width,
-            height=height,
-            sequence_length=sequence_length,
-            sequence_index=sequence_index,
-            variation_coordinates=(identity_coordinate,),
-            minimum_pairwise_l1=minimum_pairwise_l1,
-        ):
-            _increment_counter(counters, "identity_fallback_count")
-            return identity_coordinate
-    except ObservationFormationValidationError:
-        _increment_counter(counters, "validation_error_count")
-        pass
+    _increment_counter(counters, "identity_fallback_count")
+    return identity_coordinate
     raise ObservationGenerationError(
         "could not sample an identity-preserving affine coordinate"
     )
-
-
-def _readable_variation_coordinate_record(
-    *,
-    transform: VariationTransformDeclaration,
-    generator: random.Random,
-    sequence_index: int,
-    thresholds: Mapping[str, float],
-) -> Mapping[str, object]:
-    spatial = transform.spatial_affine
-    if spatial.spatial_rank != 2:
-        return _variation_coordinate_record(
-            transform=transform,
-            generator=generator,
-            sequence_index=sequence_index,
-        )
-    minimum_scale = thresholds.get("affine_minimum_singular_value", 0.75)
-    maximum_scale = thresholds.get("affine_maximum_singular_value", 1.25)
-    maximum_condition = thresholds.get("affine_maximum_condition_number", 1.35)
-    minimum_alignment = thresholds.get("affine_minimum_axis_alignment", 0.9)
-    maximum_angle = math.acos(max(-1.0, min(1.0, minimum_alignment)))
-    rotation = generator.uniform(-maximum_angle, maximum_angle)
-    scale_x = generator.uniform(minimum_scale, maximum_scale)
-    scale_y = generator.uniform(
-        max(minimum_scale, scale_x / maximum_condition),
-        min(maximum_scale, scale_x * maximum_condition),
-    )
-    shear = generator.uniform(-math.tan(maximum_angle) * 0.25, math.tan(maximum_angle) * 0.25)
-    cos_angle = math.cos(rotation)
-    sin_angle = math.sin(rotation)
-    a = scale_x * cos_angle
-    c = scale_x * sin_angle
-    b = scale_y * (shear * cos_angle - sin_angle)
-    d = scale_y * (shear * sin_angle + cos_angle)
-    tx = generator.uniform(-0.15, 0.15)
-    ty = generator.uniform(-0.15, 0.15)
-    return {
-        "kind": "field-variation-transform-coordinate",
-        "sequence_index": sequence_index,
-        "spatial_affine": {
-            "kind": "spatial-affine-coordinate",
-            "coordinate_system": spatial.coordinate_system,
-            "matrix": [[a, b, tx], [c, d, ty], [0.0, 0.0, 1.0]],
-        },
-    }
 
 
 def _increment_counter(counters: dict[str, float], name: str, value: float = 1.0) -> None:
@@ -1102,24 +1043,6 @@ def _projected_unit_interval(
         )
         possible_ranges.append(max(points) - min(points))
     return (min(possible_ranges), max(possible_ranges))
-
-
-def _variation_analysis_extent(
-    *,
-    formation: ObservationFormationDeclaration,
-    sequence_length: int,
-    width: int,
-    height: int,
-) -> tuple[int, int]:
-    if formation.variation_transform.spatial_affine.coordinate_system != (
-        "normalized-sequence-element"
-    ):
-        return (width, height)
-    if formation.sequence_layout.placement_axis == "x":
-        return (max(1, width // sequence_length), height)
-    return (width, max(1, height // sequence_length))
-
-
 def _identity_variation_coordinate_record(
     *,
     transform: VariationTransformDeclaration,
@@ -1214,6 +1137,94 @@ def _affine_coordinate_passes_fast_thresholds(
     return (overlap_width * overlap_height) / envelope_area >= minimum_overlap
 
 
+def _affine_coordinate_fits_canvas(
+    *,
+    formation: ObservationFormationDeclaration,
+    width: int,
+    height: int,
+    sequence_index: int,
+    coordinate: Mapping[str, object],
+) -> bool:
+    matrix = _affine_coordinate_matrix(coordinate)
+    a, b, tx = matrix[0]
+    c, d, ty = matrix[1]
+    center = (0.5, 0.5)
+    for bounds in _canvas_fit_component_bounds(
+        formation=formation,
+        width=width,
+        height=height,
+        sequence_index=sequence_index,
+    ):
+        if bounds is None:
+            continue
+        min_x, min_y, max_x, max_y = bounds
+        source_corners = (
+            ((min_x - 1.5) / width, (min_y - 1.5) / height),
+            ((max_x + 2.5) / width, (min_y - 1.5) / height),
+            ((min_x - 1.5) / width, (max_y + 2.5) / height),
+            ((max_x + 2.5) / width, (max_y + 2.5) / height),
+        )
+        for x, y in source_corners:
+            transformed_x = center[0] + a * (x - center[0]) + b * (y - center[1]) + tx
+            transformed_y = center[1] + c * (x - center[0]) + d * (y - center[1]) + ty
+            if transformed_x < 0.0 or transformed_x > 1.0:
+                return False
+            if transformed_y < 0.0 or transformed_y > 1.0:
+                return False
+    return True
+
+
+def _canvas_fit_component_bounds(
+    *,
+    formation: ObservationFormationDeclaration,
+    width: int,
+    height: int,
+    sequence_index: int,
+) -> tuple[tuple[int, int, int, int] | None, ...]:
+    key = (str(formation.digest), width, height, sequence_index)
+    cached = _canvas_fit_component_bounds_cache.get(key)
+    if cached is not None:
+        return cached
+    bounds = tuple(
+        _positive_field_bounds(
+            formation.component_field(
+                width=width,
+                height=height,
+                sequence_length=1,
+                sequence_index=sequence_index,
+                component_index=component_index,
+            )
+        )
+        for component_index in range(len(formation.components))
+    )
+    _canvas_fit_component_bounds_cache[key] = bounds
+    return bounds
+
+
+def _positive_field_bounds(
+    field: FieldObservation,
+) -> tuple[int, int, int, int] | None:
+    channels, height, width = field.shape
+    min_x = width
+    min_y = height
+    max_x = -1
+    max_y = -1
+    for channel in range(channels):
+        channel_offset = channel * width * height
+        for y_index in range(height):
+            row_offset = channel_offset + y_index * width
+            for x_index in range(width):
+                if field.values[row_offset + x_index] <= 0.0:
+                    continue
+                min_x = min(min_x, x_index)
+                min_y = min(min_y, y_index)
+                max_x = max(max_x, x_index)
+                max_y = max(max_y, y_index)
+    if max_x < min_x or max_y < min_y:
+        return None
+    return (min_x, min_y, max_x, max_y)
+
+
 def _affine_singular_values(
     a: float,
     b: float,
@@ -1278,21 +1289,83 @@ def _resolution_sampling(
     height_axis = value.get("height_axis")
     if not isinstance(height_axis, str) or not height_axis:
         raise ObservationGenerationError("resolution_sampling height_axis must be nonempty")
-    multiplier = value.get("maximum_pixel_multiplier")
-    if (
-        not isinstance(multiplier, int | float)
-        or isinstance(multiplier, bool)
-        or not math.isfinite(float(multiplier))
-        or float(multiplier) < 1.0
-    ):
-        raise ObservationGenerationError(
-            "resolution_sampling maximum_pixel_multiplier must be at least 1"
-        )
     return _ResolutionSampling(
         width_axis=width_axis,
         height_axis=height_axis,
-        maximum_pixel_multiplier=float(multiplier),
     )
+
+
+def _variation_transform_complexity(
+    transform: VariationTransformDeclaration,
+    *,
+    sequence_length: int,
+    width: int,
+    height: int,
+) -> float:
+    if sequence_length < 1:
+        raise ObservationGenerationError("sequence_length must be positive")
+    element_width = max(1, width // sequence_length)
+    row_extents = (element_width, height, 1)
+    complexity = 0.0
+    for row_index, row in enumerate(transform.spatial_affine.matrix):
+        extent = row_extents[row_index] if row_index < len(row_extents) else 1
+        for lower, upper in row:
+            if upper > lower:
+                complexity += _distinguishable_interval_complexity(
+                    lower=lower,
+                    upper=upper,
+                    extent=extent,
+                )
+    return complexity
+
+
+def _distinguishable_interval_complexity(
+    *,
+    lower: float,
+    upper: float,
+    extent: int,
+) -> float:
+    if extent < 1:
+        return 0.0
+    return math.log2(max(1, math.floor((upper - lower) * extent) + 1))
+
+
+def _sampled_resolution_maximum(
+    *,
+    minimum_width: int,
+    minimum_height: int,
+    maximum_pixel_count: int,
+) -> tuple[int, int]:
+    minimum_pixel_count = minimum_width * minimum_height
+    if maximum_pixel_count < minimum_pixel_count:
+        return (minimum_width, minimum_height)
+    side_multiplier = math.sqrt(maximum_pixel_count / minimum_pixel_count)
+    return (
+        math.floor(minimum_width * side_multiplier),
+        math.floor(minimum_height * side_multiplier),
+    )
+
+
+def _batch_sample_pixel_limit(
+    *,
+    memory_limit_bytes: int,
+    memory_budget_fraction: float,
+    sample_count: int,
+    channel_count: int,
+) -> int:
+    if type(memory_limit_bytes) is not int or memory_limit_bytes < 1:
+        raise ObservationGenerationError("memory_limit_bytes must be a positive integer")
+    if not math.isfinite(memory_budget_fraction) or memory_budget_fraction <= 0.0:
+        raise ObservationGenerationError("memory_budget_fraction must be positive")
+    if memory_budget_fraction > 1.0:
+        raise ObservationGenerationError("memory_budget_fraction must not exceed 1")
+    if sample_count < 1:
+        raise ObservationGenerationError("sample_count must be positive")
+    if channel_count < 1:
+        raise ObservationGenerationError("channel_count must be positive")
+    budget = math.floor(memory_limit_bytes * memory_budget_fraction)
+    per_sample_denominator = sample_count * channel_count * _field_scalar_construction_bytes
+    return max(1, budget // per_sample_denominator)
 
 
 def _sample_component_sequence(

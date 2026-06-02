@@ -6,7 +6,7 @@ import {
   PackageCheck,
   type LucideIcon,
 } from 'lucide-react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useMemo } from 'react';
 
 import { BenchmarkResultDashboard } from './BenchmarkResultDashboard.tsx';
@@ -243,7 +243,6 @@ function emptyBenchmarkResult(benchmark: BenchmarkTaskRecord): BenchmarkResultRe
     leaderboard: [],
     model_inspections: [],
     proposals: [],
-    scale_axis: benchmark.scale_axis,
     training_history: [],
   };
 }
@@ -1133,7 +1132,7 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
         {visibleSamples.map(({ batch, sample }) => (
           <BenchmarkSampleCard
             density={batch.presentation.sample_card_density}
-            key={`${batch.mode}-${batch.scale}-${sample.index}-${sample.outcome_id}`}
+            key={`${batch.mode}-${batch.component_count}-${sample.index}-${sample.outcome_id}`}
             onSelect={() => setSelectedSampleKey(sampleKey(batch, sample))}
             sample={sample}
             selected={sampleKey(batch, sample) === selectedKey}
@@ -1162,25 +1161,12 @@ function BenchmarkSampleCard({
       type="button"
     >
       <div className="benchmark-image-shell">
-        <img
-          alt={sample.outcome_id}
-          src={sample.image_data_url}
-          style={samplePreviewStyle(sample)}
-        />
+        <div className="benchmark-image-fit">
+          <img alt={sample.outcome_id} src={sample.image_data_url} />
+        </div>
       </div>
     </button>
   );
-}
-
-function samplePreviewStyle(sample: GeneratedObservationSampleRecord): CSSProperties {
-  const [, fieldHeight = 1, fieldWidth = 1] = sample.field_shape;
-  const { left, top, size } = sample.preview_crop;
-  return {
-    height: `${(fieldHeight / size) * 100}%`,
-    left: `${(-left / size) * 100}%`,
-    top: `${(-top / size) * 100}%`,
-    width: `${(fieldWidth / size) * 100}%`,
-  };
 }
 
 function BenchmarkSampleCoordinateInspector({
@@ -1215,5 +1201,5 @@ function sampleKey(
   batch: GeneratedObservationBatchRecord,
   sample: GeneratedObservationSampleRecord,
 ): string {
-  return `${batch.mode}:${batch.scale}:${batch.seed}:${batch.sample_count}:${sample.index}:${sample.outcome_id}`;
+  return `${batch.mode}:${batch.component_count}:${batch.seed}:${batch.sample_count}:${sample.index}:${sample.outcome_id}`;
 }

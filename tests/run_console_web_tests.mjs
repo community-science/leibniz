@@ -8,6 +8,7 @@ import {
   consoleBasePath,
   consoleResultRoots,
   consoleResultWatchRoots,
+  isMaterializedResultViewEvent,
   resultRootArguments,
 } from '../src/leibniz/console/_web_src/vite.config.mjs';
 
@@ -188,6 +189,7 @@ function assertBenchmarkSamplePaneStructure() {
   );
   const requiredPanelMarkers = [
     'BenchmarkSampleCoordinateInspector',
+    'benchmark-image-fit',
     'benchmark-sample-coordinate-inspector',
   ];
   for (const marker of requiredPanelMarkers) {
@@ -197,6 +199,9 @@ function assertBenchmarkSamplePaneStructure() {
   }
   const requiredStyleMarkers = [
     '--benchmark-sample-tile-size',
+    '.benchmark-image-fit',
+    'box-sizing: border-box',
+    'inset: 0',
     '.benchmark-sample-coordinate-inspector',
     'object-fit: contain',
   ];
@@ -372,14 +377,18 @@ function assertConsoleResultRootPolicy() {
   const tempRoot = mkdtempSync(resolve(tmpdir(), 'leibniz-console-roots-'));
   try {
     assertEqual(consoleResultRoots({}, tempRoot).length, 0, 'missing default result root');
-    assertEqual(consoleResultWatchRoots({}, tempRoot).length, 0, 'missing default watch root');
+    assertEqual(
+      consoleResultWatchRoots({}, tempRoot)[0],
+      resolve(tempRoot, 'results'),
+      'missing default watch root',
+    );
     mkdirSync(resolve(tempRoot, 'results'), { recursive: true });
     assertEqual(
       consoleResultWatchRoots({}, tempRoot)[0],
       resolve(tempRoot, 'results'),
       'default watch root',
     );
-    const defaultRoot = resolve(tempRoot, 'results/views');
+    const defaultRoot = resolve(tempRoot, 'results');
     mkdirSync(defaultRoot, { recursive: true });
     assertEqual(consoleResultRoots({}, tempRoot)[0], defaultRoot, 'default result root');
     assertEqual(consoleBasePath({}), '/', 'default console base path');
@@ -408,6 +417,23 @@ function assertConsoleResultRootPolicy() {
       resultRootArguments([explicitRoot]).join('|'),
       ['--result-root', explicitRoot].join('|'),
       'result root arguments',
+    );
+    assertEqual(
+      isMaterializedResultViewEvent(
+        resolve(defaultRoot, 'views', 'benchmark_results.json'),
+        [defaultRoot],
+      ),
+      true,
+      'default result root ignores materialized view events',
+    );
+    const explicitViewsRoot = resolve(defaultRoot, 'views');
+    assertEqual(
+      isMaterializedResultViewEvent(
+        resolve(explicitViewsRoot, 'benchmark_results.json'),
+        [explicitViewsRoot],
+      ),
+      false,
+      'explicit views root still refreshes on view events',
     );
     assertEqual(
       consoleDataPayloadPath().endsWith('src/leibniz/console/_web_src/src/generated/consoleDataPayload.json'),

@@ -1,3 +1,4 @@
+import math
 import subprocess
 from pathlib import Path
 from typing import cast
@@ -30,6 +31,44 @@ _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "
 _digits_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool" / "manifest.json"
 )
+
+
+def test_base_normalized_absolute_score_rewards_complexity_above_chance() -> None:
+    base_complexity = 20.0
+    chance_mass = 0.1
+
+    assert math.isclose(
+        local_results.base_normalized_absolute_score(
+            ({"complexity": base_complexity, "score": 1.0},),
+            base_complexity=base_complexity,
+            chance_mass=chance_mass,
+        ),
+        1.0,
+    )
+    assert math.isclose(
+        local_results.base_normalized_absolute_score(
+            ({"complexity": base_complexity * 2.0, "score": 1.0},),
+            base_complexity=base_complexity,
+            chance_mass=chance_mass,
+        ),
+        2.0,
+    )
+    assert math.isclose(
+        local_results.base_normalized_absolute_score(
+            ({"complexity": base_complexity, "score": 0.55},),
+            base_complexity=base_complexity,
+            chance_mass=chance_mass,
+        ),
+        0.5,
+    )
+    assert math.isclose(
+        local_results.base_normalized_absolute_score(
+            ({"complexity": base_complexity * 4.0, "score": chance_mass},),
+            base_complexity=base_complexity,
+            chance_mass=chance_mass,
+        ),
+        0.0,
+    )
 
 
 def test_import_submission_publications_materializes_runs_views(tmp_path: Path) -> None:
@@ -218,8 +257,8 @@ def test_materialize_benchmark_result_views_projects_imported_publications(
     result = results[0]
     assert result["benchmark_id"] == "benchmarks.digits@0.1.0"
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
-    assert leaderboard[0]["score"] == 1.0
-    assert leaderboard[0]["observed_complexities"] == [1.0]
+    assert leaderboard[0]["score"] == 0.0
+    assert leaderboard[0]["observed_complexities"] == []
     model_view = cast(dict[str, object], leaderboard[0]["console_view_model"])
     model_sections = cast(list[dict[str, object]], model_view["detail_sections"])
     assert [section["title"] for section in model_sections] == [
@@ -231,7 +270,7 @@ def test_materialize_benchmark_result_views_projects_imported_publications(
     contract_entries = cast(list[dict[str, object]], model_sections[0]["entries"])
     assert contract_entries[1] == {
         "label": "Prediction Space",
-        "value": "finite digit token sequence over 10 atoms",
+        "value": "finite outcome space with 10 outcomes",
     }
     graph_entries = cast(list[dict[str, object]], model_sections[1]["entries"])
     assert graph_entries[0] == {"label": "Components", "value": "3"}
@@ -300,6 +339,10 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
             train_steps=0,
         )
     )
+    local_result_summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=local_results_root,
+    )
 
     publish_summary = publish_local_benchmark_results(
         repository_root=_repository_root,
@@ -316,22 +359,29 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
     )
 
     assert publish_summary.publication_bundle_count == 1
-    assert publish_summary.measurement_count == 1
+    assert publish_summary.measurement_count >= 1
     publication_document = SubmissionPublicationDocument.from_bytes(
         publish_summary.publication_files[0].read_bytes()
     )
     assert publication_document.bundle.submission_package.id == ProtocolIdentifier.parse(
-        "submissions.digits.digits-arch-bb0dde9254dc-l1-seed101-samples1-steps0"
-        "-train-d83ad78f1b6c@0.1.0"
+        "submissions.digits.digits-arch-bb0dde9254dc-c1-seed101-samples1-steps0"
+        "-train-e4b2ff9c5722@0.1.0"
     )
+    assert publication_document.bundle.submission_package.sampled_competence is not None
     assert imported_summary.publication_bundle_count == 1
     assert result_summary.run_count == 1
+    local_view = load_console_result_view(local_result_summary.view_file.read_bytes())
+    local_results = cast(list[dict[str, object]], local_view["benchmark_results"])
+    local_leaderboard = cast(list[dict[str, object]], local_results[0]["leaderboard"])
     view = load_console_result_view(result_summary.view_file.read_bytes())
     results = cast(list[dict[str, object]], view["benchmark_results"])
     history = cast(list[dict[str, object]], results[0]["training_history"])
     leaderboard = cast(list[dict[str, object]], results[0]["leaderboard"])
     assert history[0]["source_kind"] == "imported-publication"
-    assert history[0]["measurement_count"] == 1
+    assert history[0]["measurement_count"] == publish_summary.measurement_count
+    assert "sampled_competence" in history[0]
+    assert leaderboard[0]["score"] == local_leaderboard[0]["score"]
+    assert leaderboard[0]["observed_complexities"] == local_leaderboard[0]["observed_complexities"]
     assert leaderboard[0]["run_ids"] == [history[0]["run_id"]]
 
 
@@ -365,7 +415,7 @@ def test_cli_publishes_local_benchmark_results(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert "wrote 1 publication bundle(s), 1 measurement(s)" in captured.out
+    assert "wrote 1 publication bundle(s), 2 measurement(s)" in captured.out
     assert "publication: " in captured.out
     assert "commit: " in captured.out
     assert len(tuple((results_root / "publication_bundles").glob("*.json"))) == 1
@@ -715,7 +765,7 @@ def _digits_measurement():
 
 
 def _digits_measurement_record() -> dict[str, object]:
-    outcome_space = _digits_benchmark().manifest.resolve_outcome_space(scale=1)
+    outcome_space = _digits_benchmark().manifest.resolve_outcome_space()
     return {
         "benchmark_id": "benchmarks.digits@0.1.0",
         "outcome_space": outcome_space.to_record(),

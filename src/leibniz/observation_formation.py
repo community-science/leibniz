@@ -508,6 +508,7 @@ class ObservationFormationDeclaration:
     variation_transform: VariationTransformDeclaration = field(
         default_factory=VariationTransformDeclaration.identity
     )
+    _digest: ContentDigest = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         try:
@@ -544,6 +545,7 @@ class ObservationFormationDeclaration:
                     raise ObservationFormationValidationError(
                         f"mark channel {mark.channel} is outside channel_count {self.channel_count}"
                     )
+        object.__setattr__(self, "_digest", ContentDigest.from_value(self.to_record()))
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ObservationFormationDeclaration:
@@ -579,18 +581,18 @@ class ObservationFormationDeclaration:
     def sample_component_sequence(
         self,
         *,
-        plan: MaterializationPlan,
+        seed: int,
+        component_count: int,
         sample_index: int,
     ) -> tuple[int, ...]:
         if sample_index < 0:
             raise ObservationFormationValidationError("sample_index must be nonnegative")
-        sequence_length = plan.scale_assignment.require_axis(self.sequence_layout.sequence_axis)
-        if sequence_length < 1:
-            raise ObservationFormationValidationError("sequence length must be positive")
-        generator = random.Random(plan.seed + sample_index)
+        if component_count < 1:
+            raise ObservationFormationValidationError("component_count must be positive")
+        generator = random.Random(seed + sample_index)
         return tuple(
             generator.randrange(len(self.components))
-            for _sequence_element in range(sequence_length)
+            for _sequence_element in range(component_count)
         )
 
     def form_observation(
@@ -605,15 +607,12 @@ class ObservationFormationDeclaration:
             raise ObservationFormationValidationError(
                 f"plan benchmark_id {plan.benchmark_id} does not match {self.benchmark_id}"
             )
-        sequence_elements = plan.scale_assignment.require_axis(self.sequence_layout.sequence_axis)
         width = plan.resolution_assignment.require_axis(self.width_axis)
         height = plan.resolution_assignment.require_axis(self.height_axis)
         sequence = tuple(_as_int(index, field="component_sequence") for index in component_sequence)
-        if len(sequence) != sequence_elements:
-            raise ObservationFormationValidationError(
-                f"component_sequence length {len(sequence)} does not match "
-                f"sequence length {sequence_elements}"
-            )
+        sequence_elements = len(sequence)
+        if sequence_elements < 1:
+            raise ObservationFormationValidationError("component_sequence must not be empty")
         if any(index >= len(self.components) for index in sequence):
             raise ObservationFormationValidationError(
                 "component_sequence index is outside component vocabulary"
@@ -1139,7 +1138,7 @@ class ObservationFormationDeclaration:
 
     @property
     def digest(self) -> ContentDigest:
-        return ContentDigest.from_value(self.to_record())
+        return self._digest
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -1195,19 +1194,28 @@ class ObservationFormationDeclaration:
         for sequence_index, component_index in enumerate(sequence):
             target_values = values
             if variation_coordinates is not None:
-                target_values = [0.0] * len(values)
-            component = self.components[component_index]
-            for mark in component.marks:
-                _draw_mark(
-                    values=target_values,
-                    channel_count=self.channel_count,
-                    width=width,
-                    height=height,
-                    sequence_length=len(sequence),
-                    sequence_index=sequence_index,
-                    placement_axis=self.sequence_layout.placement_axis,
-                    mark=mark,
+                target_values = list(
+                    self._cached_component_analysis_field(
+                        width=width,
+                        height=height,
+                        sequence_length=len(sequence),
+                        sequence_index=sequence_index,
+                        component_index=component_index,
+                    ).values
                 )
+            else:
+                component = self.components[component_index]
+                for mark in component.marks:
+                    _draw_mark(
+                        values=target_values,
+                        channel_count=self.channel_count,
+                        width=width,
+                        height=height,
+                        sequence_length=len(sequence),
+                        sequence_index=sequence_index,
+                        placement_axis=self.sequence_layout.placement_axis,
+                        mark=mark,
+                    )
             if variation_coordinates is not None:
                 _merge_transformed_sequence_element(
                     values=values,

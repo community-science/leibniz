@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
@@ -27,6 +28,7 @@ _submission_package_record = RecordSpec(
         "benchmark_manifest": FieldSpec(kind="record"),
         "architecture_manifest": FieldSpec(kind="record"),
         "measurement_dataset": FieldSpec(kind="record"),
+        "sampled_competence": FieldSpec(kind="record", required=False),
         "artifacts": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="record"),
@@ -93,6 +95,7 @@ class SubmissionPackageManifest:
     benchmark_manifest: BenchmarkManifest
     architecture_manifest: ArchitectureManifest
     measurement_dataset: MeasurementDataset
+    sampled_competence: Mapping[str, object] | None = None
     artifacts: tuple[SubmissionArtifact, ...] = ()
 
     def __post_init__(self) -> None:
@@ -107,6 +110,11 @@ class SubmissionPackageManifest:
                 "measurement_dataset must contain at least one measurement"
             )
         _reject_duplicate_artifact_ids(self.artifacts)
+        if self.sampled_competence is not None:
+            _validate_sampled_competence(
+                self.sampled_competence,
+                benchmark_manifest=self.benchmark_manifest,
+            )
         try:
             _validate_measurement_dataset_manifest(
                 dataset=self.measurement_dataset,
@@ -132,6 +140,10 @@ class SubmissionPackageManifest:
                 SubmissionArtifact.from_record(_as_mapping(item, field="artifacts"))
                 for item in _as_sequence(validated.get("artifacts", ()), field="artifacts")
             )
+            sampled_competence = _optional_mapping(
+                validated.get("sampled_competence"),
+                field="sampled_competence",
+            )
         except ValueError as error:
             raise SubmissionPackageValidationError(str(error)) from error
         return cls(
@@ -139,6 +151,7 @@ class SubmissionPackageManifest:
             benchmark_manifest=benchmark_manifest,
             architecture_manifest=architecture_manifest,
             measurement_dataset=measurement_dataset,
+            sampled_competence=sampled_competence,
             artifacts=artifacts,
         )
 
@@ -153,6 +166,8 @@ class SubmissionPackageManifest:
             "architecture_manifest": self.architecture_manifest.to_record(),
             "measurement_dataset": self.measurement_dataset.to_record(),
         }
+        if self.sampled_competence is not None:
+            record["sampled_competence"] = dict(self.sampled_competence)
         if self.artifacts:
             record["artifacts"] = [
                 artifact.to_record()
@@ -189,32 +204,7 @@ def _validate_measurement_dataset_manifest(
     dataset: MeasurementDataset,
     manifest: BenchmarkManifest,
 ) -> None:
-    if manifest.outcome_space is not None:
-        dataset.validate_manifest(manifest)
-        return
-    for measurement in dataset.measurements:
-        measurement.validate_manifest(
-            manifest,
-            scale=_scale_from_measurement_outcome_space(manifest, measurement.outcome_space.id),
-        )
-
-
-def _scale_from_measurement_outcome_space(
-    manifest: BenchmarkManifest,
-    outcome_space_id: ProtocolIdentifier,
-) -> int:
-    prefix = f"{manifest.id.name}.outcomes.l"
-    outcome_space_name = str(outcome_space_id.name)
-    if not outcome_space_name.startswith(prefix):
-        raise SubmissionPackageValidationError(
-            "measurement outcome_space does not match scale-indexed manifest"
-        )
-    scale_text = outcome_space_name.removeprefix(prefix)
-    if not scale_text.isdecimal():
-        raise SubmissionPackageValidationError(
-            "measurement outcome_space does not declare an integer scale"
-        )
-    return int(scale_text)
+    dataset.validate_manifest(manifest)
 
 
 def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
@@ -223,10 +213,19 @@ def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
     return cast(Mapping[str, object], value)
 
 
+def _optional_mapping(value: object, *, field: str) -> Mapping[str, object] | None:
+    if value is None:
+        return None
+    return _as_mapping(value, field=field)
+
+
 def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
+    if isinstance(value, tuple):
+        return cast(tuple[object, ...], value)
+    if isinstance(value, list):
+        return tuple(cast(list[object], value))
+    else:
         raise SubmissionPackageValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
 
 
 def _as_optional_string(value: object) -> str | None:
@@ -255,3 +254,59 @@ def _reject_duplicate_artifact_ids(artifacts: tuple[SubmissionArtifact, ...]) ->
         if artifact.id in seen:
             raise SubmissionPackageValidationError(f"duplicate artifact id: {artifact.id}")
         seen.add(artifact.id)
+
+
+def _validate_sampled_competence(
+    record: Mapping[str, object],
+    *,
+    benchmark_manifest: BenchmarkManifest,
+) -> None:
+    benchmark_id = record.get("benchmark_id")
+    if benchmark_id != str(benchmark_manifest.id):
+        raise SubmissionPackageValidationError(
+            "sampled_competence benchmark_id does not match benchmark_manifest"
+        )
+    kind = record.get("kind")
+    if kind not in {"sampled-complexity-class", "sampled-competence-curriculum"}:
+        raise SubmissionPackageValidationError("sampled_competence has unsupported kind")
+    _positive_int(record.get("sample_count"), field="sampled_competence.sample_count")
+    _score(record.get("mean_accepted_mass"), field="sampled_competence.mean_accepted_mass")
+    _nonnegative_number(record.get("complexity"), field="sampled_competence.complexity")
+    points = record.get("points")
+    if points is not None:
+        for point in _as_sequence(points, field="sampled_competence.points"):
+            point_record = _as_mapping(point, field="sampled_competence.points")
+            _positive_int(
+                point_record.get("sample_count"),
+                field="sampled_competence.points.sample_count",
+            )
+            _score(
+                point_record.get("mean_accepted_mass"),
+                field="sampled_competence.points.mean_accepted_mass",
+            )
+            _nonnegative_number(
+                point_record.get("complexity"),
+                field="sampled_competence.points.complexity",
+            )
+
+
+def _positive_int(value: object, *, field: str) -> int:
+    if type(value) is not int or value < 1:
+        raise SubmissionPackageValidationError(f"{field}: expected positive integer")
+    return value
+
+
+def _nonnegative_number(value: object, *, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise SubmissionPackageValidationError(f"{field}: expected nonnegative number")
+    number = float(value)
+    if number < 0.0 or not math.isfinite(number):
+        raise SubmissionPackageValidationError(f"{field}: expected nonnegative number")
+    return number
+
+
+def _score(value: object, *, field: str) -> float:
+    score = _nonnegative_number(value, field=field)
+    if score > 1.0:
+        raise SubmissionPackageValidationError(f"{field}: expected score at most 1")
+    return score

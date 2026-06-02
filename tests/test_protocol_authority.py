@@ -39,12 +39,13 @@ def test_protocol_authority_routes_and_hashes_manifest_record(tmp_path: Path) ->
     record: dict[str, object] = {
         "id": "benchmarks.example@0.1.0",
         "name": "benchmarks.example",
-        "outcome_sequence": {
-            "atom_count": 2,
-            "atom_name": "bit",
-            "length_parameter": "L",
+        "outcome_space": {
+            "id": "benchmarks.example.outcomes@0.1.0",
+            "outcomes": [
+                {"id": "bit-0"},
+                {"id": "bit-1"},
+            ],
         },
-        "scale_parameter": {"symbol": "L", "minimum": 1},
     }
 
     route = route_protocol_record(record)
@@ -104,12 +105,13 @@ def test_protocol_authority_reports_dangling_reference_edges(tmp_path: Path) -> 
             "manifest.json": {
                 "id": "benchmarks.example@0.1.0",
                 "name": "benchmarks.example",
-                "outcome_sequence": {
-                    "atom_count": 2,
-                    "atom_name": "bit",
-                    "length_parameter": "L",
+                "outcome_space": {
+                    "id": "benchmarks.example.outcomes@0.1.0",
+                    "outcomes": [
+                        {"id": "bit-0"},
+                        {"id": "bit-1"},
+                    ],
                 },
-                "scale_parameter": {"symbol": "L", "minimum": 1},
                 "latent_factor_declaration": {
                     "kind": "latent-factor-declaration",
                     "protocol_id": "latent-factors.missing@0.1.0",

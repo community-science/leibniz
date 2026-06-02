@@ -10,7 +10,7 @@ const consoleDataModuleId = 'virtual:leibniz-console-data';
 const resolvedConsoleDataModuleId = `\0${consoleDataModuleId}`;
 const consoleDataUpdateEvent = 'leibniz-console-data:update';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-const defaultResultRoot = 'results/views';
+const defaultResultRoot = 'results';
 const consoleDataCachePath = resolve(
   repositoryRoot,
   'src/leibniz/console/_web_src/src/generated/consoleDataPayload.json',
@@ -57,7 +57,7 @@ function leibnizConsoleData() {
       }
       server.watcher.add(roots);
       server.watcher.on('all', (_event, path) => {
-        if (!isInsideAnyRoot(path, roots)) {
+        if (!isInsideAnyRoot(path, roots) || isMaterializedResultViewEvent(path, roots)) {
           return;
         }
         const module = server.moduleGraph.getModuleById(resolvedConsoleDataModuleId);
@@ -120,7 +120,7 @@ export function consoleResultWatchRoots(env = process.env, root = repositoryRoot
   const raw = env.LEIBNIZ_CONSOLE_RESULT_ROOTS ?? '';
   if (raw.trim() === '') {
     const runsRoot = resolve(root, 'results');
-    return existingDirectories([runsRoot]);
+    return [runsRoot];
   }
   return consoleResultRoots(env, root);
 }
@@ -154,5 +154,14 @@ function isInsideAnyRoot(path, roots) {
   return roots.some((root) => {
     const relativePath = relative(root, resolvedPath);
     return relativePath === '' || (!relativePath.startsWith('..') && !relativePath.startsWith('/'));
+  });
+}
+
+export function isMaterializedResultViewEvent(path, roots) {
+  const resolvedPath = resolve(path);
+  return roots.some((root) => {
+    const relativePath = relative(root, resolvedPath);
+    const parts = relativePath.split(/[\\/]+/);
+    return parts[0] === 'views' && parts.length > 1;
   });
 }

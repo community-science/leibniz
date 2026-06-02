@@ -191,11 +191,13 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     task = benchmark_tasks[0]
     assert task["kind"] == "generated-observations"
     assert task["benchmark_id"] == "benchmarks.digits@0.1.0"
-    assert task["scale_axis"] == "L"
-    assert task["complexity_axis"] == "C"
+    assert task["complexity_axis"] is None
     assert task["outcome_atom_count"] == 10
     batches = cast(list[dict[str, object]], task["batches"])
-    assert [(batch["mode"], batch["scale"], batch["sample_count"]) for batch in batches] == [
+    assert [
+        (batch["mode"], batch["component_count"], batch["sample_count"])
+        for batch in batches
+    ] == [
         ("balanced", 1, 40),
     ]
     batch = batches[0]
@@ -208,19 +210,9 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     component_sequences = [
         cast(list[int], sample["component_sequence"]) for sample in samples
     ]
-    assert Counter(len(sequence) for sequence in component_sequences) == dict.fromkeys(
-        range(1, 9), 5
-    )
+    assert Counter(len(sequence) for sequence in component_sequences) == {1: 40}
     digit_counts = Counter(digit for sequence in component_sequences for digit in sequence)
-    assert digit_counts == dict.fromkeys(range(10), 18)
-    assert any(
-        sequence
-        != [
-            (sequence[0] + sequence_index) % 10
-            for sequence_index in range(len(sequence))
-        ]
-        for sequence in component_sequences
-    )
+    assert digit_counts == dict.fromkeys(range(10), 4)
     field_shapes = [tuple(cast(list[int], sample["field_shape"])) for sample in samples]
     assert len(set(field_shapes)) == len(field_shapes)
     materialization_plans = [
@@ -229,11 +221,11 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert all(".sample-0@" in str(plan["id"]) for plan in materialization_plans)
     assert len({plan["seed"] for plan in materialization_plans}) == len(materialization_plans)
     assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
-    assert samples[0]["field_shape"] == [1, 28, 40]
-    assert _png_dimensions(str(samples[0]["image_data_url"])) == (40, 28)
-    assert _png_dimensions(str(samples[1]["image_data_url"])) == (169, 23)
-    assert samples[0]["preview_crop"] == {"left": 5, "top": 0, "size": 26}
-    assert samples[1]["preview_crop"] == {"left": 8, "top": -64, "size": 154}
+    assert samples[0]["field_shape"] == [1, 128, 139]
+    assert _png_dimensions(str(samples[0]["image_data_url"])) == (139, 128)
+    assert _png_dimensions(str(samples[1]["image_data_url"])) == (43, 171)
+    assert "preview_crop" not in samples[0]
+    assert "preview_crop" not in samples[1]
     latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])
     variation = next(
         coordinate for coordinate in latent_coordinates if coordinate["role"] == "variation"
@@ -298,7 +290,6 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
     {
       "benchmark_id": "benchmarks.digits@0.1.0",
       "complexity_axis": "C",
-      "scale_axis": "L",
       "cost_axes": [{"key": "parameter_count", "label": "Parameters"}],
       "leaderboard": [
         {
@@ -334,7 +325,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
           "benchmark_id": "benchmarks.digits@0.1.0",
           "architecture_digest": "sha256:model",
           "model_key": "sha256:model",
-          "scale": 1,
+          "complexity": 10,
           "measurement_count": 1,
           "score": 1.0,
           "cost_summary": {
@@ -378,16 +369,56 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
     assert results[0]["benchmark_id"] == "benchmarks.digits@0.1.0"
 
 
+def test_console_data_discovers_materialized_result_root_views(tmp_path: Path) -> None:
+    result_root = tmp_path / "results"
+    view_root = result_root / "views"
+    view_root.mkdir(parents=True)
+    (view_root / "benchmark_results.json").write_text(
+        """
+{
+  "format": "leibniz.console.benchmark-results",
+  "format_version": 1,
+  "benchmark_results": [
+    {
+      "benchmark_id": "benchmarks.digits@0.1.0",
+      "cost_axes": [{"key": "parameter_count", "label": "Parameters"}],
+      "leaderboard": [],
+      "frontiers": {
+        "parameter_count": [],
+        "inference_flops": [],
+        "parameter_bytes": []
+      },
+      "training_history": []
+    }
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+
+    data = ConsoleDataBuilder(_repository_root).discover(
+        (PurePosixPath("tests/fixtures"),),
+        result_roots=(result_root,),
+    )
+    record = data.to_record()
+    result_views = cast(list[dict[str, object]], record["result_views"])
+
+    assert len(result_views) == 1
+    assert result_views[0]["source_path"] == (
+        view_root / "benchmark_results.json"
+    ).as_posix()
+
+
 def test_console_data_rejects_local_state_roots() -> None:
     with pytest.raises(ConsoleDataValidationError, match="local state"):
         ConsoleDataBuilder(_repository_root).discover((PurePosixPath("results"),))
 
 
-def test_console_data_rejects_raw_result_roots() -> None:
-    with pytest.raises(ConsoleDataValidationError, match="results/views"):
+def test_console_data_rejects_nested_local_result_roots() -> None:
+    with pytest.raises(ConsoleDataValidationError, match="results or results/views"):
         ConsoleDataBuilder(_repository_root).discover(
             (PurePosixPath("tests/fixtures"),),
-            result_roots=(Path("results"),),
+            result_roots=(Path("results/training-progress"),),
         )
 
 

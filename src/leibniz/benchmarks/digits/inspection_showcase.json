@@ -8,17 +8,9 @@
   "materialization_declaration": {
     "kind": "materialization-declaration",
     "protocol_id": "benchmarks.digits.materialization@0.1.0"
-  },
-  "samples": [
+    },
+    "samples": [
     {
-      "complexity_assignment": {
-        "values": [
-          {
-            "axis": "C",
-            "value": 1
-          }
-        ]
-      },
       "component_sequence": [
         7
       ],
@@ -26,42 +18,16 @@
       "label": "Single digit 7",
       "outcome_id": "digit-7",
       "sample_index": 0,
-      "scale_assignment": {
-        "values": [
-          {
-            "axis": "L",
-            "value": 1
-          }
-        ]
-      },
       "seed": 101
     },
     {
-      "complexity_assignment": {
-        "values": [
-          {
-            "axis": "C",
-            "value": 3
-          }
-        ]
-      },
       "component_sequence": [
-        1,
-        2,
         3
       ],
-      "id": "benchmarks.digits.inspection-samples.sequence-3.digits-1-2-3@0.1.0",
-      "label": "Three digit sequence 123",
-      "outcome_id": "digit-1-2-3",
+      "id": "benchmarks.digits.inspection-samples.sequence-1.digit-3@0.1.0",
+      "label": "Single digit 3",
+      "outcome_id": "digit-3",
       "sample_index": 1,
-      "scale_assignment": {
-        "values": [
-          {
-            "axis": "L",
-            "value": 3
-          }
-        ]
-      },
       "seed": 101
     }
   ]

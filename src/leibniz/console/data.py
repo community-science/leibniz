@@ -24,10 +24,13 @@ from leibniz.console.protocol import (
 )
 from leibniz.documents import canonical_document_bytes, document_filename_suffix
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
-from leibniz.local_results import LocalResultImportError, load_console_result_view
+from leibniz.local_results import (
+    LocalResultImportError,
+    load_console_result_view,
+    materialize_benchmark_result_views,
+)
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_operators import model_operator_vocabulary
-from leibniz.observation_formation import FieldObservation
 from leibniz.observation_generation import (
     ObservationGenerator,
     field_to_png_data_url,
@@ -185,23 +188,17 @@ class ConsoleDataBuilder:
             }
             if "outcome_space" in record:
                 summary["outcome_space"] = record["outcome_space"]
-            if "outcome_sequence" in record:
-                summary["outcome_sequence"] = record["outcome_sequence"]
-            if "scale_parameter" in record:
-                summary["scale_parameter"] = record["scale_parameter"]
             if "observation_ids" in record:
                 summary["observation_ids"] = record["observation_ids"]
             if "latent_factor_declaration" in record:
                 summary["latent_factor_declaration"] = record["latent_factor_declaration"]
-            if "complexity_coordinate" in record:
-                summary["complexity_coordinate"] = record["complexity_coordinate"]
             return summary
         if kind == "latent-factor-declaration":
             return {
                 "id": record["id"],
                 "construction_factors": record["construction_factors"],
                 "sample_factors": record["sample_factors"],
-                "complexity_projections": record["complexity_projections"],
+                "complexity_projections": record.get("complexity_projections", ()),
                 "resolution_requirements": record.get("resolution_requirements", ()),
             }
         if kind == "materialization-declaration":
@@ -220,8 +217,6 @@ class ConsoleDataBuilder:
                 "id": record["id"],
                 "benchmark_id": record["benchmark_id"],
                 "materialization_declaration": record["materialization_declaration"],
-                "scale_assignment": record["scale_assignment"],
-                "complexity_assignment": record["complexity_assignment"],
                 "resolution_assignment": record["resolution_assignment"],
                 "seed": record["seed"],
             }
@@ -313,22 +308,18 @@ class ConsoleDataBuilder:
                 continue
             generator = load_observation_generator(benchmark_root)
             manifest = generator.benchmark_manifest
-            if manifest.outcome_sequence is None:
-                continue
-            if manifest.scale_parameter is None:
-                raise ConsoleDataValidationError(
-                    f"{entry.source_path}: benchmark task requires scale_parameter"
-                )
-            atom_count = manifest.outcome_sequence.atom_count
+            atom_count = len(manifest.outcome_space.outcomes)
+            outcome_atom_name = _outcome_atom_name(
+                tuple(outcome.id for outcome in manifest.outcome_space.outcomes)
+            )
             tasks.append(
                 {
                     "kind": "generated-observations",
                     "benchmark_id": str(manifest.id),
                     "label": _title_from_protocol_name(str(manifest.name)),
                     "source_path": entry.source_path.as_posix(),
-                    "scale_axis": manifest.scale_parameter.symbol,
-                    "complexity_axis": manifest.complexity_coordinate,
-                    "outcome_atom_name": manifest.outcome_sequence.atom_name,
+                    "complexity_axis": None,
+                    "outcome_atom_name": outcome_atom_name,
                     "outcome_atom_count": atom_count,
                     "batches": [
                         self._balanced_observation_batch(
@@ -346,23 +337,23 @@ class ConsoleDataBuilder:
         generator: ObservationGenerator,
         atom_count: int,
     ) -> Mapping[str, object]:
-        cache_key = (str(generator.benchmark_manifest.id), "balanced-l-samples")
+        cache_key = (str(generator.benchmark_manifest.id), "balanced-component-samples")
         cached = _generated_batch_cache.get(cache_key)
         if cached is not None:
             return cached
         samples: list[Mapping[str, object]] = []
-        samples_per_scale = 5
-        scales = tuple(range(1, 9))
+        samples_per_component_count = 40
+        component_counts = (1,)
         component_sequences = _balanced_component_sequences(
-            scales=scales,
-            samples_per_scale=samples_per_scale,
+            component_counts=component_counts,
+            samples_per_component_count=samples_per_component_count,
             atom_count=atom_count,
             seed=f"{generator.benchmark_manifest.id}:balanced-console-samples",
         )
         used_field_shapes: set[tuple[int, ...]] = set()
-        for scale in scales:
-            for sample_index, sequence in enumerate(component_sequences[scale]):
-                seed = 4000 + scale * 100 + sample_index
+        for component_count in component_counts:
+            for sample_index, sequence in enumerate(component_sequences[component_count]):
+                seed = 4000 + component_count * 100 + sample_index
                 attempt_count = 0
                 while True:
                     attempt_count += 1
@@ -371,7 +362,7 @@ class ConsoleDataBuilder:
                             "could not generate unique console sample canvas shapes"
                         )
                     batch = generator.sample_batch(
-                        scale=scale,
+                        component_count=component_count,
                         sample_count=1,
                         seed=seed,
                         component_sequences=(sequence,),
@@ -390,7 +381,6 @@ class ConsoleDataBuilder:
                         "complexity": sample.complexity,
                         "field_shape": list(sample.field.shape),
                         "image_data_url": field_to_png_data_url(sample.field),
-                        "preview_crop": _square_content_crop(sample.field, padding=2),
                         "materialization_plan": sample.materialization_plan.to_record(),
                         "latent_coordinates": [
                             dict(coordinate) for coordinate in sample.latent_coordinates
@@ -402,7 +392,7 @@ class ConsoleDataBuilder:
         record = {
             "mode": "balanced",
             "label": "Balanced samples",
-            "scale": 1,
+            "component_count": 1,
             "seed": 401,
             "sample_count": len(samples),
             "presentation": {
@@ -444,7 +434,7 @@ class ConsoleDataBuilder:
             if root_path in seen_paths:
                 continue
             seen_paths.add(root_path)
-            for path in self._result_view_files(root_path):
+            for path in self._result_view_files(self._materialized_result_view_root(root_path)):
                 try:
                     record = dict(load_console_result_view(path.read_bytes()))
                 except LocalResultImportError as error:
@@ -462,11 +452,33 @@ class ConsoleDataBuilder:
         path = root.resolve() if root.is_absolute() else (self._repository_root / root).resolve()
         if path.is_relative_to(self._repository_root):
             relative = path.relative_to(self._repository_root)
-            if "results" in relative.parts and relative.parts[:2] != ("results", "views"):
-                raise ConsoleDataValidationError("result root inside results must be results/views")
+            if relative.parts[:1] == ("results",) and relative.parts not in {
+                ("results",),
+                ("results", "views"),
+            }:
+                raise ConsoleDataValidationError(
+                    "result root inside results must be results or results/views"
+                )
         if not path.is_dir():
             raise ConsoleDataValidationError(f"result root does not name a directory: {root}")
         return path
+
+    def _materialized_result_view_root(self, root: Path) -> Path:
+        if root.name == "views":
+            return root
+        try:
+            summary = materialize_benchmark_result_views(
+                repository_root=self._repository_root,
+                results_root=root,
+            )
+        except LocalResultImportError as error:
+            if str(error) == "no benchmark result records found":
+                view_root = root / "views"
+                return view_root if view_root.is_dir() else root
+            raise ConsoleDataValidationError(
+                f"{root}: could not materialize console result views: {error}"
+            ) from error
+        return summary.view_file.parent
 
     def _result_view_files(self, root: Path) -> tuple[Path, ...]:
         return tuple(sorted(path for path in root.rglob("*" + _document_suffix) if path.is_file()))
@@ -485,29 +497,25 @@ def _sample_display_key(sample: Mapping[str, object], sample_count: int) -> int:
     return (index * 17) % (sample_count + 1)
 
 
-def _square_content_crop(field: FieldObservation, *, padding: int) -> Mapping[str, object]:
-    _channels, height, width = field.shape
-    pixels = [index for index, value in enumerate(field.values) if value > 0.0]
-    if not pixels:
-        return {"left": 0, "top": 0, "size": max(width, height)}
-    xs = [index % width for index in pixels]
-    ys = [index // width for index in pixels]
-    min_x, max_x = min(xs), max(xs)
-    min_y, max_y = min(ys), max(ys)
-    side = max(max_x - min_x + 1, max_y - min_y + 1) + padding * 2
-    left = round((min_x + max_x + 1 - side) / 2.0)
-    top = round((min_y + max_y + 1 - side) / 2.0)
-    return {"left": left, "top": top, "size": side}
+def _outcome_atom_name(outcome_ids: tuple[str, ...]) -> str:
+    prefixes = {
+        outcome_id.rsplit("-", 1)[0]
+        for outcome_id in outcome_ids
+        if "-" in outcome_id
+    }
+    if len(prefixes) == 1:
+        return prefixes.pop()
+    return "outcome"
 
 
 def _balanced_component_sequences(
     *,
-    scales: tuple[int, ...],
-    samples_per_scale: int,
+    component_counts: tuple[int, ...],
+    samples_per_component_count: int,
     atom_count: int,
     seed: str,
 ) -> dict[int, tuple[tuple[int, ...], ...]]:
-    total_tokens = samples_per_scale * sum(scales)
+    total_tokens = samples_per_component_count * sum(component_counts)
     if total_tokens % atom_count != 0:
         raise ConsoleDataValidationError(
             "balanced console samples require total token count to divide atom count"
@@ -521,11 +529,11 @@ def _balanced_component_sequences(
     generator.shuffle(tokens)
     token_iter = iter(tokens)
     return {
-        scale: tuple(
-            tuple(next(token_iter) for _token in range(scale))
-            for _sample in range(samples_per_scale)
+        component_count: tuple(
+            tuple(next(token_iter) for _token in range(component_count))
+            for _sample in range(samples_per_component_count)
         )
-        for scale in scales
+        for component_count in component_counts
     }
 
 def _main(argv: list[str] | None = None) -> int:

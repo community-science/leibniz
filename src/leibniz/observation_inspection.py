@@ -45,8 +45,6 @@ _inspection_record = RecordSpec(
         "materialization_plan": FieldSpec(kind="record"),
         "sample_index": FieldSpec(kind="integer"),
         "component_sequence": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
-        "scale_assignment": FieldSpec(kind="record"),
-        "complexity_assignment": FieldSpec(kind="record"),
         "resolution_assignment": FieldSpec(kind="record"),
         "field_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
         "field_digest": FieldSpec(kind="string"),
@@ -151,8 +149,6 @@ class ObservationInspectionRecord:
     materialization_plan: ArtifactReference
     sample_index: int
     component_sequence: tuple[int, ...]
-    scale_assignment: AxisAssignment
-    complexity_assignment: AxisAssignment
     resolution_assignment: AxisAssignment
     field_shape: tuple[int, int, int]
     field_digest: ContentDigest
@@ -221,8 +217,6 @@ class ObservationInspectionRecord:
             materialization_plan=observation.materialization_plan,
             sample_index=sample_index,
             component_sequence=observation.component_sequence,
-            scale_assignment=materialization_plan.scale_assignment,
-            complexity_assignment=materialization_plan.complexity_assignment,
             resolution_assignment=materialization_plan.resolution_assignment,
             field_shape=observation.field.shape,
             field_digest=observation.field.digest,
@@ -257,12 +251,6 @@ class ObservationInspectionRecord:
                     field="component_sequence",
                 )
             ),
-            scale_assignment=AxisAssignment.from_record(
-                _as_mapping(validated["scale_assignment"], field="scale_assignment")
-            ),
-            complexity_assignment=AxisAssignment.from_record(
-                _as_mapping(validated["complexity_assignment"], field="complexity_assignment")
-            ),
             resolution_assignment=AxisAssignment.from_record(
                 _as_mapping(validated["resolution_assignment"], field="resolution_assignment")
             ),
@@ -289,8 +277,6 @@ class ObservationInspectionRecord:
             "materialization_plan": self.materialization_plan.to_record(),
             "sample_index": self.sample_index,
             "component_sequence": list(self.component_sequence),
-            "scale_assignment": self.scale_assignment.to_record(),
-            "complexity_assignment": self.complexity_assignment.to_record(),
             "resolution_assignment": self.resolution_assignment.to_record(),
             "field_shape": list(self.field_shape),
             "field_digest": str(self.field_digest),

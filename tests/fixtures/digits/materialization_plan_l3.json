@@ -9,20 +9,10 @@
     "kind": "latent-factor-declaration",
     "protocol_id": "benchmarks.digits.latent-factors@0.1.0"
   },
-  "scale_assignment": {
-    "values": [
-      {"axis": "L", "value": 3}
-    ]
-  },
-  "complexity_assignment": {
-    "values": [
-      {"axis": "C", "value": 3}
-    ]
-  },
   "resolution_assignment": {
     "values": [
-      {"axis": "H", "value": 16},
-      {"axis": "W", "value": 48}
+      {"axis": "H", "value": 24},
+      {"axis": "W", "value": 72}
     ]
   },
   "seed": 101

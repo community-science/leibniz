@@ -104,12 +104,15 @@ class MeasurementScoreViewValidationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class CompetenceIntegralSource:
-    """A measurement paired with the materialization plan that declares its complexity."""
+    """A measurement paired with its materialization plan and derived complexity."""
 
     measurement: MeasurementRecord
     materialization_plan: MaterializationPlan
+    complexity: float
 
     def __post_init__(self) -> None:
+        _require_finite_nonnegative(self.complexity, field="complexity")
+        object.__setattr__(self, "complexity", float(self.complexity))
         if self.measurement.benchmark_id != self.materialization_plan.benchmark_id:
             raise MeasurementScoreViewValidationError(
                 "measurement benchmark_id does not match materialization plan"
@@ -577,9 +580,6 @@ def _entries_from_sources(
     grouped: dict[ProtocolIdentifier, list[CompetenceIntegralPoint]] = {}
     for source in sources:
         evidence = source.measurement.raw_scoring_evidence
-        complexity = float(
-            source.materialization_plan.complexity_assignment.require_axis(complexity_axis)
-        )
         point = CompetenceIntegralPoint(
             measurement_id=evidence.id,
             materialization_plan=ArtifactReference(
@@ -587,7 +587,7 @@ def _entries_from_sources(
                 protocol_id=source.materialization_plan.id,
                 record_digest=source.materialization_plan.digest,
             ),
-            complexity=complexity,
+            complexity=source.complexity,
             competence=evidence.accepted_mass,
         )
         grouped.setdefault(source.measurement.benchmark_id, []).append(point)

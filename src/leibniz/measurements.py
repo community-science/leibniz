@@ -123,22 +123,12 @@ class MeasurementRecord:
     def digest(self) -> ContentDigest:
         return ContentDigest.from_value(self.to_record())
 
-    def validate_manifest(self, manifest: BenchmarkManifest, *, scale: int | None = None) -> None:
-        if manifest.outcome_space is None and scale is None:
-            raise MeasurementRecordValidationError(
-                "scale-indexed benchmark manifests require resolved outcome spaces"
-            )
+    def validate_manifest(self, manifest: BenchmarkManifest) -> None:
         if self.benchmark_id != manifest.id:
             raise MeasurementRecordValidationError(
                 f"benchmark_id {self.benchmark_id} does not match manifest {manifest.id}"
             )
-        expected_outcome_space = (
-            manifest.outcome_space if scale is None else manifest.resolve_outcome_space(scale=scale)
-        )
-        if expected_outcome_space is None:
-            raise MeasurementRecordValidationError(
-                "scale-indexed benchmark manifests require resolved outcome spaces"
-            )
+        expected_outcome_space = manifest.resolve_outcome_space()
         if self.outcome_space != expected_outcome_space:
             raise MeasurementRecordValidationError(
                 "measurement outcome_space does not match manifest outcome_space "
@@ -223,9 +213,9 @@ class MeasurementDataset:
     def digest(self) -> ContentDigest:
         return ContentDigest.from_value(self.to_record())
 
-    def validate_manifest(self, manifest: BenchmarkManifest, *, scale: int | None = None) -> None:
+    def validate_manifest(self, manifest: BenchmarkManifest) -> None:
         for measurement in self.measurements:
-            measurement.validate_manifest(manifest, scale=scale)
+            measurement.validate_manifest(manifest)
 
     def to_record(self) -> dict[str, object]:
         return {

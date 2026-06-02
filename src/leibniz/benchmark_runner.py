@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import count
 from pathlib import Path
 from typing import Any, cast
@@ -13,6 +13,7 @@ from typing import Any, cast
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_evaluation import (
     finite_measurements_for_predictions,
+    sampled_competence_curriculum_record,
     sampled_competence_record,
     validation_competence,
 )
@@ -29,13 +30,6 @@ from leibniz.observation_generation import (
 )
 from leibniz.operator_semantics import model_operator_semantic_registry
 from leibniz.outcomes import OutcomeSpace
-from leibniz.scale_evaluation import (
-    AdaptiveScaleEvaluation,
-    PerScaleScore,
-    ScaleAxis,
-    ScaleEvaluationLevel,
-    ScaleEvaluationTrace,
-)
 from leibniz.tensor_runtime import (
     FormationTensorCache,
     TensorRuntimeDevice,
@@ -43,6 +37,7 @@ from leibniz.tensor_runtime import (
     TensorRuntimeError,
     resolve_tensor_runtime,
     runtime_roofline_record,
+    tensor_runtime_available_memory_bytes,
     tensor_runtime_device_kinds,
     validate_tensor_runtime_device,
 )
@@ -55,6 +50,7 @@ __all__ = [
     "BenchmarkRunSummary",
     "has_windowed_validation_plateau",
     "run_benchmark",
+    "training_stage_converged",
 ]
 
 _document_suffix = document_filename_suffix()
@@ -63,18 +59,32 @@ _progress_format_version = 1
 _default_sample_count = 512
 _default_train_steps: int | None = None
 _default_validation_interval = 250
-_default_convergence_patience = 12
+_default_convergence_patience = 6
 _default_convergence_min_delta = 1e-3
 _default_convergence_min_steps = 500
-_initial_scale = 1
+_component_count = 1
+_initial_generation_memory_limit_bytes = 1_024_000
+_generation_curriculum_growth_factor = 4
+_generation_curriculum_max_rungs = 4
+_converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
+_minimum_plateau_lr_reductions = 3
 _adaptive_pooling_alias = model_operator_semantic_registry().operators[0].syntax_aliases[0]
 
 
 @dataclass(frozen=True, slots=True)
 class _TrainingResult:
-    probabilities: tuple[tuple[float, ...], ...]
+    evaluation_results: tuple[
+        tuple[GeneratedObservationBatch, tuple[tuple[float, ...], ...]],
+        ...,
+    ]
     training_run: TrainingRunRecord
     throughput: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _TrainingStageResult:
+    validation_history: tuple[TrainingHistoryPoint, ...]
+    stop_reason: str
 
 
 @dataclass(slots=True)
@@ -98,6 +108,19 @@ class _ThroughputCounter:
         return record
 
 
+def _curriculum_memory_limits(maximum_memory_limit: int) -> tuple[int, ...]:
+    if maximum_memory_limit < 1:
+        raise BenchmarkRunnerError("generation memory limit must be positive")
+    limits: list[int] = []
+    limit = min(maximum_memory_limit, _initial_generation_memory_limit_bytes)
+    while True:
+        limits.append(limit)
+        if limit >= maximum_memory_limit or len(limits) >= _generation_curriculum_max_rungs:
+            break
+        limit = min(maximum_memory_limit, limit * _generation_curriculum_growth_factor)
+    return tuple(limits)
+
+
 @dataclass(frozen=True, slots=True)
 class _PhaseWorkEstimate:
     flops_per_sample: float
@@ -117,6 +140,9 @@ class _LearningRateSchedule:
     scheduler: Any
     optimizer: Any
     update_on: str
+    lr_reduction_count: int = 0
+    minimum_effective_learning_rate: float | None = None
+    base_learning_rates: tuple[float, ...] = ()
 
     def learning_rates(self) -> tuple[float, ...]:
         return tuple(float(group["lr"]) for group in self.optimizer.param_groups)
@@ -127,7 +153,43 @@ class _LearningRateSchedule:
 
     def step_after_validation(self, validation_loss: float) -> None:
         if self.update_on == "validation-loss":
+            before = self.learning_rates()
             self.scheduler.step(validation_loss)
+            after = self.learning_rates()
+            if any(new < old for old, new in zip(before, after, strict=True)):
+                self.lr_reduction_count += 1
+
+    def has_exhausted_plateau_response(self) -> bool:
+        if self.update_on != "validation-loss":
+            return True
+        return (
+            self.lr_reduction_count >= _minimum_plateau_lr_reductions
+            or self.has_reached_minimum_effective_learning_rate()
+        )
+
+    def reset_plateau_response_count(self) -> None:
+        self.lr_reduction_count = 0
+
+    def reset_for_curriculum_expansion(self) -> None:
+        self.reset_plateau_response_count()
+        if self.base_learning_rates:
+            for group, base_learning_rate in zip(
+                self.optimizer.param_groups,
+                self.base_learning_rates,
+                strict=True,
+            ):
+                group["lr"] = base_learning_rate
+        reset_scheduler = getattr(self.scheduler, "_reset", None)
+        if callable(reset_scheduler):
+            reset_scheduler()
+
+    def has_reached_minimum_effective_learning_rate(self) -> bool:
+        if self.minimum_effective_learning_rate is None:
+            return False
+        return all(
+            learning_rate <= self.minimum_effective_learning_rate
+            for learning_rate in self.learning_rates()
+        )
 
 
 class BenchmarkRunnerError(ValueError):
@@ -146,13 +208,12 @@ class BenchmarkRunPlan:
     seed: int = 101
     train_steps: int | None = _default_train_steps
     learning_rate: float = 0.01
-    optimizer: str = "sgd"
-    schedule: str = "none"
+    optimizer: str = "adam"
+    schedule: str = "reduce-on-plateau"
     validation_interval: int = _default_validation_interval
     convergence_patience: int = _default_convergence_patience
     convergence_min_delta: float = _default_convergence_min_delta
     convergence_min_steps: int = _default_convergence_min_steps
-    target_validation_loss: float | None = None
     tensor_device: TensorRuntimeDevice = "auto"
     dry_run: bool = False
 
@@ -175,14 +236,8 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError("train_steps must be a nonnegative integer")
         if self.train_steps is None and self.schedule == "cosine":
             raise BenchmarkRunnerError("cosine schedule requires train_steps")
-        if (
-            self.train_steps is None
-            and self.convergence_patience == 0
-            and self.target_validation_loss is None
-        ):
-            raise BenchmarkRunnerError(
-                "uncapped training requires convergence_patience or target_validation_loss"
-            )
+        if self.train_steps is None and self.convergence_patience == 0:
+            raise BenchmarkRunnerError("uncapped training requires convergence_patience")
         if self.learning_rate <= 0:
             raise BenchmarkRunnerError("learning_rate must be positive")
         if self.optimizer not in {"sgd", "adam", "adamw"}:
@@ -197,8 +252,6 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError("convergence_min_delta must be nonnegative")
         if type(self.convergence_min_steps) is not int or self.convergence_min_steps < 0:
             raise BenchmarkRunnerError("convergence_min_steps must be nonnegative")
-        if self.target_validation_loss is not None and self.target_validation_loss < 0:
-            raise BenchmarkRunnerError("target_validation_loss must be nonnegative")
         try:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
@@ -209,7 +262,7 @@ class BenchmarkRunPlan:
         """Return the deterministic local run suffix."""
 
         base = (
-            f"l{_initial_scale}-seed{self.seed}-samples{self.sample_count}"
+            f"c{_component_count}-seed{self.seed}-samples{self.sample_count}"
             f"-steps{self.train_steps if self.train_steps is not None else 'converge'}"
         )
         if self.resolved_evaluation_sample_count == self.sample_count:
@@ -228,9 +281,6 @@ class BenchmarkRunPlan:
             "convergence_patience": self.convergence_patience,
             "convergence_min_delta": float(self.convergence_min_delta),
             "convergence_min_steps": self.convergence_min_steps,
-            "target_validation_loss": (
-                None if self.target_validation_loss is None else float(self.target_validation_loss)
-            ),
             "tensor_device": self.tensor_device,
         }
         return f"train-{ContentDigest.from_value(controls).hex[:12]}"
@@ -285,12 +335,21 @@ def run_benchmark(
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
+    if plan.dry_run:
+        generation_memory_limit = _initial_generation_memory_limit_bytes
+    else:
+        try:
+            generation_runtime = resolve_tensor_runtime(plan.tensor_device)
+            generation_memory_limit = tensor_runtime_available_memory_bytes(generation_runtime)
+        except TensorRuntimeError as error:
+            raise BenchmarkRunnerError(str(error)) from error
     evaluation_batch = generator.sample_batch(
-        scale=_initial_scale,
+        component_count=_component_count,
         sample_count=plan.resolved_evaluation_sample_count,
         seed=plan.seed,
+        memory_limit_bytes=_curriculum_memory_limits(generation_memory_limit)[0],
     )
-    outcome_space = generator.benchmark_manifest.resolve_outcome_space(scale=_initial_scale)
+    outcome_space = generator.benchmark_manifest.resolve_outcome_space()
     _validate_architecture_for_batch(
         architecture=architecture,
         batch=evaluation_batch,
@@ -325,6 +384,7 @@ def run_benchmark(
                 summary=summary,
                 architecture=architecture,
                 outcome_space=outcome_space,
+                evaluation_batch=evaluation_batch,
                 training_run=training_run,
                 throughput=throughput,
             ),
@@ -337,7 +397,7 @@ def run_benchmark(
         evaluation_batch=evaluation_batch,
         generator=generator,
         outcome_space=outcome_space,
-        scale=_initial_scale,
+        component_count=_component_count,
         sample_count=plan.sample_count,
         train_steps=plan.train_steps,
         learning_rate=float(plan.learning_rate),
@@ -347,8 +407,8 @@ def run_benchmark(
         convergence_patience=plan.convergence_patience,
         convergence_min_delta=float(plan.convergence_min_delta),
         convergence_min_steps=plan.convergence_min_steps,
-        target_validation_loss=plan.target_validation_loss,
         tensor_device=plan.tensor_device,
+        memory_limit_bytes=generation_memory_limit,
         work_estimates=_training_work_estimates(
             architecture=architecture,
             inference_flops=model_inspection.cost_summary.inference_flops,
@@ -358,36 +418,34 @@ def run_benchmark(
         seed=plan.seed,
         progress_callback=publish_progress,
     )
-    measurements = finite_measurements_for_predictions(
-        batch=evaluation_batch,
-        outcome_space=outcome_space,
-        probabilities=training_result.probabilities,
-        run_slug=summary.run_slug,
-    )
-    scale_evaluation_trace = (
-        _scale_evaluation_trace(
-            plan=plan,
-            generator=generator,
-            architecture=architecture,
-            model_inspection=model_inspection,
-            training_run=training_result.training_run,
+    measurement_groups = tuple(
+        finite_measurements_for_predictions(
+            batch=batch,
             outcome_space=outcome_space,
+            probabilities=probabilities,
+            run_slug=f"{summary.run_slug}.rung{index}",
         )
-        if generator.benchmark_manifest.scale_parameter is not None
-        else None
+        for index, (batch, probabilities) in enumerate(training_result.evaluation_results)
+    )
+    measurements = tuple(
+        measurement
+        for group in measurement_groups
+        for measurement in group
     )
     dataset = MeasurementDataset(measurements=measurements)
-    dataset.validate_manifest(generator.benchmark_manifest, scale=_initial_scale)
+    dataset.validate_manifest(generator.benchmark_manifest)
+    completed_summary = replace(summary, measurement_count=len(measurements))
     _write_document(summary.measurement_dataset_path, dataset.to_record())
     _write_document(summary.model_inspection_path, model_inspection.to_record())
     _write_document(
         summary.training_summary_path,
         {
-            **summary.to_record(),
+            **completed_summary.to_record(),
             "dry_run": False,
-            "scale": _initial_scale,
+            "component_count": _component_count,
             "sample_count": plan.sample_count,
             "evaluation_sample_count": plan.resolved_evaluation_sample_count,
+            "evaluation_curriculum_rung_count": len(training_result.evaluation_results),
             "seed": plan.seed,
             "train_steps": plan.train_steps,
             "learning_rate": float(plan.learning_rate),
@@ -401,15 +459,19 @@ def run_benchmark(
             "tensor_device": training_result.training_run.protocol.tensor_device,
             "training_run": training_result.training_run.to_record(),
             "throughput": training_result.throughput,
-            **(
-                {}
-                if scale_evaluation_trace is None
-                else {"scale_evaluation_trace": scale_evaluation_trace.to_record()}
-            ),
-            "sampled_competence": sampled_competence_record(
-                batch=evaluation_batch,
-                measurements=measurements,
-                complexity_axis=generator.benchmark_manifest.complexity_coordinate,
+            "sampled_competence": sampled_competence_curriculum_record(
+                tuple(
+                    sampled_competence_record(
+                        batch=batch,
+                        measurements=measurements,
+                        complexity_axis=None,
+                    )
+                    for (batch, _probabilities), measurements in zip(
+                        training_result.evaluation_results,
+                        measurement_groups,
+                        strict=True,
+                    )
+                )
             ),
             "architecture": model_inspection.architecture.to_record(),
             "cost_summary": model_inspection.cost_summary.to_record(),
@@ -418,7 +480,7 @@ def run_benchmark(
         },
     )
     progress_path.unlink(missing_ok=True)
-    return summary
+    return completed_summary
 
 
 def _run_summary(
@@ -479,173 +541,6 @@ def _validate_architecture_for_batch(
             f"architecture output_shape {architecture.output_shape} does not match "
             f"{outcome_count} resolved benchmark outcomes"
         )
-
-
-def _scale_evaluation_trace(
-    *,
-    plan: BenchmarkRunPlan,
-    generator: ObservationGenerator,
-    architecture: ArchitectureManifest,
-    model_inspection: ModelInspectionRecord,
-    training_run: TrainingRunRecord,
-    outcome_space: OutcomeSpace,
-) -> ScaleEvaluationTrace:
-    if generator.benchmark_manifest.scale_parameter is None:
-        raise BenchmarkRunnerError("adaptive scale evaluation requires a benchmark scale parameter")
-    axis = ScaleAxis(
-        symbol=generator.benchmark_manifest.scale_parameter.symbol,
-        minimum=generator.benchmark_manifest.scale_parameter.minimum,
-        maximum=None,
-    )
-    score = PerScaleScore()
-    evaluation = AdaptiveScaleEvaluation(
-        axis_symbol=axis.symbol,
-        stopping_window=1,
-        marginal_score_epsilon=float(plan.convergence_min_delta),
-    )
-    levels = [
-        ScaleEvaluationLevel(
-            scale=_initial_scale,
-            competence=validation_competence(
-                best_validation_loss=training_run.best_validation_loss,
-                outcome_count=len(outcome_space.outcomes),
-            ),
-            score_weight=_scale_score_weight(
-                generator=generator,
-                scale=_initial_scale,
-            ),
-            resources={
-                "training_steps": training_run.steps_run,
-                "validation_checks": training_run.validation_checks,
-                "sample_count": plan.sample_count,
-            },
-        )
-    ]
-    marginal_scores: list[float] = []
-    next_scale = _initial_scale + 1
-    while True:
-        boundary_reason = _direct_prediction_boundary_reason(
-            generator=generator,
-            architecture=architecture,
-            scale=next_scale,
-            sample_count=plan.resolved_evaluation_sample_count,
-            seed=plan.seed + 20_000_039 + next_scale,
-        )
-        score_weight = _scale_score_weight(generator=generator, scale=next_scale)
-        if boundary_reason is not None:
-            levels.append(
-                ScaleEvaluationLevel(
-                    scale=next_scale,
-                    competence=0.0,
-                    score_weight=score_weight,
-                    boundary_reason=boundary_reason,
-                )
-            )
-            return ScaleEvaluationTrace(
-                axis=axis,
-                score=score,
-                evaluation=evaluation,
-                levels=tuple(levels),
-                stop_reason="model-scale-boundary",
-            )
-        next_outcome_space = generator.benchmark_manifest.resolve_outcome_space(
-            scale=next_scale
-        )
-        next_evaluation_batch = generator.sample_batch(
-            scale=next_scale,
-            sample_count=plan.resolved_evaluation_sample_count,
-            seed=plan.seed + 20_000_039 + next_scale,
-        )
-        next_training = _train_and_predict(
-            architecture=architecture,
-            evaluation_batch=next_evaluation_batch,
-            generator=generator,
-            outcome_space=next_outcome_space,
-            scale=next_scale,
-            sample_count=plan.sample_count,
-            train_steps=plan.train_steps,
-            learning_rate=float(plan.learning_rate),
-            optimizer_name=plan.optimizer,
-            schedule_name=plan.schedule,
-            validation_interval=plan.validation_interval,
-            convergence_patience=plan.convergence_patience,
-            convergence_min_delta=float(plan.convergence_min_delta),
-            convergence_min_steps=plan.convergence_min_steps,
-            target_validation_loss=plan.target_validation_loss,
-            tensor_device=plan.tensor_device,
-            work_estimates=_training_work_estimates(
-                architecture=architecture,
-                inference_flops=model_inspection.cost_summary.inference_flops,
-                parameter_bytes=model_inspection.cost_summary.parameter_bytes,
-                batch_size=plan.sample_count,
-            ),
-            seed=plan.seed + 10_000_019 * next_scale,
-        )
-        competence = validation_competence(
-            best_validation_loss=next_training.training_run.best_validation_loss,
-            outcome_count=len(next_outcome_space.outcomes),
-        )
-        levels.append(
-            ScaleEvaluationLevel(
-                scale=next_scale,
-                competence=competence,
-                score_weight=score_weight,
-                resources={
-                    "training_steps": next_training.training_run.steps_run,
-                    "validation_checks": next_training.training_run.validation_checks,
-                    "sample_count": plan.sample_count,
-                },
-            )
-        )
-        marginal_scores.append(competence * score_weight)
-        if evaluation.should_stop(marginal_scores):
-            return ScaleEvaluationTrace(
-                axis=axis,
-                score=score,
-                evaluation=evaluation,
-                levels=tuple(levels),
-                stop_reason="zero-marginal-score",
-            )
-        next_scale += 1
-
-
-def _scale_score_weight(
-    *,
-    generator: ObservationGenerator,
-    scale: int,
-) -> float:
-    baseline_count = len(
-        generator.benchmark_manifest.resolve_outcome_space(scale=_initial_scale).outcomes
-    )
-    outcome_count = len(generator.benchmark_manifest.resolve_outcome_space(scale=scale).outcomes)
-    baseline_entropy = math.log(baseline_count)
-    if baseline_entropy <= 0:
-        return 1.0
-    return math.log(outcome_count) / baseline_entropy
-
-
-def _direct_prediction_boundary_reason(
-    *,
-    generator: ObservationGenerator,
-    architecture: ArchitectureManifest,
-    scale: int,
-    sample_count: int,
-    seed: int,
-) -> str | None:
-    batch = generator.sample_batch(scale=scale, sample_count=sample_count, seed=seed)
-    input_reason = _input_shape_boundary_reason(
-        architecture=architecture,
-        sample_shape=batch.samples[0].field.shape,
-    )
-    if input_reason is not None:
-        return input_reason
-    outcome_count = len(generator.benchmark_manifest.resolve_outcome_space(scale=scale).outcomes)
-    if architecture.output_shape != (outcome_count,):
-        return (
-            f"architecture output_shape {architecture.output_shape} does not match "
-            f"{outcome_count} resolved benchmark sequence outcomes at scale {scale}"
-        )
-    return None
 
 
 def _input_shape_boundary_reason(
@@ -719,7 +614,7 @@ def _train_and_predict(
     evaluation_batch: GeneratedObservationBatch,
     generator: ObservationGenerator,
     outcome_space: OutcomeSpace,
-    scale: int,
+    component_count: int,
     sample_count: int,
     train_steps: int | None,
     learning_rate: float,
@@ -729,8 +624,8 @@ def _train_and_predict(
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
-    target_validation_loss: float | None,
     tensor_device: TensorRuntimeDevice,
+    memory_limit_bytes: int,
     work_estimates: _TrainingWorkEstimates | None,
     seed: int,
     progress_callback: Callable[[TrainingRunRecord, Mapping[str, object]], None] | None = None,
@@ -747,7 +642,7 @@ def _train_and_predict(
                 evaluation_batch=evaluation_batch,
                 generator=generator,
                 outcome_space=outcome_space,
-                scale=scale,
+                component_count=component_count,
                 sample_count=sample_count,
                 train_steps=train_steps,
                 learning_rate=learning_rate,
@@ -757,8 +652,8 @@ def _train_and_predict(
                 convergence_patience=convergence_patience,
                 convergence_min_delta=convergence_min_delta,
                 convergence_min_steps=convergence_min_steps,
-                target_validation_loss=target_validation_loss,
                 tensor_device=device_kind,
+                memory_limit_bytes=memory_limit_bytes,
                 work_estimates=work_estimates,
                 seed=seed,
                 progress_callback=progress_callback,
@@ -777,7 +672,7 @@ def _train_and_predict_on_device(
     evaluation_batch: GeneratedObservationBatch,
     generator: ObservationGenerator,
     outcome_space: OutcomeSpace,
-    scale: int,
+    component_count: int,
     sample_count: int,
     train_steps: int | None,
     learning_rate: float,
@@ -787,8 +682,8 @@ def _train_and_predict_on_device(
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
-    target_validation_loss: float | None,
     tensor_device: TensorRuntimeDeviceKind,
+    memory_limit_bytes: int,
     work_estimates: _TrainingWorkEstimates | None,
     seed: int,
     progress_callback: Callable[[TrainingRunRecord, Mapping[str, object]], None] | None = None,
@@ -816,6 +711,7 @@ def _train_and_predict_on_device(
         name=schedule_name,
         max_steps=train_steps,
         min_delta=convergence_min_delta,
+        patience=convergence_patience,
     )
     training_counter = _ThroughputCounter()
     validation_counter = _ThroughputCounter()
@@ -827,12 +723,14 @@ def _train_and_predict_on_device(
         *,
         generation_phase: str,
         tensor_phase: str,
+        memory_limit: int,
     ) -> tuple[Any, Any]:
         with phase_timings.span(generation_phase, samples=sample_count):
             generated = generator.sample_formation_batch(
-                scale=scale,
+                component_count=component_count,
                 sample_count=sample_count,
                 seed=batch_seed,
+                memory_limit_bytes=memory_limit,
                 timing=phase_timings,
                 timing_prefix=f"{generation_phase}.",
             )
@@ -840,7 +738,22 @@ def _train_and_predict_on_device(
             tensors = formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
         return tensors
 
-    validation_history = _train_until_convergence(
+    memory_limits = _curriculum_memory_limits(memory_limit_bytes)
+    memory_limit_index = 0
+
+    def current_memory_limit() -> int:
+        return memory_limits[memory_limit_index]
+
+    def advance_memory_limit() -> bool:
+        nonlocal memory_limit_index
+        if memory_limit_index >= len(memory_limits) - 1:
+            return False
+        memory_limit_index += 1
+        if scheduler is not None:
+            scheduler.reset_for_curriculum_expansion()
+        return True
+
+    training_result = _train_until_convergence(
         torch=torch,
         module=module,
         optimizer=optimizer,
@@ -850,22 +763,24 @@ def _train_and_predict_on_device(
             seed + step,
             generation_phase="training_formation_generation",
             tensor_phase="training_tensor_batch",
+            memory_limit=current_memory_limit(),
         ),
         validation_batch=lambda check: batch_for_seed(
             seed + 1_000_003 + check,
             generation_phase="validation_formation_generation",
             tensor_phase="validation_tensor_batch",
+            memory_limit=current_memory_limit(),
         ),
         max_steps=train_steps,
         validation_interval=validation_interval,
         patience=convergence_patience,
         min_delta=convergence_min_delta,
         min_steps=convergence_min_steps,
-        target_validation_loss=target_validation_loss,
         batch_size=sample_count,
         training_counter=training_counter,
         validation_counter=validation_counter,
         phase_timings=phase_timings,
+        on_plateau=advance_memory_limit,
         on_validation=lambda history: (
             progress_callback(
                 _running_training_run_record(
@@ -880,7 +795,7 @@ def _train_and_predict_on_device(
                     convergence_min_delta=convergence_min_delta,
                     convergence_min_steps=convergence_min_steps,
                     tensor_device=runtime.device_kind,
-                    validation_history=tuple(history),
+                    validation_history=history,
                 ),
                 _throughput_record(
                     runtime_device=runtime.device_kind,
@@ -897,24 +812,71 @@ def _train_and_predict_on_device(
             else None
         ),
     )
-    evaluation_started = time.perf_counter()
-    with phase_timings.span("evaluation_tensorization", samples=len(evaluation_batch.samples)):
-        eval_fields, _eval_labels = _batch_tensors(
-            torch=torch,
-            batch=evaluation_batch,
-            outcome_ids=outcome_ids,
-            device=runtime.device,
-        )
+    validation_history = training_result.validation_history
+    final_training_stop_reason = training_result.stop_reason
+    if train_steps is None and not training_stage_converged(final_training_stop_reason):
+        raise BenchmarkRunnerError("uncapped training curriculum ended before convergence")
     module.eval()
-    with (
-        phase_timings.span("evaluation_forward", samples=len(evaluation_batch.samples)),
-        torch.no_grad(),
-    ):
-        predictions = torch.softmax(module(eval_fields), dim=1).tolist()
-    evaluation_counter.add(
-        seconds=time.perf_counter() - evaluation_started,
-        samples=len(evaluation_batch.samples),
-    )
+    evaluation_results: list[tuple[GeneratedObservationBatch, tuple[tuple[float, ...], ...]]] = []
+    evaluated_complexities: set[float] = set()
+    for rung_index, memory_limit in enumerate(_curriculum_memory_limits(memory_limit_bytes)):
+        if rung_index == 0:
+            candidate_batch = evaluation_batch
+        else:
+            with phase_timings.span(
+                "evaluation_formation_generation",
+                samples=len(evaluation_batch.samples),
+            ):
+                candidate_batch = generator.sample_batch(
+                    component_count=component_count,
+                    sample_count=len(evaluation_batch.samples),
+                    seed=seed + 2_000_003 + rung_index,
+                    memory_limit_bytes=memory_limit,
+                    timing=phase_timings,
+                    timing_prefix="evaluation_formation_generation.",
+                )
+            input_reason = _input_shape_boundary_reason(
+                architecture=architecture,
+                sample_shape=candidate_batch.samples[0].field.shape,
+            )
+            if input_reason is not None:
+                break
+        complexity = candidate_batch.samples[0].complexity
+        if complexity in evaluated_complexities:
+            break
+        evaluated_complexities.add(complexity)
+        evaluation_started = time.perf_counter()
+        with phase_timings.span(
+            "evaluation_tensorization",
+            samples=len(candidate_batch.samples),
+        ):
+            eval_fields, _eval_labels = _batch_tensors(
+                torch=torch,
+                batch=candidate_batch,
+                outcome_ids=outcome_ids,
+                device=runtime.device,
+            )
+        with (
+            phase_timings.span("evaluation_forward", samples=len(candidate_batch.samples)),
+            torch.no_grad(),
+        ):
+            predictions = tuple(
+                _renormalized_probabilities(row)
+                for row in torch.softmax(module(eval_fields), dim=1).tolist()
+            )
+        evaluation_counter.add(
+            seconds=time.perf_counter() - evaluation_started,
+            samples=len(candidate_batch.samples),
+        )
+        evaluation_results.append((candidate_batch, predictions))
+        if _mean_prediction_accepted_mass(
+            batch=candidate_batch,
+            probabilities=predictions,
+            outcome_ids=outcome_ids,
+        ) <= _chance_accepted_mass(outcome_ids) + 1e-12:
+            break
+        if memory_limit >= memory_limit_bytes:
+            break
     training_run = _training_run_record(
         seed=seed,
         batch_size=sample_count,
@@ -926,12 +888,12 @@ def _train_and_predict_on_device(
         convergence_patience=convergence_patience,
         convergence_min_delta=convergence_min_delta,
         convergence_min_steps=convergence_min_steps,
-        target_validation_loss=target_validation_loss,
         tensor_device=runtime.device_kind,
         validation_history=tuple(validation_history),
+        stop_reason=final_training_stop_reason,
     )
     return _TrainingResult(
-        probabilities=tuple(_renormalized_probabilities(row) for row in predictions),
+        evaluation_results=tuple(evaluation_results),
         training_run=training_run,
         throughput=_throughput_record(
             runtime_device=runtime.device_kind,
@@ -944,6 +906,10 @@ def _train_and_predict_on_device(
             fallback_errors=fallback_errors,
         ),
     )
+
+
+def training_stage_converged(stop_reason: str) -> bool:
+    return stop_reason in _converged_training_stage_stop_reasons
 
 
 def _train_until_convergence(
@@ -960,18 +926,26 @@ def _train_until_convergence(
     patience: int,
     min_delta: float,
     min_steps: int,
-    target_validation_loss: float | None,
     batch_size: int,
     training_counter: _ThroughputCounter,
     validation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
+    start_step: int = 0,
+    start_check: int = 0,
+    initial_best: TrainingHistoryPoint | None = None,
+    on_plateau: Callable[[], bool] | None = None,
     on_validation: Callable[[tuple[TrainingHistoryPoint, ...]], None] | None = None,
-) -> list[TrainingHistoryPoint]:
+) -> _TrainingStageResult:
     validation_history: list[TrainingHistoryPoint] = []
-    best_loss = float("inf")
-    best_step = 0
-    best_check = 0
+    best_loss = (
+        float("inf") if initial_best is None else initial_best.best_validation_loss
+    )
+    best_step = start_step if initial_best is None else initial_best.best_validation_step
+    best_check = start_check if initial_best is None else initial_best.best_validation_check
     stale_checks = 0
+    stop_reason = "training-stopped"
+    plateau_window_start_index = 0
+    plateau_window_start_step = start_step
 
     def append_validation(*, step: int, check: int) -> None:
         nonlocal best_loss, best_step, best_check, stale_checks
@@ -1016,9 +990,14 @@ def _train_until_convergence(
         if on_validation is not None:
             on_validation(tuple(validation_history))
 
-    append_validation(step=0, check=0)
-    validation_check = 1
-    steps = count(1) if max_steps is None else range(1, max_steps + 1)
+    append_validation(step=start_step, check=start_check)
+    if max_steps == start_step:
+        return _TrainingStageResult(
+            validation_history=tuple(validation_history),
+            stop_reason="no-training-steps" if start_step == 0 else "max-steps",
+        )
+    validation_check = start_check + 1
+    steps = count(start_step + 1) if max_steps is None else range(start_step + 1, max_steps + 1)
     for step in steps:
         training_started = time.perf_counter()
         fields, labels = train_batch(step)
@@ -1044,22 +1023,31 @@ def _train_until_convergence(
         append_validation(step=step, check=validation_check)
         validation_check += 1
         if (
-            target_validation_loss is not None
-            and step >= min_steps
-            and best_loss <= target_validation_loss
-        ):
-            break
-        if (
             patience > 0
-            and step >= min_steps
+            and step - plateau_window_start_step >= min_steps
             and has_windowed_validation_plateau(
-                validation_history,
+                validation_history[plateau_window_start_index:],
                 window_checks=patience,
                 min_delta=min_delta,
             )
+            and (
+                scheduler is None
+                or scheduler.has_exhausted_plateau_response()
+            )
         ):
+            if on_plateau is not None and on_plateau():
+                plateau_window_start_index = len(validation_history) - 1
+                plateau_window_start_step = step
+                continue
+            stop_reason = "validation-plateau"
             break
-    return validation_history
+        if max_steps is not None and step >= max_steps:
+            stop_reason = "max-steps"
+            break
+    return _TrainingStageResult(
+        validation_history=tuple(validation_history),
+        stop_reason=stop_reason,
+    )
 
 
 def _validation_loss(
@@ -1104,30 +1092,19 @@ def _training_run_record(
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
-    target_validation_loss: float | None,
     tensor_device: str,
     validation_history: tuple[TrainingHistoryPoint, ...],
+    stop_reason: str,
 ) -> TrainingRunRecord:
     best = validation_history[-1]
     last_step = validation_history[-1].step
-    if max_steps == 0:
-        stop_reason = "no-training-steps"
+    if stop_reason == "no-training-steps":
         status = "completed"
-    elif has_windowed_validation_plateau(
-        validation_history,
-        window_checks=convergence_patience,
-        min_delta=convergence_min_delta,
-    ):
-        stop_reason = "validation-plateau"
+    elif stop_reason == "validation-plateau":
         status = "converged"
-    elif target_validation_loss is not None and best.best_validation_loss <= target_validation_loss:
-        stop_reason = "target-validation-loss"
-        status = "converged"
-    elif max_steps is not None and last_step >= max_steps:
-        stop_reason = "max-steps"
+    elif stop_reason == "max-steps":
         status = "budget-exhausted"
     else:
-        stop_reason = "training-stopped"
         status = "completed"
     return TrainingRunRecord(
         status=status,
@@ -1211,6 +1188,7 @@ def _training_progress_record(
     summary: BenchmarkRunSummary,
     architecture: ArchitectureManifest,
     outcome_space: OutcomeSpace,
+    evaluation_batch: GeneratedObservationBatch,
     training_run: TrainingRunRecord,
     throughput: Mapping[str, object],
 ) -> Mapping[str, object]:
@@ -1221,14 +1199,22 @@ def _training_progress_record(
         ),
         architecture_manifest=architecture,
     )
-    return {
+    provisional_score = validation_competence(
+        best_validation_loss=training_run.best_validation_loss,
+        outcome_count=len(outcome_space.outcomes),
+    )
+    chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
+    accepted_mass_equivalent = chance_mass + provisional_score * (1.0 - chance_mass)
+    complexities = {sample.complexity for sample in evaluation_batch.samples}
+    progress_complexity = next(iter(complexities)) if len(complexities) == 1 else None
+    record: dict[str, object] = {
         "format": _progress_format,
         "format_version": _progress_format_version,
         "run_slug": summary.run_slug,
         "run_status": "running",
         "benchmark_id": str(summary.benchmark_id),
         "architecture_path": summary.architecture_path.as_posix(),
-        "scale": _initial_scale,
+        "component_count": _component_count,
         "sample_count": plan.sample_count,
         "evaluation_sample_count": plan.resolved_evaluation_sample_count,
         "seed": plan.seed,
@@ -1242,11 +1228,6 @@ def _training_progress_record(
         "convergence_min_steps": plan.convergence_min_steps,
         "tensor_runtime": "pytorch",
         "tensor_device": training_run.protocol.tensor_device,
-        "target_validation_loss": (
-            None
-            if plan.target_validation_loss is None
-            else float(plan.target_validation_loss)
-        ),
         "training_run": training_run.to_record(),
         "throughput": throughput,
         "architecture": inspection.architecture.to_record(),
@@ -1254,11 +1235,23 @@ def _training_progress_record(
         "model_inspection": inspection.to_record(),
         "architecture_digest": str(architecture.digest),
         "model_inspection_digest": str(inspection.digest),
-        "provisional_score": validation_competence(
-            best_validation_loss=training_run.best_validation_loss,
-            outcome_count=len(outcome_space.outcomes),
-        ),
+        "provisional_score": provisional_score,
     }
+    if progress_complexity is not None:
+        record["sampled_competence"] = {
+            "kind": "provisional-validation-competence",
+            "sampling_rule": "generator-validation-resample-v1",
+            "difficulty_assumption": "validation-loss-proxy-for-sampled-competence",
+            "benchmark_id": str(summary.benchmark_id),
+            "component_count": evaluation_batch.component_count,
+            "complexity_axis": None,
+            "complexity": progress_complexity,
+            "seed": evaluation_batch.seed,
+            "sample_count": len(evaluation_batch.samples),
+            "mean_accepted_mass": accepted_mass_equivalent,
+            "validation_competence": provisional_score,
+        }
+    return record
 
 
 def _throughput_record(
@@ -1477,6 +1470,7 @@ def _make_scheduler(
     name: str,
     max_steps: int | None,
     min_delta: float,
+    patience: int,
 ) -> _LearningRateSchedule | None:
     if name == "none":
         return None
@@ -1490,17 +1484,25 @@ def _make_scheduler(
             ),
             optimizer=optimizer,
             update_on="optimizer-step",
+            base_learning_rates=tuple(float(group["lr"]) for group in optimizer.param_groups),
         )
     if name == "reduce-on-plateau":
+        factor = 0.1
+        eps = 1e-8
         return _LearningRateSchedule(
             scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(
                 optimizer,
                 mode="min",
+                factor=factor,
                 threshold=min_delta,
                 threshold_mode="abs",
+                patience=patience,
+                eps=eps,
             ),
             optimizer=optimizer,
             update_on="validation-loss",
+            minimum_effective_learning_rate=eps / (1.0 - factor),
+            base_learning_rates=tuple(float(group["lr"]) for group in optimizer.param_groups),
         )
     raise BenchmarkRunnerError(f"unsupported schedule: {name}")
 
@@ -1537,6 +1539,26 @@ def _renormalized_probabilities(probabilities: Sequence[float]) -> tuple[float, 
         return (1.0,)
     normalized[-1] = max(0.0, 1.0 - sum(normalized[:-1]))
     return tuple(normalized)
+
+
+def _mean_prediction_accepted_mass(
+    *,
+    batch: GeneratedObservationBatch,
+    probabilities: tuple[tuple[float, ...], ...],
+    outcome_ids: tuple[str, ...],
+) -> float:
+    outcome_indexes = {outcome_id: index for index, outcome_id in enumerate(outcome_ids)}
+    accepted_mass = tuple(
+        row[outcome_indexes[sample.outcome_id]]
+        for sample, row in zip(batch.samples, probabilities, strict=True)
+    )
+    return math.fsum(accepted_mass) / len(accepted_mass)
+
+
+def _chance_accepted_mass(outcome_ids: tuple[str, ...]) -> float:
+    if not outcome_ids:
+        raise BenchmarkRunnerError("outcome space must contain at least one outcome")
+    return 1.0 / len(outcome_ids)
 
 
 def _write_document(path: Path, record: object) -> None:

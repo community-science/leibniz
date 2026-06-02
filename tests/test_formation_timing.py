@@ -17,7 +17,7 @@ def test_time_formation_paths_reports_samples_per_second() -> None:
     summary = time_formation_paths(
         FormationTimingPlan(
             benchmark_root=_digits_benchmark_root,
-            scale=1,
+            component_count=1,
             sample_count=1,
             repeats=1,
             warmup_repeats=0,
@@ -28,7 +28,7 @@ def test_time_formation_paths_reports_samples_per_second() -> None:
     record = summary.to_record()
     assert record["format"] == "leibniz.formation-timing"
     assert record["benchmark_id"] == "benchmarks.digits@0.1.0"
-    assert record["scale"] == 1
+    assert record["component_count"] == 1
     assert record["sample_count"] == 1
     assert record["repeats"] == 1
     assert record["tensor_runtime"] == "pytorch"

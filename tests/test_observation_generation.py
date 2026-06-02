@@ -1,3 +1,4 @@
+import math
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import cast
@@ -5,7 +6,8 @@ from typing import cast
 import pytest
 
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import AxisAssignment, MaterializationPlan
+from leibniz.materialization import MaterializationPlan
+from leibniz.observation_formation import FieldObservation
 from leibniz.observation_generation import (
     ObservationGenerationError,
     field_to_png_bytes,
@@ -22,20 +24,20 @@ _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "
 def test_digits_observation_generator_is_deterministic() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
-    left = generator.sample_batch(scale=3, sample_count=2, seed=101)
-    right = generator.sample_batch(scale=3, sample_count=2, seed=101)
+    left = generator.sample_batch(component_count=1, sample_count=2, seed=101)
+    right = generator.sample_batch(component_count=1, sample_count=2, seed=101)
 
     assert left == right
-    assert left.scale == 3
-    assert left.samples[0].field.shape == (1, 35, 115)
-    assert left.samples[0].complexity == 3.0
-    assert len(left.samples[0].observation.component_sequence) == 3
-    assert left.samples[0].outcome_id.startswith("digit-")
+    assert left.component_count == 1
+    assert left.samples[0].field.shape == (1, 147, 136)
+    assert math.isclose(left.samples[0].complexity, math.log2(22565088000))
+    assert len(left.samples[0].observation.component_sequence) == 1
+    assert left.samples[0].outcome_id == "digit-8"
     assert _coordinate(left.samples[0].latent_coordinates, role="content")["values"] == list(
         left.samples[0].observation.component_sequence
     )
     variation = _coordinate(left.samples[0].latent_coordinates, role="variation")
-    assert variation["multiplicity"] == 3
+    assert variation["multiplicity"] == 1
     assert variation["name"] == "benchmarks.digits.sample.field-variation-transform"
     assert variation["degree_measure"] == {"kind": "vector-dimension", "count": 6.0}
     variation_values = cast(dict[str, object], variation["values"])
@@ -44,8 +46,8 @@ def test_digits_observation_generator_is_deterministic() -> None:
         generator.formation.variation_transform.to_record()
     )
     coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
-    assert [coordinate["sequence_index"] for coordinate in coordinates] == [0, 1, 2]
-    assert len(coordinates) == 3
+    assert [coordinate["sequence_index"] for coordinate in coordinates] == [0]
+    assert len(coordinates) == 1
     assert _within_transform_bounds(
         coordinates[0],
         bounds=generator.formation.variation_transform.to_record(),
@@ -66,15 +68,15 @@ def test_digits_observation_generator_is_deterministic() -> None:
 def test_digits_observation_generator_samples_formation_batch_without_fields() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
-    observation_batch = generator.sample_batch(scale=3, sample_count=2, seed=101)
-    formation_batch = generator.sample_formation_batch(scale=3, sample_count=2, seed=101)
+    observation_batch = generator.sample_batch(component_count=1, sample_count=2, seed=101)
+    formation_batch = generator.sample_formation_batch(component_count=1, sample_count=2, seed=101)
 
     assert formation_batch.benchmark_id == observation_batch.benchmark_id
-    assert formation_batch.scale == observation_batch.scale
+    assert formation_batch.component_count == observation_batch.component_count
     assert formation_batch.seed == observation_batch.seed
     assert [(sample.width, sample.height) for sample in formation_batch.samples] == [
-        (115, 35),
-        (115, 35),
+        (136, 147),
+        (136, 147),
     ]
     assert [sample.component_sequence for sample in formation_batch.samples] == [
         sample.observation.component_sequence for sample in observation_batch.samples
@@ -97,15 +99,11 @@ def test_digits_observation_generator_samples_formation_batch_without_fields() -
     minimum_plan = MaterializationPlan.resolve(
         id=formation_batch.samples[0].materialization_plan.id,
         declaration=generator.materialization,
-        scale_assignment=AxisAssignment(values={"L": 3}),
-        complexity_assignment=AxisAssignment(values={"C": 3}),
         seed=101,
     )
     generated_plan = formation_batch.samples[0].materialization_plan
-    assert generated_plan.scale_assignment == minimum_plan.scale_assignment
-    assert generated_plan.complexity_assignment == minimum_plan.complexity_assignment
-    assert minimum_plan.resolution_assignment.values == {"W": 1, "H": 1}
-    assert generated_plan.resolution_assignment.values == {"W": 115, "H": 35}
+    assert minimum_plan.resolution_assignment.values == {"W": 24, "H": 24}
+    assert generated_plan.resolution_assignment.values == {"W": 136, "H": 147}
 
 
 def test_digits_observation_generator_records_optional_timing() -> None:
@@ -113,7 +111,7 @@ def test_digits_observation_generator_records_optional_timing() -> None:
     timing = TimingCollector()
 
     generator.sample_batch(
-        scale=2,
+        component_count=1,
         sample_count=2,
         seed=303,
         timing=timing,
@@ -137,69 +135,116 @@ def test_digits_observation_generator_records_optional_timing() -> None:
     assert variation["sample_count"] == 2
     variation_counters = cast(dict[str, float], variation["counters"])
     assert variation_counters["candidate_count"] >= variation_counters["accepted_count"]
-    assert variation_counters["accepted_count"] == 4.0
-    assert variation_counters["candidate_count"] == variation_counters["accepted_count"]
-    assert "fast_reject_count" not in variation_counters
+    assert variation_counters["accepted_count"] == 2.0
+    assert variation_counters["declared_distribution_candidate_count"] == variation_counters[
+        "candidate_count"
+    ]
+    assert "canvas_discriminability_check_count" not in variation_counters
+    assert "analysis_discriminability_check_count" not in variation_counters
+    assert "readable_certificate_accept_count" not in variation_counters
+    assert "discriminability_check_count" not in variation_counters
+    assert "discriminability_reject_count" not in variation_counters
     assert observation["sample_count"] == 2
     assert cast(float, observation["seconds"]) > 0
 
 
-def test_digits_observation_generator_samples_resolution_from_complexity_bound() -> None:
+def test_digits_observation_generator_samples_resolution_from_memory_bound() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
     batch = generator.sample_batch(
-        scale=4,
+        component_count=1,
         sample_count=1,
         seed=202,
-        component_sequences=((1, 2, 3, 4),),
+        component_sequences=((1,),),
     )
     sample = batch.samples[0]
 
-    assert sample.field.shape == (1, 22, 88)
-    assert sample.materialization_plan.scale_assignment.require_axis("L") == 4
-    assert sample.materialization_plan.resolution_assignment.values == {"W": 88, "H": 22}
-    assert sample.materialization_plan.complexity_assignment.require_axis("C") == 4
-    assert sample.complexity == 4.0
-    assert sample.outcome_id == "digit-1-2-3-4"
+    assert sample.field.shape == (1, 144, 166)
+    assert sample.materialization_plan.resolution_assignment.values == {"W": 166, "H": 144}
+    assert math.isclose(sample.complexity, math.log2(39029760000))
+    assert sample.outcome_id == "digit-1"
 
 
-def test_digits_observation_generator_decouples_canvas_size_from_complexity() -> None:
+def test_digits_observation_generator_counts_discretized_nuisance_state_space() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
 
-    scale_one = generator.sample_formation_batch(scale=1, sample_count=3, seed=101)
-    scale_three = generator.sample_formation_batch(scale=3, sample_count=3, seed=101)
-    scale_three_other_seed = generator.sample_formation_batch(
-        scale=3,
+    scale_one = generator.sample_formation_batch(component_count=1, sample_count=3, seed=101)
+    scale_one_other_seed = generator.sample_formation_batch(
+        component_count=1,
         sample_count=3,
         seed=102,
     )
 
-    assert {sample.complexity for sample in scale_one.samples} == {1.0}
-    assert {sample.complexity for sample in scale_three.samples} == {3.0}
-    assert [(sample.width, sample.height) for sample in scale_three.samples] == [
-        (115, 35),
-        (115, 35),
-        (115, 35),
+    assert {round(sample.complexity, 12) for sample in scale_one.samples} == {
+        round(math.log2(108927000), 12)
+    }
+    assert {round(sample.complexity, 12) for sample in scale_one_other_seed.samples} == {
+        round(math.log2(608256000), 12)
+    }
+    assert [(sample.width, sample.height) for sample in scale_one.samples] == [
+        (67, 48),
+        (67, 48),
+        (67, 48),
     ]
-    assert [(sample.width, sample.height) for sample in scale_three_other_seed.samples] == [
-        (70, 28),
-        (70, 28),
-        (70, 28),
+    assert [(sample.width, sample.height) for sample in scale_one_other_seed.samples] == [
+        (104, 57),
+        (104, 57),
+        (104, 57),
     ]
-    assert 20 <= scale_one.samples[0].width <= 40
-    assert 20 <= scale_one.samples[0].height <= 40
-    assert 60 <= scale_three.samples[0].width <= 120
-    assert 20 <= scale_three.samples[0].height <= 40
-    assert (scale_three.samples[0].width, scale_three.samples[0].height) != (60, 20)
+    assert 24 <= scale_one.samples[0].width <= 130
+    assert 24 <= scale_one.samples[0].height <= 130
+    assert (scale_one.samples[0].width, scale_one.samples[0].height) != (24, 24)
+
+
+def test_digits_observation_generator_uses_runtime_memory_limit_as_canvas_cap() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    small = generator.sample_formation_batch(
+        component_count=1,
+        sample_count=3,
+        seed=101,
+        memory_limit_bytes=1_024_000,
+    )
+    large = generator.sample_formation_batch(
+        component_count=1,
+        sample_count=3,
+        seed=101,
+        memory_limit_bytes=100_000_000,
+    )
+
+    assert [(sample.width, sample.height) for sample in small.samples] == [
+        (24, 24),
+        (24, 24),
+        (24, 24),
+    ]
+    assert [(sample.width, sample.height) for sample in large.samples] == [
+        (124, 152),
+        (124, 152),
+        (124, 152),
+    ]
+    assert large.samples[0].complexity > small.samples[0].complexity
+
+
+def test_digits_observation_generator_keeps_minimum_canvas_when_memory_cap_is_tiny() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    batch = generator.sample_formation_batch(
+        component_count=1,
+        sample_count=8,
+        seed=101,
+        memory_limit_bytes=1,
+    )
+
+    assert [(sample.width, sample.height) for sample in batch.samples] == [(24, 24)] * 8
 
 
 def test_digits_observation_generator_applies_recorded_variation_coordinates() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
     sample = generator.sample_batch(
-        scale=2,
+        component_count=1,
         sample_count=1,
         seed=909,
-        component_sequences=((1, 2),),
+        component_sequences=((1,),),
     ).samples[0]
     variation = _coordinate(sample.latent_coordinates, role="variation")
     variation_values = cast(dict[str, object], variation["values"])
@@ -223,9 +268,18 @@ def test_digits_observation_generator_applies_recorded_variation_coordinates() -
     assert all(0.0 <= value <= 1.0 for value in sample.field.values)
 
 
+def test_digits_observation_generator_rejects_edge_clipped_affine_samples() -> None:
+    generator = load_observation_generator(_digits_benchmark_root)
+
+    batch = generator.sample_batch(component_count=1, sample_count=3, seed=1)
+
+    for sample in batch.samples:
+        assert not _field_has_positive_edge(sample.field)
+
+
 def test_generated_observation_records_can_include_fields() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
-    batch = generator.sample_batch(scale=1, sample_count=1, seed=303)
+    batch = generator.sample_batch(component_count=1, sample_count=1, seed=303)
 
     compact = batch.to_record()
     expanded = batch.to_record(include_fields=True)
@@ -273,7 +327,7 @@ def test_variation_transform_sampling_is_deterministic_and_declaration_driven() 
 
 def test_field_png_encoding_is_deterministic() -> None:
     generator = load_observation_generator(_digits_benchmark_root)
-    field = generator.sample_batch(scale=1, sample_count=1, seed=404).samples[0].field
+    field = generator.sample_batch(component_count=1, sample_count=1, seed=404).samples[0].field
 
     left = field_to_png_bytes(field)
     right = field_to_png_bytes(field)
@@ -290,15 +344,15 @@ def test_observation_generator_rejects_invalid_requests() -> None:
     assert (
         str(
             capture_generation_error(
-                lambda: generator.sample_batch(scale=0, sample_count=1, seed=1)
+                lambda: generator.sample_batch(component_count=0, sample_count=1, seed=1)
             )
         )
-        == "scale must be a positive integer"
+        == "component_count must be a positive integer"
     )
     assert (
         str(
             capture_generation_error(
-                lambda: generator.sample_batch(scale=1, sample_count=0, seed=1)
+                lambda: generator.sample_batch(component_count=1, sample_count=0, seed=1)
             )
         )
         == "sample_count must be a positive integer"
@@ -307,7 +361,7 @@ def test_observation_generator_rejects_invalid_requests() -> None:
         str(
             capture_generation_error(
                 lambda: generator.sample_batch(
-                    scale=1,
+                    component_count=1,
                     sample_count=2,
                     seed=1,
                     component_sequences=((1,),),
@@ -344,6 +398,23 @@ def _within_transform_bounds(
         for row, bound_row in zip(matrix, matrix_bounds, strict=True)
         for value, (lower, upper) in zip(row, bound_row, strict=True)
     )
+
+
+def _field_has_positive_edge(field: FieldObservation) -> bool:
+    channels, height, width = field.shape
+    for channel in range(channels):
+        channel_offset = channel * width * height
+        for x_index in range(width):
+            if field.values[channel_offset + x_index] > 0.0:
+                return True
+            if field.values[channel_offset + (height - 1) * width + x_index] > 0.0:
+                return True
+        for y_index in range(height):
+            if field.values[channel_offset + y_index * width] > 0.0:
+                return True
+            if field.values[channel_offset + y_index * width + width - 1] > 0.0:
+                return True
+    return False
 
 
 def capture_generation_error(call: Callable[[], object]) -> ObservationGenerationError:

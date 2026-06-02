@@ -3,6 +3,7 @@ channels:
   - conda-forge
 dependencies:
   - python=3.12
+  - nodejs=24
   - pip>=24
   - pytorch>=2
   - pip:

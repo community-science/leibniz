@@ -45,13 +45,12 @@ class ActiveTrainingLoopPlan:
     seed: int = 101
     train_steps: int | None = None
     learning_rate: float = 0.01
-    optimizer: str = "sgd"
-    schedule: str = "none"
+    optimizer: str = "adam"
+    schedule: str = "reduce-on-plateau"
     validation_interval: int = 250
-    convergence_patience: int = 12
+    convergence_patience: int = 6
     convergence_min_delta: float = 1e-3
     convergence_min_steps: int = 500
-    target_validation_loss: float | None = None
     tensor_device: TensorRuntimeDevice = "auto"
     dry_run: bool = False
     progress_callback: Callable[[BenchmarkRunSummary], None] | None = None
@@ -77,14 +76,8 @@ class ActiveTrainingLoopPlan:
             raise ActiveTrainingLoopError("train_steps must be nonnegative")
         if self.train_steps is None and self.schedule == "cosine":
             raise ActiveTrainingLoopError("cosine schedule requires train_steps")
-        if (
-            self.train_steps is None
-            and self.convergence_patience == 0
-            and self.target_validation_loss is None
-        ):
-            raise ActiveTrainingLoopError(
-                "uncapped training requires convergence_patience or target_validation_loss"
-            )
+        if self.train_steps is None and self.convergence_patience == 0:
+            raise ActiveTrainingLoopError("uncapped training requires convergence_patience")
         if self.learning_rate <= 0:
             raise ActiveTrainingLoopError("learning_rate must be positive")
         if self.optimizer not in {"sgd", "adam", "adamw"}:
@@ -99,8 +92,6 @@ class ActiveTrainingLoopPlan:
             raise ActiveTrainingLoopError("convergence_min_delta must be nonnegative")
         if type(self.convergence_min_steps) is not int or self.convergence_min_steps < 0:
             raise ActiveTrainingLoopError("convergence_min_steps must be nonnegative")
-        if self.target_validation_loss is not None and self.target_validation_loss < 0:
-            raise ActiveTrainingLoopError("target_validation_loss must be nonnegative")
         try:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
@@ -156,7 +147,6 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
             convergence_patience=plan.convergence_patience,
             convergence_min_delta=plan.convergence_min_delta,
             convergence_min_steps=plan.convergence_min_steps,
-            target_validation_loss=plan.target_validation_loss,
             tensor_device=plan.tensor_device,
         )
     )
@@ -199,7 +189,6 @@ def run_active_training_loop(plan: ActiveTrainingLoopPlan) -> ActiveTrainingLoop
             convergence_patience=plan.convergence_patience,
             convergence_min_delta=plan.convergence_min_delta,
             convergence_min_steps=plan.convergence_min_steps,
-            target_validation_loss=plan.target_validation_loss,
             tensor_device=plan.tensor_device,
         ),
         progress_callback=refresh_progress,

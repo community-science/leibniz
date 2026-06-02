@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import math
+import os
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ __all__ = [
     "TensorRuntimeError",
     "TensorRuntimeDevice",
     "TensorRuntimeDeviceKind",
+    "tensor_runtime_available_memory_bytes",
     "tensor_runtime_device_kinds",
     "resolve_tensor_runtime",
     "runtime_roofline_record",
@@ -51,6 +53,40 @@ class TensorRuntime:
     torch: Any
     device: Any
     device_kind: Literal["cpu", "cuda", "mps"]
+
+
+def tensor_runtime_available_memory_bytes(runtime: TensorRuntime) -> int:
+    """Return available memory bytes for the resolved runtime device."""
+
+    if runtime.device_kind == "cuda":
+        try:
+            free_bytes, _total_bytes = runtime.torch.cuda.mem_get_info(runtime.device)
+        except Exception as error:  # pragma: no cover - backend-specific failure
+            raise TensorRuntimeError(f"could not query cuda memory: {error}") from error
+        return _positive_memory_bytes(free_bytes, field="cuda free memory")
+    if runtime.device_kind == "mps":
+        mps = runtime.torch.mps
+        recommended = (
+            mps.recommended_max_memory()
+            if hasattr(mps, "recommended_max_memory")
+            else None
+        )
+        if recommended is None:
+            return _host_memory_bytes()
+        allocated = (
+            mps.driver_allocated_memory()
+            if hasattr(mps, "driver_allocated_memory")
+            else (
+                mps.current_allocated_memory()
+                if hasattr(mps, "current_allocated_memory")
+                else 0
+            )
+        )
+        return _positive_memory_bytes(
+            max(1, int(recommended) - int(allocated)),
+            field="mps available memory",
+        )
+    return _host_memory_bytes()
 
 
 @dataclass(slots=True)
@@ -532,6 +568,26 @@ def _torch() -> Any:
 def _require_positive_integer(value: int, name: str) -> None:
     if type(value) is not int or value < 1:
         raise TensorRuntimeError(f"{name} must be a positive integer")
+
+
+def _positive_memory_bytes(value: object, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TensorRuntimeError(f"{field} must be numeric")
+    bytes_value = int(value)
+    if bytes_value < 1:
+        raise TensorRuntimeError(f"{field} must be positive")
+    return bytes_value
+
+
+def _host_memory_bytes() -> int:
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        page_count = os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, OSError, ValueError):
+        page_size = page_count = -1
+    if page_size > 0 and page_count > 0:
+        return page_size * page_count
+    return 1_073_741_824
 
 
 def _require_sequence_index(*, sequence_index: int, sequence_length: int) -> None:

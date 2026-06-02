@@ -27,7 +27,11 @@ def test_digits_observation_inspection_records_sample_provenance() -> None:
     plan = MaterializationPlanDocument.from_bytes(
         (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
     ).plan
-    sequence = declaration.sample_component_sequence(plan=plan, sample_index=2)
+    sequence = declaration.sample_component_sequence(
+        seed=plan.seed,
+        component_count=3,
+        sample_index=2,
+    )
     observation = declaration.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.observations.l3.sample-2@0.1.0"),
         plan=plan,
@@ -45,12 +49,10 @@ def test_digits_observation_inspection_records_sample_provenance() -> None:
 
     assert inspection.benchmark_id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
     assert inspection.component_sequence == sequence
-    assert inspection.scale_assignment.values == {"L": 3}
-    assert inspection.complexity_assignment.values == {"C": 3}
-    assert inspection.resolution_assignment.values == {"W": 48, "H": 16}
-    assert inspection.field_shape == (1, 16, 48)
+    assert inspection.resolution_assignment.values == {"W": 72, "H": 24}
+    assert inspection.field_shape == (1, 24, 72)
     assert inspection.field_preview is not None
-    assert sum(run.count for run in inspection.field_preview.runs) == 48 * 16
+    assert sum(run.count for run in inspection.field_preview.runs) == 72 * 24
     assert record["field_digest"] == str(observation.field.digest)
     assert record["formed_observation"] == {
         "kind": "formed-observation",
@@ -122,8 +124,6 @@ def test_non_digits_observation_uses_same_inspection_record_path() -> None:
             kind="materialization-declaration",
             protocol_id=ProtocolIdentifier.parse("benchmarks.synthetic-bars.materialization@0.1.0"),
         ),
-        scale_assignment=AxisAssignment(values={"S": 2}),
-        complexity_assignment=AxisAssignment(values={"C": 2}),
         resolution_assignment=AxisAssignment(values={"W": 16, "H": 20}),
         seed=11,
     )
@@ -140,7 +140,6 @@ def test_non_digits_observation_uses_same_inspection_record_path() -> None:
         sample_index=0,
     )
 
-    assert inspection.scale_assignment.values == {"S": 2}
     assert inspection.resolution_assignment.values == {"W": 16, "H": 20}
     assert inspection.field_shape == (1, 20, 16)
     assert inspection.outcome_id is None
@@ -155,8 +154,6 @@ def test_observation_inspection_rejects_mismatched_plan_reference() -> None:
             kind="materialization-declaration",
             protocol_id=ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0"),
         ),
-        scale_assignment=AxisAssignment(values={"L": 3}),
-        complexity_assignment=AxisAssignment(values={"C": 3}),
         resolution_assignment=AxisAssignment(values={"W": 48, "H": 16}),
         seed=101,
     )
@@ -184,7 +181,7 @@ def test_observation_inspection_rejects_invalid_preview_run_length() -> None:
 
     assert (
         str(capture_inspection_error(lambda: ObservationInspectionRecord.from_record(record)))
-        == "preview run length 1 does not match shape size 768"
+        == "preview run length 1 does not match shape size 1728"
     )
 
 
@@ -202,7 +199,11 @@ def _digits_observation():
     return declaration.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.observations.l3.sample-0@0.1.0"),
         plan=plan,
-        component_sequence=declaration.sample_component_sequence(plan=plan, sample_index=0),
+        component_sequence=declaration.sample_component_sequence(
+            seed=plan.seed,
+            component_count=3,
+            sample_index=0,
+        ),
     )
 
 
@@ -214,7 +215,11 @@ def _digits_inspection() -> ObservationInspectionRecord:
     observation = declaration.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.observations.l3.sample-0@0.1.0"),
         plan=plan,
-        component_sequence=declaration.sample_component_sequence(plan=plan, sample_index=0),
+        component_sequence=declaration.sample_component_sequence(
+            seed=plan.seed,
+            component_count=3,
+            sample_index=0,
+        ),
     )
     return ObservationInspectionRecord.from_formed_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.inspections.l3.sample-0@0.1.0"),

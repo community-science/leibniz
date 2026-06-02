@@ -1,21 +1,25 @@
 {
   "id": "benchmarks.digits@0.1.0",
   "name": "benchmarks.digits",
-  "outcome_sequence": {
-    "atom_count": 10,
-    "atom_name": "digit",
-    "length_parameter": "L"
-  },
-  "scale_parameter": {
-    "symbol": "L",
-    "minimum": 1,
-    "description": "Number of digits in the ordered sequence."
+  "outcome_space": {
+    "id": "benchmarks.digits.outcomes@0.1.0",
+    "outcomes": [
+      {"id": "digit-0"},
+      {"id": "digit-1"},
+      {"id": "digit-2"},
+      {"id": "digit-3"},
+      {"id": "digit-4"},
+      {"id": "digit-5"},
+      {"id": "digit-6"},
+      {"id": "digit-7"},
+      {"id": "digit-8"},
+      {"id": "digit-9"}
+    ]
   },
   "latent_factor_declaration": {
     "kind": "latent-factor-declaration",
     "protocol_id": "benchmarks.digits.latent-factors@0.1.0"
   },
-  "complexity_coordinate": "C",
   "resolution_analysis": {
     "kind": "component-discriminability-margin",
     "discriminability_margin": 20.0,

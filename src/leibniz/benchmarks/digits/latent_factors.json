@@ -36,13 +36,5 @@
         "count": 2
       }
     }
-  ],
-  "complexity_projections": [
-    {
-      "name": "benchmarks.digits.complexity.content",
-      "coordinate": "C",
-      "included_roles": ["content"],
-      "description": "Primary content-complexity coordinate."
-    }
   ]
 }

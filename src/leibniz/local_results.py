@@ -34,6 +34,7 @@ from leibniz.model_inspection import (
     ModelInspectionRecord,
     ModelInspectionValidationError,
 )
+from leibniz.observation_generation import load_observation_generator
 from leibniz.publications import SubmissionPublicationBundle, SubmissionPublicationDocument
 from leibniz.submissions import SubmissionArtifact, SubmissionPackageManifest
 from leibniz.training_runs import TrainingRunRecord
@@ -46,6 +47,7 @@ __all__ = [
     "LocalPublicationPushSummary",
     "LocalResultImportError",
     "LocalResultImportSummary",
+    "base_normalized_absolute_score",
     "import_submission_publications",
     "initialize_publication_checkout",
     "load_console_result_view",
@@ -426,6 +428,7 @@ def materialize_benchmark_result_views(
         benchmark_records.append(
             _benchmark_result_record(
                 manifest=manifest,
+                repository_root=repository_root,
                 runs=benchmark_runs,
                 proposals=_proposal_records(results_root, benchmark_id=benchmark_id),
             )
@@ -484,7 +487,6 @@ class _BenchmarkRunRecord:
     benchmark_id: ProtocolIdentifier
     architecture_digest: ContentDigest
     model_key: str
-    scale: int | None
     complexity: float | None
     measurement_count: int
     score: float
@@ -520,8 +522,6 @@ class _BenchmarkRunRecord:
         }
         if self.model_inspection_path is not None:
             record["model_inspection_path"] = self.model_inspection_path.as_posix()
-        if self.scale is not None:
-            record["scale"] = self.scale
         if self.complexity is not None:
             record["complexity"] = self.complexity
         if self.sampled_competence is not None:
@@ -606,7 +606,6 @@ def _local_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
                 benchmark_id=_as_identifier(summary.get("benchmark_id"), "benchmark_id"),
                 architecture_digest=_record_digest(inspection.architecture.to_record()),
                 model_key=str(inspection.architecture.record_digest),
-                scale=_optional_int(summary.get("scale"), "scale"),
                 complexity=_sampled_competence_complexity(summary),
                 measurement_count=len(dataset.measurements),
                 score=_mean_accepted_mass(dataset),
@@ -657,6 +656,10 @@ def _local_progress_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord
             summary.get("model_inspection_digest"),
             field="model_inspection_digest",
         )
+        sampled_competence = _optional_mapping(
+            summary.get("sampled_competence"),
+            "sampled_competence",
+        )
         measurement_dataset_digest = empty_dataset.digest
         records.append(
             _BenchmarkRunRecord(
@@ -667,8 +670,14 @@ def _local_progress_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord
                 benchmark_id=_as_identifier(summary.get("benchmark_id"), "benchmark_id"),
                 architecture_digest=architecture_digest,
                 model_key=str(architecture_digest),
-                scale=_optional_int(summary.get("scale"), "scale"),
-                complexity=None,
+                complexity=(
+                    None
+                    if sampled_competence is None
+                    else _as_nonnegative_number(
+                        sampled_competence.get("complexity"),
+                        "sampled_competence.complexity",
+                    )
+                ),
                 measurement_count=0,
                 score=_as_nonnegative_number(
                     summary.get("provisional_score"),
@@ -686,6 +695,7 @@ def _local_progress_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord
                 model_inspection_path=None,
                 measurement_dataset=empty_dataset,
                 measurement_dataset_digest=measurement_dataset_digest,
+                sampled_competence=sampled_competence,
                 training_summary=summary,
             )
         )
@@ -712,11 +722,9 @@ def _imported_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]
                 benchmark_id=package.benchmark_manifest.id,
                 architecture_digest=package.architecture_manifest.digest,
                 model_key=str(package.architecture_manifest.digest),
-                scale=_dataset_scale(
-                    manifest=package.benchmark_manifest,
-                    dataset=bundle.measurement_dataset,
+                complexity=_sampled_competence_record_complexity(
+                    package.sampled_competence,
                 ),
-                complexity=None,
                 measurement_count=len(bundle.measurement_dataset.measurements),
                 score=_mean_accepted_mass(bundle.measurement_dataset),
                 cost_summary=inspection.cost_summary.to_record(),
@@ -731,6 +739,7 @@ def _imported_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]
                 model_inspection_path=None,
                 measurement_dataset=bundle.measurement_dataset,
                 measurement_dataset_digest=bundle.measurement_dataset.digest,
+                sampled_competence=package.sampled_competence,
             )
         )
     return tuple(records)
@@ -745,6 +754,12 @@ def _sampled_competence(summary: Mapping[str, object]) -> Mapping[str, object] |
 
 def _sampled_competence_complexity(summary: Mapping[str, object]) -> float | None:
     record = _sampled_competence(summary)
+    return _sampled_competence_record_complexity(record)
+
+
+def _sampled_competence_record_complexity(
+    record: Mapping[str, object] | None,
+) -> float | None:
     if record is None:
         return None
     return _as_nonnegative_number(record.get("complexity"), "sampled_competence.complexity")
@@ -1047,6 +1062,7 @@ def _publication_bundle_for_local_run(
             run=run,
         ),
         measurement_dataset=run.measurement_dataset,
+        sampled_competence=run.sampled_competence,
         artifacts=_submission_artifacts_for_local_run(run),
     )
     score_view = MeasurementScoreView.from_dataset(
@@ -1117,10 +1133,17 @@ def _inspection_from_architecture(architecture: ArchitectureManifest) -> ModelIn
 def _benchmark_result_record(
     *,
     manifest: BenchmarkManifest,
+    repository_root: Path,
     runs: tuple[_BenchmarkRunRecord, ...],
     proposals: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
-    models = tuple(_model_result_records(runs, manifest=manifest))
+    models = tuple(
+        _model_result_records(
+            runs,
+            manifest=manifest,
+            repository_root=repository_root,
+        )
+    )
     record: dict[str, object] = {
         "benchmark_id": str(runs[0].benchmark_id),
         "cost_axes": [
@@ -1133,17 +1156,11 @@ def _benchmark_result_record(
             axis: _frontier_records(models, cost_axis=axis)
             for axis in ("parameter_count", "inference_flops", "parameter_bytes")
         },
-        "training_history": [
-            run.to_record(complexity_axis=manifest.complexity_coordinate) for run in runs
-        ],
+        "training_history": [run.to_record(complexity_axis=None) for run in runs],
         "model_inspections": _model_inspection_records(runs),
     }
     if proposals:
         record["proposals"] = list(proposals)
-    if manifest.complexity_coordinate is not None:
-        record["complexity_axis"] = manifest.complexity_coordinate
-    if manifest.scale_parameter is not None:
-        record["scale_axis"] = manifest.scale_parameter.symbol
     return record
 
 
@@ -1160,16 +1177,26 @@ def _model_result_records(
     runs: tuple[_BenchmarkRunRecord, ...],
     *,
     manifest: BenchmarkManifest,
+    repository_root: Path,
 ) -> tuple[dict[str, object], ...]:
     grouped: dict[str, list[_BenchmarkRunRecord]] = {}
     for run in runs:
         grouped.setdefault(run.model_key, []).append(run)
 
+    base_complexity = _benchmark_base_complexity(
+        manifest=manifest,
+        repository_root=repository_root,
+    )
+    chance_mass = _chance_mass(manifest)
     records: list[dict[str, object]] = []
     for model_key, model_runs in grouped.items():
         ordered_runs = tuple(sorted(model_runs, key=_run_sort_key))
         points = _competence_points(ordered_runs)
-        score = _competence_integral(points)
+        score = base_normalized_absolute_score(
+            points,
+            base_complexity=base_complexity,
+            chance_mass=chance_mass,
+        )
         best_run = max(
             ordered_runs,
             key=lambda run: (run.score, -_cost_value(run.cost_summary, "parameter_count")),
@@ -1179,6 +1206,13 @@ def _model_result_records(
             "architecture_digest": str(best_run.architecture_digest),
             "benchmark_id": str(best_run.benchmark_id),
             "score": score,
+            "score_basis": {
+                "kind": "base-normalized-absolute-competent-complexity-v1",
+                "base_complexity": base_complexity,
+                "chance_mass": chance_mass,
+                "point_score": "accepted-mass",
+                "local_competence": "above-chance-accepted-mass",
+            },
             "observed_complexities": [point["complexity"] for point in points],
             "points": list(points),
             "cost_summary": dict(best_run.cost_summary),
@@ -1294,21 +1328,10 @@ def _model_console_view_model(
 
 
 def _prediction_space_label(manifest: BenchmarkManifest) -> str:
-    if manifest.outcome_sequence is not None:
-        return (
-            f"finite {manifest.outcome_sequence.atom_name} token sequence"
-            f" over {manifest.outcome_sequence.atom_count} atoms"
-        )
-    if manifest.outcome_space is not None:
-        return f"finite outcome space with {len(manifest.outcome_space.outcomes)} outcomes"
-    return "not declared"
+    return f"finite outcome space with {len(manifest.outcome_space.outcomes)} outcomes"
 
 
 def _model_complexity_label(manifest: BenchmarkManifest) -> str:
-    if manifest.complexity_coordinate is not None:
-        return manifest.complexity_coordinate
-    if manifest.scale_parameter is not None:
-        return manifest.scale_parameter.symbol
     return "Complexity"
 
 
@@ -1340,41 +1363,152 @@ def _proposal_records(
 def _competence_points(
     runs: tuple[_BenchmarkRunRecord, ...],
 ) -> tuple[dict[str, object], ...]:
-    by_complexity: dict[float, list[_BenchmarkRunRecord]] = {}
+    by_complexity: dict[float, list[tuple[_BenchmarkRunRecord, float, int]]] = {}
     for run in runs:
-        complexity = run.complexity
-        if complexity is None and run.scale is not None:
-            complexity = float(run.scale)
-        if complexity is None:
-            continue
-        by_complexity.setdefault(complexity, []).append(run)
+        for complexity, score, sample_count in _run_competence_points(run):
+            by_complexity.setdefault(complexity, []).append((run, score, sample_count))
     points: list[dict[str, object]] = []
-    for complexity, complexity_runs in by_complexity.items():
-        score = sum(run.score for run in complexity_runs) / len(complexity_runs)
+    for complexity, evidence in by_complexity.items():
+        total_samples = sum(sample_count for _run, _score, sample_count in evidence)
+        score = (
+            sum(score * sample_count for _run, score, sample_count in evidence)
+            / total_samples
+        )
         points.append(
             {
                 "complexity": complexity,
                 "score": score,
-                "sample_count": sum(run.measurement_count for run in complexity_runs),
-                "run_ids": [run.run_id for run in sorted(complexity_runs, key=_run_sort_key)],
+                "sample_count": total_samples,
+                "run_ids": [
+                    run.run_id
+                    for run in sorted(
+                        {
+                            run.run_id: run
+                            for run, _score, _sample_count in evidence
+                        }.values(),
+                        key=_run_sort_key,
+                    )
+                ],
             }
         )
     return tuple(sorted(points, key=_point_complexity))
 
 
-def _competence_integral(points: tuple[dict[str, object], ...]) -> float:
+def _run_competence_points(run: _BenchmarkRunRecord) -> tuple[tuple[float, float, int], ...]:
+    if run.sampled_competence is not None:
+        points = run.sampled_competence.get("points")
+        if isinstance(points, list | tuple):
+            return tuple(
+                (
+                    _as_nonnegative_number(
+                        point.get("complexity"),
+                        "sampled_competence.point.complexity",
+                    ),
+                    _as_nonnegative_number(
+                        point.get("mean_accepted_mass"),
+                        "sampled_competence.point.mean_accepted_mass",
+                    ),
+                    _as_positive_int(
+                        point.get("sample_count"),
+                        "sampled_competence.point.sample_count",
+                    ),
+                )
+                for point in (
+                    _as_mapping(value, "sampled_competence.points")
+                    for value in _as_sequence(
+                        cast(object, points),
+                        "sampled_competence.points",
+                    )
+                )
+            )
+        return (
+            (
+                _as_nonnegative_number(
+                    run.sampled_competence.get("complexity"),
+                    "sampled_competence.complexity",
+                ),
+                _as_nonnegative_number(
+                    run.sampled_competence.get("mean_accepted_mass"),
+                    "sampled_competence.mean_accepted_mass",
+                ),
+                _as_positive_int(
+                    run.sampled_competence.get("sample_count"),
+                    "sampled_competence.sample_count",
+                ),
+            ),
+        )
+    if run.complexity is None:
+        return ()
+    return ((run.complexity, run.score, run.measurement_count),)
+
+
+def base_normalized_absolute_score(
+    points: tuple[dict[str, object], ...],
+    *,
+    base_complexity: float,
+    chance_mass: float,
+) -> float:
     if not points:
         return 0.0
-    if len(points) == 1:
-        return _point_score(points[0])
-    total_width = _point_complexity(points[-1]) - _point_complexity(points[0])
-    if total_width <= 0:
-        return _point_score(points[-1])
-    area = 0.0
-    for left, right in zip(points, points[1:], strict=True):
-        width = _point_complexity(right) - _point_complexity(left)
-        area += width * (_point_score(left) + _point_score(right)) / 2.0
-    return area / total_width
+    if base_complexity <= 0.0:
+        raise LocalResultImportError("base_complexity must be positive")
+    ordered = tuple(sorted(points, key=_point_complexity))
+    first_complexity = _point_complexity(ordered[0])
+    first_competence = _above_chance_competence(
+        _point_score(ordered[0]),
+        chance_mass=chance_mass,
+    )
+    area = first_complexity * first_competence
+    for left, right in zip(ordered, ordered[1:], strict=False):
+        left_complexity = _point_complexity(left)
+        right_complexity = _point_complexity(right)
+        width = right_complexity - left_complexity
+        if width <= 0.0:
+            continue
+        left_competence = _above_chance_competence(
+            _point_score(left),
+            chance_mass=chance_mass,
+        )
+        right_competence = _above_chance_competence(
+            _point_score(right),
+            chance_mass=chance_mass,
+        )
+        area += width * (left_competence + right_competence) / 2.0
+    return area / base_complexity
+
+
+def _above_chance_competence(score: float, *, chance_mass: float) -> float:
+    if chance_mass >= 1.0:
+        return 0.0
+    return max(0.0, min(1.0, (score - chance_mass) / (1.0 - chance_mass)))
+
+
+def _benchmark_base_complexity(
+    *,
+    manifest: BenchmarkManifest,
+    repository_root: Path,
+) -> float:
+    generator = load_observation_generator(
+        repository_root / "src" / "leibniz" / "benchmarks" / _identifier_atom(manifest.id)
+    )
+    resolution = generator.minimum_discriminatable_resolution_assignment(
+        component_count=1,
+        minimum_assignment=generator.materialization.minimum_resolution(),
+    )
+    width = resolution.require_axis(generator.formation.width_axis)
+    height = resolution.require_axis(generator.formation.height_axis)
+    return generator.distinguishable_state_complexity(
+        component_count=1,
+        width=width,
+        height=height,
+    )
+
+
+def _chance_mass(manifest: BenchmarkManifest) -> float:
+    outcome_count = len(manifest.outcome_space.outcomes)
+    if outcome_count < 1:
+        return 0.0
+    return 1.0 / outcome_count
 
 
 def _frontier_records(
@@ -1419,39 +1553,6 @@ def _local_artifact_path(*, results_root: Path, value: object, field: str) -> Pa
     if not resolved.is_file():
         raise LocalResultImportError(f"{field} does not exist: {path}")
     return resolved
-
-
-def _dataset_scale(*, manifest: BenchmarkManifest, dataset: MeasurementDataset) -> int | None:
-    scales = {
-        _scale_from_outcome_space_id(
-            manifest=manifest,
-            outcome_space_id=measurement.outcome_space.id,
-        )
-        for measurement in dataset.measurements
-    }
-    scales.discard(None)
-    if len(scales) > 1:
-        raise LocalResultImportError("measurement dataset spans multiple scales")
-    return next(iter(scales), None)
-
-
-def _scale_from_outcome_space_id(
-    *,
-    manifest: BenchmarkManifest,
-    outcome_space_id: ProtocolIdentifier,
-) -> int | None:
-    if manifest.outcome_space is not None:
-        return None
-    prefix = f"{manifest.id.name}.outcomes.l"
-    outcome_space_name = str(outcome_space_id.name)
-    if not outcome_space_name.startswith(prefix):
-        raise LocalResultImportError(
-            "measurement outcome_space does not match scale-indexed benchmark"
-        )
-    scale_text = outcome_space_name.removeprefix(prefix)
-    if not scale_text.isdecimal():
-        raise LocalResultImportError("measurement outcome_space does not declare an integer scale")
-    return int(scale_text)
 
 
 def _mean_accepted_mass(dataset: MeasurementDataset) -> float:
@@ -2077,6 +2178,12 @@ def _as_mapping(value: object, field: str) -> Mapping[str, object]:
     return cast(Mapping[str, object], value)
 
 
+def _optional_mapping(value: object, field: str) -> Mapping[str, object] | None:
+    if value is None:
+        return None
+    return _as_mapping(value, field)
+
+
 def _as_sequence(value: object, field: str) -> tuple[object, ...]:
     if isinstance(value, tuple):
         return cast(tuple[object, ...], value)
@@ -2102,14 +2209,6 @@ def _as_identifier(value: object, field: str) -> ProtocolIdentifier:
     raise LocalResultImportError(f"{field}: expected identifier")
 
 
-def _optional_int(value: object, field: str) -> int | None:
-    if value is None:
-        return None
-    if type(value) is not int:
-        raise LocalResultImportError(f"{field}: expected integer")
-    return value
-
-
 def _as_digest(value: object, *, field: str) -> ContentDigest:
     if not isinstance(value, str):
         raise LocalResultImportError(f"{field}: expected digest string")
@@ -2129,3 +2228,9 @@ def _as_nonnegative_number(value: object, field: str) -> float:
     if numeric < 0 or not math.isfinite(numeric):
         raise LocalResultImportError(f"{field}: expected finite nonnegative number")
     return numeric
+
+
+def _as_positive_int(value: object, field: str) -> int:
+    if type(value) is not int or value < 1:
+        raise LocalResultImportError(f"{field}: expected positive integer")
+    return value

@@ -10,7 +10,6 @@ from leibniz.artifacts import ArtifactReference
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import AxisAssignment
 from leibniz.records import FieldSpec, RecordSpec
 
 __all__ = [
@@ -25,8 +24,6 @@ _sample_record = RecordSpec(
         "id": FieldSpec(kind="identifier"),
         "label": FieldSpec(kind="string"),
         "sample_index": FieldSpec(kind="integer"),
-        "scale_assignment": FieldSpec(kind="record"),
-        "complexity_assignment": FieldSpec(kind="record"),
         "seed": FieldSpec(kind="integer"),
         "component_sequence": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
         "outcome_id": FieldSpec(kind="string", required=False),
@@ -54,8 +51,6 @@ class ObservationShowcaseSample:
     id: ProtocolIdentifier
     label: str
     sample_index: int
-    scale_assignment: AxisAssignment
-    complexity_assignment: AxisAssignment
     seed: int
     component_sequence: tuple[int, ...]
     outcome_id: str | None = None
@@ -94,12 +89,6 @@ class ObservationShowcaseSample:
             id=_as_identifier(validated["id"], field="id"),
             label=_as_string(validated["label"], field="label"),
             sample_index=_as_int(validated["sample_index"], field="sample_index"),
-            scale_assignment=AxisAssignment.from_record(
-                _as_mapping(validated["scale_assignment"], field="scale_assignment")
-            ),
-            complexity_assignment=AxisAssignment.from_record(
-                _as_mapping(validated["complexity_assignment"], field="complexity_assignment")
-            ),
             seed=_as_int(validated["seed"], field="seed"),
             component_sequence=tuple(
                 _as_int(index, field="component_sequence")
@@ -116,8 +105,6 @@ class ObservationShowcaseSample:
             "id": str(self.id),
             "label": self.label,
             "sample_index": self.sample_index,
-            "scale_assignment": self.scale_assignment.to_record(),
-            "complexity_assignment": self.complexity_assignment.to_record(),
             "seed": self.seed,
             "component_sequence": list(self.component_sequence),
         }

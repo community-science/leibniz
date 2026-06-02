@@ -124,19 +124,19 @@ if (benchmarkTask === undefined) {
 assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind');
 assertEqual(benchmarkTask?.batches.length, 1, 'benchmark batch count');
 assertEqual(
-  benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.scale}:${batch.sample_count}`).join('|'),
+  benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.component_count}:${batch.sample_count}`).join('|'),
   'balanced:1:40',
   'generated benchmark batches',
 );
 const generatedSamples = benchmarkTask?.batches[0]?.samples ?? [];
 assertEqual(
   scaleCounts(generatedSamples).join(','),
-  '5,5,5,5,5,5,5,5',
+  '40',
   'balanced scale samples',
 );
 assertEqual(
   digitCounts(generatedSamples).join(','),
-  '18,18,18,18,18,18,18,18,18,18',
+  '4,4,4,4,4,4,4,4,4,4',
   'balanced digit counts',
 );
 assertEqual(
@@ -159,15 +159,11 @@ if (generatedSample === undefined) {
   throw new Error('expected generated sample');
 }
 assertEqual(generatedSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
-assertEqual(generatedSample.field_shape.join('x'), '1x28x40', 'sample field shape');
+assertEqual(generatedSample.field_shape.join('x'), '1x128x139', 'sample field shape');
 assertEqual(
-  [
-    generatedSample.preview_crop.left,
-    generatedSample.preview_crop.top,
-    generatedSample.preview_crop.size,
-  ].join(','),
-  '5,0,26',
-  'sample preview crop',
+  Object.hasOwn(generatedSample, 'preview_crop'),
+  false,
+  'sample preview crop omitted',
 );
 assertEqual(
   generatedSample.latent_coordinates.map((coordinate) => coordinate.role).join(','),
@@ -199,15 +195,9 @@ assertEqual(
   'sample variation coordinate count',
 );
 const materializationPlan = generatedSample.materialization_plan as Record<string, unknown>;
-assertEqual(assignmentLabel(materializationPlan.scale_assignment), 'L=1', 'sample scale assignment');
-assertEqual(
-  assignmentLabel(materializationPlan.complexity_assignment),
-  'C=1',
-  'sample complexity assignment',
-);
 assertEqual(
   assignmentLabel(materializationPlan.resolution_assignment),
-  'H=28,W=40',
+  'H=128,W=139',
   'sample resolution assignment',
 );
 assertDataError(
