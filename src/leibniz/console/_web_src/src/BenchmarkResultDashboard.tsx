@@ -57,7 +57,7 @@ const plotWidth = 960;
 const plotHeight = 440;
 const plotMargin = {
   bottom: 78,
-  left: 72,
+  left: 92,
   right: 26,
   top: 26,
 };
