@@ -700,23 +700,23 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
             device_kind=cast(Any, device_kind),
         )
 
-    original_torch_operation_modules = (
-        benchmark_runner.ExecutableModelOperator.torch_operation_modules
+    original_operation_modules = (
+        benchmark_runner.ExecutableModelOperator.operation_modules
     )
 
-    def flaky_torch_operation_modules(self: object) -> object:
+    def flaky_operation_modules(self: object) -> object:
         nonlocal module_calls
         module_calls += 1
         if module_calls == 1:
             raise RuntimeError("MPS backend failed to compile adaptive pooling")
-        return original_torch_operation_modules(cast(Any, self))
+        return original_operation_modules(cast(Any, self))
 
     monkeypatch.setattr(benchmark_runner, "tensor_runtime_device_kinds", fake_device_kinds)
     monkeypatch.setattr(benchmark_runner, "resolve_tensor_runtime", fake_resolve_tensor_runtime)
     monkeypatch.setattr(
         benchmark_runner.ExecutableModelOperator,
-        "torch_operation_modules",
-        flaky_torch_operation_modules,
+        "operation_modules",
+        flaky_operation_modules,
     )
 
     summary = run_benchmark(
@@ -789,14 +789,14 @@ def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_dev
             "peak_bytes_per_second": 1_000_000.0,
         }
 
-    original_torch_operation_modules = (
-        benchmark_runner.ExecutableModelOperator.torch_operation_modules
+    original_operation_modules = (
+        benchmark_runner.ExecutableModelOperator.operation_modules
     )
 
     def flaky_first_operation(self: object) -> object:
         import importlib
         torch = cast(Any, importlib.import_module("torch"))
-        modules = list(original_torch_operation_modules(cast(Any, self)))
+        modules = list(original_operation_modules(cast(Any, self)))
         modules[0] = torch.nn.Sequential(FlakyOperation(), modules[0])
         return tuple(modules)
 
@@ -805,7 +805,7 @@ def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_dev
     monkeypatch.setattr(benchmark_runner, "runtime_roofline_record", fake_roofline_record)
     monkeypatch.setattr(
         benchmark_runner.ExecutableModelOperator,
-        "torch_operation_modules",
+        "operation_modules",
         flaky_first_operation,
     )
 

@@ -365,9 +365,7 @@ class ExecutableModelOperator:
 
     architecture: ArchitectureManifest
 
-    def torch_module(self) -> Any:
-        """Instantiate a minimal PyTorch module for supported operator specializations."""
-
+    def sequential_module(self) -> Any:
         try:
             return build_architecture_sequential(
                 self.architecture,
@@ -376,9 +374,7 @@ class ExecutableModelOperator:
         except TensorRuntimeError as error:
             raise ModelOperatorExecutionError(str(error)) from error
 
-    def torch_operation_modules(self) -> tuple[Any, ...]:
-        """Instantiate one PyTorch module per supported operator specialization."""
-
+    def operation_modules(self) -> tuple[Any, ...]:
         try:
             return build_architecture_modules(
                 self.architecture,

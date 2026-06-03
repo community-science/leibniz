@@ -217,7 +217,7 @@ def test_torch_is_imported_only_in_tensor_runtime() -> None:
         for path in sorted(source_root.rglob("*.py"))
         if path.relative_to(source_root).as_posix() != "tensor_runtime.py"
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
-        if re.search(r"\btorch\b", line)
+        if re.search(r"\btorch", line)
     )
 
     assert offenders == ()

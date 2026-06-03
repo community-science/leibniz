@@ -100,7 +100,7 @@ def test_model_operator_summary_rejects_shape_law_mismatch() -> None:
 def test_torch_instantiation_is_a_minimal_sequential_specialization() -> None:
     torch = cast(Any, importlib.import_module("torch"))
 
-    module = ExecutableModelOperator(_architecture_manifest()).torch_module()
+    module = ExecutableModelOperator(_architecture_manifest()).sequential_module()
     output = module(torch.zeros(2, 1, 32, 32))
 
     assert len(module) == 3
@@ -114,7 +114,7 @@ def test_convolution_alias_routes_through_local_affine_semantics() -> None:
 
     local_affine_plan = summarize_architecture_operators(local_affine_manifest)
     convolution_plan = summarize_architecture_operators(convolution_manifest)
-    module = ExecutableModelOperator(convolution_manifest).torch_module()
+    module = ExecutableModelOperator(convolution_manifest).sequential_module()
     output = module(torch.zeros(2, 1, 24, 24))
 
     assert [operator.descriptor.kind for operator in local_affine_plan.operators] == [
@@ -185,7 +185,7 @@ def test_fixed_support_affine_projects_variable_canvas_to_fixed_convnet_shape() 
     )
 
     plan = summarize_architecture_operators(manifest)
-    output = ExecutableModelOperator(manifest).torch_module()(torch.zeros(2, 1, 31, 47))
+    output = ExecutableModelOperator(manifest).sequential_module()(torch.zeros(2, 1, 31, 47))
 
     assert [operator.descriptor.kind for operator in plan.operators] == [
         "fixed-support-affine",

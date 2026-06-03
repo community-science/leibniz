@@ -1014,7 +1014,7 @@ def _train_and_predict_on_device(
     executable = ExecutableModelOperator(architecture)
     module = OperationFallbackSequential(
         runtime=runtime,
-        operations=executable.torch_operation_modules(),
+        operations=executable.operation_modules(),
     )
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     formation_cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
