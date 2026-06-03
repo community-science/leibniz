@@ -41,7 +41,7 @@ assertEqual(
 );
 assertEqual(
   benchmarkScoreAxes(undefined).map((axis) => axis.key).join(','),
-  'absolute',
+  'absolute,relative',
   'default score axes',
 );
 assertEqual(

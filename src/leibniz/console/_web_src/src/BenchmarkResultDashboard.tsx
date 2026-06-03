@@ -45,6 +45,17 @@ type PlotView = {
   yDomain: [number, number];
 };
 
+type PlotAxisSelectorAxis = {
+  key: string;
+  label: string;
+};
+
+type PlotAxisSelectorGroup = {
+  axes: PlotAxisSelectorAxis[];
+  key: string;
+  label: string;
+};
+
 const plotWidth = 960;
 const plotHeight = 440;
 const plotMargin = {
@@ -139,7 +150,6 @@ export function BenchmarkResultDashboard({
         costAxis={costAxis}
         scoreAxes={scoreAxes}
         scoreAxis={scoreAxis}
-        scoreAxisLabel={scoreAxisLabel}
         model={plot}
         onCostAxisChange={(axis) => {
           setSelectedCostAxis(axis);
@@ -198,7 +208,6 @@ function BenchmarkFrontierPlot({
   onZoom,
   scoreAxes,
   scoreAxis,
-  scoreAxisLabel,
   selectedId,
   view,
 }: {
@@ -215,7 +224,6 @@ function BenchmarkFrontierPlot({
   onZoom: (factor: number) => void;
   scoreAxes: ScoreAxisRecord[];
   scoreAxis: string;
-  scoreAxisLabel: string;
   selectedId: string | null;
   view: PlotView;
 }) {
@@ -247,6 +255,13 @@ function BenchmarkFrontierPlot({
   const axisSelectorX = plotMargin.left + plotBodyWidth / 2 - axisSelectorWidth / 2;
   const axisSelectorY = plotMargin.top + plotBodyHeight + plotAxisSelectorTopOffset;
   const yAxisSelectorCenterY = plotMargin.top + plotBodyHeight / 2;
+  const scoreAxisGroups: PlotAxisSelectorGroup[] = [
+    {
+      axes: scoreAxes,
+      key: 'score',
+      label: 'Score',
+    },
+  ];
 
   return (
     <section className="benchmark-result-table-section">
@@ -432,77 +447,31 @@ function BenchmarkFrontierPlot({
               y={axisSelectorY}
             >
               <div className="frontier-chart-axis-selector">
-                {costAxisGroups.map((group) => (
-                  <div
-                    className="frontier-chart-axis-group"
-                    key={group.key}
-                    style={{ flexGrow: group.axes.length }}
-                  >
-                    <span>{group.label}</span>
-                    <div>
-                      {group.axes.map((axis) => (
-                        <button
-                          aria-pressed={axis.key === costAxis}
-                          className={axis.key === costAxis ? 'active' : ''}
-                          key={axis.key}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onCostAxisChange(axis.key);
-                          }}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          type="button"
-                        >
-                          {axis.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                <PlotAxisSelector
+                  activeAxis={costAxis}
+                  groups={costAxisGroups}
+                  onAxisChange={onCostAxisChange}
+                />
               </div>
             </foreignObject>
-            {scoreAxes.length > 1 ? (
-              <foreignObject
-                height={plotAxisSelectorHeight}
-                width={plotScoreSelectorWidth}
-                transform={
-                  `translate(18 ${yAxisSelectorCenterY}) rotate(-90) ` +
-                  `translate(${-plotScoreSelectorWidth / 2} ${-plotAxisSelectorHeight / 2})`
-                }
-                x={0}
-                y={0}
-              >
-                <div className="frontier-chart-score-selector">
-                  <span>Score</span>
-                  <div>
-                    {scoreAxes.map((axis) => (
-                      <button
-                        aria-pressed={axis.key === scoreAxis}
-                        className={axis.key === scoreAxis ? 'active' : ''}
-                        key={axis.key}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onScoreAxisChange(axis.key);
-                        }}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        type="button"
-                      >
-                        {axis.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </foreignObject>
-            ) : (
-              <text
-                className="frontier-chart-axis-label"
-                textAnchor="middle"
-                transform={`rotate(-90 ${18} ${yAxisSelectorCenterY})`}
-                x={18}
-                y={yAxisSelectorCenterY}
-              >
-                {scoreAxisLabel}
-              </text>
-            )}
+            <foreignObject
+              height={plotAxisSelectorHeight}
+              width={plotScoreSelectorWidth}
+              transform={
+                `translate(18 ${yAxisSelectorCenterY}) rotate(-90) ` +
+                `translate(${-plotScoreSelectorWidth / 2} ${-plotAxisSelectorHeight / 2})`
+              }
+              x={0}
+              y={0}
+            >
+              <div className="frontier-chart-axis-selector">
+                <PlotAxisSelector
+                  activeAxis={scoreAxis}
+                  groups={scoreAxisGroups}
+                  onAxisChange={onScoreAxisChange}
+                />
+              </div>
+            </foreignObject>
             {model.points.length === 0 ? (
               <text
                 className="frontier-chart-empty-label"
@@ -526,6 +495,47 @@ function BenchmarkFrontierPlot({
         )}
       </div>
     </section>
+  );
+}
+
+function PlotAxisSelector({
+  activeAxis,
+  groups,
+  onAxisChange,
+}: {
+  activeAxis: string;
+  groups: PlotAxisSelectorGroup[];
+  onAxisChange: (axis: string) => void;
+}) {
+  return (
+    <>
+      {groups.map((group) => (
+        <div
+          className="frontier-chart-axis-group"
+          key={group.key}
+          style={{ flexGrow: group.axes.length }}
+        >
+          <span>{group.label}</span>
+          <div>
+            {group.axes.map((axis) => (
+              <button
+                aria-pressed={axis.key === activeAxis}
+                className={axis.key === activeAxis ? 'active' : ''}
+                key={axis.key}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onAxisChange(axis.key);
+                }}
+                onPointerDown={(event) => event.stopPropagation()}
+                type="button"
+              >
+                {axis.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -593,7 +603,7 @@ function ModelResultTable({
             type="button"
           >
             <span role="cell">{shortDigest(model.architecture_digest)}</span>
-            <span role="cell">{scoreValue(model, scoreAxis).toFixed(4)}</span>
+            <span role="cell">{scoreLabel(scoreValue(model, scoreAxis))}</span>
             <span role="cell">{formatCost(costValue(model.cost_summary, costAxis))}</span>
           </button>
         ))}

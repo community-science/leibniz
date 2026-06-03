@@ -139,10 +139,11 @@ export function benchmarkScoreAxes(
   result: BenchmarkResultRecord | undefined,
 ): ScoreAxisRecord[] {
   const axes = result?.score_axes ?? [];
-  if (axes.length > 0) {
-    return axes;
-  }
-  return [standardScoreAxes[0]!];
+  const seen = new Set(axes.map((axis) => axis.key));
+  return [
+    ...axes,
+    ...standardScoreAxes.filter((axis) => !seen.has(axis.key)),
+  ];
 }
 
 export function benchmarkScoreAxis(
@@ -289,7 +290,10 @@ export function costValue(costSummary: Record<string, unknown>, costAxis: string
 
 export function scoreValue(model: ModelResultRecord, scoreAxis: string): number {
   const viewScore = model.score_views?.[scoreAxis]?.score;
-  return typeof viewScore === 'number' && Number.isFinite(viewScore) ? viewScore : model.score;
+  if (typeof viewScore === 'number' && Number.isFinite(viewScore)) {
+    return viewScore;
+  }
+  return scoreAxis === 'absolute' ? model.score : Number.NaN;
 }
 
 export function formatCost(value: number): string {
@@ -297,7 +301,7 @@ export function formatCost(value: number): string {
 }
 
 export function scoreLabel(value: number | undefined): string {
-  return value === undefined ? 'n/a' : value.toFixed(4);
+  return value === undefined || !Number.isFinite(value) ? 'n/a' : value.toFixed(4);
 }
 
 export function shortDigest(value: string): string {
@@ -338,7 +342,7 @@ function compareModelResults(
     return result * direction;
   }
   return (
-    scoreValue(right, scoreAxis) - scoreValue(left, scoreAxis) ||
+    sortableScoreValue(right, scoreAxis) - sortableScoreValue(left, scoreAxis) ||
     costValue(left.cost_summary, costAxis) - costValue(right.cost_summary, costAxis)
   );
 }
@@ -351,7 +355,7 @@ function compareBySortKey(
   key: ModelResultSortKey,
 ): number {
   if (key === 'score') {
-    return scoreValue(left, scoreAxis) - scoreValue(right, scoreAxis);
+    return sortableScoreValue(left, scoreAxis) - sortableScoreValue(right, scoreAxis);
   }
   if (key === 'cost') {
     return costValue(left.cost_summary, costAxis) - costValue(right.cost_summary, costAxis);
@@ -363,6 +367,11 @@ function compareBySortKey(
     return left.measurement_count - right.measurement_count;
   }
   return left.model_key.localeCompare(right.model_key);
+}
+
+function sortableScoreValue(model: ModelResultRecord, scoreAxis: string): number {
+  const value = scoreValue(model, scoreAxis);
+  return Number.isFinite(value) ? value : -Infinity;
 }
 
 function defaultSortDirection(key: ModelResultSortKey): SortDirection {
