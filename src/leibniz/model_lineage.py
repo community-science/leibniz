@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from leibniz.artifacts import ArtifactReference
+from leibniz.artifacts import (
+    ArtifactReference,
+    first_duplicate,
+    first_duplicate_reference,
+    reference_sort_key,
+)
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
@@ -64,17 +69,17 @@ class ModelLineageGraph:
         if not self.operations:
             raise ModelLineageValidationError("operations must contain at least one operation")
 
-        artifact_duplicate = _first_duplicate_reference(self.artifacts)
+        artifact_duplicate = first_duplicate_reference(self.artifacts)
         if artifact_duplicate is not None:
             raise ModelLineageValidationError(f"duplicate artifact reference: {artifact_duplicate}")
-        operation_duplicate = _first_duplicate(tuple(operation.id for operation in self.operations))
+        operation_duplicate = first_duplicate(tuple(operation.id for operation in self.operations))
         if operation_duplicate is not None:
             raise ModelLineageValidationError(f"duplicate operation id: {operation_duplicate}")
 
         object.__setattr__(
             self,
             "artifacts",
-            tuple(sorted(self.artifacts, key=_reference_sort_key)),
+            tuple(sorted(self.artifacts, key=reference_sort_key)),
         )
         object.__setattr__(
             self,
@@ -187,34 +192,5 @@ def _has_cycle(
     return False
 
 
-def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:
-    return (
-        reference.kind,
-        str(reference.protocol_id) if reference.protocol_id is not None else "",
-        str(reference.content_digest) if reference.content_digest is not None else "",
-        str(reference.record_digest) if reference.record_digest is not None else "",
-        reference.external_uri if reference.external_uri is not None else "",
-    )
-
-
 def _reference_key(reference: ArtifactReference) -> str:
     return str(ContentDigest.from_value(reference.to_record()))
-
-
-def _first_duplicate(values: tuple[object, ...]) -> object | None:
-    seen: set[object] = set()
-    for value in values:
-        if value in seen:
-            return value
-        seen.add(value)
-    return None
-
-
-def _first_duplicate_reference(references: tuple[ArtifactReference, ...]) -> str | None:
-    seen: set[str] = set()
-    for reference in references:
-        key = _reference_key(reference)
-        if key in seen:
-            return key
-        seen.add(key)
-    return None

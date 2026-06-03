@@ -6,7 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast
 
-from leibniz.artifacts import ArtifactReference
+from leibniz.artifacts import (
+    ArtifactReference,
+    first_duplicate_reference,
+    reference_sort_key,
+)
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
@@ -83,12 +87,12 @@ class FederationIngestPlanEntry:
                 reference,
                 field="discovered_publication_bundles",
             )
-        duplicate_expected = _first_duplicate_reference(self.expected_publication_bundles)
+        duplicate_expected = first_duplicate_reference(self.expected_publication_bundles)
         if duplicate_expected is not None:
             raise FederationIngestValidationError(
                 f"duplicate expected publication bundle reference: {duplicate_expected}"
             )
-        duplicate_discovered = _first_duplicate_reference(self.discovered_publication_bundles)
+        duplicate_discovered = first_duplicate_reference(self.discovered_publication_bundles)
         if duplicate_discovered is not None:
             raise FederationIngestValidationError(
                 f"duplicate discovered publication bundle reference: {duplicate_discovered}"
@@ -96,12 +100,12 @@ class FederationIngestPlanEntry:
         object.__setattr__(
             self,
             "expected_publication_bundles",
-            tuple(sorted(self.expected_publication_bundles, key=_reference_sort_key)),
+            tuple(sorted(self.expected_publication_bundles, key=reference_sort_key)),
         )
         object.__setattr__(
             self,
             "discovered_publication_bundles",
-            tuple(sorted(self.discovered_publication_bundles, key=_reference_sort_key)),
+            tuple(sorted(self.discovered_publication_bundles, key=reference_sort_key)),
         )
 
     @classmethod
@@ -349,30 +353,6 @@ def _as_digest(value: object, *, field: str) -> ContentDigest:
         return ContentDigest(algorithm=algorithm, hex=digest_hex)
     except ContentEncodingError as error:
         raise FederationIngestValidationError(str(error)) from error
-
-
-def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:
-    return (
-        reference.kind,
-        str(reference.protocol_id) if reference.protocol_id is not None else "",
-        str(reference.content_digest) if reference.content_digest is not None else "",
-        str(reference.record_digest) if reference.record_digest is not None else "",
-        reference.external_uri if reference.external_uri is not None else "",
-    )
-
-
-def _reference_key(reference: ArtifactReference) -> str:
-    return str(ContentDigest.from_value(reference.to_record()))
-
-
-def _first_duplicate_reference(references: tuple[ArtifactReference, ...]) -> str | None:
-    seen: set[str] = set()
-    for reference in references:
-        key = _reference_key(reference)
-        if key in seen:
-            return key
-        seen.add(key)
-    return None
 
 
 def _first_duplicate_source(

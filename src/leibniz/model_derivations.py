@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast
 
 from leibniz.architectures import ArchitectureManifest
-from leibniz.artifacts import ArtifactReference, reference_for_record
+from leibniz.artifacts import (
+    ArtifactReference,
+    first_duplicate,
+    first_duplicate_reference,
+    reference_for_record,
+    reference_sort_key,
+)
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
@@ -158,19 +164,19 @@ class ModelDerivationCompatibilityReport:
             )
         for law in self.preservation_laws:
             _validate_name(law, field="preservation law")
-        duplicate_mapping = _first_duplicate(
+        duplicate_mapping = first_duplicate(
             tuple(mapping.name for mapping in self.parameter_mappings)
         )
         if duplicate_mapping is not None:
             raise ModelDerivationCompatibilityValidationError(
                 f"duplicate parameter mapping name: {duplicate_mapping}"
             )
-        duplicate_law = _first_duplicate(self.preservation_laws)
+        duplicate_law = first_duplicate(self.preservation_laws)
         if duplicate_law is not None:
             raise ModelDerivationCompatibilityValidationError(
                 f"duplicate preservation law: {duplicate_law}"
             )
-        duplicate_resource = _first_duplicate_reference(self.resource_reports)
+        duplicate_resource = first_duplicate_reference(self.resource_reports)
         if duplicate_resource is not None:
             raise ModelDerivationCompatibilityValidationError(
                 f"duplicate resource report reference: {duplicate_resource}"
@@ -184,7 +190,7 @@ class ModelDerivationCompatibilityReport:
         object.__setattr__(
             self,
             "resource_reports",
-            tuple(sorted(self.resource_reports, key=_reference_sort_key)),
+            tuple(sorted(self.resource_reports, key=reference_sort_key)),
         )
 
     @classmethod
@@ -373,30 +379,3 @@ def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
     return cast(tuple[object, ...], value)
 
 
-def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:
-    return (
-        reference.kind,
-        str(reference.protocol_id) if reference.protocol_id is not None else "",
-        str(reference.content_digest) if reference.content_digest is not None else "",
-        str(reference.record_digest) if reference.record_digest is not None else "",
-        reference.external_uri if reference.external_uri is not None else "",
-    )
-
-
-def _first_duplicate(values: tuple[object, ...]) -> object | None:
-    seen: set[object] = set()
-    for value in values:
-        if value in seen:
-            return value
-        seen.add(value)
-    return None
-
-
-def _first_duplicate_reference(references: tuple[ArtifactReference, ...]) -> str | None:
-    seen: set[str] = set()
-    for reference in references:
-        key = str(ContentDigest.from_value(reference.to_record()))
-        if key in seen:
-            return key
-        seen.add(key)
-    return None

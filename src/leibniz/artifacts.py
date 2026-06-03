@@ -19,7 +19,10 @@ __all__ = [
     "ArtifactReference",
     "ArtifactReferenceDocument",
     "ArtifactReferenceValidationError",
+    "first_duplicate",
+    "first_duplicate_reference",
     "reference_for_record",
+    "reference_sort_key",
 ]
 
 _kind = re.compile(
@@ -175,10 +178,10 @@ class ArtifactIndex:
             raise ArtifactReferenceValidationError(
                 "artifacts must contain at least one artifact reference"
             )
-        expected_artifacts = tuple(sorted(self.artifacts, key=_reference_sort_key))
+        expected_artifacts = tuple(sorted(self.artifacts, key=reference_sort_key))
         if self.artifacts != expected_artifacts:
             object.__setattr__(self, "artifacts", expected_artifacts)
-        duplicate = _first_duplicate_reference(self.artifacts)
+        duplicate = first_duplicate_reference(self.artifacts)
         if duplicate is not None:
             raise ArtifactReferenceValidationError(f"duplicate artifact reference: {duplicate}")
 
@@ -368,7 +371,7 @@ def _as_optional_digest(value: object, *, field: str) -> ContentDigest | None:
         raise ArtifactReferenceValidationError(str(error)) from error
 
 
-def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:
+def reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:
     return (
         reference.kind,
         str(reference.protocol_id) if reference.protocol_id is not None else "",
@@ -378,11 +381,20 @@ def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, st
     )
 
 
-def _first_duplicate_reference(references: tuple[ArtifactReference, ...]) -> str | None:
+def first_duplicate_reference(references: tuple[ArtifactReference, ...]) -> str | None:
     seen: set[str] = set()
     for reference in references:
         key = str(ContentDigest.from_value(reference.to_record()))
         if key in seen:
             return key
         seen.add(key)
+    return None
+
+
+def first_duplicate(values: tuple[object, ...]) -> object | None:
+    seen: set[object] = set()
+    for value in values:
+        if value in seen:
+            return value
+        seen.add(value)
     return None
