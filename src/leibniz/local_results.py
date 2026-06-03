@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 import math
 import os
 import subprocess
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, cast
@@ -18,6 +17,7 @@ from leibniz.benchmark_evaluation import (
     sampled_competence_frontier_score,
 )
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
+from leibniz.competition_bundles import BenchmarkCompetitionBundleDocument
 from leibniz.console.protocol import (
     console_protocol_format_versions,
     console_protocol_formats,
@@ -28,54 +28,46 @@ from leibniz.documents import (
     document_filename_suffix,
     load_object_document,
 )
+from leibniz.evaluation_bundles import (
+    BenchmarkEvaluationBundle,
+    BenchmarkEvaluationBundleDocument,
+)
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import (
     MeasurementDataset,
-    MeasurementDatasetDocument,
-    MeasurementRecord,
 )
 from leibniz.model_inspection import (
-    ModelInspectionDocument,
     ModelInspectionRecord,
     ModelInspectionValidationError,
 )
 from leibniz.observation_generation import load_observation_generator
-from leibniz.publications import SubmissionPublicationBundle, SubmissionPublicationDocument
 from leibniz.records import RecordExtractor
-from leibniz.submissions import SubmissionArtifact, SubmissionPackageManifest
 from leibniz.training_runs import TrainingRunRecord
-from leibniz.views import MeasurementScoreView
 
 __all__ = [
     "LocalBenchmarkResultViewSummary",
-    "LocalPublicationExportSummary",
-    "LocalPublicationCheckoutSummary",
-    "LocalPublicationPushSummary",
+    "LocalResultCheckoutSummary",
+    "LocalResultPublishSummary",
+    "LocalResultPushSummary",
     "LocalResultImportError",
-    "LocalResultImportSummary",
     "competent_complexity_score",
-    "import_submission_publications",
-    "initialize_publication_checkout",
+    "initialize_result_checkout",
     "load_console_result_view",
     "materialize_benchmark_result_views",
     "publish_local_benchmark_results",
-    "push_publication_checkout",
+    "push_result_checkout",
 ]
 
 _protocol_formats = console_protocol_formats()
 _protocol_format_versions = console_protocol_format_versions()
-_console_result_view_format = _protocol_formats.imported_result_view
 _benchmark_result_view_format = _protocol_formats.benchmark_result_view
 _console_result_view_format_version = _protocol_format_versions.result_view
 _document_suffix = document_filename_suffix()
 _manifest_filename = "manifest" + _document_suffix
 _default_results_root = Path("results")
-_publication_directories = (
+_result_directories = (
     "evaluations",
-    "imports/publication_bundles",
-    "measurements",
     "models",
-    "publication_bundles",
     "training",
     "views",
 )
@@ -101,15 +93,6 @@ _extract = RecordExtractor(error_type=LocalResultImportError)
 
 
 @dataclass(frozen=True, slots=True)
-class LocalResultImportSummary(_SummaryRecordMixin):
-    source_files: tuple[Path, ...]
-    import_files: tuple[Path, ...]
-    view_file: Path
-    publication_bundle_count: int
-    measurement_count: int
-
-
-@dataclass(frozen=True, slots=True)
 class LocalBenchmarkResultViewSummary(_SummaryRecordMixin):
     source_files: tuple[Path, ...]
     view_file: Path
@@ -119,10 +102,8 @@ class LocalBenchmarkResultViewSummary(_SummaryRecordMixin):
 
 
 @dataclass(frozen=True, slots=True)
-class LocalPublicationExportSummary(_SummaryRecordMixin):
+class LocalResultPublishSummary(_SummaryRecordMixin):
     source_files: tuple[Path, ...]
-    publication_files: tuple[Path, ...]
-    publication_bundle_count: int
     measurement_count: int
     git_commit: str | None = None
     git_pushed: bool = False
@@ -131,7 +112,7 @@ class LocalPublicationExportSummary(_SummaryRecordMixin):
 
 
 @dataclass(frozen=True, slots=True)
-class LocalPublicationCheckoutSummary(_SummaryRecordMixin):
+class LocalResultCheckoutSummary(_SummaryRecordMixin):
     repo_id: str | None
     results_root: Path
     repo_url: str | None
@@ -141,7 +122,7 @@ class LocalPublicationCheckoutSummary(_SummaryRecordMixin):
 
 
 @dataclass(frozen=True, slots=True)
-class LocalPublicationPushSummary(_SummaryRecordMixin):
+class LocalResultPushSummary(_SummaryRecordMixin):
     results_root: Path
     pushed_commit: str
 
@@ -166,7 +147,7 @@ def _summary_record(summary: Any) -> dict[str, object]:
     return record
 
 
-def initialize_publication_checkout(
+def initialize_result_checkout(
     *,
     repo_id: str | None,
     repository_root: Path | None = None,
@@ -174,9 +155,9 @@ def initialize_publication_checkout(
     remote: str = "auto",
     local_only: bool = False,
     push: bool = False,
-    commit_message: str = "Initialize Leibniz result publication checkout",
+    commit_message: str = "Initialize Leibniz result checkout",
     token: str | None = None,
-) -> LocalPublicationCheckoutSummary:
+) -> LocalResultCheckoutSummary:
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     results_root = _resolve_output_root(repository_root, results_root)
     selected_remote: str | None = None
@@ -191,7 +172,7 @@ def initialize_publication_checkout(
         if repo_id is None:
             raise LocalResultImportError("--repo is required unless --local-only is used")
         repo_id = _validate_hf_repo_id(repo_id)
-        selected_remote = _select_publication_remote(
+        selected_remote = _select_result_remote(
             repo_id=repo_id,
             remote=remote,
             results_root=results_root,
@@ -207,7 +188,7 @@ def initialize_publication_checkout(
         else:
             results_root.mkdir(parents=True, exist_ok=True)
             _create_hf_dataset_repo(repo_id=repo_id, token=token)
-    _ensure_publication_checkout_structure(results_root)
+    _ensure_result_checkout_structure(results_root)
     scaffold_commit = _commit_checkout_if_dirty(
         results_root=results_root,
         message=commit_message,
@@ -223,7 +204,7 @@ def initialize_publication_checkout(
             message=commit_message,
             token=token,
         )
-    return LocalPublicationCheckoutSummary(
+    return LocalResultCheckoutSummary(
         repo_id=repo_id,
         results_root=results_root,
         repo_url=repo_url,
@@ -233,19 +214,19 @@ def initialize_publication_checkout(
     )
 
 
-def push_publication_checkout(
+def push_result_checkout(
     *,
     repository_root: Path | None = None,
     results_root: Path = _default_results_root,
     repo_id: str | None = None,
     remote: str = "auto",
     token: str | None = None,
-) -> LocalPublicationPushSummary:
-    """Push an existing result-publication checkout without creating a commit."""
+) -> LocalResultPushSummary:
+    """Push an existing result checkout without creating a commit."""
 
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     results_root = _resolve_output_root(repository_root, results_root)
-    selected_remote = _select_publication_remote(
+    selected_remote = _select_result_remote(
         repo_id=repo_id,
         remote=remote,
         results_root=results_root,
@@ -264,7 +245,7 @@ def push_publication_checkout(
         pushed_commit = _push_checkout(results_root=results_root)
     else:
         raise LocalResultImportError("results root must be a Git checkout when pushing")
-    return LocalPublicationPushSummary(
+    return LocalResultPushSummary(
         results_root=results_root,
         pushed_commit=pushed_commit,
     )
@@ -280,35 +261,16 @@ def publish_local_benchmark_results(
     remote: str = "auto",
     token: str | None = None,
     commit_message: str = "Publish Leibniz benchmark results",
-) -> LocalPublicationExportSummary:
+) -> LocalResultPublishSummary:
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     results_root = _resolve_output_root(repository_root, results_root)
-    output_root = results_root / "publication_bundles"
     if push and not commit:
         raise LocalResultImportError("push requires committing the result checkout")
-    manifests = _known_benchmark_manifests(repository_root)
     runs = _local_run_records(results_root)
     if not runs:
         raise LocalResultImportError("no local benchmark result records found")
-    output_root.mkdir(parents=True, exist_ok=True)
-    publication_files: list[Path] = []
-    measurement_count = 0
-    for run in runs:
-        manifest = manifests.get(run.benchmark_id)
-        if manifest is None:
-            raise LocalResultImportError(
-                f"unknown benchmark id in local results: {run.benchmark_id}"
-            )
-        bundle = _publication_bundle_for_local_run(
-            manifest=manifest,
-            repository_root=repository_root,
-            run=run,
-        )
-        publication_file = output_root / _bundle_filename(bundle.id, bundle.digest)
-        publication_file.write_bytes(canonical_document_bytes(bundle.to_record()) + b"\n")
-        publication_files.append(publication_file)
-        measurement_count += len(bundle.measurement_dataset.measurements)
     materialize_benchmark_result_views(repository_root=repository_root, results_root=results_root)
+    measurement_count = sum(run.measurement_count for run in runs)
     git_commit: str | None = None
     selected_remote: str | None = None
     remote_commit: str | None = None
@@ -321,10 +283,8 @@ def publish_local_benchmark_results(
             remote=remote,
             token=token,
         )
-    return LocalPublicationExportSummary(
+    return LocalResultPublishSummary(
         source_files=tuple(run.source_path for run in runs),
-        publication_files=tuple(publication_files),
-        publication_bundle_count=len(publication_files),
         measurement_count=measurement_count,
         git_commit=git_commit,
         git_pushed=push and selected_remote == "git",
@@ -333,97 +293,12 @@ def publish_local_benchmark_results(
     )
 
 
-def import_submission_publications(
-    source_roots: Iterable[Path],
-    *,
-    repository_root: Path | None = None,
-    results_root: Path = _default_results_root,
-) -> LocalResultImportSummary:
-    """Import local publication bundles into a result checkout and console views."""
-
-    repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
-    results_root = _resolve_output_root(repository_root, results_root)
-    known_benchmark_ids = _known_benchmark_ids(repository_root)
-    documents = tuple(_publication_documents(source_roots))
-    if not documents:
-        raise LocalResultImportError("no publication bundle documents found")
-
-    measurement_records: dict[ProtocolIdentifier, Mapping[str, object]] = {}
-    publication_views: list[Mapping[str, object]] = []
-    imported_files: list[Path] = []
-    source_files: list[Path] = []
-
-    import_root = results_root / "imports" / "publication_bundles"
-    view_root = results_root / "views"
-    import_root.mkdir(parents=True, exist_ok=True)
-    view_root.mkdir(parents=True, exist_ok=True)
-
-    for source_file, document in documents:
-        bundle = document.bundle
-        if bundle.submission_package.benchmark_manifest.id not in known_benchmark_ids:
-            raise LocalResultImportError(
-                "unknown benchmark id in imported submission package: "
-                f"{bundle.submission_package.benchmark_manifest.id}"
-            )
-        _validate_known_benchmarks(bundle.measurement_dataset.measurements, known_benchmark_ids)
-        for measurement in bundle.measurement_dataset.measurements:
-            measurement_id = measurement.raw_scoring_evidence.id
-            measurement_record = measurement.to_record()
-            previous = measurement_records.get(measurement_id)
-            if previous is not None and previous != measurement_record:
-                raise LocalResultImportError(
-                    f"conflicting measurement record for {measurement_id}"
-                )
-            measurement_records[measurement_id] = measurement_record
-
-        import_file = import_root / _bundle_filename(bundle.id, document.digest)
-        import_file.write_bytes(canonical_document_bytes(bundle.to_record()) + b"\n")
-        imported_files.append(import_file)
-        source_files.append(source_file)
-        publication_views.append(
-            {
-                "id": str(bundle.id),
-                "digest": str(document.digest),
-                "source_path": source_file.as_posix(),
-                "submission_package_id": str(bundle.submission_package.id),
-                "benchmark_ids": sorted(
-                    {
-                        str(measurement.benchmark_id)
-                        for measurement in bundle.measurement_dataset.measurements
-                    }
-                ),
-                "measurement_count": len(bundle.measurement_dataset.measurements),
-                "measurement_dataset": bundle.measurement_dataset.to_record(),
-                "measurement_score_view": bundle.measurement_score_view.to_record(),
-            }
-        )
-
-    view_file = view_root / ("imported_results" + _document_suffix)
-    view_file.write_bytes(
-        canonical_document_bytes(
-            {
-                "format": _console_result_view_format,
-                "format_version": _console_result_view_format_version,
-                "publication_bundles": publication_views,
-            }
-        )
-        + b"\n"
-    )
-    return LocalResultImportSummary(
-        source_files=tuple(source_files),
-        import_files=tuple(imported_files),
-        view_file=view_file,
-        publication_bundle_count=len(publication_views),
-        measurement_count=len(measurement_records),
-    )
-
-
 def materialize_benchmark_result_views(
     *,
     repository_root: Path | None = None,
     results_root: Path = _default_results_root,
 ) -> LocalBenchmarkResultViewSummary:
-    """Derive console benchmark result views from ignored run/import state."""
+    """Derive console benchmark result views from local result state."""
 
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     results_root = _resolve_output_root(repository_root, results_root)
@@ -434,10 +309,9 @@ def materialize_benchmark_result_views(
         repository_root=repository_root,
         accepted_run_slugs={run.run_slug for run in local_runs},
     )
-    imported_runs = _imported_run_records(results_root)
     runs = tuple(
         sorted(
-            (*local_runs, *local_training_estimates, *imported_runs),
+            (*local_runs, *local_training_estimates),
             key=_run_sort_key,
         )
     )
@@ -496,16 +370,7 @@ def load_console_result_view(data: bytes) -> Mapping[str, object]:
     if record.get("format") == _benchmark_result_view_format:
         _validate_benchmark_result_view(record)
         return record
-    if record.get("format") != _console_result_view_format:
-        raise LocalResultImportError("console result view has unsupported format")
-    if record.get("format_version") != _console_result_view_format_version:
-        raise LocalResultImportError("console result view has unsupported format_version")
-    publication_bundles = _as_sequence(record.get("publication_bundles"), "publication_bundles")
-    for index, publication_bundle in enumerate(publication_bundles):
-        _validate_publication_bundle_view(
-            _extract.mapping(publication_bundle, f"publication_bundles.{index}")
-        )
-    return record
+    raise LocalResultImportError("console result view has unsupported format")
 
 
 @dataclass(frozen=True, slots=True)
@@ -572,33 +437,6 @@ class _ModelCompetitionOutcome:
     sample_count: int
 
 
-def _publication_documents(
-    source_roots: Iterable[Path],
-) -> tuple[tuple[Path, SubmissionPublicationDocument], ...]:
-    documents: list[tuple[Path, SubmissionPublicationDocument]] = []
-    for source_root in source_roots:
-        for path in _candidate_document_files(source_root):
-            try:
-                document = SubmissionPublicationDocument.from_bytes(path.read_bytes())
-            except ValueError:
-                continue
-            documents.append((path.resolve(), document))
-    return tuple(sorted(documents, key=lambda item: item[0].as_posix()))
-
-
-def _candidate_document_files(source_root: Path) -> tuple[Path, ...]:
-    root = source_root.resolve()
-    if root.is_file():
-        return (root,) if root.suffix == _document_suffix else ()
-    if not root.is_dir():
-        raise LocalResultImportError(f"source root does not exist: {source_root}")
-    return tuple(sorted(path for path in root.rglob("*" + _document_suffix) if path.is_file()))
-
-
-def _known_benchmark_ids(repository_root: Path) -> frozenset[ProtocolIdentifier]:
-    return frozenset(_known_benchmark_manifests(repository_root))
-
-
 def _known_benchmark_manifests(
     repository_root: Path,
 ) -> dict[ProtocolIdentifier, BenchmarkManifest]:
@@ -618,66 +456,38 @@ def _local_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
         return ()
     records: list[_BenchmarkRunRecord] = []
     for path in sorted(evaluation_root.rglob("*" + _document_suffix)):
-        summary = load_object_document(path.read_bytes(), description="benchmark evaluation")
-        if summary.get("format") != "leibniz.benchmark-evaluation":
+        record = load_object_document(path.read_bytes(), description="benchmark evaluation")
+        if record.get("format") != "leibniz.benchmark-evaluation":
             continue
-        training_summary_path = _local_artifact_path(
-            results_root=results_root,
-            value=summary.get("training_summary_path"),
-            field="training_summary_path",
-        )
-        training_summary = load_object_document(
-            training_summary_path.read_bytes(),
-            description="training summary",
-        )
-        measurement_dataset_path = _local_artifact_path(
-            results_root=results_root,
-            value=summary.get("measurement_dataset_path"),
-            field="measurement_dataset_path",
-        )
-        model_inspection_path = _local_artifact_path(
-            results_root=results_root,
-            value=summary.get("model_inspection_path"),
-            field="model_inspection_path",
-        )
-        dataset = MeasurementDatasetDocument.from_bytes(
-            measurement_dataset_path.read_bytes()
-        ).dataset
-        inspection = ModelInspectionDocument.from_bytes(
-            model_inspection_path.read_bytes()
-        ).inspection
-        _validate_model_checkpoint_artifacts(
-            results_root=results_root,
-            training_summary=training_summary,
-        )
-        sampled_competence = _sampled_competence(summary)
+        bundle = BenchmarkEvaluationBundleDocument.from_bytes(path.read_bytes()).bundle
+        model_key = _model_key_from_checkpoint_record(bundle.model_checkpoint)
         records.append(
             _BenchmarkRunRecord(
                 source_kind="local-run",
                 result_status="accepted",
                 source_path=path.resolve(),
-                run_id=_extract.non_empty_string(summary.get("run_slug"), "run_slug"),
-                run_slug=_extract.non_empty_string(summary.get("run_slug"), "run_slug"),
-                benchmark_id=_as_identifier(summary.get("benchmark_id"), "benchmark_id"),
-                architecture_digest=_record_digest(inspection.architecture.to_record()),
-                model_key=str(inspection.architecture.record_digest),
-                complexity=_sampled_competence_complexity(summary),
-                measurement_count=len(dataset.measurements),
-                score=_mean_accepted_mass(dataset),
-                cost_summary=inspection.cost_summary.to_record(),
-                architecture=inspection.architecture.to_record(),
+                run_id=bundle.run_slug,
+                run_slug=bundle.run_slug,
+                benchmark_id=bundle.benchmark_manifest.id,
+                architecture_digest=bundle.architecture_manifest.digest,
+                model_key=model_key,
+                complexity=_sampled_competence_record_complexity(bundle.sampled_competence),
+                measurement_count=len(bundle.measurement_dataset.measurements),
+                score=_mean_accepted_mass(bundle.measurement_dataset),
+                cost_summary=_evaluation_bundle_cost_summary(bundle),
+                architecture=bundle.model_inspection.architecture.to_record(),
                 model_inspection=_model_inspection_view_record(
-                    inspection=inspection.to_record(),
-                    source_path=model_inspection_path.resolve(),
-                    measurement_dataset_digest=dataset.digest,
-                    training_summary=summary,
+                    inspection=bundle.model_inspection.to_record(),
+                    source_path=path.resolve(),
+                    measurement_dataset_digest=bundle.measurement_dataset.digest,
+                    training_summary=None,
+                    artifact_references=_evaluation_bundle_artifact_references(bundle),
                 ),
-                model_inspection_digest=inspection.digest,
-                model_inspection_path=model_inspection_path.resolve(),
-                measurement_dataset=dataset,
-                measurement_dataset_digest=dataset.digest,
-                sampled_competence=sampled_competence,
-                training_summary=training_summary,
+                model_inspection_digest=bundle.model_inspection.digest,
+                model_inspection_path=path.resolve(),
+                measurement_dataset=bundle.measurement_dataset,
+                measurement_dataset_digest=bundle.measurement_dataset.digest,
+                sampled_competence=bundle.sampled_competence,
             )
         )
     return tuple(records)
@@ -739,6 +549,7 @@ def _local_training_estimate_records(
                     source_path=path.resolve(),
                     measurement_dataset_digest=empty_dataset.digest,
                     training_summary=summary,
+                    artifact_references=None,
                 ),
                 model_inspection_digest=inspection.digest,
                 model_inspection_path=None,
@@ -751,60 +562,6 @@ def _local_training_estimate_records(
     return tuple(records)
 
 
-def _imported_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
-    import_root = results_root / "imports" / "publication_bundles"
-    if not import_root.is_dir():
-        return ()
-    records: list[_BenchmarkRunRecord] = []
-    for path in sorted(import_root.rglob("*" + _document_suffix)):
-        document = SubmissionPublicationDocument.from_bytes(path.read_bytes())
-        bundle = document.bundle
-        package = bundle.submission_package
-        inspection = _inspection_from_architecture(package.architecture_manifest)
-        inspection_record = inspection.to_record()
-        cost_summary = inspection.cost_summary.to_record()
-        if package.model_metadata is not None:
-            metadata_cost_summary = package.model_metadata.get("cost_summary")
-            if metadata_cost_summary is not None:
-                cost_summary.update(
-                    _extract.mapping(
-                        metadata_cost_summary,
-                        "submission_package.model_metadata.cost_summary",
-                    )
-                )
-        records.append(
-            _BenchmarkRunRecord(
-                source_kind="imported-publication",
-                result_status="accepted",
-                source_path=path.resolve(),
-                run_id=str(bundle.id),
-                run_slug=str(bundle.id.name),
-                benchmark_id=package.benchmark_manifest.id,
-                architecture_digest=package.architecture_manifest.digest,
-                model_key=str(package.architecture_manifest.digest),
-                complexity=_sampled_competence_record_complexity(
-                    package.sampled_competence,
-                ),
-                measurement_count=len(bundle.measurement_dataset.measurements),
-                score=_mean_accepted_mass(bundle.measurement_dataset),
-                cost_summary=cost_summary,
-                architecture=inspection.architecture.to_record(),
-                model_inspection=_model_inspection_view_record(
-                    inspection=inspection_record,
-                    source_path=path.resolve(),
-                    measurement_dataset_digest=bundle.measurement_dataset.digest,
-                    training_summary=None,
-                ),
-                model_inspection_digest=inspection.digest,
-                model_inspection_path=None,
-                measurement_dataset=bundle.measurement_dataset,
-                measurement_dataset_digest=bundle.measurement_dataset.digest,
-                sampled_competence=package.sampled_competence,
-            )
-        )
-    return tuple(records)
-
-
 def _local_competition_records(results_root: Path) -> tuple[Mapping[str, object], ...]:
     evaluation_root = results_root / "evaluations"
     if not evaluation_root.is_dir():
@@ -812,21 +569,13 @@ def _local_competition_records(results_root: Path) -> tuple[Mapping[str, object]
     records: list[Mapping[str, object]] = []
     for path in sorted(evaluation_root.rglob("competitions/*" + _document_suffix)):
         record = load_object_document(path.read_bytes(), description="benchmark competition")
-        _validate_competition_record(record, "competition")
-        records.append(record)
+        if record.get("format") != "leibniz.benchmark-competition":
+            continue
+        bundle = BenchmarkCompetitionBundleDocument.from_bytes(path.read_bytes()).bundle
+        result = dict(bundle.competition_result)
+        _validate_competition_record(result, "competition")
+        records.append(result)
     return tuple(records)
-
-
-def _sampled_competence(summary: Mapping[str, object]) -> Mapping[str, object] | None:
-    evidence = summary.get("sampled_competence")
-    if evidence is None:
-        return None
-    return _extract.mapping(evidence, "sampled_competence")
-
-
-def _sampled_competence_complexity(summary: Mapping[str, object]) -> float | None:
-    record = _sampled_competence(summary)
-    return _sampled_competence_record_complexity(record)
 
 
 def _sampled_competence_record_complexity(
@@ -843,6 +592,7 @@ def _model_inspection_view_record(
     source_path: Path,
     measurement_dataset_digest: ContentDigest,
     training_summary: Mapping[str, object] | None,
+    artifact_references: tuple[Mapping[str, object], ...] | None,
 ) -> Mapping[str, object]:
     record = dict(inspection)
     record["source_path"] = source_path.as_posix()
@@ -857,7 +607,71 @@ def _model_inspection_view_record(
                 "record_digest": str(ContentDigest.from_value(training_summary)),
             }
         ]
+    if artifact_references is not None:
+        record["artifacts"] = [dict(reference) for reference in artifact_references]
     return record
+
+
+def _model_key_from_checkpoint_record(record: Mapping[str, object]) -> str:
+    return str(
+        ContentDigest.from_string(
+            record.get("digest"),
+            field="model_checkpoint.digest",
+            error_type=LocalResultImportError,
+        )
+    )
+
+
+def _evaluation_bundle_cost_summary(
+    bundle: BenchmarkEvaluationBundle,
+) -> Mapping[str, object]:
+    cost_summary = dict(bundle.model_inspection.cost_summary.to_record())
+    training_compute = bundle.evaluation_protocol.get("training_compute")
+    if training_compute is not None:
+        cost_summary["training_compute"] = _as_nonnegative_number(
+            training_compute,
+            "evaluation_protocol.training_compute",
+        )
+    return cost_summary
+
+
+def _evaluation_bundle_artifact_references(
+    bundle: BenchmarkEvaluationBundle,
+) -> tuple[Mapping[str, object], ...]:
+    checkpoint = dict(bundle.model_checkpoint)
+    references: list[Mapping[str, object]] = [
+        {
+            "kind": "measurement-dataset",
+            "digest": str(bundle.measurement_dataset.digest),
+        },
+        {
+            "kind": "model-inspection",
+            "digest": str(bundle.model_inspection.digest),
+        },
+        {
+            "kind": "model-checkpoint",
+            "digest": _extract.non_empty_string(
+                checkpoint.get("digest"),
+                "model_checkpoint.digest",
+            ),
+            "path": _extract.non_empty_string(
+                checkpoint.get("path"),
+                "model_checkpoint.path",
+            ),
+        },
+        {
+            "kind": "model-manifest",
+            "digest": _extract.non_empty_string(
+                checkpoint.get("manifest_digest"),
+                "model_checkpoint.manifest_digest",
+            ),
+            "path": _extract.non_empty_string(
+                checkpoint.get("manifest_path"),
+                "model_checkpoint.manifest_path",
+            ),
+        },
+    ]
+    return tuple(references)
 
 
 def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, object]:
@@ -957,55 +771,6 @@ def _model_checkpoint_records(
             training_summary.get("model_checkpoints", ()),
             "model_checkpoints",
         )
-    )
-
-
-def _validate_model_checkpoint_artifacts(
-    *,
-    results_root: Path,
-    training_summary: Mapping[str, object],
-) -> None:
-    for checkpoint in _model_checkpoint_records(training_summary):
-        checkpoint_path = _local_artifact_path(
-            results_root=results_root,
-            value=checkpoint.get("path"),
-            field="model_checkpoints.path",
-        )
-        expected_digest = ContentDigest.from_string(
-            checkpoint.get("digest"),
-            field="model_checkpoints.digest",
-            error_type=LocalResultImportError,
-        )
-        actual_digest = _file_content_digest(checkpoint_path)
-        if actual_digest != expected_digest:
-            raise LocalResultImportError(
-                f"model_checkpoints.path digest mismatch: {checkpoint_path}"
-            )
-        manifest_path = _local_artifact_path(
-            results_root=results_root,
-            value=checkpoint.get("manifest_path"),
-            field="model_checkpoints.manifest_path",
-        )
-        manifest_record = load_object_document(
-            manifest_path.read_bytes(),
-            description="model checkpoint manifest",
-        )
-        expected_manifest_digest = ContentDigest.from_string(
-            checkpoint.get("manifest_digest"),
-            field="model_checkpoints.manifest_digest",
-            error_type=LocalResultImportError,
-        )
-        actual_manifest_digest = ContentDigest.from_value(manifest_record)
-        if actual_manifest_digest != expected_manifest_digest:
-            raise LocalResultImportError(
-                f"model_checkpoints.manifest_path digest mismatch: {manifest_path}"
-            )
-
-
-def _file_content_digest(path: Path) -> ContentDigest:
-    return ContentDigest(
-        algorithm="sha256",
-        hex=hashlib.sha256(path.read_bytes()).hexdigest(),
     )
 
 
@@ -1215,52 +980,6 @@ def _console_validation_history_row(point: object) -> list[str]:
     ]
 
 
-def _publication_bundle_for_local_run(
-    *,
-    manifest: BenchmarkManifest,
-    repository_root: Path,
-    run: _BenchmarkRunRecord,
-) -> SubmissionPublicationBundle:
-    identifier_stem = f"{_identifier_atom(run.benchmark_id)}.{run.run_slug}"
-    package = SubmissionPackageManifest(
-        id=ProtocolIdentifier.parse(f"submissions.{identifier_stem}@0.1.0"),
-        benchmark_manifest=manifest,
-        architecture_manifest=_local_run_architecture_manifest(
-            repository_root=repository_root,
-            run=run,
-        ),
-        measurement_dataset=run.measurement_dataset,
-        sampled_competence=run.sampled_competence,
-        artifacts=_submission_artifacts_for_local_run(run),
-        model_metadata={
-            "cost_summary": _run_cost_summary(run),
-        },
-    )
-    score_view = MeasurementScoreView.from_dataset(
-        id=ProtocolIdentifier.parse(f"views.measurement-scores.{identifier_stem}@0.1.0"),
-        dataset=run.measurement_dataset,
-    )
-    return SubmissionPublicationBundle(
-        id=ProtocolIdentifier.parse(f"publication-bundles.{identifier_stem}@0.1.0"),
-        submission_package=package,
-        measurement_dataset=run.measurement_dataset,
-        measurement_score_view=score_view,
-    )
-
-
-def _local_run_architecture_manifest(
-    *,
-    repository_root: Path,
-    run: _BenchmarkRunRecord,
-) -> ArchitectureManifest:
-    if run.training_summary is None:
-        raise LocalResultImportError("training summary is required for publication")
-    return _architecture_manifest_from_training_record(
-        repository_root=repository_root,
-        training_summary=run.training_summary,
-    )
-
-
 def _architecture_manifest_from_training_record(
     *,
     repository_root: Path,
@@ -1275,35 +994,6 @@ def _architecture_manifest_from_training_record(
     if not resolved.is_file():
         raise LocalResultImportError(f"architecture_path does not exist: {path}")
     return ArchitectureManifestDocument.from_bytes(resolved.read_bytes()).manifest
-
-
-def _submission_artifacts_for_local_run(
-    run: _BenchmarkRunRecord,
-) -> tuple[SubmissionArtifact, ...]:
-    identifier_stem = f"{_identifier_atom(run.benchmark_id)}.{run.run_slug}"
-    artifacts = [
-        SubmissionArtifact(
-            id=ProtocolIdentifier.parse(f"artifacts.{identifier_stem}.measurement-dataset@0.1.0"),
-            digest=run.measurement_dataset_digest,
-            description="measurement dataset",
-        ),
-        SubmissionArtifact(
-            id=ProtocolIdentifier.parse(f"artifacts.{identifier_stem}.model-inspection@0.1.0"),
-            digest=run.model_inspection_digest,
-            description="model inspection",
-        ),
-    ]
-    if run.training_summary is not None:
-        artifacts.append(
-            SubmissionArtifact(
-                id=ProtocolIdentifier.parse(
-                    f"artifacts.{identifier_stem}.training-summary@0.1.0"
-                ),
-                digest=ContentDigest.from_value(run.training_summary),
-                description="training summary",
-            )
-        )
-    return tuple(artifacts)
 
 
 def _inspection_from_architecture(architecture: ArchitectureManifest) -> ModelInspectionRecord:
@@ -1889,27 +1579,6 @@ def _frontier_records(
     return frontier
 
 
-def _validate_known_benchmarks(
-    measurements: tuple[MeasurementRecord, ...],
-    known_benchmark_ids: frozenset[ProtocolIdentifier],
-) -> None:
-    for measurement in measurements:
-        if measurement.benchmark_id not in known_benchmark_ids:
-            raise LocalResultImportError(
-                f"unknown benchmark id in imported measurement: {measurement.benchmark_id}"
-            )
-
-
-def _local_artifact_path(*, results_root: Path, value: object, field: str) -> Path:
-    path = Path(_extract.non_empty_string(value, field))
-    resolved = path.resolve() if path.is_absolute() else (results_root.parent / path).resolve()
-    if not resolved.is_relative_to(results_root.resolve()):
-        raise LocalResultImportError(f"{field} must stay inside results root")
-    if not resolved.is_file():
-        raise LocalResultImportError(f"{field} does not exist: {path}")
-    return resolved
-
-
 def _mean_accepted_mass(dataset: MeasurementDataset) -> float:
     if not dataset.measurements:
         return 0.0
@@ -1917,13 +1586,6 @@ def _mean_accepted_mass(dataset: MeasurementDataset) -> float:
         measurement.raw_scoring_evidence.accepted_mass
         for measurement in dataset.measurements
     ) / len(dataset.measurements)
-
-
-def _record_digest(record: Mapping[str, object]) -> ContentDigest:
-    digest = record.get("record_digest")
-    if digest is None:
-        return ContentDigest.from_value(record)
-    return _as_digest(digest, field="record_digest")
 
 
 def _cost_value(cost_summary: Mapping[str, object], cost_axis: str) -> float:
@@ -1990,7 +1652,7 @@ def _commit_runs_checkout(
         raise LocalResultImportError("commit message must not be empty")
     if not push and not _is_git_checkout(results_root):
         return None, None, None
-    selected_remote = _select_publication_remote(
+    selected_remote = _select_result_remote(
         repo_id=repo_id,
         remote=remote,
         results_root=results_root,
@@ -2032,7 +1694,7 @@ def _commit_checkout_if_dirty(
         raise LocalResultImportError("commit message must not be empty")
     if not push and not _is_git_checkout(results_root):
         return None
-    selected_remote = _select_publication_remote(
+    selected_remote = _select_result_remote(
         repo_id=repo_id,
         remote=remote,
         results_root=results_root,
@@ -2118,7 +1780,7 @@ def _run_git_process(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, check=True, capture_output=True, text=True)
 
 
-def _select_publication_remote(
+def _select_result_remote(
     *,
     repo_id: str | None,
     remote: str,
@@ -2141,7 +1803,7 @@ def _select_publication_remote(
     if repo_id is not None:
         return "git"
     raise LocalResultImportError(
-        "no publication remote is available: provide --repo with Hugging Face auth "
+        "no result remote is available: provide --repo with Hugging Face auth "
         "or use a Git checkout for results"
     )
 
@@ -2160,7 +1822,7 @@ def _push_hf_api(
             path_in_repo=path.relative_to(results_root).as_posix(),
             path_or_fileobj=path.as_posix(),
         )
-        for path in _publication_upload_files(results_root)
+        for path in _result_upload_files(results_root)
     ]
     if not operations:
         raise LocalResultImportError("no result files found to publish")
@@ -2191,7 +1853,7 @@ def _create_hf_dataset_repo(*, repo_id: str, token: str | None) -> bool:
     return True
 
 
-def _publication_upload_files(results_root: Path) -> tuple[Path, ...]:
+def _result_upload_files(results_root: Path) -> tuple[Path, ...]:
     return tuple(
         sorted(
             path
@@ -2245,19 +1907,18 @@ def _hf_dataset_ssh_url(repo_id: str) -> str:
     return f"git@hf.co:datasets/{repo_id}.git"
 
 
-def _ensure_publication_checkout_structure(results_root: Path) -> None:
+def _ensure_result_checkout_structure(results_root: Path) -> None:
     readme = results_root / "README.md"
     if not readme.exists():
         readme.write_text(
             "---\n"
             "license: cc0-1.0\n"
             "---\n\n"
-            "# Leibniz Result Publication Checkout\n\n"
-            "This dataset repository stores Leibniz benchmark run state and "
-            "publication bundle documents.\n",
+            "# Leibniz Result Checkout\n\n"
+            "This dataset repository stores Leibniz benchmark result state.\n",
             encoding="utf-8",
         )
-    for directory in _publication_directories:
+    for directory in _result_directories:
         marker = results_root / directory / ".gitkeep"
         marker.parent.mkdir(parents=True, exist_ok=True)
         if not marker.exists():
@@ -2272,30 +1933,6 @@ def _validate_hf_repo_id(repo_id: str) -> str:
     if any(part in {".", ".."} or any(char.isspace() for char in part) for part in parts):
         raise LocalResultImportError("Hugging Face repo id contains invalid path atoms")
     return value
-
-
-def _bundle_filename(bundle_id: ProtocolIdentifier, digest: ContentDigest) -> str:
-    name = str(bundle_id.name).replace(".", "_")
-    version = str(bundle_id.version).replace(".", "_")
-    return f"{name}_{version}_{str(digest)[:12]}{_document_suffix}"
-
-
-def _validate_publication_bundle_view(record: Mapping[str, object]) -> None:
-    _require_string_fields(
-        record,
-        "",
-        ("id", "digest", "source_path", "submission_package_id"),
-    )
-    benchmark_ids = _as_sequence(record.get("benchmark_ids"), "benchmark_ids")
-    if not all(isinstance(item, str) and item for item in benchmark_ids):
-        raise LocalResultImportError("benchmark_ids must contain nonempty strings")
-    measurement_count = record.get("measurement_count")
-    if not isinstance(measurement_count, int) or isinstance(measurement_count, bool):
-        raise LocalResultImportError("measurement_count must be an integer")
-    if measurement_count < 0:
-        raise LocalResultImportError("measurement_count must be nonnegative")
-    _require_mapping_fields(record, "", ("measurement_dataset", "measurement_score_view"))
-
 
 def _validate_benchmark_result_view(record: Mapping[str, object]) -> None:
     if record.get("format_version") != _console_result_view_format_version:
@@ -2358,6 +1995,7 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
         field = f"model_inspections.{index}"
         inspection_record = dict(_extract.mapping(inspection, field))
         inspection_record.pop("source_path", None)
+        inspection_record.pop("artifacts", None)
         try:
             ModelInspectionRecord.from_record(inspection_record)
         except ModelInspectionValidationError as error:
@@ -2667,10 +2305,6 @@ def _as_identifier(value: object, field: str) -> ProtocolIdentifier:
         except ValueError as error:
             raise LocalResultImportError(str(error)) from error
     raise LocalResultImportError(f"{field}: expected identifier")
-
-
-def _as_digest(value: object, *, field: str) -> ContentDigest:
-    return ContentDigest.from_string(value, field=field, error_type=LocalResultImportError)
 
 
 def _as_nonnegative_number(value: object, field: str) -> float:

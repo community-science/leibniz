@@ -16,20 +16,17 @@ from leibniz.benchmark_runner import (
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
 from leibniz.content import ContentDigest
-from leibniz.documents import canonical_document_bytes
+from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import (
     LocalResultImportError,
-    import_submission_publications,
-    initialize_publication_checkout,
+    initialize_result_checkout,
     load_console_result_view,
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
-    push_publication_checkout,
+    push_result_checkout,
 )
 from leibniz.measurements import MeasurementDataset, MeasurementDocument
-from leibniz.publications import SubmissionPublicationDocument
-from leibniz.views import MeasurementScoreView
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -51,7 +48,9 @@ def _run_and_evaluate_digits_benchmark(results_root: Path, *, sample_count: int 
     )
     evaluate_benchmark_checkpoint(
         BenchmarkEvaluationPlan(
-            training_summary_path=training_summary.training_summary_path,
+            checkpoint_artifact_path=_selected_checkpoint_artifact_path(
+                training_summary.training_summary_path
+            ),
             benchmark_root=_digits_benchmark_root,
             results_root=results_root,
             tensor_device="cpu",
@@ -93,66 +92,13 @@ def test_competent_complexity_score_integrates_bits_above_chance() -> None:
     )
 
 
-def test_import_submission_publications_materializes_runs_views(tmp_path: Path) -> None:
-    source_root = tmp_path / "hf-checkout"
-    source_root.mkdir()
-    bundle_path = source_root / "digits_publication.json"
-    bundle_path.write_bytes(canonical_document_bytes(_digits_publication_bundle_record()))
-
-    summary = import_submission_publications(
-        (source_root,),
-        repository_root=_repository_root,
-        results_root=tmp_path / "results",
-    )
-
-    assert summary.publication_bundle_count == 1
-    assert summary.measurement_count == 1
-    assert summary.view_file == tmp_path / "results" / "views" / "imported_results.json"
-    assert len(summary.import_files) == 1
-
-    imported_bundle = SubmissionPublicationDocument.from_bytes(
-        summary.import_files[0].read_bytes()
-    ).bundle
-    assert imported_bundle.id == ProtocolIdentifier.parse("publication-bundles.digits@0.1.0")
-
-    view = load_console_result_view(summary.view_file.read_bytes())
-    assert view["format"] == "leibniz.console.imported-results"
-    bundles = cast(list[dict[str, object]], view["publication_bundles"])
-    assert bundles[0]["id"] == "publication-bundles.digits@0.1.0"
-    assert bundles[0]["benchmark_ids"] == ["benchmarks.digits@0.1.0"]
-    assert bundles[0]["measurement_count"] == 1
-
-
-def test_import_submission_publications_ignores_non_publication_json(tmp_path: Path) -> None:
-    source_root = tmp_path / "hf-checkout"
-    source_root.mkdir()
-    (source_root / "not-a-publication.json").write_bytes(
-        canonical_document_bytes({"measurement_dataset": {"measurements": []}})
-    )
-
-    with pytest.raises(LocalResultImportError, match="no publication bundle"):
-        import_submission_publications(
-            (source_root,),
-            repository_root=_repository_root,
-            results_root=tmp_path / "results",
-        )
-
-
 def test_console_result_view_rejects_wrong_format() -> None:
     with pytest.raises(LocalResultImportError, match="unsupported format"):
         load_console_result_view(canonical_document_bytes({"format": "other", "format_version": 1}))
 
 
 def test_console_result_view_validates_embedded_model_inspections(tmp_path: Path) -> None:
-    source_root = tmp_path / "hf-checkout"
-    source_root.mkdir()
-    bundle_path = source_root / "digits_publication.json"
-    bundle_path.write_bytes(canonical_document_bytes(_digits_publication_bundle_record()))
-    import_submission_publications(
-        (source_root,),
-        repository_root=_repository_root,
-        results_root=tmp_path / "results",
-    )
+    _run_and_evaluate_digits_benchmark(tmp_path / "results")
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
         results_root=tmp_path / "results",
@@ -171,15 +117,7 @@ def test_console_result_view_validates_embedded_model_inspections(tmp_path: Path
 
 
 def test_console_result_view_validates_benchmark_leaderboard_models(tmp_path: Path) -> None:
-    source_root = tmp_path / "hf-checkout"
-    source_root.mkdir()
-    bundle_path = source_root / "digits_publication.json"
-    bundle_path.write_bytes(canonical_document_bytes(_digits_publication_bundle_record()))
-    import_submission_publications(
-        (source_root,),
-        repository_root=_repository_root,
-        results_root=tmp_path / "results",
-    )
+    _run_and_evaluate_digits_benchmark(tmp_path / "results")
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
         results_root=tmp_path / "results",
@@ -267,15 +205,7 @@ def test_relative_competition_scores_rank_undefeated_model_first() -> None:
 
 
 def test_console_result_view_validates_model_detail_tables(tmp_path: Path) -> None:
-    source_root = tmp_path / "hf-checkout"
-    source_root.mkdir()
-    bundle_path = source_root / "digits_publication.json"
-    bundle_path.write_bytes(canonical_document_bytes(_digits_publication_bundle_record()))
-    import_submission_publications(
-        (source_root,),
-        repository_root=_repository_root,
-        results_root=tmp_path / "results",
-    )
+    _run_and_evaluate_digits_benchmark(tmp_path / "results")
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
         results_root=tmp_path / "results",
@@ -297,15 +227,7 @@ def test_console_result_view_validates_model_detail_tables(tmp_path: Path) -> No
 
 
 def test_console_result_view_validates_training_diagnostics_records(tmp_path: Path) -> None:
-    source_root = tmp_path / "hf-checkout"
-    source_root.mkdir()
-    bundle_path = source_root / "digits_publication.json"
-    bundle_path.write_bytes(canonical_document_bytes(_digits_publication_bundle_record()))
-    import_submission_publications(
-        (source_root,),
-        repository_root=_repository_root,
-        results_root=tmp_path / "results",
-    )
+    _run_and_evaluate_digits_benchmark(tmp_path / "results")
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
         results_root=tmp_path / "results",
@@ -324,7 +246,16 @@ def test_console_result_view_validates_training_diagnostics_records(tmp_path: Pa
 
 def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: Path) -> None:
     results_root = tmp_path / "results"
-    _run_and_evaluate_digits_benchmark(results_root)
+    run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=results_root,
+            sample_count=1,
+            train_steps=0,
+            tensor_device="cpu",
+        )
+    )
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
         results_root=results_root,
@@ -333,6 +264,7 @@ def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: 
     view = dict(load_console_result_view(summary.view_file.read_bytes()))
     results = cast(list[dict[str, object]], view["benchmark_results"])
     history = cast(list[dict[str, object]], results[0]["training_history"])
+    assert history[0]["result_status"] == "tentative"
     protocol = cast(dict[str, object], history[0]["training_diagnostics"])["protocol"]
     cast(dict[str, object], protocol)["gate_check_interval"] = 0
 
@@ -343,18 +275,10 @@ def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: 
         load_console_result_view(canonical_document_bytes(view))
 
 
-def test_materialize_benchmark_result_views_projects_imported_publications(
+def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     tmp_path: Path,
 ) -> None:
-    source_root = tmp_path / "hf-checkout"
-    source_root.mkdir()
-    bundle_path = source_root / "digits_publication.json"
-    bundle_path.write_bytes(canonical_document_bytes(_digits_publication_bundle_record()))
-    import_submission_publications(
-        (source_root,),
-        repository_root=_repository_root,
-        results_root=tmp_path / "results",
-    )
+    _run_and_evaluate_digits_benchmark(tmp_path / "results")
 
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
@@ -372,8 +296,7 @@ def test_materialize_benchmark_result_views_projects_imported_publications(
     result = results[0]
     assert result["benchmark_id"] == "benchmarks.digits@0.1.0"
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
-    assert leaderboard[0]["score"] == 0.0
-    assert leaderboard[0]["observed_complexities"] == []
+    assert leaderboard[0]["measurement_count"] == 1
     model_view = cast(dict[str, object], leaderboard[0]["console_view_model"])
     model_sections = cast(list[dict[str, object]], model_view["detail_sections"])
     assert [section["title"] for section in model_sections] == [
@@ -382,55 +305,27 @@ def test_materialize_benchmark_result_views_projects_imported_publications(
         "Evidence",
         "Resources",
     ]
-    contract_entries = cast(list[dict[str, object]], model_sections[0]["entries"])
-    assert contract_entries[1] == {
-        "label": "Prediction Space",
-        "value": "finite outcome space with 10 outcomes",
-    }
-    graph_entries = cast(list[dict[str, object]], model_sections[1]["entries"])
-    assert graph_entries[0] == {"label": "Components", "value": "3"}
-    evidence_entries = cast(list[dict[str, object]], model_sections[2]["entries"])
-    assert evidence_entries[0] == {"label": "Node Evidence", "value": "3"}
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     assert cost_summary["parameter_count"] == 50
     frontiers = cast(dict[str, object], result["frontiers"])
     assert len(cast(list[dict[str, object]], frontiers["parameter_count"])) == 1
     history = cast(list[dict[str, object]], result["training_history"])
-    assert history[0]["source_kind"] == "imported-publication"
+    assert history[0]["source_kind"] == "local-run"
+    assert "training_diagnostics" not in history[0]
     inspections = cast(list[dict[str, object]], result["model_inspections"])
     assert len(inspections) == 1
     assert inspections[0]["source_path"] == history[0]["source_path"]
     assert "measurement_dataset" in inspections[0]
-
-
-def test_materialize_imported_publications_accepts_numeric_architecture_digest(
-    tmp_path: Path,
-) -> None:
-    source_root = tmp_path / "hf-checkout"
-    source_root.mkdir()
-    bundle_path = source_root / "digits_publication.json"
-    bundle_path.write_bytes(
-        canonical_document_bytes(
-            _digits_publication_bundle_record(
-                architecture_manifest=_numeric_digest_architecture_record()
-            )
-        )
-    )
-    import_submission_publications(
-        (source_root,),
-        repository_root=_repository_root,
-        results_root=tmp_path / "results",
-    )
-
-    summary = materialize_benchmark_result_views(
-        repository_root=_repository_root,
-        results_root=tmp_path / "results",
-    )
-
-    view = load_console_result_view(summary.view_file.read_bytes())
-    results = cast(list[dict[str, object]], view["benchmark_results"])
-    inspections = cast(list[dict[str, object]], results[0]["model_inspections"])
-    assert inspections[0]["id"] == "model-inspections.imported.sha-057e708d0a213627@0.1.0"
+    artifact_kinds = {
+        artifact["kind"]
+        for artifact in cast(list[dict[str, object]], inspections[0]["artifacts"])
+    }
+    assert artifact_kinds == {
+        "measurement-dataset",
+        "model-checkpoint",
+        "model-inspection",
+        "model-manifest",
+    }
 
 
 def test_materialize_benchmark_result_views_rejects_empty_results_root(tmp_path: Path) -> None:
@@ -439,56 +334,6 @@ def test_materialize_benchmark_result_views_rejects_empty_results_root(tmp_path:
             repository_root=_repository_root,
             results_root=tmp_path / "results",
         )
-
-
-def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) -> None:
-    local_results_root = tmp_path / "local-runs"
-    imported_results_root = tmp_path / "imported-runs"
-    _init_git(local_results_root)
-    _run_and_evaluate_digits_benchmark(local_results_root)
-    local_result_summary = materialize_benchmark_result_views(
-        repository_root=_repository_root,
-        results_root=local_results_root,
-    )
-
-    publish_summary = publish_local_benchmark_results(
-        repository_root=_repository_root,
-        results_root=local_results_root,
-    )
-    imported_summary = import_submission_publications(
-        (local_results_root / "publication_bundles",),
-        repository_root=_repository_root,
-        results_root=imported_results_root,
-    )
-    result_summary = materialize_benchmark_result_views(
-        repository_root=_repository_root,
-        results_root=imported_results_root,
-    )
-
-    assert publish_summary.publication_bundle_count == 1
-    assert publish_summary.measurement_count >= 1
-    publication_document = SubmissionPublicationDocument.from_bytes(
-        publish_summary.publication_files[0].read_bytes()
-    )
-    assert str(publication_document.bundle.submission_package.id).startswith(
-        "submissions.digits.digits-arch-4a2277aa9fd5-c1-seed101-samples1-steps0-train-"
-    )
-    assert publication_document.bundle.submission_package.sampled_competence is not None
-    assert imported_summary.publication_bundle_count == 1
-    assert result_summary.run_count == 1
-    local_view = load_console_result_view(local_result_summary.view_file.read_bytes())
-    local_results = cast(list[dict[str, object]], local_view["benchmark_results"])
-    local_leaderboard = cast(list[dict[str, object]], local_results[0]["leaderboard"])
-    view = load_console_result_view(result_summary.view_file.read_bytes())
-    results = cast(list[dict[str, object]], view["benchmark_results"])
-    history = cast(list[dict[str, object]], results[0]["training_history"])
-    leaderboard = cast(list[dict[str, object]], results[0]["leaderboard"])
-    assert history[0]["source_kind"] == "imported-publication"
-    assert history[0]["measurement_count"] == publish_summary.measurement_count
-    assert "sampled_competence" in history[0]
-    assert leaderboard[0]["score"] == local_leaderboard[0]["score"]
-    assert leaderboard[0]["observed_complexities"] == local_leaderboard[0]["observed_complexities"]
-    assert leaderboard[0]["run_ids"] == [history[0]["run_id"]]
 
 
 def test_cli_publishes_local_benchmark_results(
@@ -513,25 +358,10 @@ def test_cli_publishes_local_benchmark_results(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert "wrote 1 publication bundle(s), 1 measurement(s)" in captured.out
-    assert "publication: " in captured.out
+    assert "published 1 measurement(s)" in captured.out
     assert "commit: " in captured.out
-    assert len(tuple((results_root / "publication_bundles").glob("*.json"))) == 1
+    assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 1
     assert _git(results_root, "status", "--porcelain").stdout == ""
-
-
-def test_publish_defaults_publication_output_to_results_root(tmp_path: Path) -> None:
-    results_root = tmp_path / "results"
-    _init_git(results_root)
-    _run_and_evaluate_digits_benchmark(results_root)
-
-    summary = publish_local_benchmark_results(
-        repository_root=_repository_root,
-        results_root=results_root,
-    )
-
-    assert len(summary.publication_files) == 1
-    assert summary.publication_files[0].parent == results_root / "publication_bundles"
 
 
 def test_publish_can_commit_results_root_checkout(tmp_path: Path) -> None:
@@ -550,7 +380,7 @@ def test_publish_can_commit_results_root_checkout(tmp_path: Path) -> None:
     assert _git(results_root, "status", "--porcelain").stdout == ""
     tracked_files = _git(results_root, "ls-files").stdout.splitlines()
     assert "views/benchmark_results.json" in tracked_files
-    assert any(path.startswith("publication_bundles/") for path in tracked_files)
+    assert any(path.startswith("evaluations/digits/") for path in tracked_files)
 
 
 def test_publish_pushes_only_when_requested(tmp_path: Path) -> None:
@@ -614,10 +444,10 @@ def test_publish_prefers_hugging_face_api_when_token_is_available(
     assert summary.remote_commit == "hf-commit"
     assert summary.git_commit is None
     assert "views/benchmark_results.json" in uploaded_paths
-    assert any(path.startswith("publication_bundles/") for path in uploaded_paths)
+    assert any(path.startswith("evaluations/digits/") for path in uploaded_paths)
 
 
-def test_push_publication_checkout_pushes_existing_commit(tmp_path: Path) -> None:
+def test_push_result_checkout_pushes_existing_commit(tmp_path: Path) -> None:
     results_root = tmp_path / "results"
     remote_root = tmp_path / "remote.git"
     _git(tmp_path, "init", "--bare", str(remote_root))
@@ -627,7 +457,7 @@ def test_push_publication_checkout_pushes_existing_commit(tmp_path: Path) -> Non
     _git(results_root, "add", "README.md")
     _git(results_root, "commit", "-m", "Prepare checkout")
 
-    summary = push_publication_checkout(
+    summary = push_result_checkout(
         repository_root=_repository_root,
         results_root=results_root,
     )
@@ -636,7 +466,7 @@ def test_push_publication_checkout_pushes_existing_commit(tmp_path: Path) -> Non
     assert _git(remote_root, "rev-parse", "HEAD").stdout.strip() == summary.pushed_commit
 
 
-def test_cli_pushes_publication_checkout(
+def test_cli_pushes_result_checkout(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -669,7 +499,7 @@ def test_cli_pushes_publication_checkout(
     ).stdout.strip()
 
 
-def test_initialize_publication_checkout_scaffolds_existing_git_checkout(
+def test_initialize_result_checkout_scaffolds_existing_git_checkout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -690,7 +520,7 @@ def test_initialize_publication_checkout_scaffolds_existing_git_checkout(
 
     monkeypatch.setattr(local_results, "_hf_api_module", lambda: _HfModule)
 
-    summary = initialize_publication_checkout(
+    summary = initialize_result_checkout(
         repo_id="operator/leibniz-results",
         token="hf_test",
         repository_root=_repository_root,
@@ -704,10 +534,13 @@ def test_initialize_publication_checkout_scaffolds_existing_git_checkout(
     assert _git(results_root, "status", "--porcelain").stdout == ""
     tracked_files = _git(results_root, "ls-files").stdout.splitlines()
     assert "README.md" in tracked_files
-    assert "publication_bundles/.gitkeep" in tracked_files
+    assert "evaluations/.gitkeep" in tracked_files
+    assert "models/.gitkeep" in tracked_files
+    assert "training/.gitkeep" in tracked_files
+    assert "views/.gitkeep" in tracked_files
 
 
-def test_initialize_publication_checkout_creates_hugging_face_repo_for_plain_results(
+def test_initialize_result_checkout_creates_hugging_face_repo_for_plain_results(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -723,7 +556,7 @@ def test_initialize_publication_checkout_creates_hugging_face_repo_for_plain_res
 
     monkeypatch.setattr(local_results, "_hf_api_module", lambda: _HfModule)
 
-    summary = initialize_publication_checkout(
+    summary = initialize_result_checkout(
         repo_id="operator/leibniz-results",
         repository_root=_repository_root,
         results_root=results_root,
@@ -733,13 +566,13 @@ def test_initialize_publication_checkout_creates_hugging_face_repo_for_plain_res
     assert calls == ["operator/leibniz-results"]
     assert summary.scaffold_commit is None
     assert summary.created_or_reused is True
-    assert (results_root / "publication_bundles" / ".gitkeep").is_file()
+    assert (results_root / "evaluations" / ".gitkeep").is_file()
 
 
-def test_initialize_publication_checkout_supports_local_only_fallback(tmp_path: Path) -> None:
+def test_initialize_result_checkout_supports_local_only_fallback(tmp_path: Path) -> None:
     results_root = tmp_path / "results"
 
-    summary = initialize_publication_checkout(
+    summary = initialize_result_checkout(
         repo_id=None,
         token=None,
         repository_root=_repository_root,
@@ -751,65 +584,37 @@ def test_initialize_publication_checkout_supports_local_only_fallback(tmp_path: 
     assert summary.repo_url is None
     assert summary.scaffold_commit is None
     assert summary.pushed is False
-    assert (results_root / "publication_bundles" / ".gitkeep").is_file()
+    assert (results_root / "evaluations" / ".gitkeep").is_file()
 
 
-def test_cli_initializes_local_publication_checkout_with_default_results_root(
+def test_cli_initializes_local_result_checkout_with_default_results_root(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    exit_code = main(["results", "init-publication", "--local-only"])
+    exit_code = main(["results", "init", "--local-only"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
     assert "repository: local-only" in captured.out
     assert "results root: " in captured.out
-    assert (tmp_path / "results" / "publication_bundles" / ".gitkeep").is_file()
-
-
-def _digits_publication_bundle_record(
-    *,
-    architecture_manifest: dict[str, object] | None = None,
-) -> dict[str, object]:
-    dataset = _digits_dataset()
-    return {
-        "id": "publication-bundles.digits@0.1.0",
-        "submission_package": {
-            "id": "submissions.digits-pool@0.1.0",
-            "benchmark_manifest": _digits_benchmark().manifest.to_record(),
-            "architecture_manifest": (
-                _architecture().manifest.to_record()
-                if architecture_manifest is None
-                else architecture_manifest
-            ),
-            "measurement_dataset": dataset.to_record(),
-            "model_metadata": {
-                "cost_summary": {
-                    "training_compute": 3000,
-                }
-            },
-            "artifacts": [
-                {
-                    "id": "artifacts.digits-weights@0.1.0",
-                    "digest": str(ContentDigest.from_value({"checkpoint": "metadata"})),
-                    "description": "checkpoint metadata only",
-                }
-            ],
-        },
-        "measurement_dataset": dataset.to_record(),
-        "measurement_score_view": MeasurementScoreView.from_dataset(
-            id=ProtocolIdentifier.parse("views.measurement-scores.digits@0.1.0"),
-            dataset=dataset,
-        ).to_record(),
-    }
+    assert (tmp_path / "results" / "evaluations" / ".gitkeep").is_file()
 
 
 def _digits_dataset() -> MeasurementDataset:
     return MeasurementDataset.from_record({"measurements": [_digits_measurement().to_record()]})
+
+
+def _selected_checkpoint_artifact_path(training_summary_path: Path) -> Path:
+    training_summary = load_object_document(
+        training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    checkpoint = cast(dict[str, object], training_summary["selected_model_checkpoint"])
+    return Path(cast(str, checkpoint["record_path"]))
 
 
 def _benchmark_run_record_for_competition(
@@ -939,23 +744,3 @@ def _architecture() -> ArchitectureManifestDocument:
     return ArchitectureManifestDocument.from_bytes(
         manifest_path.read_bytes()
     )
-
-
-def _numeric_digest_architecture_record() -> dict[str, object]:
-    record: dict[str, object] = {
-        "id": (
-            "architecture."
-            "sha-ec44c2854f8e8dae76bbdcc5316fb467ac6cf6613b58dfd1aa692f6d1d3c2f16"
-            "@0.1.0"
-        ),
-        "input_shape": [1, 32, 32],
-        "output_shape": [10],
-        "layers": [
-            {"kind": "adaptive-pooling", "parameters": {"dimension": 1, "size": 3}},
-            {"kind": "flatten", "parameters": {}},
-            {"kind": "dense", "parameters": {"out": 10}},
-        ],
-    }
-    document = ArchitectureManifestDocument.from_bytes(canonical_document_bytes(record))
-    assert str(document.manifest.digest).startswith("sha256:057e708d0a213627")
-    return document.manifest.to_record()

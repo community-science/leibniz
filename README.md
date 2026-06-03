@@ -52,13 +52,13 @@ Use narrower checks while iterating when they prove the contract you changed,
 such as a focused `python -m pytest tests/test_example.py`. Before opening or
 updating a non-documentation pull request, run the full local check set above
 unless the pull request explains why a check was skipped. Heavy benchmark
-training, GPU jobs, and network-dependent publication or federation workflows
-are manual validation paths, not routine pull-request checks.
+training, GPU jobs, and network-dependent result repository workflows are
+manual validation paths, not routine pull-request checks.
 
 ## Repository Layout
 
 - `src/leibniz/`: Python package containing protocol artifact definitions,
-  validation, CLI commands, benchmark orchestration, local publication flows,
+  validation, CLI commands, benchmark orchestration, local result workflows,
   and console data generation.
 - `src/leibniz/_formats/`: shared structured-format helpers used by protocol
   artifact readers and writers.
@@ -70,11 +70,11 @@ are manual validation paths, not routine pull-request checks.
   `tests/fixtures/`; console web contract tests live beside the Python tests.
 - `scripts/`: repository environment setup and activation helpers.
 - `.github/workflows/`: pull-request and main-branch CI checks.
-- `results/`, caches, checkpoints, and local publication checkouts: local
+- `results/`, caches, checkpoints, and local result checkouts: local
   runtime state only; do not commit these unless a deterministic producer and
   review path are explicitly documented.
 
-## Result Publication Workflow
+## Result Workflow
 
 Benchmark runs write local state under `results/` by default. That path is
 ignored by this source repository so the console can discover result views
@@ -84,22 +84,22 @@ Before starting benchmark runs, prepare the result repository with the same
 setup command for either Hugging Face API auth or Git/SSH auth:
 
 ```bash
-leibniz results init-publication --repo owner/leibniz-results
+leibniz results init --repo owner/leibniz-results
 ```
 
 With Hugging Face API auth, install `huggingface_hub` and authenticate with
-`hf auth login` or `HF_TOKEN`; `init-publication` can create the empty dataset
+`hf auth login` or `HF_TOKEN`; `results init` can create the empty dataset
 repository as part of setup. With SSH-only Git auth, create the empty Hugging
-Face dataset repository first; `init-publication` then clones it into
+Face dataset repository first; `results init` then clones it into
 `results/` using `git@hf.co:datasets/owner/leibniz-results.git`. If you prefer
 to keep the clone outside this source checkout, clone it elsewhere, symlink
-`results/` to that clone, and then run the same `init-publication` command to
+`results/` to that clone, and then run the same `results init` command to
 validate and scaffold it:
 
 ```bash
 git clone git@hf.co:datasets/owner/leibniz-results.git ../leibniz-results
 ln -s ../leibniz-results results
-leibniz results init-publication --repo owner/leibniz-results
+leibniz results init --repo owner/leibniz-results
 ```
 
 After benchmark runs have written results locally, push them to that repository:
@@ -114,7 +114,7 @@ available for `--repo`; otherwise it falls back to plain Git push when
 local result directory and skip any push step:
 
 ```bash
-leibniz results init-publication --local-only
+leibniz results init --local-only
 ```
 
 Run the canonical reference trainer against an explicit architecture:
@@ -166,20 +166,21 @@ While a benchmark run is training, gate-check progress may be written under
 `results/training/` as the current training-run record. The console may
 materialize those records as tentative plot points, using the training run's own
 score estimate, but leaderboard rows and frontiers are composed only from
-completed accepted benchmark evaluations. Saved model checkpoints and their
-model manifests are written under `results/models/`, and completed training
-runs atomically replace their running records with final training summaries in
-the same `results/training/` location. Benchmark evidence is generated
-separately by reloading a selected checkpoint artifact into the evaluator with a
-fresh unpredictable evaluation seed; those evaluation records are written under
-`results/evaluations/` and replace matching tentative points as the accepted
-local benchmark records consumed by the console and publication workflow.
-
-Submission evaluation is separate from reference training. External
-submissions publish measurement, model-inspection, sampled-competence, and
-protocol metadata artifacts; local result commands import, validate,
-materialize, and publish those artifacts without prescribing the model
-architecture or how it was trained.
+completed accepted benchmark evaluations. Saved model checkpoints, checkpoint
+artifact sidecars, and model manifests are written under `results/models/`, and
+completed training runs atomically replace their running records with final
+training summaries in the same `results/training/` location. Benchmark evidence
+is generated separately by handing a checkpoint artifact record to the evaluator
+with a fresh unpredictable evaluation seed; those evaluation records are written
+under `results/evaluations/` and replace matching tentative points as the
+accepted local benchmark records consumed by the console. Each accepted
+evaluation is a self-contained benchmark evaluation bundle: it embeds the
+benchmark manifest, architecture manifest, model manifest, checkpoint artifact
+record, model inspection, measurement dataset, score view, sampled competence
+record, evaluation protocol, evaluation curriculum, seed, and throughput.
+Pairwise relative-score evidence is generated as an accepted benchmark
+competition bundle under `results/evaluations/<benchmark>/competitions/`, using
+two evaluation bundles and their checkpoint artifacts as the handoff surface.
 
 Publish the local dirty state as a commit:
 
@@ -191,14 +192,6 @@ Push only when you want to update the public Hugging Face repository:
 
 ```bash
 leibniz results publish --push --repo owner/leibniz-results
-```
-
-To inspect another publication checkout locally, import its publication bundle
-documents into a separate result root and materialize console views:
-
-```bash
-leibniz results import --source path/to/checkout --results-root imported-results
-leibniz results materialize --results-root imported-results
 ```
 
 ## License

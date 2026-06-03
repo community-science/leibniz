@@ -11,12 +11,9 @@ from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes, load_object_document
-from leibniz.federation_ingest import plan_federation_ingest
-from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDocument
 from leibniz.model_manifests import ModelExecutionFamily
 from leibniz.model_operations import ModelOperation
-from leibniz.submission_registries import SubmissionRegistry
 
 _fixtures_root = Path(__file__).parent / "fixtures"
 _finite_fixture = _fixtures_root / "finite_outcome"
@@ -61,7 +58,23 @@ def test_cli_validate_help_lists_expanded_artifacts(capsys: pytest.CaptureFixtur
     assert "model-lineage" in output
     assert "architecture" in output
     assert "submission-registry" in output
-    assert "federation-ingest-plan" in output
+    assert "evaluation-bundle" in output
+    assert "competition-bundle" in output
+
+
+def test_cli_benchmark_evaluate_requires_checkpoint_artifact_contract(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["benchmark", "evaluate", "--help"])
+
+    output = capsys.readouterr().out
+    assert exit_info.value.code == 0
+    assert "--checkpoint-artifact" in output
+    assert "--training-summary" not in output
+    assert "--run-slug" not in output
+    assert "--evaluation-rung-count" not in output
+    assert "--training-compute" not in output
 
 
 def test_cli_console_dev_runs_npm_dev_script(
@@ -337,62 +350,6 @@ def test_cli_validates_model_interface_with_outcome_space(
     assert captured.err == ""
 
 
-def test_cli_validates_federation_ingest_plan_with_registry(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    registry = SubmissionRegistry.from_record(_submission_registry_record())
-    plan = plan_federation_ingest(
-        id=ProtocolIdentifier.parse("federation-ingest-plans.cli@0.1.0"),
-        registry=registry,
-        expected_publication_bundles=(_publication_bundle_reference(),),
-    )
-    registry_path = tmp_path / "registry.json"
-    plan_path = tmp_path / "plan.json"
-    registry_path.write_bytes(canonical_document_bytes(registry.to_record()))
-    plan_path.write_bytes(canonical_document_bytes(plan.to_record()))
-
-    exit_code = main(
-        [
-            "validate",
-            "federation-ingest-plan",
-            str(plan_path),
-            "--registry",
-            str(registry_path),
-        ]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert captured.out == "valid federation ingest plan federation-ingest-plans.cli@0.1.0\n"
-    assert captured.err == ""
-
-
-def test_cli_results_import_reports_missing_publications(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    source_root = tmp_path / "source"
-    source_root.mkdir()
-    (source_root / "other.json").write_text("{}", encoding="utf-8")
-
-    exit_code = main(
-        [
-            "results",
-            "import",
-            "--source",
-            str(source_root),
-            "--results-root",
-            str(tmp_path / "results"),
-        ]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert captured.out == ""
-    assert captured.err == "error: no publication bundle documents found\n"
-
-
 @pytest.mark.parametrize(
     "artifact",
     [
@@ -407,9 +364,9 @@ def test_cli_results_import_reports_missing_publications(
         "view-manifest",
         "projection-record",
         "model-derivation",
-        "publication-bundle",
+        "evaluation-bundle",
+        "competition-bundle",
         "submission-registry",
-        "federation-ingest-plan",
     ],
 )
 def test_cli_reports_malformed_expanded_artifact_files(
@@ -497,7 +454,7 @@ def _dataset_path(tmp_path: Path) -> Path:
 
 
 def _artifact_reference_record() -> dict[str, object]:
-    return _publication_bundle_reference().to_record()
+    return _architecture_reference().to_record()
 
 
 def _expanded_artifact_record(factory_name: str) -> dict[str, object]:
@@ -531,12 +488,12 @@ def _expanded_artifact_record(factory_name: str) -> dict[str, object]:
 def _artifact_index_record() -> dict[str, object]:
     return {
         "id": "artifact-indexes.cli@0.1.0",
-        "artifacts": [_publication_bundle_reference().to_record()],
+        "artifacts": [_architecture_reference().to_record()],
     }
 
 
 def _authority_index_record() -> dict[str, object]:
-    artifact = _publication_bundle_reference().to_record()
+    artifact = _architecture_reference().to_record()
     return {
         "id": "authority-indexes.cli@0.1.0",
         "artifacts": [artifact],
@@ -723,15 +680,6 @@ def _outcome_space_record() -> dict[str, object]:
         "id": "core.boolean-outcome@0.1.0",
         "outcomes": [{"id": "yes"}, {"id": "no"}],
     }
-
-
-def _publication_bundle_reference() -> ArtifactReference:
-    return ArtifactReference.from_record(
-        {
-            "kind": "publication-bundle",
-            "content_digest": str(ContentDigest.from_value({"publication": "bundle"})),
-        }
-    )
 
 
 def _architecture_reference() -> ArtifactReference:

@@ -1,6 +1,5 @@
 export {
   isBenchmarkResultView,
-  isImportedResultView,
   parseResultViewRecords,
 } from './generated/resultViewRecords.ts';
 
@@ -10,8 +9,6 @@ export type {
   CompetencePointRecord,
   CostAxisRecord,
   CostSummaryRecord,
-  ImportedPublicationBundleRecord,
-  ImportedResultViewRecord,
   ModelResultRecord,
   ResultViewRecord,
   RunDetailEntryRecord,

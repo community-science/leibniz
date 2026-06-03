@@ -22,11 +22,16 @@ from leibniz.benchmark_evaluation import (
     validation_competence,
     validation_competence_frontier_score,
 )
+from leibniz.competition_bundles import BenchmarkCompetitionBundle
 from leibniz.content import ContentDigest
 from leibniz.documents import (
     canonical_document_bytes,
     document_filename_suffix,
     load_object_document,
+)
+from leibniz.evaluation_bundles import (
+    BenchmarkEvaluationBundle,
+    BenchmarkEvaluationBundleDocument,
 )
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment
@@ -45,6 +50,7 @@ from leibniz.observation_generation import (
     load_observation_generator,
 )
 from leibniz.outcomes import OutcomeSpace
+from leibniz.records import RecordExtractor
 from leibniz.tensor_runtime import (
     FormationTensorCache,
     OperationFallbackSequential,
@@ -70,6 +76,7 @@ from leibniz.tensor_runtime import (
 )
 from leibniz.timing import TimingCollector
 from leibniz.training_runs import TrainingHistoryPoint, TrainingProtocol, TrainingRunRecord
+from leibniz.views import MeasurementScoreView
 
 __all__ = [
     "BenchmarkRunnerError",
@@ -119,6 +126,17 @@ class _TrainingResult:
     training_frontier_index: int
     training_run: TrainingRunRecord
     throughput: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _EvaluationInput:
+    architecture: ArchitectureManifest
+    checkpoint: ModelCheckpointArtifact
+    run_slug: str
+    benchmark_id: ProtocolIdentifier
+    evaluation_sample_count: int
+    evaluation_rung_count: int
+    training_compute: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,12 +326,15 @@ class BenchmarkRunnerError(ValueError):
     """Raised when a local benchmark run cannot be planned or executed."""
 
 
+_extract = RecordExtractor(error_type=BenchmarkRunnerError)
+
+
 @dataclass(frozen=True, slots=True)
 class BenchmarkEvaluationPlan:
     """A benchmark evaluation plan over a saved training checkpoint artifact."""
 
-    training_summary_path: Path
     benchmark_root: Path
+    checkpoint_artifact_path: Path
     results_root: Path = Path("results")
     tensor_device: TensorRuntimeDevice = "auto"
 
@@ -330,11 +351,8 @@ class BenchmarkEvaluationSummary:
 
     run_slug: str
     benchmark_id: ProtocolIdentifier
-    evaluation_summary_path: Path
+    evaluation_bundle_path: Path
     measurement_count: int
-    measurement_dataset_path: Path
-    model_inspection_path: Path
-    training_summary_path: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,7 +381,7 @@ class BenchmarkCompetitionSummary:
 
     competition_id: str
     benchmark_id: ProtocolIdentifier
-    competition_path: Path
+    competition_bundle_path: Path
     sample_count: int
     left_model_key: str
     right_model_key: str
@@ -504,8 +522,6 @@ class BenchmarkRunSummary:
     benchmark_id: ProtocolIdentifier
     architecture_path: Path
     measurement_count: int
-    measurement_dataset_path: Path
-    model_inspection_path: Path
     training_summary_path: Path
     model_artifact_root: Path
     dry_run: bool
@@ -520,8 +536,6 @@ class BenchmarkRunSummary:
             "benchmark_id": str(self.benchmark_id),
             "architecture_path": self.architecture_path.as_posix(),
             "measurement_count": self.measurement_count,
-            "measurement_dataset_path": self.measurement_dataset_path.as_posix(),
-            "model_inspection_path": self.model_inspection_path.as_posix(),
             "training_summary_path": self.training_summary_path.as_posix(),
             "model_artifact_root": self.model_artifact_root.as_posix(),
             "dry_run": self.dry_run,
@@ -580,6 +594,22 @@ def run_benchmark(
     )
     checkpoint_artifacts: list[ModelCheckpointArtifact] = []
 
+    def checkpoint_record(
+        checkpoint: ModelCheckpointArtifact,
+        *,
+        evaluation_rung_count: int | None,
+        training_compute: float | None,
+    ) -> dict[str, object]:
+        return _model_checkpoint_artifact_record(
+            checkpoint=checkpoint,
+            architecture=architecture,
+            benchmark_id=summary.benchmark_id,
+            run_slug=summary.run_slug,
+            evaluation_sample_count=plan.resolved_evaluation_sample_count,
+            evaluation_rung_count=evaluation_rung_count,
+            training_compute=training_compute,
+        )
+
     def publish_progress(
         training_run: TrainingRunRecord,
         throughput: Mapping[str, object],
@@ -630,8 +660,23 @@ def run_benchmark(
                 training_curriculum=training_curriculum,
                 training_run=training_run,
                 throughput=throughput,
-                model_checkpoints=tuple(checkpoint_artifacts),
-                selected_model_checkpoint=selected_checkpoint,
+                model_checkpoints=tuple(
+                    checkpoint_record(
+                        checkpoint,
+                        evaluation_rung_count=1,
+                        training_compute=training_run.training_compute,
+                    )
+                    for checkpoint in checkpoint_artifacts
+                ),
+                selected_model_checkpoint=(
+                    None
+                    if selected_checkpoint is None
+                    else checkpoint_record(
+                        selected_checkpoint,
+                        evaluation_rung_count=1,
+                        training_compute=training_run.training_compute,
+                    )
+                ),
             ),
         )
         if progress_callback is not None:
@@ -679,6 +724,21 @@ def run_benchmark(
         model_manifest=selected_checkpoint.manifest,
         architecture_manifest=architecture,
     )
+    checkpoint_records = tuple(
+        checkpoint_record(
+            checkpoint,
+            evaluation_rung_count=len(training_result.training_rungs),
+            training_compute=training_result.training_run.training_compute,
+        )
+        for checkpoint in checkpoint_artifacts
+    )
+    for record in checkpoint_records:
+        _write_document(Path(_required_string(record.get("record_path"), "record_path")), record)
+    selected_checkpoint_record = checkpoint_record(
+        selected_checkpoint,
+        evaluation_rung_count=len(training_result.training_rungs),
+        training_compute=training_result.training_run.training_compute,
+    )
     _write_document_atomic(
         summary.training_summary_path,
         {
@@ -721,12 +781,10 @@ def run_benchmark(
             "throughput": training_result.throughput,
             "architecture": model_inspection.architecture.to_record(),
             "cost_summary": model_inspection.cost_summary.to_record(),
-            "model_checkpoints": [
-                checkpoint.to_record() for checkpoint in checkpoint_artifacts
-            ],
-            "selected_model_checkpoint": selected_checkpoint.to_record(),
+            "model_checkpoints": [dict(record) for record in checkpoint_records],
+            "selected_model_checkpoint": selected_checkpoint_record,
             "selected_model_checkpoint_policy": "lowest-validation-loss",
-            "evaluation_model_artifact": selected_checkpoint.to_record(),
+            "evaluation_model_artifact": selected_checkpoint_record,
         },
     )
     if progress_path != summary.training_summary_path:
@@ -748,15 +806,6 @@ def _run_summary(
         benchmark_id=benchmark_id,
         architecture_path=plan.architecture_path,
         measurement_count=plan.resolved_evaluation_sample_count,
-        measurement_dataset_path=(
-            plan.results_root / "measurements" / benchmark_atom / f"{run_slug}{_document_suffix}"
-        ),
-        model_inspection_path=(
-            plan.results_root
-            / "model-inspections"
-            / benchmark_atom
-            / f"{run_slug}{_document_suffix}"
-        ),
         training_summary_path=(
             plan.results_root / "training" / benchmark_atom / f"{run_slug}{_document_suffix}"
         ),
@@ -772,49 +821,16 @@ def _training_progress_path(summary: BenchmarkRunSummary) -> Path:
 def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEvaluationSummary:
     """Generate benchmark evidence from a saved training checkpoint artifact."""
 
-    training_summary = _load_object_record(
-        plan.training_summary_path,
-        description="training summary",
-    )
-    if training_summary.get("format") != "leibniz.benchmark-run":
-        raise BenchmarkRunnerError("training summary has unsupported format")
     generator = load_observation_generator(plan.benchmark_root)
-    architecture_path = _artifact_path_from_record(
-        _required_string(training_summary.get("architecture_path"), "architecture_path"),
-        base=Path.cwd(),
-    )
-    architecture = ArchitectureManifestDocument.from_bytes(architecture_path.read_bytes()).manifest
+    evaluation_input = _evaluation_input_from_plan(plan, generator=generator)
     outcome_space = generator.benchmark_manifest.resolve_outcome_space()
-    selected_checkpoint = load_model_checkpoint_artifact(
-        _extract_record(
-            training_summary.get("selected_model_checkpoint"),
-            "selected_model_checkpoint",
-        ),
-        results_root=plan.results_root,
-    )
-    training_curriculum = _extract_record(
-        training_summary.get("training_curriculum"),
-        "training_curriculum",
-    )
-    training_rungs = _extract_sequence(
-        training_curriculum.get("rungs"),
-        "training_curriculum.rungs",
-    )
-    if not training_rungs:
-        raise BenchmarkRunnerError("training curriculum must contain at least one rung")
-    run_slug = _required_string(training_summary.get("run_slug"), "run_slug")
-    benchmark_id = ProtocolIdentifier.parse(
-        _required_string(training_summary.get("benchmark_id"), "benchmark_id")
-    )
+    architecture = evaluation_input.architecture
+    selected_checkpoint = evaluation_input.checkpoint
+    run_slug = evaluation_input.run_slug
+    benchmark_id = evaluation_input.benchmark_id
     benchmark_atom = _identifier_atom(benchmark_id)
-    evaluation_summary_path = (
+    evaluation_bundle_path = (
         plan.results_root / "evaluations" / benchmark_atom / f"{run_slug}{_document_suffix}"
-    )
-    measurement_dataset_path = (
-        plan.results_root / "measurements" / benchmark_atom / f"{run_slug}{_document_suffix}"
-    )
-    model_inspection_path = (
-        plan.results_root / "model-inspections" / benchmark_atom / f"{run_slug}{_document_suffix}"
     )
     evaluation_seed = _unpredictable_evaluation_seed()
     evaluation_results, checkpoint_evaluation_throughput = evaluate_model_checkpoint_artifact(
@@ -822,11 +838,8 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         generator=generator,
         outcome_space=outcome_space,
         component_count=_component_count,
-        evaluation_sample_count=_required_int(
-            training_summary.get("evaluation_sample_count"),
-            "evaluation_sample_count",
-        ),
-        training_rung_count=len(training_rungs),
+        evaluation_sample_count=evaluation_input.evaluation_sample_count,
+        training_rung_count=evaluation_input.evaluation_rung_count,
         seed=evaluation_seed,
         tensor_device=plan.tensor_device,
         checkpoint=selected_checkpoint,
@@ -863,111 +876,167 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         model_manifest=selected_checkpoint.manifest,
         architecture_manifest=architecture,
     )
-    _write_document(measurement_dataset_path, dataset.to_record())
-    _write_document(model_inspection_path, model_inspection.to_record())
-    evaluation_summary = {
-        "format": "leibniz.benchmark-evaluation",
-        "format_version": 1,
-        "run_slug": run_slug,
-        "benchmark_id": str(benchmark_id),
-        "training_summary_path": plan.training_summary_path.as_posix(),
-        "architecture_path": architecture_path.as_posix(),
-        "measurement_count": len(measurements),
-        "measurement_dataset_path": measurement_dataset_path.as_posix(),
-        "measurement_dataset_digest": str(dataset.digest),
-        "model_inspection_path": model_inspection_path.as_posix(),
-        "model_inspection_digest": str(model_inspection.digest),
-        "evaluation_seed": evaluation_seed,
-        "evaluation_curriculum_rung_count": len(evaluation_results),
-        "evaluation_curriculum": _curriculum_record(
-            kind="checkpoint-benchmark-evaluation-curriculum",
-            rungs=tuple(rung for rung, _probabilities in evaluation_results),
-            frontier_index=len(evaluation_results) - 1,
-        ),
-        "sampled_competence": sampled_competence,
-        "selected_model_checkpoint": selected_checkpoint.to_record(),
-        "evaluation_model_artifact": selected_checkpoint.to_record(),
-        "throughput": {
-            "kind": "benchmark-evaluation-throughput",
-            "evaluation": dict(checkpoint_evaluation_throughput),
-            "checkpoint_evaluation": dict(checkpoint_evaluation_throughput),
-        },
+    evaluation_curriculum = _curriculum_record(
+        kind="checkpoint-benchmark-evaluation-curriculum",
+        rungs=tuple(rung for rung, _probabilities in evaluation_results),
+        frontier_index=len(evaluation_results) - 1,
+    )
+    throughput = {
+        "kind": "benchmark-evaluation-throughput",
+        "evaluation": dict(checkpoint_evaluation_throughput),
+        "checkpoint_evaluation": dict(checkpoint_evaluation_throughput),
     }
-    _write_document(evaluation_summary_path, evaluation_summary)
+    evaluation_tensor_device = _required_string(
+        checkpoint_evaluation_throughput.get("tensor_device"),
+        "checkpoint_evaluation.tensor_device",
+    )
+    identifier_stem = f"{benchmark_atom}.{run_slug}"
+    evaluation_protocol: dict[str, object] = {
+        "kind": "checkpoint-benchmark-evaluation",
+        "measurement_count": len(measurements),
+        "evaluation_sample_count": evaluation_input.evaluation_sample_count,
+        "evaluation_curriculum_rung_count": len(evaluation_results),
+        "tensor_runtime": "pytorch",
+        "tensor_device": evaluation_tensor_device,
+        "requested_tensor_device": plan.tensor_device,
+    }
+    if evaluation_input.training_compute is not None:
+        evaluation_protocol["training_compute"] = evaluation_input.training_compute
+    checkpoint_record = _model_checkpoint_artifact_record(
+        checkpoint=selected_checkpoint,
+        architecture=architecture,
+        benchmark_id=benchmark_id,
+        run_slug=run_slug,
+        evaluation_sample_count=evaluation_input.evaluation_sample_count,
+        evaluation_rung_count=evaluation_input.evaluation_rung_count,
+        training_compute=evaluation_input.training_compute,
+    )
+    bundle = BenchmarkEvaluationBundle(
+        id=ProtocolIdentifier.parse(f"benchmark-evaluations.{identifier_stem}@0.1.0"),
+        run_slug=run_slug,
+        benchmark_manifest=generator.benchmark_manifest,
+        architecture_manifest=architecture,
+        model_manifest=selected_checkpoint.manifest,
+        model_checkpoint=checkpoint_record,
+        model_inspection=model_inspection,
+        measurement_dataset=dataset,
+        measurement_score_view=MeasurementScoreView.from_dataset(
+            id=ProtocolIdentifier.parse(
+                f"views.measurement-scores.{identifier_stem}@0.1.0"
+            ),
+            dataset=dataset,
+        ),
+        sampled_competence=sampled_competence,
+        evaluation_protocol=evaluation_protocol,
+        evaluation_seed=evaluation_seed,
+        evaluation_curriculum=evaluation_curriculum,
+        throughput=throughput,
+    )
+    _write_document(evaluation_bundle_path, bundle.to_record())
     return BenchmarkEvaluationSummary(
         run_slug=run_slug,
         benchmark_id=benchmark_id,
-        evaluation_summary_path=evaluation_summary_path,
+        evaluation_bundle_path=evaluation_bundle_path,
         measurement_count=len(measurements),
-        measurement_dataset_path=measurement_dataset_path,
-        model_inspection_path=model_inspection_path,
-        training_summary_path=plan.training_summary_path,
+    )
+
+
+def _evaluation_input_from_plan(
+    plan: BenchmarkEvaluationPlan,
+    *,
+    generator: ObservationGenerator,
+) -> _EvaluationInput:
+    checkpoint_record = _load_object_record(
+        plan.checkpoint_artifact_path,
+        description="checkpoint artifact",
+    )
+    architecture = ArchitectureManifest.from_record(
+        _extract_record(
+            checkpoint_record.get("architecture_manifest"),
+            "checkpoint_artifact.architecture_manifest",
+        )
+    )
+    try:
+        checkpoint_benchmark_id = ProtocolIdentifier.parse(
+            _required_string(
+                checkpoint_record.get("benchmark_id"),
+                "checkpoint_artifact.benchmark_id",
+            )
+        )
+    except ValueError as error:
+        raise BenchmarkRunnerError(str(error)) from error
+    if checkpoint_benchmark_id != generator.benchmark_manifest.id:
+        raise BenchmarkRunnerError(
+            "checkpoint_artifact.benchmark_id does not match benchmark root"
+        )
+    run_slug = _required_string(checkpoint_record.get("run_slug"), "checkpoint_artifact.run_slug")
+    evaluation_sample_count = _required_int(
+        checkpoint_record.get("evaluation_sample_count"),
+        "checkpoint_artifact.evaluation_sample_count",
+    )
+    if evaluation_sample_count < 1:
+        raise BenchmarkRunnerError("checkpoint_artifact.evaluation_sample_count must be positive")
+    evaluation_rung_count = _required_int(
+        checkpoint_record.get("evaluation_rung_count"),
+        "checkpoint_artifact.evaluation_rung_count",
+    )
+    if evaluation_rung_count < 1:
+        raise BenchmarkRunnerError("checkpoint_artifact.evaluation_rung_count must be positive")
+    training_compute = _extract.optional_float(
+        checkpoint_record.get("training_compute"),
+        "checkpoint_artifact.training_compute",
+    )
+    if training_compute is not None and training_compute < 0:
+        raise BenchmarkRunnerError("checkpoint_artifact.training_compute must be nonnegative")
+    return _EvaluationInput(
+        architecture=architecture,
+        checkpoint=load_model_checkpoint_artifact(
+            checkpoint_record,
+            results_root=plan.results_root,
+        ),
+        run_slug=run_slug,
+        benchmark_id=checkpoint_benchmark_id,
+        evaluation_sample_count=evaluation_sample_count,
+        evaluation_rung_count=evaluation_rung_count,
+        training_compute=training_compute,
     )
 
 
 def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCompetitionSummary:
     """Generate pairwise benchmark competition evidence from two evaluated checkpoints."""
 
-    left_evaluation = _load_object_record(
-        plan.left_evaluation_path,
-        description="left benchmark evaluation",
-    )
-    right_evaluation = _load_object_record(
-        plan.right_evaluation_path,
-        description="right benchmark evaluation",
-    )
-    if left_evaluation.get("format") != "leibniz.benchmark-evaluation":
-        raise BenchmarkRunnerError("left evaluation has unsupported format")
-    if right_evaluation.get("format") != "leibniz.benchmark-evaluation":
-        raise BenchmarkRunnerError("right evaluation has unsupported format")
-    left_training = _load_object_record(
-        _artifact_path_from_record(
-            _required_string(left_evaluation.get("training_summary_path"), "training_summary_path"),
-            base=Path.cwd(),
-        ),
-        description="left training summary",
-    )
-    right_training = _load_object_record(
-        _artifact_path_from_record(
-            _required_string(
-                right_evaluation.get("training_summary_path"),
-                "training_summary_path",
-            ),
-            base=Path.cwd(),
-        ),
-        description="right training summary",
-    )
+    try:
+        left_evaluation_bundle = BenchmarkEvaluationBundleDocument.from_bytes(
+            plan.left_evaluation_path.read_bytes()
+        ).bundle
+        right_evaluation_bundle = BenchmarkEvaluationBundleDocument.from_bytes(
+            plan.right_evaluation_path.read_bytes()
+        ).bundle
+    except ValueError as error:
+        raise BenchmarkRunnerError(str(error)) from error
+    left_evaluation = left_evaluation_bundle.to_record()
+    right_evaluation = right_evaluation_bundle.to_record()
     generator = load_observation_generator(plan.benchmark_root)
     benchmark_id = generator.benchmark_manifest.id
     outcome_space = generator.benchmark_manifest.resolve_outcome_space()
-    left_architecture = ArchitectureManifestDocument.from_bytes(
-        _artifact_path_from_record(
-            _required_string(left_training.get("architecture_path"), "architecture_path"),
-            base=Path.cwd(),
-        ).read_bytes()
-    ).manifest
-    right_architecture = ArchitectureManifestDocument.from_bytes(
-        _artifact_path_from_record(
-            _required_string(right_training.get("architecture_path"), "architecture_path"),
-            base=Path.cwd(),
-        ).read_bytes()
-    ).manifest
+    left_architecture = left_evaluation_bundle.architecture_manifest
+    right_architecture = right_evaluation_bundle.architecture_manifest
     left_checkpoint = load_model_checkpoint_artifact(
         _extract_record(
-            left_evaluation.get("selected_model_checkpoint"),
-            "selected_model_checkpoint",
+            left_evaluation.get("model_checkpoint"),
+            "model_checkpoint",
         ),
         results_root=plan.results_root,
     )
     right_checkpoint = load_model_checkpoint_artifact(
         _extract_record(
-            right_evaluation.get("selected_model_checkpoint"),
-            "selected_model_checkpoint",
+            right_evaluation.get("model_checkpoint"),
+            "model_checkpoint",
         ),
         results_root=plan.results_root,
     )
-    left_model_key = str(left_architecture.digest)
-    right_model_key = str(right_architecture.digest)
+    left_model_key = _model_key_from_checkpoint(left_checkpoint)
+    right_model_key = _model_key_from_checkpoint(right_checkpoint)
     if left_model_key == right_model_key:
         raise BenchmarkRunnerError("benchmark competition requires two distinct models")
     if right_model_key < left_model_key:
@@ -986,7 +1055,10 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
         left_model_key=left_model_key,
         right_model_key=right_model_key,
     )
-    resolution_assignment = _competition_resolution_assignment(left_training)
+    resolution_assignment = _competition_resolution_assignment_from_evaluations(
+        left_evaluation,
+        right_evaluation,
+    )
     competition_record, throughput = generate_model_checkpoint_competition_record(
         left_architecture=left_architecture,
         right_architecture=right_architecture,
@@ -1005,7 +1077,29 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
         benchmark_id=benchmark_id,
         competition_id=competition_id,
     )
+    competition_protocol = {
+        "kind": "checkpoint-benchmark-competition",
+        "sample_count": plan.sample_count,
+        "requested_seed": competition_seed,
+        "tensor_runtime": "pytorch",
+        "tensor_device": _required_string(
+            throughput.get("tensor_device"),
+            "checkpoint_competition.tensor_device",
+        ),
+        "requested_tensor_device": plan.tensor_device,
+        "mechanic": "paired-prediction-accepted-mass",
+    }
     competition_record["throughput"] = dict(throughput)
+    competition_bundle = BenchmarkCompetitionBundle(
+        id=ProtocolIdentifier.parse(f"benchmark-competitions.{competition_id}@0.1.0"),
+        benchmark_manifest=generator.benchmark_manifest,
+        left_evaluation_bundle=left_evaluation_bundle,
+        right_evaluation_bundle=right_evaluation_bundle,
+        competition_result=competition_record,
+        competition_protocol=competition_protocol,
+        competition_seed=_required_int(competition_record.get("seed"), "competition.seed"),
+        throughput=throughput,
+    )
     competition_path = (
         plan.results_root
         / "evaluations"
@@ -1013,11 +1107,11 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
         / "competitions"
         / f"{competition_id}{_document_suffix}"
     )
-    _write_document(competition_path, competition_record)
+    _write_document(competition_path, competition_bundle.to_record())
     return BenchmarkCompetitionSummary(
         competition_id=competition_id,
         benchmark_id=benchmark_id,
-        competition_path=competition_path,
+        competition_bundle_path=competition_path,
         sample_count=plan.sample_count,
         left_model_key=left_model_key,
         right_model_key=right_model_key,
@@ -1735,7 +1829,10 @@ def evaluate_model_checkpoint_artifact(
             break
     if not results:
         raise BenchmarkRunnerError("checkpoint evaluation did not produce any results")
-    return tuple(results), evaluation_counter.to_record(kind="checkpoint-evaluation-throughput")
+    throughput = evaluation_counter.to_record(kind="checkpoint-evaluation-throughput")
+    throughput["tensor_runtime"] = "pytorch"
+    throughput["tensor_device"] = predictor.runtime.device_kind
+    return tuple(results), throughput
 
 
 def generate_model_checkpoint_competition_record(
@@ -1787,6 +1884,9 @@ def generate_model_checkpoint_competition_record(
         seconds=time.perf_counter() - competition_started,
         samples=2 * len(rung.batch.samples),
     )
+    throughput = competition_counter.to_record(kind="checkpoint-competition-throughput")
+    throughput["tensor_runtime"] = "pytorch"
+    throughput["tensor_device"] = left_predictor.runtime.device_kind
     return (
         _checkpoint_competition_record(
             batch=rung.batch,
@@ -1798,7 +1898,7 @@ def generate_model_checkpoint_competition_record(
             benchmark_id=benchmark_id,
             competition_id=competition_id,
         ),
-        competition_counter.to_record(kind="checkpoint-competition-throughput"),
+        throughput,
     )
 
 
@@ -1835,7 +1935,7 @@ def load_model_checkpoint_artifact(
     *,
     results_root: Path = Path("results"),
 ) -> ModelCheckpointArtifact:
-    """Load and validate a checkpoint artifact record from a run summary."""
+    """Load and validate a checkpoint artifact record."""
 
     path = _resolve_artifact_record_path(
         _required_string(record.get("path"), "model checkpoint path"),
@@ -1886,19 +1986,37 @@ def load_model_checkpoint_artifact(
     )
 
 
+def _model_checkpoint_artifact_record(
+    *,
+    checkpoint: ModelCheckpointArtifact,
+    architecture: ArchitectureManifest,
+    benchmark_id: ProtocolIdentifier,
+    run_slug: str,
+    evaluation_sample_count: int,
+    evaluation_rung_count: int | None,
+    training_compute: float | None,
+) -> dict[str, object]:
+    record = checkpoint.to_record()
+    record["record_path"] = checkpoint.path.with_suffix(
+        ".checkpoint" + _document_suffix
+    ).as_posix()
+    record["benchmark_id"] = str(benchmark_id)
+    record["run_slug"] = run_slug
+    record["architecture_manifest"] = architecture.to_record()
+    record["model_manifest"] = checkpoint.manifest.to_record()
+    record["evaluation_sample_count"] = evaluation_sample_count
+    if evaluation_rung_count is not None:
+        record["evaluation_rung_count"] = evaluation_rung_count
+    if training_compute is not None:
+        record["training_compute"] = training_compute
+    return record
+
+
 def _resolve_artifact_record_path(value: str, *, results_root: Path) -> Path:
     path = Path(value)
     resolved = path.resolve() if path.is_absolute() else (results_root.parent / path).resolve()
     if not resolved.is_relative_to(results_root.resolve()):
         raise BenchmarkRunnerError(f"artifact path must stay inside results root: {value}")
-    return resolved
-
-
-def _artifact_path_from_record(value: str, *, base: Path) -> Path:
-    path = Path(value)
-    resolved = path if path.is_absolute() else base / path
-    if not resolved.is_file():
-        raise BenchmarkRunnerError(f"artifact path does not exist: {value}")
     return resolved
 
 
@@ -1958,21 +2076,55 @@ def _competition_id(
     return f"models-{digest.hex[:16]}"
 
 
-def _competition_resolution_assignment(training_summary: Mapping[str, object]) -> AxisAssignment:
-    curriculum = _extract_record(training_summary.get("training_curriculum"), "training_curriculum")
-    rungs = _extract_sequence(curriculum.get("rungs"), "training_curriculum.rungs")
-    frontier_index = _required_int(
-        curriculum.get("frontier_index"),
-        "training_curriculum.frontier_index",
+def _model_key_from_checkpoint(checkpoint: ModelCheckpointArtifact) -> str:
+    return str(checkpoint.digest)
+
+
+def _competition_resolution_assignment_from_evaluations(
+    left_evaluation: Mapping[str, object],
+    right_evaluation: Mapping[str, object],
+) -> AxisAssignment:
+    left_rung = _competition_frontier_rung_from_evaluation(left_evaluation, field="left")
+    right_rung = _competition_frontier_rung_from_evaluation(right_evaluation, field="right")
+    selected = min(
+        (left_rung, right_rung),
+        key=lambda rung: (
+            _required_float(rung.get("complexity"), "evaluation_curriculum.rungs.complexity"),
+            _required_int(rung.get("index"), "evaluation_curriculum.rungs.index"),
+        ),
     )
-    if frontier_index < 0 or frontier_index >= len(rungs):
-        raise BenchmarkRunnerError("training_curriculum.frontier_index is out of range")
-    rung = _extract_record(rungs[frontier_index], "training_curriculum.rungs")
     resolution_record = _extract_record(
-        rung.get("resolution_assignment"),
-        "training_curriculum.rungs.resolution_assignment",
+        selected.get("resolution_assignment"),
+        "evaluation_curriculum.rungs.resolution_assignment",
     )
     return AxisAssignment.from_record(resolution_record)
+
+
+def _competition_frontier_rung_from_evaluation(
+    evaluation: Mapping[str, object],
+    *,
+    field: str,
+) -> Mapping[str, object]:
+    curriculum = _extract_record(
+        evaluation.get("evaluation_curriculum"),
+        f"{field}.evaluation_curriculum",
+    )
+    rungs = _extract_sequence(
+        curriculum.get("rungs"),
+        f"{field}.evaluation_curriculum.rungs",
+    )
+    frontier_index = _required_int(
+        curriculum.get("frontier_index"),
+        f"{field}.evaluation_curriculum.frontier_index",
+    )
+    if frontier_index < 0 or frontier_index >= len(rungs):
+        raise BenchmarkRunnerError(
+            f"{field}.evaluation_curriculum.frontier_index is out of range"
+        )
+    return _extract_record(
+        rungs[frontier_index],
+        f"{field}.evaluation_curriculum.rungs",
+    )
 
 
 def training_stage_converged(stop_reason: str) -> bool:
@@ -2311,8 +2463,8 @@ def _training_progress_record(
     training_curriculum: Mapping[str, object],
     training_run: TrainingRunRecord,
     throughput: Mapping[str, object],
-    model_checkpoints: tuple[ModelCheckpointArtifact, ...],
-    selected_model_checkpoint: ModelCheckpointArtifact | None,
+    model_checkpoints: tuple[Mapping[str, object], ...],
+    selected_model_checkpoint: Mapping[str, object] | None,
 ) -> Mapping[str, object]:
     provisional_score = validation_competence(
         validation_loss=training_run.validation_history[-1].validation_loss,
@@ -2371,13 +2523,9 @@ def _training_progress_record(
             training_rungs=evaluation_rungs,
             frontier_index=frontier_index,
         ),
-        "model_checkpoints": [
-            checkpoint.to_record() for checkpoint in model_checkpoints
-        ],
+        "model_checkpoints": [dict(checkpoint) for checkpoint in model_checkpoints],
         "selected_model_checkpoint": (
-            selected_model_checkpoint.to_record()
-            if selected_model_checkpoint is not None
-            else None
+            None if selected_model_checkpoint is None else dict(selected_model_checkpoint)
         ),
         "selected_model_checkpoint_policy": "lowest-validation-loss",
     }

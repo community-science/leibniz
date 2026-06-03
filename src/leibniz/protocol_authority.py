@@ -35,12 +35,12 @@ _DocumentIdentity = Callable[[object], str]
 
 _state_artifact_kinds = frozenset(
     (
+        "competition-bundle",
         "benchmark-result-view",
+        "evaluation-bundle",
         "measurement",
         "measurement-dataset",
         "model-inspection",
-        "publication-bundle",
-        "submission-publication",
         "training-summary",
     )
 )

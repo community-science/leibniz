@@ -83,7 +83,7 @@ def test_authority_index_from_artifacts_reports_dangling_dependency_target() -> 
 
 
 def test_authority_index_rejects_duplicate_artifacts() -> None:
-    artifact = _publication_bundle_reference()
+    artifact = _evaluation_bundle_reference()
 
     with pytest.raises(AuthorityIndexValidationError, match="duplicate artifact"):
         AuthorityIndex.from_artifacts(
@@ -95,8 +95,8 @@ def test_authority_index_rejects_duplicate_artifacts() -> None:
 def test_authority_index_rejects_invalid_dependency_relation() -> None:
     with pytest.raises(AuthorityIndexValidationError, match="relation must be"):
         AuthorityDependency(
-            source=_publication_bundle_reference(),
-            target=_publication_bundle_reference(),
+            source=_evaluation_bundle_reference(),
+            target=_evaluation_bundle_reference(),
             relation="Bad Relation",
         )
 
@@ -110,7 +110,7 @@ def test_authority_index_document_rejects_invalid_bytes() -> None:
 
 
 def _authority_index_record() -> dict[str, object]:
-    artifact = _publication_bundle_reference().to_record()
+    artifact = _evaluation_bundle_reference().to_record()
     return {
         "id": "authority-indexes.review@0.1.0",
         "artifacts": [artifact],
@@ -128,7 +128,7 @@ def _authority_index_record() -> dict[str, object]:
 def _artifact_index_record() -> dict[str, object]:
     return {
         "id": "artifact-indexes.review@0.1.0",
-        "artifacts": [_publication_bundle_reference().to_record()],
+        "artifacts": [_evaluation_bundle_reference().to_record()],
     }
 
 
@@ -141,7 +141,7 @@ def _projection_record() -> dict[str, object]:
         ).to_record(),
         "predicate": "declares_projection",
         "object": _protocol_reference("metric", "metrics.review@0.1.0").to_record(),
-        "scope": [_publication_bundle_reference().to_record()],
+        "scope": [_evaluation_bundle_reference().to_record()],
         "evidence": [
             _protocol_reference(
                 "resource-report",
@@ -159,20 +159,20 @@ def _projection_record() -> dict[str, object]:
 def _view_manifest_record() -> dict[str, object]:
     return {
         "id": "view-manifests.review@0.1.0",
-        "subject_kind": "publication-bundle",
-        "subject": _publication_bundle_reference().to_record(),
+        "subject_kind": "evaluation-bundle",
+        "subject": _evaluation_bundle_reference().to_record(),
         "projection_kind": "summary",
-        "source_artifacts": [_publication_bundle_reference().to_record()],
+        "source_artifacts": [_evaluation_bundle_reference().to_record()],
         "metric_name": "accepted_mass",
         "score_direction": "higher",
     }
 
 
-def _publication_bundle_reference() -> ArtifactReference:
+def _evaluation_bundle_reference() -> ArtifactReference:
     return ArtifactReference.from_record(
         {
-            "kind": "publication-bundle",
-            "content_digest": str(ContentDigest.from_value({"publication": "bundle"})),
+            "kind": "evaluation-bundle",
+            "content_digest": str(ContentDigest.from_value({"evaluation": "bundle"})),
         }
     )
 

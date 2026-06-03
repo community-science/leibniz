@@ -16,7 +16,6 @@ from leibniz.artifacts import (
 )
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
-from leibniz.federation_ingest import FederationIngestPlan
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
 from leibniz.projection_records import ProjectionRecord
 from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
@@ -256,7 +255,6 @@ class AuthorityIndex:
         artifact_indexes: tuple[ArtifactIndex, ...] = (),
         projection_records: tuple[ProjectionRecord, ...] = (),
         view_manifests: tuple[ViewManifest, ...] = (),
-        federation_ingest_plans: tuple[FederationIngestPlan, ...] = (),
     ) -> AuthorityIndex:
         """Build an index from explicit already-loaded public records."""
 
@@ -291,13 +289,6 @@ class AuthorityIndex:
             )
             artifacts.append(manifest_reference)
             dependencies.extend(_view_manifest_dependencies(manifest_reference, manifest))
-        for plan in federation_ingest_plans:
-            plan_reference = reference_for_record(
-                kind="federation-ingest-plan",
-                record=plan.to_record(),
-            )
-            artifacts.append(plan_reference)
-            dependencies.extend(_federation_plan_dependencies(plan_reference, plan))
         return cls.from_artifacts(
             id=id,
             artifacts=tuple(artifacts),
@@ -371,31 +362,6 @@ def _view_manifest_dependencies(
             for artifact in manifest.source_artifacts
         ),
     )
-
-
-def _federation_plan_dependencies(
-    source: ArtifactReference,
-    plan: FederationIngestPlan,
-) -> tuple[AuthorityDependency, ...]:
-    dependencies: list[AuthorityDependency] = []
-    for entry in plan.entries:
-        for reference in entry.expected_publication_bundles:
-            dependencies.append(
-                AuthorityDependency(
-                    source=source,
-                    target=reference,
-                    relation="expected-publication",
-                )
-            )
-        for reference in entry.discovered_publication_bundles:
-            dependencies.append(
-                AuthorityDependency(
-                    source=source,
-                    target=reference,
-                    relation="discovered-publication",
-                )
-            )
-    return tuple(dependencies)
 
 
 def _validation_entries_for(

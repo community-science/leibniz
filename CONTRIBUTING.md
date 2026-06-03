@@ -70,7 +70,7 @@ Treat these as public surface unless the pull request states otherwise:
   `src/leibniz/`.
 - Protocol artifact schemas, durable document formats, semantic identifiers,
   and versioned artifact names.
-- Files intended to be read by other tools, repositories, publication flows, or
+- Files intended to be read by other tools, repositories, result flows, or
   benchmark runners.
 - Console data contracts and generated data consumed by the embedded web
   console.
@@ -136,7 +136,7 @@ surfaces are introduced. Expected checks include:
 - repository policy checks for runtime state and artifact boundaries,
 - documentation checks once public docs become substantial.
 
-Heavy benchmark training, GPU jobs, and network-dependent federation tests
+Heavy benchmark training, GPU jobs, and network-dependent result repository tests
 should not be required pull-request checks. They belong in scheduled or
 manually triggered workflows with explicit resource expectations.
 
@@ -146,7 +146,7 @@ Use validation tiers deliberately:
   contract.
 - Before review, run the full local check set from `README.md` for
   non-documentation changes unless the pull request explains a skipped check.
-- For expensive benchmark, GPU, publication, or federation workflows, document
+- For expensive benchmark, GPU, or result repository workflows, document
   the manual validation path instead of making it a routine pull-request gate.
 
 ## Dependency Discipline

@@ -25,10 +25,10 @@ _ScoreDirection: TypeAlias = Literal["higher", "lower"]
 _name = re.compile(r"^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$")
 _subject_kinds = frozenset(
     (
-        "federation-ingest-plan",
+        "competition-bundle",
+        "evaluation-bundle",
         "measurement-score-view",
         "model-lineage",
-        "publication-bundle",
         "resource-report-set",
     )
 )

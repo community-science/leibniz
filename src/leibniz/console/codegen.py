@@ -84,7 +84,6 @@ def _console_protocol_formats() -> Mapping[str, object]:
         "consoleData": formats.console_data,
         "artifactIndex": formats.artifact_index,
         "resultViews": {
-            "importedResults": formats.imported_result_view,
             "benchmarkResults": formats.benchmark_result_view,
         },
     }
@@ -126,29 +125,11 @@ type ResultViewBaseRecord = {
   source_size_bytes?: number;
 };
 
-export type ResultViewRecord =
-  | ImportedResultViewRecord
-  | BenchmarkResultViewRecord;
-
-export type ImportedResultViewRecord = ResultViewBaseRecord & {
-  format: typeof resultViewFormats.importedResults;
-  publication_bundles: ImportedPublicationBundleRecord[];
-};
+export type ResultViewRecord = BenchmarkResultViewRecord;
 
 export type BenchmarkResultViewRecord = ResultViewBaseRecord & {
   format: typeof resultViewFormats.benchmarkResults;
   benchmark_results: BenchmarkResultRecord[];
-};
-
-export type ImportedPublicationBundleRecord = {
-  id: string;
-  digest: string;
-  source_path: string;
-  submission_package_id: string;
-  benchmark_ids: string[];
-  measurement_count: number;
-  measurement_dataset: Record<string, unknown>;
-  measurement_score_view: Record<string, unknown>;
 };
 
 export type BenchmarkResultRecord = {
@@ -314,12 +295,6 @@ export function isBenchmarkResultView(
   return view.format === resultViewFormats.benchmarkResults;
 }
 
-export function isImportedResultView(
-  view: ResultViewRecord,
-): view is ImportedResultViewRecord {
-  return view.format === resultViewFormats.importedResults;
-}
-
 export function parseResultViewRecords(value: unknown): ResultViewRecord[] {
   return requireArray(value, 'result_views', transportError).map((view, index) =>
     parseResultViewRecord(view, `result_views.${index}`),
@@ -332,13 +307,8 @@ function parseResultViewRecord(value: unknown, path: string): ResultViewRecord {
   requireString(record.source_path, `${path}.source_path`, transportError);
   optionalNumber(record.source_mtime_ms, `${path}.source_mtime_ms`, transportError);
   optionalNumber(record.source_size_bytes, `${path}.source_size_bytes`, transportError);
-  if (record.format === resultViewFormats.benchmarkResults) {
-    return parseBenchmarkResultViewRecord(record, path);
-  }
-  requireLiteral(record.format, `${path}.format`, resultViewFormats.importedResults, transportError);
-  return withFields(record, {
-    publication_bundles: arrayOf(record.publication_bundles, `${path}.publication_bundles`, parseImportedPublicationBundleRecord),
-  }) as ImportedResultViewRecord;
+  requireLiteral(record.format, `${path}.format`, resultViewFormats.benchmarkResults, transportError);
+  return parseBenchmarkResultViewRecord(record, path);
 }
 
 function parseBenchmarkResultViewRecord(
@@ -414,21 +384,6 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
     training_diagnostics: optional(record.training_diagnostics, `${path}.training_diagnostics`, parseTrainingDiagnostics),
     console_view_model: optional(record.console_view_model, `${path}.console_view_model`, parseRunDetailViewModel),
   }) as RunResultRecord;
-}
-
-function parseImportedPublicationBundleRecord(value: unknown, path: string): ImportedPublicationBundleRecord {
-  const record = requireRecord(value, path, transportError);
-  requireStrings(record, path, ['id', 'digest', 'source_path', 'submission_package_id']);
-  return {
-    id: record.id,
-    digest: record.digest,
-    source_path: record.source_path,
-    submission_package_id: record.submission_package_id,
-    benchmark_ids: stringArray(record.benchmark_ids, `${path}.benchmark_ids`),
-    measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`, transportError),
-    measurement_dataset: requireRecord(record.measurement_dataset, `${path}.measurement_dataset`, transportError),
-    measurement_score_view: requireRecord(record.measurement_score_view, `${path}.measurement_score_view`, transportError),
-  } as ImportedPublicationBundleRecord;
 }
 
 function parseCostAxis(value: unknown, path: string): CostAxisRecord {

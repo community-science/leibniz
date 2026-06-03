@@ -21,19 +21,19 @@ from leibniz.benchmark_runner import (
     run_benchmark,
 )
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
+from leibniz.competition_bundles import BenchmarkCompetitionBundleDocument
 from leibniz.documents import (
     canonical_document_bytes,
     document_filename_suffix,
     load_object_document,
 )
-from leibniz.federation_ingest import FederationIngestPlanDocument
+from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
 from leibniz.formation_timing import FormationTimingPlan, time_formation_paths
 from leibniz.local_results import (
-    import_submission_publications,
-    initialize_publication_checkout,
+    initialize_result_checkout,
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
-    push_publication_checkout,
+    push_result_checkout,
 )
 from leibniz.measurements import (
     MeasurementDataset,
@@ -48,9 +48,8 @@ from leibniz.model_manifests import ModelArtifactManifestDocument
 from leibniz.model_operations import ModelOperationDocument
 from leibniz.outcomes import OutcomeSpace
 from leibniz.projection_records import ProjectionRecordDocument
-from leibniz.publications import SubmissionPublicationDocument
 from leibniz.resources import ResourceReportDocument, ResourceReportSetDocument
-from leibniz.submission_registries import SubmissionRegistry, SubmissionRegistryDocument
+from leibniz.submission_registries import SubmissionRegistryDocument
 from leibniz.view_manifests import ViewManifestDocument
 
 __all__ = ["main"]
@@ -187,24 +186,23 @@ def _parser() -> argparse.ArgumentParser:
     )
     model_derivation.add_argument("path", type=Path)
 
-    publication_bundle = validate_subcommands.add_parser(
-        "publication-bundle",
-        help="validate a submission publication bundle document",
+    evaluation_bundle = validate_subcommands.add_parser(
+        "evaluation-bundle",
+        help="validate a benchmark evaluation bundle document",
     )
-    publication_bundle.add_argument("path", type=Path)
+    evaluation_bundle.add_argument("path", type=Path)
+
+    competition_bundle = validate_subcommands.add_parser(
+        "competition-bundle",
+        help="validate a benchmark competition bundle document",
+    )
+    competition_bundle.add_argument("path", type=Path)
 
     submission_registry = validate_subcommands.add_parser(
         "submission-registry",
         help="validate a submission registry document",
     )
     submission_registry.add_argument("path", type=Path)
-
-    federation_ingest_plan = validate_subcommands.add_parser(
-        "federation-ingest-plan",
-        help="validate a federation ingest plan document",
-    )
-    federation_ingest_plan.add_argument("path", type=Path)
-    federation_ingest_plan.add_argument("--registry", type=Path)
 
     results = subcommands.add_parser(
         "results",
@@ -213,70 +211,50 @@ def _parser() -> argparse.ArgumentParser:
     )
     results_subcommands = results.add_subparsers(dest="results_command", required=True)
 
-    init_publication = results_subcommands.add_parser(
-        "init-publication",
-        description="prepare the local result root for public Hugging Face publication",
-        help="prepare a result-publication root",
+    init_results = results_subcommands.add_parser(
+        "init",
+        description="prepare the local result root",
+        help="prepare a result root",
     )
-    init_publication.add_argument(
+    init_results.add_argument(
         "--repo",
         help="Hugging Face dataset repository id in owner/name form",
     )
-    init_publication.add_argument(
+    init_results.add_argument(
         "--token",
         default=None,
         help="Hugging Face API token; defaults to HF_TOKEN or hf auth login",
     )
-    init_publication.add_argument(
+    init_results.add_argument(
         "--results-root",
         default=Path("results"),
         type=Path,
         help="local result checkout; defaults to results",
     )
-    init_publication.add_argument(
+    init_results.add_argument(
         "--remote",
         choices=("auto", "hf", "git"),
         default="auto",
-        help="publication remote selection; defaults to auto",
+        help="result remote selection; defaults to auto",
     )
-    init_publication.add_argument(
+    init_results.add_argument(
         "--push",
         action="store_true",
         help="push the scaffold commit after initialization",
     )
-    init_publication.add_argument(
+    init_results.add_argument(
         "--local-only",
         action="store_true",
-        help="prepare a local publication checkout without a Hugging Face account",
+        help="prepare a local result checkout without a Hugging Face account",
     )
-    init_publication.add_argument(
+    init_results.add_argument(
         "--message",
-        default="Initialize Leibniz result publication checkout",
+        default="Initialize Leibniz result checkout",
         help="Git commit message for the scaffold commit",
-    )
-
-    import_results = results_subcommands.add_parser(
-        "import",
-        description="import local publication bundles into a result checkout",
-        help="import local publication bundles",
-    )
-    import_results.add_argument(
-        "--source",
-        action="append",
-        default=[],
-        required=True,
-        type=Path,
-        help="local publication checkout path or publication bundle document file",
-    )
-    import_results.add_argument(
-        "--results-root",
-        default=Path("results"),
-        type=Path,
-        help="local result checkout; defaults to results",
     )
     publish_results = results_subcommands.add_parser(
         "publish",
-        description="commit local benchmark runs as publication state",
+        description="commit local benchmark result state",
         help="publish local result checkout",
     )
     publish_results.add_argument(
@@ -298,7 +276,7 @@ def _parser() -> argparse.ArgumentParser:
         "--remote",
         choices=("auto", "hf", "git"),
         default="auto",
-        help="publication remote selection; defaults to auto",
+        help="result remote selection; defaults to auto",
     )
     publish_results.add_argument(
         "--push",
@@ -312,7 +290,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     push_results = results_subcommands.add_parser(
         "push",
-        description="push an existing result-publication checkout",
+        description="push an existing result checkout",
         help="push result checkout",
     )
     push_results.add_argument(
@@ -334,7 +312,7 @@ def _parser() -> argparse.ArgumentParser:
         "--remote",
         choices=("auto", "hf", "git"),
         default="auto",
-        help="publication remote selection; defaults to auto",
+        help="result remote selection; defaults to auto",
     )
     materialize_results = results_subcommands.add_parser(
         "materialize",
@@ -396,7 +374,7 @@ def _parser() -> argparse.ArgumentParser:
         description="evaluate a saved training checkpoint as benchmark evidence",
         help="evaluate a saved checkpoint",
     )
-    evaluate.add_argument("--training-summary", type=Path, required=True)
+    evaluate.add_argument("--checkpoint-artifact", type=Path, required=True)
     evaluate.add_argument("--benchmark-root", type=Path, required=True)
     evaluate.add_argument(
         "--results-root",
@@ -530,7 +508,7 @@ def _benchmark(args: argparse.Namespace) -> int:
         if str(args.benchmark_command) == "evaluate":
             summary = evaluate_benchmark_checkpoint(
                 BenchmarkEvaluationPlan(
-                    training_summary_path=args.training_summary,
+                    checkpoint_artifact_path=args.checkpoint_artifact,
                     benchmark_root=args.benchmark_root,
                     results_root=args.results_root,
                     tensor_device=args.device,
@@ -540,9 +518,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                 f"completed benchmark evaluation {summary.run_slug} "
                 f"({summary.measurement_count} measurement(s))"
             )
-            print(f"measurements: {summary.measurement_dataset_path}")
-            print(f"model inspection: {summary.model_inspection_path}")
-            print(f"evaluation summary: {summary.evaluation_summary_path}")
+            print(f"evaluation bundle: {summary.evaluation_bundle_path}")
             return 0
         if str(args.benchmark_command) == "compete":
             summary = compete_benchmark_checkpoints(
@@ -561,7 +537,7 @@ def _benchmark(args: argparse.Namespace) -> int:
             )
             print(f"left model: {summary.left_model_key}")
             print(f"right model: {summary.right_model_key}")
-            print(f"competition: {summary.competition_path}")
+            print(f"competition bundle: {summary.competition_bundle_path}")
             return 0
         if str(args.benchmark_command) == "time-formation":
             summary = time_formation_paths(
@@ -591,8 +567,8 @@ def _benchmark(args: argparse.Namespace) -> int:
 def _results(args: argparse.Namespace) -> int:
     try:
         results_command = str(args.results_command)
-        if results_command == "init-publication":
-            summary = initialize_publication_checkout(
+        if results_command == "init":
+            summary = initialize_result_checkout(
                 repo_id=args.repo,
                 repository_root=Path.cwd(),
                 results_root=args.results_root,
@@ -614,19 +590,6 @@ def _results(args: argparse.Namespace) -> int:
             if summary.pushed:
                 print("pushed: yes")
             return 0
-        if results_command == "import":
-            summary = import_submission_publications(
-                args.source,
-                repository_root=Path.cwd(),
-                results_root=args.results_root,
-            )
-            print(
-                "imported "
-                f"{summary.publication_bundle_count} publication bundle(s), "
-                f"{summary.measurement_count} measurement(s)"
-            )
-            print(f"view: {summary.view_file}")
-            return 0
         if results_command == "publish":
             summary = publish_local_benchmark_results(
                 repository_root=Path.cwd(),
@@ -638,12 +601,9 @@ def _results(args: argparse.Namespace) -> int:
                 commit_message=args.message,
             )
             print(
-                "wrote "
-                f"{summary.publication_bundle_count} publication bundle(s), "
+                "published "
                 f"{summary.measurement_count} measurement(s)"
             )
-            for publication_file in summary.publication_files:
-                print(f"publication: {publication_file}")
             if summary.git_commit is not None:
                 print(f"commit: {summary.git_commit}")
             if summary.git_pushed:
@@ -653,7 +613,7 @@ def _results(args: argparse.Namespace) -> int:
                 print(f"remote commit: {summary.remote_commit}")
             return 0
         if results_command == "push":
-            summary = push_publication_checkout(
+            summary = push_result_checkout(
                 repository_root=Path.cwd(),
                 results_root=args.results_root,
                 repo_id=args.repo,
@@ -761,22 +721,17 @@ def _validate(args: argparse.Namespace) -> int:
             document = ModelDerivationCompatibilityReportDocument.from_bytes(args.path.read_bytes())
             print(f"valid model derivation compatibility report {document.report.id}")
             return 0
-        if artifact == "publication-bundle":
-            document = SubmissionPublicationDocument.from_bytes(args.path.read_bytes())
-            print(f"valid publication bundle {document.bundle.id}")
+        if artifact == "evaluation-bundle":
+            document = BenchmarkEvaluationBundleDocument.from_bytes(args.path.read_bytes())
+            print(f"valid evaluation bundle {document.bundle.id}")
+            return 0
+        if artifact == "competition-bundle":
+            document = BenchmarkCompetitionBundleDocument.from_bytes(args.path.read_bytes())
+            print(f"valid competition bundle {document.bundle.id}")
             return 0
         if artifact == "submission-registry":
             document = SubmissionRegistryDocument.from_bytes(args.path.read_bytes())
             print(f"valid submission registry {document.registry.id}")
-            return 0
-        if artifact == "federation-ingest-plan":
-            registry_path = getattr(args, "registry", None)
-            registry = _load_submission_registry(registry_path) if registry_path else None
-            document = FederationIngestPlanDocument.from_bytes(
-                args.path.read_bytes(),
-                registry=registry,
-            )
-            print(f"valid federation ingest plan {document.plan.id}")
             return 0
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -801,10 +756,6 @@ def _load_outcome_space(path: Path) -> OutcomeSpace:
     return OutcomeSpace.from_record(
         load_object_document(path.read_bytes(), description="outcome space document")
     )
-
-
-def _load_submission_registry(path: Path) -> SubmissionRegistry:
-    return SubmissionRegistryDocument.from_bytes(path.read_bytes()).registry
 
 
 if __name__ == "__main__":

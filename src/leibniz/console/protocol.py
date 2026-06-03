@@ -18,7 +18,6 @@ class ConsoleProtocolFormats:
 
     console_data: str = "leibniz.console-data"
     artifact_index: str = "leibniz.console.artifact-index"
-    imported_result_view: str = "leibniz.console.imported-results"
     benchmark_result_view: str = "leibniz.console.benchmark-results"
 
 
