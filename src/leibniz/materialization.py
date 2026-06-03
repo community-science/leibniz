@@ -509,10 +509,14 @@ class MaterializationPlanDocument:
             raise MaterializationValidationError(str(error)) from error
         plan = MaterializationPlan.from_record(record)
         return cls(plan=plan, digest=plan.digest)
+
+
 def _as_name(value: object, *, field: str) -> ProtocolName:
     if not isinstance(value, ProtocolName):
         raise MaterializationValidationError(f"{field}: expected parsed name")
     return value
+
+
 def _reference(value: object, *, field: str) -> ArtifactReference:
     try:
         return ArtifactReference.from_record(_extract.mapping(value, field))

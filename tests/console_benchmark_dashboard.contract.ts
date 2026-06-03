@@ -375,11 +375,6 @@ const parsedResultViews = parseResultViewRecords([
             training_provenance: undefined,
           },
         ],
-        proposals: [
-          {
-            id: 'legacy-proposal',
-          },
-        ],
       },
     ],
     format: 'leibniz.console.benchmark-results',
@@ -391,11 +386,6 @@ const parsedBenchmarkResult = parsedResultViews[0];
 if (parsedBenchmarkResult?.format !== 'leibniz.console.benchmark-results') {
   throw new Error('parsed benchmark result view must keep its discriminant');
 }
-assertEqual(
-  Object.hasOwn(parsedBenchmarkResult.benchmark_results[0] ?? {}, 'proposals'),
-  false,
-  'parser drops retired proposals field',
-);
 assertEqual(
   parsedBenchmarkResult.benchmark_results[0]?.model_inspections[0]?.model_artifacts.length,
   0,

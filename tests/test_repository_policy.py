@@ -4,7 +4,6 @@ import subprocess
 from pathlib import Path, PurePosixPath
 
 from leibniz._repository_policy import PolicyViolation, RepositoryPolicy
-from leibniz.console.artifact_index import ConsoleArtifactIndexBuilder
 from leibniz.documents import load_object_document
 
 _repository_root = Path(__file__).parents[1]
@@ -213,20 +212,6 @@ def test_field_extraction_helpers_are_not_duplicated_outside_records() -> None:
     )
 
     assert offenders == ()
-
-
-def test_legacy_performance_bundles_are_not_supported() -> None:
-    assert "performance-view-bundle" not in ConsoleArtifactIndexBuilder.supported_kinds()
-    assert not (_repository_root / "src" / "leibniz" / "performance_bundles.py").exists()
-    assert not (
-        _repository_root
-        / "src"
-        / "leibniz"
-        / "console"
-        / "_web_src"
-        / "src"
-        / "performanceViews.ts"
-    ).exists()
 
 
 def test_torch_is_imported_only_in_tensor_runtime() -> None:

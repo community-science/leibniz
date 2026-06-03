@@ -156,7 +156,7 @@ class ConsoleDataBuilder:
         for kind in ConsoleArtifactIndexBuilder.supported_kinds():
             try:
                 ConsoleArtifactIndexBuilder.load_supported_artifact(kind, data)
-            except Exception:
+            except ValueError:
                 continue
             matches.append(kind)
 

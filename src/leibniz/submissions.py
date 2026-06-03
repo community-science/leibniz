@@ -205,12 +205,16 @@ class SubmissionPackageDocument:
             raise SubmissionPackageValidationError(str(error)) from error
         manifest = SubmissionPackageManifest.from_record(record)
         return cls(manifest=manifest, digest=manifest.digest)
+
+
 def _validate_measurement_dataset_manifest(
     *,
     dataset: MeasurementDataset,
     manifest: BenchmarkManifest,
 ) -> None:
     dataset.validate_manifest(manifest)
+
+
 def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
     if isinstance(value, list):
         return tuple(cast(list[object], value))
@@ -228,15 +232,11 @@ def _as_optional_string(value: object) -> str | None:
 
 
 def _as_digest(value: object, *, field: str) -> ContentDigest:
-    if not isinstance(value, str):
-        raise SubmissionPackageValidationError(f"{field}: expected digest string")
-    algorithm, separator, digest_hex = value.partition(":")
-    if separator == "":
-        raise SubmissionPackageValidationError(f"{field}: expected algorithm:digest")
-    try:
-        return ContentDigest(algorithm=algorithm, hex=digest_hex)
-    except ContentEncodingError as error:
-        raise SubmissionPackageValidationError(str(error)) from error
+    return ContentDigest.from_string(
+        value,
+        field=field,
+        error_type=SubmissionPackageValidationError,
+    )
 
 
 def _reject_duplicate_artifact_ids(artifacts: tuple[SubmissionArtifact, ...]) -> None:

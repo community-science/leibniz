@@ -330,15 +330,11 @@ def _as_optional_identifier(value: object) -> ProtocolIdentifier | None:
 def _as_optional_digest(value: object, *, field: str) -> ContentDigest | None:
     if value is None:
         return None
-    if not isinstance(value, str):
-        raise ArtifactReferenceValidationError(f"{field}: expected digest string")
-    algorithm, separator, digest_hex = value.partition(":")
-    if separator == "":
-        raise ArtifactReferenceValidationError(f"{field}: expected algorithm:digest")
-    try:
-        return ContentDigest(algorithm=algorithm, hex=digest_hex)
-    except ContentEncodingError as error:
-        raise ArtifactReferenceValidationError(str(error)) from error
+    return ContentDigest.from_string(
+        value,
+        field=field,
+        error_type=ArtifactReferenceValidationError,
+    )
 
 
 def reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:

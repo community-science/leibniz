@@ -490,6 +490,8 @@ def _canonical_number(value: float) -> int | float:
     if value.is_integer():
         return int(value)
     return value
+
+
 def _as_shape(value: object, *, field: str) -> tuple[int, ...]:
     shape = tuple(_extract.integer(axis, field) for axis in _extract.sequence(value, field))
     _require_positive_shape(shape, field=field)

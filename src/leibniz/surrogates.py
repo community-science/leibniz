@@ -346,16 +346,16 @@ class ArchitectureSurrogateDocument:
             raise ArchitectureSurrogateValidationError(str(error)) from error
         surrogate = ArchitectureSurrogateRecord.from_record(record, dataset=dataset)
         return cls(surrogate=surrogate, digest=surrogate.digest)
+
+
 def _as_digest(value: object, *, field: str) -> ContentDigest:
-    if not isinstance(value, str):
-        raise ArchitectureSurrogateValidationError(f"{field}: expected digest string")
-    algorithm, separator, digest_hex = value.partition(":")
-    if separator == "":
-        raise ArchitectureSurrogateValidationError(f"{field}: expected algorithm:digest")
-    try:
-        return ContentDigest(algorithm=algorithm, hex=digest_hex)
-    except ContentEncodingError as error:
-        raise ArchitectureSurrogateValidationError(str(error)) from error
+    return ContentDigest.from_string(
+        value,
+        field=field,
+        error_type=ArchitectureSurrogateValidationError,
+    )
+
+
 def _require_finite(value: float, *, field: str) -> None:
     if not math.isfinite(value):
         raise ArchitectureSurrogateValidationError(f"{field} must be finite")

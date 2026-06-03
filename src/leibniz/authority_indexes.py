@@ -439,6 +439,8 @@ def _unique_references(references: Iterable[ArtifactReference]) -> tuple[Artifac
         seen.add(key)
         unique.append(reference)
     return tuple(unique)
+
+
 def _dependency_sort_key(dependency: AuthorityDependency) -> tuple[str, str, str]:
     return (
         _reference_identity(dependency.source),

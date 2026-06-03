@@ -90,6 +90,21 @@ def test_console_data_reuses_persistent_generated_observation_batch_cache(
     assert batch == cached_batch
 
 
+def test_console_data_discovery_does_not_swallow_loader_bugs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_loader(_kind: str, _data: bytes) -> object:
+        raise RuntimeError("loader bug")
+
+    monkeypatch.setattr(
+        "leibniz.console.data.ConsoleArtifactIndexBuilder.load_supported_artifact",
+        broken_loader,
+    )
+
+    with pytest.raises(RuntimeError, match="loader bug"):
+        ConsoleDataBuilder(_repository_root).discover((PurePosixPath("tests/fixtures"),))
+
+
 def test_console_data_discovers_supported_public_fixture_documents() -> None:
     data = ConsoleDataBuilder(_repository_root).discover(
         (PurePosixPath("tests/fixtures"), PurePosixPath("src/leibniz/benchmarks"))
