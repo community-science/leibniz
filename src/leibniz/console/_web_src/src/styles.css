@@ -611,8 +611,7 @@ p {
   padding-left: var(--space-sm);
 }
 
-.run-evidence-panel dt,
-.run-validation-row.header span {
+.run-evidence-panel dt {
   color: var(--text-dim);
   font-size: var(--font-label);
   font-weight: 700;
@@ -620,37 +619,12 @@ p {
   text-transform: uppercase;
 }
 
-.run-evidence-panel dd,
-.run-validation-row span {
+.run-evidence-panel dd {
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--text-primary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--font-control);
-}
-
-.run-validation-table {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border: var(--line-thin) solid var(--border-color);
-  border-radius: var(--radius-sm);
-}
-
-.run-validation-row {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--space-sm);
-  padding: var(--space-sm);
-  background: var(--control-bg);
-}
-
-.run-validation-row + .run-validation-row {
-  border-top: var(--line-thin) solid var(--border-color);
-}
-
-.run-validation-row.header {
-  background: var(--metric-bg);
 }
 
 .benchmark-workbench {
