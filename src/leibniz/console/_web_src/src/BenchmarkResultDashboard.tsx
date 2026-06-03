@@ -65,6 +65,7 @@ const plotAxisSelectorTopOffset = 20;
 const plotAxisSelectorHeight = 28;
 const plotAxisSelectorMinWidth = 720;
 const plotAxisSelectorButtonWidth = 118;
+const plotScoreSelectorWidth = 300;
 const defaultLeaderboardSort: ModelResultSort = {
   key: 'score',
   direction: 'descending',
@@ -245,6 +246,7 @@ function BenchmarkFrontierPlot({
   );
   const axisSelectorX = plotMargin.left + plotBodyWidth / 2 - axisSelectorWidth / 2;
   const axisSelectorY = plotMargin.top + plotBodyHeight + plotAxisSelectorTopOffset;
+  const yAxisSelectorCenterY = plotMargin.top + plotBodyHeight / 2;
 
   return (
     <section className="benchmark-result-table-section">
@@ -458,21 +460,16 @@ function BenchmarkFrontierPlot({
                 ))}
               </div>
             </foreignObject>
-            <text
-              className="frontier-chart-axis-label"
-              textAnchor="middle"
-              transform={`rotate(-90 ${18} ${plotMargin.top + plotBodyHeight / 2})`}
-              x={18}
-              y={plotMargin.top + plotBodyHeight / 2}
-            >
-              {scoreAxisLabel}
-            </text>
             {scoreAxes.length > 1 ? (
               <foreignObject
                 height={plotAxisSelectorHeight}
-                width={300}
-                x={plotMargin.left}
-                y={plotMargin.top - 2}
+                width={plotScoreSelectorWidth}
+                transform={
+                  `translate(18 ${yAxisSelectorCenterY}) rotate(-90) ` +
+                  `translate(${-plotScoreSelectorWidth / 2} ${-plotAxisSelectorHeight / 2})`
+                }
+                x={0}
+                y={0}
               >
                 <div className="frontier-chart-score-selector">
                   <span>Score</span>
@@ -495,7 +492,17 @@ function BenchmarkFrontierPlot({
                   </div>
                 </div>
               </foreignObject>
-            ) : null}
+            ) : (
+              <text
+                className="frontier-chart-axis-label"
+                textAnchor="middle"
+                transform={`rotate(-90 ${18} ${yAxisSelectorCenterY})`}
+                x={18}
+                y={yAxisSelectorCenterY}
+              >
+                {scoreAxisLabel}
+              </text>
+            )}
             {model.points.length === 0 ? (
               <text
                 className="frontier-chart-empty-label"

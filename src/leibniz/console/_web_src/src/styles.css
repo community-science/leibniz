@@ -400,8 +400,10 @@ p {
 .frontier-chart-score-selector {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-sm);
   height: 100%;
+  width: 100%;
 }
 
 .frontier-chart-axis-group {
