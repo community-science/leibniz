@@ -465,7 +465,7 @@ function BenchmarkFrontierPlot({
               x={18}
               y={plotMargin.top + plotBodyHeight / 2}
             >
-              {`Score: ${scoreAxisLabel}`}
+              {scoreAxisLabel}
             </text>
             {scoreAxes.length > 1 ? (
               <foreignObject
