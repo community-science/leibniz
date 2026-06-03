@@ -32,7 +32,7 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
             ".pytest_cache/v/cache/nodeids",
             ".ruff_cache/CACHEDIR.TAG",
             "results/measurements/digits/local-run.json",
-            "results/proposals/digits/proposal_set.json",
+            "results/evaluations/digits/local-run.json",
             "results/views/benchmark_results.json",
             ".venv/pyvenv.cfg",
             ".vite/deps/react.js",
@@ -64,7 +64,7 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(
-            path=PurePosixPath("results/proposals/digits/proposal_set.json"),
+            path=PurePosixPath("results/evaluations/digits/local-run.json"),
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(

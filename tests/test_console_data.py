@@ -357,27 +357,6 @@ def _png_dimensions(data_url: str) -> tuple[int, int]:
 def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
     result_root = tmp_path / "views"
     result_root.mkdir()
-    (result_root / "imported_results.json").write_text(
-        """
-{
-  "format": "leibniz.console.imported-results",
-  "format_version": 1,
-  "publication_bundles": [
-    {
-      "id": "publication-bundles.digits@0.1.0",
-      "digest": "sha256:abc",
-      "source_path": "/tmp/submissions/digits.json",
-      "submission_package_id": "submissions.digits@0.1.0",
-      "benchmark_ids": ["benchmarks.digits@0.1.0"],
-      "measurement_count": 1,
-      "measurement_dataset": {"measurements": []},
-      "measurement_score_view": {"entries": []}
-    }
-  ]
-}
-""",
-        encoding="utf-8",
-    )
     (result_root / "benchmark_results.json").write_text(
         """
 {
@@ -502,18 +481,10 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
     record = data.to_record()
     result_views = cast(list[dict[str, object]], record["result_views"])
 
-    assert len(result_views) == 2
-    imported = next(
-        view for view in result_views if view["format"] == "leibniz.console.imported-results"
-    )
+    assert len(result_views) == 1
     benchmark = next(
         view for view in result_views if view["format"] == "leibniz.console.benchmark-results"
     )
-    assert imported["source_path"] == (result_root / "imported_results.json").as_posix()
-    assert isinstance(imported["source_mtime_ms"], int)
-    assert isinstance(imported["source_size_bytes"], int)
-    bundles = cast(list[dict[str, object]], imported["publication_bundles"])
-    assert bundles[0]["measurement_count"] == 1
     results = cast(list[dict[str, object]], benchmark["benchmark_results"])
     assert results[0]["benchmark_id"] == "benchmarks.digits@0.1.0"
 

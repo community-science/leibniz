@@ -36,7 +36,6 @@ def test_generated_console_result_view_records_module_contains_parser_surface() 
     assert "export function parseResultViewRecords" in generated
     assert "console_view_model?: RunDetailViewModelRecord;" in generated
     assert "from '../transport.ts'" in generated
-    assert "parseImportedPublicationBundleRecord" in generated
     assert "delete resultRecord" not in generated
     assert "parseRunDetailViewModel" in generated
     assert "arrayOf(record.model_inspections ?? []" in generated
@@ -106,7 +105,6 @@ def test_handwritten_web_source_uses_generated_protocol_formats() -> None:
     migrated_literals = (
         "leibniz.console-data",
         "leibniz.console.artifact-index",
-        "leibniz.console.imported-results",
         "leibniz.console.benchmark-results",
     )
 
@@ -126,13 +124,11 @@ def test_handwritten_result_view_source_uses_generated_record_parsers() -> None:
     migrated_markers = (
         "class ResultViewTransportError",
         "function parseResultViewRecord",
-        "function parseImportedResultViewRecord",
         "function parseBenchmarkResultViewRecord",
         "function parseBenchmarkResult",
         "function parseModelResult",
         "function parseRunResult",
         "function parseTrainingDiagnostics",
-        "function parseProposal",
     )
 
     offenders = tuple(

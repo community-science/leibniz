@@ -220,17 +220,17 @@ def test_artifact_index_canonicalizes_explicit_references() -> None:
 
     index = ArtifactIndex.from_record(
         {
-            "id": "artifact-indexes.boolean-publication@0.1.0",
+            "id": "artifact-indexes.boolean-evaluation@0.1.0",
             "artifacts": [weights.to_record(), architecture.to_record()],
         }
     )
 
     assert index == ArtifactIndex(
-        id=ProtocolIdentifier.parse("artifact-indexes.boolean-publication@0.1.0"),
+        id=ProtocolIdentifier.parse("artifact-indexes.boolean-evaluation@0.1.0"),
         artifacts=(architecture, weights),
     )
     assert index.to_record() == {
-        "id": "artifact-indexes.boolean-publication@0.1.0",
+        "id": "artifact-indexes.boolean-evaluation@0.1.0",
         "artifacts": [architecture.to_record(), weights.to_record()],
     }
     assert index.digest == ContentDigest.from_value(index.to_record())
@@ -240,13 +240,13 @@ def test_artifact_index_records_equivalent_orderings_with_same_digest() -> None:
     references = _index_references()
     forward = ArtifactIndex.from_record(
         {
-            "id": "artifact-indexes.boolean-publication@0.1.0",
+            "id": "artifact-indexes.boolean-evaluation@0.1.0",
             "artifacts": [reference.to_record() for reference in references],
         }
     )
     reverse = ArtifactIndex.from_record(
         {
-            "id": "artifact-indexes.boolean-publication@0.1.0",
+            "id": "artifact-indexes.boolean-evaluation@0.1.0",
             "artifacts": [reference.to_record() for reference in reversed(references)],
         }
     )
@@ -256,10 +256,10 @@ def test_artifact_index_records_equivalent_orderings_with_same_digest() -> None:
 
 
 def test_artifact_index_validates_source_digest_when_source_is_supplied() -> None:
-    source_record = {"publication": True, "version": 1}
+    source_record = {"evaluation": True, "version": 1}
     index = ArtifactIndex.from_source_record(
-        id=ProtocolIdentifier.parse("artifact-indexes.boolean-publication@0.1.0"),
-        source_kind="publication-bundle",
+        id=ProtocolIdentifier.parse("artifact-indexes.boolean-evaluation@0.1.0"),
+        source_kind="evaluation-bundle",
         source_record=source_record,
         artifacts=_index_references(),
     )
@@ -275,7 +275,7 @@ def test_artifact_index_validates_source_digest_when_source_is_supplied() -> Non
     assert document.digest == ContentDigest.from_value(index.to_record())
     assert index.to_record()["source_digest"] == str(ContentDigest.from_value(source_record))
 
-    altered_source = {"publication": True, "version": 2}
+    altered_source = {"evaluation": True, "version": 2}
     assert str(
         capture_artifact_error(
             lambda: ArtifactIndex.from_record(index.to_record(), source_record=altered_source)
@@ -293,7 +293,7 @@ def test_artifact_index_rejects_duplicate_and_malformed_records() -> None:
         capture_artifact_error(
             lambda: ArtifactIndex.from_record(
                 {
-                    "id": "artifact-indexes.boolean-publication@0.1.0",
+                    "id": "artifact-indexes.boolean-evaluation@0.1.0",
                     "artifacts": [reference.to_record(), reference.to_record()],
                 }
             )
@@ -304,7 +304,7 @@ def test_artifact_index_rejects_duplicate_and_malformed_records() -> None:
         capture_artifact_error(
             lambda: ArtifactIndex.from_record(
                 {
-                    "id": "artifact-indexes.boolean-publication@0.1.0",
+                    "id": "artifact-indexes.boolean-evaluation@0.1.0",
                     "artifacts": [],
                 }
             )
@@ -326,7 +326,7 @@ def test_artifact_index_rejects_duplicate_and_malformed_records() -> None:
         capture_artifact_error(
             lambda: ArtifactIndex.from_record(
                 {
-                    "id": "artifact-indexes.boolean-publication@0.1.0",
+                    "id": "artifact-indexes.boolean-evaluation@0.1.0",
                     "source_digest": str(ContentDigest.from_value({"source": True})),
                     "artifacts": [reference.to_record()],
                 }
@@ -338,8 +338,8 @@ def test_artifact_index_rejects_duplicate_and_malformed_records() -> None:
         capture_artifact_error(
             lambda: ArtifactIndex.from_record(
                 {
-                    "id": "artifact-indexes.boolean-publication@0.1.0",
-                    "source_kind": "publication-bundle",
+                    "id": "artifact-indexes.boolean-evaluation@0.1.0",
+                    "source_kind": "evaluation-bundle",
                     "artifacts": [reference.to_record()],
                 }
             )

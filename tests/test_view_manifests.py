@@ -56,48 +56,52 @@ def test_view_manifest_validates_subject_and_sources() -> None:
     manifest.validate_source_artifacts((source_record,))
 
 
-def test_view_manifest_parses_publication_and_federation_subjects() -> None:
-    publication = ViewManifest.from_record(
+def test_view_manifest_parses_evaluation_bundle_subject() -> None:
+    evaluation = ViewManifest.from_record(
         {
-            "id": "view-manifests.publications@0.1.0",
-            "subject_kind": "publication-bundle",
+            "id": "view-manifests.evaluations@0.1.0",
+            "subject_kind": "evaluation-bundle",
             "subject": _protocol_reference(
-                "publication-bundle",
-                "publication-bundles.boolean@0.1.0",
+                "evaluation-bundle",
+                "benchmark-evaluations.boolean@0.1.0",
             ).to_record(),
             "projection_kind": "summary",
             "source_artifacts": [
                 _protocol_reference(
-                    "publication-bundle",
-                    "publication-bundles.boolean@0.1.0",
+                    "evaluation-bundle",
+                    "benchmark-evaluations.boolean@0.1.0",
                 ).to_record()
             ],
             "metric_name": "accepted_mass",
             "score_direction": "higher",
         }
     )
-    federation = ViewManifest.from_record(
+
+    assert evaluation.subject_kind == "evaluation-bundle"
+
+
+def test_view_manifest_parses_competition_bundle_subject() -> None:
+    competition = ViewManifest.from_record(
         {
-            "id": "view-manifests.federation@0.1.0",
-            "subject_kind": "federation-ingest-plan",
+            "id": "view-manifests.competitions@0.1.0",
+            "subject_kind": "competition-bundle",
             "subject": _protocol_reference(
-                "federation-ingest-plan",
-                "federation-ingest-plans.default@0.1.0",
+                "competition-bundle",
+                "benchmark-competitions.boolean@0.1.0",
             ).to_record(),
-            "projection_kind": "comparison",
+            "projection_kind": "summary",
             "source_artifacts": [
                 _protocol_reference(
-                    "submission-registry",
-                    "submission-registries.default@0.1.0",
+                    "competition-bundle",
+                    "benchmark-competitions.boolean@0.1.0",
                 ).to_record()
             ],
-            "metric_name": "publication_bundle_count",
+            "metric_name": "relative_score",
             "score_direction": "higher",
         }
     )
 
-    assert publication.subject_kind == "publication-bundle"
-    assert federation.subject_kind == "federation-ingest-plan"
+    assert competition.subject_kind == "competition-bundle"
 
 
 @pytest.mark.parametrize(
@@ -126,8 +130,8 @@ def test_view_manifest_rejects_invalid_records(
 def test_view_manifest_rejects_subject_kind_mismatch() -> None:
     record = _measurement_score_view_manifest_record()
     record["subject"] = _protocol_reference(
-        "publication-bundle",
-        "publication-bundles.boolean@0.1.0",
+        "evaluation-bundle",
+        "benchmark-evaluations.boolean@0.1.0",
     ).to_record()
 
     with pytest.raises(ViewManifestValidationError, match="subject kind must match"):

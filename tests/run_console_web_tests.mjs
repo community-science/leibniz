@@ -355,7 +355,7 @@ function assertConsoleResultRootPolicy() {
     if (!resultViewRecords.includes(marker)) {
       continue;
     }
-    throw new Error(`Result view transport must not expose local proposal marker: ${marker}`);
+    throw new Error(`Result view transport must not expose local mutation marker: ${marker}`);
   }
   const viteConfig = readFileSync(
     resolve(repositoryRoot, 'src/leibniz/console/_web_src/vite.config.mjs'),
@@ -426,7 +426,7 @@ function assertConsoleResultRootPolicy() {
       'explicit console base path',
     );
 
-    const explicitRoot = resolve(tempRoot, 'publication-results');
+    const explicitRoot = resolve(tempRoot, 'external-results');
     const explicitMissingRoot = resolve(tempRoot, 'missing-results');
     const env = {
       LEIBNIZ_CONSOLE_RESULT_ROOTS: [explicitRoot, explicitMissingRoot].join(delimiter),

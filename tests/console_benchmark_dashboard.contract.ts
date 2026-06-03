@@ -553,13 +553,12 @@ assertThrows(
   () =>
     parseResultViewRecords([
       {
-        format: 'leibniz.console.imported-results',
+        format: 'leibniz.console.unknown-results',
         format_version: 1,
-        publication_bundles: [{ id: 'publication-bundles.incomplete@0.1.0' }],
-        source_path: 'results/imported_results.json',
+        source_path: 'results/unknown_results.json',
       },
     ]),
-  'parser rejects incomplete imported publication bundles',
+  'parser rejects unsupported result views',
 );
 assertThrows(
   () =>

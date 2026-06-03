@@ -10,19 +10,20 @@ import leibniz.benchmark_runner as benchmark_runner
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_evaluation import ValidationCompetencePoint
 from leibniz.benchmark_runner import (
+    BenchmarkCompetitionPlan,
     BenchmarkEvaluationPlan,
     BenchmarkRunnerError,
     BenchmarkRunPlan,
     BenchmarkRunSummary,
+    compete_benchmark_checkpoints,
     evaluate_benchmark_checkpoint,
     run_benchmark,
 )
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
 from leibniz.documents import canonical_document_bytes, load_object_document
+from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
-from leibniz.measurements import MeasurementDatasetDocument
-from leibniz.model_inspection import ModelInspectionDocument
 from leibniz.observation_generation import load_observation_generator
 from leibniz.tensor_runtime import (
     TensorRuntime,
@@ -58,14 +59,6 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     assert summary.run_slug.startswith(
         "digits-arch-4a2277aa9fd5-c1-seed101-samples2-steps1-train-"
     )
-    assert summary.measurement_dataset_path == (
-        tmp_path
-        / "results"
-        / "measurements"
-        / "digits"
-        / f"{summary.run_slug}.json"
-    )
-    assert not summary.measurement_dataset_path.exists()
     assert not (tmp_path / "results").exists()
 
 
@@ -197,28 +190,41 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     )
     evaluation_summary = evaluate_benchmark_checkpoint(
         BenchmarkEvaluationPlan(
-            training_summary_path=summary.training_summary_path,
+            checkpoint_artifact_path=_selected_checkpoint_artifact_path(
+                summary.training_summary_path
+            ),
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
             tensor_device="cpu",
         )
     )
 
-    dataset_document = MeasurementDatasetDocument.from_bytes(
-        evaluation_summary.measurement_dataset_path.read_bytes()
-    )
-    inspection_document = ModelInspectionDocument.from_bytes(
-        evaluation_summary.model_inspection_path.read_bytes()
-    )
+    evaluation_bundle = BenchmarkEvaluationBundleDocument.from_bytes(
+        evaluation_summary.evaluation_bundle_path.read_bytes()
+    ).bundle
     manifest = BenchmarkManifestDocument.from_bytes(
         (_digits_benchmark_root / "manifest.json").read_bytes()
     ).manifest
 
-    dataset_document.dataset.validate_manifest(manifest)
+    evaluation_bundle.measurement_dataset.validate_manifest(manifest)
     assert evaluation_summary.measurement_count == 3
-    assert len(dataset_document.dataset.measurements) == 3
-    assert inspection_document.inspection.cost_summary.parameter_count == 50
-    assert inspection_document.inspection.cost_summary.inference_compute == 656
+    assert len(evaluation_bundle.measurement_dataset.measurements) == 3
+    assert evaluation_bundle.measurement_score_view.source_dataset_digest == (
+        evaluation_bundle.measurement_dataset.digest
+    )
+    assert evaluation_bundle.model_inspection.cost_summary.parameter_count == 50
+    assert evaluation_bundle.model_inspection.cost_summary.inference_compute == 656
+    assert (
+        evaluation_bundle.model_checkpoint["manifest_digest"]
+        == str(evaluation_bundle.model_manifest.digest)
+    )
+    assert evaluation_bundle.evaluation_protocol["tensor_device"] == "cpu"
+    assert evaluation_bundle.evaluation_protocol["requested_tensor_device"] == "cpu"
+    assert evaluation_summary.evaluation_bundle_path.parent == (
+        tmp_path / "results" / "evaluations" / "digits"
+    )
+    assert not (tmp_path / "results" / "measurements").exists()
+    assert not (tmp_path / "results" / "model-inspections").exists()
     assert summary.training_summary_path.exists()
     training_summary = load_object_document(
         summary.training_summary_path.read_bytes(),
@@ -278,10 +284,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_run.validation_checks == 2
     assert training_run.validation_history[0].step == 0
     assert training_run.validation_history[-1].step == 1
-    evaluation_record = load_object_document(
-        evaluation_summary.evaluation_summary_path.read_bytes(),
-        description="evaluation summary",
-    )
+    evaluation_record = evaluation_bundle.to_record()
     evaluation_curriculum = cast(dict[str, object], evaluation_record["evaluation_curriculum"])
     training_curriculum = cast(dict[str, object], training_summary["training_curriculum"])
     curriculum_rungs = cast(list[dict[str, object]], evaluation_curriculum["rungs"])
@@ -362,6 +365,42 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     )
 
 
+def test_benchmark_evaluation_rejects_checkpoint_artifact_for_wrong_benchmark(
+    tmp_path: Path,
+) -> None:
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=tmp_path / "results",
+            sample_count=1,
+            evaluation_sample_count=1,
+            seed=101,
+            train_steps=0,
+            tensor_device="cpu",
+        )
+    )
+    checkpoint_artifact_path = _selected_checkpoint_artifact_path(summary.training_summary_path)
+    checkpoint_record = dict(
+        load_object_document(
+            checkpoint_artifact_path.read_bytes(),
+            description="checkpoint artifact",
+        )
+    )
+    checkpoint_record["benchmark_id"] = "benchmarks.synthetic-bars@0.1.0"
+    checkpoint_artifact_path.write_bytes(canonical_document_bytes(checkpoint_record) + b"\n")
+
+    with pytest.raises(BenchmarkRunnerError, match="does not match benchmark root"):
+        evaluate_benchmark_checkpoint(
+            BenchmarkEvaluationPlan(
+                checkpoint_artifact_path=checkpoint_artifact_path,
+                benchmark_root=_digits_benchmark_root,
+                results_root=tmp_path / "results",
+                tensor_device="cpu",
+            )
+        )
+
+
 def test_digits_benchmark_runner_accepts_convnet_architecture(
     tmp_path: Path,
 ) -> None:
@@ -379,16 +418,18 @@ def test_digits_benchmark_runner_accepts_convnet_architecture(
     )
     evaluation_summary = evaluate_benchmark_checkpoint(
         BenchmarkEvaluationPlan(
-            training_summary_path=summary.training_summary_path,
+            checkpoint_artifact_path=_selected_checkpoint_artifact_path(
+                summary.training_summary_path
+            ),
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
             tensor_device="cpu",
         )
     )
 
-    inspection = ModelInspectionDocument.from_bytes(
-        evaluation_summary.model_inspection_path.read_bytes()
-    ).inspection
+    inspection = BenchmarkEvaluationBundleDocument.from_bytes(
+        evaluation_summary.evaluation_bundle_path.read_bytes()
+    ).bundle.model_inspection
 
     assert evaluation_summary.measurement_count == 2
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
@@ -485,8 +526,6 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
     )
 
     assert summary.measurement_count == 2
-    assert not summary.measurement_dataset_path.exists()
-    assert not summary.model_inspection_path.exists()
     assert "sampled_competence" not in training_summary
     assert "evaluation_curriculum" not in training_summary
     assert "measurement_dataset_digest" not in training_summary
@@ -1099,7 +1138,9 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     )
     evaluate_benchmark_checkpoint(
         BenchmarkEvaluationPlan(
-            training_summary_path=training_summary.training_summary_path,
+            checkpoint_artifact_path=_selected_checkpoint_artifact_path(
+                training_summary.training_summary_path
+            ),
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
             tensor_device="cpu",
@@ -1121,47 +1162,25 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert "model_inspection_digest" in history[0]
     assert "model_inspection_path" in history[0]
     assert "sampled_competence" in history[0]
-    diagnostics = cast(dict[str, object], history[0]["training_diagnostics"])
-    protocol = cast(dict[str, object], diagnostics["protocol"])
-    throughput = cast(dict[str, object], diagnostics["throughput"])
+    assert "training_diagnostics" not in history[0]
     cost_summary = cast(dict[str, object], history[0]["cost_summary"])
-    phase_timing = cast(dict[str, object], throughput["phase_timing"])
-    roofline_comparison = cast(dict[str, object], throughput["roofline_comparison"])
-    assert protocol["optimizer"] == "adam"
-    assert protocol["schedule"] == "reduce-on-plateau"
-    assert protocol["patience"] == 6
-    assert diagnostics["stop_reason"] == "max-steps"
-    assert diagnostics["steps_run"] == 1
-    assert diagnostics["training_compute"] == 2784.0
     assert cost_summary["training_compute"] == 2784.0
     assert cost_summary["training_compute_per_sample"] == 1392
-    assert diagnostics["validation_checks"] == 2
-    assert "final_validation_loss" in diagnostics
-    assert "training_tensor_batch" in cast(dict[str, object], phase_timing["phases"])
-    assert roofline_comparison["status"] == "available"
-    assert roofline_comparison["model"] == "operational-intensity"
-    assert len(cast(list[dict[str, object]], diagnostics["validation_history"])) == 2
     console_view_model = cast(dict[str, object], history[0]["console_view_model"])
     detail_sections = cast(list[dict[str, object]], console_view_model["detail_sections"])
     assert [section["title"] for section in detail_sections] == [
         "Sampled Competence",
-        "Training Protocol",
-        "Training Outcome",
-        "Throughput",
-        "Validation History",
     ]
-    validation_table = cast(dict[str, object], detail_sections[-1]["table"])
-    assert validation_table["columns"] == ["Step", "Loss", "Stale"]
+    inspections = cast(list[dict[str, object]], result["model_inspections"])
     artifact_kinds = {
         artifact["kind"]
-        for artifact in cast(list[dict[str, object]], diagnostics["artifacts"])
+        for artifact in cast(list[dict[str, object]], inspections[0]["artifacts"])
     }
     assert artifact_kinds == {
         "measurement-dataset",
         "model-checkpoint",
         "model-inspection",
         "model-manifest",
-        "training-summary",
     }
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     score_basis = cast(dict[str, object], leaderboard[0]["score_basis"])
@@ -1186,11 +1205,119 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
     assert points[0]["sample_count"] == 2
-    inspections = cast(list[dict[str, object]], result["model_inspections"])
     assert len(inspections) == 1
     assert inspections[0]["source_path"] == history[0]["model_inspection_path"]
     assert "measurement_dataset" in inspections[0]
-    assert "training_provenance" in inspections[0]
+
+
+def test_benchmark_competition_uses_evaluation_bundles_as_handoff_contract(
+    tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    first_training = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=results_root,
+            sample_count=1,
+            evaluation_sample_count=1,
+            seed=101,
+            train_steps=0,
+            tensor_device="cpu",
+        )
+    )
+    second_training = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=results_root,
+            sample_count=1,
+            evaluation_sample_count=1,
+            seed=202,
+            train_steps=0,
+            tensor_device="cpu",
+        )
+    )
+    first_evaluation = evaluate_benchmark_checkpoint(
+        BenchmarkEvaluationPlan(
+            checkpoint_artifact_path=_selected_checkpoint_artifact_path(
+                first_training.training_summary_path
+            ),
+            benchmark_root=_digits_benchmark_root,
+            results_root=results_root,
+            tensor_device="cpu",
+        )
+    )
+    second_evaluation = evaluate_benchmark_checkpoint(
+        BenchmarkEvaluationPlan(
+            checkpoint_artifact_path=_selected_checkpoint_artifact_path(
+                second_training.training_summary_path
+            ),
+            benchmark_root=_digits_benchmark_root,
+            results_root=results_root,
+            tensor_device="cpu",
+        )
+    )
+    for path in (
+        first_evaluation.evaluation_bundle_path,
+        second_evaluation.evaluation_bundle_path,
+    ):
+        record = dict(load_object_document(path.read_bytes(), description="evaluation bundle"))
+        path.write_bytes(canonical_document_bytes(record) + b"\n")
+    first_training.training_summary_path.unlink()
+    second_training.training_summary_path.unlink()
+
+    competition = compete_benchmark_checkpoints(
+        BenchmarkCompetitionPlan(
+            left_evaluation_path=first_evaluation.evaluation_bundle_path,
+            right_evaluation_path=second_evaluation.evaluation_bundle_path,
+            benchmark_root=_digits_benchmark_root,
+            results_root=results_root,
+            sample_count=1,
+            tensor_device="cpu",
+        )
+    )
+
+    first_bundle = BenchmarkEvaluationBundleDocument.from_bytes(
+        first_evaluation.evaluation_bundle_path.read_bytes()
+    ).bundle
+    second_bundle = BenchmarkEvaluationBundleDocument.from_bytes(
+        second_evaluation.evaluation_bundle_path.read_bytes()
+    ).bundle
+    expected_keys = {
+        str(first_bundle.model_checkpoint["digest"]),
+        str(second_bundle.model_checkpoint["digest"]),
+    }
+    assert {competition.left_model_key, competition.right_model_key} == expected_keys
+    competition_record = load_object_document(
+        competition.competition_bundle_path.read_bytes(),
+        description="competition bundle",
+    )
+    assert competition_record["format"] == "leibniz.benchmark-competition"
+    competition_result = cast(dict[str, object], competition_record["competition_result"])
+    assert {
+        competition_result["left_model_key"],
+        competition_result["right_model_key"],
+    } == expected_keys
+
+    view_summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=results_root,
+    )
+    view = load_console_result_view(view_summary.view_file.read_bytes())
+    result = cast(list[dict[str, object]], view["benchmark_results"])[0]
+    leaderboard = cast(list[dict[str, object]], result["leaderboard"])
+    assert {model["model_key"] for model in leaderboard} == expected_keys
+    assert len(leaderboard) == 2
+
+
+def _selected_checkpoint_artifact_path(training_summary_path: Path) -> Path:
+    training_summary = load_object_document(
+        training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    checkpoint = cast(dict[str, object], training_summary["selected_model_checkpoint"])
+    return Path(cast(str, checkpoint["record_path"]))
 
 
 def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
