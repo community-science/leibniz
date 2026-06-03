@@ -534,13 +534,15 @@ def test_plateau_scheduler_resets_learning_rate_for_curriculum_expansion() -> No
 
 
 def test_reduce_on_plateau_scheduler_uses_convergence_patience() -> None:
+    import importlib
+
     runtime = resolve_tensor_runtime("cpu")
-    torch = runtime.torch
+    torch = importlib.import_module("torch")
     parameter = torch.nn.Parameter(torch.tensor(1.0))
     optimizer = torch.optim.Adam([parameter], lr=0.01)
 
     schedule = cast(Any, benchmark_runner)._make_scheduler(
-        torch=torch,
+        runtime=runtime,
         optimizer=optimizer,
         name="reduce-on-plateau",
         max_steps=None,
@@ -563,7 +565,7 @@ def test_training_stage_records_current_validation_loss_without_global_best(
 
     monkeypatch.setattr(benchmark_runner, "_validation_loss", constant_validation_loss)
     stage_result = cast(Any, benchmark_runner)._train_until_convergence(
-        torch=object(),
+        runtime=resolve_tensor_runtime("cpu"),
         module=object(),
         optimizer=type("FakeOptimizer", (), {"param_groups": [{"lr": 0.01}]})(),
         scheduler=None,

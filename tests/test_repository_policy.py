@@ -213,28 +213,14 @@ def test_torch_is_imported_only_in_tensor_runtime() -> None:
     source_root = _repository_root / "src" / "leibniz"
 
     offenders = tuple(
-        f"{path.relative_to(_repository_root)}:{node.lineno}"
+        f"{path.relative_to(_repository_root)}:{line_number}"
         for path in sorted(source_root.rglob("*.py"))
         if path.relative_to(source_root).as_posix() != "tensor_runtime.py"
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
-        if isinstance(node, ast.Import | ast.ImportFrom | ast.Call)
-        and _is_torch_reference(node)
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if re.search(r"\btorch\b", line)
     )
 
     assert offenders == ()
-
-
-def _is_torch_reference(node: ast.Import | ast.ImportFrom | ast.Call) -> bool:
-    if isinstance(node, ast.Import):
-        return any(
-            alias.name == "torch" or alias.name.startswith("torch.")
-            for alias in node.names
-        )
-    if isinstance(node, ast.ImportFrom):
-        return node.module is not None and (
-            node.module == "torch" or node.module.startswith("torch.")
-        )
-    return _is_torch_importlib_call(node)
 
 
 def test_document_suffix_is_funneled_through_documents_module() -> None:
@@ -280,20 +266,6 @@ def _constant_string_value(node: ast.expr) -> str | None:
         if separator is not None and items is not None:
             return separator.join(items)
     return None
-
-
-def _is_torch_importlib_call(node: ast.AST) -> bool:
-    if not isinstance(node, ast.Call):
-        return False
-    func = node.func
-    if not (isinstance(func, ast.Attribute) and func.attr == "import_module"):
-        return False
-    if not node.args:
-        return False
-    module_name = _constant_string_value(node.args[0])
-    return module_name is not None and (
-        module_name == "torch" or module_name.startswith("torch.")
-    )
 
 
 def _constant_string_sequence(node: ast.expr) -> tuple[str, ...] | None:

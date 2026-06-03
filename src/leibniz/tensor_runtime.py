@@ -16,13 +16,23 @@ from leibniz.observation_generation import GeneratedFormationBatch
 from leibniz.tensor_shapes import TensorShape
 
 __all__ = [
+    "apply_softmax_predictions",
     "architecture_tensor_runtime_issue",
     "architecture_supported_by_tensor_runtime",
     "build_architecture_modules",
     "build_architecture_sequential",
+    "build_cosine_lr_schedule",
+    "build_cross_entropy_loss",
+    "build_optimizer",
+    "build_plateau_lr_schedule",
     "FormationTensorCache",
+    "make_float_tensor",
+    "make_long_tensor",
+    "no_grad_context",
     "OperationFallbackSequential",
     "preferred_tensor_runtime_device_kind",
+    "seed_runtime",
+    "synchronize_runtime",
     "TensorRuntime",
     "TensorRuntimeError",
     "TensorRuntimeDevice",
@@ -623,6 +633,106 @@ def build_architecture_sequential(
     torch = _torch()
     modules = build_architecture_modules(architecture, canonical_layer_kinds=canonical_layer_kinds)
     return torch.nn.Sequential(*modules)
+
+
+def synchronize_runtime(runtime: TensorRuntime) -> None:
+    """Synchronize the runtime device; no-op on CPU."""
+
+    _synchronize_runtime(runtime)
+
+
+def seed_runtime(runtime: TensorRuntime, *, seed: int) -> None:
+    """Set the global random seed for reproducible training."""
+
+    _ = runtime
+    _torch().manual_seed(seed)
+
+
+def build_cross_entropy_loss(runtime: TensorRuntime) -> Any:
+    """Build a cross-entropy classification loss module."""
+
+    _ = runtime
+    return _torch().nn.CrossEntropyLoss()
+
+
+def no_grad_context(runtime: TensorRuntime) -> Any:
+    """Return a torch.no_grad() context manager for inference."""
+
+    _ = runtime
+    return _torch().no_grad()
+
+
+def apply_softmax_predictions(
+    runtime: TensorRuntime, module: Any, fields: Any
+) -> list[list[float]]:
+    _ = runtime
+    return _torch().softmax(module(fields), dim=1).tolist()
+
+
+def build_optimizer(
+    runtime: TensorRuntime,
+    *,
+    name: str,
+    parameters: Any,
+    learning_rate: float,
+) -> Any:
+    """Build a named optimizer for module parameters."""
+
+    _ = runtime
+    torch = _torch()
+    if name == "sgd":
+        return torch.optim.SGD(parameters, lr=learning_rate)
+    if name == "adam":
+        return torch.optim.Adam(parameters, lr=learning_rate)
+    if name == "adamw":
+        return torch.optim.AdamW(parameters, lr=learning_rate)
+    raise TensorRuntimeError(f"unsupported optimizer: {name}")
+
+
+def build_cosine_lr_schedule(runtime: TensorRuntime, optimizer: Any, *, T_max: int) -> Any:
+    """Build a cosine annealing learning rate scheduler."""
+
+    _ = runtime
+    return _torch().optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max)
+
+
+def build_plateau_lr_schedule(
+    runtime: TensorRuntime,
+    optimizer: Any,
+    *,
+    factor: float,
+    threshold: float,
+    patience: int,
+    eps: float,
+) -> Any:
+    """Build a reduce-on-plateau learning rate scheduler."""
+
+    _ = runtime
+    return _torch().optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=factor,
+        threshold=threshold,
+        threshold_mode="abs",
+        patience=patience,
+        eps=eps,
+    )
+
+
+def make_float_tensor(runtime: TensorRuntime, values: Any, *, device: Any) -> Any:
+    """Create a float32 tensor on the given device."""
+
+    _ = runtime
+    torch = _torch()
+    return torch.tensor(values, dtype=torch.float32, device=device)
+
+
+def make_long_tensor(runtime: TensorRuntime, values: Any, *, device: Any) -> Any:
+    """Create a long (int64) tensor on the given device."""
+
+    _ = runtime
+    torch = _torch()
+    return torch.tensor(values, dtype=torch.long, device=device)
 
 
 def _calibrated_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
