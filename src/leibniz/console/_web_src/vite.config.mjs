@@ -51,13 +51,18 @@ function leibnizConsoleData() {
       ].join('\n');
     },
     configureServer(server) {
-      const roots = consoleResultWatchRoots();
-      if (roots.length === 0) {
+      const resultRoots = consoleResultWatchRoots();
+      const watchRoots = consoleResultWatchPaths(process.env, repositoryRoot, resultRoots);
+      if (watchRoots.length === 0) {
         return;
       }
-      server.watcher.add(roots);
+      server.watcher.add(watchRoots);
       server.watcher.on('all', (_event, path) => {
-        if (!isInsideAnyRoot(path, roots) || isMaterializedResultViewEvent(path, roots)) {
+        server.watcher.add(existingDirectories(resultRoots));
+        if (
+          !isInsideAnyRoot(path, resultRoots) ||
+          isMaterializedResultViewEvent(path, resultRoots)
+        ) {
           return;
         }
         const module = server.moduleGraph.getModuleById(resolvedConsoleDataModuleId);
@@ -141,12 +146,24 @@ export function resultRootArguments(roots = consoleResultRoots()) {
   return roots.flatMap((root) => ['--result-root', root]);
 }
 
+export function consoleResultWatchPaths(
+  env = process.env,
+  root = repositoryRoot,
+  roots = consoleResultWatchRoots(env, root),
+) {
+  return uniquePaths(existingDirectories(roots.flatMap((path) => [dirname(path), path])));
+}
+
 export function consoleBasePath(env = process.env) {
   return env.LEIBNIZ_CONSOLE_BASE_PATH ?? '/';
 }
 
 function existingDirectories(paths) {
   return paths.filter((path) => existsSync(path) && statSync(path).isDirectory());
+}
+
+function uniquePaths(paths) {
+  return [...new Set(paths)];
 }
 
 function isInsideAnyRoot(path, roots) {

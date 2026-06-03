@@ -7,6 +7,7 @@ import {
   consoleDataPayloadPath,
   consoleBasePath,
   consoleResultRoots,
+  consoleResultWatchPaths,
   consoleResultWatchRoots,
   isMaterializedResultViewEvent,
   resultRootArguments,
@@ -364,6 +365,12 @@ function assertConsoleResultRootPolicy() {
   if (!viteConfig.includes('refreshConsoleDataPayload()')) {
     throw new Error('Console result polling must refresh the prepared console data payload');
   }
+  if (!viteConfig.includes('consoleResultWatchPaths(')) {
+    throw new Error('Console result polling must watch stable parent paths for deleted roots');
+  }
+  if (!viteConfig.includes('server.watcher.add(existingDirectories(resultRoots))')) {
+    throw new Error('Console result polling must re-add recreated result roots');
+  }
   if (viteConfig.includes("type: 'full-reload'")) {
     throw new Error('Console result polling must update console data without a full page reload');
   }
@@ -382,6 +389,11 @@ function assertConsoleResultRootPolicy() {
       resolve(tempRoot, 'results'),
       'missing default watch root',
     );
+    assertEqual(
+      consoleResultWatchPaths({}, tempRoot).join('|'),
+      tempRoot,
+      'missing default result root watches parent',
+    );
     mkdirSync(resolve(tempRoot, 'results'), { recursive: true });
     assertEqual(
       consoleResultWatchRoots({}, tempRoot)[0],
@@ -391,6 +403,11 @@ function assertConsoleResultRootPolicy() {
     const defaultRoot = resolve(tempRoot, 'results');
     mkdirSync(defaultRoot, { recursive: true });
     assertEqual(consoleResultRoots({}, tempRoot)[0], defaultRoot, 'default result root');
+    assertEqual(
+      consoleResultWatchPaths({}, tempRoot).join('|'),
+      [tempRoot, defaultRoot].join('|'),
+      'default result root watches parent and root',
+    );
     assertEqual(consoleBasePath({}), '/', 'default console base path');
     assertEqual(
       consoleBasePath({ LEIBNIZ_CONSOLE_BASE_PATH: '/leibniz-pages/' }),
@@ -412,6 +429,17 @@ function assertConsoleResultRootPolicy() {
       consoleResultWatchRoots(env, tempRoot).join('|'),
       [explicitRoot, explicitMissingRoot].join('|'),
       'explicit watch roots',
+    );
+    assertEqual(
+      consoleResultWatchPaths(env, tempRoot).join('|'),
+      tempRoot,
+      'missing explicit result roots watch shared parent',
+    );
+    mkdirSync(explicitRoot, { recursive: true });
+    assertEqual(
+      consoleResultWatchPaths(env, tempRoot).join('|'),
+      [tempRoot, explicitRoot].join('|'),
+      'explicit result roots watch parent and existing root',
     );
     assertEqual(
       resultRootArguments([explicitRoot]).join('|'),
