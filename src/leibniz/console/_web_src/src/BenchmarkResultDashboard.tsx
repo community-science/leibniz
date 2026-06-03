@@ -21,6 +21,7 @@ import {
   formatCost,
   nextModelResultSort,
   scoreLabel,
+  scoreTickLabel,
   scoreValue,
   selectionForId,
   shortDigest,
@@ -390,7 +391,7 @@ function BenchmarkFrontierPlot({
                     x={plotMargin.left - plotYTickLabelOffset}
                     y={tickY + plotTickLabelBaselineOffset}
                   >
-                    {tick.toFixed(0)}
+                    {scoreTickLabel(tick)}
                   </text>
                 </g>
               );

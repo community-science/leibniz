@@ -9,6 +9,7 @@ import {
   modelComparisonRows,
   nextModelResultSort,
   runSelectionId,
+  scoreTickLabel,
   selectionForId,
   sortedModelResults,
 } from '../src/leibniz/console/_web_src/src/benchmarkDashboardModel.ts';
@@ -442,6 +443,10 @@ assertEqual(plotModel.xMajorTicks.includes(1), true, 'plot major x ticks');
 assertEqual(plotModel.xMinorTicks.includes(2), true, 'plot minor x ticks');
 assertEqual(plotModel.yDomain[0], 0, 'plot y starts at zero');
 assertEqual(plotModel.yDomain[1], 1.05, 'plot y ceiling follows score scale');
+assertEqual(plotModel.yTicks.join(','), '0,0.2,0.4,0.6,0.8,1', 'absolute plot y ticks');
+assertEqual(relativePlotModel.yTicks.join(','), '0,200,400,600,800,1000,1200', 'relative plot y ticks');
+assertEqual(scoreTickLabel(1200), '1,200', 'relative score tick label');
+assertEqual(scoreTickLabel(0.2), '0.2', 'fractional score tick label');
 assertEqual(
   sortedModelResults(result.leaderboard, 'parameter_count', 'absolute', {
     key: 'cost',

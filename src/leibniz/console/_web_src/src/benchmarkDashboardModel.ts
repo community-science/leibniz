@@ -53,6 +53,7 @@ export type BenchmarkCostAxisGroup = {
 const fallbackLogCostDomain: [number, number] = [0, 20];
 const fallbackScoreDomain: [number, number] = [0, 1.05];
 const denseLogTickThreshold = 14;
+const targetScoreTickCount = 8;
 const standardScoreAxes: ScoreAxisRecord[] = [
   { key: 'absolute', label: 'Absolute' },
   { key: 'relative', label: 'Relative' },
@@ -294,6 +295,12 @@ export function scoreLabel(value: number | undefined): string {
   return value === undefined || !Number.isFinite(value) ? 'n/a' : value.toFixed(4);
 }
 
+export function scoreTickLabel(value: number): string {
+  const abs = Math.abs(value);
+  const maximumFractionDigits = abs >= 100 ? 0 : abs >= 10 ? 1 : abs >= 1 ? 2 : 3;
+  return value.toLocaleString(undefined, { maximumFractionDigits });
+}
+
 export function shortDigest(value: string): string {
   const digest = normalizedDigest(value);
   return digest.slice(0, 12);
@@ -467,17 +474,40 @@ function scoreDomain(values: number[]): [number, number] {
 }
 
 function scoreTicks([min, max]: [number, number]): number[] {
-  const first = Math.ceil(min);
-  const last = Math.floor(max);
-  const labelStep = last - first > denseLogTickThreshold ? 2 : 1;
+  const span = max - min;
+  if (!Number.isFinite(span) || span <= 0) {
+    return [min];
+  }
+  const step = niceScoreTickStep(span / Math.max(1, targetScoreTickCount - 1));
+  const first = Math.ceil(min / step) * step;
+  const last = Math.floor(max / step) * step;
   const ticks: number[] = [];
-  for (let exponent = first; exponent <= last; exponent += labelStep) {
-    ticks.push(exponent);
+  for (let tick = first; tick <= last + step / 2; tick += step) {
+    ticks.push(normalizedTick(tick));
   }
   if (ticks.length === 0) {
-    ticks.push(Math.round((min + max) / 2));
+    ticks.push(normalizedTick((min + max) / 2));
   }
   return ticks;
+}
+
+function niceScoreTickStep(rawStep: number): number {
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+  const normalized = rawStep / magnitude;
+  const multiplier = normalized <= 1
+    ? 1
+    : normalized <= 2
+      ? 2
+      : normalized <= 2.5
+        ? 2.5
+        : normalized <= 5
+          ? 5
+          : 10;
+  return multiplier * magnitude;
+}
+
+function normalizedTick(value: number): number {
+  return Number(value.toPrecision(12));
 }
 
 function logCostTicks([min, max]: [number, number]): { major: number[]; minor: number[] } {
