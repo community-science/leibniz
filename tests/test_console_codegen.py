@@ -199,6 +199,9 @@ def test_benchmark_dashboard_renders_python_owned_run_detail_sections() -> None:
     dashboard = (
         _web_source_root / "BenchmarkResultDashboard.tsx"
     ).read_text(encoding="utf-8")
+    model_inspector = (
+        _web_source_root / "BenchmarksPanel.tsx"
+    ).read_text(encoding="utf-8")
     migrated_markers = (
         "sampled_competence",
         "training_diagnostics",
@@ -208,7 +211,7 @@ def test_benchmark_dashboard_renders_python_owned_run_detail_sections() -> None:
 
     offenders = tuple(marker for marker in migrated_markers if marker in dashboard)
 
-    assert "console_view_model?.detail_sections" in dashboard
+    assert "console_view_model?.detail_sections" in model_inspector
     assert offenders == ()
 
 

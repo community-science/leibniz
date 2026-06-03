@@ -370,6 +370,12 @@ function assertConsoleResultRootPolicy() {
   if (!viteConfig.includes('refreshConsoleDataPayload()')) {
     throw new Error('Console result polling must refresh the prepared console data payload');
   }
+  if (
+    !viteConfig.includes('consoleDataPayloadMaxBuffer') ||
+    !viteConfig.includes('maxBuffer: consoleDataPayloadMaxBuffer')
+  ) {
+    throw new Error('Console data refresh must size the Python stdout buffer explicitly');
+  }
   if (!viteConfig.includes('consoleResultWatchPaths(')) {
     throw new Error('Console result polling must watch stable parent paths for deleted roots');
   }

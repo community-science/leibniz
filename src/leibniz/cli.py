@@ -12,7 +12,14 @@ from leibniz.architecture_semantics import validate_architecture_semantics
 from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
 from leibniz.authority_indexes import AuthorityIndexDocument
-from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
+from leibniz.benchmark_runner import (
+    BenchmarkCompetitionPlan,
+    BenchmarkEvaluationPlan,
+    BenchmarkRunPlan,
+    compete_benchmark_checkpoints,
+    evaluate_benchmark_checkpoint,
+    run_benchmark,
+)
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.documents import (
     canonical_document_bytes,
@@ -384,6 +391,46 @@ def _parser() -> argparse.ArgumentParser:
         help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
     )
     train.add_argument("--dry-run", action="store_true")
+    evaluate = benchmark_subcommands.add_parser(
+        "evaluate",
+        description="evaluate a saved training checkpoint as benchmark evidence",
+        help="evaluate a saved checkpoint",
+    )
+    evaluate.add_argument("--training-summary", type=Path, required=True)
+    evaluate.add_argument("--benchmark-root", type=Path, required=True)
+    evaluate.add_argument(
+        "--results-root",
+        default=Path("results"),
+        type=Path,
+        help="local result checkout; defaults to results",
+    )
+    evaluate.add_argument(
+        "--device",
+        default="auto",
+        choices=("auto", "cpu", "cuda", "mps"),
+        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
+    )
+    compete = benchmark_subcommands.add_parser(
+        "compete",
+        description="run a pairwise benchmark competition between two evaluated checkpoints",
+        help="compete two evaluated checkpoints",
+    )
+    compete.add_argument("--left-evaluation", type=Path, required=True)
+    compete.add_argument("--right-evaluation", type=Path, required=True)
+    compete.add_argument("--benchmark-root", type=Path, required=True)
+    compete.add_argument(
+        "--results-root",
+        default=Path("results"),
+        type=Path,
+        help="local result checkout; defaults to results",
+    )
+    compete.add_argument("--sample-count", default=512, type=int)
+    compete.add_argument(
+        "--device",
+        default="auto",
+        choices=("auto", "cpu", "cuda", "mps"),
+        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
+    )
     time_formation = benchmark_subcommands.add_parser(
         "time-formation",
         description="time local benchmark observation formation paths",
@@ -475,11 +522,46 @@ def _benchmark(args: argparse.Namespace) -> int:
             prefix = "planned" if summary.dry_run else "completed"
             print(
                 f"{prefix} benchmark training run {summary.run_slug} "
+                f"({summary.measurement_count} benchmark measurement(s) planned)"
+            )
+            print(f"training summary: {summary.training_summary_path}")
+            print(f"model artifacts: {summary.model_artifact_root}")
+            return 0
+        if str(args.benchmark_command) == "evaluate":
+            summary = evaluate_benchmark_checkpoint(
+                BenchmarkEvaluationPlan(
+                    training_summary_path=args.training_summary,
+                    benchmark_root=args.benchmark_root,
+                    results_root=args.results_root,
+                    tensor_device=args.device,
+                )
+            )
+            print(
+                f"completed benchmark evaluation {summary.run_slug} "
                 f"({summary.measurement_count} measurement(s))"
             )
             print(f"measurements: {summary.measurement_dataset_path}")
             print(f"model inspection: {summary.model_inspection_path}")
-            print(f"training summary: {summary.training_summary_path}")
+            print(f"evaluation summary: {summary.evaluation_summary_path}")
+            return 0
+        if str(args.benchmark_command) == "compete":
+            summary = compete_benchmark_checkpoints(
+                BenchmarkCompetitionPlan(
+                    left_evaluation_path=args.left_evaluation,
+                    right_evaluation_path=args.right_evaluation,
+                    benchmark_root=args.benchmark_root,
+                    results_root=args.results_root,
+                    sample_count=args.sample_count,
+                    tensor_device=args.device,
+                )
+            )
+            print(
+                f"completed benchmark competition {summary.competition_id} "
+                f"({summary.sample_count} sample(s))"
+            )
+            print(f"left model: {summary.left_model_key}")
+            print(f"right model: {summary.right_model_key}")
+            print(f"competition: {summary.competition_path}")
             return 0
         if str(args.benchmark_command) == "time-formation":
             summary = time_formation_paths(

@@ -7,7 +7,7 @@ import math
 import secrets
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from itertools import count
 from pathlib import Path
 from typing import Any, cast
@@ -23,7 +23,11 @@ from leibniz.benchmark_evaluation import (
     validation_competence_frontier_score,
 )
 from leibniz.content import ContentDigest
-from leibniz.documents import canonical_document_bytes, document_filename_suffix
+from leibniz.documents import (
+    canonical_document_bytes,
+    document_filename_suffix,
+    load_object_document,
+)
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment
 from leibniz.measurements import MeasurementDataset
@@ -69,10 +73,17 @@ from leibniz.training_runs import TrainingHistoryPoint, TrainingProtocol, Traini
 
 __all__ = [
     "BenchmarkRunnerError",
+    "BenchmarkEvaluationPlan",
+    "BenchmarkEvaluationSummary",
+    "BenchmarkCompetitionPlan",
+    "BenchmarkCompetitionSummary",
     "BenchmarkRunPlan",
     "BenchmarkRunSummary",
     "CheckpointModelPredictor",
+    "evaluate_benchmark_checkpoint",
+    "compete_benchmark_checkpoints",
     "evaluate_model_checkpoint_artifact",
+    "generate_model_checkpoint_competition_record",
     "load_model_checkpoint_artifact",
     "load_model_checkpoint_predictor",
     "ModelCheckpointArtifact",
@@ -295,6 +306,67 @@ class _LearningRateSchedule:
 
 class BenchmarkRunnerError(ValueError):
     """Raised when a local benchmark run cannot be planned or executed."""
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkEvaluationPlan:
+    """A benchmark evaluation plan over a saved training checkpoint artifact."""
+
+    training_summary_path: Path
+    benchmark_root: Path
+    results_root: Path = Path("results")
+    tensor_device: TensorRuntimeDevice = "auto"
+
+    def __post_init__(self) -> None:
+        try:
+            validate_tensor_runtime_device(self.tensor_device)
+        except TensorRuntimeError as error:
+            raise BenchmarkRunnerError(str(error)) from error
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkEvaluationSummary:
+    """Summary of a benchmark evaluation generated from a checkpoint artifact."""
+
+    run_slug: str
+    benchmark_id: ProtocolIdentifier
+    evaluation_summary_path: Path
+    measurement_count: int
+    measurement_dataset_path: Path
+    model_inspection_path: Path
+    training_summary_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkCompetitionPlan:
+    """A pairwise benchmark competition plan over two evaluated checkpoints."""
+
+    left_evaluation_path: Path
+    right_evaluation_path: Path
+    benchmark_root: Path
+    results_root: Path = Path("results")
+    sample_count: int = _default_sample_count
+    tensor_device: TensorRuntimeDevice = "auto"
+
+    def __post_init__(self) -> None:
+        if type(self.sample_count) is not int or self.sample_count < 1:
+            raise BenchmarkRunnerError("sample_count must be a positive integer")
+        try:
+            validate_tensor_runtime_device(self.tensor_device)
+        except TensorRuntimeError as error:
+            raise BenchmarkRunnerError(str(error)) from error
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkCompetitionSummary:
+    """Summary of a pairwise benchmark competition record."""
+
+    competition_id: str
+    benchmark_id: ProtocolIdentifier
+    competition_path: Path
+    sample_count: int
+    left_model_key: str
+    right_model_key: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -599,47 +671,6 @@ def run_benchmark(
     selected_checkpoint = _selected_model_checkpoint(tuple(checkpoint_artifacts))
     if selected_checkpoint is None:
         raise BenchmarkRunnerError("training did not produce any model checkpoints")
-    evaluation_seed = _unpredictable_evaluation_seed()
-    evaluation_results, checkpoint_evaluation_throughput = evaluate_model_checkpoint_artifact(
-        architecture=architecture,
-        generator=generator,
-        outcome_space=outcome_space,
-        component_count=_component_count,
-        evaluation_sample_count=plan.resolved_evaluation_sample_count,
-        training_rung_count=len(training_result.training_rungs),
-        seed=evaluation_seed,
-        tensor_device=cast(
-            TensorRuntimeDevice,
-            training_result.training_run.protocol.tensor_device,
-        ),
-        checkpoint=selected_checkpoint,
-    )
-    final_evaluation_result = evaluation_results[-1]
-    measurement_groups = (
-        finite_measurements_for_predictions(
-            batch=final_evaluation_result[0].batch,
-            outcome_space=outcome_space,
-            probabilities=final_evaluation_result[1],
-            run_slug=f"{summary.run_slug}.final",
-        ),
-    )
-    sampled_competence = sampled_competence_curriculum_record(
-        (
-            sampled_competence_record(
-                batch=final_evaluation_result[0].batch,
-                measurements=measurement_groups[0],
-                complexity_axis=None,
-            ),
-        )
-    )
-    measurements = tuple(
-        measurement
-        for group in measurement_groups
-        for measurement in group
-    )
-    dataset = MeasurementDataset(measurements=measurements)
-    dataset.validate_manifest(generator.benchmark_manifest)
-    completed_summary = replace(summary, measurement_count=len(measurements))
     model_inspection = ModelInspectionRecord.from_model_manifest(
         id=ProtocolIdentifier.parse(
             f"model-inspections.{_identifier_atom(generator.benchmark_manifest.id)}."
@@ -648,24 +679,15 @@ def run_benchmark(
         model_manifest=selected_checkpoint.manifest,
         architecture_manifest=architecture,
     )
-    _write_document(summary.measurement_dataset_path, dataset.to_record())
-    _write_document(summary.model_inspection_path, model_inspection.to_record())
-    _write_document(
+    _write_document_atomic(
         summary.training_summary_path,
         {
-            **completed_summary.to_record(),
+            **summary.to_record(),
             "dry_run": False,
+            "run_status": "completed",
             "component_count": _component_count,
             "sample_count": plan.sample_count,
             "evaluation_sample_count": plan.resolved_evaluation_sample_count,
-            "evaluation_curriculum_rung_count": len(evaluation_results),
-            "evaluation_curriculum": _curriculum_record(
-                kind="competence-gated-evaluation-curriculum",
-                rungs=tuple(
-                    rung for rung, _probabilities in evaluation_results
-                ),
-                frontier_index=len(evaluation_results) - 1,
-            ),
             "training_curriculum": _curriculum_record(
                 kind="competence-gated-training-curriculum",
                 source="structured-training-curriculum",
@@ -674,8 +696,14 @@ def run_benchmark(
                 rungs=training_result.training_rungs,
                 frontier_index=training_result.training_frontier_index,
             ),
+            "training_estimate": _training_estimate_record(
+                summary=summary,
+                outcome_space=outcome_space,
+                training_run=training_result.training_run,
+                training_rungs=training_result.training_rungs,
+                frontier_index=training_result.training_frontier_index,
+            ),
             "seed": plan.seed,
-            "evaluation_seed": evaluation_seed,
             "train_steps": plan.train_steps,
             "learning_rate": float(plan.learning_rate),
             "optimizer": plan.optimizer,
@@ -690,15 +718,9 @@ def run_benchmark(
             "tensor_runtime": "pytorch",
             "tensor_device": training_result.training_run.protocol.tensor_device,
             "training_run": training_result.training_run.to_record(),
-            "throughput": _completed_throughput_record(
-                training_result.throughput,
-                checkpoint_evaluation=checkpoint_evaluation_throughput,
-            ),
-            "sampled_competence": sampled_competence,
+            "throughput": training_result.throughput,
             "architecture": model_inspection.architecture.to_record(),
             "cost_summary": model_inspection.cost_summary.to_record(),
-            "measurement_dataset_digest": str(dataset.digest),
-            "model_inspection_digest": str(model_inspection.digest),
             "model_checkpoints": [
                 checkpoint.to_record() for checkpoint in checkpoint_artifacts
             ],
@@ -707,8 +729,9 @@ def run_benchmark(
             "evaluation_model_artifact": selected_checkpoint.to_record(),
         },
     )
-    progress_path.unlink(missing_ok=True)
-    return completed_summary
+    if progress_path != summary.training_summary_path:
+        progress_path.unlink(missing_ok=True)
+    return summary
 
 
 def _run_summary(
@@ -743,11 +766,261 @@ def _run_summary(
 
 
 def _training_progress_path(summary: BenchmarkRunSummary) -> Path:
-    return (
-        summary.training_summary_path.parent.parent.parent
-        / "training-progress"
-        / summary.training_summary_path.parent.name
-        / summary.training_summary_path.name
+    return summary.training_summary_path
+
+
+def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEvaluationSummary:
+    """Generate benchmark evidence from a saved training checkpoint artifact."""
+
+    training_summary = _load_object_record(
+        plan.training_summary_path,
+        description="training summary",
+    )
+    if training_summary.get("format") != "leibniz.benchmark-run":
+        raise BenchmarkRunnerError("training summary has unsupported format")
+    generator = load_observation_generator(plan.benchmark_root)
+    architecture_path = _artifact_path_from_record(
+        _required_string(training_summary.get("architecture_path"), "architecture_path"),
+        base=Path.cwd(),
+    )
+    architecture = ArchitectureManifestDocument.from_bytes(architecture_path.read_bytes()).manifest
+    outcome_space = generator.benchmark_manifest.resolve_outcome_space()
+    selected_checkpoint = load_model_checkpoint_artifact(
+        _extract_record(
+            training_summary.get("selected_model_checkpoint"),
+            "selected_model_checkpoint",
+        ),
+        results_root=plan.results_root,
+    )
+    training_curriculum = _extract_record(
+        training_summary.get("training_curriculum"),
+        "training_curriculum",
+    )
+    training_rungs = _extract_sequence(
+        training_curriculum.get("rungs"),
+        "training_curriculum.rungs",
+    )
+    if not training_rungs:
+        raise BenchmarkRunnerError("training curriculum must contain at least one rung")
+    run_slug = _required_string(training_summary.get("run_slug"), "run_slug")
+    benchmark_id = ProtocolIdentifier.parse(
+        _required_string(training_summary.get("benchmark_id"), "benchmark_id")
+    )
+    benchmark_atom = _identifier_atom(benchmark_id)
+    evaluation_summary_path = (
+        plan.results_root / "evaluations" / benchmark_atom / f"{run_slug}{_document_suffix}"
+    )
+    measurement_dataset_path = (
+        plan.results_root / "measurements" / benchmark_atom / f"{run_slug}{_document_suffix}"
+    )
+    model_inspection_path = (
+        plan.results_root / "model-inspections" / benchmark_atom / f"{run_slug}{_document_suffix}"
+    )
+    evaluation_seed = _unpredictable_evaluation_seed()
+    evaluation_results, checkpoint_evaluation_throughput = evaluate_model_checkpoint_artifact(
+        architecture=architecture,
+        generator=generator,
+        outcome_space=outcome_space,
+        component_count=_component_count,
+        evaluation_sample_count=_required_int(
+            training_summary.get("evaluation_sample_count"),
+            "evaluation_sample_count",
+        ),
+        training_rung_count=len(training_rungs),
+        seed=evaluation_seed,
+        tensor_device=plan.tensor_device,
+        checkpoint=selected_checkpoint,
+    )
+    final_evaluation_result = evaluation_results[-1]
+    measurement_groups = (
+        finite_measurements_for_predictions(
+            batch=final_evaluation_result[0].batch,
+            outcome_space=outcome_space,
+            probabilities=final_evaluation_result[1],
+            run_slug=f"{run_slug}.final",
+        ),
+    )
+    sampled_competence = sampled_competence_curriculum_record(
+        (
+            sampled_competence_record(
+                batch=final_evaluation_result[0].batch,
+                measurements=measurement_groups[0],
+                complexity_axis=None,
+            ),
+        )
+    )
+    measurements = tuple(
+        measurement
+        for group in measurement_groups
+        for measurement in group
+    )
+    dataset = MeasurementDataset(measurements=measurements)
+    dataset.validate_manifest(generator.benchmark_manifest)
+    model_inspection = ModelInspectionRecord.from_model_manifest(
+        id=ProtocolIdentifier.parse(
+            f"model-inspections.{benchmark_atom}.{run_slug}@0.1.0"
+        ),
+        model_manifest=selected_checkpoint.manifest,
+        architecture_manifest=architecture,
+    )
+    _write_document(measurement_dataset_path, dataset.to_record())
+    _write_document(model_inspection_path, model_inspection.to_record())
+    evaluation_summary = {
+        "format": "leibniz.benchmark-evaluation",
+        "format_version": 1,
+        "run_slug": run_slug,
+        "benchmark_id": str(benchmark_id),
+        "training_summary_path": plan.training_summary_path.as_posix(),
+        "architecture_path": architecture_path.as_posix(),
+        "measurement_count": len(measurements),
+        "measurement_dataset_path": measurement_dataset_path.as_posix(),
+        "measurement_dataset_digest": str(dataset.digest),
+        "model_inspection_path": model_inspection_path.as_posix(),
+        "model_inspection_digest": str(model_inspection.digest),
+        "evaluation_seed": evaluation_seed,
+        "evaluation_curriculum_rung_count": len(evaluation_results),
+        "evaluation_curriculum": _curriculum_record(
+            kind="checkpoint-benchmark-evaluation-curriculum",
+            rungs=tuple(rung for rung, _probabilities in evaluation_results),
+            frontier_index=len(evaluation_results) - 1,
+        ),
+        "sampled_competence": sampled_competence,
+        "selected_model_checkpoint": selected_checkpoint.to_record(),
+        "evaluation_model_artifact": selected_checkpoint.to_record(),
+        "throughput": {
+            "kind": "benchmark-evaluation-throughput",
+            "evaluation": dict(checkpoint_evaluation_throughput),
+            "checkpoint_evaluation": dict(checkpoint_evaluation_throughput),
+        },
+    }
+    _write_document(evaluation_summary_path, evaluation_summary)
+    return BenchmarkEvaluationSummary(
+        run_slug=run_slug,
+        benchmark_id=benchmark_id,
+        evaluation_summary_path=evaluation_summary_path,
+        measurement_count=len(measurements),
+        measurement_dataset_path=measurement_dataset_path,
+        model_inspection_path=model_inspection_path,
+        training_summary_path=plan.training_summary_path,
+    )
+
+
+def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCompetitionSummary:
+    """Generate pairwise benchmark competition evidence from two evaluated checkpoints."""
+
+    left_evaluation = _load_object_record(
+        plan.left_evaluation_path,
+        description="left benchmark evaluation",
+    )
+    right_evaluation = _load_object_record(
+        plan.right_evaluation_path,
+        description="right benchmark evaluation",
+    )
+    if left_evaluation.get("format") != "leibniz.benchmark-evaluation":
+        raise BenchmarkRunnerError("left evaluation has unsupported format")
+    if right_evaluation.get("format") != "leibniz.benchmark-evaluation":
+        raise BenchmarkRunnerError("right evaluation has unsupported format")
+    left_training = _load_object_record(
+        _artifact_path_from_record(
+            _required_string(left_evaluation.get("training_summary_path"), "training_summary_path"),
+            base=Path.cwd(),
+        ),
+        description="left training summary",
+    )
+    right_training = _load_object_record(
+        _artifact_path_from_record(
+            _required_string(
+                right_evaluation.get("training_summary_path"),
+                "training_summary_path",
+            ),
+            base=Path.cwd(),
+        ),
+        description="right training summary",
+    )
+    generator = load_observation_generator(plan.benchmark_root)
+    benchmark_id = generator.benchmark_manifest.id
+    outcome_space = generator.benchmark_manifest.resolve_outcome_space()
+    left_architecture = ArchitectureManifestDocument.from_bytes(
+        _artifact_path_from_record(
+            _required_string(left_training.get("architecture_path"), "architecture_path"),
+            base=Path.cwd(),
+        ).read_bytes()
+    ).manifest
+    right_architecture = ArchitectureManifestDocument.from_bytes(
+        _artifact_path_from_record(
+            _required_string(right_training.get("architecture_path"), "architecture_path"),
+            base=Path.cwd(),
+        ).read_bytes()
+    ).manifest
+    left_checkpoint = load_model_checkpoint_artifact(
+        _extract_record(
+            left_evaluation.get("selected_model_checkpoint"),
+            "selected_model_checkpoint",
+        ),
+        results_root=plan.results_root,
+    )
+    right_checkpoint = load_model_checkpoint_artifact(
+        _extract_record(
+            right_evaluation.get("selected_model_checkpoint"),
+            "selected_model_checkpoint",
+        ),
+        results_root=plan.results_root,
+    )
+    left_model_key = str(left_architecture.digest)
+    right_model_key = str(right_architecture.digest)
+    if left_model_key == right_model_key:
+        raise BenchmarkRunnerError("benchmark competition requires two distinct models")
+    if right_model_key < left_model_key:
+        swapped = BenchmarkCompetitionPlan(
+            left_evaluation_path=plan.right_evaluation_path,
+            right_evaluation_path=plan.left_evaluation_path,
+            benchmark_root=plan.benchmark_root,
+            results_root=plan.results_root,
+            sample_count=plan.sample_count,
+            tensor_device=plan.tensor_device,
+        )
+        return compete_benchmark_checkpoints(swapped)
+    competition_seed = _unpredictable_evaluation_seed()
+    competition_id = _competition_id(
+        benchmark_id=benchmark_id,
+        left_model_key=left_model_key,
+        right_model_key=right_model_key,
+    )
+    resolution_assignment = _competition_resolution_assignment(left_training)
+    competition_record, throughput = generate_model_checkpoint_competition_record(
+        left_architecture=left_architecture,
+        right_architecture=right_architecture,
+        generator=generator,
+        outcome_space=outcome_space,
+        component_count=_component_count,
+        sample_count=plan.sample_count,
+        seed=competition_seed,
+        index=0,
+        resolution_assignment=resolution_assignment,
+        tensor_device=plan.tensor_device,
+        left_checkpoint=left_checkpoint,
+        right_checkpoint=right_checkpoint,
+        left_model_key=left_model_key,
+        right_model_key=right_model_key,
+        benchmark_id=benchmark_id,
+        competition_id=competition_id,
+    )
+    competition_record["throughput"] = dict(throughput)
+    competition_path = (
+        plan.results_root
+        / "evaluations"
+        / _identifier_atom(benchmark_id)
+        / "competitions"
+        / f"{competition_id}{_document_suffix}"
+    )
+    _write_document(competition_path, competition_record)
+    return BenchmarkCompetitionSummary(
+        competition_id=competition_id,
+        benchmark_id=benchmark_id,
+        competition_path=competition_path,
+        sample_count=plan.sample_count,
+        left_model_key=left_model_key,
+        right_model_key=right_model_key,
     )
 
 
@@ -796,6 +1069,30 @@ def _training_curriculum_rung(
             component_count=component_count,
             start_index=index,
         ),
+    )
+
+
+def _competition_curriculum_rung(
+    *,
+    generator: ObservationGenerator,
+    component_count: int,
+    sample_count: int,
+    seed: int,
+    index: int,
+    resolution_assignment: AxisAssignment,
+) -> _CurriculumRung:
+    batch = generator.sample_batch(
+        component_count=component_count,
+        sample_count=sample_count,
+        seed=seed + 9_000_009 + 2_000_003 * index,
+        resolution_assignment=resolution_assignment,
+        variation_extent=_full_variation_extent,
+    )
+    return _CurriculumRung(
+        index=index,
+        resolution_assignment=resolution_assignment,
+        seed=batch.seed,
+        batch=batch,
     )
 
 
@@ -1326,6 +1623,7 @@ def _train_and_predict_on_device(
                     training_counter=training_counter,
                     validation_counter=validation_counter,
                     evaluation_counter=evaluation_counter,
+                    competition_counter=None,
                     roofline=runtime_roofline_record(runtime),
                     work_estimates=work_estimates,
                     phase_timings=phase_timings,
@@ -1378,6 +1676,7 @@ def _train_and_predict_on_device(
             training_counter=training_counter,
             validation_counter=validation_counter,
             evaluation_counter=evaluation_counter,
+            competition_counter=None,
             roofline=runtime_roofline_record(runtime),
             work_estimates=work_estimates,
             phase_timings=phase_timings,
@@ -1437,6 +1736,70 @@ def evaluate_model_checkpoint_artifact(
     if not results:
         raise BenchmarkRunnerError("checkpoint evaluation did not produce any results")
     return tuple(results), evaluation_counter.to_record(kind="checkpoint-evaluation-throughput")
+
+
+def generate_model_checkpoint_competition_record(
+    *,
+    left_architecture: ArchitectureManifest,
+    right_architecture: ArchitectureManifest,
+    generator: ObservationGenerator,
+    outcome_space: OutcomeSpace,
+    component_count: int,
+    sample_count: int,
+    seed: int,
+    index: int,
+    resolution_assignment: AxisAssignment,
+    tensor_device: TensorRuntimeDevice,
+    left_checkpoint: ModelCheckpointArtifact,
+    right_checkpoint: ModelCheckpointArtifact,
+    left_model_key: str,
+    right_model_key: str,
+    benchmark_id: ProtocolIdentifier,
+    competition_id: str,
+) -> tuple[dict[str, object], Mapping[str, object]]:
+    """Generate pairwise competition evidence from two saved checkpoint artifacts."""
+
+    left_predictor = load_model_checkpoint_predictor(
+        architecture=left_architecture,
+        outcome_space=outcome_space,
+        checkpoint=left_checkpoint,
+        tensor_device=tensor_device,
+    )
+    right_predictor = load_model_checkpoint_predictor(
+        architecture=right_architecture,
+        outcome_space=outcome_space,
+        checkpoint=right_checkpoint,
+        tensor_device=tensor_device,
+    )
+    rung = _competition_curriculum_rung(
+        generator=generator,
+        component_count=component_count,
+        sample_count=sample_count,
+        seed=seed,
+        index=index,
+        resolution_assignment=resolution_assignment,
+    )
+    competition_counter = _ThroughputCounter()
+    competition_started = time.perf_counter()
+    left_predictions = left_predictor.predict_batch(rung.batch)
+    right_predictions = right_predictor.predict_batch(rung.batch)
+    competition_counter.add(
+        seconds=time.perf_counter() - competition_started,
+        samples=2 * len(rung.batch.samples),
+    )
+    return (
+        _checkpoint_competition_record(
+            batch=rung.batch,
+            left_probabilities=left_predictions,
+            right_probabilities=right_predictions,
+            outcome_space=outcome_space,
+            left_model_key=left_model_key,
+            right_model_key=right_model_key,
+            benchmark_id=benchmark_id,
+            competition_id=competition_id,
+        ),
+        competition_counter.to_record(kind="checkpoint-competition-throughput"),
+    )
 
 
 def load_model_checkpoint_predictor(
@@ -1531,6 +1894,30 @@ def _resolve_artifact_record_path(value: str, *, results_root: Path) -> Path:
     return resolved
 
 
+def _artifact_path_from_record(value: str, *, base: Path) -> Path:
+    path = Path(value)
+    resolved = path if path.is_absolute() else base / path
+    if not resolved.is_file():
+        raise BenchmarkRunnerError(f"artifact path does not exist: {value}")
+    return resolved
+
+
+def _load_object_record(path: Path, *, description: str) -> Mapping[str, object]:
+    return load_object_document(path.read_bytes(), description=description)
+
+
+def _extract_record(value: object, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise BenchmarkRunnerError(f"{field} must be a record")
+    return cast(Mapping[str, object], value)
+
+
+def _extract_sequence(value: object, field: str) -> tuple[object, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        raise BenchmarkRunnerError(f"{field} must be a sequence")
+    return tuple(cast(Sequence[object], value))
+
+
 def _required_string(value: object, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise BenchmarkRunnerError(f"{field} must be a nonempty string")
@@ -1549,19 +1936,43 @@ def _required_float(value: object, field: str) -> float:
     return float(value)
 
 
-def _completed_throughput_record(
-    training_throughput: Mapping[str, object],
-    *,
-    checkpoint_evaluation: Mapping[str, object],
-) -> Mapping[str, object]:
-    record = dict(training_throughput)
-    record["evaluation"] = dict(checkpoint_evaluation)
-    record["checkpoint_evaluation"] = dict(checkpoint_evaluation)
-    return record
-
-
 def _unpredictable_evaluation_seed() -> int:
     return secrets.randbelow(2**63)
+
+
+def _competition_id(
+    *,
+    benchmark_id: ProtocolIdentifier,
+    left_model_key: str,
+    right_model_key: str,
+) -> str:
+    digest = ContentDigest.from_value(
+        {
+            "kind": "benchmark-model-competition",
+            "version": 1,
+            "benchmark_id": str(benchmark_id),
+            "left_model_key": left_model_key,
+            "right_model_key": right_model_key,
+        }
+    )
+    return f"models-{digest.hex[:16]}"
+
+
+def _competition_resolution_assignment(training_summary: Mapping[str, object]) -> AxisAssignment:
+    curriculum = _extract_record(training_summary.get("training_curriculum"), "training_curriculum")
+    rungs = _extract_sequence(curriculum.get("rungs"), "training_curriculum.rungs")
+    frontier_index = _required_int(
+        curriculum.get("frontier_index"),
+        "training_curriculum.frontier_index",
+    )
+    if frontier_index < 0 or frontier_index >= len(rungs):
+        raise BenchmarkRunnerError("training_curriculum.frontier_index is out of range")
+    rung = _extract_record(rungs[frontier_index], "training_curriculum.rungs")
+    resolution_record = _extract_record(
+        rung.get("resolution_assignment"),
+        "training_curriculum.rungs.resolution_assignment",
+    )
+    return AxisAssignment.from_record(resolution_record)
 
 
 def training_stage_converged(stop_reason: str) -> bool:
@@ -1953,6 +2364,13 @@ def _training_progress_record(
         "architecture_digest": str(architecture.digest),
         "model_inspection_digest": str(inspection.digest),
         "provisional_score": provisional_score,
+        "training_estimate": _training_estimate_record(
+            summary=summary,
+            outcome_space=outcome_space,
+            training_run=training_run,
+            training_rungs=evaluation_rungs,
+            frontier_index=frontier_index,
+        ),
         "model_checkpoints": [
             checkpoint.to_record() for checkpoint in model_checkpoints
         ],
@@ -1978,6 +2396,44 @@ def _training_progress_record(
             "validation_competence": provisional_score,
         }
     return record
+
+
+def _training_estimate_record(
+    *,
+    summary: BenchmarkRunSummary,
+    outcome_space: OutcomeSpace,
+    training_run: TrainingRunRecord,
+    training_rungs: tuple[_CurriculumRung, ...],
+    frontier_index: int,
+) -> dict[str, object]:
+    if not training_run.validation_history:
+        raise BenchmarkRunnerError("training estimate requires validation history")
+    if not training_rungs:
+        raise BenchmarkRunnerError("training estimate requires at least one curriculum rung")
+    bounded_index = min(max(frontier_index, 0), len(training_rungs) - 1)
+    frontier_rung = training_rungs[bounded_index]
+    batch = frontier_rung.batch
+    complexities = {sample.complexity for sample in batch.samples}
+    complexity = next(iter(complexities)) if len(complexities) == 1 else frontier_rung.complexity
+    provisional_score = validation_competence(
+        validation_loss=training_run.validation_history[-1].validation_loss,
+        outcome_count=len(outcome_space.outcomes),
+    )
+    chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
+    accepted_mass_equivalent = chance_mass + provisional_score * (1.0 - chance_mass)
+    return {
+        "kind": "training-estimated-benchmark-score",
+        "status": "tentative",
+        "score_basis": "validation-loss-proxy-for-accepted-mass",
+        "benchmark_id": str(summary.benchmark_id),
+        "component_count": batch.component_count,
+        "complexity_axis": None,
+        "complexity": complexity,
+        "seed": batch.seed,
+        "sample_count": len(batch.samples),
+        "mean_accepted_mass": accepted_mass_equivalent,
+        "validation_competence": provisional_score,
+    }
 
 
 def _should_write_model_checkpoint(
@@ -2126,6 +2582,7 @@ def _throughput_record(
     training_counter: _ThroughputCounter,
     validation_counter: _ThroughputCounter,
     evaluation_counter: _ThroughputCounter,
+    competition_counter: _ThroughputCounter | None,
     roofline: Mapping[str, object],
     work_estimates: _TrainingWorkEstimates | None,
     phase_timings: TimingCollector,
@@ -2135,6 +2592,11 @@ def _throughput_record(
     training = training_counter.to_record(kind="training-throughput")
     validation = validation_counter.to_record(kind="validation-throughput")
     evaluation = evaluation_counter.to_record(kind="evaluation-throughput")
+    competition = (
+        None
+        if competition_counter is None
+        else competition_counter.to_record(kind="competition-throughput")
+    )
     record: dict[str, object] = {
         "kind": "benchmark-throughput",
         "tensor_runtime": "pytorch",
@@ -2152,6 +2614,8 @@ def _throughput_record(
             work_estimates=work_estimates,
         ),
     }
+    if competition is not None:
+        record["competition"] = competition
     if fallback_errors:
         record["runtime_fallbacks"] = [
             {
@@ -2425,6 +2889,76 @@ def _mean_prediction_accepted_mass(
         for sample, row in zip(batch.samples, probabilities, strict=True)
     )
     return math.fsum(accepted_mass) / len(accepted_mass)
+
+
+def _checkpoint_competition_record(
+    *,
+    batch: GeneratedObservationBatch,
+    left_probabilities: tuple[tuple[float, ...], ...],
+    right_probabilities: tuple[tuple[float, ...], ...],
+    outcome_space: OutcomeSpace,
+    left_model_key: str,
+    right_model_key: str,
+    benchmark_id: ProtocolIdentifier,
+    competition_id: str,
+) -> dict[str, object]:
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    outcome_indexes = {outcome_id: index for index, outcome_id in enumerate(outcome_ids)}
+    entries: list[dict[str, object]] = []
+    left_wins = 0
+    right_wins = 0
+    ties = 0
+    for sample, left_row, right_row in zip(
+        batch.samples,
+        left_probabilities,
+        right_probabilities,
+        strict=True,
+    ):
+        accepted_index = outcome_indexes[sample.outcome_id]
+        left_score = left_row[accepted_index]
+        right_score = right_row[accepted_index]
+        if left_score > right_score:
+            winner = "left"
+            left_wins += 1
+        elif right_score > left_score:
+            winner = "right"
+            right_wins += 1
+        else:
+            winner = "tie"
+            ties += 1
+        entries.append(
+            {
+                "id": (
+                    f"benchmarks.{_identifier_atom(benchmark_id)}.competition."
+                    f"{competition_id}.sample-{sample.index}@0.1.0"
+                ),
+                "observation_id": str(sample.observation.id),
+                "accepted_outcome_id": sample.outcome_id,
+                "left_score": left_score,
+                "right_score": right_score,
+                "winner": winner,
+            }
+        )
+    sample_count = len(entries)
+    left_score = 0.0 if sample_count == 0 else (left_wins + 0.5 * ties) / sample_count
+    return {
+        "format": "leibniz.model-competition",
+        "format_version": 1,
+        "benchmark_id": str(benchmark_id),
+        "competition_id": competition_id,
+        "mechanic": "paired-prediction-accepted-mass",
+        "seed": batch.seed,
+        "sample_count": sample_count,
+        "outcome_space_id": str(outcome_space.id),
+        "left_model_key": left_model_key,
+        "right_model_key": right_model_key,
+        "left_score": left_score,
+        "right_score": 1.0 - left_score,
+        "left_wins": left_wins,
+        "right_wins": right_wins,
+        "ties": ties,
+        "entries": entries,
+    }
 
 
 def _chance_accepted_mass(outcome_ids: tuple[str, ...]) -> float:

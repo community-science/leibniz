@@ -19,6 +19,8 @@ export type {
   RunDetailTableRecord,
   RunDetailViewModelRecord,
   RunResultRecord,
+  ScoreAxisRecord,
+  ScoreViewRecord,
   TrainingArtifactReferenceRecord,
   TrainingDiagnosticsRecord,
   TrainingHistoryPointRecord,

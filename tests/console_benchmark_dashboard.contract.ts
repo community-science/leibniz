@@ -3,11 +3,13 @@ import {
   benchmarkCostAxis,
   benchmarkPlotModel,
   benchmarkResultsForTask,
+  benchmarkScoreAxes,
+  benchmarkScoreAxis,
   emptyFrontiersForCostAxes,
   modelComparisonRows,
   nextModelResultSort,
-  runDetails,
   runSelectionId,
+  scoreTickLabel,
   selectionForId,
   sortedModelResults,
 } from '../src/leibniz/console/_web_src/src/benchmarkDashboardModel.ts';
@@ -37,10 +39,24 @@ assertEqual(
   'parameter_count',
   'missing cost axis fallback',
 );
+assertEqual(
+  benchmarkScoreAxes(undefined).map((axis) => axis.key).join(','),
+  'absolute,relative',
+  'default score axes',
+);
+assertEqual(
+  benchmarkScoreAxis('missing_axis', benchmarkScoreAxes(undefined)),
+  'absolute',
+  'missing score axis fallback',
+);
 
 const result: BenchmarkResultRecord = {
   benchmark_id: targetBenchmark,
   cost_axes: [{ key: 'parameter_count', label: 'Parameters' }],
+  score_axes: [
+    { key: 'absolute', label: 'Absolute' },
+    { key: 'relative', label: 'Relative' },
+  ],
   frontiers: {
     parameter_count: [
       {
@@ -55,10 +71,15 @@ const result: BenchmarkResultRecord = {
         },
         measurement_count: 2,
         model_key: 'model-a',
+        result_status: 'accepted',
         observed_complexities: [1, 2],
         points: [],
         run_ids: ['run-a'],
         score: 0.75,
+        score_views: {
+          absolute: { key: 'absolute', label: 'Absolute', score: 0.75 },
+          relative: { key: 'relative', label: 'Relative', score: 1200 },
+        },
         source_kinds: ['local'],
       },
     ],
@@ -76,10 +97,15 @@ const result: BenchmarkResultRecord = {
       },
       measurement_count: 2,
       model_key: 'model-a',
+      result_status: 'accepted',
       observed_complexities: [1, 2],
       points: [],
       run_ids: ['run-a'],
       score: 0.75,
+      score_views: {
+        absolute: { key: 'absolute', label: 'Absolute', score: 0.75 },
+        relative: { key: 'relative', label: 'Relative', score: 1200 },
+      },
       source_kinds: ['local'],
     },
     {
@@ -94,10 +120,63 @@ const result: BenchmarkResultRecord = {
       },
       measurement_count: 1,
       model_key: 'model-b',
+      result_status: 'accepted',
       observed_complexities: [1],
       points: [],
       run_ids: ['run-b'],
       score: 0.5,
+      score_views: {
+        absolute: { key: 'absolute', label: 'Absolute', score: 0.5 },
+        relative: { key: 'relative', label: 'Relative', score: 900 },
+      },
+      source_kinds: ['local'],
+    },
+  ],
+  model_candidates: [
+    {
+      architecture_digest: architectureDigest,
+      benchmark_id: targetBenchmark,
+      cost_summary: {
+        component_count: 1,
+        inference_compute: 20,
+        storage_bytes: 40,
+        parameter_count: 10,
+        training_compute: 360,
+      },
+      measurement_count: 2,
+      model_key: 'model-a',
+      result_status: 'accepted',
+      observed_complexities: [1, 2],
+      points: [],
+      run_ids: ['run-a'],
+      score: 0.75,
+      score_views: {
+        absolute: { key: 'absolute', label: 'Absolute', score: 0.75 },
+        relative: { key: 'relative', label: 'Relative', score: 1200 },
+      },
+      source_kinds: ['local'],
+    },
+    {
+      architecture_digest: 'sha256:fedcba9876543210',
+      benchmark_id: targetBenchmark,
+      cost_summary: {
+        component_count: 2,
+        inference_compute: 80,
+        storage_bytes: 160,
+        parameter_count: 40,
+        training_compute: 1440,
+      },
+      measurement_count: 1,
+      model_key: 'model-b',
+      result_status: 'accepted',
+      observed_complexities: [1],
+      points: [],
+      run_ids: ['run-b'],
+      score: 0.5,
+      score_views: {
+        absolute: { key: 'absolute', label: 'Absolute', score: 0.5 },
+        relative: { key: 'relative', label: 'Relative', score: 900 },
+      },
       source_kinds: ['local'],
     },
   ],
@@ -121,6 +200,7 @@ const result: BenchmarkResultRecord = {
       run_slug: 'train-a',
       complexity: 10,
       score: 0.75,
+      result_status: 'accepted',
       source_kind: 'local',
       source_path: 'results/training/run-a.json',
       training_diagnostics: {
@@ -167,6 +247,52 @@ const result: BenchmarkResultRecord = {
           },
         ],
       },
+    },
+  ],
+  plot_runs: [
+    {
+      architecture: { layers: [] },
+      architecture_digest: architectureDigest,
+      benchmark_id: targetBenchmark,
+      cost_summary: {
+        component_count: 1,
+        inference_compute: 20,
+        storage_bytes: 40,
+        parameter_count: 10,
+        training_compute: 360,
+      },
+      measurement_count: 2,
+      measurement_dataset_digest: 'sha256:dataset1234',
+      model_key: 'model-a',
+      run_id: 'run-a',
+      run_slug: 'train-a',
+      complexity: 10,
+      score: 0.75,
+      result_status: 'accepted',
+      source_kind: 'local',
+      source_path: 'results/training/run-a.json',
+    },
+    {
+      architecture: { layers: [] },
+      architecture_digest: 'sha256:fedcba9876543210',
+      benchmark_id: targetBenchmark,
+      cost_summary: {
+        component_count: 2,
+        inference_compute: 80,
+        storage_bytes: 160,
+        parameter_count: 40,
+        training_compute: 1440,
+      },
+      measurement_count: 1,
+      measurement_dataset_digest: 'sha256:dataset5678',
+      model_key: 'model-b',
+      run_id: 'run-b',
+      run_slug: 'train-b',
+      complexity: 10,
+      score: 0.5,
+      result_status: 'accepted',
+      source_kind: 'local',
+      source_path: 'results/training/run-b.json',
     },
   ],
 };
@@ -303,8 +429,12 @@ assertEqual(
   'result-local model inspection match',
 );
 const plotModel = benchmarkPlotModel(result, 'parameter_count');
+const relativePlotModel = benchmarkPlotModel(result, 'parameter_count', 'relative');
 assertEqual(plotModel.points.length, 2, 'plot point count');
+assertEqual(benchmarkScoreAxes(result).map((axis) => axis.key).join(','), 'absolute,relative', 'result score axes');
+assertEqual(benchmarkScoreAxis('relative', benchmarkScoreAxes(result)), 'relative', 'relative score axis');
 assertEqual(plotModel.frontierPoints.length, 1, 'plot frontier count');
+assertEqual(relativePlotModel.points[0]?.score, 1200, 'relative plot score');
 assertEqual(plotModel.staircase.length, 1, 'plot staircase point count');
 assertEqual(plotModel.xTicks.includes(16), true, 'plot log ticks');
 assertEqual(plotModel.xDomain[0], 0, 'plot default x minimum');
@@ -313,8 +443,12 @@ assertEqual(plotModel.xMajorTicks.includes(1), true, 'plot major x ticks');
 assertEqual(plotModel.xMinorTicks.includes(2), true, 'plot minor x ticks');
 assertEqual(plotModel.yDomain[0], 0, 'plot y starts at zero');
 assertEqual(plotModel.yDomain[1], 1.05, 'plot y ceiling follows score scale');
+assertEqual(plotModel.yTicks.join(','), '0,0.2,0.4,0.6,0.8,1', 'absolute plot y ticks');
+assertEqual(relativePlotModel.yTicks.join(','), '0,200,400,600,800,1000,1200', 'relative plot y ticks');
+assertEqual(scoreTickLabel(1200), '1,200', 'relative score tick label');
+assertEqual(scoreTickLabel(0.2), '0.2', 'fractional score tick label');
 assertEqual(
-  sortedModelResults(result.leaderboard, 'parameter_count', {
+  sortedModelResults(result.leaderboard, 'parameter_count', 'absolute', {
     key: 'cost',
     direction: 'descending',
   })[0]?.model_key,
@@ -322,11 +456,18 @@ assertEqual(
   'model cost sort',
 );
 assertEqual(
+  sortedModelResults(result.leaderboard, 'parameter_count', 'relative', {
+    key: 'score',
+    direction: 'ascending',
+  })[0]?.model_key,
+  'model-b',
+  'relative score sort',
+);
+assertEqual(
   nextModelResultSort({ key: 'score', direction: 'descending' }, 'score').direction,
   'ascending',
   'sort toggle',
 );
-assertEqual(runDetails(result)[0]?.model?.model_key, 'model-a', 'run model match');
 assertEqual(
   selectionForId(result, runSelectionId(result.training_history[0]!)).selectedRun?.run_slug,
   'train-a',
@@ -355,6 +496,19 @@ const expandedPlotModel = benchmarkPlotModel(
           parameter_count: 2 ** 22,
         },
         model_key: 'model-c',
+      },
+    ],
+    plot_runs: [
+      ...result.plot_runs,
+      {
+        ...result.plot_runs[1]!,
+        cost_summary: {
+          ...result.plot_runs[1]!.cost_summary,
+          parameter_count: 2 ** 22,
+        },
+        model_key: 'model-c',
+        run_id: 'run-c',
+        run_slug: 'train-c',
       },
     ],
   },

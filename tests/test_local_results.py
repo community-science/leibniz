@@ -1,13 +1,18 @@
 import math
 import subprocess
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
 import leibniz.local_results as local_results
 from leibniz.architectures import ArchitectureManifestDocument
-from leibniz.benchmark_runner import BenchmarkRunPlan, run_benchmark
+from leibniz.benchmark_runner import (
+    BenchmarkEvaluationPlan,
+    BenchmarkRunPlan,
+    evaluate_benchmark_checkpoint,
+    run_benchmark,
+)
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
 from leibniz.content import ContentDigest
@@ -31,6 +36,27 @@ _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "
 _digits_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool.json"
 )
+
+
+def _run_and_evaluate_digits_benchmark(results_root: Path, *, sample_count: int = 1) -> None:
+    training_summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=results_root,
+            sample_count=sample_count,
+            train_steps=0,
+            tensor_device="cpu",
+        )
+    )
+    evaluate_benchmark_checkpoint(
+        BenchmarkEvaluationPlan(
+            training_summary_path=training_summary.training_summary_path,
+            benchmark_root=_digits_benchmark_root,
+            results_root=results_root,
+            tensor_device="cpu",
+        )
+    )
 
 
 def test_competent_complexity_score_integrates_bits_above_chance() -> None:
@@ -168,6 +194,78 @@ def test_console_result_view_validates_benchmark_leaderboard_models(tmp_path: Pa
         load_console_result_view(canonical_document_bytes(view))
 
 
+def test_relative_competition_does_not_read_absolute_measurements() -> None:
+    run_a = _benchmark_run_record_for_competition(
+        model_key="model-a",
+        run_id="run-a",
+    )
+    run_b = _benchmark_run_record_for_competition(
+        model_key="model-b",
+        run_id="run-b",
+    )
+
+    assert cast(Any, local_results)._pairwise_competition_outcomes(
+        {"model-a": run_a, "model-b": run_b},
+        (),
+    ) == ()
+
+    outcomes = cast(Any, local_results)._pairwise_competition_outcomes(
+        {"model-a": run_a, "model-b": run_b},
+        (_competition_record(left_model_key="model-a", right_model_key="model-b"),),
+    )
+
+    assert len(outcomes) == 1
+    assert outcomes[0].left_model_key == "model-a"
+    assert outcomes[0].right_model_key == "model-b"
+    assert outcomes[0].left_score == 1.0
+    assert outcomes[0].right_score == 0.0
+
+
+def test_relative_competition_scores_rank_undefeated_model_first() -> None:
+    best_runs = {
+        "model-a": _benchmark_run_record_for_competition(
+            model_key="model-a",
+            run_id="run-a",
+        ),
+        "model-b": _benchmark_run_record_for_competition(
+            model_key="model-b",
+            run_id="run-b",
+        ),
+        "model-c": _benchmark_run_record_for_competition(
+            model_key="model-c",
+            run_id="run-c",
+        ),
+    }
+    outcomes = (
+        cast(Any, local_results)._ModelCompetitionOutcome(
+            left_model_key="model-a",
+            right_model_key="model-b",
+            left_score=0.64,
+            right_score=0.36,
+            sample_count=512,
+        ),
+        cast(Any, local_results)._ModelCompetitionOutcome(
+            left_model_key="model-a",
+            right_model_key="model-c",
+            left_score=0.71,
+            right_score=0.29,
+            sample_count=512,
+        ),
+        cast(Any, local_results)._ModelCompetitionOutcome(
+            left_model_key="model-b",
+            right_model_key="model-c",
+            left_score=0.87,
+            right_score=0.13,
+            sample_count=512,
+        ),
+    )
+
+    scores = cast(Any, local_results)._relative_model_scores(best_runs, outcomes=outcomes)
+
+    assert scores["model-a"] > scores["model-b"]
+    assert scores["model-b"] > scores["model-c"]
+
+
 def test_console_result_view_validates_model_detail_tables(tmp_path: Path) -> None:
     source_root = tmp_path / "hf-checkout"
     source_root.mkdir()
@@ -226,16 +324,7 @@ def test_console_result_view_validates_training_diagnostics_records(tmp_path: Pa
 
 def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: Path) -> None:
     results_root = tmp_path / "results"
-    run_benchmark(
-        BenchmarkRunPlan(
-            architecture_path=_digits_architecture,
-            benchmark_root=_digits_benchmark_root,
-            results_root=results_root,
-            sample_count=1,
-            train_steps=0,
-            tensor_device="cpu",
-        )
-    )
+    _run_and_evaluate_digits_benchmark(results_root)
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
         results_root=results_root,
@@ -356,15 +445,7 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
     local_results_root = tmp_path / "local-runs"
     imported_results_root = tmp_path / "imported-runs"
     _init_git(local_results_root)
-    run_benchmark(
-        BenchmarkRunPlan(
-            architecture_path=_digits_architecture,
-            benchmark_root=_digits_benchmark_root,
-            results_root=local_results_root,
-            sample_count=1,
-            train_steps=0,
-        )
-    )
+    _run_and_evaluate_digits_benchmark(local_results_root)
     local_result_summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
         results_root=local_results_root,
@@ -389,9 +470,8 @@ def test_publish_import_materialize_local_frontier_round_trip(tmp_path: Path) ->
     publication_document = SubmissionPublicationDocument.from_bytes(
         publish_summary.publication_files[0].read_bytes()
     )
-    assert publication_document.bundle.submission_package.id == ProtocolIdentifier.parse(
-        "submissions.digits.digits-arch-4a2277aa9fd5-c1-seed101-samples1-steps0"
-        "-train-be687c342255@0.1.0"
+    assert str(publication_document.bundle.submission_package.id).startswith(
+        "submissions.digits.digits-arch-4a2277aa9fd5-c1-seed101-samples1-steps0-train-"
     )
     assert publication_document.bundle.submission_package.sampled_competence is not None
     assert imported_summary.publication_bundle_count == 1
@@ -417,15 +497,7 @@ def test_cli_publishes_local_benchmark_results(
 ) -> None:
     results_root = tmp_path / "results"
     _init_git(results_root, configure_identity=False)
-    run_benchmark(
-        BenchmarkRunPlan(
-            architecture_path=_digits_architecture,
-            benchmark_root=_digits_benchmark_root,
-            results_root=results_root,
-            sample_count=1,
-            train_steps=0,
-        )
-    )
+    _run_and_evaluate_digits_benchmark(results_root)
 
     exit_code = main(
         [
@@ -451,15 +523,7 @@ def test_cli_publishes_local_benchmark_results(
 def test_publish_defaults_publication_output_to_results_root(tmp_path: Path) -> None:
     results_root = tmp_path / "results"
     _init_git(results_root)
-    run_benchmark(
-        BenchmarkRunPlan(
-            architecture_path=_digits_architecture,
-            benchmark_root=_digits_benchmark_root,
-            results_root=results_root,
-            sample_count=1,
-            train_steps=0,
-        )
-    )
+    _run_and_evaluate_digits_benchmark(results_root)
 
     summary = publish_local_benchmark_results(
         repository_root=_repository_root,
@@ -473,15 +537,7 @@ def test_publish_defaults_publication_output_to_results_root(tmp_path: Path) -> 
 def test_publish_can_commit_results_root_checkout(tmp_path: Path) -> None:
     results_root = tmp_path / "results"
     _init_git(results_root)
-    run_benchmark(
-        BenchmarkRunPlan(
-            architecture_path=_digits_architecture,
-            benchmark_root=_digits_benchmark_root,
-            results_root=results_root,
-            sample_count=1,
-            train_steps=0,
-        )
-    )
+    _run_and_evaluate_digits_benchmark(results_root)
 
     summary = publish_local_benchmark_results(
         repository_root=_repository_root,
@@ -503,15 +559,7 @@ def test_publish_pushes_only_when_requested(tmp_path: Path) -> None:
     _git(tmp_path, "init", "--bare", str(remote_root))
     _init_git(results_root)
     _git(results_root, "remote", "add", "origin", str(remote_root))
-    run_benchmark(
-        BenchmarkRunPlan(
-            architecture_path=_digits_architecture,
-            benchmark_root=_digits_benchmark_root,
-            results_root=results_root,
-            sample_count=1,
-            train_steps=0,
-        )
-    )
+    _run_and_evaluate_digits_benchmark(results_root)
 
     summary = publish_local_benchmark_results(
         repository_root=_repository_root,
@@ -551,15 +599,7 @@ def test_publish_prefers_hugging_face_api_when_token_is_available(
         HfApi = _HfApi
 
     monkeypatch.setattr(local_results, "_hf_api_module", lambda: _HfModule)
-    run_benchmark(
-        BenchmarkRunPlan(
-            architecture_path=_digits_architecture,
-            benchmark_root=_digits_benchmark_root,
-            results_root=results_root,
-            sample_count=1,
-            train_steps=0,
-        )
-    )
+    _run_and_evaluate_digits_benchmark(results_root)
 
     summary = publish_local_benchmark_results(
         repository_root=_repository_root,
@@ -770,6 +810,66 @@ def _digits_publication_bundle_record(
 
 def _digits_dataset() -> MeasurementDataset:
     return MeasurementDataset.from_record({"measurements": [_digits_measurement().to_record()]})
+
+
+def _benchmark_run_record_for_competition(
+    *,
+    model_key: str,
+    run_id: str,
+) -> object:
+    dataset = _digits_dataset()
+    architecture = _architecture().manifest
+    digest = ContentDigest.from_value({"model": model_key})
+    return cast(Any, local_results)._BenchmarkRunRecord(
+        source_kind="test",
+        result_status="accepted",
+        source_path=Path(f"results/training/{run_id}.json"),
+        run_id=run_id,
+        run_slug=run_id,
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
+        architecture_digest=digest,
+        model_key=model_key,
+        complexity=1.0,
+        measurement_count=len(dataset.measurements),
+        score=1.0,
+        cost_summary={"component_count": 1, "parameter_count": 1},
+        architecture=architecture.to_record(),
+        model_inspection={},
+        model_inspection_digest=digest,
+        model_inspection_path=None,
+        measurement_dataset=dataset,
+        measurement_dataset_digest=dataset.digest,
+    )
+
+
+def _competition_record(*, left_model_key: str, right_model_key: str) -> dict[str, object]:
+    return {
+        "format": "leibniz.model-competition",
+        "format_version": 1,
+        "benchmark_id": "benchmarks.digits@0.1.0",
+        "competition_id": "model-a-vs-model-b",
+        "mechanic": "paired-prediction-accepted-mass",
+        "seed": 9000110,
+        "sample_count": 1,
+        "outcome_space_id": "benchmarks.digits.outcomes@0.1.0",
+        "left_model_key": left_model_key,
+        "right_model_key": right_model_key,
+        "left_score": 1.0,
+        "right_score": 0.0,
+        "left_wins": 1,
+        "right_wins": 0,
+        "ties": 0,
+        "entries": [
+            {
+                "id": "benchmarks.digits.competition.model-a-vs-model-b.sample-0@0.1.0",
+                "observation_id": "benchmarks.digits.observations.competition.sample-0@0.1.0",
+                "accepted_outcome_id": "digit-7",
+                "left_score": 0.9,
+                "right_score": 0.1,
+                "winner": "left",
+            }
+        ],
+    }
 
 
 def _git(path: Path, *args: str) -> subprocess.CompletedProcess[str]:

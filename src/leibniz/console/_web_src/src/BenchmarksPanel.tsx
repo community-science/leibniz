@@ -49,6 +49,7 @@ import type {
 } from './resultViews.ts';
 
 type SampleCardDensity = 'standard' | 'compact';
+type BenchmarkModelCandidate = BenchmarkResultRecord['model_candidates'][number];
 type ModelArtifactView = 'model' | 'architecture' | 'training' | 'provenance';
 type ModelArtifactFlowItem = {
   icon: LucideIcon;
@@ -166,20 +167,18 @@ export function BenchmarksPanel({
               selectedModelKey={effectiveSelectedModelKey}
             />
           </CollapsibleBenchmarkSection>
-          {modelRows.length === 0 ? null : (
-            <CollapsibleBenchmarkSection
-              label="Models"
-              summary={`${modelRows.length} inspected candidates`}
-              storageKey="leibniz.console.benchmarks.section.models.expanded"
-            >
-              <BenchmarkModelsPane
-                operatorVocabulary={operatorVocabulary}
-                rows={modelRows}
-                result={result}
-                selectedModelKey={effectiveSelectedModelKey}
-              />
-            </CollapsibleBenchmarkSection>
-          )}
+          <CollapsibleBenchmarkSection
+            label="Model Inspector"
+            summary={`${modelRows.length} inspected candidates`}
+            storageKey="leibniz.console.benchmarks.section.models.expanded"
+          >
+            <BenchmarkModelsPane
+              operatorVocabulary={operatorVocabulary}
+              rows={modelRows}
+              result={result}
+              selectedModelKey={effectiveSelectedModelKey}
+            />
+          </CollapsibleBenchmarkSection>
         </div>
       </div>
     </section>
@@ -251,7 +250,9 @@ function emptyBenchmarkResult(benchmark: BenchmarkTaskRecord): BenchmarkResultRe
     cost_axes: costAxes,
     frontiers: emptyFrontiersForCostAxes(costAxes),
     leaderboard: [],
+    model_candidates: [],
     model_inspections: [],
+    plot_runs: [],
     training_history: [],
   };
 }
@@ -274,12 +275,10 @@ function BenchmarkModelsPane({
   return (
     <div className="benchmark-task">
       <section className="benchmark-model-workbench">
-        <div className="benchmark-model-workbench-heading">
-          <h3>Model Workbench</h3>
-          <span>{selectedRow === undefined ? 'No model selected' : shortDigest(selectedRow.model.architecture_digest)}</span>
-        </div>
         <div className="benchmark-model-inspector-layout single">
-          {selectedRow === undefined ? null : (
+          {selectedRow === undefined ? (
+            <p className="artifact-detail-note">No model runs are available.</p>
+          ) : (
             <BenchmarkModelInspector
               complexityAxis={result?.complexity_axis}
               costAxis={costAxis}
@@ -306,7 +305,7 @@ function BenchmarkModelInspector({
   complexityAxis: string | undefined;
   costAxis: string;
   inspection: ModelInspectionRecord | undefined;
-  model: BenchmarkResultRecord['leaderboard'][number];
+  model: BenchmarkModelCandidate;
   operatorVocabulary: OperatorVocabularyRecord;
   runs: RunResultRecord[];
 }) {
@@ -387,7 +386,7 @@ function ModelArtifactFlow({
 }: {
   active: ModelArtifactView;
   inspection: ModelInspectionRecord | undefined;
-  model: BenchmarkResultRecord['leaderboard'][number];
+  model: BenchmarkModelCandidate;
   onSelect: (view: ModelArtifactView) => void;
 }) {
   const items: ModelArtifactFlowItem[] = [
@@ -451,7 +450,7 @@ function ModelLineageGraph({
   runs,
 }: {
   inspection: ModelInspectionRecord | undefined;
-  model: BenchmarkResultRecord['leaderboard'][number];
+  model: BenchmarkModelCandidate;
   runs: RunResultRecord[];
 }) {
   const inputNodes = [
@@ -515,7 +514,7 @@ function ModelManifestDetail({
 }: {
   complexityAxis: string | undefined;
   inspection: ModelInspectionRecord | undefined;
-  model: BenchmarkResultRecord['leaderboard'][number];
+  model: BenchmarkModelCandidate;
 }) {
   const sections = model.console_view_model?.detail_sections ?? [];
   return (
@@ -571,7 +570,7 @@ function ModelArchitectureDetail({
 }: {
   complexityAxis: string | undefined;
   inspection: ModelInspectionRecord | undefined;
-  model: BenchmarkResultRecord['leaderboard'][number];
+  model: BenchmarkModelCandidate;
 }) {
   return (
     <section className="benchmark-model-detail-section">
@@ -596,7 +595,6 @@ function ModelTrainingDetail({ runs }: { runs: RunResultRecord[] }) {
   if (runs.length === 0) {
     return (
       <section className="benchmark-model-detail-section">
-        <h4>Training History</h4>
         <p className="artifact-detail-note">No training runs match this model.</p>
       </section>
     );
@@ -612,7 +610,6 @@ function ModelTrainingDetail({ runs }: { runs: RunResultRecord[] }) {
   const protocol = diagnostics?.protocol;
   return (
     <section className="benchmark-model-detail-section">
-      <h4>Training History</h4>
       <dl className="benchmark-model-training-grid">
         <div>
           <dt>Runs</dt>
@@ -657,31 +654,8 @@ function ModelTrainingDetail({ runs }: { runs: RunResultRecord[] }) {
           ))}
         </dl>
       )}
-      {diagnostics === undefined ? null : (
-        <TrainingArtifactReferences artifacts={diagnostics.artifacts} />
-      )}
       {history.length === 0 ? null : <ModelValidationChart points={history} />}
     </section>
-  );
-}
-
-function TrainingArtifactReferences({
-  artifacts,
-}: {
-  artifacts: NonNullable<RunResultRecord['training_diagnostics']>['artifacts'];
-}) {
-  if (artifacts.length === 0) {
-    return null;
-  }
-  return (
-    <dl className="benchmark-model-training-artifacts">
-      {artifacts.map((artifact) => (
-        <div key={`${artifact.kind}:${artifact.digest}`}>
-          <dt>{parameterValueLabel(artifact.kind)}</dt>
-          <dd>{artifact.path ?? shortDigest(artifact.digest)}</dd>
-        </div>
-      ))}
-    </dl>
   );
 }
 
@@ -756,7 +730,7 @@ function ModelCostDetail({
   model,
 }: {
   inspection: ModelInspectionRecord | undefined;
-  model: BenchmarkResultRecord['leaderboard'][number];
+  model: BenchmarkModelCandidate;
 }) {
   const summary = inspection?.cost_summary ?? model.cost_summary;
   return (
@@ -939,7 +913,7 @@ function modelProvenanceReferences(
 
 function runsForModel(
   result: BenchmarkResultRecord | undefined,
-  model: BenchmarkResultRecord['leaderboard'][number],
+  model: BenchmarkModelCandidate,
 ): RunResultRecord[] {
   if (result === undefined) {
     return [];
@@ -993,7 +967,7 @@ function optionalNumberLabel(value: number | undefined): string {
 
 function modelComponentCount(
   inspection: ModelInspectionRecord | undefined,
-  model: BenchmarkResultRecord['leaderboard'][number],
+  model: BenchmarkModelCandidate,
 ): number {
   return inspection?.architecture_summary.component_count ?? model.cost_summary.component_count;
 }

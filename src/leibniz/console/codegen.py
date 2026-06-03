@@ -155,15 +155,30 @@ export type BenchmarkResultRecord = {
   benchmark_id: string;
   complexity_axis?: string;
   cost_axes: CostAxisRecord[];
+  score_axes?: ScoreAxisRecord[];
   leaderboard: ModelResultRecord[];
+  model_candidates: ModelResultRecord[];
   frontiers: Record<string, ModelResultRecord[]>;
   training_history: RunResultRecord[];
+  plot_runs: RunResultRecord[];
   model_inspections: ModelInspectionRecord[];
 };
 
 export type CostAxisRecord = {
   key: string;
   label: string;
+};
+
+export type ScoreAxisRecord = {
+  key: string;
+  label: string;
+};
+
+export type ScoreViewRecord = {
+  key: string;
+  label: string;
+  score: number;
+  basis?: Record<string, unknown>;
 };
 
 export type CompetencePointRecord = {
@@ -185,10 +200,12 @@ export type CostSummaryRecord = {
 
 export type ModelResultRecord = {
   model_key: string;
+  result_status: 'accepted' | 'tentative';
   architecture_digest: string;
   benchmark_id: string;
   score: number;
   score_basis?: Record<string, unknown>;
+  score_views?: Record<string, ScoreViewRecord>;
   observed_complexities: number[];
   points: CompetencePointRecord[];
   cost_summary: CostSummaryRecord;
@@ -200,6 +217,7 @@ export type ModelResultRecord = {
 
 export type RunResultRecord = {
   source_kind: string;
+  result_status: 'accepted' | 'tentative';
   source_path: string;
   run_id: string;
   run_slug: string;
@@ -338,22 +356,30 @@ function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultReco
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     complexity_axis: optional(record.complexity_axis, `${path}.complexity_axis`, (item, itemPath) => requireString(item, itemPath, transportError)),
     cost_axes: arrayOf(record.cost_axes, `${path}.cost_axes`, parseCostAxis),
+    score_axes: optional(record.score_axes, `${path}.score_axes`, (value, valuePath) => arrayOf(value, valuePath, parseScoreAxis)),
     leaderboard: arrayOf(record.leaderboard, `${path}.leaderboard`, parseModelResult),
+    model_candidates: arrayOf(record.model_candidates, `${path}.model_candidates`, parseModelResult),
     frontiers: parseFrontiers(record.frontiers, `${path}.frontiers`),
     training_history: arrayOf(record.training_history, `${path}.training_history`, parseRunResult),
+    plot_runs: arrayOf(record.plot_runs, `${path}.plot_runs`, parseRunResult),
     model_inspections: arrayOf(record.model_inspections ?? [], `${path}.model_inspections`, parseModelInspectionRecord),
   };
 }
 
 function parseModelResult(value: unknown, path: string): ModelResultRecord {
   const record = requireRecord(value, path, transportError);
-  requireStrings(record, path, ['model_key', 'architecture_digest', 'benchmark_id']);
+  requireStrings(record, path, ['model_key', 'result_status', 'architecture_digest', 'benchmark_id']);
+  if (record.result_status !== 'accepted' && record.result_status !== 'tentative') {
+    throw transportError(`${path}.result_status must be accepted or tentative`);
+  }
   return withFields(record, {
     model_key: requireString(record.model_key, `${path}.model_key`, transportError),
+    result_status: requireString(record.result_status, `${path}.result_status`, transportError) as 'accepted' | 'tentative',
     architecture_digest: requireString(record.architecture_digest, `${path}.architecture_digest`, transportError),
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
     score_basis: optional(record.score_basis, `${path}.score_basis`, parseScoreBasis),
+    score_views: optional(record.score_views, `${path}.score_views`, parseScoreViews),
     observed_complexities: numberArray(record.observed_complexities, `${path}.observed_complexities`),
     points: arrayOf(record.points, `${path}.points`, parseCompetencePoint),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
@@ -368,6 +394,7 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
   const record = requireRecord(value, path, transportError);
   requireStrings(record, path, [
     'source_kind',
+    'result_status',
     'source_path',
     'run_id',
     'run_slug',
@@ -376,6 +403,9 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
     'model_key',
     'measurement_dataset_digest',
   ]);
+  if (record.result_status !== 'accepted' && record.result_status !== 'tentative') {
+    throw transportError(`${path}.result_status must be accepted or tentative`);
+  }
   return withFields(record, {
     measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
@@ -405,6 +435,32 @@ function parseCostAxis(value: unknown, path: string): CostAxisRecord {
   const record = requireRecord(value, path, transportError);
   requireStrings(record, path, ['key', 'label']);
   return record as CostAxisRecord;
+}
+
+function parseScoreAxis(value: unknown, path: string): ScoreAxisRecord {
+  const record = requireRecord(value, path, transportError);
+  requireStrings(record, path, ['key', 'label']);
+  return record as ScoreAxisRecord;
+}
+
+function parseScoreViews(value: unknown, path: string): Record<string, ScoreViewRecord> {
+  const record = requireRecord(value, path, transportError);
+  return Object.fromEntries(
+    Object.entries(record).map(([key, item]) => {
+      const itemPath = `${path}.${key}`;
+      const view = requireRecord(item, itemPath, transportError);
+      requireStrings(view, itemPath, ['key', 'label']);
+      return [
+        key,
+        {
+          key: requireString(view.key, `${itemPath}.key`, transportError),
+          label: requireString(view.label, `${itemPath}.label`, transportError),
+          score: requireNumber(view.score, `${itemPath}.score`, transportError),
+          basis: optional(view.basis, `${itemPath}.basis`, parseScoreBasis),
+        },
+      ];
+    }),
+  );
 }
 
 function parseCompetencePoint(value: unknown, path: string): CompetencePointRecord {

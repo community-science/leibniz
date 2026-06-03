@@ -388,10 +388,11 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
       "benchmark_id": "benchmarks.digits@0.1.0",
       "complexity_axis": "C",
       "cost_axes": [{"key": "parameter_count", "label": "Parameters"}],
-      "leaderboard": [
-        {
-          "model_key": "sha256:model",
-          "architecture_digest": "sha256:model",
+          "leaderboard": [
+            {
+              "model_key": "sha256:model",
+              "result_status": "accepted",
+              "architecture_digest": "sha256:model",
           "benchmark_id": "benchmarks.digits@0.1.0",
           "score": 1.0,
           "observed_complexities": [1.0],
@@ -415,10 +416,11 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
         "inference_compute": [],
         "training_compute": []
       },
-      "training_history": [
-        {
-          "source_kind": "local-run",
-          "source_path": "results/training/example.json",
+          "training_history": [
+            {
+              "source_kind": "local-run",
+              "result_status": "accepted",
+              "source_path": "results/training/example.json",
           "run_id": "run-1",
           "run_slug": "run-1",
           "benchmark_id": "benchmarks.digits@0.1.0",
@@ -436,12 +438,59 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
             "unknown_parameter_components": []
           },
           "architecture": {"kind": "architecture-manifest"},
-          "measurement_dataset_digest": "sha256:dataset"
+              "measurement_dataset_digest": "sha256:dataset"
+            }
+          ],
+          "model_candidates": [
+            {
+              "model_key": "sha256:model",
+              "result_status": "accepted",
+              "architecture_digest": "sha256:model",
+              "benchmark_id": "benchmarks.digits@0.1.0",
+              "score": 1.0,
+              "observed_complexities": [1.0],
+              "points": [{"complexity": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
+              "cost_summary": {
+                "component_count": 1,
+                "parameter_count": 10,
+                "storage_bytes": 40,
+                "inference_compute": 20,
+                "training_compute": 60,
+                "unknown_parameter_components": []
+              },
+              "run_ids": ["run-1"],
+              "measurement_count": 1,
+              "source_kinds": ["local-run"]
+            }
+          ],
+          "plot_runs": [
+            {
+              "source_kind": "local-run",
+              "result_status": "accepted",
+              "source_path": "results/training/example.json",
+              "run_id": "run-1",
+              "run_slug": "run-1",
+              "benchmark_id": "benchmarks.digits@0.1.0",
+              "architecture_digest": "sha256:model",
+              "model_key": "sha256:model",
+              "complexity": 10,
+              "measurement_count": 1,
+              "score": 1.0,
+              "cost_summary": {
+                "component_count": 1,
+                "parameter_count": 10,
+                "storage_bytes": 40,
+                "inference_compute": 20,
+                "training_compute": 60,
+                "unknown_parameter_components": []
+              },
+              "architecture": {"kind": "architecture-manifest"},
+              "measurement_dataset_digest": "sha256:dataset"
+            }
+          ]
         }
       ]
     }
-  ]
-}
 """,
         encoding="utf-8",
     )
@@ -483,13 +532,15 @@ def test_console_data_discovers_materialized_result_root_views(tmp_path: Path) -
       "benchmark_id": "benchmarks.digits@0.1.0",
       "cost_axes": [{"key": "parameter_count", "label": "Parameters"}],
       "leaderboard": [],
+      "model_candidates": [],
       "frontiers": {
         "parameter_count": [],
         "storage_bytes": [],
         "inference_compute": [],
         "training_compute": []
       },
-      "training_history": []
+      "training_history": [],
+      "plot_runs": []
     }
   ]
 }
@@ -519,7 +570,7 @@ def test_console_data_rejects_nested_local_result_roots() -> None:
     with pytest.raises(ConsoleDataValidationError, match="results or results/views"):
         ConsoleDataBuilder(_repository_root).discover(
             (PurePosixPath("tests/fixtures"),),
-            result_roots=(Path("results/training-progress"),),
+            result_roots=(Path("results/training"),),
         )
 
 
