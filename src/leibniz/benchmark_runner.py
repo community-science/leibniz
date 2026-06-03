@@ -12,10 +12,12 @@ from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_evaluation import (
+    ValidationCompetencePoint,
     finite_measurements_for_predictions,
     sampled_competence_curriculum_record,
     sampled_competence_record,
     validation_competence,
+    validation_competence_frontier_score,
 )
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes, document_filename_suffix
@@ -76,7 +78,7 @@ _default_convergence_min_steps = 500
 _component_count = 1
 _converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
 _minimum_plateau_lr_reductions = 3
-_nuisance_extent_curriculum = (0.0, 0.25, 0.5, 1.0)
+_full_variation_extent = 1.0
 _canvas_logarithmic_growth_factor = math.sqrt(2.0)
 
 
@@ -86,6 +88,8 @@ class _TrainingResult:
         tuple[_CurriculumRung, tuple[tuple[float, ...], ...]],
         ...,
     ]
+    training_rungs: tuple[_CurriculumRung, ...]
+    training_frontier_index: int
     training_run: TrainingRunRecord
     throughput: Mapping[str, object]
 
@@ -99,7 +103,6 @@ class _TrainingStageResult:
 @dataclass(frozen=True, slots=True)
 class _CurriculumRung:
     index: int
-    nuisance_extent: float
     resolution_assignment: AxisAssignment
     seed: int
     batch: GeneratedObservationBatch
@@ -113,7 +116,6 @@ class _CurriculumRung:
             "index": self.index,
             "status": status,
             "resolution_assignment": self.resolution_assignment.to_record(),
-            "nuisance_extent": self.nuisance_extent,
             "seed": self.seed,
             "complexity_axis": "internal-distinguishable-state-complexity",
             "complexity": self.complexity,
@@ -430,7 +432,7 @@ def run_benchmark(
     def publish_progress(
         training_run: TrainingRunRecord,
         throughput: Mapping[str, object],
-        evaluation_curriculum: Mapping[str, object],
+        training_curriculum: Mapping[str, object],
     ) -> None:
         _write_document_atomic(
             progress_path,
@@ -440,7 +442,12 @@ def run_benchmark(
                 architecture=architecture,
                 outcome_space=outcome_space,
                 evaluation_rungs=(initial_evaluation_rung,),
-                evaluation_curriculum=evaluation_curriculum,
+                evaluation_curriculum=_curriculum_record(
+                    kind="competence-gated-evaluation-curriculum",
+                    rungs=(initial_evaluation_rung,),
+                    frontier_index=0,
+                ),
+                training_curriculum=training_curriculum,
                 training_run=training_run,
                 throughput=throughput,
             ),
@@ -480,14 +487,23 @@ def run_benchmark(
         seed=plan.seed,
         progress_callback=publish_progress,
     )
-    measurement_groups = tuple(
+    final_evaluation_result = training_result.evaluation_results[-1]
+    measurement_groups = (
         finite_measurements_for_predictions(
-            batch=rung.batch,
+            batch=final_evaluation_result[0].batch,
             outcome_space=outcome_space,
-            probabilities=probabilities,
-            run_slug=f"{summary.run_slug}.rung{index}",
+            probabilities=final_evaluation_result[1],
+            run_slug=f"{summary.run_slug}.final",
+        ),
+    )
+    sampled_competence = sampled_competence_curriculum_record(
+        (
+            sampled_competence_record(
+                batch=final_evaluation_result[0].batch,
+                measurements=measurement_groups[0],
+                complexity_axis=None,
+            ),
         )
-        for index, (rung, probabilities) in enumerate(training_result.evaluation_results)
     )
     measurements = tuple(
         measurement
@@ -509,19 +525,20 @@ def run_benchmark(
             "evaluation_sample_count": plan.resolved_evaluation_sample_count,
             "evaluation_curriculum_rung_count": len(training_result.evaluation_results),
             "evaluation_curriculum": _curriculum_record(
+                kind="competence-gated-evaluation-curriculum",
                 rungs=tuple(
                     rung for rung, _probabilities in training_result.evaluation_results
                 ),
                 frontier_index=len(training_result.evaluation_results) - 1,
             ),
-            "training_curriculum": {
-                "kind": "competence-gated-training-curriculum",
-                "source": "structured-training-curriculum",
-                "frontier_sampling_weight": 0.7,
-                "replay_sampling_weight": 0.3,
-                "gating_metric": "monotone-frontier-validation-competence",
-                "nuisance_policy": "warmup-to-full-then-fixed",
-            },
+            "training_curriculum": _curriculum_record(
+                kind="competence-gated-training-curriculum",
+                source="structured-training-curriculum",
+                frontier_sampling_weight=0.7,
+                replay_sampling_weight=0.3,
+                rungs=training_result.training_rungs,
+                frontier_index=training_result.training_frontier_index,
+            ),
             "seed": plan.seed,
             "train_steps": plan.train_steps,
             "learning_rate": float(plan.learning_rate),
@@ -538,21 +555,7 @@ def run_benchmark(
             "tensor_device": training_result.training_run.protocol.tensor_device,
             "training_run": training_result.training_run.to_record(),
             "throughput": training_result.throughput,
-            "sampled_competence": sampled_competence_curriculum_record(
-                tuple(
-                    sampled_competence_record(
-                        batch=batch,
-                        measurements=measurements,
-                        complexity_axis=None,
-                    )
-                    for (rung, _probabilities), measurements in zip(
-                        training_result.evaluation_results,
-                        measurement_groups,
-                        strict=True,
-                    )
-                    for batch in (rung.batch,)
-                )
-            ),
+            "sampled_competence": sampled_competence,
             "architecture": model_inspection.architecture.to_record(),
             "cost_summary": model_inspection.cost_summary.to_record(),
             "measurement_dataset_digest": str(dataset.digest),
@@ -669,7 +672,7 @@ def _curriculum_rung_from_candidates(
             sample_count=sample_count,
             seed=rung_seed,
             resolution_assignment=candidate.resolution_assignment,
-            variation_extent=candidate.nuisance_extent,
+            variation_extent=_full_variation_extent,
         )
         input_reason = _input_shape_boundary_reason(
             architecture=architecture,
@@ -684,7 +687,6 @@ def _curriculum_rung_from_candidates(
             )
         return _CurriculumRung(
             index=index,
-            nuisance_extent=candidate.nuisance_extent,
             resolution_assignment=candidate.resolution_assignment,
             seed=batch.seed,
             batch=batch,
@@ -694,7 +696,6 @@ def _curriculum_rung_from_candidates(
 
 @dataclass(frozen=True, slots=True)
 class _CurriculumCandidate:
-    nuisance_extent: float
     resolution_assignment: AxisAssignment
     complexity: float
 
@@ -709,11 +710,6 @@ def _logarithmic_curriculum_candidates(
         generator=generator,
         component_count=component_count,
         start_index=start_index,
-        nuisance_extents_for_stage=lambda stage: (
-            _nuisance_extent_curriculum
-            if stage == 0
-            else tuple(extent for extent in _nuisance_extent_curriculum if extent > 0.0)
-        ),
     )
     return tuple(sorted(candidates, key=lambda candidate: candidate.complexity))
 
@@ -728,9 +724,6 @@ def _structured_training_curriculum_candidates(
         generator=generator,
         component_count=component_count,
         start_index=start_index,
-        nuisance_extents_for_stage=lambda stage: (
-            _nuisance_extent_curriculum if stage == 0 else (1.0,)
-        ),
     )
 
 
@@ -739,7 +732,6 @@ def _curriculum_candidate_grid(
     generator: ObservationGenerator,
     component_count: int,
     start_index: int,
-    nuisance_extents_for_stage: Callable[[int], tuple[float, ...]],
 ) -> Sequence[_CurriculumCandidate]:
     minimum_assignment = generator.minimum_discriminatable_resolution_assignment(
         component_count=component_count,
@@ -769,26 +761,24 @@ def _curriculum_candidate_grid(
             for height_index, height in enumerate(heights[: stage + 1]):
                 if max(width_index, height_index) != stage:
                     continue
-                for nuisance_extent in nuisance_extents_for_stage(stage):
-                    complexity = generator.distinguishable_state_complexity(
-                        component_count=component_count,
-                        width=width,
-                        height=height,
-                        variation_extent=nuisance_extent,
+                complexity = generator.distinguishable_state_complexity(
+                    component_count=component_count,
+                    width=width,
+                    height=height,
+                    variation_extent=_full_variation_extent,
+                )
+                candidates.append(
+                    _CurriculumCandidate(
+                        resolution_assignment=AxisAssignment(
+                            values={
+                                **minimum_assignment.values,
+                                width_axis: width,
+                                height_axis: height,
+                            }
+                        ),
+                        complexity=complexity,
                     )
-                    candidates.append(
-                        _CurriculumCandidate(
-                            nuisance_extent=nuisance_extent,
-                            resolution_assignment=AxisAssignment(
-                                values={
-                                    **minimum_assignment.values,
-                                    width_axis: width,
-                                    height_axis: height,
-                                }
-                            ),
-                            complexity=complexity,
-                        )
-                    )
+                )
     return tuple(candidates)
 
 
@@ -817,19 +807,22 @@ def _logarithmic_lattice_axis_values(
 
 def _curriculum_record(
     *,
+    kind: str,
     rungs: Sequence[_CurriculumRung],
     frontier_index: int,
+    source: str | None = None,
+    frontier_sampling_weight: float | None = None,
+    replay_sampling_weight: float | None = None,
 ) -> dict[str, object]:
-    return {
-        "kind": "competence-gated-evaluation-curriculum",
+    record: dict[str, object] = {
+        "kind": kind,
         "curriculum_variable": "internal-distinguishable-state-complexity",
         "complexity_axis": "internal-distinguishable-state-complexity",
-        "sampling_levers": ["canvas-size", "nuisance-extent"],
+        "sampling_levers": ["canvas-size"],
         "canvas_growth": {
             "kind": "logarithmic",
             "factor": _canvas_logarithmic_growth_factor,
         },
-        "nuisance_extent_curriculum": list(_nuisance_extent_curriculum),
         "gating_metric": "monotone-frontier-validation-competence",
         "rung_policy": "unbounded-competence-frontier",
         "frontier_index": frontier_index,
@@ -847,6 +840,13 @@ def _curriculum_record(
             for rung in rungs
         ],
     }
+    if source is not None:
+        record["source"] = source
+    if frontier_sampling_weight is not None:
+        record["frontier_sampling_weight"] = frontier_sampling_weight
+    if replay_sampling_weight is not None:
+        record["replay_sampling_weight"] = replay_sampling_weight
+    return record
 
 
 def _validate_architecture_for_batch(
@@ -1047,7 +1047,6 @@ def _train_and_predict_on_device(
         generation_phase: str,
         tensor_phase: str,
         resolution_assignment: AxisAssignment,
-        variation_extent: float,
     ) -> tuple[Any, Any]:
         with phase_timings.span(generation_phase, samples=batch_sample_count):
             generated = generator.sample_formation_batch(
@@ -1055,7 +1054,7 @@ def _train_and_predict_on_device(
                 sample_count=batch_sample_count,
                 seed=batch_seed,
                 resolution_assignment=resolution_assignment,
-                variation_extent=variation_extent,
+                variation_extent=_full_variation_extent,
                 timing=phase_timings,
                 timing_prefix=f"{generation_phase}.",
             )
@@ -1074,7 +1073,7 @@ def _train_and_predict_on_device(
         )
     ]
     training_frontier_index = 0
-    previous_frontier_plateau_competence: float | None = None
+    frontier_plateau_points: list[ValidationCompetencePoint] = []
 
     def current_frontier() -> _CurriculumRung:
         return training_rungs[training_frontier_index]
@@ -1090,15 +1089,18 @@ def _train_and_predict_on_device(
         return training_rungs[replay_index]
 
     def advance_frontier(history: Sequence[TrainingHistoryPoint]) -> bool:
-        nonlocal previous_frontier_plateau_competence, training_frontier_index
+        nonlocal training_frontier_index
         latest = history[-1]
-        frontier_competence = _frontier_plateau_competence(
+        chance_mass = _chance_accepted_mass(outcome_ids)
+        frontier_point = _frontier_plateau_competence_point(
             validation_loss=latest.validation_loss,
             outcome_count=len(outcome_ids),
+            complexity=current_frontier().complexity,
         )
         if not _frontier_plateau_advances(
-            frontier_competence=frontier_competence,
-            previous_frontier_plateau_competence=previous_frontier_plateau_competence,
+            frontier_point=frontier_point,
+            previous_frontier_points=tuple(frontier_plateau_points),
+            chance_mass=chance_mass,
         ):
             return False
         next_index = training_frontier_index + 1
@@ -1112,7 +1114,7 @@ def _train_and_predict_on_device(
                 index=next_index,
             )
         )
-        previous_frontier_plateau_competence = frontier_competence
+        frontier_plateau_points.append(frontier_point)
         training_frontier_index += 1
         if scheduler is not None:
             scheduler.reset_for_curriculum_expansion()
@@ -1131,7 +1133,6 @@ def _train_and_predict_on_device(
                 generation_phase="training_formation_generation",
                 tensor_phase="training_tensor_batch",
                 resolution_assignment=training_rung_for_step(step).resolution_assignment,
-                variation_extent=training_rung_for_step(step).nuisance_extent,
             )
         ),
         validation_batch=lambda check: batch_for_seed(
@@ -1140,7 +1141,6 @@ def _train_and_predict_on_device(
             generation_phase="validation_formation_generation",
             tensor_phase="validation_tensor_batch",
             resolution_assignment=current_frontier().resolution_assignment,
-            variation_extent=current_frontier().nuisance_extent,
         ),
         max_steps=train_steps,
         gate_check_interval=gate_check_interval,
@@ -1190,6 +1190,10 @@ def _train_and_predict_on_device(
                     operation_fallbacks=module.operation_fallback_records(),
                 ),
                 _curriculum_record(
+                    kind="competence-gated-training-curriculum",
+                    source="structured-training-curriculum",
+                    frontier_sampling_weight=0.7,
+                    replay_sampling_weight=0.3,
                     rungs=tuple(training_rungs),
                     frontier_index=training_frontier_index,
                 ),
@@ -1268,6 +1272,8 @@ def _train_and_predict_on_device(
     )
     return _TrainingResult(
         evaluation_results=tuple(evaluation_results),
+        training_rungs=tuple(training_rungs),
+        training_frontier_index=training_frontier_index,
         training_run=training_run,
         throughput=_throughput_record(
             runtime_device=runtime.device_kind,
@@ -1457,21 +1463,41 @@ def _tensor_batch_size(fields: Any, *, fallback: int) -> int:
     return fallback
 
 
-def _frontier_plateau_competence(*, validation_loss: float, outcome_count: int) -> float:
-    return validation_competence(validation_loss=validation_loss, outcome_count=outcome_count)
+def _frontier_plateau_competence_point(
+    *,
+    validation_loss: float,
+    outcome_count: int,
+    complexity: float,
+) -> ValidationCompetencePoint:
+    chance_mass = 1.0 / outcome_count if outcome_count > 0 else 1.0
+    local_competence = validation_competence(
+        validation_loss=validation_loss,
+        outcome_count=outcome_count,
+    )
+    accepted_mass_equivalent = chance_mass + local_competence * (1.0 - chance_mass)
+    return ValidationCompetencePoint(
+        complexity=complexity,
+        accepted_mass=accepted_mass_equivalent,
+    )
 
 
 def _frontier_plateau_advances(
     *,
-    frontier_competence: float,
-    previous_frontier_plateau_competence: float | None,
+    frontier_point: ValidationCompetencePoint,
+    previous_frontier_points: tuple[ValidationCompetencePoint, ...],
+    chance_mass: float,
 ) -> bool:
-    if frontier_competence <= 0.0:
-        return False
-    return (
-        previous_frontier_plateau_competence is None
-        or frontier_competence > previous_frontier_plateau_competence
+    previous_score = validation_competence_frontier_score(
+        previous_frontier_points,
+        chance_mass=chance_mass,
     )
+    next_score = validation_competence_frontier_score(
+        (*previous_frontier_points, frontier_point),
+        chance_mass=chance_mass,
+    )
+    if next_score <= 0.0:
+        return False
+    return next_score > previous_score
 
 
 def has_windowed_validation_plateau(
@@ -1603,6 +1629,7 @@ def _training_progress_record(
     outcome_space: OutcomeSpace,
     evaluation_rungs: tuple[_CurriculumRung, ...],
     evaluation_curriculum: Mapping[str, object],
+    training_curriculum: Mapping[str, object],
     training_run: TrainingRunRecord,
     throughput: Mapping[str, object],
 ) -> Mapping[str, object]:
@@ -1656,6 +1683,7 @@ def _training_progress_record(
         "training_run": training_run.to_record(),
         "throughput": throughput,
         "evaluation_curriculum": dict(evaluation_curriculum),
+        "training_curriculum": dict(training_curriculum),
         "architecture": inspection.architecture.to_record(),
         "cost_summary": inspection.cost_summary.to_record(),
         "model_inspection": inspection.to_record(),

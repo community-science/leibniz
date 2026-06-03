@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
+from leibniz.benchmark_evaluation import (
+    CompetencePoint,
+    sampled_competence_frontier_score,
+)
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
 from leibniz.console.protocol import (
     console_protocol_format_versions,
@@ -837,6 +841,11 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
         record["evaluation_curriculum"] = dict(
             cast(Mapping[str, object], evaluation_curriculum)
         )
+    training_curriculum = run.training_summary.get("training_curriculum")
+    if isinstance(training_curriculum, Mapping):
+        record["training_curriculum"] = dict(
+            cast(Mapping[str, object], training_curriculum)
+        )
     return record
 
 
@@ -1507,37 +1516,16 @@ def competent_complexity_score(
     *,
     chance_mass: float,
 ) -> float:
-    if not points:
-        return 0.0
-    ordered = tuple(sorted(points, key=_point_complexity))
-    first_complexity = _point_complexity(ordered[0])
-    first_competence = _above_chance_competence(
-        _point_score(ordered[0]),
+    return sampled_competence_frontier_score(
+        tuple(
+            CompetencePoint(
+                complexity=_point_complexity(point),
+                accepted_mass=_point_score(point),
+            )
+            for point in points
+        ),
         chance_mass=chance_mass,
     )
-    area = first_complexity * first_competence
-    for left, right in zip(ordered, ordered[1:], strict=False):
-        left_complexity = _point_complexity(left)
-        right_complexity = _point_complexity(right)
-        width = right_complexity - left_complexity
-        if width <= 0.0:
-            continue
-        left_competence = _above_chance_competence(
-            _point_score(left),
-            chance_mass=chance_mass,
-        )
-        right_competence = _above_chance_competence(
-            _point_score(right),
-            chance_mass=chance_mass,
-        )
-        area += width * (left_competence + right_competence) / 2.0
-    return area
-
-
-def _above_chance_competence(score: float, *, chance_mass: float) -> float:
-    if chance_mass >= 1.0:
-        return 0.0
-    return max(0.0, min(1.0, (score - chance_mass) / (1.0 - chance_mass)))
 
 
 def _benchmark_base_complexity(
@@ -2226,6 +2214,19 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
         _as_sequence(
             curriculum.get("rungs"),
             _field_path(prefix, "evaluation_curriculum.rungs"),
+        )
+    if "training_curriculum" in record:
+        curriculum = _extract.mapping(
+            record.get("training_curriculum"),
+            _field_path(prefix, "training_curriculum"),
+        )
+        _extract.non_empty_string(
+            curriculum.get("kind"),
+            _field_path(prefix, "training_curriculum.kind"),
+        )
+        _as_sequence(
+            curriculum.get("rungs"),
+            _field_path(prefix, "training_curriculum.rungs"),
         )
 
 

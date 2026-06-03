@@ -116,7 +116,7 @@ def test_cli_validates_architecture_manifest_with_semantics(
         [
             "validate",
             "architecture",
-            str(_fixtures_root / "architecture" / "digits_pool" / "manifest.json"),
+            str(_fixtures_root / "architecture" / "digits_pool.json"),
             "--semantic",
         ]
     )

@@ -219,7 +219,7 @@ def _benchmark_document() -> BenchmarkManifestDocument:
 
 def _architecture_document() -> ArchitectureManifestDocument:
     return ArchitectureManifestDocument.from_bytes(
-        (_fixtures_root / "architecture" / "digits_pool" / "manifest.json").read_bytes()
+        (_fixtures_root / "architecture" / "digits_pool.json").read_bytes()
     )
 
 

@@ -449,7 +449,7 @@ def test_layer_alias_literals_are_defined_only_in_the_operator_registry() -> Non
 
 def _architecture_manifest() -> ArchitectureManifest:
     return ArchitectureManifestDocument.from_bytes(
-        (_fixtures_root / "architecture" / "digits_pool" / "manifest.json").read_bytes()
+        (_fixtures_root / "architecture" / "digits_pool.json").read_bytes()
     ).manifest
 
 

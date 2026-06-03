@@ -29,7 +29,7 @@ from leibniz.views import MeasurementScoreView
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
 _digits_architecture = (
-    _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool" / "manifest.json"
+    _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool.json"
 )
 
 
@@ -835,7 +835,7 @@ def _digits_benchmark() -> BenchmarkManifestDocument:
 
 def _architecture() -> ArchitectureManifestDocument:
     manifest_path = (
-        _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool" / "manifest.json"
+        _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool.json"
     )
     return ArchitectureManifestDocument.from_bytes(
         manifest_path.read_bytes()

@@ -508,7 +508,7 @@ p {
 .benchmark-model-result-row {
   grid-template-columns:
     minmax(0, var(--result-table-model-column))
-    repeat(5, minmax(0, var(--result-table-metric-column)));
+    repeat(2, minmax(0, var(--result-table-metric-column)));
 }
 
 .benchmark-result-row + .benchmark-result-row {
@@ -562,6 +562,18 @@ p {
 
 .benchmark-sort-header.active {
   color: var(--text-primary);
+}
+
+.benchmark-sort-header-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  opacity: 0.65;
+}
+
+.benchmark-sort-header.active .benchmark-sort-header-icon {
+  color: var(--text-primary);
+  opacity: 1;
 }
 
 .run-detail-card {
