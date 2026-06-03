@@ -19,7 +19,7 @@ from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.federation_ingest import FederationIngestPlan
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
 from leibniz.projection_records import ProjectionRecord
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 from leibniz.view_manifests import ViewManifest
 
 __all__ = [
@@ -72,6 +72,9 @@ class AuthorityIndexValidationError(ValueError):
     """Raised when an authority index is invalid."""
 
 
+_extract = RecordExtractor(error_type=AuthorityIndexValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class AuthorityDependency:
     """A declared dependency edge between two artifact references."""
@@ -92,12 +95,12 @@ class AuthorityDependency:
             raise AuthorityIndexValidationError(str(error)) from error
         return cls(
             source=ArtifactReference.from_record(
-                _as_mapping(validated["source"], field="source")
+                _extract.mapping(validated["source"], "source")
             ),
             target=ArtifactReference.from_record(
-                _as_mapping(validated["target"], field="target")
+                _extract.mapping(validated["target"], "target")
             ),
-            relation=_as_string(validated["relation"], field="relation"),
+            relation=_extract.string(validated["relation"], "relation"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -130,10 +133,10 @@ class AuthorityIndexValidationEntry:
             raise AuthorityIndexValidationError(str(error)) from error
         return cls(
             artifact=ArtifactReference.from_record(
-                _as_mapping(validated["artifact"], field="artifact")
+                _extract.mapping(validated["artifact"], "artifact")
             ),
-            status=cast(_ValidationStatus, _as_string(validated["status"], field="status")),
-            message=_as_string(validated["message"], field="message"),
+            status=cast(_ValidationStatus, _extract.string(validated["status"], "status")),
+            message=_extract.string(validated["message"], "message"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -202,23 +205,23 @@ class AuthorityIndex:
         try:
             validated = _authority_index_record.validate(record)
             artifacts = tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="artifacts"))
-                for item in _as_sequence(validated["artifacts"], field="artifacts")
+                ArtifactReference.from_record(_extract.mapping(item, "artifacts"))
+                for item in _extract.sequence(validated["artifacts"], "artifacts")
             )
             dependencies = tuple(
-                AuthorityDependency.from_record(_as_mapping(item, field="dependencies"))
-                for item in _as_sequence(validated["dependencies"], field="dependencies")
+                AuthorityDependency.from_record(_extract.mapping(item, "dependencies"))
+                for item in _extract.sequence(validated["dependencies"], "dependencies")
             )
             validations = tuple(
                 AuthorityIndexValidationEntry.from_record(
-                    _as_mapping(item, field="validations")
+                    _extract.mapping(item, "validations")
                 )
-                for item in _as_sequence(validated["validations"], field="validations")
+                for item in _extract.sequence(validated["validations"], "validations")
             )
         except ValueError as error:
             raise AuthorityIndexValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             artifacts=artifacts,
             dependencies=dependencies,
             validations=validations,
@@ -436,34 +439,6 @@ def _unique_references(references: Iterable[ArtifactReference]) -> tuple[Artifac
         seen.add(key)
         unique.append(reference)
     return tuple(unique)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise AuthorityIndexValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise AuthorityIndexValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise AuthorityIndexValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
-def _as_string(value: object, *, field: str) -> str:
-    if not isinstance(value, str):
-        raise AuthorityIndexValidationError(f"{field}: expected string")
-    if not value:
-        raise AuthorityIndexValidationError(f"{field}: expected nonempty string")
-    return value
-
-
 def _dependency_sort_key(dependency: AuthorityDependency) -> tuple[str, str, str]:
     return (
         _reference_identity(dependency.source),

@@ -12,7 +12,7 @@ from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment, MaterializationPlan
 from leibniz.observation_formation import FieldObservation, FormedObservation
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "FieldPreview",
@@ -58,6 +58,9 @@ class ObservationInspectionValidationError(ValueError):
     """Raised when an observation inspection record is invalid."""
 
 
+_extract = RecordExtractor(error_type=ObservationInspectionValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class FieldPreviewRun:
     """One run in a channel-first quantized field preview."""
@@ -84,8 +87,8 @@ class FieldPreviewRun:
         except ValueError as error:
             raise ObservationInspectionValidationError(str(error)) from error
         return cls(
-            value=_as_int(validated["value"], field="value"),
-            count=_as_int(validated["count"], field="count"),
+            value=_extract.integer(validated["value"], "value"),
+            count=_extract.integer(validated["count"], "count"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -125,8 +128,8 @@ class FieldPreview:
         return cls(
             shape=_shape(validated["shape"], field="shape"),
             runs=tuple(
-                FieldPreviewRun.from_record(_as_mapping(run, field="runs"))
-                for run in _as_sequence(validated["runs"], field="runs")
+                FieldPreviewRun.from_record(_extract.mapping(run, "runs"))
+                for run in _extract.sequence(validated["runs"], "runs")
             ),
         )
 
@@ -232,36 +235,36 @@ class ObservationInspectionRecord:
             raise ObservationInspectionValidationError(str(error)) from error
         preview = validated.get("field_preview")
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
-            benchmark_id=_as_identifier(validated["benchmark_id"], field="benchmark_id"),
+            id=_extract.identifier(validated["id"], "id"),
+            benchmark_id=_extract.identifier(validated["benchmark_id"], "benchmark_id"),
             formed_observation=ArtifactReference.from_record(
-                _as_mapping(validated["formed_observation"], field="formed_observation")
+                _extract.mapping(validated["formed_observation"], "formed_observation")
             ),
             formation_declaration=ArtifactReference.from_record(
-                _as_mapping(validated["formation_declaration"], field="formation_declaration")
+                _extract.mapping(validated["formation_declaration"], "formation_declaration")
             ),
             materialization_plan=ArtifactReference.from_record(
-                _as_mapping(validated["materialization_plan"], field="materialization_plan")
+                _extract.mapping(validated["materialization_plan"], "materialization_plan")
             ),
-            sample_index=_as_int(validated["sample_index"], field="sample_index"),
+            sample_index=_extract.integer(validated["sample_index"], "sample_index"),
             component_sequence=tuple(
-                _as_int(index, field="component_sequence")
-                for index in _as_sequence(
+                _extract.integer(index, "component_sequence")
+                for index in _extract.sequence(
                     validated["component_sequence"],
-                    field="component_sequence",
+                    "component_sequence",
                 )
             ),
             resolution_assignment=AxisAssignment.from_record(
-                _as_mapping(validated["resolution_assignment"], field="resolution_assignment")
+                _extract.mapping(validated["resolution_assignment"], "resolution_assignment")
             ),
             field_shape=_shape(validated["field_shape"], field="field_shape"),
             field_digest=_digest(validated["field_digest"], field="field_digest"),
             field_preview=(
                 None
                 if preview is None
-                else FieldPreview.from_record(_as_mapping(preview, field="field_preview"))
+                else FieldPreview.from_record(_extract.mapping(preview, "field_preview"))
             ),
-            outcome_id=_optional_string(validated.get("outcome_id"), field="outcome_id"),
+            outcome_id=_extract.optional_string(validated.get("outcome_id"), "outcome_id"),
         )
 
     @property
@@ -337,7 +340,7 @@ def _require_kind(reference: ArtifactReference, expected: str, field: str) -> No
 
 
 def _shape(value: object, *, field: str) -> tuple[int, int, int]:
-    sequence = tuple(_as_int(item, field=field) for item in _as_sequence(value, field=field))
+    sequence = tuple(_extract.integer(item, field) for item in _extract.sequence(value, field))
     _validate_shape(sequence, field=field)
     return cast(tuple[int, int, int], sequence)
 
@@ -352,40 +355,6 @@ def _validate_shape(value: tuple[int, ...], *, field: str) -> None:
 def _shape_size(shape: tuple[int, int, int]) -> int:
     channels, height, width = shape
     return channels * height * width
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ObservationInspectionValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ObservationInspectionValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ObservationInspectionValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
-def _as_int(value: object, *, field: str) -> int:
-    if type(value) is not int:
-        raise ObservationInspectionValidationError(f"{field}: expected integer")
-    return value
-
-
-def _optional_string(value: object, *, field: str) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise ObservationInspectionValidationError(f"{field}: expected string")
-    return value
-
-
 def _digest(value: object, *, field: str) -> ContentDigest:
     if not isinstance(value, str):
         raise ObservationInspectionValidationError(f"{field}: expected digest string")

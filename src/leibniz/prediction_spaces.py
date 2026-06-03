@@ -8,7 +8,7 @@ from typing import Literal, TypeAlias, cast
 
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.outcomes import Outcome, OutcomeSpace
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "FiniteOutcomeSpace",
@@ -60,6 +60,9 @@ class PredictionSpaceValidationError(ValueError):
     """Raised when a prediction target-space declaration is invalid."""
 
 
+_extract = RecordExtractor(error_type=PredictionSpaceValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class FiniteTokenVocabulary:
     """A finite vocabulary of integer-indexed tokens."""
@@ -82,7 +85,7 @@ class FiniteTokenVocabulary:
         except ValueError as error:
             raise PredictionSpaceValidationError(str(error)) from error
         return cls(
-            token_count=_as_int(validated["token_count"], field="token_count"),
+            token_count=_extract.integer(validated["token_count"], "token_count"),
             token_name=str(validated["token_name"]),
         )
 
@@ -143,15 +146,15 @@ class FiniteTokenSequenceSpace:
             raise PredictionSpaceValidationError(str(error)) from error
         return cls(
             vocabulary=FiniteTokenVocabulary.from_record(
-                _as_mapping(validated["vocabulary"], field="vocabulary")
+                _extract.mapping(validated["vocabulary"], "vocabulary")
             ),
             length=(
                 None
                 if "length" not in validated
-                else _as_int(validated["length"], field="length")
+                else _extract.integer(validated["length"], "length")
             ),
             sequence_boundary=cast(_SequenceBoundary, validated["sequence_boundary"]),
-            minimum_length=_as_int(validated.get("minimum_length", 1), field="minimum_length"),
+            minimum_length=_extract.integer(validated.get("minimum_length", 1), "minimum_length"),
         )
 
     @property
@@ -169,7 +172,7 @@ class FiniteTokenSequenceSpace:
             raise PredictionSpaceValidationError(
                 "eos-terminated sequence spaces do not have finite outcome indices"
             )
-        token_values = tuple(_as_int(token, field="tokens") for token in tokens)
+        token_values = tuple(_extract.integer(token, "tokens") for token in tokens)
         if len(token_values) != self.length:
             raise PredictionSpaceValidationError(
                 f"token sequence length must be {self.length}"
@@ -196,14 +199,14 @@ class FiniteTokenSequenceSpace:
         return tuple(tokens)
 
     def outcome_id(self, tokens: Sequence[int]) -> str:
-        token_values = tuple(_as_int(token, field="tokens") for token in tokens)
+        token_values = tuple(_extract.integer(token, "tokens") for token in tokens)
         self.require_sequence(token_values)
         return "-".join((self.vocabulary.token_name, *(str(token) for token in token_values)))
 
     def require_sequence(self, tokens: Sequence[int]) -> tuple[int, ...]:
         """Validate and return a concrete token sequence in this space."""
 
-        token_values = tuple(_as_int(token, field="tokens") for token in tokens)
+        token_values = tuple(_extract.integer(token, "tokens") for token in tokens)
         if len(token_values) < self.minimum_length:
             raise PredictionSpaceValidationError(
                 f"token sequence length must be at least {self.minimum_length}"
@@ -285,15 +288,15 @@ class FiniteOutcomeSpace:
         except ValueError as error:
             raise PredictionSpaceValidationError(str(error)) from error
         return cls(
-            outcome_space_id=_as_identifier(
+            outcome_space_id=_extract.identifier(
                 validated["outcome_space_id"],
-                field="outcome_space_id",
+                "outcome_space_id",
             ),
-            outcome_count=_as_int(validated["outcome_count"], field="outcome_count"),
+            outcome_count=_extract.integer(validated["outcome_count"], "outcome_count"),
             source_space=(
                 None
                 if "source_space" not in validated
-                else _as_mapping(validated["source_space"], field="source_space")
+                else _extract.mapping(validated["source_space"], "source_space")
             ),
         )
 
@@ -342,7 +345,7 @@ class RealVectorSpace:
         except ValueError as error:
             raise PredictionSpaceValidationError(str(error)) from error
         return cls(
-            dimension=_as_int(validated["dimension"], field="dimension"),
+            dimension=_extract.integer(validated["dimension"], "dimension"),
             coordinate_name=str(validated["coordinate_name"]),
             measure=cast(_RealCoordinateMeasure, validated["measure"]),
         )
@@ -372,26 +375,6 @@ def parse_prediction_space(record: Mapping[str, object]) -> PredictionSpace:
     if not isinstance(kind, str):
         raise PredictionSpaceValidationError("kind: expected string")
     raise PredictionSpaceValidationError(f"unsupported prediction space kind: {kind}")
-
-
-def _as_int(value: object, *, field: str) -> int:
-    if type(value) is not int:
-        raise PredictionSpaceValidationError(f"{field}: expected integer")
-    return value
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise PredictionSpaceValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise PredictionSpaceValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
 def _validate_source_space(record: Mapping[str, object]) -> None:
     kind = record.get("kind")
     if kind == "finite-token-sequence":

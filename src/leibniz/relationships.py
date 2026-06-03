@@ -5,14 +5,13 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from leibniz.architectures import ArchitectureManifest
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDataset
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "RelationshipFitDocument",
@@ -55,6 +54,9 @@ class RelationshipFitValidationError(ValueError):
     """Raised when a relationship-fit record is invalid."""
 
 
+_extract = RecordExtractor(error_type=RelationshipFitValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class RelationshipFitParameter:
     """One numeric fit parameter."""
@@ -75,7 +77,7 @@ class RelationshipFitParameter:
             raise RelationshipFitValidationError(str(error)) from error
         return cls(
             name=str(validated["name"]),
-            value=_as_float(validated["value"], field="parameters.value"),
+            value=_extract.float(validated["value"], "parameters.value"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -107,10 +109,10 @@ class RelationshipFitResiduals:
             raise RelationshipFitValidationError(str(error)) from error
         r_squared = validated.get("r_squared")
         return cls(
-            rmse=_as_float(validated["rmse"], field="residuals.rmse"),
-            max_abs=_as_float(validated["max_abs"], field="residuals.max_abs"),
+            rmse=_extract.float(validated["rmse"], "residuals.rmse"),
+            max_abs=_extract.float(validated["max_abs"], "residuals.max_abs"),
             r_squared=(
-                _as_float(r_squared, field="residuals.r_squared")
+                _extract.float(r_squared, "residuals.r_squared")
                 if r_squared is not None
                 else None
             ),
@@ -169,29 +171,29 @@ class RelationshipFitRecord:
         try:
             validated = _relationship_fit_record.validate(record)
             parameters = tuple(
-                RelationshipFitParameter.from_record(_as_mapping(item, field="parameters"))
-                for item in _as_sequence(validated["parameters"], field="parameters")
+                RelationshipFitParameter.from_record(_extract.mapping(item, "parameters"))
+                for item in _extract.sequence(validated["parameters"], "parameters")
             )
             residuals = RelationshipFitResiduals.from_record(
-                _as_mapping(validated["residuals"], field="residuals")
+                _extract.mapping(validated["residuals"], "residuals")
             )
         except ValueError as error:
             raise RelationshipFitValidationError(str(error)) from error
         fit = cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             source_dataset_digest=_as_digest(
                 validated["source_dataset_digest"],
                 field="source_dataset_digest",
             ),
             architecture_id=(
-                _as_identifier(validated["architecture_id"], field="architecture_id")
+                _extract.identifier(validated["architecture_id"], "architecture_id")
                 if "architecture_id" in validated
                 else None
             ),
             hypothesis_family=str(validated["hypothesis_family"]),
             parameters=parameters,
             residuals=residuals,
-            point_count=_as_int(validated["point_count"], field="point_count"),
+            point_count=_extract.integer(validated["point_count"], "point_count"),
         )
         fit.validate_sources(dataset=dataset, architecture=architecture)
         return fit
@@ -258,26 +260,6 @@ class RelationshipFitDocument:
             architecture=architecture,
         )
         return cls(fit=fit, digest=fit.digest)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise RelationshipFitValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise RelationshipFitValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise RelationshipFitValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
 def _as_digest(value: object, *, field: str) -> ContentDigest:
     if not isinstance(value, str):
         raise RelationshipFitValidationError(f"{field}: expected digest string")
@@ -288,22 +270,6 @@ def _as_digest(value: object, *, field: str) -> ContentDigest:
         return ContentDigest(algorithm=algorithm, hex=digest_hex)
     except ContentEncodingError as error:
         raise RelationshipFitValidationError(str(error)) from error
-
-
-def _as_float(value: object, *, field: str) -> float:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return float(value)
-    if isinstance(value, float):
-        return value
-    raise RelationshipFitValidationError(f"{field}: expected parsed number")
-
-
-def _as_int(value: object, *, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise RelationshipFitValidationError(f"{field}: expected parsed integer")
-    return value
-
-
 def _require_finite(value: float, *, field: str) -> None:
     if not math.isfinite(value):
         raise RelationshipFitValidationError(f"{field} must be finite")

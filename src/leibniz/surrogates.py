@@ -11,7 +11,7 @@ from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDataset
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "ArchitectureSurrogateDocument",
@@ -69,6 +69,9 @@ class ArchitectureSurrogateValidationError(ValueError):
     """Raised when an architecture-surrogate export record is invalid."""
 
 
+_extract = RecordExtractor(error_type=ArchitectureSurrogateValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class ArchitectureSurrogateFeature:
     """One numeric feature used by an exported architecture surrogate."""
@@ -99,9 +102,9 @@ class ArchitectureSurrogateFeature:
             raise ArchitectureSurrogateValidationError(str(error)) from error
         return cls(
             name=str(validated["name"]),
-            mean=_as_float(validated["mean"], field="features.mean"),
-            scale=_as_float(validated["scale"], field="features.scale"),
-            sensitivity=_as_float(validated["sensitivity"], field="features.sensitivity"),
+            mean=_extract.float(validated["mean"], "features.mean"),
+            scale=_extract.float(validated["scale"], "features.scale"),
+            sensitivity=_extract.float(validated["sensitivity"], "features.sensitivity"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -149,10 +152,10 @@ class ArchitectureSurrogateTrainingSummary:
             raise ArchitectureSurrogateValidationError(str(error)) from error
         return cls(
             status=cast(_TrainingStatus, str(validated["status"])),
-            observation_count=_as_int(validated["observation_count"], field="observation_count"),
+            observation_count=_extract.integer(validated["observation_count"], "observation_count"),
             selector=str(validated["selector"]) if "selector" in validated else None,
             training_step_count=(
-                _as_int(validated["training_step_count"], field="training_step_count")
+                _extract.integer(validated["training_step_count"], "training_step_count")
                 if "training_step_count" in validated
                 else None
             ),
@@ -198,9 +201,9 @@ class ArchitectureSurrogateState:
             raise ArchitectureSurrogateValidationError(str(error)) from error
         return cls(
             format=str(validated["format"]),
-            input_width=_as_int(validated["input_width"], field="state.input_width"),
-            output_width=_as_int(validated["output_width"], field="state.output_width"),
-            parameter_count=_as_int(validated["parameter_count"], field="state.parameter_count"),
+            input_width=_extract.integer(validated["input_width"], "state.input_width"),
+            output_width=_extract.integer(validated["output_width"], "state.output_width"),
+            parameter_count=_extract.integer(validated["parameter_count"], "state.parameter_count"),
             state_digest=(
                 _as_digest(validated["state_digest"], field="state.state_digest")
                 if "state_digest" in validated
@@ -271,19 +274,19 @@ class ArchitectureSurrogateRecord:
         try:
             validated = _surrogate_record.validate(record)
             features = tuple(
-                ArchitectureSurrogateFeature.from_record(_as_mapping(item, field="features"))
-                for item in _as_sequence(validated["features"], field="features")
+                ArchitectureSurrogateFeature.from_record(_extract.mapping(item, "features"))
+                for item in _extract.sequence(validated["features"], "features")
             )
             training = ArchitectureSurrogateTrainingSummary.from_record(
-                _as_mapping(validated["training"], field="training")
+                _extract.mapping(validated["training"], "training")
             )
             state = ArchitectureSurrogateState.from_record(
-                _as_mapping(validated["state"], field="state")
+                _extract.mapping(validated["state"], "state")
             )
         except ValueError as error:
             raise ArchitectureSurrogateValidationError(str(error)) from error
         surrogate = cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             source_dataset_digest=_as_digest(
                 validated["source_dataset_digest"],
                 field="source_dataset_digest",
@@ -343,26 +346,6 @@ class ArchitectureSurrogateDocument:
             raise ArchitectureSurrogateValidationError(str(error)) from error
         surrogate = ArchitectureSurrogateRecord.from_record(record, dataset=dataset)
         return cls(surrogate=surrogate, digest=surrogate.digest)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ArchitectureSurrogateValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ArchitectureSurrogateValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ArchitectureSurrogateValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
 def _as_digest(value: object, *, field: str) -> ContentDigest:
     if not isinstance(value, str):
         raise ArchitectureSurrogateValidationError(f"{field}: expected digest string")
@@ -373,20 +356,6 @@ def _as_digest(value: object, *, field: str) -> ContentDigest:
         return ContentDigest(algorithm=algorithm, hex=digest_hex)
     except ContentEncodingError as error:
         raise ArchitectureSurrogateValidationError(str(error)) from error
-
-
-def _as_float(value: object, *, field: str) -> float:
-    if not isinstance(value, int | float) or isinstance(value, bool):
-        raise ArchitectureSurrogateValidationError(f"{field}: expected parsed number")
-    return float(value)
-
-
-def _as_int(value: object, *, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ArchitectureSurrogateValidationError(f"{field}: expected parsed integer")
-    return value
-
-
 def _require_finite(value: float, *, field: str) -> None:
     if not math.isfinite(value):
         raise ArchitectureSurrogateValidationError(f"{field} must be finite")

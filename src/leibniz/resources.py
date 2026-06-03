@@ -12,7 +12,7 @@ from leibniz.artifacts import ArtifactReference
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "ResourceAxis",
@@ -84,6 +84,9 @@ class ResourceValidationError(ValueError):
     """Raised when a resource accounting record is invalid."""
 
 
+_extract = RecordExtractor(error_type=ResourceValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class ResourceAxis:
     """One declared nonnegative resource axis."""
@@ -105,9 +108,9 @@ class ResourceAxis:
         except ValueError as error:
             raise ResourceValidationError(str(error)) from error
         return cls(
-            name=_as_string(validated["name"], field="name"),
-            value=_as_float(validated["value"], field="value"),
-            unit=_as_string(validated["unit"], field="unit"),
+            name=_extract.string(validated["name"], "name"),
+            value=_extract.float(validated["value"], "value"),
+            unit=_extract.string(validated["unit"], "unit"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -151,21 +154,18 @@ class ResourcePayload:
         except ValueError as error:
             raise ResourceValidationError(str(error)) from error
         return cls(
-            name=_as_string(validated["name"], field="name"),
-            kind=cast(_PayloadKind, _as_string(validated["kind"], field="kind")),
+            name=_extract.string(validated["name"], "name"),
+            kind=cast(_PayloadKind, _extract.string(validated["kind"], "kind")),
             shape=(
                 _as_shape(validated["shape"], field="shape")
                 if "shape" in validated
                 else None
             ),
-            entries=_as_optional_integer(validated.get("entries"), field="entries"),
-            entry_bits=_as_optional_integer(validated.get("entry_bits"), field="entry_bits"),
-            element_bits=_as_optional_integer(
-                validated.get("element_bits"),
-                field="element_bits",
-            ),
-            total_bits=_as_integer(validated["total_bits"], field="total_bits"),
-            total_bytes=_as_integer(validated["total_bytes"], field="total_bytes"),
+            entries=_extract.optional_integer(validated.get("entries"), "entries"),
+            entry_bits=_extract.optional_integer(validated.get("entry_bits"), "entry_bits"),
+            element_bits=_extract.optional_integer(validated.get("element_bits"), "element_bits"),
+            total_bits=_extract.integer(validated["total_bits"], "total_bits"),
+            total_bytes=_extract.integer(validated["total_bytes"], "total_bytes"),
         )
 
     @classmethod
@@ -302,34 +302,31 @@ class ResourceReport:
         try:
             validated = _resource_report_record.validate(record)
             payloads = tuple(
-                ResourcePayload.from_record(_as_mapping(item, field="payloads"))
-                for item in _as_sequence(validated.get("payloads", ()), field="payloads")
+                ResourcePayload.from_record(_extract.mapping(item, "payloads"))
+                for item in _extract.sequence(validated.get("payloads", ()), "payloads")
             )
             inference_axes = tuple(
-                ResourceAxis.from_record(_as_mapping(item, field="inference_axes"))
-                for item in _as_sequence(
+                ResourceAxis.from_record(_extract.mapping(item, "inference_axes"))
+                for item in _extract.sequence(
                     validated.get("inference_axes", ()),
-                    field="inference_axes",
+                    "inference_axes",
                 )
             )
         except ValueError as error:
             raise ResourceValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             artifact=ArtifactReference.from_record(
-                _as_mapping(validated["artifact"], field="artifact")
+                _extract.mapping(validated["artifact"], "artifact")
             ),
-            parameter_count=_as_optional_integer(
-                validated.get("parameter_count"),
-                field="parameter_count",
+            parameter_count=_extract.optional_integer(
+                validated.get("parameter_count"), "parameter_count"
             ),
-            parameter_bits=_as_optional_integer(
-                validated.get("parameter_bits"),
-                field="parameter_bits",
+            parameter_bits=_extract.optional_integer(
+                validated.get("parameter_bits"), "parameter_bits"
             ),
-            storage_bytes=_as_optional_integer(
-                validated.get("storage_bytes"),
-                field="storage_bytes",
+            storage_bytes=_extract.optional_integer(
+                validated.get("storage_bytes"), "storage_bytes"
             ),
             payloads=payloads,
             inference_axes=inference_axes,
@@ -412,13 +409,13 @@ class ResourceReportSet:
         try:
             validated = _resource_report_set_record.validate(record)
             reports = tuple(
-                ResourceReport.from_record(_as_mapping(item, field="reports"))
-                for item in _as_sequence(validated["reports"], field="reports")
+                ResourceReport.from_record(_extract.mapping(item, "reports"))
+                for item in _extract.sequence(validated["reports"], "reports")
             )
         except ValueError as error:
             raise ResourceValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             reports=reports,
         )
 
@@ -493,54 +490,8 @@ def _canonical_number(value: float) -> int | float:
     if value.is_integer():
         return int(value)
     return value
-
-
-def _as_string(value: object, *, field: str) -> str:
-    if not isinstance(value, str):
-        raise ResourceValidationError(f"{field}: expected string")
-    return value
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ResourceValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ResourceValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ResourceValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
-def _as_integer(value: object, *, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ResourceValidationError(f"{field}: expected parsed integer")
-    return value
-
-
-def _as_optional_integer(value: object, *, field: str) -> int | None:
-    if value is None:
-        return None
-    return _as_integer(value, field=field)
-
-
-def _as_float(value: object, *, field: str) -> float:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return float(value)
-    if isinstance(value, float):
-        return value
-    raise ResourceValidationError(f"{field}: expected parsed number")
-
-
 def _as_shape(value: object, *, field: str) -> tuple[int, ...]:
-    shape = tuple(_as_integer(axis, field=field) for axis in _as_sequence(value, field=field))
+    shape = tuple(_extract.integer(axis, field) for axis in _extract.sequence(value, field))
     _require_positive_shape(shape, field=field)
     return shape
 

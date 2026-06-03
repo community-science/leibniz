@@ -14,7 +14,7 @@ from leibniz.artifacts import (
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 from leibniz.submission_registries import SubmissionRegistry, SubmissionRegistrySource
 
 __all__ = [
@@ -58,6 +58,9 @@ _ingest_plan_record = RecordSpec(
 
 class FederationIngestValidationError(ValueError):
     """Raised when a federation ingest plan is invalid."""
+
+
+_extract = RecordExtractor(error_type=FederationIngestValidationError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,34 +117,34 @@ class FederationIngestPlanEntry:
             validated = _ingest_plan_entry_record.validate(record)
             expected = tuple(
                 ArtifactReference.from_record(
-                    _as_mapping(item, field="expected_publication_bundles")
+                    _extract.mapping(item, "expected_publication_bundles")
                 )
-                for item in _as_sequence(
+                for item in _extract.sequence(
                     validated["expected_publication_bundles"],
-                    field="expected_publication_bundles",
+                    "expected_publication_bundles",
                 )
             )
             discovered = tuple(
                 ArtifactReference.from_record(
-                    _as_mapping(item, field="discovered_publication_bundles")
+                    _extract.mapping(item, "discovered_publication_bundles")
                 )
-                for item in _as_sequence(
+                for item in _extract.sequence(
                     validated.get("discovered_publication_bundles", ()),
-                    field="discovered_publication_bundles",
+                    "discovered_publication_bundles",
                 )
             )
         except ValueError as error:
             raise FederationIngestValidationError(str(error)) from error
         return cls(
             source=SubmissionRegistrySource(
-                repository=_as_string(validated["repository"], field="repository"),
+                repository=_extract.string(validated["repository"], "repository"),
                 repository_type=cast(
                     Literal["dataset", "model", "space"],
-                    _as_string(validated["repository_type"], field="repository_type"),
+                    _extract.string(validated["repository_type"], "repository_type"),
                 ),
-                enabled=_as_boolean(validated["enabled"], field="enabled"),
+                enabled=_extract.boolean(validated["enabled"], "enabled"),
             ),
-            status=cast(_IngestStatus, _as_string(validated["status"], field="status")),
+            status=cast(_IngestStatus, _extract.string(validated["status"], "status")),
             expected_publication_bundles=expected,
             discovered_publication_bundles=discovered,
         )
@@ -210,15 +213,15 @@ class FederationIngestPlan:
         try:
             validated = _ingest_plan_record.validate(record)
             entries = tuple(
-                FederationIngestPlanEntry.from_record(_as_mapping(item, field="entries"))
-                for item in _as_sequence(validated["entries"], field="entries")
+                FederationIngestPlanEntry.from_record(_extract.mapping(item, "entries"))
+                for item in _extract.sequence(validated["entries"], "entries")
             )
         except ValueError as error:
             raise FederationIngestValidationError(str(error)) from error
         plan = cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             registry_digest=_as_digest(validated["registry_digest"], field="registry_digest"),
-            dry_run=_as_boolean(validated["dry_run"], field="dry_run"),
+            dry_run=_extract.boolean(validated["dry_run"], "dry_run"),
             entries=entries,
         )
         if registry is not None:
@@ -311,38 +314,6 @@ def _validate_publication_bundle_reference(reference: ArtifactReference, *, fiel
         raise FederationIngestValidationError(
             f"{field} references must have kind publication-bundle"
         )
-
-
-def _as_string(value: object, *, field: str) -> str:
-    if not isinstance(value, str):
-        raise FederationIngestValidationError(f"{field}: expected string")
-    return value
-
-
-def _as_boolean(value: object, *, field: str) -> bool:
-    if not isinstance(value, bool):
-        raise FederationIngestValidationError(f"{field}: expected boolean")
-    return value
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise FederationIngestValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise FederationIngestValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise FederationIngestValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
 def _as_digest(value: object, *, field: str) -> ContentDigest:
     if not isinstance(value, str):
         raise FederationIngestValidationError(f"{field}: expected digest string")

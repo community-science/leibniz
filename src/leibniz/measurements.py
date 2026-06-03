@@ -19,7 +19,7 @@ from leibniz.outcomes import (
     OutcomeSpace,
     RawScoringEvidence,
 )
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "MeasurementDataset",
@@ -81,6 +81,9 @@ class MeasurementRecordValidationError(ValueError):
     """Raised when a measurement record is invalid."""
 
 
+_extract = RecordExtractor(error_type=MeasurementRecordValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class MeasurementRecord:
     """A durable finite-outcome measurement for one benchmark observation."""
@@ -111,7 +114,7 @@ class MeasurementRecord:
         except ValueError as error:
             raise MeasurementRecordValidationError(str(error)) from error
         return cls(
-            benchmark_id=_as_identifier(validated["benchmark_id"], field="benchmark_id"),
+            benchmark_id=_extract.identifier(validated["benchmark_id"], "benchmark_id"),
             outcome_space=outcome_space,
             accepted_event=accepted_event,
             probability_measure=probability_measure,
@@ -197,9 +200,9 @@ class MeasurementDataset:
     def from_record(cls, record: Mapping[str, object]) -> MeasurementDataset:
         try:
             validated = _measurement_dataset_record.validate(record)
-            measurement_records = _as_sequence(
+            measurement_records = _extract.sequence(
                 validated["measurements"],
-                field="measurements",
+                "measurements",
             )
             measurements = tuple(
                 MeasurementRecord.from_record(_scoring_mapping(item, field="measurements"))
@@ -241,14 +244,6 @@ class MeasurementDatasetDocument:
             raise MeasurementRecordValidationError(str(error)) from error
         dataset = MeasurementDataset.from_record(record)
         return cls(dataset=dataset, digest=dataset.digest)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise MeasurementRecordValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
 def _measurement_scoring_parts(
     record: Mapping[str, object],
 ) -> tuple[OutcomeSpace, AcceptedEvent, FiniteProbabilityMeasure, RawScoringEvidence]:
@@ -391,7 +386,7 @@ def _raw_scoring_evidence(
         observation_id = explicit.observation_id
 
     derived = RawScoringEvidence.from_event_and_measure(
-        id=_as_identifier(evidence_id, field="id"),
+        id=_extract.identifier(evidence_id, "id"),
         observation_id=str(observation_id),
         event=accepted_event,
         measure=probability_measure,
@@ -409,21 +404,13 @@ def _scoring_mapping(value: object, *, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise MeasurementRecordValidationError(f"{field}: expected record")
     return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise MeasurementRecordValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
 def _evidence_artifacts(record: Mapping[str, object]) -> tuple[ArtifactReference, ...]:
     raw_artifacts = record.get("evidence_artifacts")
     if raw_artifacts is None:
         return ()
     artifacts = tuple(
         ArtifactReference.from_record(_scoring_mapping(item, field="evidence_artifacts"))
-        for item in _as_sequence(raw_artifacts, field="evidence_artifacts")
+        for item in _extract.sequence(raw_artifacts, "evidence_artifacts")
     )
     duplicate = _first_duplicate_references(artifacts)
     if duplicate is not None:

@@ -14,7 +14,7 @@ from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlan
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "ComponentMark",
@@ -108,6 +108,9 @@ class ObservationFormationValidationError(ValueError):
     """Raised when observation formation records are invalid."""
 
 
+_extract = RecordExtractor(error_type=ObservationFormationValidationError)
+
+
 _AffineMatrix2D = tuple[
     tuple[float, float, float],
     tuple[float, float, float],
@@ -162,18 +165,18 @@ class ComponentMark:
             validated = _mark_record.validate(record)
         except ValueError as error:
             raise ObservationFormationValidationError(str(error)) from error
-        value = _optional_float(validated.get("value"), field="value")
+        value = _extract.optional_float(validated.get("value"), "value")
         return cls(
             kind=str(validated["kind"]),
-            channel=_as_int(validated["channel"], field="channel"),
-            degree=_as_int(validated["degree"], field="degree"),
+            channel=_extract.integer(validated["channel"], "channel"),
+            degree=_extract.integer(validated["degree"], "degree"),
             control_points=tuple(
                 _point(point, field=f"control_points.{index}")
                 for index, point in enumerate(
-                    _as_sequence(validated["control_points"], field="control_points")
+                    _extract.sequence(validated["control_points"], "control_points")
                 )
             ),
-            width=_as_float(validated["width"], field="width"),
+            width=_extract.float(validated["width"], "width"),
             value=1.0 if value is None else value,
         )
 
@@ -212,8 +215,8 @@ class ObservationComponent:
         return cls(
             id=str(validated["id"]),
             marks=tuple(
-                ComponentMark.from_record(_as_mapping(mark, field="marks"))
-                for mark in _as_sequence(validated["marks"], field="marks")
+                ComponentMark.from_record(_extract.mapping(mark, "marks"))
+                for mark in _extract.sequence(validated["marks"], "marks")
             ),
         )
 
@@ -327,7 +330,7 @@ class SpatialAffineVariation:
             validated = _spatial_affine_variation_record.validate(record)
         except ValueError as error:
             raise ObservationFormationValidationError(str(error)) from error
-        spatial_rank = _as_int(validated["spatial_rank"], field="spatial_rank")
+        spatial_rank = _extract.integer(validated["spatial_rank"], "spatial_rank")
         return cls(
             kind=str(validated["kind"]),
             coordinate_system=str(validated["coordinate_system"]),
@@ -376,7 +379,7 @@ class VariationTransformDeclaration:
                 SpatialAffineVariation.identity(spatial_rank=2)
                 if "spatial_affine" not in validated
                 else SpatialAffineVariation.from_record(
-                    _as_mapping(validated["spatial_affine"], field="spatial_affine")
+                    _extract.mapping(validated["spatial_affine"], "spatial_affine")
                 )
             ),
         )
@@ -551,29 +554,29 @@ class ObservationFormationDeclaration:
     def from_record(cls, record: Mapping[str, object]) -> ObservationFormationDeclaration:
         try:
             validated = _observation_formation_declaration_record.validate(record)
-            output_field = _as_mapping(validated["output_field"], field="output_field")
+            output_field = _extract.mapping(validated["output_field"], "output_field")
             output = _output_field_record.validate(output_field)
         except ValueError as error:
             raise ObservationFormationValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
-            benchmark_id=_as_identifier(validated["benchmark_id"], field="benchmark_id"),
+            id=_extract.identifier(validated["id"], "id"),
+            benchmark_id=_extract.identifier(validated["benchmark_id"], "benchmark_id"),
             interpreter=str(validated["interpreter"]),
-            channel_count=_as_int(output["channel_count"], field="channel_count"),
+            channel_count=_extract.integer(output["channel_count"], "channel_count"),
             width_axis=str(output["width_axis"]),
             height_axis=str(output["height_axis"]),
             sequence_layout=SequenceLayout.from_record(
-                _as_mapping(validated["sequence_layout"], field="sequence_layout")
+                _extract.mapping(validated["sequence_layout"], "sequence_layout")
             ),
             components=tuple(
-                ObservationComponent.from_record(_as_mapping(component, field="components"))
-                for component in _as_sequence(validated["components"], field="components")
+                ObservationComponent.from_record(_extract.mapping(component, "components"))
+                for component in _extract.sequence(validated["components"], "components")
             ),
             variation_transform=(
                 VariationTransformDeclaration.identity()
                 if "variation_transform" not in validated
                 else VariationTransformDeclaration.from_record(
-                    _as_mapping(validated["variation_transform"], field="variation_transform")
+                    _extract.mapping(validated["variation_transform"], "variation_transform")
                 )
             ),
         )
@@ -609,7 +612,9 @@ class ObservationFormationDeclaration:
             )
         width = plan.resolution_assignment.require_axis(self.width_axis)
         height = plan.resolution_assignment.require_axis(self.height_axis)
-        sequence = tuple(_as_int(index, field="component_sequence") for index in component_sequence)
+        sequence = tuple(
+            _extract.integer(index, "component_sequence") for index in component_sequence
+        )
         sequence_elements = len(sequence)
         if sequence_elements < 1:
             raise ObservationFormationValidationError("component_sequence must not be empty")
@@ -1676,12 +1681,12 @@ def _validate_point(point: tuple[float, float], description: str) -> None:
 
 
 def _point(value: object, *, field: str) -> tuple[float, float]:
-    sequence = _as_sequence(value, field=field)
+    sequence = _extract.sequence(value, field)
     if len(sequence) != 2:
         raise ObservationFormationValidationError(f"{field}: expected two coordinates")
     return (
-        _as_float(sequence[0], field=f"{field}.0"),
-        _as_float(sequence[1], field=f"{field}.1"),
+        _extract.float(sequence[0], f"{field}.0"),
+        _extract.float(sequence[1], f"{field}.1"),
     )
 
 
@@ -1694,14 +1699,14 @@ def _parse_variation_coordinate(
         raise ObservationFormationValidationError(
             f"{field}: expected field-variation-transform-coordinate"
         )
-    spatial = _as_mapping(value.get("spatial_affine"), field=f"{field}.spatial_affine")
+    spatial = _extract.mapping(value.get("spatial_affine"), f"{field}.spatial_affine")
     if str(spatial.get("kind")) != "spatial-affine-coordinate":
         raise ObservationFormationValidationError(
             f"{field}.spatial_affine: expected spatial-affine-coordinate"
         )
     matrix = _coordinate_matrix(spatial.get("matrix"), field=f"{field}.spatial_affine.matrix")
     return _VariationCoordinate(
-        sequence_index=_as_int(value.get("sequence_index"), field=f"{field}.sequence_index"),
+        sequence_index=_extract.integer(value.get("sequence_index"), f"{field}.sequence_index"),
         spatial_affine=_SpatialAffineCoordinate(
             coordinate_system=str(spatial.get("coordinate_system")),
             matrix=matrix,
@@ -1743,9 +1748,9 @@ def _coordinate_triplet(value: object, *, field: str) -> tuple[float, float, flo
     if len(sequence) != 3:
         raise ObservationFormationValidationError(f"{field}: expected three values")
     values = (
-        _as_float(sequence[0], field=f"{field}.0"),
-        _as_float(sequence[1], field=f"{field}.1"),
-        _as_float(sequence[2], field=f"{field}.2"),
+        _extract.float(sequence[0], f"{field}.0"),
+        _extract.float(sequence[1], f"{field}.1"),
+        _extract.float(sequence[2], f"{field}.2"),
     )
     if not all(math.isfinite(value) for value in values):
         raise ObservationFormationValidationError(f"{field} values must be finite")
@@ -1761,19 +1766,19 @@ def _coordinate_sequence(value: object, *, field: str) -> tuple[object, ...]:
 
 
 def _interval(value: object, *, field: str) -> tuple[float, float]:
-    sequence = _as_sequence(value, field=field)
+    sequence = _extract.sequence(value, field)
     if len(sequence) != 2:
         raise ObservationFormationValidationError(f"{field}: expected two bounds")
     return (
-        _as_float(sequence[0], field=f"{field}.0"),
-        _as_float(sequence[1], field=f"{field}.1"),
+        _extract.float(sequence[0], f"{field}.0"),
+        _extract.float(sequence[1], f"{field}.1"),
     )
 
 
 def _interval_sequence(value: object, *, field: str) -> tuple[tuple[float, float], ...]:
     return tuple(
         _interval(item, field=f"{field}.{index}")
-        for index, item in enumerate(_as_sequence(value, field=field))
+        for index, item in enumerate(_extract.sequence(value, field))
     )
 
 
@@ -1784,7 +1789,7 @@ def _matrix_interval_sequence(
 ) -> tuple[tuple[tuple[float, float], ...], ...]:
     return tuple(
         _interval_sequence(row, field=f"{field}.{row_index}")
-        for row_index, row in enumerate(_as_sequence(value, field=field))
+        for row_index, row in enumerate(_extract.sequence(value, field))
     )
 
 
@@ -1801,46 +1806,6 @@ def _validate_interval(
         raise ObservationFormationValidationError(f"{field} lower bound must not exceed upper")
     if positive and low <= 0:
         raise ObservationFormationValidationError(f"{field} bounds must be positive")
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ObservationFormationValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ObservationFormationValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ObservationFormationValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
-def _as_int(value: object, *, field: str) -> int:
-    if type(value) is not int:
-        raise ObservationFormationValidationError(f"{field}: expected integer")
-    return value
-
-
-def _as_float(value: object, *, field: str) -> float:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return float(value)
-    if isinstance(value, float):
-        return value
-    raise ObservationFormationValidationError(f"{field}: expected number")
-
-
-def _optional_float(value: object, *, field: str) -> float | None:
-    if value is None:
-        return None
-    return _as_float(value, field=field)
-
-
 def _first_duplicate(values: tuple[object, ...]) -> object | None:
     seen: set[object] = set()
     for value in values:

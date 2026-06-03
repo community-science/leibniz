@@ -195,6 +195,26 @@ def test_benchmark_names_are_not_hardcoded_outside_benchmark_artifacts() -> None
     assert offenders == ()
 
 
+def test_field_extraction_helpers_are_not_duplicated_outside_records() -> None:
+    source_root = _repository_root / "src" / "leibniz"
+    _exempt = frozenset({"records.py", "local_results.py", "submissions.py"})
+    _pattern = re.compile(
+        r"^def (_as_(?:string|int|integer|float|bool|boolean|identifier|mapping|sequence)"
+        r"|_optional_(?:string|int|integer|float|mapping)"
+        r"|_as_optional_(?:string|int|integer|float|mapping))\b"
+    )
+
+    offenders = tuple(
+        f"{path.relative_to(_repository_root)}:{line_number}"
+        for path in sorted(source_root.rglob("*.py"))
+        if path.name not in _exempt
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if _pattern.match(line)
+    )
+
+    assert offenders == ()
+
+
 def test_legacy_performance_bundles_are_not_supported() -> None:
     assert "performance-view-bundle" not in ConsoleArtifactIndexBuilder.supported_kinds()
     assert not (_repository_root / "src" / "leibniz" / "performance_bundles.py").exists()

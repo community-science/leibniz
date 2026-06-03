@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
@@ -14,7 +13,7 @@ from leibniz.model_scale_contracts import (
     ModelScaleContractValidationError,
 )
 from leibniz.record_contracts import FieldContract, RecordContract
-from leibniz.records import RecordSpec, record_specs_from_contract
+from leibniz.records import RecordExtractor, RecordSpec, record_specs_from_contract
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
@@ -30,6 +29,9 @@ __all__ = [
 
 class ArchitectureManifestValidationError(ValueError):
     """Raised when an architecture manifest is invalid."""
+
+
+_extract = RecordExtractor(error_type=ArchitectureManifestValidationError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +75,7 @@ class ArchitectureComponent:
             raise ArchitectureManifestValidationError(str(error)) from error
         return cls(
             kind=str(validated["kind"]),
-            parameters=_as_mapping(validated.get("parameters", {}), field="parameters"),
+            parameters=_extract.mapping(validated.get("parameters", {}), "parameters"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -124,7 +126,7 @@ class ArchitectureGraphNode:
         return cls(
             id=str(validated["id"]),
             component=ArchitectureComponent.from_record(
-                _as_mapping(validated["component"], field="component")
+                _extract.mapping(validated["component"], "component")
             ),
         )
 
@@ -326,25 +328,25 @@ class ArchitectureGraph:
             raise ArchitectureManifestValidationError(str(error)) from error
         return cls(
             nodes=tuple(
-                ArchitectureGraphNode.from_record(_as_mapping(node, field="nodes"))
-                for node in _as_sequence(validated["nodes"], field="nodes")
+                ArchitectureGraphNode.from_record(_extract.mapping(node, "nodes"))
+                for node in _extract.sequence(validated["nodes"], "nodes")
             ),
             edges=tuple(
-                ArchitectureGraphEdge.from_record(_as_mapping(edge, field="edges"))
-                for edge in _as_sequence(validated["edges"], field="edges")
+                ArchitectureGraphEdge.from_record(_extract.mapping(edge, "edges"))
+                for edge in _extract.sequence(validated["edges"], "edges")
             ),
             input_node_ids=tuple(
                 str(node_id)
-                for node_id in _as_sequence(
+                for node_id in _extract.sequence(
                     validated["input_node_ids"],
-                    field="input_node_ids",
+                    "input_node_ids",
                 )
             ),
             output_node_ids=tuple(
                 str(node_id)
-                for node_id in _as_sequence(
+                for node_id in _extract.sequence(
                     validated["output_node_ids"],
-                    field="output_node_ids",
+                    "output_node_ids",
                 )
             ),
         )
@@ -453,8 +455,8 @@ class ArchitectureManifest:
             input_shape = _as_shape(validated["input_shape"], field="input_shape")
             output_shape = _as_shape(validated["output_shape"], field="output_shape")
             layers = tuple(
-                ArchitectureLayer.from_record(_as_mapping(layer, field="layers"))
-                for layer in _as_sequence(validated["layers"], field="layers")
+                ArchitectureLayer.from_record(_extract.mapping(layer, "layers"))
+                for layer in _extract.sequence(validated["layers"], "layers")
             )
             scale_contract = _optional_scale_contract(
                 validated.get("model_scale_contract")
@@ -470,7 +472,7 @@ class ArchitectureManifest:
         derived_id = _architecture_id(content_record)
         identifier = validated.get("id", derived_id)
         return cls(
-            id=_as_identifier(identifier, field="id"),
+            id=_extract.identifier(identifier, "id"),
             input_shape=input_shape,
             output_shape=output_shape,
             layers=layers,
@@ -587,32 +589,12 @@ def _optional_scale_contract(value: object) -> ModelScaleContract | None:
     if value is None:
         return None
     try:
-        return ModelScaleContract.from_record(_as_mapping(value, field="model_scale_contract"))
+        return ModelScaleContract.from_record(_extract.mapping(value, "model_scale_contract"))
     except ModelScaleContractValidationError as error:
         raise ArchitectureManifestValidationError(str(error)) from error
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ArchitectureManifestValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ArchitectureManifestValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ArchitectureManifestValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
 def _as_shape(value: object, *, field: str) -> tuple[int, ...]:
     try:
-        return TensorShape.from_record(_as_sequence(value, field=field), field=field).axes
+        return TensorShape.from_record(_extract.sequence(value, field), field=field).axes
     except TensorShapeValidationError as error:
         raise ArchitectureManifestValidationError(str(error)) from error
 
