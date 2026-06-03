@@ -519,7 +519,7 @@ def run_benchmark(
                 "source": "structured-training-curriculum",
                 "frontier_sampling_weight": 0.7,
                 "replay_sampling_weight": 0.3,
-                "gating_metric": "frontier-validation-loss-plateau",
+                "gating_metric": "monotone-frontier-validation-competence",
                 "nuisance_policy": "warmup-to-full-then-fixed",
             },
             "seed": plan.seed,
@@ -830,7 +830,7 @@ def _curriculum_record(
             "factor": _canvas_logarithmic_growth_factor,
         },
         "nuisance_extent_curriculum": list(_nuisance_extent_curriculum),
-        "gating_metric": "frontier-validation-loss-plateau",
+        "gating_metric": "monotone-frontier-validation-competence",
         "rung_policy": "unbounded-competence-frontier",
         "frontier_index": frontier_index,
         "unlocked_rung_count": min(len(rungs), frontier_index + 1),
@@ -1074,6 +1074,7 @@ def _train_and_predict_on_device(
         )
     ]
     training_frontier_index = 0
+    previous_frontier_plateau_competence: float | None = None
 
     def current_frontier() -> _CurriculumRung:
         return training_rungs[training_frontier_index]
@@ -1089,9 +1090,16 @@ def _train_and_predict_on_device(
         return training_rungs[replay_index]
 
     def advance_frontier(history: Sequence[TrainingHistoryPoint]) -> bool:
-        nonlocal training_frontier_index
+        nonlocal previous_frontier_plateau_competence, training_frontier_index
         latest = history[-1]
-        if latest.validation_loss >= math.log(len(outcome_ids)) - convergence_min_delta:
+        frontier_competence = _frontier_plateau_competence(
+            validation_loss=latest.validation_loss,
+            outcome_count=len(outcome_ids),
+        )
+        if not _frontier_plateau_advances(
+            frontier_competence=frontier_competence,
+            previous_frontier_plateau_competence=previous_frontier_plateau_competence,
+        ):
             return False
         next_index = training_frontier_index + 1
         training_rungs.append(
@@ -1104,6 +1112,7 @@ def _train_and_predict_on_device(
                 index=next_index,
             )
         )
+        previous_frontier_plateau_competence = frontier_competence
         training_frontier_index += 1
         if scheduler is not None:
             scheduler.reset_for_curriculum_expansion()
@@ -1446,6 +1455,23 @@ def _tensor_batch_size(fields: Any, *, fallback: int) -> int:
     if type(value) is int and value >= 0:
         return value
     return fallback
+
+
+def _frontier_plateau_competence(*, validation_loss: float, outcome_count: int) -> float:
+    return validation_competence(validation_loss=validation_loss, outcome_count=outcome_count)
+
+
+def _frontier_plateau_advances(
+    *,
+    frontier_competence: float,
+    previous_frontier_plateau_competence: float | None,
+) -> bool:
+    if frontier_competence <= 0.0:
+        return False
+    return (
+        previous_frontier_plateau_competence is None
+        or frontier_competence > previous_frontier_plateau_competence
+    )
 
 
 def has_windowed_validation_plateau(
