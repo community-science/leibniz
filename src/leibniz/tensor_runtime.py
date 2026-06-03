@@ -11,7 +11,15 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 from leibniz.architectures import ArchitectureManifest
-from leibniz.observation_formation import ObservationFormationDeclaration
+from leibniz.observation_formation import (
+    ObservationFormationDeclaration,
+    _affine_translation,
+    _AffineMatrix2D,
+    _linear_affine_matrix,
+    _sequence_center,
+    _sequence_relative_translation,
+    _VariationCoordinate,
+)
 from leibniz.observation_generation import GeneratedFormationBatch
 from leibniz.tensor_shapes import TensorShape
 
@@ -48,11 +56,6 @@ TensorRuntimeDevice = Literal["auto", "cpu", "cuda", "mps"]
 TensorRuntimeDeviceKind = Literal["cpu", "cuda", "mps"]
 _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
 _roofline_cache: dict[str, dict[str, object]] = {}
-_AffineMatrix2D = tuple[
-    tuple[float, float, float],
-    tuple[float, float, float],
-    tuple[float, float, float],
-]
 
 
 class TensorRuntimeError(ValueError):
@@ -938,12 +941,6 @@ def _local_window_output_size(axis: int, *, size: int, stride: int, padding: int
     return result
 
 
-@dataclass(frozen=True, slots=True)
-class _VariationCoordinate:
-    sequence_index: int
-    matrix: _AffineMatrix2D
-
-
 def _variation_coordinate(
     record: Mapping[str, object],
     *,
@@ -1065,42 +1062,6 @@ def _inverse_affine_matrix_from_values(
     if not math.isfinite(determinant) or determinant == 0.0:
         raise TensorRuntimeError("variation affine transform is singular")
     return ((d / determinant, -b / determinant), (-c / determinant, a / determinant))
-
-
-def _linear_affine_matrix(
-    matrix: _AffineMatrix2D,
-) -> tuple[tuple[float, float], tuple[float, float]]:
-    return ((matrix[0][0], matrix[0][1]), (matrix[1][0], matrix[1][1]))
-
-
-def _affine_translation(
-    matrix: _AffineMatrix2D,
-) -> tuple[float, float]:
-    return (matrix[0][2], matrix[1][2])
-
-
-def _sequence_center(
-    *,
-    width: int,
-    height: int,
-    sequence_length: int,
-    sequence_index: int,
-    placement_axis: str,
-) -> tuple[float, float]:
-    if placement_axis == "x":
-        return ((sequence_index + 0.5) / sequence_length, 0.5)
-    return (0.5, (sequence_index + 0.5) / sequence_length)
-
-
-def _sequence_relative_translation(
-    translation: tuple[float, float],
-    *,
-    sequence_length: int,
-    placement_axis: str,
-) -> tuple[float, float]:
-    if placement_axis == "x":
-        return (translation[0] / sequence_length, translation[1])
-    return (translation[0], translation[1] / sequence_length)
 
 
 def _mapping(value: object, name: str) -> Mapping[str, object]:

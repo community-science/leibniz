@@ -119,15 +119,9 @@ _AffineMatrix2D = tuple[
 
 
 @dataclass(frozen=True, slots=True)
-class _SpatialAffineCoordinate:
-    coordinate_system: str
-    matrix: _AffineMatrix2D
-
-
-@dataclass(frozen=True, slots=True)
 class _VariationCoordinate:
     sequence_index: int
-    spatial_affine: _SpatialAffineCoordinate
+    matrix: _AffineMatrix2D
 
 
 @dataclass(frozen=True, slots=True)
@@ -1310,10 +1304,6 @@ def _merge_transformed_sequence_element(
     placement_axis: str,
     coordinate: _VariationCoordinate,
 ) -> None:
-    if coordinate.spatial_affine.coordinate_system != "normalized-sequence-element":
-        raise ObservationFormationValidationError(
-            "variation coordinate coordinate_system must be normalized-sequence-element"
-        )
     if _is_identity_variation_coordinate(coordinate):
         for index, value in enumerate(source_values):
             if value > values[index]:
@@ -1326,10 +1316,10 @@ def _merge_transformed_sequence_element(
         sequence_index=sequence_index,
         placement_axis=placement_axis,
     )
-    linear_matrix = _linear_affine_matrix(coordinate.spatial_affine.matrix)
+    linear_matrix = _linear_affine_matrix(coordinate.matrix)
     inverse = _inverse_affine_matrix(linear_matrix)
     translation = _sequence_relative_translation(
-        _affine_translation(coordinate.spatial_affine.matrix),
+        _affine_translation(coordinate.matrix),
         sequence_length=sequence_length,
         placement_axis=placement_axis,
     )
@@ -1437,7 +1427,7 @@ def _positive_source_bounds(
 
 
 def _is_identity_variation_coordinate(coordinate: _VariationCoordinate) -> bool:
-    return coordinate.spatial_affine.matrix == (
+    return coordinate.matrix == (
         (1.0, 0.0, 0.0),
         (0.0, 1.0, 0.0),
         (0.0, 0.0, 1.0),
@@ -1704,13 +1694,13 @@ def _parse_variation_coordinate(
         raise ObservationFormationValidationError(
             f"{field}.spatial_affine: expected spatial-affine-coordinate"
         )
-    matrix = _coordinate_matrix(spatial.get("matrix"), field=f"{field}.spatial_affine.matrix")
+    if str(spatial.get("coordinate_system")) != "normalized-sequence-element":
+        raise ObservationFormationValidationError(
+            f"{field}.spatial_affine: coordinate_system must be normalized-sequence-element"
+        )
     return _VariationCoordinate(
         sequence_index=_extract.integer(value.get("sequence_index"), f"{field}.sequence_index"),
-        spatial_affine=_SpatialAffineCoordinate(
-            coordinate_system=str(spatial.get("coordinate_system")),
-            matrix=matrix,
-        ),
+        matrix=_coordinate_matrix(spatial.get("matrix"), field=f"{field}.spatial_affine.matrix"),
     )
 
 
