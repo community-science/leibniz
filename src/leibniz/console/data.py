@@ -529,7 +529,7 @@ class ConsoleDataBuilder:
         if root.name == "views":
             return root
         try:
-            summary = materialize_benchmark_result_views(
+            materialize_benchmark_result_views(
                 repository_root=self._repository_root,
                 results_root=root,
             )
@@ -540,10 +540,12 @@ class ConsoleDataBuilder:
             raise ConsoleDataValidationError(
                 f"{root}: could not materialize console result views: {error}"
             ) from error
-        return summary.view_file.parent
+        return root / "views"
 
     def _result_view_files(self, root: Path) -> tuple[Path, ...]:
-        return tuple(sorted(path for path in root.rglob("*" + _document_suffix) if path.is_file()))
+        files = tuple(sorted(path for path in root.rglob("*" + _document_suffix) if path.is_file()))
+        nested_files = tuple(path for path in files if path.parent != root)
+        return nested_files or files
 
     def _display_path(self, path: Path) -> str:
         resolved = path.resolve()

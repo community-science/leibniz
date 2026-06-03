@@ -3,19 +3,27 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import cast
 
 from leibniz.architecture_semantics import validate_architecture_semantics
-from leibniz.architectures import ArchitectureManifestDocument
+from leibniz.architectures import (
+    ArchitectureManifestDocument,
+    ArchitectureManifestValidationError,
+)
 from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
 from leibniz.authority_indexes import AuthorityIndexDocument
 from leibniz.benchmark_runner import (
     BenchmarkCompetitionPlan,
+    BenchmarkCompetitionSummary,
     BenchmarkEvaluationPlan,
+    BenchmarkEvaluationSummary,
     BenchmarkRunPlan,
+    BenchmarkRunSummary,
     compete_benchmark_checkpoints,
     evaluate_benchmark_checkpoint,
     run_benchmark,
@@ -30,10 +38,10 @@ from leibniz.documents import (
 from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
 from leibniz.formation_timing import FormationTimingPlan, time_formation_paths
 from leibniz.local_results import (
+    LocalResultImportError,
     initialize_result_checkout,
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
-    push_result_checkout,
 )
 from leibniz.measurements import (
     MeasurementDataset,
@@ -50,6 +58,7 @@ from leibniz.outcomes import OutcomeSpace
 from leibniz.projection_records import ProjectionRecordDocument
 from leibniz.resources import ResourceReportDocument, ResourceReportSetDocument
 from leibniz.submission_registries import SubmissionRegistryDocument
+from leibniz.tensor_runtime import TensorRuntimeDevice
 from leibniz.view_manifests import ViewManifestDocument
 
 __all__ = ["main"]
@@ -65,8 +74,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     command = getattr(args, "command", None)
     if command == "validate":
         return _validate(args)
-    if command == "results":
-        return _results(args)
     if command == "benchmark":
         return _benchmark(args)
     if command == "console":
@@ -204,140 +211,116 @@ def _parser() -> argparse.ArgumentParser:
     )
     submission_registry.add_argument("path", type=Path)
 
-    results = subcommands.add_parser(
-        "results",
-        description="manage operator-local result views",
-        help="manage operator-local result views",
-    )
-    results_subcommands = results.add_subparsers(dest="results_command", required=True)
-
-    init_results = results_subcommands.add_parser(
-        "init",
-        description="prepare the local result root",
-        help="prepare a result root",
-    )
-    init_results.add_argument(
-        "--repo",
-        help="Hugging Face dataset repository id in owner/name form",
-    )
-    init_results.add_argument(
-        "--token",
-        default=None,
-        help="Hugging Face API token; defaults to HF_TOKEN or hf auth login",
-    )
-    init_results.add_argument(
-        "--results-root",
-        default=Path("results"),
-        type=Path,
-        help="local result checkout; defaults to results",
-    )
-    init_results.add_argument(
-        "--remote",
-        choices=("auto", "hf", "git"),
-        default="auto",
-        help="result remote selection; defaults to auto",
-    )
-    init_results.add_argument(
-        "--push",
-        action="store_true",
-        help="push the scaffold commit after initialization",
-    )
-    init_results.add_argument(
-        "--local-only",
-        action="store_true",
-        help="prepare a local result checkout without a Hugging Face account",
-    )
-    init_results.add_argument(
-        "--message",
-        default="Initialize Leibniz result checkout",
-        help="Git commit message for the scaffold commit",
-    )
-    publish_results = results_subcommands.add_parser(
-        "publish",
-        description="commit local benchmark result state",
-        help="publish local result checkout",
-    )
-    publish_results.add_argument(
-        "--results-root",
-        default=Path("results"),
-        type=Path,
-        help="local result checkout; defaults to results",
-    )
-    publish_results.add_argument(
-        "--repo",
-        help="Hugging Face dataset repository id in owner/name form",
-    )
-    publish_results.add_argument(
-        "--token",
-        default=None,
-        help="Hugging Face API token; defaults to HF_TOKEN or hf auth login",
-    )
-    publish_results.add_argument(
-        "--remote",
-        choices=("auto", "hf", "git"),
-        default="auto",
-        help="result remote selection; defaults to auto",
-    )
-    publish_results.add_argument(
-        "--push",
-        action="store_true",
-        help="push the result checkout after publishing",
-    )
-    publish_results.add_argument(
-        "--message",
-        default="Publish Leibniz benchmark results",
-        help="Git commit message used when publishing",
-    )
-    push_results = results_subcommands.add_parser(
-        "push",
-        description="push an existing result checkout",
-        help="push result checkout",
-    )
-    push_results.add_argument(
-        "--results-root",
-        default=Path("results"),
-        type=Path,
-        help="local result checkout; defaults to results",
-    )
-    push_results.add_argument(
-        "--repo",
-        help="Hugging Face dataset repository id in owner/name form",
-    )
-    push_results.add_argument(
-        "--token",
-        default=None,
-        help="Hugging Face API token; defaults to HF_TOKEN or hf auth login",
-    )
-    push_results.add_argument(
-        "--remote",
-        choices=("auto", "hf", "git"),
-        default="auto",
-        help="result remote selection; defaults to auto",
-    )
-    materialize_results = results_subcommands.add_parser(
-        "materialize",
-        description="derive console result views from a result checkout",
-        help="materialize local result views",
-    )
-    materialize_results.add_argument(
-        "--results-root",
-        default=Path("results"),
-        type=Path,
-        help="local result checkout; defaults to results",
-    )
     benchmark = subcommands.add_parser(
         "benchmark",
         description="run local benchmark workflows",
         help="run local benchmark workflows",
     )
     benchmark_subcommands = benchmark.add_subparsers(dest="benchmark_command", required=True)
+    init_benchmark = benchmark_subcommands.add_parser(
+        "init",
+        description="prepare the local benchmark result root",
+        help="prepare a result root",
+    )
+    init_benchmark.add_argument(
+        "--repo",
+        help="Hugging Face dataset repository id in owner/name form",
+    )
+    init_benchmark.add_argument(
+        "--token",
+        default=None,
+        help="Hugging Face API token; defaults to HF_TOKEN or hf auth login",
+    )
+    init_benchmark.add_argument(
+        "--results-root",
+        default=Path("results"),
+        type=Path,
+        help="local result checkout; defaults to results",
+    )
+    init_benchmark.add_argument(
+        "--remote",
+        choices=("auto", "hf", "git"),
+        default="auto",
+        help="result remote selection; defaults to auto",
+    )
+    init_benchmark.add_argument(
+        "--push",
+        action="store_true",
+        help="push the scaffold commit after initialization",
+    )
+    init_benchmark.add_argument(
+        "--local-only",
+        action="store_true",
+        help="prepare a local result checkout without a Hugging Face account",
+    )
+    init_benchmark.add_argument(
+        "--message",
+        default="Initialize Leibniz result checkout",
+        help="Git commit message for the scaffold commit",
+    )
+    publish_benchmark = benchmark_subcommands.add_parser(
+        "publish",
+        description="commit and push local benchmark result state",
+        help="publish local result checkout",
+    )
+    publish_benchmark.add_argument(
+        "--results-root",
+        default=Path("results"),
+        type=Path,
+        help="local result checkout; defaults to results",
+    )
+    publish_benchmark.add_argument(
+        "--repo",
+        help="Hugging Face dataset repository id in owner/name form",
+    )
+    publish_benchmark.add_argument(
+        "--token",
+        default=None,
+        help="Hugging Face API token; defaults to HF_TOKEN or hf auth login",
+    )
+    publish_benchmark.add_argument(
+        "--remote",
+        choices=("auto", "hf", "git"),
+        default="auto",
+        help="result remote selection; defaults to auto",
+    )
+    publish_benchmark.add_argument(
+        "--no-push",
+        action="store_true",
+        help="commit without pushing the result checkout",
+    )
+    publish_benchmark.add_argument(
+        "--message",
+        default="Publish Leibniz benchmark results",
+        help="Git commit message used when publishing",
+    )
     train = benchmark_subcommands.add_parser(
         "train",
-        description="train and evaluate an explicit architecture locally",
-        help="train an explicit architecture",
+        description="train locally available architecture manifests",
+        help="train architecture manifests",
     )
-    train.add_argument("--architecture", type=Path, required=True)
-    train.add_argument("--benchmark-root", type=Path, required=True)
+    train.add_argument(
+        "--architecture",
+        type=Path,
+        action="append",
+        default=[],
+        help=(
+            "architecture manifest or directory to train; may be repeated, "
+            "defaults to architecture manifests discovered under results/training"
+        ),
+    )
+    train.add_argument(
+        "--benchmark-root",
+        type=Path,
+        action="append",
+        default=[],
+        help="benchmark root; may be repeated, defaults to packaged benchmarks",
+    )
+    train.add_argument(
+        "benchmarks",
+        nargs="*",
+        help="optional benchmark ids or names; defaults to all local benchmarks",
+    )
     train.add_argument(
         "--results-root",
         default=Path("results"),
@@ -371,11 +354,27 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--dry-run", action="store_true")
     evaluate = benchmark_subcommands.add_parser(
         "evaluate",
-        description="evaluate a saved training checkpoint as benchmark evidence",
-        help="evaluate a saved checkpoint",
+        description="evaluate saved training checkpoints as benchmark evidence",
+        help="evaluate saved checkpoints",
     )
-    evaluate.add_argument("--checkpoint-artifact", type=Path, required=True)
-    evaluate.add_argument("--benchmark-root", type=Path, required=True)
+    evaluate.add_argument("--checkpoint-artifact", type=Path)
+    evaluate.add_argument("--left-evaluation", type=Path)
+    evaluate.add_argument("--right-evaluation", type=Path)
+    evaluate.add_argument(
+        "--benchmark-root",
+        type=Path,
+        action="append",
+        default=[],
+        help="benchmark root; may be repeated, defaults to packaged benchmarks",
+    )
+    evaluate.add_argument(
+        "benchmarks",
+        nargs="*",
+        help=(
+            "optional phase (absolute or relative) followed by benchmark ids or names; "
+            "defaults to both phases for all local benchmarks"
+        ),
+    )
     evaluate.add_argument(
         "--results-root",
         default=Path("results"),
@@ -388,39 +387,24 @@ def _parser() -> argparse.ArgumentParser:
         choices=("auto", "cpu", "cuda", "mps"),
         help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
     )
-    compete = benchmark_subcommands.add_parser(
-        "compete",
-        description="run a pairwise benchmark competition between two evaluated checkpoints",
-        help="compete two evaluated checkpoints",
+    evaluate.add_argument(
+        "--sample-count",
+        default=512,
+        type=int,
+        help="sample count for relative pairwise evaluation",
     )
-    compete.add_argument("--left-evaluation", type=Path, required=True)
-    compete.add_argument("--right-evaluation", type=Path, required=True)
-    compete.add_argument("--benchmark-root", type=Path, required=True)
-    compete.add_argument(
-        "--results-root",
-        default=Path("results"),
-        type=Path,
-        help="local result checkout; defaults to results",
+    profile = benchmark_subcommands.add_parser(
+        "profile",
+        description="profile local benchmark observation formation paths",
+        help="profile benchmark formation paths",
     )
-    compete.add_argument("--sample-count", default=512, type=int)
-    compete.add_argument(
-        "--device",
-        default="auto",
-        choices=("auto", "cpu", "cuda", "mps"),
-        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
-    )
-    time_formation = benchmark_subcommands.add_parser(
-        "time-formation",
-        description="time local benchmark observation formation paths",
-        help="time benchmark formation paths",
-    )
-    time_formation.add_argument("--benchmark-root", type=Path, required=True)
-    time_formation.add_argument("--component-count", default=1, type=int)
-    time_formation.add_argument("--sample-count", default=64, type=int)
-    time_formation.add_argument("--seed", default=101, type=int)
-    time_formation.add_argument("--repeats", default=3, type=int)
-    time_formation.add_argument("--warmup-repeats", default=1, type=int)
-    time_formation.add_argument(
+    profile.add_argument("--benchmark-root", type=Path, required=True)
+    profile.add_argument("--component-count", default=1, type=int)
+    profile.add_argument("--sample-count", default=64, type=int)
+    profile.add_argument("--seed", default=101, type=int)
+    profile.add_argument("--repeats", default=3, type=int)
+    profile.add_argument("--warmup-repeats", default=1, type=int)
+    profile.add_argument(
         "--device",
         default="auto",
         choices=("auto", "cpu", "cuda", "mps"),
@@ -473,73 +457,138 @@ def _console_web_source_root() -> Path:
 
 def _benchmark(args: argparse.Namespace) -> int:
     try:
-        if str(args.benchmark_command) == "train":
-            summary = run_benchmark(
-                BenchmarkRunPlan(
-                    architecture_path=args.architecture,
-                    results_root=args.results_root,
-                    benchmark_root=args.benchmark_root,
-                    sample_count=args.sample_count,
-                    evaluation_sample_count=args.evaluation_sample_count,
-                    seed=args.seed,
-                    train_steps=args.train_steps,
-                    learning_rate=args.learning_rate,
-                    optimizer=args.optimizer,
-                    schedule=args.schedule,
-                    gate_check_interval=args.gate_check_interval,
-                    model_checkpoint_gate_interval=args.model_checkpoint_gate_interval,
-                    gate_sample_count=args.gate_sample_count,
-                    gate_decision_rule=args.gate_decision_rule,
-                    convergence_patience=args.convergence_patience,
-                    convergence_min_delta=args.convergence_min_delta,
-                    convergence_min_steps=args.convergence_min_steps,
-                    tensor_device=args.device,
-                    dry_run=args.dry_run,
-                )
+        if str(args.benchmark_command) == "init":
+            summary = initialize_result_checkout(
+                repo_id=args.repo,
+                repository_root=Path.cwd(),
+                results_root=args.results_root,
+                remote=args.remote,
+                local_only=args.local_only,
+                push=args.push,
+                commit_message=args.message,
+                token=args.token,
             )
-            prefix = "planned" if summary.dry_run else "completed"
+            if summary.repo_url is not None:
+                print(f"repository: {summary.repo_url}")
+            else:
+                print("repository: local-only")
+            print(f"results root: {summary.results_root}")
+            if summary.scaffold_commit is not None:
+                print(f"commit: {summary.scaffold_commit}")
+            else:
+                print("commit: unchanged")
+            if summary.pushed:
+                print("pushed: yes")
+            return 0
+        if str(args.benchmark_command) == "publish":
+            summary = publish_local_benchmark_results(
+                repository_root=Path.cwd(),
+                results_root=args.results_root,
+                push=not args.no_push,
+                repo_id=args.repo,
+                remote=args.remote,
+                token=args.token,
+                commit_message=args.message,
+            )
             print(
-                f"{prefix} benchmark training run {summary.run_slug} "
-                f"({summary.measurement_count} benchmark measurement(s) planned)"
+                "published "
+                f"{summary.measurement_count} measurement(s)"
             )
-            print(f"training summary: {summary.training_summary_path}")
-            print(f"model artifacts: {summary.model_artifact_root}")
+            if summary.git_commit is not None:
+                print(f"commit: {summary.git_commit}")
+            if summary.git_pushed:
+                print("pushed: yes")
+            if summary.remote_commit is not None:
+                print(f"remote: {summary.remote}")
+                print(f"remote commit: {summary.remote_commit}")
+            return 0
+        if str(args.benchmark_command) == "train":
+            summaries, skipped, moved = _run_benchmark_training(args)
+            if not summaries and not skipped:
+                print("no uncompleted benchmark training manifests found")
+            for summary in summaries:
+                prefix = "planned" if summary.dry_run else "completed"
+                print(
+                    f"{prefix} benchmark training run {summary.run_slug} "
+                    f"({summary.measurement_count} benchmark measurement(s) planned)"
+                )
+                print(f"training summary: {summary.training_summary_path}")
+                print(f"model artifacts: {summary.model_artifact_root}")
+            if skipped:
+                print(f"skipped {skipped} completed benchmark training manifest(s)")
+            if moved:
+                print(f"moved {moved} completed benchmark training manifest(s) out of pending")
             return 0
         if str(args.benchmark_command) == "evaluate":
-            summary = evaluate_benchmark_checkpoint(
-                BenchmarkEvaluationPlan(
-                    checkpoint_artifact_path=args.checkpoint_artifact,
-                    benchmark_root=args.benchmark_root,
-                    results_root=args.results_root,
-                    tensor_device=args.device,
+            evaluation_phase, benchmark_selectors = _evaluation_phase_and_selectors(
+                tuple(args.benchmarks)
+            )
+            if args.checkpoint_artifact is not None and evaluation_phase == "relative":
+                raise ValueError("checkpoint-artifact can only be used for absolute evaluation")
+            explicit_relative_pair = (
+                args.left_evaluation is not None or args.right_evaluation is not None
+            )
+            if explicit_relative_pair and evaluation_phase == "absolute":
+                raise ValueError("left-evaluation and right-evaluation require relative evaluation")
+            evaluation_summaries: list[BenchmarkEvaluationSummary] = []
+            benchmark_roots = dict(
+                _selected_benchmark_roots_by_id(
+                    explicit_roots=tuple(args.benchmark_root),
+                    benchmark_selectors=benchmark_selectors,
                 )
             )
-            print(
-                f"completed benchmark evaluation {summary.run_slug} "
-                f"({summary.measurement_count} measurement(s))"
-            )
-            print(f"evaluation bundle: {summary.evaluation_bundle_path}")
-            return 0
-        if str(args.benchmark_command) == "compete":
-            summary = compete_benchmark_checkpoints(
-                BenchmarkCompetitionPlan(
-                    left_evaluation_path=args.left_evaluation,
-                    right_evaluation_path=args.right_evaluation,
-                    benchmark_root=args.benchmark_root,
+            if evaluation_phase in {"all", "absolute"}:
+                for checkpoint_artifact in _evaluation_checkpoint_artifacts(
                     results_root=args.results_root,
+                    checkpoint_artifact=args.checkpoint_artifact,
+                    benchmark_selectors=benchmark_selectors,
+                ):
+                    checkpoint_record = _load_object_record(
+                        checkpoint_artifact,
+                        description="checkpoint artifact",
+                    )
+                    benchmark_root = _benchmark_root_for_record(
+                        checkpoint_record,
+                        benchmark_roots=benchmark_roots,
+                        description="checkpoint_artifact",
+                    )
+                    summary = evaluate_benchmark_checkpoint(
+                        BenchmarkEvaluationPlan(
+                            checkpoint_artifact_path=checkpoint_artifact,
+                            benchmark_root=benchmark_root,
+                            results_root=args.results_root,
+                            tensor_device=args.device,
+                        )
+                    )
+                    evaluation_summaries.append(summary)
+                    print(
+                        f"completed benchmark absolute evaluation {summary.run_slug} "
+                        f"({summary.measurement_count} measurement(s))"
+                    )
+                    print(f"evaluation bundle: {summary.evaluation_bundle_path}")
+                if not evaluation_summaries and args.checkpoint_artifact is not None:
+                    raise ValueError("no checkpoint artifacts matched benchmark evaluation inputs")
+                if not evaluation_summaries:
+                    print("no unevaluated benchmark checkpoints found")
+            if evaluation_phase in {"all", "relative"}:
+                competition_summaries, skipped = _run_benchmark_competitions(
+                    results_root=args.results_root,
+                    left_evaluation=args.left_evaluation,
+                    right_evaluation=args.right_evaluation,
+                    benchmark_roots=benchmark_roots,
+                    benchmark_selectors=benchmark_selectors,
                     sample_count=args.sample_count,
                     tensor_device=args.device,
                 )
-            )
-            print(
-                f"completed benchmark competition {summary.competition_id} "
-                f"({summary.sample_count} sample(s))"
-            )
-            print(f"left model: {summary.left_model_key}")
-            print(f"right model: {summary.right_model_key}")
-            print(f"competition bundle: {summary.competition_bundle_path}")
+                _print_competition_summaries(
+                    summaries=competition_summaries,
+                    skipped=skipped,
+                )
+                if not competition_summaries and not skipped:
+                    print("no missing benchmark relative evaluations found")
+            _materialize_benchmark_views_if_present(results_root=args.results_root)
             return 0
-        if str(args.benchmark_command) == "time-formation":
+        if str(args.benchmark_command) == "profile":
             summary = time_formation_paths(
                 FormationTimingPlan(
                     benchmark_root=args.benchmark_root,
@@ -564,83 +613,513 @@ def _benchmark(args: argparse.Namespace) -> int:
     return 2
 
 
-def _results(args: argparse.Namespace) -> int:
+def _run_benchmark_training(args: argparse.Namespace) -> tuple[list[BenchmarkRunSummary], int, int]:
+    summaries: list[BenchmarkRunSummary] = []
+    skipped = 0
+    moved = 0
+    benchmark_roots = tuple(
+        root
+        for _benchmark_id, root in _selected_benchmark_roots_by_id(
+            explicit_roots=tuple(args.benchmark_root),
+            benchmark_selectors=tuple(args.benchmarks),
+        )
+    )
+    for architecture_path in _training_architecture_manifests(
+        architecture_inputs=tuple(args.architecture),
+        results_root=args.results_root,
+    ):
+        completed_for_all_selected_benchmarks = True
+        for benchmark_root in benchmark_roots:
+            plan = _benchmark_run_plan(
+                args,
+                architecture_path=architecture_path,
+                benchmark_root=benchmark_root,
+            )
+            if not args.architecture and _benchmark_training_completed(plan):
+                skipped += 1
+                continue
+            summaries.append(run_benchmark(plan))
+            completed_for_all_selected_benchmarks = not plan.dry_run
+        if (
+            completed_for_all_selected_benchmarks
+            and not args.architecture
+            and not args.dry_run
+            and _move_completed_training_manifest_out_of_pending(architecture_path)
+        ):
+            moved += 1
+    return summaries, skipped, moved
+
+
+def _benchmark_run_plan(
+    args: argparse.Namespace,
+    *,
+    architecture_path: Path,
+    benchmark_root: Path,
+    dry_run: bool | None = None,
+) -> BenchmarkRunPlan:
+    return BenchmarkRunPlan(
+        architecture_path=architecture_path,
+        results_root=args.results_root,
+        benchmark_root=benchmark_root,
+        sample_count=args.sample_count,
+        evaluation_sample_count=args.evaluation_sample_count,
+        seed=args.seed,
+        train_steps=args.train_steps,
+        learning_rate=args.learning_rate,
+        optimizer=args.optimizer,
+        schedule=args.schedule,
+        gate_check_interval=args.gate_check_interval,
+        model_checkpoint_gate_interval=args.model_checkpoint_gate_interval,
+        gate_sample_count=args.gate_sample_count,
+        gate_decision_rule=args.gate_decision_rule,
+        convergence_patience=args.convergence_patience,
+        convergence_min_delta=args.convergence_min_delta,
+        convergence_min_steps=args.convergence_min_steps,
+        tensor_device=args.device,
+        dry_run=args.dry_run if dry_run is None else dry_run,
+    )
+
+
+def _selected_benchmark_roots_by_id(
+    *,
+    explicit_roots: tuple[Path, ...],
+    benchmark_selectors: tuple[str, ...],
+) -> tuple[tuple[str, Path], ...]:
+    by_id = _benchmark_roots_by_id(
+        repository_root=Path.cwd(),
+        explicit_roots=explicit_roots,
+    )
+    roots = tuple(
+        (benchmark_id, root)
+        for benchmark_id, root in sorted(by_id.items(), key=lambda item: str(item[0]))
+        if _benchmark_selected(benchmark_id, benchmark_selectors)
+    )
+    if benchmark_selectors and not roots:
+        raise ValueError("no benchmark roots matched benchmark selectors")
+    return roots
+
+
+def _training_architecture_manifests(
+    *,
+    architecture_inputs: tuple[Path, ...],
+    results_root: Path,
+) -> tuple[Path, ...]:
+    if not architecture_inputs:
+        return _pending_training_architecture_manifests(results_root=results_root)
+    roots = architecture_inputs
+    paths: list[Path] = []
+    for root in roots:
+        if root.is_file():
+            if _is_architecture_manifest(root):
+                paths.append(root)
+            else:
+                raise ValueError(f"architecture manifest is invalid: {root}")
+            continue
+        if root.is_dir():
+            paths.extend(
+                path
+                for path in sorted(root.rglob("*" + document_filename_suffix()))
+                if _is_architecture_manifest(path)
+            )
+            continue
+        if architecture_inputs:
+            raise ValueError(f"architecture path does not exist: {root}")
+    return tuple(dict.fromkeys(paths))
+
+
+def _pending_training_architecture_manifests(*, results_root: Path) -> tuple[Path, ...]:
+    training_root = results_root / "training"
+    if not training_root.is_dir():
+        return ()
+    paths: list[Path] = []
+    for pending_root in sorted(training_root.rglob("pending")):
+        if not pending_root.is_dir():
+            continue
+        paths.extend(
+            path
+            for path in sorted(pending_root.rglob("*" + document_filename_suffix()))
+            if _is_architecture_manifest(path)
+        )
+    return tuple(dict.fromkeys(paths))
+
+
+def _is_architecture_manifest(path: Path) -> bool:
     try:
-        results_command = str(args.results_command)
-        if results_command == "init":
-            summary = initialize_result_checkout(
-                repo_id=args.repo,
-                repository_root=Path.cwd(),
-                results_root=args.results_root,
-                remote=args.remote,
-                local_only=args.local_only,
-                push=args.push,
-                commit_message=args.message,
-                token=args.token,
+        ArchitectureManifestDocument.from_bytes(path.read_bytes())
+    except (OSError, ArchitectureManifestValidationError):
+        return False
+    return True
+
+
+def _benchmark_training_completed(plan: BenchmarkRunPlan) -> bool:
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=plan.architecture_path,
+            benchmark_root=plan.benchmark_root,
+            results_root=plan.results_root,
+            sample_count=plan.sample_count,
+            evaluation_sample_count=plan.evaluation_sample_count,
+            seed=plan.seed,
+            train_steps=plan.train_steps,
+            learning_rate=plan.learning_rate,
+            optimizer=plan.optimizer,
+            schedule=plan.schedule,
+            gate_check_interval=plan.gate_check_interval,
+            model_checkpoint_gate_interval=plan.model_checkpoint_gate_interval,
+            gate_sample_count=plan.gate_sample_count,
+            gate_decision_rule=plan.gate_decision_rule,
+            convergence_patience=plan.convergence_patience,
+            convergence_min_delta=plan.convergence_min_delta,
+            convergence_min_steps=plan.convergence_min_steps,
+            tensor_device=plan.tensor_device,
+            dry_run=True,
+        )
+    )
+    if not summary.training_summary_path.is_file():
+        return False
+    record = _load_object_record(summary.training_summary_path, description="training summary")
+    return record.get("run_status") == "completed"
+
+
+def _move_completed_training_manifest_out_of_pending(path: Path) -> bool:
+    if path.parent.name != "pending" or not path.is_file():
+        return False
+    completed_root = path.parent.parent / "completed"
+    completed_root.mkdir(parents=True, exist_ok=True)
+    target = completed_root / path.name
+    if target.exists():
+        if target.read_bytes() == path.read_bytes():
+            path.unlink()
+            return True
+        manifest = ArchitectureManifestDocument.from_bytes(path.read_bytes()).manifest
+        target = completed_root / f"{path.stem}-{manifest.digest.hex[:12]}{path.suffix}"
+    path.replace(target)
+    return True
+
+
+def _materialize_benchmark_views_if_present(*, results_root: Path) -> None:
+    try:
+        summary = materialize_benchmark_result_views(
+            repository_root=Path.cwd(),
+            results_root=results_root,
+        )
+    except LocalResultImportError as error:
+        if "no benchmark result records found" in str(error):
+            return
+        raise
+    print(
+        "materialized "
+        f"{summary.benchmark_count} benchmark result view(s), "
+        f"{summary.model_count} model(s), "
+        f"{summary.run_count} run(s)"
+    )
+    for view_file in summary.benchmark_view_files or (summary.view_file,):
+        print(f"view: {view_file}")
+
+
+def _evaluation_checkpoint_artifacts(
+    *,
+    results_root: Path,
+    checkpoint_artifact: Path | None,
+    benchmark_selectors: tuple[str, ...],
+) -> tuple[Path, ...]:
+    if checkpoint_artifact is not None:
+        return (checkpoint_artifact,)
+    training_root = results_root / "training"
+    if not training_root.is_dir():
+        return ()
+    checkpoint_paths: list[Path] = []
+    for path in sorted(training_root.rglob("*" + document_filename_suffix())):
+        record = _load_object_record(path, description="training summary")
+        if record.get("format") != "leibniz.benchmark-run":
+            continue
+        if record.get("run_status") != "completed":
+            continue
+        benchmark_id = _benchmark_id_from_record(record, description="training_summary")
+        if not _benchmark_selected(benchmark_id, benchmark_selectors):
+            continue
+        run_slug = record.get("run_slug")
+        if isinstance(run_slug, str) and _evaluation_bundle_exists(
+            results_root=results_root,
+            benchmark_id=benchmark_id,
+            run_slug=run_slug,
+        ):
+            continue
+        raw_artifact = record.get("evaluation_model_artifact")
+        if not isinstance(raw_artifact, Mapping):
+            continue
+        artifact = cast(Mapping[str, object], raw_artifact)
+        record_path = artifact.get("record_path")
+        if not isinstance(record_path, str) or not record_path:
+            continue
+        checkpoint_paths.append(Path(record_path))
+    return tuple(dict.fromkeys(checkpoint_paths))
+
+
+def _evaluation_phase_and_selectors(
+    values: tuple[str, ...],
+) -> tuple[str, tuple[str, ...]]:
+    if values and values[0] in {"absolute", "relative"}:
+        return values[0], values[1:]
+    return "all", values
+
+
+def _run_benchmark_competitions(
+    *,
+    results_root: Path,
+    left_evaluation: Path | None,
+    right_evaluation: Path | None,
+    benchmark_roots: Mapping[str, Path],
+    benchmark_selectors: tuple[str, ...],
+    sample_count: int,
+    tensor_device: TensorRuntimeDevice,
+) -> tuple[list[BenchmarkCompetitionSummary], int]:
+    competition_summaries: list[BenchmarkCompetitionSummary] = []
+    skipped = 0
+    for left_path, right_path in _competition_evaluation_pairs(
+        results_root=results_root,
+        left_evaluation=left_evaluation,
+        right_evaluation=right_evaluation,
+        benchmark_selectors=benchmark_selectors,
+    ):
+        left_record = _load_evaluation_bundle_record(left_path)
+        right_record = _load_evaluation_bundle_record(right_path)
+        benchmark_root = _benchmark_root_for_record(
+            left_record,
+            benchmark_roots=benchmark_roots,
+            description="left_evaluation",
+        )
+        right_benchmark_root = _benchmark_root_for_record(
+            right_record,
+            benchmark_roots=benchmark_roots,
+            description="right_evaluation",
+        )
+        if right_benchmark_root != benchmark_root:
+            raise ValueError("benchmark relative evaluation requires matching benchmark roots")
+        if (
+            left_evaluation is None
+            and _competition_pair_exists(
+                results_root=results_root,
+                left_evaluation=left_record,
+                right_evaluation=right_record,
             )
-            if summary.repo_url is not None:
-                print(f"repository: {summary.repo_url}")
-            else:
-                print("repository: local-only")
-            print(f"results root: {summary.results_root}")
-            if summary.scaffold_commit is not None:
-                print(f"commit: {summary.scaffold_commit}")
-            else:
-                print("commit: unchanged")
-            if summary.pushed:
-                print("pushed: yes")
-            return 0
-        if results_command == "publish":
-            summary = publish_local_benchmark_results(
-                repository_root=Path.cwd(),
-                results_root=args.results_root,
-                push=args.push,
-                repo_id=args.repo,
-                remote=args.remote,
-                token=args.token,
-                commit_message=args.message,
+        ):
+            skipped += 1
+            continue
+        competition_summaries.append(
+            compete_benchmark_checkpoints(
+                BenchmarkCompetitionPlan(
+                    left_evaluation_path=left_path,
+                    right_evaluation_path=right_path,
+                    benchmark_root=benchmark_root,
+                    results_root=results_root,
+                    sample_count=sample_count,
+                    tensor_device=tensor_device,
+                )
             )
-            print(
-                "published "
-                f"{summary.measurement_count} measurement(s)"
-            )
-            if summary.git_commit is not None:
-                print(f"commit: {summary.git_commit}")
-            if summary.git_pushed:
-                print("pushed: yes")
-            if summary.remote_commit is not None:
-                print(f"remote: {summary.remote}")
-                print(f"remote commit: {summary.remote_commit}")
-            return 0
-        if results_command == "push":
-            summary = push_result_checkout(
-                repository_root=Path.cwd(),
-                results_root=args.results_root,
-                repo_id=args.repo,
-                remote=args.remote,
-                token=args.token,
-            )
-            print(f"pushed: {summary.pushed_commit}")
-            print(f"results root: {summary.results_root}")
-            return 0
-        if results_command == "materialize":
-            summary = materialize_benchmark_result_views(
-                repository_root=Path.cwd(),
-                results_root=args.results_root,
-            )
-            print(
-                "materialized "
-                f"{summary.benchmark_count} benchmark result view(s), "
-                f"{summary.model_count} model(s), "
-                f"{summary.run_count} run(s)"
-            )
-            print(f"view: {summary.view_file}")
-            return 0
-    except (OSError, ValueError) as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 1
-    print(f"error: unsupported results command {args.results_command!r}", file=sys.stderr)
-    return 2
+        )
+    return competition_summaries, skipped
+
+
+def _print_competition_summaries(
+    *,
+    summaries: Sequence[BenchmarkCompetitionSummary],
+    skipped: int,
+) -> None:
+    for summary in summaries:
+        print(
+            f"completed benchmark relative evaluation {summary.competition_id} "
+            f"({summary.sample_count} sample(s))"
+        )
+        print(f"left model: {summary.left_model_key}")
+        print(f"right model: {summary.right_model_key}")
+        print(f"competition bundle: {summary.competition_bundle_path}")
+    if skipped:
+        print(f"skipped {skipped} existing benchmark relative evaluation(s)")
+
+
+def _competition_evaluation_pairs(
+    *,
+    results_root: Path,
+    left_evaluation: Path | None,
+    right_evaluation: Path | None,
+    benchmark_selectors: tuple[str, ...],
+) -> tuple[tuple[Path, Path], ...]:
+    if left_evaluation is not None or right_evaluation is not None:
+        if left_evaluation is None or right_evaluation is None:
+            raise ValueError("left-evaluation and right-evaluation must be provided together")
+        return ((left_evaluation, right_evaluation),)
+    evaluations = _evaluation_bundle_paths(
+        results_root=results_root,
+        benchmark_selectors=benchmark_selectors,
+    )
+    by_benchmark: dict[str, list[Path]] = {}
+    for path in evaluations:
+        record = _load_evaluation_bundle_record(path)
+        benchmark_id = _benchmark_id_from_record(record, description="evaluation")
+        by_benchmark.setdefault(benchmark_id, []).append(path)
+    pairs: list[tuple[Path, Path]] = []
+    for paths in by_benchmark.values():
+        pairs.extend(itertools.combinations(paths, 2))
+    return tuple(pairs)
+
+
+def _evaluation_bundle_paths(
+    *,
+    results_root: Path,
+    benchmark_selectors: tuple[str, ...],
+) -> tuple[Path, ...]:
+    evaluation_root = results_root / "evaluations"
+    if not evaluation_root.is_dir():
+        return ()
+    paths: list[Path] = []
+    for path in sorted(evaluation_root.rglob("*" + document_filename_suffix())):
+        if "competitions" in path.relative_to(evaluation_root).parts:
+            continue
+        record = _load_evaluation_bundle_record(path)
+        benchmark_id = _benchmark_id_from_record(record, description="evaluation")
+        if not _benchmark_selected(benchmark_id, benchmark_selectors):
+            continue
+        paths.append(path)
+    return tuple(paths)
+
+
+def _competition_pair_exists(
+    *,
+    results_root: Path,
+    left_evaluation: dict[str, object],
+    right_evaluation: dict[str, object],
+) -> bool:
+    left_key = _model_key_from_evaluation(left_evaluation)
+    right_key = _model_key_from_evaluation(right_evaluation)
+    if right_key < left_key:
+        left_key, right_key = right_key, left_key
+    benchmark_id = _benchmark_id_from_record(left_evaluation, description="left_evaluation")
+    competition_paths = (results_root / "evaluations").rglob(
+        "competitions/*" + document_filename_suffix()
+    )
+    for path in sorted(competition_paths):
+        record = _load_object_record(path, description="benchmark competition bundle")
+        if record.get("format") != "leibniz.benchmark-competition":
+            continue
+        raw_result = record.get("competition_result")
+        if not isinstance(raw_result, Mapping):
+            continue
+        result = cast(Mapping[str, object], raw_result)
+        if result.get("benchmark_id") != benchmark_id:
+            continue
+        existing_left = result.get("left_model_key")
+        existing_right = result.get("right_model_key")
+        if not isinstance(existing_left, str) or not isinstance(existing_right, str):
+            continue
+        if existing_right < existing_left:
+            existing_left, existing_right = existing_right, existing_left
+        if (existing_left, existing_right) == (left_key, right_key):
+            return True
+    return False
+
+
+def _evaluation_bundle_exists(
+    *,
+    results_root: Path,
+    benchmark_id: str,
+    run_slug: str,
+) -> bool:
+    path = (
+        results_root
+        / "evaluations"
+        / _benchmark_atom(benchmark_id)
+        / (run_slug + document_filename_suffix())
+    )
+    return path.is_file()
+
+
+def _benchmark_selected(benchmark_id: str, selectors: tuple[str, ...]) -> bool:
+    if not selectors:
+        return True
+    benchmark_name = benchmark_id.split("@", maxsplit=1)[0]
+    benchmark_atom = _benchmark_atom(benchmark_id)
+    return any(
+        selector in {benchmark_id, benchmark_name, benchmark_atom}
+        for selector in selectors
+    )
+
+
+def _benchmark_atom(benchmark_id: str) -> str:
+    return benchmark_id.split("@", maxsplit=1)[0].rsplit(".", maxsplit=1)[-1]
+
+
+def _benchmark_roots_by_id(
+    *,
+    repository_root: Path,
+    explicit_roots: tuple[Path, ...],
+) -> dict[str, Path]:
+    packaged_root = repository_root / "src" / "leibniz" / "benchmarks"
+    roots = explicit_roots or tuple(sorted(packaged_root.glob("*")))
+    by_id: dict[str, Path] = {}
+    for root in roots:
+        manifest_path = root / _manifest_filename
+        if not manifest_path.is_file():
+            continue
+        manifest = BenchmarkManifestDocument.from_bytes(manifest_path.read_bytes()).manifest
+        by_id[str(manifest.id)] = root
+    return by_id
+
+
+def _benchmark_root_for_record(
+    record: Mapping[str, object],
+    *,
+    benchmark_roots: Mapping[str, Path],
+    description: str,
+) -> Path:
+    benchmark_id = _benchmark_id_from_record(record, description=description)
+    benchmark_root = benchmark_roots.get(benchmark_id)
+    if benchmark_root is None:
+        raise ValueError(f"no benchmark root available for {benchmark_id}")
+    return benchmark_root
+
+
+def _load_evaluation_bundle_record(path: Path) -> dict[str, object]:
+    bundle = BenchmarkEvaluationBundleDocument.from_bytes(path.read_bytes()).bundle
+    return dict(bundle.to_record())
+
+
+def _load_object_record(path: Path, *, description: str) -> dict[str, object]:
+    record = load_object_document(path.read_bytes(), description=description)
+    return dict(record)
+
+
+def _model_key_from_evaluation(record: Mapping[str, object]) -> str:
+    raw_checkpoint = record.get("model_checkpoint")
+    if not isinstance(raw_checkpoint, Mapping):
+        raise ValueError("evaluation.model_checkpoint must be a record")
+    checkpoint = cast(Mapping[str, object], raw_checkpoint)
+    return _required_string(checkpoint.get("digest"), "evaluation.model_checkpoint.digest")
+
+
+def _benchmark_id_from_record(record: Mapping[str, object], *, description: str) -> str:
+    benchmark_id = record.get("benchmark_id")
+    if isinstance(benchmark_id, str) and benchmark_id:
+        return benchmark_id
+    raw_benchmark_manifest = record.get("benchmark_manifest")
+    if isinstance(raw_benchmark_manifest, Mapping):
+        benchmark_manifest = cast(Mapping[str, object], raw_benchmark_manifest)
+        manifest_id = benchmark_manifest.get("id")
+        if isinstance(manifest_id, str) and manifest_id:
+            return manifest_id
+    raw_checkpoint = record.get("model_checkpoint")
+    if isinstance(raw_checkpoint, Mapping):
+        checkpoint = cast(Mapping[str, object], raw_checkpoint)
+        checkpoint_benchmark_id = checkpoint.get("benchmark_id")
+        if isinstance(checkpoint_benchmark_id, str) and checkpoint_benchmark_id:
+            return checkpoint_benchmark_id
+    raise ValueError(f"{description}.benchmark_id must be a non-empty string")
+
+
+def _required_string(value: object, description: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{description} must be a non-empty string")
+    return value
 
 
 def _validate(args: argparse.Namespace) -> int:

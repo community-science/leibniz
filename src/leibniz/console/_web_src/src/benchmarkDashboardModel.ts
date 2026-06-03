@@ -220,7 +220,7 @@ export function benchmarkPlotModel(
     .filter((point): point is BenchmarkPlotModelPoint => point !== null)
     .sort((left, right) => left.cost - right.cost || right.score - left.score);
   const costLogs = points.map((point) => point.logCost);
-  const scores = points.map((point) => point.score);
+  const scores = [...points, ...frontierPoints].map((point) => point.score);
   const xDomain = logCostDomain(costLogs);
   const yDomain = scoreDomain(scores);
   const xTicks = logCostTicks(xDomain);

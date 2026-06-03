@@ -99,6 +99,7 @@ class LocalBenchmarkResultViewSummary(_SummaryRecordMixin):
     benchmark_count: int
     model_count: int
     run_count: int
+    benchmark_view_files: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,7 +257,7 @@ def publish_local_benchmark_results(
     repository_root: Path | None = None,
     results_root: Path = _default_results_root,
     commit: bool = True,
-    push: bool = False,
+    push: bool = True,
     repo_id: str | None = None,
     remote: str = "auto",
     token: str | None = None,
@@ -269,7 +270,6 @@ def publish_local_benchmark_results(
     runs = _local_run_records(results_root)
     if not runs:
         raise LocalResultImportError("no local benchmark result records found")
-    materialize_benchmark_result_views(repository_root=repository_root, results_root=results_root)
     measurement_count = sum(run.measurement_count for run in runs)
     git_commit: str | None = None
     selected_remote: str | None = None
@@ -319,6 +319,9 @@ def materialize_benchmark_result_views(
         raise LocalResultImportError("no benchmark result records found")
 
     benchmark_records: list[Mapping[str, object]] = []
+    benchmark_view_files: list[Path] = []
+    view_root = results_root / "views"
+    view_root.mkdir(parents=True, exist_ok=True)
     for benchmark_id in sorted({run.benchmark_id for run in runs}, key=str):
         manifest = manifests.get(benchmark_id)
         if manifest is None:
@@ -329,31 +332,32 @@ def materialize_benchmark_result_views(
             for competition in _local_competition_records(results_root)
             if competition.get("benchmark_id") == str(benchmark_id)
         )
-        benchmark_records.append(
-            _benchmark_result_record(
-                manifest=manifest,
-                repository_root=repository_root,
-                runs=benchmark_runs,
-                competitions=benchmark_competitions,
+        benchmark_record = _benchmark_result_record(
+            manifest=manifest,
+            repository_root=repository_root,
+            runs=benchmark_runs,
+            competitions=benchmark_competitions,
+        )
+        benchmark_records.append(benchmark_record)
+        benchmark_view_root = view_root / _identifier_atom(benchmark_id)
+        benchmark_view_root.mkdir(parents=True, exist_ok=True)
+        benchmark_view_file = benchmark_view_root / ("benchmark_results" + _document_suffix)
+        benchmark_view_file.write_bytes(
+            canonical_document_bytes(
+                {
+                    "format": _benchmark_result_view_format,
+                    "format_version": _console_result_view_format_version,
+                    "benchmark_results": [benchmark_record],
+                }
             )
+            + b"\n"
         )
+        benchmark_view_files.append(benchmark_view_file)
 
-    view_root = results_root / "views"
-    view_root.mkdir(parents=True, exist_ok=True)
-    view_file = view_root / ("benchmark_results" + _document_suffix)
-    view_file.write_bytes(
-        canonical_document_bytes(
-            {
-                "format": _benchmark_result_view_format,
-                "format_version": _console_result_view_format_version,
-                "benchmark_results": benchmark_records,
-            }
-        )
-        + b"\n"
-    )
     return LocalBenchmarkResultViewSummary(
         source_files=tuple(run.source_path for run in runs),
-        view_file=view_file,
+        view_file=benchmark_view_files[0],
+        benchmark_view_files=tuple(benchmark_view_files),
         benchmark_count=len(benchmark_records),
         model_count=len({(run.benchmark_id, run.model_key) for run in runs}),
         run_count=len(runs),
