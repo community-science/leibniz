@@ -568,6 +568,7 @@ class _ModelCompetitionOutcome:
     left_model_key: str
     right_model_key: str
     left_score: float
+    right_score: float
     sample_count: int
 
 
@@ -1488,7 +1489,7 @@ def _add_relative_score_views(
                 "kind": "model-competition-elo-like-v1",
                 "score_unit": "rating-points",
                 "baseline": _relative_score_baseline,
-                "pair_delta": "400-logit10-paired-win-rate",
+                "rating_update": "repeated-fractional-elo",
                 "competition_mechanic": "paired-prediction-accepted-mass",
                 "pair_outcome": "higher-score-wins",
                 "tie_value": 0.5,
@@ -1498,7 +1499,8 @@ def _add_relative_score_views(
 
 _relative_score_baseline = 1000.0
 _relative_score_scale = 400.0
-_relative_score_epsilon = 1.0e-6
+_relative_score_k_factor = 32.0
+_relative_score_update_epochs = 64
 
 
 def _relative_model_scores(
@@ -1506,22 +1508,24 @@ def _relative_model_scores(
     *,
     outcomes: tuple[_ModelCompetitionOutcome, ...],
 ) -> dict[str, float]:
-    score_totals = dict.fromkeys(best_runs, 0.0)
-    weight_totals = dict.fromkeys(best_runs, 0)
-    for outcome in outcomes:
-        left_delta = _elo_like_delta(outcome.left_score)
-        score_totals[outcome.left_model_key] += left_delta * outcome.sample_count
-        score_totals[outcome.right_model_key] -= left_delta * outcome.sample_count
-        weight_totals[outcome.left_model_key] += outcome.sample_count
-        weight_totals[outcome.right_model_key] += outcome.sample_count
-    return {
-        model_key: (
-            _relative_score_baseline
-            if weight_totals[model_key] == 0
-            else _relative_score_baseline + score_totals[model_key] / weight_totals[model_key]
+    ratings = dict.fromkeys(best_runs, _relative_score_baseline)
+    ordered_outcomes = tuple(
+        sorted(
+            outcomes,
+            key=lambda outcome: (outcome.left_model_key, outcome.right_model_key),
         )
-        for model_key in sorted(best_runs)
-    }
+    )
+    for _epoch in range(_relative_score_update_epochs):
+        for outcome in ordered_outcomes:
+            left_actual = _normalized_pair_score(outcome.left_score, outcome.right_score)
+            left_expected = _elo_expected_score(
+                ratings[outcome.left_model_key],
+                ratings[outcome.right_model_key],
+            )
+            delta = _relative_score_k_factor * (left_actual - left_expected)
+            ratings[outcome.left_model_key] += delta
+            ratings[outcome.right_model_key] -= delta
+    return {model_key: ratings[model_key] for model_key in sorted(best_runs)}
 
 
 def _pairwise_competition_outcomes(
@@ -1549,6 +1553,10 @@ def _pairwise_competition_outcomes(
                     competition.get("left_score"),
                     "competition.left_score",
                 ),
+                right_score=_as_probability(
+                    competition.get("right_score"),
+                    "competition.right_score",
+                ),
                 sample_count=_as_positive_int(
                     competition.get("sample_count"),
                     "competition.sample_count",
@@ -1558,9 +1566,15 @@ def _pairwise_competition_outcomes(
     return tuple(outcomes)
 
 
-def _elo_like_delta(win_rate: float) -> float:
-    clipped = min(1.0 - _relative_score_epsilon, max(_relative_score_epsilon, win_rate))
-    return -_relative_score_scale * math.log10(1.0 / clipped - 1.0)
+def _normalized_pair_score(left_score: float, right_score: float) -> float:
+    total = left_score + right_score
+    if total <= 0.0:
+        return 0.5
+    return left_score / total
+
+
+def _elo_expected_score(left_rating: float, right_rating: float) -> float:
+    return 1.0 / (1.0 + 10.0 ** ((right_rating - left_rating) / _relative_score_scale))
 
 
 def _model_cost_summary(

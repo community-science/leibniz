@@ -218,6 +218,52 @@ def test_relative_competition_does_not_read_absolute_measurements() -> None:
     assert outcomes[0].left_model_key == "model-a"
     assert outcomes[0].right_model_key == "model-b"
     assert outcomes[0].left_score == 1.0
+    assert outcomes[0].right_score == 0.0
+
+
+def test_relative_competition_scores_rank_undefeated_model_first() -> None:
+    best_runs = {
+        "model-a": _benchmark_run_record_for_competition(
+            model_key="model-a",
+            run_id="run-a",
+        ),
+        "model-b": _benchmark_run_record_for_competition(
+            model_key="model-b",
+            run_id="run-b",
+        ),
+        "model-c": _benchmark_run_record_for_competition(
+            model_key="model-c",
+            run_id="run-c",
+        ),
+    }
+    outcomes = (
+        cast(Any, local_results)._ModelCompetitionOutcome(
+            left_model_key="model-a",
+            right_model_key="model-b",
+            left_score=0.64,
+            right_score=0.36,
+            sample_count=512,
+        ),
+        cast(Any, local_results)._ModelCompetitionOutcome(
+            left_model_key="model-a",
+            right_model_key="model-c",
+            left_score=0.71,
+            right_score=0.29,
+            sample_count=512,
+        ),
+        cast(Any, local_results)._ModelCompetitionOutcome(
+            left_model_key="model-b",
+            right_model_key="model-c",
+            left_score=0.87,
+            right_score=0.13,
+            sample_count=512,
+        ),
+    )
+
+    scores = cast(Any, local_results)._relative_model_scores(best_runs, outcomes=outcomes)
+
+    assert scores["model-a"] > scores["model-b"]
+    assert scores["model-b"] > scores["model-c"]
 
 
 def test_console_result_view_validates_model_detail_tables(tmp_path: Path) -> None:
