@@ -702,12 +702,12 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
         benchmark_runner.ExecutableModelOperator.torch_operation_modules
     )
 
-    def flaky_torch_operation_modules(self: object, *, torch: object | None = None) -> object:
+    def flaky_torch_operation_modules(self: object) -> object:
         nonlocal module_calls
         module_calls += 1
         if module_calls == 1:
             raise RuntimeError("MPS backend failed to compile adaptive pooling")
-        return original_torch_operation_modules(cast(Any, self), torch=cast(Any, torch))
+        return original_torch_operation_modules(cast(Any, self))
 
     monkeypatch.setattr(benchmark_runner, "tensor_runtime_device_kinds", fake_device_kinds)
     monkeypatch.setattr(benchmark_runner, "resolve_tensor_runtime", fake_resolve_tensor_runtime)
@@ -791,12 +791,11 @@ def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_dev
         benchmark_runner.ExecutableModelOperator.torch_operation_modules
     )
 
-    def flaky_first_operation(self: object, *, torch: object | None = None) -> object:
-        torch_module = cast(Any, torch)
-        modules = list(
-            original_torch_operation_modules(cast(Any, self), torch=torch_module)
-        )
-        modules[0] = torch_module.nn.Sequential(FlakyOperation(), modules[0])
+    def flaky_first_operation(self: object) -> object:
+        import importlib
+        torch = cast(Any, importlib.import_module("torch"))
+        modules = list(original_torch_operation_modules(cast(Any, self)))
+        modules[0] = torch.nn.Sequential(FlakyOperation(), modules[0])
         return tuple(modules)
 
     monkeypatch.setattr(benchmark_runner, "tensor_runtime_device_kinds", fake_device_kinds)
