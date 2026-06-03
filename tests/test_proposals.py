@@ -394,7 +394,7 @@ def _measurement_dataset() -> MeasurementDataset:
 
 def _architecture() -> ArchitectureManifest:
     return ArchitectureManifestDocument.from_bytes(
-        (_fixtures_root / "architecture" / "digits_pool" / "manifest.json").read_bytes()
+        (_fixtures_root / "architecture" / "digits_pool.json").read_bytes()
     ).manifest
 
 

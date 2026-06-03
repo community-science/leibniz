@@ -230,7 +230,7 @@ def _training_reference() -> ArtifactReference:
 
 def _architecture_manifest() -> ArchitectureManifest:
     return ArchitectureManifestDocument.from_bytes(
-        (_fixtures_root / "architecture" / "digits_pool" / "manifest.json").read_bytes()
+        (_fixtures_root / "architecture" / "digits_pool.json").read_bytes()
     ).manifest
 
 

@@ -13,7 +13,7 @@ declare const consoleDataPayload: unknown;
 const parsed = parseConsoleDataRecord(consoleDataPayload);
 const rawConsoleData = consoleDataPayload as Record<string, unknown>;
 const modelInspection = parsed.model_inspections.find(
-  (inspection) => inspection.source_path === 'tests/fixtures/architecture/digits_pool/manifest.json',
+  (inspection) => inspection.source_path === 'tests/fixtures/architecture/digits_pool.json',
 );
 if (modelInspection === undefined) {
   throw new Error('expected model inspection fixture');

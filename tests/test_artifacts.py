@@ -353,7 +353,7 @@ def test_artifact_index_rejects_duplicate_and_malformed_records() -> None:
 
 def _architecture_record() -> dict[str, object]:
     return ArchitectureManifestDocument.from_bytes(
-        (_fixtures_root / "architecture" / "digits_pool" / "manifest.json").read_bytes()
+        (_fixtures_root / "architecture" / "digits_pool.json").read_bytes()
     ).manifest.to_record()
 
 

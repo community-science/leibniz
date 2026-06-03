@@ -132,9 +132,9 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert [(artifact["kind"], artifact["source_path"]) for artifact in artifacts] == [
         (
             "architecture-manifest",
-            "tests/fixtures/architecture/digits_fixed_support_convnet/manifest.json",
+            "tests/fixtures/architecture/digits_convnet.json",
         ),
-        ("architecture-manifest", "tests/fixtures/architecture/digits_pool/manifest.json"),
+        ("architecture-manifest", "tests/fixtures/architecture/digits_pool.json"),
         ("benchmark-manifest", "src/leibniz/benchmarks/digits/manifest.json"),
         ("benchmark-manifest", "tests/fixtures/chess/mate_in_one/manifest.json"),
         ("benchmark-manifest", "tests/fixtures/finite_outcome/manifest.json"),
@@ -156,7 +156,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     architecture_detail = next(
         detail
         for detail in details
-        if detail["source_path"] == "tests/fixtures/architecture/digits_pool/manifest.json"
+        if detail["source_path"] == "tests/fixtures/architecture/digits_pool.json"
     )
     architecture_graph = cast(dict[str, object], architecture_detail["architecture_graph"])
     assert [node["id"] for node in cast(list[dict[str, object]], architecture_graph["nodes"])] == [
@@ -181,16 +181,16 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert [
         inspection["source_path"] for inspection in model_inspections
     ] == [
-        "tests/fixtures/architecture/digits_fixed_support_convnet/manifest.json",
-        "tests/fixtures/architecture/digits_pool/manifest.json",
+        "tests/fixtures/architecture/digits_convnet.json",
+        "tests/fixtures/architecture/digits_pool.json",
     ]
     model_inspection = next(
         inspection
         for inspection in model_inspections
-        if inspection["source_path"] == "tests/fixtures/architecture/digits_pool/manifest.json"
+        if inspection["source_path"] == "tests/fixtures/architecture/digits_pool.json"
     )
     assert model_inspection["source_path"] == (
-        "tests/fixtures/architecture/digits_pool/manifest.json"
+        "tests/fixtures/architecture/digits_pool.json"
     )
     assert model_inspection["input_shape"] == [1, 24, 24]
     assert model_inspection["output_shape"] == [10]

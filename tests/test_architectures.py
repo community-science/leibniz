@@ -242,7 +242,7 @@ def test_architecture_manifest_rejects_invalid_ids_shapes_and_layers() -> None:
 
 def test_architecture_manifest_document_loads_fixture_with_digest() -> None:
     document = ArchitectureManifestDocument.from_bytes(
-        (_fixtures_root / "architecture" / "digits_pool" / "manifest.json").read_bytes()
+        (_fixtures_root / "architecture" / "digits_pool.json").read_bytes()
     )
 
     assert document.manifest.input_shape == (1, 24, 24)

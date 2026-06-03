@@ -1,6 +1,9 @@
 import {
   ArrowLeft,
   ArrowRight,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   RotateCcw,
   ZoomIn,
   ZoomOut,
@@ -79,6 +82,7 @@ export function BenchmarkResultDashboard({
     costAxes[0]?.key ?? 'parameter_count',
   );
   const costAxis = benchmarkCostAxis(selectedCostAxis, costAxes);
+  const costAxisLabel = costAxes.find((axis) => axis.key === costAxis)?.label ?? 'Cost';
   const [plotView, setPlotView] = usePersistentState<PlotView | null>(
     `${stateKeyPrefix}.plotView`,
     null,
@@ -137,8 +141,8 @@ export function BenchmarkResultDashboard({
         hoveredId={hoveredId}
       />
       <ModelResultTable
-        complexityAxis={result.complexity_axis}
         costAxis={costAxis}
+        costAxisLabel={costAxisLabel}
         models={result.leaderboard}
         onSelect={setSelectedId}
         onSort={(key) => setLeaderboardSort((current) => nextModelResultSort(current, key))}
@@ -461,8 +465,8 @@ function BenchmarkFrontierPlot({
 }
 
 function ModelResultTable({
-  complexityAxis,
   costAxis,
+  costAxisLabel,
   models,
   onSelect,
   onSort,
@@ -470,8 +474,8 @@ function ModelResultTable({
   sort,
   title,
 }: {
-  complexityAxis: string | undefined;
   costAxis: string;
+  costAxisLabel: string;
   models: ModelResultRecord[];
   onSelect: (id: string) => void;
   onSort: (key: ModelResultSortKey) => void;
@@ -503,21 +507,8 @@ function ModelResultTable({
           <SortHeader
             active={sort.key === 'cost'}
             direction={sort.direction}
-            label="Cost"
+            label={costAxisLabel}
             onClick={() => onSort('cost')}
-          />
-          <span role="columnheader">{complexityAxis ?? 'Complexity'}</span>
-          <SortHeader
-            active={sort.key === 'runs'}
-            direction={sort.direction}
-            label="Runs"
-            onClick={() => onSort('runs')}
-          />
-          <SortHeader
-            active={sort.key === 'measurements'}
-            direction={sort.direction}
-            label="Measurements"
-            onClick={() => onSort('measurements')}
           />
         </div>
         {sortedModelResults(models, costAxis, sort).map((model) => (
@@ -535,9 +526,6 @@ function ModelResultTable({
             <span role="cell">{shortDigest(model.architecture_digest)}</span>
             <span role="cell">{model.score.toFixed(4)}</span>
             <span role="cell">{formatCost(costValue(model.cost_summary, costAxis))}</span>
-            <span role="cell">{model.observed_complexities.join(', ') || 'none'}</span>
-            <span role="cell">{model.run_ids.length}</span>
-            <span role="cell">{model.measurement_count}</span>
           </button>
         ))}
       </div>
@@ -565,7 +553,17 @@ function SortHeader({
       type="button"
     >
       <span>{label}</span>
-      {active ? <span aria-hidden="true">{direction === 'ascending' ? 'asc' : 'desc'}</span> : null}
+      <span className="benchmark-sort-header-icon" aria-hidden="true">
+        {active ? (
+          direction === 'ascending' ? (
+            <ArrowUp size={13} />
+          ) : (
+            <ArrowDown size={13} />
+          )
+        ) : (
+          <ArrowUpDown size={13} />
+        )}
+      </span>
     </button>
   );
 }

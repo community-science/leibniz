@@ -14,7 +14,7 @@ _repository_root = Path(__file__).parents[1]
 _public_fixture_sources = (
     ConsoleArtifactIndexSource(
         kind="architecture-manifest",
-        source_path=PurePosixPath("tests/fixtures/architecture/digits_pool/manifest.json"),
+        source_path=PurePosixPath("tests/fixtures/architecture/digits_pool.json"),
     ),
     ConsoleArtifactIndexSource(
         kind="benchmark-manifest",

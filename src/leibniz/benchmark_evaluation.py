@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.identifiers import ProtocolIdentifier
@@ -14,11 +15,28 @@ from leibniz.prediction_results import DirectFiniteProbabilityPrediction
 from leibniz.prediction_spaces import FiniteOutcomeSpace
 
 __all__ = [
+    "CompetencePoint",
     "finite_measurements_for_predictions",
     "sampled_competence_curriculum_record",
     "sampled_competence_record",
+    "sampled_competence_frontier_score",
+    "ValidationCompetencePoint",
     "validation_competence",
+    "validation_competence_frontier_score",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class CompetencePoint:
+    """A measured point on a complexity frontier."""
+
+    complexity: float
+    accepted_mass: float
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationCompetencePoint(CompetencePoint):
+    """A validation-loss-derived point on a complexity frontier."""
 
 
 def finite_measurements_for_predictions(
@@ -177,6 +195,67 @@ def validation_competence(*, validation_loss: float, outcome_count: int) -> floa
     if reference_cross_entropy <= 0:
         return 0.0
     return max(0.0, min(1.0, 1.0 - validation_loss / reference_cross_entropy))
+
+
+def sampled_competence_frontier_score(
+    points: Sequence[CompetencePoint],
+    *,
+    chance_mass: float,
+) -> float:
+    """Return bits above chance integrated over observed complexity."""
+
+    if not points:
+        return 0.0
+    ordered = tuple(sorted(points, key=lambda point: point.complexity))
+    first_complexity = _finite_nonnegative_number(
+        ordered[0].complexity,
+        field="competence_frontier.complexity",
+    )
+    first_competence = _above_chance_competence(
+        ordered[0].accepted_mass,
+        chance_mass=chance_mass,
+    )
+    area = first_complexity * first_competence
+    for left, right in zip(ordered, ordered[1:], strict=False):
+        left_complexity = _finite_nonnegative_number(
+            left.complexity,
+            field="competence_frontier.complexity",
+        )
+        right_complexity = _finite_nonnegative_number(
+            right.complexity,
+            field="competence_frontier.complexity",
+        )
+        width = right_complexity - left_complexity
+        if width <= 0.0:
+            continue
+        left_competence = _above_chance_competence(
+            left.accepted_mass,
+            chance_mass=chance_mass,
+        )
+        right_competence = _above_chance_competence(
+            right.accepted_mass,
+            chance_mass=chance_mass,
+        )
+        area += width * (left_competence + right_competence) / 2.0
+    return area
+
+
+def validation_competence_frontier_score(
+    points: Sequence[ValidationCompetencePoint],
+    *,
+    chance_mass: float,
+) -> float:
+    """Return the benchmark frontier score for validation-derived points."""
+
+    return sampled_competence_frontier_score(points, chance_mass=chance_mass)
+
+
+def _above_chance_competence(score: float, *, chance_mass: float) -> float:
+    chance = _finite_score(chance_mass, field="competence_frontier.chance_mass")
+    if chance >= 1.0:
+        return 0.0
+    accepted_mass = _finite_score(score, field="competence_frontier.accepted_mass")
+    return max(0.0, min(1.0, (accepted_mass - chance) / (1.0 - chance)))
 
 
 def _positive_int(value: object, *, field: str) -> int:

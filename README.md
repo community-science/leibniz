@@ -122,7 +122,7 @@ Run the canonical reference trainer against an explicit architecture:
 ```bash
 leibniz benchmark train \
   --benchmark-root src/leibniz/benchmarks/digits \
-  --architecture tests/fixtures/architecture/digits_pool/manifest.json
+  --architecture tests/fixtures/architecture/digits_pool.json
 ```
 
 `benchmark train` is a reference implementation for local benchmark training and
