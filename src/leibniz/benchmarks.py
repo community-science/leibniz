@@ -247,10 +247,14 @@ class BenchmarkManifestDocument:
             raise BenchmarkManifestValidationError(str(error)) from error
         manifest = BenchmarkManifest.from_record(record)
         return cls(manifest=manifest, digest=ContentDigest.from_value(manifest.to_record()))
+
+
 def _as_name(value: object, *, field: str) -> ProtocolName:
     if not isinstance(value, ProtocolName):
         raise BenchmarkManifestValidationError(f"{field}: expected parsed name")
     return value
+
+
 def _manifest_name(validated: Mapping[str, object]) -> ProtocolName:
     identifier = _extract.identifier(validated["id"], "id")
     value = validated.get("name")

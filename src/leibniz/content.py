@@ -35,3 +35,23 @@ class ContentDigest:
     def from_value(cls, value: object) -> ContentDigest:
         digest = hashlib.sha256(canonical_document_bytes(value)).hexdigest()
         return cls(algorithm="sha256", hex=digest)
+
+    @classmethod
+    def from_string(
+        cls,
+        value: object,
+        *,
+        field: str,
+        error_type: type[ValueError] = ContentEncodingError,
+    ) -> ContentDigest:
+        """Parse an algorithm-qualified digest string from a protocol record."""
+
+        if not isinstance(value, str):
+            raise error_type(f"{field}: expected digest string")
+        algorithm, separator, digest_hex = value.partition(":")
+        if separator == "":
+            raise error_type(f"{field}: expected algorithm:digest")
+        try:
+            return cls(algorithm=algorithm, hex=digest_hex)
+        except ContentEncodingError as error:
+            raise error_type(str(error)) from error

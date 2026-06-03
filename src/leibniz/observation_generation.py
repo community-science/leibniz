@@ -1153,6 +1153,8 @@ def _projected_unit_interval(
         )
         possible_ranges.append(max(points) - min(points))
     return (min(possible_ranges), max(possible_ranges))
+
+
 def _identity_variation_coordinate_record(
     *,
     transform: VariationTransformDeclaration,

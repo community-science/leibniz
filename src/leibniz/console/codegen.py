@@ -28,6 +28,8 @@ _generated_protocol_module_path = (
 _generated_result_view_records_module_path = (
     Path(__file__).parent / "_web_src" / "src" / "generated" / "resultViewRecords.ts"
 )
+
+
 def generated_console_protocol_module() -> str:
     """Return the generated TypeScript console protocol vocabulary module."""
 
@@ -246,9 +248,11 @@ export type TrainingDiagnosticsRecord = {
   final_validation_loss: number;
   final_validation_step: number;
   final_validation_check: number;
+  training_compute?: number;
   protocol: TrainingProtocolRecord;
   validation_history: TrainingHistoryPointRecord[];
   artifacts: TrainingArtifactReferenceRecord[];
+  throughput?: Record<string, unknown>;
   evaluation_curriculum?: Record<string, unknown>;
 };
 
@@ -331,16 +335,15 @@ function parseBenchmarkResultViewRecord(
 
 function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultRecord {
   const record = requireRecord(value, path, transportError);
-  const resultRecord = { ...record };
-  delete resultRecord.proposals;
-  return withFields(resultRecord, {
+  return {
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
+    complexity_axis: optional(record.complexity_axis, `${path}.complexity_axis`, (item, itemPath) => requireString(item, itemPath, transportError)),
     cost_axes: arrayOf(record.cost_axes, `${path}.cost_axes`, parseCostAxis),
     leaderboard: arrayOf(record.leaderboard, `${path}.leaderboard`, parseModelResult),
     frontiers: parseFrontiers(record.frontiers, `${path}.frontiers`),
     training_history: arrayOf(record.training_history, `${path}.training_history`, parseRunResult),
     model_inspections: arrayOf(record.model_inspections ?? [], `${path}.model_inspections`, parseModelInspectionRecord),
-  }) as BenchmarkResultRecord;
+  };
 }
 
 function parseModelResult(value: unknown, path: string): ModelResultRecord {
@@ -464,9 +467,14 @@ function parseTrainingDiagnostics(value: unknown, path: string): TrainingDiagnos
     'final_validation_check',
   ]);
   return withFields(record, {
+    training_compute: optionalNumber(record.training_compute, `${path}.training_compute`, transportError),
     protocol: requireRecord(record.protocol, `${path}.protocol`, transportError) as TrainingProtocolRecord,
     validation_history: requireArray(record.validation_history, `${path}.validation_history`, transportError) as TrainingHistoryPointRecord[],
     artifacts: requireArray(record.artifacts, `${path}.artifacts`, transportError) as TrainingArtifactReferenceRecord[],
+    throughput:
+      record.throughput === undefined
+        ? undefined
+        : requireRecord(record.throughput, `${path}.throughput`, transportError),
     evaluation_curriculum:
       record.evaluation_curriculum === undefined
         ? undefined

@@ -404,6 +404,8 @@ def _scoring_mapping(value: object, *, field: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise MeasurementRecordValidationError(f"{field}: expected record")
     return cast(Mapping[str, object], value)
+
+
 def _evidence_artifacts(record: Mapping[str, object]) -> tuple[ArtifactReference, ...]:
     raw_artifacts = record.get("evidence_artifacts")
     if raw_artifacts is None:

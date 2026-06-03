@@ -687,6 +687,8 @@ def _competence_point_sort_key(point: CompetenceIntegralPoint) -> tuple[float, s
 
 def _competence_entry_sort_key(entry: CompetenceIntegralEntry) -> tuple[float, str]:
     return (-entry.integral, str(entry.benchmark_id))
+
+
 def _float_sequence(
     value: object,
     *,
@@ -704,15 +706,13 @@ def _float_sequence(
 
 
 def _as_digest(value: object, *, field: str) -> ContentDigest:
-    if not isinstance(value, str):
-        raise MeasurementScoreViewValidationError(f"{field}: expected digest string")
-    algorithm, separator, digest_hex = value.partition(":")
-    if separator == "":
-        raise MeasurementScoreViewValidationError(f"{field}: expected algorithm:digest")
-    try:
-        return ContentDigest(algorithm=algorithm, hex=digest_hex)
-    except ContentEncodingError as error:
-        raise MeasurementScoreViewValidationError(str(error)) from error
+    return ContentDigest.from_string(
+        value,
+        field=field,
+        error_type=MeasurementScoreViewValidationError,
+    )
+
+
 def _ordered_unique_values(
     values: tuple[float, ...],
     *,

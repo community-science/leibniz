@@ -251,7 +251,7 @@ function assertBenchmarkFrontierPlotStructure() {
   }
   for (const marker of ['Frontier Plot', 'performance-metrics', 'title="Frontier"']) {
     if (dashboard.includes(marker)) {
-      throw new Error(`BenchmarkResultDashboard must not preserve retired frontier summary UI: ${marker}`);
+      throw new Error(`BenchmarkResultDashboard must not expose unsupported frontier summary UI: ${marker}`);
     }
   }
 
@@ -296,7 +296,7 @@ function assertBenchmarkModelWorkbenchStructure() {
     }
   }
   if (panel.includes('benchmark-model-rail') || panel.includes('benchmark-model-card')) {
-    throw new Error('BenchmarksPanel must not preserve the retired model selector rail');
+    throw new Error('BenchmarksPanel must not expose unsupported model selector rail');
   }
 
   const requiredStyleMarkers = [
@@ -314,7 +314,7 @@ function assertBenchmarkModelWorkbenchStructure() {
     }
   }
   if (styles.includes('.benchmark-model-rail') || styles.includes('.benchmark-model-card')) {
-    throw new Error('Console styles must not preserve the retired model selector rail');
+    throw new Error('Console styles must not expose unsupported model selector rail');
   }
 }
 
@@ -323,7 +323,6 @@ function assertConsoleTextIsUseful() {
   const bannedPatterns = [
     /fixture/i,
     /Best-known score by model cost/,
-    /No active proposals are available/,
     /No training history is available/,
     /No [^.\n]+ records are available/,
     /Read-only architecture/,
@@ -335,7 +334,7 @@ function assertConsoleTextIsUseful() {
     const source = readFileSync(path, 'utf8');
     for (const pattern of bannedPatterns) {
       if (pattern.test(source)) {
-        throw new Error(`${relativePath} contains retired explanatory UI copy: ${pattern}`);
+        throw new Error(`${relativePath} contains unsupported explanatory UI copy: ${pattern}`);
       }
     }
   }
@@ -346,7 +345,7 @@ function assertConsoleResultRootPolicy() {
     resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/generated/resultViewRecords.ts'),
     'utf8',
   );
-  for (const marker of ['ProposalRecord', 'record.proposals']) {
+  for (const marker of ['delete resultRecord']) {
     if (!resultViewRecords.includes(marker)) {
       continue;
     }

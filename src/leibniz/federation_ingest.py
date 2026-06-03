@@ -314,16 +314,14 @@ def _validate_publication_bundle_reference(reference: ArtifactReference, *, fiel
         raise FederationIngestValidationError(
             f"{field} references must have kind publication-bundle"
         )
+
+
 def _as_digest(value: object, *, field: str) -> ContentDigest:
-    if not isinstance(value, str):
-        raise FederationIngestValidationError(f"{field}: expected digest string")
-    algorithm, separator, digest_hex = value.partition(":")
-    if separator == "":
-        raise FederationIngestValidationError(f"{field}: expected algorithm:digest")
-    try:
-        return ContentDigest(algorithm=algorithm, hex=digest_hex)
-    except ContentEncodingError as error:
-        raise FederationIngestValidationError(str(error)) from error
+    return ContentDigest.from_string(
+        value,
+        field=field,
+        error_type=FederationIngestValidationError,
+    )
 
 
 def _first_duplicate_source(

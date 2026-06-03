@@ -1229,6 +1229,8 @@ def _optional_reference(value: object, field: str) -> ArtifactReference | None:
     if value is None:
         return None
     return ArtifactReference.from_record(_extract.mapping(value, field))
+
+
 def _string_mapping(value: object, *, field: str) -> Mapping[str, str]:
     mapping = _extract.mapping(value, field)
     result: dict[str, str] = {}

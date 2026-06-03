@@ -168,19 +168,12 @@ def test_benchmark_manifest_rejects_missing_outcome_declaration() -> None:
     )
 
 
-def test_benchmark_manifest_rejects_retired_sequence_fields() -> None:
+def test_benchmark_manifest_rejects_unknown_fields() -> None:
     record = _benchmark_manifest_record()
-    record["outcome_sequence"] = {"atom_count": 10, "atom_name": "digit"}
+    record["unsupported_field"] = {"atom_count": 10, "atom_name": "digit"}
 
     assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
-        "outcome_sequence: unknown field"
-    )
-
-    record = _benchmark_manifest_record()
-    record["scale_parameter"] = {"symbol": "L", "minimum": 1}
-
-    assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (
-        "scale_parameter: unknown field"
+        "unsupported_field: unknown field"
     )
 
 

@@ -530,16 +530,22 @@ class LatentFactorDeclarationDocument:
             raise LatentFactorValidationError(str(error)) from error
         declaration = LatentFactorDeclaration.from_record(record)
         return cls(declaration=declaration, digest=declaration.digest)
+
+
 def _as_name(value: object, *, field: str) -> ProtocolName:
     if not isinstance(value, ProtocolName):
         raise LatentFactorValidationError(f"{field}: expected parsed name")
     return value
+
+
 def _as_role(value: object) -> LatentFactorRole:
     if not isinstance(value, str):
         raise LatentFactorValidationError("role: expected string")
     if value not in _latent_factor_roles:
         raise LatentFactorValidationError(f"unsupported latent factor role: {value}")
     return value
+
+
 def _require_nonempty(values: tuple[object, ...], description: str) -> None:
     if not values:
         raise LatentFactorValidationError(f"{description} must contain at least one item")

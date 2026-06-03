@@ -429,15 +429,13 @@ class ExperimentProposalDocument:
         )
         return cls(proposal_set=proposal_set, digest=proposal_set.digest)
 def _as_digest(value: object, *, field: str) -> ContentDigest:
-    if not isinstance(value, str):
-        raise ExperimentProposalValidationError(f"{field}: expected digest string")
-    algorithm, separator, digest_hex = value.partition(":")
-    if separator == "":
-        raise ExperimentProposalValidationError(f"{field}: expected algorithm:digest")
-    try:
-        return ContentDigest(algorithm=algorithm, hex=digest_hex)
-    except ContentEncodingError as error:
-        raise ExperimentProposalValidationError(str(error)) from error
+    return ContentDigest.from_string(
+        value,
+        field=field,
+        error_type=ExperimentProposalValidationError,
+    )
+
+
 def _require_optional_probability(value: float | None, *, field: str) -> None:
     if value is None:
         return

@@ -48,6 +48,20 @@ def test_content_digest_formats_sha256_digest() -> None:
     assert str(digest) == f"sha256:{digest.hex}"
 
 
+def test_content_digest_parses_algorithm_qualified_digest_strings() -> None:
+    digest = ContentDigest.from_value({"id": "core.example@0.1.0"})
+
+    assert ContentDigest.from_string(str(digest), field="digest") == digest
+    assert_error(
+        lambda: ContentDigest.from_string("not-a-digest", field="digest"),
+        "digest: expected algorithm:digest",
+    )
+    assert_error(
+        lambda: ContentDigest.from_string("sha256:abcd", field="digest"),
+        "sha256 digest must be 64 lowercase hexadecimal characters",
+    )
+
+
 def test_content_digest_rejects_values_that_cannot_be_encoded() -> None:
     assert_error(lambda: ContentDigest.from_value({"score": math.inf}), "score: nonfinite number")
     assert_error(

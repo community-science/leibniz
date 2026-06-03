@@ -355,13 +355,11 @@ def _validate_shape(value: tuple[int, ...], *, field: str) -> None:
 def _shape_size(shape: tuple[int, int, int]) -> int:
     channels, height, width = shape
     return channels * height * width
+
+
 def _digest(value: object, *, field: str) -> ContentDigest:
-    if not isinstance(value, str):
-        raise ObservationInspectionValidationError(f"{field}: expected digest string")
-    algorithm, separator, digest_hex = value.partition(":")
-    if separator == "":
-        raise ObservationInspectionValidationError(f"{field}: expected algorithm:digest")
-    try:
-        return ContentDigest(algorithm=algorithm, hex=digest_hex)
-    except ContentEncodingError as error:
-        raise ObservationInspectionValidationError(str(error)) from error
+    return ContentDigest.from_string(
+        value,
+        field=field,
+        error_type=ObservationInspectionValidationError,
+    )

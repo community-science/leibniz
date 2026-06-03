@@ -47,7 +47,6 @@ def test_digits_observation_formation_declaration_loads_source_artifact() -> Non
         "width_axis": "W",
         "height_axis": "H",
     }
-    assert "slot_composition" not in declaration.to_record()
     assert (
         declaration.variation_transform.spatial_affine.coordinate_system
         == "normalized-sequence-element"
@@ -234,13 +233,13 @@ def test_observation_formation_rejects_empty_component_sequence() -> None:
     )
 
 
-def test_observation_formation_rejects_retired_slot_contract() -> None:
+def test_observation_formation_rejects_unknown_fields() -> None:
     record = _minimal_declaration_record()
-    record["slot_composition"] = record.pop("sequence_layout")
+    record["unsupported_field"] = record["sequence_layout"]
 
     assert (
         str(capture_observation_error(lambda: ObservationFormationDeclaration.from_record(record)))
-        == "sequence_layout: missing required field; slot_composition: unknown field"
+        == "unsupported_field: unknown field"
     )
 
 

@@ -261,15 +261,11 @@ class RelationshipFitDocument:
         )
         return cls(fit=fit, digest=fit.digest)
 def _as_digest(value: object, *, field: str) -> ContentDigest:
-    if not isinstance(value, str):
-        raise RelationshipFitValidationError(f"{field}: expected digest string")
-    algorithm, separator, digest_hex = value.partition(":")
-    if separator == "":
-        raise RelationshipFitValidationError(f"{field}: expected algorithm:digest")
-    try:
-        return ContentDigest(algorithm=algorithm, hex=digest_hex)
-    except ContentEncodingError as error:
-        raise RelationshipFitValidationError(str(error)) from error
+    return ContentDigest.from_string(
+        value,
+        field=field,
+        error_type=RelationshipFitValidationError,
+    )
 def _require_finite(value: float, *, field: str) -> None:
     if not math.isfinite(value):
         raise RelationshipFitValidationError(f"{field} must be finite")

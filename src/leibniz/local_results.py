@@ -2009,6 +2009,19 @@ def _validate_benchmark_result_view(record: Mapping[str, object]) -> None:
 
 
 def _validate_benchmark_result(record: Mapping[str, object]) -> None:
+    _reject_unknown_fields(
+        record,
+        {
+            "benchmark_id",
+            "complexity_axis",
+            "cost_axes",
+            "leaderboard",
+            "frontiers",
+            "training_history",
+            "model_inspections",
+        },
+        prefix="benchmark_results",
+    )
     _extract.non_empty_string(record.get("benchmark_id"), "benchmark_id")
     cost_axes = _as_sequence(record.get("cost_axes"), "cost_axes")
     if not cost_axes:
@@ -2037,6 +2050,8 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
             ModelInspectionRecord.from_record(inspection_record)
         except ModelInspectionValidationError as error:
             raise LocalResultImportError(f"{field}: invalid model inspection: {error}") from error
+
+
 def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
     _require_string_fields(record, prefix, ("model_key", "architecture_digest", "benchmark_id"))
     _as_nonnegative_number(record.get("score"), _field_path(prefix, "score"))
@@ -2227,6 +2242,17 @@ def _record_sequence(
     )
 
 
+def _reject_unknown_fields(
+    record: Mapping[str, object],
+    allowed: set[str],
+    *,
+    prefix: str,
+) -> None:
+    unknown = sorted(str(field) for field in record if field not in allowed)
+    if unknown:
+        raise LocalResultImportError(f"{prefix}: unknown fields: {', '.join(unknown)}")
+
+
 def _field_path(prefix: str, field: str) -> str:
     return field if not prefix else f"{prefix}.{field}"
 
@@ -2256,12 +2282,16 @@ def _require_sequence_fields(
 ) -> None:
     for field in fields:
         _as_sequence(record.get(field), _field_path(prefix, field))
+
+
 def _as_sequence(value: object, field: str) -> tuple[object, ...]:
     if isinstance(value, tuple):
         return cast(tuple[object, ...], value)
     if isinstance(value, list):
         return tuple(cast(list[object], value))
     raise LocalResultImportError(f"{field}: expected parsed sequence")
+
+
 def _as_identifier(value: object, field: str) -> ProtocolIdentifier:
     if isinstance(value, ProtocolIdentifier):
         return value
@@ -2274,15 +2304,7 @@ def _as_identifier(value: object, field: str) -> ProtocolIdentifier:
 
 
 def _as_digest(value: object, *, field: str) -> ContentDigest:
-    if not isinstance(value, str):
-        raise LocalResultImportError(f"{field}: expected digest string")
-    algorithm, separator, digest_hex = value.partition(":")
-    if separator == "":
-        raise LocalResultImportError(f"{field}: expected algorithm:digest")
-    try:
-        return ContentDigest(algorithm=algorithm, hex=digest_hex)
-    except ValueError as error:
-        raise LocalResultImportError(str(error)) from error
+    return ContentDigest.from_string(value, field=field, error_type=LocalResultImportError)
 
 
 def _as_nonnegative_number(value: object, field: str) -> float:
