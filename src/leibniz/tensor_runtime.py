@@ -12,13 +12,13 @@ from typing import Any, Literal, cast
 
 from leibniz.architectures import ArchitectureManifest
 from leibniz.observation_formation import (
+    AffineMatrix2D,
     ObservationFormationDeclaration,
-    _affine_translation,
-    _AffineMatrix2D,
-    _linear_affine_matrix,
-    _sequence_center,
-    _sequence_relative_translation,
-    _VariationCoordinate,
+    VariationCoordinate,
+    affine_translation,
+    linear_affine_matrix,
+    sequence_center,
+    sequence_relative_translation,
 )
 from leibniz.observation_generation import GeneratedFormationBatch
 from leibniz.tensor_shapes import TensorShape
@@ -945,7 +945,7 @@ def _variation_coordinate(
     record: Mapping[str, object],
     *,
     expected_sequence_index: int,
-) -> _VariationCoordinate:
+) -> VariationCoordinate:
     if str(record.get("kind")) != "field-variation-transform-coordinate":
         raise TensorRuntimeError(
             "variation coordinate kind must be field-variation-transform-coordinate"
@@ -963,7 +963,7 @@ def _variation_coordinate(
             "spatial_affine coordinate_system must be normalized-sequence-element"
         )
     matrix = _matrix(spatial.get("matrix"), "spatial_affine.matrix")
-    return _VariationCoordinate(
+    return VariationCoordinate(
         sequence_index=sequence_index,
         matrix=matrix,
     )
@@ -991,7 +991,7 @@ def _generated_affine_grid_row(
 
 def _affine_grid_row(
     *,
-    coordinate: _VariationCoordinate,
+    coordinate: VariationCoordinate,
     width: int,
     height: int,
     sequence_length: int,
@@ -1010,16 +1010,16 @@ def _affine_grid_row(
 
 def _affine_grid_row_from_values(
     *,
-    matrix: _AffineMatrix2D,
+    matrix: AffineMatrix2D,
     width: int,
     height: int,
     sequence_length: int,
     sequence_index: int,
     placement_axis: str,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    linear_matrix = _linear_affine_matrix(matrix)
+    linear_matrix = linear_affine_matrix(matrix)
     inverse = _inverse_affine_matrix_from_values(matrix=linear_matrix)
-    center = _sequence_center(
+    center = sequence_center(
         width=width,
         height=height,
         sequence_length=sequence_length,
@@ -1028,8 +1028,8 @@ def _affine_grid_row_from_values(
     )
     center_x = 2.0 * center[0] - 1.0
     center_y = 2.0 * center[1] - 1.0
-    field_translation = _sequence_relative_translation(
-        _affine_translation(matrix),
+    field_translation = sequence_relative_translation(
+        affine_translation(matrix),
         sequence_length=sequence_length,
         placement_axis=placement_axis,
     )
@@ -1073,7 +1073,7 @@ def _mapping(value: object, name: str) -> Mapping[str, object]:
 def _matrix(
     value: object,
     name: str,
-) -> _AffineMatrix2D:
+) -> AffineMatrix2D:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         raise TensorRuntimeError(f"{name} must contain three rows")
     sequence = cast(Sequence[object], value)
@@ -1089,7 +1089,7 @@ def _matrix(
     return matrix
 
 
-def _trusted_matrix(value: object) -> _AffineMatrix2D:
+def _trusted_matrix(value: object) -> AffineMatrix2D:
     sequence = cast(Sequence[object], value)
     return (
         _trusted_triple(sequence[0]),

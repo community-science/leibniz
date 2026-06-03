@@ -17,6 +17,7 @@ from leibniz.materialization import MaterializationPlan
 from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
+    "AffineMatrix2D",
     "ComponentMark",
     "FieldObservation",
     "FormedObservation",
@@ -28,6 +29,11 @@ __all__ = [
     "ObservationFormationValidationError",
     "SequenceLayout",
     "SpatialAffineVariation",
+    "VariationCoordinate",
+    "affine_translation",
+    "linear_affine_matrix",
+    "sequence_center",
+    "sequence_relative_translation",
 ]
 
 _interpreter = "field-mark-composition@0.1.0"
@@ -111,7 +117,7 @@ class ObservationFormationValidationError(ValueError):
 _extract = RecordExtractor(error_type=ObservationFormationValidationError)
 
 
-_AffineMatrix2D = tuple[
+AffineMatrix2D = tuple[
     tuple[float, float, float],
     tuple[float, float, float],
     tuple[float, float, float],
@@ -119,9 +125,9 @@ _AffineMatrix2D = tuple[
 
 
 @dataclass(frozen=True, slots=True)
-class _VariationCoordinate:
+class VariationCoordinate:
     sequence_index: int
-    matrix: _AffineMatrix2D
+    matrix: AffineMatrix2D
 
 
 @dataclass(frozen=True, slots=True)
@@ -1159,7 +1165,7 @@ class ObservationFormationDeclaration:
         *,
         sequence_length: int,
         variation_coordinates: Sequence[Mapping[str, object]] | None,
-    ) -> tuple[_VariationCoordinate, ...] | None:
+    ) -> tuple[VariationCoordinate, ...] | None:
         if variation_coordinates is None:
             return None
         coordinates = tuple(variation_coordinates)
@@ -1167,7 +1173,7 @@ class ObservationFormationDeclaration:
             raise ObservationFormationValidationError(
                 "variation_coordinates length must match sequence length"
             )
-        parsed_coordinates: list[_VariationCoordinate] = []
+        parsed_coordinates: list[VariationCoordinate] = []
         for sequence_index, coordinate in enumerate(coordinates):
             parsed = _parse_variation_coordinate(coordinate, field="variation_coordinates")
             if parsed.sequence_index != sequence_index:
@@ -1183,7 +1189,7 @@ class ObservationFormationDeclaration:
         sequence: tuple[int, ...],
         width: int,
         height: int,
-        variation_coordinates: tuple[_VariationCoordinate, ...] | None = None,
+        variation_coordinates: tuple[VariationCoordinate, ...] | None = None,
     ) -> FieldObservation:
         if width < 1:
             raise ObservationFormationValidationError("width must be positive")
@@ -1302,24 +1308,24 @@ def _merge_transformed_sequence_element(
     sequence_length: int,
     sequence_index: int,
     placement_axis: str,
-    coordinate: _VariationCoordinate,
+    coordinate: VariationCoordinate,
 ) -> None:
     if _is_identity_variation_coordinate(coordinate):
         for index, value in enumerate(source_values):
             if value > values[index]:
                 values[index] = value
         return
-    center = _sequence_center(
+    center = sequence_center(
         width=width,
         height=height,
         sequence_length=sequence_length,
         sequence_index=sequence_index,
         placement_axis=placement_axis,
     )
-    linear_matrix = _linear_affine_matrix(coordinate.matrix)
+    linear_matrix = linear_affine_matrix(coordinate.matrix)
     inverse = _inverse_affine_matrix(linear_matrix)
-    translation = _sequence_relative_translation(
-        _affine_translation(coordinate.matrix),
+    translation = sequence_relative_translation(
+        affine_translation(coordinate.matrix),
         sequence_length=sequence_length,
         placement_axis=placement_axis,
     )
@@ -1426,7 +1432,7 @@ def _positive_source_bounds(
     return (min_x, min_y, max_x, max_y)
 
 
-def _is_identity_variation_coordinate(coordinate: _VariationCoordinate) -> bool:
+def _is_identity_variation_coordinate(coordinate: VariationCoordinate) -> bool:
     return coordinate.matrix == (
         (1.0, 0.0, 0.0),
         (0.0, 1.0, 0.0),
@@ -1434,7 +1440,7 @@ def _is_identity_variation_coordinate(coordinate: _VariationCoordinate) -> bool:
     )
 
 
-def _sequence_center(
+def sequence_center(
     *,
     width: int,
     height: int,
@@ -1452,7 +1458,7 @@ def _sequence_center(
     )
 
 
-def _sequence_relative_translation(
+def sequence_relative_translation(
     translation: tuple[float, float],
     *,
     sequence_length: int,
@@ -1473,14 +1479,14 @@ def _inverse_affine_matrix(
     return ((d / determinant, -b / determinant), (-c / determinant, a / determinant))
 
 
-def _linear_affine_matrix(
-    matrix: _AffineMatrix2D,
+def linear_affine_matrix(
+    matrix: AffineMatrix2D,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
     return ((matrix[0][0], matrix[0][1]), (matrix[1][0], matrix[1][1]))
 
 
-def _affine_translation(
-    matrix: _AffineMatrix2D,
+def affine_translation(
+    matrix: AffineMatrix2D,
 ) -> tuple[float, float]:
     return (matrix[0][2], matrix[1][2])
 
@@ -1684,7 +1690,7 @@ def _parse_variation_coordinate(
     value: Mapping[str, object],
     *,
     field: str,
-) -> _VariationCoordinate:
+) -> VariationCoordinate:
     if str(value.get("kind")) != "field-variation-transform-coordinate":
         raise ObservationFormationValidationError(
             f"{field}: expected field-variation-transform-coordinate"
@@ -1698,7 +1704,7 @@ def _parse_variation_coordinate(
         raise ObservationFormationValidationError(
             f"{field}.spatial_affine: coordinate_system must be normalized-sequence-element"
         )
-    return _VariationCoordinate(
+    return VariationCoordinate(
         sequence_index=_extract.integer(value.get("sequence_index"), f"{field}.sequence_index"),
         matrix=_coordinate_matrix(spatial.get("matrix"), field=f"{field}.spatial_affine.matrix"),
     )
@@ -1717,7 +1723,7 @@ def _coordinate_matrix(
     value: object,
     *,
     field: str,
-) -> _AffineMatrix2D:
+) -> AffineMatrix2D:
     rows = _coordinate_sequence(value, field=field)
     if len(rows) != 3:
         raise ObservationFormationValidationError(f"{field}: expected three rows")
