@@ -24,7 +24,6 @@ def test_training_run_record_round_trips_protocol_and_history() -> None:
         "seed": 101,
         "batch_size": 2,
         "max_steps": 1,
-        "checkpoint_interval": 1,
         "gate_check_interval": 1,
         "gate_sample_count": 2,
         "gate_decision_rule": "validation-loss-plateau",
@@ -80,7 +79,6 @@ def test_training_protocol_rejects_unsupported_optimizer() -> None:
             seed=101,
             batch_size=2,
             max_steps=1,
-            checkpoint_interval=1,
             gate_check_interval=1,
             gate_sample_count=2,
             gate_decision_rule="validation-loss-plateau",
@@ -90,11 +88,8 @@ def test_training_protocol_rejects_unsupported_optimizer() -> None:
         )
 
 
-def test_training_protocol_requires_checkpoint_interval_on_gate_cadence() -> None:
-    with pytest.raises(
-        TrainingRunValidationError,
-        match="checkpoint_interval must be an integer multiple of gate_check_interval",
-    ):
+def test_training_protocol_requires_positive_gate_check_interval() -> None:
+    with pytest.raises(TrainingRunValidationError, match="gate_check_interval"):
         TrainingProtocol(
             kind="fixed-step-local-batch",
             objective="cross-entropy",
@@ -104,8 +99,7 @@ def test_training_protocol_requires_checkpoint_interval_on_gate_cadence() -> Non
             seed=101,
             batch_size=2,
             max_steps=1,
-            checkpoint_interval=250,
-            gate_check_interval=32,
+            gate_check_interval=0,
             gate_sample_count=2,
             gate_decision_rule="validation-loss-plateau",
             min_delta=0.0,
@@ -136,7 +130,6 @@ def _protocol() -> TrainingProtocol:
         seed=101,
         batch_size=2,
         max_steps=1,
-        checkpoint_interval=1,
         gate_check_interval=1,
         gate_sample_count=2,
         gate_decision_rule="validation-loss-plateau",

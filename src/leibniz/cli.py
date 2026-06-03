@@ -370,8 +370,8 @@ def _parser() -> argparse.ArgumentParser:
         default="reduce-on-plateau",
         choices=("none", "cosine", "reduce-on-plateau"),
     )
-    train.add_argument("--checkpoint-interval", default=256, type=int)
     train.add_argument("--gate-check-interval", default=32, type=int)
+    train.add_argument("--model-checkpoint-gate-interval", default=1, type=int)
     train.add_argument("--gate-sample-count", default=None, type=int)
     train.add_argument("--gate-decision-rule", default="validation-loss-plateau")
     train.add_argument("--convergence-patience", default=6, type=int)
@@ -461,8 +461,8 @@ def _benchmark(args: argparse.Namespace) -> int:
                     learning_rate=args.learning_rate,
                     optimizer=args.optimizer,
                     schedule=args.schedule,
-                    checkpoint_interval=args.checkpoint_interval,
                     gate_check_interval=args.gate_check_interval,
+                    model_checkpoint_gate_interval=args.model_checkpoint_gate_interval,
                     gate_sample_count=args.gate_sample_count,
                     gate_decision_rule=args.gate_decision_rule,
                     convergence_patience=args.convergence_patience,

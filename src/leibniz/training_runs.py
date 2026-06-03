@@ -37,7 +37,6 @@ _protocol_record = RecordSpec(
         "seed": FieldSpec(kind="integer"),
         "batch_size": FieldSpec(kind="integer"),
         "max_steps": FieldSpec(kind="integer", required=False),
-        "checkpoint_interval": FieldSpec(kind="integer"),
         "gate_check_interval": FieldSpec(kind="integer"),
         "gate_sample_count": FieldSpec(kind="integer"),
         "gate_decision_rule": FieldSpec(kind="string"),
@@ -99,7 +98,6 @@ class TrainingProtocol:
     seed: int
     batch_size: int
     max_steps: int | None
-    checkpoint_interval: int
     gate_check_interval: int
     gate_sample_count: int
     gate_decision_rule: str
@@ -125,12 +123,7 @@ class TrainingProtocol:
         _require_positive_int(self.batch_size, "batch_size")
         if self.max_steps is not None:
             _require_nonnegative_int(self.max_steps, "max_steps")
-        _require_positive_int(self.checkpoint_interval, "checkpoint_interval")
         _require_positive_int(self.gate_check_interval, "gate_check_interval")
-        if self.checkpoint_interval % self.gate_check_interval != 0:
-            raise TrainingRunValidationError(
-                "checkpoint_interval must be an integer multiple of gate_check_interval"
-            )
         _require_positive_int(self.gate_sample_count, "gate_sample_count")
         if not self.gate_decision_rule:
             raise TrainingRunValidationError("gate_decision_rule must be nonempty")
@@ -168,10 +161,6 @@ class TrainingProtocol:
                 None
                 if "max_steps" not in validated
                 else _extract.integer(validated["max_steps"], "max_steps")
-            ),
-            checkpoint_interval=_extract.integer(
-                validated["checkpoint_interval"],
-                "checkpoint_interval",
             ),
             gate_check_interval=_extract.integer(
                 validated["gate_check_interval"],
@@ -211,7 +200,6 @@ class TrainingProtocol:
             "schedule": self.schedule,
             "seed": self.seed,
             "batch_size": self.batch_size,
-            "checkpoint_interval": self.checkpoint_interval,
             "gate_check_interval": self.gate_check_interval,
             "gate_sample_count": self.gate_sample_count,
             "gate_decision_rule": self.gate_decision_rule,
