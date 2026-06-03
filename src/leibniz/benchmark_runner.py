@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
+import secrets
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -11,6 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
+from leibniz.artifacts import ArtifactReference, reference_for_record
 from leibniz.benchmark_evaluation import (
     ValidationCompetencePoint,
     finite_measurements_for_predictions,
@@ -25,6 +28,12 @@ from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment
 from leibniz.measurements import MeasurementDataset
 from leibniz.model_inspection import ModelInspectionRecord
+from leibniz.model_interfaces import ModelInterface
+from leibniz.model_manifests import (
+    ModelArtifactManifest,
+    ModelArtifactManifestDocument,
+    ModelExecutionFamily,
+)
 from leibniz.model_operators import ExecutableModelOperator
 from leibniz.observation_generation import (
     GeneratedObservationBatch,
@@ -44,11 +53,13 @@ from leibniz.tensor_runtime import (
     build_cross_entropy_loss,
     build_optimizer,
     build_plateau_lr_schedule,
+    load_tensor_runtime_state,
     make_float_tensor,
     make_long_tensor,
     no_grad_context,
     resolve_tensor_runtime,
     runtime_roofline_record,
+    save_tensor_runtime_state,
     seed_runtime,
     tensor_runtime_device_kinds,
     validate_tensor_runtime_device,
@@ -60,6 +71,11 @@ __all__ = [
     "BenchmarkRunnerError",
     "BenchmarkRunPlan",
     "BenchmarkRunSummary",
+    "CheckpointModelPredictor",
+    "evaluate_model_checkpoint_artifact",
+    "load_model_checkpoint_artifact",
+    "load_model_checkpoint_predictor",
+    "ModelCheckpointArtifact",
     "has_windowed_validation_plateau",
     "run_benchmark",
     "training_stage_converged",
@@ -70,8 +86,8 @@ _progress_format = "leibniz.benchmark-training-progress"
 _progress_format_version = 1
 _default_sample_count = 512
 _default_train_steps: int | None = None
-_default_checkpoint_interval = 256
 _default_gate_check_interval = 32
+_default_model_checkpoint_gate_interval = 1
 _default_convergence_patience = 6
 _default_convergence_min_delta = 1e-3
 _default_convergence_min_steps = 500
@@ -92,6 +108,58 @@ class _TrainingResult:
     training_frontier_index: int
     training_run: TrainingRunRecord
     throughput: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class ModelCheckpointArtifact:
+    """A saved model checkpoint artifact and its manifest."""
+
+    path: Path
+    digest: ContentDigest
+    manifest_path: Path
+    manifest_digest: ContentDigest
+    manifest: ModelArtifactManifest
+    step: int
+    validation_check: int
+    validation_loss: float
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "kind": "model-checkpoint",
+            "path": self.path.as_posix(),
+            "digest": str(self.digest),
+            "manifest_path": self.manifest_path.as_posix(),
+            "manifest_digest": str(self.manifest_digest),
+            "step": self.step,
+            "validation_check": self.validation_check,
+            "validation_loss": self.validation_loss,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointModelPredictor:
+    """A loaded checkpoint model that can produce benchmark predictions."""
+
+    runtime: TensorRuntime
+    module: Any
+    outcome_ids: tuple[str, ...]
+
+    def predict_batch(
+        self,
+        batch: GeneratedObservationBatch,
+    ) -> tuple[tuple[float, ...], ...]:
+        self.module.eval()
+        fields, _labels = _batch_tensors(
+            runtime=self.runtime,
+            batch=batch,
+            outcome_ids=self.outcome_ids,
+            device=self.runtime.device,
+        )
+        with no_grad_context(self.runtime):
+            return tuple(
+                _renormalized_probabilities(row)
+                for row in apply_softmax_predictions(self.runtime, self.module, fields)
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,8 +311,8 @@ class BenchmarkRunPlan:
     learning_rate: float = 0.01
     optimizer: str = "adam"
     schedule: str = "reduce-on-plateau"
-    checkpoint_interval: int = _default_checkpoint_interval
     gate_check_interval: int = _default_gate_check_interval
+    model_checkpoint_gate_interval: int = _default_model_checkpoint_gate_interval
     gate_sample_count: int | None = None
     gate_decision_rule: str = "validation-loss-plateau"
     convergence_patience: int = _default_convergence_patience
@@ -280,13 +348,14 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError(f"unsupported optimizer: {self.optimizer}")
         if self.schedule not in {"none", "cosine", "reduce-on-plateau"}:
             raise BenchmarkRunnerError(f"unsupported schedule: {self.schedule}")
-        if type(self.checkpoint_interval) is not int or self.checkpoint_interval < 1:
-            raise BenchmarkRunnerError("checkpoint_interval must be a positive integer")
         if type(self.gate_check_interval) is not int or self.gate_check_interval < 1:
             raise BenchmarkRunnerError("gate_check_interval must be a positive integer")
-        if self.checkpoint_interval % self.gate_check_interval != 0:
+        if (
+            type(self.model_checkpoint_gate_interval) is not int
+            or self.model_checkpoint_gate_interval < 1
+        ):
             raise BenchmarkRunnerError(
-                "checkpoint_interval must be an integer multiple of gate_check_interval"
+                "model_checkpoint_gate_interval must be a positive integer"
             )
         if self.gate_sample_count is not None and (
             type(self.gate_sample_count) is not int or self.gate_sample_count < 1
@@ -327,8 +396,8 @@ class BenchmarkRunPlan:
             "learning_rate": float(self.learning_rate),
             "optimizer": self.optimizer,
             "schedule": self.schedule,
-            "checkpoint_interval": self.checkpoint_interval,
             "gate_check_interval": self.gate_check_interval,
+            "model_checkpoint_gate_interval": self.model_checkpoint_gate_interval,
             "gate_sample_count": self.resolved_gate_sample_count,
             "gate_decision_rule": self.gate_decision_rule,
             "convergence_patience": self.convergence_patience,
@@ -366,6 +435,7 @@ class BenchmarkRunSummary:
     measurement_dataset_path: Path
     model_inspection_path: Path
     training_summary_path: Path
+    model_artifact_root: Path
     dry_run: bool
 
     def to_record(self) -> dict[str, object]:
@@ -381,6 +451,7 @@ class BenchmarkRunSummary:
             "measurement_dataset_path": self.measurement_dataset_path.as_posix(),
             "model_inspection_path": self.model_inspection_path.as_posix(),
             "training_summary_path": self.training_summary_path.as_posix(),
+            "model_artifact_root": self.model_artifact_root.as_posix(),
             "dry_run": self.dry_run,
         }
 
@@ -428,18 +499,55 @@ def run_benchmark(
         return summary
 
     progress_path = _training_progress_path(summary)
+    model_interface = ModelInterface.from_outcome_space(
+        id=ProtocolIdentifier.parse(
+            f"model-interfaces.{_identifier_atom(generator.benchmark_manifest.id)}."
+            f"{summary.run_slug}@0.1.0"
+        ),
+        outcome_space=outcome_space,
+    )
+    checkpoint_artifacts: list[ModelCheckpointArtifact] = []
 
     def publish_progress(
         training_run: TrainingRunRecord,
         throughput: Mapping[str, object],
         training_curriculum: Mapping[str, object],
+        module: Any,
     ) -> None:
+        if _should_write_model_checkpoint(
+            training_run=training_run,
+            gate_interval=plan.model_checkpoint_gate_interval,
+        ):
+            checkpoint_artifacts.append(
+                _write_model_checkpoint_artifact(
+                    summary=summary,
+                    architecture=architecture,
+                    model_interface=model_interface,
+                    training_run=training_run,
+                    module=module,
+                    runtime="pytorch",
+                )
+            )
+        selected_checkpoint = _selected_model_checkpoint(tuple(checkpoint_artifacts))
+        progress_inspection = (
+            ModelInspectionRecord.from_model_manifest(
+                id=ProtocolIdentifier.parse(
+                    f"model-inspections.{_identifier_atom(summary.benchmark_id)}."
+                    f"{summary.run_slug}.progress@0.1.0"
+                ),
+                model_manifest=selected_checkpoint.manifest,
+                architecture_manifest=architecture,
+            )
+            if selected_checkpoint is not None
+            else model_inspection
+        )
         _write_document_atomic(
             progress_path,
             _training_progress_record(
                 plan=plan,
                 summary=summary,
                 architecture=architecture,
+                inspection=progress_inspection,
                 outcome_space=outcome_space,
                 evaluation_rungs=(initial_evaluation_rung,),
                 evaluation_curriculum=_curriculum_record(
@@ -450,6 +558,8 @@ def run_benchmark(
                 training_curriculum=training_curriculum,
                 training_run=training_run,
                 throughput=throughput,
+                model_checkpoints=tuple(checkpoint_artifacts),
+                selected_model_checkpoint=selected_checkpoint,
             ),
         )
         if progress_callback is not None:
@@ -469,7 +579,6 @@ def run_benchmark(
         optimizer_name=plan.optimizer,
         schedule_name=plan.schedule,
         gate_check_interval=plan.gate_check_interval,
-        checkpoint_interval=plan.checkpoint_interval,
         gate_decision_rule=plan.gate_decision_rule,
         convergence_patience=plan.convergence_patience,
         convergence_min_delta=float(plan.convergence_min_delta),
@@ -487,7 +596,25 @@ def run_benchmark(
         seed=plan.seed,
         progress_callback=publish_progress,
     )
-    final_evaluation_result = training_result.evaluation_results[-1]
+    selected_checkpoint = _selected_model_checkpoint(tuple(checkpoint_artifacts))
+    if selected_checkpoint is None:
+        raise BenchmarkRunnerError("training did not produce any model checkpoints")
+    evaluation_seed = _unpredictable_evaluation_seed()
+    evaluation_results, checkpoint_evaluation_throughput = evaluate_model_checkpoint_artifact(
+        architecture=architecture,
+        generator=generator,
+        outcome_space=outcome_space,
+        component_count=_component_count,
+        evaluation_sample_count=plan.resolved_evaluation_sample_count,
+        training_rung_count=len(training_result.training_rungs),
+        seed=evaluation_seed,
+        tensor_device=cast(
+            TensorRuntimeDevice,
+            training_result.training_run.protocol.tensor_device,
+        ),
+        checkpoint=selected_checkpoint,
+    )
+    final_evaluation_result = evaluation_results[-1]
     measurement_groups = (
         finite_measurements_for_predictions(
             batch=final_evaluation_result[0].batch,
@@ -513,6 +640,14 @@ def run_benchmark(
     dataset = MeasurementDataset(measurements=measurements)
     dataset.validate_manifest(generator.benchmark_manifest)
     completed_summary = replace(summary, measurement_count=len(measurements))
+    model_inspection = ModelInspectionRecord.from_model_manifest(
+        id=ProtocolIdentifier.parse(
+            f"model-inspections.{_identifier_atom(generator.benchmark_manifest.id)}."
+            f"{summary.run_slug}@0.1.0"
+        ),
+        model_manifest=selected_checkpoint.manifest,
+        architecture_manifest=architecture,
+    )
     _write_document(summary.measurement_dataset_path, dataset.to_record())
     _write_document(summary.model_inspection_path, model_inspection.to_record())
     _write_document(
@@ -523,13 +658,13 @@ def run_benchmark(
             "component_count": _component_count,
             "sample_count": plan.sample_count,
             "evaluation_sample_count": plan.resolved_evaluation_sample_count,
-            "evaluation_curriculum_rung_count": len(training_result.evaluation_results),
+            "evaluation_curriculum_rung_count": len(evaluation_results),
             "evaluation_curriculum": _curriculum_record(
                 kind="competence-gated-evaluation-curriculum",
                 rungs=tuple(
-                    rung for rung, _probabilities in training_result.evaluation_results
+                    rung for rung, _probabilities in evaluation_results
                 ),
-                frontier_index=len(training_result.evaluation_results) - 1,
+                frontier_index=len(evaluation_results) - 1,
             ),
             "training_curriculum": _curriculum_record(
                 kind="competence-gated-training-curriculum",
@@ -540,12 +675,13 @@ def run_benchmark(
                 frontier_index=training_result.training_frontier_index,
             ),
             "seed": plan.seed,
+            "evaluation_seed": evaluation_seed,
             "train_steps": plan.train_steps,
             "learning_rate": float(plan.learning_rate),
             "optimizer": plan.optimizer,
             "schedule": plan.schedule,
-            "checkpoint_interval": plan.checkpoint_interval,
             "gate_check_interval": plan.gate_check_interval,
+            "model_checkpoint_gate_interval": plan.model_checkpoint_gate_interval,
             "gate_sample_count": plan.resolved_gate_sample_count,
             "gate_decision_rule": plan.gate_decision_rule,
             "convergence_patience": plan.convergence_patience,
@@ -554,12 +690,21 @@ def run_benchmark(
             "tensor_runtime": "pytorch",
             "tensor_device": training_result.training_run.protocol.tensor_device,
             "training_run": training_result.training_run.to_record(),
-            "throughput": training_result.throughput,
+            "throughput": _completed_throughput_record(
+                training_result.throughput,
+                checkpoint_evaluation=checkpoint_evaluation_throughput,
+            ),
             "sampled_competence": sampled_competence,
             "architecture": model_inspection.architecture.to_record(),
             "cost_summary": model_inspection.cost_summary.to_record(),
             "measurement_dataset_digest": str(dataset.digest),
             "model_inspection_digest": str(model_inspection.digest),
+            "model_checkpoints": [
+                checkpoint.to_record() for checkpoint in checkpoint_artifacts
+            ],
+            "selected_model_checkpoint": selected_checkpoint.to_record(),
+            "selected_model_checkpoint_policy": "lowest-validation-loss",
+            "evaluation_model_artifact": selected_checkpoint.to_record(),
         },
     )
     progress_path.unlink(missing_ok=True)
@@ -592,6 +737,7 @@ def _run_summary(
         training_summary_path=(
             plan.results_root / "training" / benchmark_atom / f"{run_slug}{_document_suffix}"
         ),
+        model_artifact_root=(plan.results_root / "models" / benchmark_atom / run_slug),
         dry_run=plan.dry_run,
     )
 
@@ -927,7 +1073,6 @@ def _train_and_predict(
     optimizer_name: str,
     schedule_name: str,
     gate_check_interval: int,
-    checkpoint_interval: int,
     gate_decision_rule: str,
     convergence_patience: int,
     convergence_min_delta: float,
@@ -936,7 +1081,8 @@ def _train_and_predict(
     work_estimates: _TrainingWorkEstimates | None,
     seed: int,
     progress_callback: (
-        Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object]], None] | None
+        Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object], Any], None]
+        | None
     ) = None,
 ) -> _TrainingResult:
     fallback_errors: list[tuple[str, str]] = []
@@ -960,7 +1106,6 @@ def _train_and_predict(
                 optimizer_name=optimizer_name,
                 schedule_name=schedule_name,
                 gate_check_interval=gate_check_interval,
-                checkpoint_interval=checkpoint_interval,
                 gate_decision_rule=gate_decision_rule,
                 convergence_patience=convergence_patience,
                 convergence_min_delta=convergence_min_delta,
@@ -993,7 +1138,6 @@ def _train_and_predict_on_device(
     optimizer_name: str,
     schedule_name: str,
     gate_check_interval: int,
-    checkpoint_interval: int,
     gate_decision_rule: str,
     convergence_patience: int,
     convergence_min_delta: float,
@@ -1002,7 +1146,8 @@ def _train_and_predict_on_device(
     work_estimates: _TrainingWorkEstimates | None,
     seed: int,
     progress_callback: (
-        Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object]], None] | None
+        Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object], Any], None]
+        | None
     ) = None,
     fallback_errors: tuple[tuple[str, str], ...] = (),
 ) -> _TrainingResult:
@@ -1144,7 +1289,6 @@ def _train_and_predict_on_device(
         ),
         max_steps=train_steps,
         gate_check_interval=gate_check_interval,
-        checkpoint_interval=checkpoint_interval,
         patience=convergence_patience,
         min_delta=convergence_min_delta,
         min_steps=convergence_min_steps,
@@ -1158,7 +1302,7 @@ def _train_and_predict_on_device(
         validation_counter=validation_counter,
         phase_timings=phase_timings,
         on_plateau=advance_frontier,
-        on_checkpoint=lambda history: (
+        on_gate_check=lambda history, checked_module: (
             progress_callback(
                 _running_training_run_record(
                     seed=seed,
@@ -1168,7 +1312,6 @@ def _train_and_predict_on_device(
                     optimizer_name=optimizer_name,
                     schedule_name=schedule_name,
                     gate_check_interval=gate_check_interval,
-                    checkpoint_interval=checkpoint_interval,
                     gate_sample_count=gate_sample_count,
                     gate_decision_rule=gate_decision_rule,
                     convergence_patience=convergence_patience,
@@ -1197,6 +1340,7 @@ def _train_and_predict_on_device(
                     rungs=tuple(training_rungs),
                     frontier_index=training_frontier_index,
                 ),
+                checked_module,
             )
             if progress_callback is not None
             else None
@@ -1206,51 +1350,6 @@ def _train_and_predict_on_device(
     final_training_stop_reason = training_result.stop_reason
     if train_steps is None and not training_stage_converged(final_training_stop_reason):
         raise BenchmarkRunnerError("uncapped training curriculum ended before convergence")
-    module.eval()
-    evaluation_rungs = tuple(
-        _evaluation_curriculum_rung(
-            architecture=architecture,
-            generator=generator,
-            component_count=component_count,
-            sample_count=evaluation_sample_count,
-            seed=seed,
-            index=index,
-        )
-        for index in range(len(training_rungs))
-    )
-    evaluation_results: list[tuple[_CurriculumRung, tuple[tuple[float, ...], ...]]] = []
-    for rung in evaluation_rungs:
-        candidate_batch = rung.batch
-        evaluation_started = time.perf_counter()
-        with phase_timings.span(
-            "evaluation_tensorization",
-            samples=len(candidate_batch.samples),
-        ):
-            eval_fields, _eval_labels = _batch_tensors(
-                runtime=runtime,
-                batch=candidate_batch,
-                outcome_ids=outcome_ids,
-                device=runtime.device,
-            )
-        with (
-            phase_timings.span("evaluation_forward", samples=len(candidate_batch.samples)),
-            no_grad_context(runtime),
-        ):
-            predictions = tuple(
-                _renormalized_probabilities(row)
-                for row in apply_softmax_predictions(runtime, module, eval_fields)
-            )
-        evaluation_counter.add(
-            seconds=time.perf_counter() - evaluation_started,
-            samples=len(candidate_batch.samples),
-        )
-        evaluation_results.append((rung, predictions))
-        if _mean_prediction_accepted_mass(
-            batch=candidate_batch,
-            probabilities=predictions,
-            outcome_ids=outcome_ids,
-        ) <= _chance_accepted_mass(outcome_ids) + 1e-12:
-            break
     training_run = _training_run_record(
         seed=seed,
         batch_size=sample_count,
@@ -1259,7 +1358,6 @@ def _train_and_predict_on_device(
         optimizer_name=optimizer_name,
         schedule_name=schedule_name,
         gate_check_interval=gate_check_interval,
-        checkpoint_interval=checkpoint_interval,
         gate_sample_count=gate_sample_count,
         gate_decision_rule=gate_decision_rule,
         convergence_patience=convergence_patience,
@@ -1271,7 +1369,7 @@ def _train_and_predict_on_device(
         training_compute=training_compute_counter.compute,
     )
     return _TrainingResult(
-        evaluation_results=tuple(evaluation_results),
+        evaluation_results=(),
         training_rungs=tuple(training_rungs),
         training_frontier_index=training_frontier_index,
         training_run=training_run,
@@ -1289,6 +1387,183 @@ def _train_and_predict_on_device(
     )
 
 
+def evaluate_model_checkpoint_artifact(
+    *,
+    architecture: ArchitectureManifest,
+    generator: ObservationGenerator,
+    outcome_space: OutcomeSpace,
+    component_count: int,
+    evaluation_sample_count: int,
+    training_rung_count: int,
+    seed: int,
+    tensor_device: TensorRuntimeDevice,
+    checkpoint: ModelCheckpointArtifact,
+) -> tuple[
+    tuple[tuple[_CurriculumRung, tuple[tuple[float, ...], ...]], ...],
+    Mapping[str, object],
+]:
+    """Generate benchmark evaluation evidence from a saved checkpoint artifact."""
+
+    predictor = load_model_checkpoint_predictor(
+        architecture=architecture,
+        outcome_space=outcome_space,
+        checkpoint=checkpoint,
+        tensor_device=tensor_device,
+    )
+    evaluation_counter = _ThroughputCounter()
+    results: list[tuple[_CurriculumRung, tuple[tuple[float, ...], ...]]] = []
+    for index in range(training_rung_count):
+        rung = _evaluation_curriculum_rung(
+            architecture=architecture,
+            generator=generator,
+            component_count=component_count,
+            sample_count=evaluation_sample_count,
+            seed=seed,
+            index=index,
+        )
+        evaluation_started = time.perf_counter()
+        predictions = predictor.predict_batch(rung.batch)
+        evaluation_counter.add(
+            seconds=time.perf_counter() - evaluation_started,
+            samples=len(rung.batch.samples),
+        )
+        results.append((rung, predictions))
+        if _mean_prediction_accepted_mass(
+            batch=rung.batch,
+            probabilities=predictions,
+            outcome_ids=predictor.outcome_ids,
+        ) <= _chance_accepted_mass(predictor.outcome_ids) + 1e-12:
+            break
+    if not results:
+        raise BenchmarkRunnerError("checkpoint evaluation did not produce any results")
+    return tuple(results), evaluation_counter.to_record(kind="checkpoint-evaluation-throughput")
+
+
+def load_model_checkpoint_predictor(
+    *,
+    architecture: ArchitectureManifest,
+    outcome_space: OutcomeSpace,
+    checkpoint: ModelCheckpointArtifact,
+    tensor_device: TensorRuntimeDevice,
+) -> CheckpointModelPredictor:
+    """Load a saved checkpoint artifact as an executable benchmark predictor."""
+
+    try:
+        runtime = resolve_tensor_runtime(tensor_device)
+    except TensorRuntimeError as error:
+        raise BenchmarkRunnerError(str(error)) from error
+    executable = ExecutableModelOperator(architecture)
+    module = OperationFallbackSequential(
+        runtime=runtime,
+        operations=executable.operation_modules(),
+    )
+    _load_torch_checkpoint(module=module, runtime=runtime, checkpoint=checkpoint)
+    module.eval()
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    return CheckpointModelPredictor(
+        runtime=runtime,
+        module=module,
+        outcome_ids=outcome_ids,
+    )
+
+
+def load_model_checkpoint_artifact(
+    record: Mapping[str, object],
+    *,
+    results_root: Path = Path("results"),
+) -> ModelCheckpointArtifact:
+    """Load and validate a checkpoint artifact record from a run summary."""
+
+    path = _resolve_artifact_record_path(
+        _required_string(record.get("path"), "model checkpoint path"),
+        results_root=results_root,
+    )
+    digest = ContentDigest.from_string(
+        record.get("digest"),
+        field="model checkpoint digest",
+        error_type=BenchmarkRunnerError,
+    )
+    if not path.is_file():
+        raise BenchmarkRunnerError(f"model checkpoint path does not exist: {path}")
+    if _file_content_digest(path) != digest:
+        raise BenchmarkRunnerError(f"model checkpoint digest mismatch: {path}")
+    manifest_path = _resolve_artifact_record_path(
+        _required_string(record.get("manifest_path"), "model checkpoint manifest_path"),
+        results_root=results_root,
+    )
+    manifest_digest = ContentDigest.from_string(
+        record.get("manifest_digest"),
+        field="model checkpoint manifest_digest",
+        error_type=BenchmarkRunnerError,
+    )
+    if not manifest_path.is_file():
+        raise BenchmarkRunnerError(
+            f"model checkpoint manifest_path does not exist: {manifest_path}"
+        )
+    manifest_document = ModelArtifactManifestDocument.from_bytes(manifest_path.read_bytes())
+    if manifest_document.digest != manifest_digest:
+        raise BenchmarkRunnerError(
+            f"model checkpoint manifest digest mismatch: {manifest_path}"
+        )
+    return ModelCheckpointArtifact(
+        path=path,
+        digest=digest,
+        manifest_path=manifest_path,
+        manifest_digest=manifest_digest,
+        manifest=manifest_document.manifest,
+        step=_required_int(record.get("step"), "model checkpoint step"),
+        validation_check=_required_int(
+            record.get("validation_check"),
+            "model checkpoint validation_check",
+        ),
+        validation_loss=_required_float(
+            record.get("validation_loss"),
+            "model checkpoint validation_loss",
+        ),
+    )
+
+
+def _resolve_artifact_record_path(value: str, *, results_root: Path) -> Path:
+    path = Path(value)
+    resolved = path.resolve() if path.is_absolute() else (results_root.parent / path).resolve()
+    if not resolved.is_relative_to(results_root.resolve()):
+        raise BenchmarkRunnerError(f"artifact path must stay inside results root: {value}")
+    return resolved
+
+
+def _required_string(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise BenchmarkRunnerError(f"{field} must be a nonempty string")
+    return value
+
+
+def _required_int(value: object, field: str) -> int:
+    if type(value) is not int:
+        raise BenchmarkRunnerError(f"{field} must be an integer")
+    return value
+
+
+def _required_float(value: object, field: str) -> float:
+    if not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(value):
+        raise BenchmarkRunnerError(f"{field} must be a finite number")
+    return float(value)
+
+
+def _completed_throughput_record(
+    training_throughput: Mapping[str, object],
+    *,
+    checkpoint_evaluation: Mapping[str, object],
+) -> Mapping[str, object]:
+    record = dict(training_throughput)
+    record["evaluation"] = dict(checkpoint_evaluation)
+    record["checkpoint_evaluation"] = dict(checkpoint_evaluation)
+    return record
+
+
+def _unpredictable_evaluation_seed() -> int:
+    return secrets.randbelow(2**63)
+
+
 def training_stage_converged(stop_reason: str) -> bool:
     return stop_reason in _converged_training_stage_stop_reasons
 
@@ -1304,7 +1579,6 @@ def _train_until_convergence(
     validation_batch: Callable[[int], tuple[Any, Any]],
     max_steps: int | None,
     gate_check_interval: int,
-    checkpoint_interval: int,
     patience: int,
     min_delta: float,
     min_steps: int,
@@ -1318,7 +1592,7 @@ def _train_until_convergence(
     start_step: int = 0,
     start_check: int = 0,
     on_plateau: Callable[[tuple[TrainingHistoryPoint, ...]], bool] | None = None,
-    on_checkpoint: Callable[[tuple[TrainingHistoryPoint, ...]], None] | None = None,
+    on_gate_check: Callable[[tuple[TrainingHistoryPoint, ...], Any], None] | None = None,
 ) -> _TrainingStageResult:
     validation_history: list[TrainingHistoryPoint] = []
     best_loss = float("inf")
@@ -1363,11 +1637,8 @@ def _train_until_convergence(
                 learning_rates=learning_rates,
             )
         )
-        if (
-            on_checkpoint is not None
-            and (step == start_step or step % checkpoint_interval == 0)
-        ):
-            on_checkpoint(tuple(validation_history))
+        if on_gate_check is not None:
+            on_gate_check(tuple(validation_history), module)
 
     append_validation(step=start_step, check=start_check)
     if max_steps == start_step:
@@ -1522,7 +1793,6 @@ def _training_run_record(
     optimizer_name: str,
     schedule_name: str,
     gate_check_interval: int,
-    checkpoint_interval: int,
     gate_sample_count: int,
     gate_decision_rule: str,
     convergence_patience: int,
@@ -1557,7 +1827,6 @@ def _training_run_record(
             seed=seed,
             batch_size=batch_size,
             max_steps=max_steps,
-            checkpoint_interval=checkpoint_interval,
             gate_check_interval=gate_check_interval,
             gate_sample_count=gate_sample_count,
             gate_decision_rule=gate_decision_rule,
@@ -1581,7 +1850,6 @@ def _running_training_run_record(
     optimizer_name: str,
     schedule_name: str,
     gate_check_interval: int,
-    checkpoint_interval: int,
     gate_sample_count: int,
     gate_decision_rule: str,
     convergence_patience: int,
@@ -1606,7 +1874,6 @@ def _running_training_run_record(
             seed=seed,
             batch_size=batch_size,
             max_steps=max_steps,
-            checkpoint_interval=checkpoint_interval,
             gate_check_interval=gate_check_interval,
             gate_sample_count=gate_sample_count,
             gate_decision_rule=gate_decision_rule,
@@ -1626,20 +1893,16 @@ def _training_progress_record(
     plan: BenchmarkRunPlan,
     summary: BenchmarkRunSummary,
     architecture: ArchitectureManifest,
+    inspection: ModelInspectionRecord,
     outcome_space: OutcomeSpace,
     evaluation_rungs: tuple[_CurriculumRung, ...],
     evaluation_curriculum: Mapping[str, object],
     training_curriculum: Mapping[str, object],
     training_run: TrainingRunRecord,
     throughput: Mapping[str, object],
+    model_checkpoints: tuple[ModelCheckpointArtifact, ...],
+    selected_model_checkpoint: ModelCheckpointArtifact | None,
 ) -> Mapping[str, object]:
-    inspection = ModelInspectionRecord.from_architecture(
-        id=ProtocolIdentifier.parse(
-            f"model-inspections.{_identifier_atom(summary.benchmark_id)}."
-            f"{summary.run_slug}.progress@0.1.0"
-        ),
-        architecture_manifest=architecture,
-    )
     provisional_score = validation_competence(
         validation_loss=training_run.validation_history[-1].validation_loss,
         outcome_count=len(outcome_space.outcomes),
@@ -1671,8 +1934,8 @@ def _training_progress_record(
         "learning_rate": float(plan.learning_rate),
         "optimizer": plan.optimizer,
         "schedule": plan.schedule,
-        "checkpoint_interval": plan.checkpoint_interval,
         "gate_check_interval": plan.gate_check_interval,
+        "model_checkpoint_gate_interval": plan.model_checkpoint_gate_interval,
         "gate_sample_count": plan.resolved_gate_sample_count,
         "gate_decision_rule": plan.gate_decision_rule,
         "convergence_patience": plan.convergence_patience,
@@ -1690,6 +1953,15 @@ def _training_progress_record(
         "architecture_digest": str(architecture.digest),
         "model_inspection_digest": str(inspection.digest),
         "provisional_score": provisional_score,
+        "model_checkpoints": [
+            checkpoint.to_record() for checkpoint in model_checkpoints
+        ],
+        "selected_model_checkpoint": (
+            selected_model_checkpoint.to_record()
+            if selected_model_checkpoint is not None
+            else None
+        ),
+        "selected_model_checkpoint_policy": "lowest-validation-loss",
     }
     if progress_complexity is not None:
         record["sampled_competence"] = {
@@ -1706,6 +1978,146 @@ def _training_progress_record(
             "validation_competence": provisional_score,
         }
     return record
+
+
+def _should_write_model_checkpoint(
+    *,
+    training_run: TrainingRunRecord,
+    gate_interval: int,
+) -> bool:
+    if gate_interval < 1:
+        raise BenchmarkRunnerError("model checkpoint gate interval must be positive")
+    latest = training_run.validation_history[-1]
+    return latest.validation_check % gate_interval == 0
+
+
+def _write_model_checkpoint_artifact(
+    *,
+    summary: BenchmarkRunSummary,
+    architecture: ArchitectureManifest,
+    model_interface: ModelInterface,
+    training_run: TrainingRunRecord,
+    module: Any,
+    runtime: str,
+) -> ModelCheckpointArtifact:
+    latest = training_run.validation_history[-1]
+    stem = f"gate{latest.validation_check:04d}-step{latest.step:08d}"
+    checkpoint_path = summary.model_artifact_root / f"{stem}.pt"
+    _write_torch_checkpoint(checkpoint_path, module=module)
+    checkpoint_digest = _file_content_digest(checkpoint_path)
+    checkpoint_reference = ArtifactReference(
+        kind="model-checkpoint",
+        content_digest=checkpoint_digest,
+    )
+    manifest = ModelArtifactManifest(
+        id=ProtocolIdentifier.parse(
+            f"model-manifests.{_identifier_atom(summary.benchmark_id)}."
+            f"{summary.run_slug}.{stem}@0.1.0"
+        ),
+        architecture=reference_for_record(
+            kind="architecture-manifest",
+            record=architecture.to_record(),
+        ),
+        interface=reference_for_record(
+            kind="model-interface",
+            record=model_interface.to_record(),
+        ),
+        execution_family=(
+            ModelExecutionFamily.reference_runner_pytorch_sequential()
+            if runtime == "pytorch"
+            else ModelExecutionFamily(
+                kind=f"local-{runtime}",
+                runtime=runtime,
+                architecture_family="sequential-architecture-components",
+            )
+        ),
+        model_artifacts=(checkpoint_reference,),
+        training_provenance=(
+            ArtifactReference(
+                kind="training-run",
+                record_digest=ContentDigest.from_value(training_run.to_record()),
+            ),
+        ),
+    )
+    manifest_path = summary.model_artifact_root / f"{stem}.model{_document_suffix}"
+    _write_document(manifest_path, manifest.to_record())
+    return ModelCheckpointArtifact(
+        path=checkpoint_path,
+        digest=checkpoint_digest,
+        manifest_path=manifest_path,
+        manifest_digest=manifest.digest,
+        manifest=manifest,
+        step=latest.step,
+        validation_check=latest.validation_check,
+        validation_loss=latest.validation_loss,
+    )
+
+
+def _write_torch_checkpoint(path: Path, *, module: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    state = {
+        "format": "leibniz.model-checkpoint.pytorch-state-dict",
+        "format_version": 1,
+        "state_dict": _portable_state_dict(module),
+    }
+    save_tensor_runtime_state(temporary, state)
+    temporary.replace(path)
+
+
+def _load_torch_checkpoint(
+    *,
+    module: Any,
+    runtime: TensorRuntime,
+    checkpoint: ModelCheckpointArtifact,
+) -> None:
+    if _file_content_digest(checkpoint.path) != checkpoint.digest:
+        raise BenchmarkRunnerError(f"model checkpoint digest mismatch: {checkpoint.path}")
+    payload = load_tensor_runtime_state(runtime, checkpoint.path, weights_only=False)
+    if not isinstance(payload, Mapping):
+        raise BenchmarkRunnerError("model checkpoint payload must be a mapping")
+    payload_record = cast(Mapping[str, object], payload)
+    if payload_record.get("format") != "leibniz.model-checkpoint.pytorch-state-dict":
+        raise BenchmarkRunnerError("model checkpoint has unsupported format")
+    if payload_record.get("format_version") != 1:
+        raise BenchmarkRunnerError("model checkpoint has unsupported format_version")
+    state_dict = payload_record.get("state_dict")
+    if not isinstance(state_dict, Mapping):
+        raise BenchmarkRunnerError("model checkpoint state_dict must be a mapping")
+    module.load_state_dict(dict(cast(Mapping[str, object], state_dict)))
+
+
+def _portable_state_dict(module: Any) -> Mapping[str, object]:
+    state: dict[str, object] = {}
+    for key, value in module.state_dict().items():
+        detach = getattr(value, "detach", None)
+        if callable(detach):
+            value = detach()
+        cpu = getattr(value, "cpu", None)
+        if callable(cpu):
+            value = cpu()
+        state[str(key)] = value
+    return state
+
+
+def _file_content_digest(path: Path) -> ContentDigest:
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return ContentDigest(algorithm="sha256", hex=digest)
+
+
+def _selected_model_checkpoint(
+    checkpoints: tuple[ModelCheckpointArtifact, ...],
+) -> ModelCheckpointArtifact | None:
+    if not checkpoints:
+        return None
+    return min(
+        checkpoints,
+        key=lambda checkpoint: (
+            checkpoint.validation_loss,
+            checkpoint.validation_check,
+            checkpoint.step,
+        ),
+    )
 
 
 def _throughput_record(

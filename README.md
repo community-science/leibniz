@@ -128,13 +128,14 @@ leibniz benchmark train \
 `benchmark train` is a reference implementation for local benchmark training and
 evaluation. It requires an explicit architecture manifest and does not propose
 or choose architectures. The default local training profile is an uncapped
-convergence run: competence gates are checked every 32 steps, progress
-checkpoints are written every 256 steps, training runs at least 500 steps before
-early stopping, patience is 6 gate checks, and convergence min delta is `1e-3`.
-Override those with `--train-steps`, `--convergence-min-steps`,
-`--gate-check-interval`, `--gate-sample-count`, `--checkpoint-interval`,
+convergence run: competence gates are checked every 32 steps, every gate check
+updates the running progress record, model checkpoint artifacts are written
+every gate check, training runs at least 500 steps before early stopping,
+patience is 6 gate checks, and convergence min delta is `1e-3`. Override those
+with `--train-steps`, `--convergence-min-steps`, `--gate-check-interval`,
+`--gate-sample-count`, `--model-checkpoint-gate-interval`,
 `--convergence-patience`, and `--convergence-min-delta` when you need a shorter
-diagnostic run.
+diagnostic run or a cheaper checkpoint cadence.
 
 The digits benchmark samples rectangular canvases with independently varying
 height and width. Observation formation now derives the lower canvas floor from
@@ -161,11 +162,14 @@ unless it changes what nuisance states can be distinguished. This keeps the
 model output fixed at a 10-way probability measure while allowing absolute
 score to grow as formation rules add real distinguishable observation states.
 
-While a benchmark run is training, validation checkpoints are written under
+While a benchmark run is training, gate-check progress is written under
 `results/training-progress/` and materialized into the local benchmark result
-view as running leaderboard entries with accumulated validation history.
-Completed runs replace that progress state with final measurement,
-model-inspection, and training-summary records.
+view as running leaderboard entries with accumulated validation history. Saved
+model checkpoints and their model manifests are written under `results/models/`.
+Completed runs replace the progress state with final measurement,
+model-inspection, and training-summary records; benchmark evidence is generated
+by reloading a selected checkpoint artifact into the evaluator with a fresh
+unpredictable evaluation seed.
 
 Submission evaluation is separate from reference training. External
 submissions publish measurement, model-inspection, sampled-competence, and

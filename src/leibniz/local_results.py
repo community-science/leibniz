@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import math
 import os
@@ -609,6 +610,10 @@ def _local_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
         inspection = ModelInspectionDocument.from_bytes(
             model_inspection_path.read_bytes()
         ).inspection
+        _validate_model_checkpoint_artifacts(
+            results_root=results_root,
+            training_summary=summary,
+        )
         sampled_competence = _sampled_competence(summary)
         records.append(
             _BenchmarkRunRecord(
@@ -869,7 +874,95 @@ def _training_artifact_references(run: _BenchmarkRunRecord) -> list[dict[str, ob
     ]
     if run.model_inspection_path is not None:
         references[1]["path"] = run.model_inspection_path.as_posix()
+    for checkpoint in _model_checkpoint_records(run.training_summary):
+        references.append(
+            {
+                "kind": "model-checkpoint",
+                "digest": _extract.non_empty_string(
+                    checkpoint.get("digest"),
+                    "model_checkpoints.digest",
+                ),
+                "path": _extract.non_empty_string(
+                    checkpoint.get("path"),
+                    "model_checkpoints.path",
+                ),
+            }
+        )
+        references.append(
+            {
+                "kind": "model-manifest",
+                "digest": _extract.non_empty_string(
+                    checkpoint.get("manifest_digest"),
+                    "model_checkpoints.manifest_digest",
+                ),
+                "path": _extract.non_empty_string(
+                    checkpoint.get("manifest_path"),
+                    "model_checkpoints.manifest_path",
+                ),
+            }
+        )
     return references
+
+
+def _model_checkpoint_records(
+    training_summary: Mapping[str, object],
+) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        _extract.mapping(item, "model_checkpoints")
+        for item in _as_sequence(
+            training_summary.get("model_checkpoints", ()),
+            "model_checkpoints",
+        )
+    )
+
+
+def _validate_model_checkpoint_artifacts(
+    *,
+    results_root: Path,
+    training_summary: Mapping[str, object],
+) -> None:
+    for checkpoint in _model_checkpoint_records(training_summary):
+        checkpoint_path = _local_artifact_path(
+            results_root=results_root,
+            value=checkpoint.get("path"),
+            field="model_checkpoints.path",
+        )
+        expected_digest = ContentDigest.from_string(
+            checkpoint.get("digest"),
+            field="model_checkpoints.digest",
+            error_type=LocalResultImportError,
+        )
+        actual_digest = _file_content_digest(checkpoint_path)
+        if actual_digest != expected_digest:
+            raise LocalResultImportError(
+                f"model_checkpoints.path digest mismatch: {checkpoint_path}"
+            )
+        manifest_path = _local_artifact_path(
+            results_root=results_root,
+            value=checkpoint.get("manifest_path"),
+            field="model_checkpoints.manifest_path",
+        )
+        manifest_record = load_object_document(
+            manifest_path.read_bytes(),
+            description="model checkpoint manifest",
+        )
+        expected_manifest_digest = ContentDigest.from_string(
+            checkpoint.get("manifest_digest"),
+            field="model_checkpoints.manifest_digest",
+            error_type=LocalResultImportError,
+        )
+        actual_manifest_digest = ContentDigest.from_value(manifest_record)
+        if actual_manifest_digest != expected_manifest_digest:
+            raise LocalResultImportError(
+                f"model_checkpoints.manifest_path digest mismatch: {manifest_path}"
+            )
+
+
+def _file_content_digest(path: Path) -> ContentDigest:
+    return ContentDigest(
+        algorithm="sha256",
+        hex=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
 
 
 def _run_console_view_model(
@@ -918,8 +1011,13 @@ def _run_console_view_model(
                     ),
                     ("Steps", _console_number_value(protocol.get("max_steps"))),
                     ("Batch", _console_number_value(protocol.get("batch_size"))),
-                    ("Checkpoint", _console_number_value(protocol.get("checkpoint_interval"))),
                     ("Gate Check", _console_number_value(protocol.get("gate_check_interval"))),
+                    (
+                        "Checkpoint Gate",
+                        _console_number_value(
+                            run.training_summary.get("model_checkpoint_gate_interval")
+                        ),
+                    ),
                     ("Gate Samples", _console_number_value(protocol.get("gate_sample_count"))),
                     ("Gate Rule", _console_string_value(protocol.get("gate_decision_rule"))),
                     ("Validation", _console_string_value(protocol.get("validation_source"))),
@@ -2176,26 +2274,12 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
     protocol_positive_ints = (
         "seed",
         "batch_size",
-        "checkpoint_interval",
         "gate_check_interval",
         "gate_sample_count",
     )
     for field in protocol_positive_ints:
         _as_positive_int(protocol.get(field), f"{prefix}.protocol.{field}")
     _as_nonnegative_number(protocol.get("patience"), f"{prefix}.protocol.patience")
-    checkpoint_interval = _as_positive_int(
-        protocol.get("checkpoint_interval"),
-        f"{prefix}.protocol.checkpoint_interval",
-    )
-    gate_check_interval = _as_positive_int(
-        protocol.get("gate_check_interval"),
-        f"{prefix}.protocol.gate_check_interval",
-    )
-    if checkpoint_interval % gate_check_interval != 0:
-        raise LocalResultImportError(
-            f"{prefix}.protocol.checkpoint_interval: "
-            "expected integer multiple of gate_check_interval"
-        )
     _extract.non_empty_string(
         protocol.get("gate_decision_rule"),
         f"{prefix}.protocol.gate_decision_rule",

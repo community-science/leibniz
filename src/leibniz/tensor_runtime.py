@@ -49,6 +49,8 @@ __all__ = [
     "tensor_runtime_device_kinds",
     "resolve_tensor_runtime",
     "runtime_roofline_record",
+    "save_tensor_runtime_state",
+    "load_tensor_runtime_state",
     "validate_tensor_runtime_device",
 ]
 
@@ -160,6 +162,28 @@ class OperationFallbackSequential:
                         _optimizer_state_to_device(state, device=device)
 
         return Module()
+
+
+def save_tensor_runtime_state(path: Any, state: Mapping[str, object]) -> None:
+    """Persist a tensor-runtime state payload."""
+
+    torch = importlib.import_module("torch")
+    torch.save(dict(state), path)
+
+
+def load_tensor_runtime_state(
+    runtime: TensorRuntime,
+    path: Any,
+    *,
+    weights_only: bool = False,
+) -> object:
+    """Load a tensor-runtime state payload onto the runtime device."""
+
+    return runtime.torch.load(
+        path,
+        map_location=runtime.device,
+        weights_only=weights_only,
+    )
 
 
 def _optimizer_state_to_device(

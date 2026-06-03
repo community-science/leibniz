@@ -962,7 +962,6 @@ function trainingProtocolEntries(protocol: TrainingProtocolRecord): [string, str
     ['Steps', protocol.max_steps],
     ['Min Steps', protocol.min_steps],
     ['Batch', protocol.batch_size],
-    ['Checkpoint', protocol.checkpoint_interval],
     ['Gate Check', protocol.gate_check_interval],
     ['Gate Samples', protocol.gate_sample_count],
     ['Gate Rule', protocol.gate_decision_rule],

@@ -265,7 +265,6 @@ export type TrainingProtocolRecord = {
   seed: number;
   batch_size: number;
   max_steps?: number;
-  checkpoint_interval: number;
   gate_check_interval: number;
   gate_sample_count: number;
   gate_decision_rule: string;

@@ -143,7 +143,6 @@ const result: BenchmarkResultRecord = {
           patience: 0,
           schedule: 'none',
           seed: 101,
-          checkpoint_interval: 1,
           gate_check_interval: 1,
           gate_sample_count: 2,
           gate_decision_rule: 'validation-loss-plateau',

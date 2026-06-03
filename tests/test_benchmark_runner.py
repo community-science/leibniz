@@ -90,19 +90,18 @@ def test_digits_benchmark_runner_dry_run_does_not_discover_runtime(
     assert summary.dry_run is True
 
 
-def test_benchmark_run_plan_requires_checkpoint_interval_on_gate_cadence(
+def test_benchmark_run_plan_requires_positive_model_checkpoint_gate_interval(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(
         BenchmarkRunnerError,
-        match="checkpoint_interval must be an integer multiple of gate_check_interval",
+        match="model_checkpoint_gate_interval must be a positive integer",
     ):
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            checkpoint_interval=250,
-            gate_check_interval=32,
+            model_checkpoint_gate_interval=0,
         )
 
 
@@ -229,6 +228,10 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     throughput = cast(dict[str, object], training_summary["throughput"])
     training_throughput = cast(dict[str, object], throughput["training"])
     evaluation_throughput = cast(dict[str, object], throughput["evaluation"])
+    checkpoint_evaluation_throughput = cast(
+        dict[str, object],
+        throughput["checkpoint_evaluation"],
+    )
     phase_timing = cast(dict[str, object], throughput["phase_timing"])
     timing_phases = cast(dict[str, object], phase_timing["phases"])
     tensor_batch_timing = cast(dict[str, object], timing_phases["training_tensor_batch"])
@@ -258,6 +261,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_throughput["sample_count"] == 2
     assert cast(float, training_throughput["samples_per_second"]) > 0
     assert evaluation_throughput["sample_count"] == 3
+    assert checkpoint_evaluation_throughput["sample_count"] == 3
     assert cast(float, evaluation_throughput["samples_per_second"]) > 0
     assert roofline_comparison["status"] == "available"
     assert roofline_comparison["model"] == "operational-intensity"
@@ -402,10 +406,17 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
         index=1,
     )
 
+    fake_evaluation_results: list[tuple[object, tuple[tuple[float, ...], ...]]] = []
+
     def fake_train_and_predict(**kwargs: object) -> object:
         initial_rung = cast(Any, kwargs["initial_evaluation_rung"])
+        progress_callback = cast(Any, kwargs["progress_callback"])
         probabilities = tuple((0.1,) * 10 for _sample in initial_rung.batch.samples)
         final_probabilities = tuple((0.1,) * 10 for _sample in final_rung.batch.samples)
+        fake_evaluation_results[:] = [
+            (initial_rung, probabilities),
+            (final_rung, final_probabilities),
+        ]
         training_run = cast(Any, benchmark_runner)._training_run_record(
             seed=101,
             batch_size=2,
@@ -414,7 +425,6 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
             optimizer_name="adam",
             schedule_name="reduce-on-plateau",
             gate_check_interval=32,
-            checkpoint_interval=256,
             gate_sample_count=2,
             gate_decision_rule="validation-loss-plateau",
             convergence_patience=6,
@@ -433,18 +443,33 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
             stop_reason="max-steps",
             training_compute=0.0,
         )
+        runtime = resolve_tensor_runtime("cpu")
+        executable = benchmark_runner.ExecutableModelOperator(cast(Any, kwargs["architecture"]))
+        module = benchmark_runner.OperationFallbackSequential(
+            runtime=runtime,
+            operations=executable.operation_modules(),
+        )
+        progress_callback(training_run, {}, {}, module)
         return cast(Any, benchmark_runner)._TrainingResult(
-            evaluation_results=(
-                (initial_rung, probabilities),
-                (final_rung, final_probabilities),
-            ),
+            evaluation_results=(),
             training_rungs=(initial_rung, final_rung),
             training_frontier_index=1,
             training_run=training_run,
             throughput={},
         )
 
+    def fake_evaluate_model_checkpoint_artifact(**_kwargs: object) -> object:
+        return (
+            tuple(fake_evaluation_results),
+            {"kind": "checkpoint-evaluation-throughput", "sample_count": 2, "seconds": 0.1},
+        )
+
     monkeypatch.setattr(benchmark_runner, "_train_and_predict", fake_train_and_predict)
+    monkeypatch.setattr(
+        benchmark_runner,
+        "evaluate_model_checkpoint_artifact",
+        fake_evaluate_model_checkpoint_artifact,
+    )
 
     summary = run_benchmark(
         BenchmarkRunPlan(
@@ -500,7 +525,7 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
             optimizer="adam",
             schedule="cosine",
             gate_check_interval=1,
-            checkpoint_interval=2,
+            model_checkpoint_gate_interval=2,
             gate_sample_count=3,
             convergence_patience=2,
             convergence_min_delta=0.001,
@@ -520,7 +545,6 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert training_run.protocol.schedule == "cosine"
     assert training_run.protocol.learning_rate == 0.005
     assert training_run.protocol.gate_check_interval == 1
-    assert training_run.protocol.checkpoint_interval == 2
     assert training_run.protocol.gate_sample_count == 3
     assert training_run.protocol.gate_decision_rule == "validation-loss-plateau"
     assert training_run.protocol.patience == 2
@@ -528,6 +552,11 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert training_run.protocol.validation_source == "generator-resample"
     assert [point.step for point in training_run.validation_history] == [0, 1, 2, 3]
     assert training_run.validation_history[-1].learning_rates
+    assert training_summary["model_checkpoint_gate_interval"] == 2
+    checkpoints = cast(list[dict[str, object]], training_summary["model_checkpoints"])
+    checkpoint_checks = [checkpoint["validation_check"] for checkpoint in checkpoints]
+    assert checkpoint_checks == [0, 2]
+    assert all(Path(cast(str, checkpoint["path"])).is_file() for checkpoint in checkpoints)
 
 
 def test_windowed_plateau_ignores_tiny_recent_best_loss_resets() -> None:
@@ -695,7 +724,6 @@ def test_training_stage_records_current_validation_loss_without_global_best(
         validation_batch=fake_batch,
         max_steps=100,
         gate_check_interval=1,
-        checkpoint_interval=1,
         patience=1,
         min_delta=0.0,
         min_steps=0,
@@ -942,7 +970,7 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
     throughput = cast(dict[str, object], training_summary["throughput"])
     fallbacks = cast(list[dict[str, object]], throughput["runtime_fallbacks"])
 
-    assert calls == ["mps", "cpu"]
+    assert calls == ["mps", "cpu", "cpu"]
     assert training_summary["tensor_device"] == "cpu"
     assert throughput["tensor_device"] == "cpu"
     assert fallbacks == [
@@ -1035,7 +1063,7 @@ def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_dev
         throughput["operation_runtime_fallbacks"],
     )
 
-    assert calls == ["mps"]
+    assert calls == ["mps", "mps"]
     assert training_summary["tensor_device"] == "mps"
     assert "runtime_fallbacks" not in throughput
     assert operation_fallbacks == [
@@ -1134,7 +1162,9 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     }
     assert artifact_kinds == {
         "measurement-dataset",
+        "model-checkpoint",
         "model-inspection",
+        "model-manifest",
         "training-summary",
     }
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
@@ -1189,7 +1219,7 @@ def test_digits_benchmark_runner_materializes_running_training_history(
             seed=101,
             train_steps=2,
             gate_check_interval=1,
-            checkpoint_interval=1,
+            model_checkpoint_gate_interval=1,
             convergence_patience=0,
             convergence_min_delta=0.0,
             convergence_min_steps=0,
