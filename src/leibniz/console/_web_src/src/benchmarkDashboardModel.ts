@@ -28,7 +28,9 @@ export type BenchmarkPlotModelPoint = {
   logCost: number;
   score: number;
   frontier: boolean;
-  model: ModelResultRecord;
+  resultStatus: 'accepted' | 'tentative';
+  model?: ModelResultRecord;
+  run?: RunResultRecord;
 };
 
 export type BenchmarkPlotModel = {
@@ -83,11 +85,6 @@ export type SortDirection = 'ascending' | 'descending';
 export type ModelResultSort = {
   key: ModelResultSortKey;
   direction: SortDirection;
-};
-
-export type BenchmarkRunDetail = {
-  run: RunResultRecord;
-  model?: ModelResultRecord;
 };
 
 export type BenchmarkSelection = {
@@ -199,7 +196,7 @@ export function modelComparisonRows(
     }
   }
 
-  return result.leaderboard.map((model) => ({
+  return result.model_candidates.map((model) => ({
     model,
     inspection: inspectionsByDigest.get(normalizedDigest(model.architecture_digest)),
   }));
@@ -212,8 +209,9 @@ export function benchmarkPlotModel(
 ): BenchmarkPlotModel {
   const frontierModels = frontierModelResults(result.leaderboard, costAxis, scoreAxis);
   const frontierKeys = new Set(frontierModels.map((model) => model.model_key));
-  const points = result.leaderboard
-    .map((model) => plotPoint(model, costAxis, scoreAxis, frontierKeys.has(model.model_key)))
+  const models = modelLookup(result.leaderboard);
+  const points = result.plot_runs
+    .map((run) => plotRunPoint(run, models, costAxis, scoreAxis, frontierKeys))
     .filter((point): point is BenchmarkPlotModelPoint => point !== null)
     .sort((left, right) => left.cost - right.cost || right.score - left.score);
   const frontierPoints = frontierModels
@@ -260,16 +258,6 @@ export function nextModelResultSort(
   };
 }
 
-export function runDetails(result: BenchmarkResultRecord): BenchmarkRunDetail[] {
-  const models = modelLookup(result.leaderboard);
-  return result.training_history.map((run) => ({
-    run,
-    model:
-      models.byModelKey.get(run.model_key) ??
-      models.byArchitecture.get(normalizedDigest(run.architecture_digest)),
-  }));
-}
-
 export function selectionForId(
   result: BenchmarkResultRecord,
   selectedId: string | null,
@@ -279,7 +267,9 @@ export function selectionForId(
   }
   return {
     selectedModel: result.leaderboard.find((model) => model.model_key === selectedId),
-    selectedRun: result.training_history.find((run) => runSelectionId(run) === selectedId),
+    selectedRun: [...result.plot_runs, ...result.training_history].find(
+      (run) => runSelectionId(run) === selectedId,
+    ),
   };
 }
 
@@ -396,7 +386,38 @@ function plotPoint(
     logCost: Math.log2(cost),
     score,
     frontier,
+    resultStatus: 'accepted',
     model,
+  };
+}
+
+function plotRunPoint(
+  run: RunResultRecord,
+  models: ReturnType<typeof modelLookup>,
+  costAxis: string,
+  scoreAxis: string,
+  frontierKeys: Set<string>,
+): BenchmarkPlotModelPoint | null {
+  const model =
+    models.byModelKey.get(run.model_key) ??
+    models.byArchitecture.get(normalizedDigest(run.architecture_digest));
+  const cost = costValue(run.cost_summary, costAxis);
+  const score = run.result_status === 'tentative' && scoreAxis === 'absolute'
+    ? run.score
+    : model === undefined ? Number.NaN : scoreValue(model, scoreAxis);
+  if (!Number.isFinite(cost) || cost <= 0 || !Number.isFinite(score)) {
+    return null;
+  }
+  return {
+    id: runSelectionId(run),
+    label: shortDigest(run.architecture_digest),
+    cost,
+    logCost: Math.log2(cost),
+    score,
+    frontier: run.result_status === 'accepted' && model !== undefined && frontierKeys.has(model.model_key),
+    resultStatus: run.result_status,
+    model,
+    run,
   };
 }
 

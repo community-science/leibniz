@@ -10,9 +10,11 @@ import leibniz.benchmark_runner as benchmark_runner
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_evaluation import ValidationCompetencePoint
 from leibniz.benchmark_runner import (
+    BenchmarkEvaluationPlan,
     BenchmarkRunnerError,
     BenchmarkRunPlan,
     BenchmarkRunSummary,
+    evaluate_benchmark_checkpoint,
     run_benchmark,
 )
 from leibniz.benchmarks import BenchmarkManifestDocument
@@ -193,19 +195,27 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
             tensor_device="cpu",
         )
     )
+    evaluation_summary = evaluate_benchmark_checkpoint(
+        BenchmarkEvaluationPlan(
+            training_summary_path=summary.training_summary_path,
+            benchmark_root=_digits_benchmark_root,
+            results_root=tmp_path / "results",
+            tensor_device="cpu",
+        )
+    )
 
     dataset_document = MeasurementDatasetDocument.from_bytes(
-        summary.measurement_dataset_path.read_bytes()
+        evaluation_summary.measurement_dataset_path.read_bytes()
     )
     inspection_document = ModelInspectionDocument.from_bytes(
-        summary.model_inspection_path.read_bytes()
+        evaluation_summary.model_inspection_path.read_bytes()
     )
     manifest = BenchmarkManifestDocument.from_bytes(
         (_digits_benchmark_root / "manifest.json").read_bytes()
     ).manifest
 
     dataset_document.dataset.validate_manifest(manifest)
-    assert summary.measurement_count == 3
+    assert evaluation_summary.measurement_count == 3
     assert len(dataset_document.dataset.measurements) == 3
     assert inspection_document.inspection.cost_summary.parameter_count == 50
     assert inspection_document.inspection.cost_summary.inference_compute == 656
@@ -228,10 +238,6 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     throughput = cast(dict[str, object], training_summary["throughput"])
     training_throughput = cast(dict[str, object], throughput["training"])
     evaluation_throughput = cast(dict[str, object], throughput["evaluation"])
-    checkpoint_evaluation_throughput = cast(
-        dict[str, object],
-        throughput["checkpoint_evaluation"],
-    )
     phase_timing = cast(dict[str, object], throughput["phase_timing"])
     timing_phases = cast(dict[str, object], phase_timing["phases"])
     tensor_batch_timing = cast(dict[str, object], timing_phases["training_tensor_batch"])
@@ -260,9 +266,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert cast(float, roofline["peak_bytes_per_second"]) > 0
     assert training_throughput["sample_count"] == 2
     assert cast(float, training_throughput["samples_per_second"]) > 0
-    assert evaluation_throughput["sample_count"] == 3
-    assert checkpoint_evaluation_throughput["sample_count"] == 3
-    assert cast(float, evaluation_throughput["samples_per_second"]) > 0
+    assert evaluation_throughput["sample_count"] == 0
+    assert evaluation_throughput["samples_per_second"] == 0.0
     assert roofline_comparison["status"] == "available"
     assert roofline_comparison["model"] == "operational-intensity"
     assert cast(float, roofline_comparison["training_fraction_of_roofline"]) > 0
@@ -273,10 +278,14 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_run.validation_checks == 2
     assert training_run.validation_history[0].step == 0
     assert training_run.validation_history[-1].step == 1
-    evaluation_curriculum = cast(dict[str, object], training_summary["evaluation_curriculum"])
+    evaluation_record = load_object_document(
+        evaluation_summary.evaluation_summary_path.read_bytes(),
+        description="evaluation summary",
+    )
+    evaluation_curriculum = cast(dict[str, object], evaluation_record["evaluation_curriculum"])
     training_curriculum = cast(dict[str, object], training_summary["training_curriculum"])
     curriculum_rungs = cast(list[dict[str, object]], evaluation_curriculum["rungs"])
-    assert evaluation_curriculum["kind"] == "competence-gated-evaluation-curriculum"
+    assert evaluation_curriculum["kind"] == "checkpoint-benchmark-evaluation-curriculum"
     assert (
         evaluation_curriculum["curriculum_variable"]
         == "internal-distinguishable-state-complexity"
@@ -325,7 +334,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     training_rungs = cast(list[dict[str, object]], training_curriculum["rungs"])
     assert [rung["index"] for rung in training_rungs] == [0]
     assert all(set(rung) == expected_rung_keys for rung in training_rungs)
-    sampled_competence = cast(dict[str, object], training_summary["sampled_competence"])
+    sampled_competence = cast(dict[str, object], evaluation_record["sampled_competence"])
     assert sampled_competence["kind"] == "sampled-competence-curriculum"
     assert sampled_competence["sampling_rule"] == "generator-uniform-component-sequence-v1"
     assert (
@@ -368,12 +377,20 @@ def test_digits_benchmark_runner_accepts_convnet_architecture(
             tensor_device="cpu",
         )
     )
+    evaluation_summary = evaluate_benchmark_checkpoint(
+        BenchmarkEvaluationPlan(
+            training_summary_path=summary.training_summary_path,
+            benchmark_root=_digits_benchmark_root,
+            results_root=tmp_path / "results",
+            tensor_device="cpu",
+        )
+    )
 
     inspection = ModelInspectionDocument.from_bytes(
-        summary.model_inspection_path.read_bytes()
+        evaluation_summary.model_inspection_path.read_bytes()
     ).inspection
 
-    assert summary.measurement_count == 2
+    assert evaluation_summary.measurement_count == 2
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
         "fixed-support-affine",
         "local-affine",
@@ -405,26 +422,9 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
         seed=101,
         index=1,
     )
-    competition_rung = cast(Any, benchmark_runner)._competition_curriculum_rung(
-        generator=generator,
-        component_count=1,
-        sample_count=2,
-        seed=101,
-        index=1,
-        resolution_assignment=final_rung.resolution_assignment,
-    )
-
-    fake_evaluation_results: list[tuple[object, tuple[tuple[float, ...], ...]]] = []
-
     def fake_train_and_predict(**kwargs: object) -> object:
         initial_rung = cast(Any, kwargs["initial_evaluation_rung"])
         progress_callback = cast(Any, kwargs["progress_callback"])
-        probabilities = tuple((0.1,) * 10 for _sample in initial_rung.batch.samples)
-        final_probabilities = tuple((0.1,) * 10 for _sample in final_rung.batch.samples)
-        fake_evaluation_results[:] = [
-            (initial_rung, probabilities),
-            (final_rung, final_probabilities),
-        ]
         training_run = cast(Any, benchmark_runner)._training_run_record(
             seed=101,
             batch_size=2,
@@ -466,43 +466,7 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
             throughput={},
         )
 
-    def fake_evaluate_model_checkpoint_artifact(**_kwargs: object) -> object:
-        return (
-            tuple(fake_evaluation_results),
-            {"kind": "checkpoint-evaluation-throughput", "sample_count": 2, "seconds": 0.1},
-        )
-
-    def fake_generate_model_checkpoint_competition_profile(**kwargs: object) -> object:
-        competition_probabilities = tuple(
-            (0.1,) * 10 for _sample in competition_rung.batch.samples
-        )
-        return (
-            cast(Any, benchmark_runner)._prediction_competition_profile_record(
-                batch=competition_rung.batch,
-                probabilities=competition_probabilities,
-                outcome_space=cast(Any, kwargs["outcome_space"]),
-                run_slug=cast(str, kwargs["run_slug"]),
-                benchmark_id=cast(Any, kwargs["benchmark_id"]),
-                architecture_digest=cast(Any, kwargs["architecture_digest"]),
-            ),
-            {
-                "kind": "checkpoint-competition-throughput",
-                "sample_count": 2,
-                "seconds": 0.1,
-            },
-        )
-
     monkeypatch.setattr(benchmark_runner, "_train_and_predict", fake_train_and_predict)
-    monkeypatch.setattr(
-        benchmark_runner,
-        "evaluate_model_checkpoint_artifact",
-        fake_evaluate_model_checkpoint_artifact,
-    )
-    monkeypatch.setattr(
-        benchmark_runner,
-        "generate_model_checkpoint_competition_profile",
-        fake_generate_model_checkpoint_competition_profile,
-    )
 
     summary = run_benchmark(
         BenchmarkRunPlan(
@@ -515,48 +479,20 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
             tensor_device="cpu",
         )
     )
-    dataset = MeasurementDatasetDocument.from_bytes(
-        summary.measurement_dataset_path.read_bytes()
-    ).dataset
     training_summary = load_object_document(
         summary.training_summary_path.read_bytes(),
         description="training summary",
     )
-    competition_profile = load_object_document(
-        summary.competition_profile_path.read_bytes(),
-        description="competition profile",
-    )
-    sampled_competence = cast(dict[str, object], training_summary["sampled_competence"])
-    points = cast(list[dict[str, object]], sampled_competence["points"])
 
     assert summary.measurement_count == 2
-    assert len(dataset.measurements) == 2
-    assert training_summary["evaluation_curriculum_rung_count"] == 2
-    evaluation_curriculum = cast(
-        dict[str, object],
-        training_summary["evaluation_curriculum"],
-    )
-    assert len(cast(list[object], evaluation_curriculum["rungs"])) == 2
-    assert len(points) == 1
-    assert math.isclose(cast(float, points[0]["complexity"]), final_rung.complexity)
-    measurement_ids = [
-        str(measurement.raw_scoring_evidence.id)
-        for measurement in dataset.measurements
-    ]
-    assert all(".final." in measurement_id for measurement_id in measurement_ids)
-    assert all(".rung0." not in measurement_id for measurement_id in measurement_ids)
-    competition_entries = cast(list[dict[str, object]], competition_profile["entries"])
-    assert competition_profile["mechanic"] == "paired-prediction-accepted-mass"
-    assert summary.competition_profile_path.parent.name == "digits"
-    assert summary.competition_profile_path.parent.parent.name == "competitions"
-    assert all(".competition." in cast(str, entry["id"]) for entry in competition_entries)
-    assert not {
-        cast(str, entry["observation_id"])
-        for entry in competition_entries
-    } & {
-        str(measurement.raw_scoring_evidence.observation_id)
-        for measurement in dataset.measurements
-    }
+    assert not summary.measurement_dataset_path.exists()
+    assert not summary.model_inspection_path.exists()
+    assert "sampled_competence" not in training_summary
+    assert "evaluation_curriculum" not in training_summary
+    assert "measurement_dataset_digest" not in training_summary
+    assert "model_inspection_digest" not in training_summary
+    assert "competition_profile_path" not in training_summary
+    assert "selected_model_checkpoint" in training_summary
 
 
 def test_digits_benchmark_runner_records_convergence_protocol_controls(
@@ -1019,15 +955,10 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
     throughput = cast(dict[str, object], training_summary["throughput"])
     fallbacks = cast(list[dict[str, object]], throughput["runtime_fallbacks"])
 
-    assert calls == ["mps", "cpu", "cpu", "cpu"]
+    assert calls == ["mps", "cpu"]
     assert training_summary["tensor_device"] == "cpu"
     assert throughput["tensor_device"] == "cpu"
-    assert cast(dict[str, object], throughput["evaluation"])["kind"] == (
-        "checkpoint-evaluation-throughput"
-    )
-    assert cast(dict[str, object], throughput["competition"])["kind"] == (
-        "checkpoint-competition-throughput"
-    )
+    assert cast(dict[str, object], throughput["evaluation"])["kind"] == "evaluation-throughput"
     assert fallbacks == [
         {
             "from_device": "mps",
@@ -1118,7 +1049,7 @@ def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_dev
         throughput["operation_runtime_fallbacks"],
     )
 
-    assert calls == ["mps", "mps", "mps"]
+    assert calls == ["mps"]
     assert training_summary["tensor_device"] == "mps"
     assert "runtime_fallbacks" not in throughput
     assert operation_fallbacks == [
@@ -1155,7 +1086,7 @@ def test_digits_benchmark_runner_run_slug_includes_training_controls() -> None:
 
 
 def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: Path) -> None:
-    run_benchmark(
+    training_summary = run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
@@ -1163,6 +1094,14 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
             sample_count=2,
             seed=101,
             train_steps=1,
+            tensor_device="cpu",
+        )
+    )
+    evaluate_benchmark_checkpoint(
+        BenchmarkEvaluationPlan(
+            training_summary_path=training_summary.training_summary_path,
+            benchmark_root=_digits_benchmark_root,
+            results_root=tmp_path / "results",
             tensor_device="cpu",
         )
     )
@@ -1176,7 +1115,9 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     results = cast(list[dict[str, object]], view["benchmark_results"])
     result = results[0]
     history = cast(list[dict[str, object]], result["training_history"])
+    plot_runs = cast(list[dict[str, object]], result["plot_runs"])
     assert history[0]["source_kind"] == "local-run"
+    assert [run["result_status"] for run in plot_runs] == ["accepted"]
     assert "model_inspection_digest" in history[0]
     assert "model_inspection_path" in history[0]
     assert "sampled_competence" in history[0]
@@ -1252,17 +1193,18 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert "training_provenance" in inspections[0]
 
 
-def test_digits_benchmark_runner_materializes_running_training_history(
+def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     tmp_path: Path,
 ) -> None:
-    progress_views: list[Mapping[str, object]] = []
+    progress_records: list[Mapping[str, object]] = []
 
     def refresh_progress(_summary: BenchmarkRunSummary) -> None:
-        view_summary = materialize_benchmark_result_views(
-            repository_root=_repository_root,
-            results_root=tmp_path / "results",
+        progress_records.append(
+            load_object_document(
+                _summary.training_summary_path.read_bytes(),
+                description="training progress",
+            )
         )
-        progress_views.append(load_console_result_view(view_summary.view_file.read_bytes()))
 
     summary = run_benchmark(
         BenchmarkRunPlan(
@@ -1283,62 +1225,37 @@ def test_digits_benchmark_runner_materializes_running_training_history(
         progress_callback=refresh_progress,
     )
 
-    assert progress_views
-    progress_view = progress_views[0]
-    result = cast(list[dict[str, object]], progress_view["benchmark_results"])[0]
-    history = cast(list[dict[str, object]], result["training_history"])
-    running_run = history[0]
-    diagnostics = cast(dict[str, object], running_run["training_diagnostics"])
-    throughput = cast(dict[str, object], diagnostics["throughput"])
-    training_throughput = cast(dict[str, object], throughput["training"])
-
-    assert running_run["source_kind"] == "local-progress"
-    assert running_run["measurement_count"] == 0
-    assert diagnostics["status"] == "running"
-    assert diagnostics["stop_reason"] == "validation-checkpoint"
-    assert diagnostics["validation_checks"] == 1
-    assert training_throughput["sample_count"] == 0
-    assert cast(dict[str, object], throughput["roofline_comparison"])["status"] == "available"
-    assert cast(list[dict[str, object]], result["leaderboard"])[0]["source_kinds"] == [
-        "local-progress"
-    ]
-    points = cast(
-        list[dict[str, object]],
-        cast(list[dict[str, object]], result["leaderboard"])[0]["points"],
+    assert progress_records
+    assert progress_records[0]["format"] == "leibniz.benchmark-training-progress"
+    assert progress_records[0]["run_status"] == "running"
+    progress_view_summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=tmp_path / "results",
     )
-    sampled_competence = cast(dict[str, object], running_run["sampled_competence"])
-    evaluation_curriculum = cast(dict[str, object], diagnostics["evaluation_curriculum"])
-    curriculum_rungs = cast(list[dict[str, object]], evaluation_curriculum["rungs"])
-    assert points
-    assert points[0]["sample_count"] == 2
-    assert evaluation_curriculum["kind"] == "competence-gated-evaluation-curriculum"
-    assert (
-        evaluation_curriculum["curriculum_variable"]
-        == "internal-distinguishable-state-complexity"
+    progress_view = load_console_result_view(progress_view_summary.view_file.read_bytes())
+    progress_result = cast(list[dict[str, object]], progress_view["benchmark_results"])[0]
+    assert cast(list[dict[str, object]], progress_result["leaderboard"]) == []
+    assert cast(dict[str, object], progress_result["frontiers"])["parameter_count"] == []
+    progress_plot_runs = cast(list[dict[str, object]], progress_result["plot_runs"])
+    assert len(progress_plot_runs) == 1
+    assert progress_plot_runs[0]["result_status"] == "tentative"
+    assert progress_plot_runs[0]["source_kind"] == "local-training-estimate"
+    final_record = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="training summary",
     )
-    assert evaluation_curriculum["frontier_index"] == 0
-    assert curriculum_rungs[0]["status"] == "frontier"
-    assert sampled_competence["validation_competence"] == running_run["score"]
-    assert math.isclose(
-        (cast(float, points[0]["score"]) - 0.1) / 0.9,
-        cast(float, running_run["score"]),
-    )
-
+    assert final_record["format"] == "leibniz.benchmark-run"
+    assert final_record["run_status"] == "completed"
     final_view_summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
         results_root=tmp_path / "results",
     )
     final_view = load_console_result_view(final_view_summary.view_file.read_bytes())
     final_result = cast(list[dict[str, object]], final_view["benchmark_results"])[0]
-    final_history = cast(list[dict[str, object]], final_result["training_history"])
-    progress_path = (
-        summary.training_summary_path.parent.parent.parent
-        / "training-progress"
-        / summary.training_summary_path.parent.name
-        / summary.training_summary_path.name
-    )
-    assert final_history[0]["source_kind"] == "local-run"
-    assert not progress_path.exists()
+    assert cast(list[dict[str, object]], final_result["leaderboard"]) == []
+    final_plot_runs = cast(list[dict[str, object]], final_result["plot_runs"])
+    assert len(final_plot_runs) == 1
+    assert final_plot_runs[0]["result_status"] == "tentative"
 
 
 def test_digits_benchmark_runner_records_fixed_component_count(

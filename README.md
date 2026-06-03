@@ -162,14 +162,18 @@ unless it changes what nuisance states can be distinguished. This keeps the
 model output fixed at a 10-way probability measure while allowing absolute
 score to grow as formation rules add real distinguishable observation states.
 
-While a benchmark run is training, gate-check progress is written under
-`results/training-progress/` and materialized into the local benchmark result
-view as running leaderboard entries with accumulated validation history. Saved
-model checkpoints and their model manifests are written under `results/models/`.
-Completed runs replace the progress state with final measurement,
-model-inspection, and training-summary records; benchmark evidence is generated
-by reloading a selected checkpoint artifact into the evaluator with a fresh
-unpredictable evaluation seed.
+While a benchmark run is training, gate-check progress may be written under
+`results/training/` as the current training-run record. The console may
+materialize those records as tentative plot points, using the training run's own
+score estimate, but leaderboard rows and frontiers are composed only from
+completed accepted benchmark evaluations. Saved model checkpoints and their
+model manifests are written under `results/models/`, and completed training
+runs atomically replace their running records with final training summaries in
+the same `results/training/` location. Benchmark evidence is generated
+separately by reloading a selected checkpoint artifact into the evaluator with a
+fresh unpredictable evaluation seed; those evaluation records are written under
+`results/evaluations/` and replace matching tentative points as the accepted
+local benchmark records consumed by the console and publication workflow.
 
 Submission evaluation is separate from reference training. External
 submissions publish measurement, model-inspection, sampled-competence, and

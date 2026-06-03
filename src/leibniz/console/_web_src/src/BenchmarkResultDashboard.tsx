@@ -20,14 +20,11 @@ import {
   costValue,
   formatCost,
   nextModelResultSort,
-  runDetails,
-  runSelectionId,
   scoreLabel,
   scoreValue,
   selectionForId,
   shortDigest,
   sortedModelResults,
-  type BenchmarkRunDetail,
   type ModelResultSort,
   type ModelResultSortKey,
 } from './benchmarkDashboardModel.ts';
@@ -35,7 +32,6 @@ import type {
   BenchmarkResultRecord,
   CostAxisRecord,
   ModelResultRecord,
-  RunDetailSectionRecord,
   ScoreAxisRecord,
 } from './resultViews.ts';
 import { usePersistentState } from './persistentState.ts';
@@ -121,13 +117,9 @@ export function BenchmarkResultDashboard({
   );
   const plot = benchmarkPlotModel(result, costAxis, scoreAxis);
   const selection = selectionForId(result, selectedId);
-  const runRows = runDetails(result);
-  const selectedRunDetail = runRows.find(
-    ({ run }) => runSelectionId(run) === selectedId,
-  );
   const selectedSelectionModelKey =
     selection.selectedModel?.model_key ??
-    selectedRunDetail?.model?.model_key;
+    selection.selectedRun?.model_key;
   const activeSelectedModelKey = selectedSelectionModelKey ?? selectedModelKey;
   const activeView = plotView ?? {
     xDomain: plot.xDomain,
@@ -181,14 +173,6 @@ export function BenchmarkResultDashboard({
         selectedModelKey={activeSelectedModelKey}
         sort={leaderboardSort}
         title="Leaderboard"
-      />
-      <RunHistoryTable
-        complexityAxis={result.complexity_axis}
-        costAxis={costAxis}
-        onSelect={setSelectedId}
-        rows={runRows}
-        selectedId={selectedId}
-        selectedRunDetail={selectedRunDetail}
       />
     </section>
   );
@@ -266,9 +250,6 @@ function BenchmarkFrontierPlot({
   return (
     <section className="benchmark-result-table-section">
       <div className="benchmark-plot-heading">
-        <div>
-          <h3>Measurements Plot</h3>
-        </div>
         <div className="benchmark-plot-actions">
           <button
             aria-label="Pan left"
@@ -316,6 +297,7 @@ function BenchmarkFrontierPlot({
         <div className="frontier-chart-legend" aria-label="Measurements plot legend">
           <span><i className="frontier" />Frontier</span>
           <span><i className="measured" />Measured</span>
+          <span><i className="tentative" />Tentative</span>
         </div>
         <svg
           aria-label={`Measurements by ${costAxis}`}
@@ -425,6 +407,7 @@ function BenchmarkFrontierPlot({
                 className={[
                   'frontier-chart-point',
                   point.frontier ? 'frontier' : '',
+                  point.resultStatus === 'tentative' ? 'tentative' : '',
                   selectedId === point.id ? 'selected' : '',
                   hoveredId === point.id ? 'hovered' : '',
                 ].filter(Boolean).join(' ')}
@@ -486,7 +469,9 @@ function BenchmarkFrontierPlot({
         {activePoint === undefined ? null : (
           <div className="frontier-chart-tooltip">
             <span className="frontier-chart-tooltip-kicker">
-              {activePoint.frontier ? 'Frontier highlight' : 'Measured model'}
+              {activePoint.resultStatus === 'tentative'
+                ? 'Training estimate'
+                : activePoint.frontier ? 'Frontier highlight' : 'Accepted result'}
             </span>
             <strong>{activePoint.label}</strong>
             <span>{formatCost(activePoint.cost)} cost</span>
@@ -568,7 +553,6 @@ function ModelResultTable({
 
   return (
     <section className="benchmark-result-table-section">
-      <h3>{title}</h3>
       <div className="benchmark-result-table" role="table" aria-label={title}>
         <div className="benchmark-result-row benchmark-model-result-row header" role="row">
           <SortHeader
@@ -644,145 +628,6 @@ function SortHeader({
         )}
       </span>
     </button>
-  );
-}
-
-function RunHistoryTable({
-  complexityAxis,
-  costAxis,
-  onSelect,
-  rows,
-  selectedId,
-  selectedRunDetail,
-}: {
-  complexityAxis: string | undefined;
-  costAxis: string;
-  onSelect: (id: string) => void;
-  rows: BenchmarkRunDetail[];
-  selectedId: string | null;
-  selectedRunDetail: BenchmarkRunDetail | undefined;
-}) {
-  if (rows.length === 0) {
-    return null;
-  }
-
-  return (
-    <section className="benchmark-result-table-section">
-      <h3>Training History</h3>
-      <div className="benchmark-result-table" role="table" aria-label="Training history">
-        <div className="benchmark-result-row header" role="row">
-          <span role="columnheader">Run</span>
-          <span role="columnheader">Score</span>
-          <span role="columnheader">Cost</span>
-          <span role="columnheader">{complexityAxis ?? 'Complexity'}</span>
-          <span role="columnheader">Measurements</span>
-        </div>
-        {rows.map(({ run }) => {
-          const id = runSelectionId(run);
-          return (
-            <button
-              className={`benchmark-result-row ${selectedId === id ? 'selected' : ''}`}
-              key={id}
-              onClick={() => onSelect(id)}
-              role="row"
-              type="button"
-            >
-              <span role="cell">{run.run_slug}</span>
-              <span role="cell">{run.score.toFixed(4)}</span>
-              <span role="cell">{formatCost(costValue(run.cost_summary, costAxis))}</span>
-              <span role="cell">{run.complexity ?? 'n/a'}</span>
-              <span role="cell">{run.measurement_count}</span>
-            </button>
-          );
-        })}
-      </div>
-      {selectedRunDetail === undefined ? null : (
-        <RunDetailCard
-          costAxis={costAxis}
-          detail={selectedRunDetail}
-        />
-      )}
-    </section>
-  );
-}
-
-function RunDetailCard({
-  costAxis,
-  detail,
-}: {
-  costAxis: string;
-  detail: BenchmarkRunDetail;
-}) {
-  const { model, run } = detail;
-  const detailSections = run.console_view_model?.detail_sections ?? [];
-  return (
-    <article className="run-detail-card">
-      <div>
-        <h4>{run.run_slug}</h4>
-        <p>{run.source_path}</p>
-      </div>
-      <dl>
-        <dt>Score</dt>
-        <dd>{run.score.toFixed(4)}</dd>
-        <dt>Cost</dt>
-        <dd>{formatCost(costValue(run.cost_summary, costAxis))}</dd>
-        <dt>Architecture</dt>
-        <dd>{shortDigest(run.architecture_digest)}</dd>
-        <dt>Matched Model</dt>
-        <dd>{model === undefined ? 'none' : shortDigest(model.architecture_digest)}</dd>
-        <dt>Measurements</dt>
-        <dd>{run.measurement_count}</dd>
-        <dt>Dataset</dt>
-        <dd>{shortDigest(run.measurement_dataset_digest)}</dd>
-        <dt>Source</dt>
-        <dd>{run.source_kind}</dd>
-        <dt>Model Inspection</dt>
-        <dd>
-          {run.model_inspection_digest === undefined
-            ? 'none'
-            : shortDigest(run.model_inspection_digest)}
-        </dd>
-      </dl>
-      {detailSections.map((section) => (
-        <RunDetailSection key={section.title} section={section} />
-      ))}
-    </article>
-  );
-}
-
-function RunDetailSection({ section }: { section: RunDetailSectionRecord }) {
-  const entries = section.entries ?? [];
-  const table = section.table;
-  return (
-    <section className="run-evidence-panel">
-      <h5>{section.title}</h5>
-      {entries.length === 0 ? null : (
-        <dl>
-          {entries.map((entry) => (
-            <div key={entry.label}>
-              <dt>{entry.label}</dt>
-              <dd>{entry.value}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-      {table === undefined ? null : (
-        <div className="run-validation-table" role="table" aria-label={table.aria_label}>
-          <div className="run-validation-row header" role="row">
-            {table.columns.map((column) => (
-              <span key={column} role="columnheader">{column}</span>
-            ))}
-          </div>
-          {table.rows.map((row, index) => (
-            <div className="run-validation-row" key={index} role="row">
-              {row.map((value, valueIndex) => (
-                <span key={`${index}-${valueIndex}`} role="cell">{value}</span>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
   );
 }
 

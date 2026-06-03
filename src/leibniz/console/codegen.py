@@ -157,8 +157,10 @@ export type BenchmarkResultRecord = {
   cost_axes: CostAxisRecord[];
   score_axes?: ScoreAxisRecord[];
   leaderboard: ModelResultRecord[];
+  model_candidates: ModelResultRecord[];
   frontiers: Record<string, ModelResultRecord[]>;
   training_history: RunResultRecord[];
+  plot_runs: RunResultRecord[];
   model_inspections: ModelInspectionRecord[];
 };
 
@@ -198,6 +200,7 @@ export type CostSummaryRecord = {
 
 export type ModelResultRecord = {
   model_key: string;
+  result_status: 'accepted' | 'tentative';
   architecture_digest: string;
   benchmark_id: string;
   score: number;
@@ -214,6 +217,7 @@ export type ModelResultRecord = {
 
 export type RunResultRecord = {
   source_kind: string;
+  result_status: 'accepted' | 'tentative';
   source_path: string;
   run_id: string;
   run_slug: string;
@@ -354,17 +358,23 @@ function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultReco
     cost_axes: arrayOf(record.cost_axes, `${path}.cost_axes`, parseCostAxis),
     score_axes: optional(record.score_axes, `${path}.score_axes`, (value, valuePath) => arrayOf(value, valuePath, parseScoreAxis)),
     leaderboard: arrayOf(record.leaderboard, `${path}.leaderboard`, parseModelResult),
+    model_candidates: arrayOf(record.model_candidates, `${path}.model_candidates`, parseModelResult),
     frontiers: parseFrontiers(record.frontiers, `${path}.frontiers`),
     training_history: arrayOf(record.training_history, `${path}.training_history`, parseRunResult),
+    plot_runs: arrayOf(record.plot_runs, `${path}.plot_runs`, parseRunResult),
     model_inspections: arrayOf(record.model_inspections ?? [], `${path}.model_inspections`, parseModelInspectionRecord),
   };
 }
 
 function parseModelResult(value: unknown, path: string): ModelResultRecord {
   const record = requireRecord(value, path, transportError);
-  requireStrings(record, path, ['model_key', 'architecture_digest', 'benchmark_id']);
+  requireStrings(record, path, ['model_key', 'result_status', 'architecture_digest', 'benchmark_id']);
+  if (record.result_status !== 'accepted' && record.result_status !== 'tentative') {
+    throw transportError(`${path}.result_status must be accepted or tentative`);
+  }
   return withFields(record, {
     model_key: requireString(record.model_key, `${path}.model_key`, transportError),
+    result_status: requireString(record.result_status, `${path}.result_status`, transportError) as 'accepted' | 'tentative',
     architecture_digest: requireString(record.architecture_digest, `${path}.architecture_digest`, transportError),
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
@@ -384,6 +394,7 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
   const record = requireRecord(value, path, transportError);
   requireStrings(record, path, [
     'source_kind',
+    'result_status',
     'source_path',
     'run_id',
     'run_slug',
@@ -392,6 +403,9 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
     'model_key',
     'measurement_dataset_digest',
   ]);
+  if (record.result_status !== 'accepted' && record.result_status !== 'tentative') {
+    throw transportError(`${path}.result_status must be accepted or tentative`);
+  }
   return withFields(record, {
     measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
