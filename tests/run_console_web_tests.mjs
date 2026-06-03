@@ -289,6 +289,8 @@ function assertBenchmarkModelWorkbenchStructure() {
     'benchmark-model-validation-chart',
     'benchmark-model-cost-grid',
     'Graph Operations',
+    'Provenance',
+    'modelProvenanceReferences',
     'benchmark-model-operation-shape-grid',
   ];
   for (const marker of requiredPanelMarkers) {
@@ -298,6 +300,9 @@ function assertBenchmarkModelWorkbenchStructure() {
   }
   if (panel.includes('benchmark-model-rail') || panel.includes('benchmark-model-card')) {
     throw new Error('BenchmarksPanel must not expose unsupported model selector rail');
+  }
+  if (panel.includes("label: 'Artifacts'")) {
+    throw new Error('BenchmarksPanel must label provenance by the records it actually renders');
   }
 
   const requiredStyleMarkers = [
