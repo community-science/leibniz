@@ -6,6 +6,7 @@ import {
   type ModelResultRecord,
   type ResultViewRecord,
   type RunResultRecord,
+  type ScoreAxisRecord,
 } from './resultViews.ts';
 
 export type BenchmarkResultEntry = {
@@ -50,6 +51,10 @@ export type BenchmarkCostAxisGroup = {
 const fallbackLogCostDomain: [number, number] = [0, 20];
 const fallbackScoreDomain: [number, number] = [0, 1.05];
 const denseLogTickThreshold = 14;
+const standardScoreAxes: ScoreAxisRecord[] = [
+  { key: 'absolute', label: 'Absolute' },
+  { key: 'relative', label: 'Relative' },
+];
 const standardCostAxisGroups: BenchmarkCostAxisGroup[] = [
   {
     axes: [
@@ -130,6 +135,26 @@ export function benchmarkCostAxis(
   return axes[0]?.key ?? standardCostAxes[0]!.key;
 }
 
+export function benchmarkScoreAxes(
+  result: BenchmarkResultRecord | undefined,
+): ScoreAxisRecord[] {
+  const axes = result?.score_axes ?? [];
+  if (axes.length > 0) {
+    return axes;
+  }
+  return [standardScoreAxes[0]!];
+}
+
+export function benchmarkScoreAxis(
+  selectedAxis: string,
+  axes: ScoreAxisRecord[],
+): string {
+  if (axes.some((axis) => axis.key === selectedAxis)) {
+    return selectedAxis;
+  }
+  return axes[0]?.key ?? standardScoreAxes[0]!.key;
+}
+
 export function emptyFrontiersForCostAxes(
   axes: CostAxisRecord[],
 ): Record<string, ModelResultRecord[]> {
@@ -182,14 +207,16 @@ export function modelComparisonRows(
 export function benchmarkPlotModel(
   result: BenchmarkResultRecord,
   costAxis: string,
+  scoreAxis = 'absolute',
 ): BenchmarkPlotModel {
-  const frontierKeys = new Set((result.frontiers[costAxis] ?? []).map((model) => model.model_key));
+  const frontierModels = frontierModelResults(result.leaderboard, costAxis, scoreAxis);
+  const frontierKeys = new Set(frontierModels.map((model) => model.model_key));
   const points = result.leaderboard
-    .map((model) => plotPoint(model, costAxis, frontierKeys.has(model.model_key)))
+    .map((model) => plotPoint(model, costAxis, scoreAxis, frontierKeys.has(model.model_key)))
     .filter((point): point is BenchmarkPlotModelPoint => point !== null)
     .sort((left, right) => left.cost - right.cost || right.score - left.score);
-  const frontierPoints = (result.frontiers[costAxis] ?? [])
-    .map((model) => plotPoint(model, costAxis, true))
+  const frontierPoints = frontierModels
+    .map((model) => plotPoint(model, costAxis, scoreAxis, true))
     .filter((point): point is BenchmarkPlotModelPoint => point !== null)
     .sort((left, right) => left.cost - right.cost || right.score - left.score);
   const costLogs = points.map((point) => point.logCost);
@@ -213,9 +240,10 @@ export function benchmarkPlotModel(
 export function sortedModelResults(
   models: ModelResultRecord[],
   costAxis: string,
+  scoreAxis: string,
   sort: ModelResultSort,
 ): ModelResultRecord[] {
-  return [...models].sort((left, right) => compareModelResults(left, right, costAxis, sort));
+  return [...models].sort((left, right) => compareModelResults(left, right, costAxis, scoreAxis, sort));
 }
 
 export function nextModelResultSort(
@@ -259,6 +287,11 @@ export function costValue(costSummary: Record<string, unknown>, costAxis: string
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+export function scoreValue(model: ModelResultRecord, scoreAxis: string): number {
+  const viewScore = model.score_views?.[scoreAxis]?.score;
+  return typeof viewScore === 'number' && Number.isFinite(viewScore) ? viewScore : model.score;
+}
+
 export function formatCost(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
@@ -296,15 +329,16 @@ function compareModelResults(
   left: ModelResultRecord,
   right: ModelResultRecord,
   costAxis: string,
+  scoreAxis: string,
   sort: ModelResultSort,
 ): number {
   const direction = sort.direction === 'ascending' ? 1 : -1;
-  const result = compareBySortKey(left, right, costAxis, sort.key);
+  const result = compareBySortKey(left, right, costAxis, scoreAxis, sort.key);
   if (result !== 0) {
     return result * direction;
   }
   return (
-    right.score - left.score ||
+    scoreValue(right, scoreAxis) - scoreValue(left, scoreAxis) ||
     costValue(left.cost_summary, costAxis) - costValue(right.cost_summary, costAxis)
   );
 }
@@ -313,10 +347,11 @@ function compareBySortKey(
   left: ModelResultRecord,
   right: ModelResultRecord,
   costAxis: string,
+  scoreAxis: string,
   key: ModelResultSortKey,
 ): number {
   if (key === 'score') {
-    return left.score - right.score;
+    return scoreValue(left, scoreAxis) - scoreValue(right, scoreAxis);
   }
   if (key === 'cost') {
     return costValue(left.cost_summary, costAxis) - costValue(right.cost_summary, costAxis);
@@ -337,10 +372,12 @@ function defaultSortDirection(key: ModelResultSortKey): SortDirection {
 function plotPoint(
   model: ModelResultRecord,
   costAxis: string,
+  scoreAxis: string,
   frontier: boolean,
 ): BenchmarkPlotModelPoint | null {
   const cost = costValue(model.cost_summary, costAxis);
-  if (!Number.isFinite(cost) || cost <= 0 || !Number.isFinite(model.score)) {
+  const score = scoreValue(model, scoreAxis);
+  if (!Number.isFinite(cost) || cost <= 0 || !Number.isFinite(score)) {
     return null;
   }
   return {
@@ -348,10 +385,36 @@ function plotPoint(
     label: shortDigest(model.architecture_digest),
     cost,
     logCost: Math.log2(cost),
-    score: model.score,
+    score,
     frontier,
     model,
   };
+}
+
+function frontierModelResults(
+  models: ModelResultRecord[],
+  costAxis: string,
+  scoreAxis: string,
+): ModelResultRecord[] {
+  const ordered = [...models]
+    .filter((model) => {
+      const cost = costValue(model.cost_summary, costAxis);
+      return cost > 0 && Number.isFinite(cost) && Number.isFinite(scoreValue(model, scoreAxis));
+    })
+    .sort((left, right) =>
+      costValue(left.cost_summary, costAxis) - costValue(right.cost_summary, costAxis) ||
+      scoreValue(right, scoreAxis) - scoreValue(left, scoreAxis),
+    );
+  const frontier: ModelResultRecord[] = [];
+  let bestScore = -Infinity;
+  for (const model of ordered) {
+    const score = scoreValue(model, scoreAxis);
+    if (score > bestScore) {
+      frontier.push(model);
+      bestScore = score;
+    }
+  }
+  return frontier;
 }
 
 function logCostDomain(values: number[]): [number, number] {

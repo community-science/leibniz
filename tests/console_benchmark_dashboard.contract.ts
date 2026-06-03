@@ -3,6 +3,8 @@ import {
   benchmarkCostAxis,
   benchmarkPlotModel,
   benchmarkResultsForTask,
+  benchmarkScoreAxes,
+  benchmarkScoreAxis,
   emptyFrontiersForCostAxes,
   modelComparisonRows,
   nextModelResultSort,
@@ -37,10 +39,24 @@ assertEqual(
   'parameter_count',
   'missing cost axis fallback',
 );
+assertEqual(
+  benchmarkScoreAxes(undefined).map((axis) => axis.key).join(','),
+  'absolute',
+  'default score axes',
+);
+assertEqual(
+  benchmarkScoreAxis('missing_axis', benchmarkScoreAxes(undefined)),
+  'absolute',
+  'missing score axis fallback',
+);
 
 const result: BenchmarkResultRecord = {
   benchmark_id: targetBenchmark,
   cost_axes: [{ key: 'parameter_count', label: 'Parameters' }],
+  score_axes: [
+    { key: 'absolute', label: 'Absolute' },
+    { key: 'relative', label: 'Relative' },
+  ],
   frontiers: {
     parameter_count: [
       {
@@ -59,6 +75,10 @@ const result: BenchmarkResultRecord = {
         points: [],
         run_ids: ['run-a'],
         score: 0.75,
+        score_views: {
+          absolute: { key: 'absolute', label: 'Absolute', score: 0.75 },
+          relative: { key: 'relative', label: 'Relative', score: 1200 },
+        },
         source_kinds: ['local'],
       },
     ],
@@ -80,6 +100,10 @@ const result: BenchmarkResultRecord = {
       points: [],
       run_ids: ['run-a'],
       score: 0.75,
+      score_views: {
+        absolute: { key: 'absolute', label: 'Absolute', score: 0.75 },
+        relative: { key: 'relative', label: 'Relative', score: 1200 },
+      },
       source_kinds: ['local'],
     },
     {
@@ -98,6 +122,10 @@ const result: BenchmarkResultRecord = {
       points: [],
       run_ids: ['run-b'],
       score: 0.5,
+      score_views: {
+        absolute: { key: 'absolute', label: 'Absolute', score: 0.5 },
+        relative: { key: 'relative', label: 'Relative', score: 900 },
+      },
       source_kinds: ['local'],
     },
   ],
@@ -303,8 +331,12 @@ assertEqual(
   'result-local model inspection match',
 );
 const plotModel = benchmarkPlotModel(result, 'parameter_count');
+const relativePlotModel = benchmarkPlotModel(result, 'parameter_count', 'relative');
 assertEqual(plotModel.points.length, 2, 'plot point count');
+assertEqual(benchmarkScoreAxes(result).map((axis) => axis.key).join(','), 'absolute,relative', 'result score axes');
+assertEqual(benchmarkScoreAxis('relative', benchmarkScoreAxes(result)), 'relative', 'relative score axis');
 assertEqual(plotModel.frontierPoints.length, 1, 'plot frontier count');
+assertEqual(relativePlotModel.points[0]?.score, 1200, 'relative plot score');
 assertEqual(plotModel.staircase.length, 1, 'plot staircase point count');
 assertEqual(plotModel.xTicks.includes(16), true, 'plot log ticks');
 assertEqual(plotModel.xDomain[0], 0, 'plot default x minimum');
@@ -314,12 +346,20 @@ assertEqual(plotModel.xMinorTicks.includes(2), true, 'plot minor x ticks');
 assertEqual(plotModel.yDomain[0], 0, 'plot y starts at zero');
 assertEqual(plotModel.yDomain[1], 1.05, 'plot y ceiling follows score scale');
 assertEqual(
-  sortedModelResults(result.leaderboard, 'parameter_count', {
+  sortedModelResults(result.leaderboard, 'parameter_count', 'absolute', {
     key: 'cost',
     direction: 'descending',
   })[0]?.model_key,
   'model-b',
   'model cost sort',
+);
+assertEqual(
+  sortedModelResults(result.leaderboard, 'parameter_count', 'relative', {
+    key: 'score',
+    direction: 'ascending',
+  })[0]?.model_key,
+  'model-b',
+  'relative score sort',
 );
 assertEqual(
   nextModelResultSort({ key: 'score', direction: 'descending' }, 'score').direction,

@@ -71,6 +71,7 @@ _document_suffix = document_filename_suffix()
 _manifest_filename = "manifest" + _document_suffix
 _default_results_root = Path("results")
 _publication_directories = (
+    "competitions",
     "imports/publication_bundles",
     "measurements",
     "models",
@@ -511,6 +512,8 @@ class _BenchmarkRunRecord:
     model_inspection_path: Path | None
     measurement_dataset: MeasurementDataset
     measurement_dataset_digest: ContentDigest
+    competition_profile: Mapping[str, object] | None = None
+    competition_profile_digest: ContentDigest | None = None
     sampled_competence: Mapping[str, object] | None = None
     training_summary: Mapping[str, object] | None = None
 
@@ -543,6 +546,14 @@ class _BenchmarkRunRecord:
         if self.training_summary is not None:
             record["training_diagnostics"] = _training_diagnostics_record(run=self)
         return record
+
+
+@dataclass(frozen=True, slots=True)
+class _ModelCompetitionOutcome:
+    left_model_key: str
+    right_model_key: str
+    left_score: float
+    sample_count: int
 
 
 def _publication_documents(
@@ -639,6 +650,11 @@ def _local_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
                 model_inspection_path=model_inspection_path.resolve(),
                 measurement_dataset=dataset,
                 measurement_dataset_digest=dataset.digest,
+                competition_profile=_competition_profile(summary, results_root=results_root),
+                competition_profile_digest=_optional_digest(
+                    summary.get("competition_profile_digest"),
+                    field="competition_profile_digest",
+                ),
                 sampled_competence=sampled_competence,
                 training_summary=summary,
             )
@@ -713,6 +729,8 @@ def _local_progress_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord
                 model_inspection_path=None,
                 measurement_dataset=empty_dataset,
                 measurement_dataset_digest=measurement_dataset_digest,
+                competition_profile=None,
+                competition_profile_digest=None,
                 sampled_competence=sampled_competence,
                 training_summary=summary,
             )
@@ -767,10 +785,30 @@ def _imported_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]
                 model_inspection_path=None,
                 measurement_dataset=bundle.measurement_dataset,
                 measurement_dataset_digest=bundle.measurement_dataset.digest,
+                competition_profile=None,
+                competition_profile_digest=None,
                 sampled_competence=package.sampled_competence,
             )
         )
     return tuple(records)
+
+
+def _competition_profile(
+    summary: Mapping[str, object],
+    *,
+    results_root: Path,
+) -> Mapping[str, object] | None:
+    path_value = summary.get("competition_profile_path")
+    if path_value is None:
+        return None
+    path = _local_artifact_path(
+        results_root=results_root,
+        value=path_value,
+        field="competition_profile_path",
+    )
+    record = load_object_document(path.read_bytes(), description="competition profile")
+    _validate_competition_profile(record, "competition_profile")
+    return record
 
 
 def _sampled_competence(summary: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -1277,6 +1315,7 @@ def _benchmark_result_record(
     record: dict[str, object] = {
         "benchmark_id": str(runs[0].benchmark_id),
         "cost_axes": _benchmark_cost_axis_records(),
+        "score_axes": _benchmark_score_axis_records(models),
         "leaderboard": list(models),
         "frontiers": {
             axis: _frontier_records(models, cost_axis=axis)
@@ -1296,6 +1335,18 @@ def _benchmark_cost_axis_records() -> list[dict[str, object]]:
         }
         for key, label in _benchmark_cost_axes
     ]
+
+
+def _benchmark_score_axis_records(
+    models: tuple[Mapping[str, object], ...],
+) -> list[dict[str, object]]:
+    axes: list[dict[str, object]] = [{"key": "absolute", "label": "Absolute"}]
+    if any(
+        "relative" in _extract.mapping(model.get("score_views"), "score_views")
+        for model in models
+    ):
+        axes.append({"key": "relative", "label": "Relative"})
+    return axes
 
 
 def _model_inspection_records(
@@ -1323,6 +1374,7 @@ def _model_result_records(
     )
     chance_mass = _chance_mass(manifest)
     records: list[dict[str, object]] = []
+    best_runs: dict[str, _BenchmarkRunRecord] = {}
     for model_key, model_runs in grouped.items():
         ordered_runs = tuple(sorted(model_runs, key=_run_sort_key))
         points = _competence_points(ordered_runs)
@@ -1334,20 +1386,30 @@ def _model_result_records(
             ordered_runs,
             key=lambda run: (run.score, -_cost_value(run.cost_summary, "parameter_count")),
         )
+        best_runs[model_key] = best_run
+        score_basis = {
+            "kind": "competence-integral-over-complexity-v1",
+            "score_unit": "bits",
+            "complexity_axis": "log2-distinguishable-states",
+            "reference_baseline_complexity": reference_baseline_complexity,
+            "chance_mass": chance_mass,
+            "point_score": "accepted-mass",
+            "local_competence": "above-chance-accepted-mass",
+            "integration": "trapezoid-over-observed-complexity",
+        }
         record: dict[str, object] = {
             "model_key": model_key,
             "architecture_digest": str(best_run.architecture_digest),
             "benchmark_id": str(best_run.benchmark_id),
             "score": score,
-            "score_basis": {
-                "kind": "competence-integral-over-complexity-v1",
-                "score_unit": "bits",
-                "complexity_axis": "log2-distinguishable-states",
-                "reference_baseline_complexity": reference_baseline_complexity,
-                "chance_mass": chance_mass,
-                "point_score": "accepted-mass",
-                "local_competence": "above-chance-accepted-mass",
-                "integration": "trapezoid-over-observed-complexity",
+            "score_basis": score_basis,
+            "score_views": {
+                "absolute": {
+                    "key": "absolute",
+                    "label": "Absolute",
+                    "score": score,
+                    "basis": score_basis,
+                }
             },
             "observed_complexities": [point["complexity"] for point in points],
             "points": list(points),
@@ -1363,7 +1425,131 @@ def _model_result_records(
             inspection=best_run.model_inspection,
         )
         records.append(record)
+    _add_relative_score_views(records, best_runs=best_runs)
     return tuple(sorted(records, key=_model_sort_key))
+
+
+def _add_relative_score_views(
+    records: list[dict[str, object]],
+    *,
+    best_runs: Mapping[str, _BenchmarkRunRecord],
+) -> None:
+    if len(records) < 2:
+        return
+    competition_outcomes = _prediction_competition_outcomes(best_runs)
+    if not competition_outcomes:
+        return
+    relative_scores = _relative_model_scores(best_runs, outcomes=competition_outcomes)
+    for record in records:
+        model_key = str(record["model_key"])
+        score_views = cast(dict[str, object], record["score_views"])
+        score_views["relative"] = {
+            "key": "relative",
+            "label": "Relative",
+            "score": relative_scores.get(model_key, _relative_score_baseline),
+            "basis": {
+                "kind": "model-competition-elo-like-v1",
+                "score_unit": "rating-points",
+                "baseline": _relative_score_baseline,
+                "pair_delta": "400-logit10-paired-win-rate",
+                "competition_mechanic": "paired-prediction-accepted-mass",
+                "pair_outcome": "higher-score-wins",
+                "tie_value": 0.5,
+            },
+        }
+
+
+_relative_score_baseline = 1000.0
+_relative_score_scale = 400.0
+_relative_score_epsilon = 1.0e-6
+
+
+def _relative_model_scores(
+    best_runs: Mapping[str, _BenchmarkRunRecord],
+    *,
+    outcomes: tuple[_ModelCompetitionOutcome, ...],
+) -> dict[str, float]:
+    score_totals = dict.fromkeys(best_runs, 0.0)
+    weight_totals = dict.fromkeys(best_runs, 0)
+    for outcome in outcomes:
+        left_delta = _elo_like_delta(outcome.left_score)
+        score_totals[outcome.left_model_key] += left_delta * outcome.sample_count
+        score_totals[outcome.right_model_key] -= left_delta * outcome.sample_count
+        weight_totals[outcome.left_model_key] += outcome.sample_count
+        weight_totals[outcome.right_model_key] += outcome.sample_count
+    return {
+        model_key: (
+            _relative_score_baseline
+            if weight_totals[model_key] == 0
+            else _relative_score_baseline + score_totals[model_key] / weight_totals[model_key]
+        )
+        for model_key in sorted(best_runs)
+    }
+
+
+def _prediction_competition_outcomes(
+    best_runs: Mapping[str, _BenchmarkRunRecord],
+) -> tuple[_ModelCompetitionOutcome, ...]:
+    competition_scores = {
+        model_key: _competition_scores_by_observation(run)
+        for model_key, run in best_runs.items()
+        if run.competition_profile is not None
+    }
+    outcomes: list[_ModelCompetitionOutcome] = []
+    model_keys = sorted(competition_scores)
+    for left_index, left_key in enumerate(model_keys):
+        for right_key in model_keys[left_index + 1:]:
+            shared_observations = sorted(
+                set(competition_scores[left_key]) & set(competition_scores[right_key])
+            )
+            if not shared_observations:
+                continue
+            left_wins = sum(
+                competition_scores[left_key][observation_id]
+                > competition_scores[right_key][observation_id]
+                for observation_id in shared_observations
+            )
+            ties = sum(
+                competition_scores[left_key][observation_id]
+                == competition_scores[right_key][observation_id]
+                for observation_id in shared_observations
+            )
+            sample_count = len(shared_observations)
+            left_win_rate = (left_wins + 0.5 * ties) / sample_count
+            outcomes.append(
+                _ModelCompetitionOutcome(
+                    left_model_key=left_key,
+                    right_model_key=right_key,
+                    left_score=left_win_rate,
+                    sample_count=sample_count,
+                )
+            )
+    return tuple(outcomes)
+
+
+def _competition_scores_by_observation(run: _BenchmarkRunRecord) -> dict[str, float]:
+    if run.competition_profile is None:
+        return {}
+    scores: dict[str, float] = {}
+    for value in _as_sequence(
+        run.competition_profile.get("entries"),
+        "competition_profile.entries",
+    ):
+        entry = _extract.mapping(value, "competition_profile.entries")
+        observation_id = _extract.non_empty_string(
+            entry.get("observation_id"),
+            "competition_profile.observation_id",
+        )
+        scores[observation_id] = _as_nonnegative_number(
+            entry.get("score"),
+            "competition_profile.score",
+        )
+    return scores
+
+
+def _elo_like_delta(win_rate: float) -> float:
+    clipped = min(1.0 - _relative_score_epsilon, max(_relative_score_epsilon, win_rate))
+    return -_relative_score_scale * math.log10(1.0 / clipped - 1.0)
 
 
 def _model_cost_summary(
@@ -2101,6 +2287,7 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
             "benchmark_id",
             "complexity_axis",
             "cost_axes",
+            "score_axes",
             "leaderboard",
             "frontiers",
             "training_history",
@@ -2116,6 +2303,12 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
         _require_string_fields(
             _extract.mapping(axis, f"cost_axes.{index}"),
             f"cost_axes.{index}",
+            ("key", "label"),
+        )
+    for index, axis in enumerate(_as_sequence(record.get("score_axes", ()), "score_axes")):
+        _require_string_fields(
+            _extract.mapping(axis, f"score_axes.{index}"),
+            f"score_axes.{index}",
             ("key", "label"),
         )
     for index, model in enumerate(_record_sequence(record, "leaderboard")):
@@ -2159,6 +2352,42 @@ def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
             ),
             _field_path(prefix, "console_view_model"),
         )
+    if "score_views" in record:
+        for key, view in _extract.mapping(
+            record["score_views"],
+            _field_path(prefix, "score_views"),
+        ).items():
+            view_path = _field_path(prefix, f"score_views.{key}")
+            view_record = _extract.mapping(view, view_path)
+            _require_string_fields(view_record, view_path, ("key", "label"))
+            _as_nonnegative_number(view_record.get("score"), _field_path(view_path, "score"))
+            if "basis" in view_record:
+                _extract.mapping(view_record["basis"], _field_path(view_path, "basis"))
+
+
+def _validate_competition_profile(record: Mapping[str, object], prefix: str) -> None:
+    if record.get("format") != "leibniz.model-competition-profile":
+        raise LocalResultImportError(f"{prefix}: unsupported format")
+    if record.get("format_version") != 1:
+        raise LocalResultImportError(f"{prefix}: unsupported format_version")
+    _require_string_fields(
+        record,
+        prefix,
+        ("benchmark_id", "run_slug", "mechanic", "outcome_space_id"),
+    )
+    _as_positive_int(record.get("sample_count"), _field_path(prefix, "sample_count"))
+    entries = _as_sequence(record.get("entries"), _field_path(prefix, "entries"))
+    for index, entry in enumerate(entries):
+        entry_path = _field_path(prefix, f"entries.{index}")
+        entry_record = _extract.mapping(entry, entry_path)
+        _require_string_fields(
+            entry_record,
+            entry_path,
+            ("id", "observation_id", "accepted_outcome_id"),
+        )
+        score = _as_nonnegative_number(entry_record.get("score"), _field_path(entry_path, "score"))
+        if score > 1.0:
+            raise LocalResultImportError(f"{_field_path(entry_path, 'score')} must not exceed 1")
 
 
 def _validate_run_result(record: Mapping[str, object], prefix: str) -> None:
@@ -2390,6 +2619,12 @@ def _as_identifier(value: object, field: str) -> ProtocolIdentifier:
 
 def _as_digest(value: object, *, field: str) -> ContentDigest:
     return ContentDigest.from_string(value, field=field, error_type=LocalResultImportError)
+
+
+def _optional_digest(value: object, *, field: str) -> ContentDigest | None:
+    if value is None:
+        return None
+    return _as_digest(value, field=field)
 
 
 def _as_nonnegative_number(value: object, field: str) -> float:

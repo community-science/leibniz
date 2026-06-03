@@ -397,6 +397,13 @@ p {
   width: 100%;
 }
 
+.frontier-chart-score-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  height: 100%;
+}
+
 .frontier-chart-axis-group {
   display: flex;
   flex: 1 1 0;
@@ -405,6 +412,7 @@ p {
   gap: var(--space-sm);
 }
 
+.frontier-chart-score-selector > span,
 .frontier-chart-axis-group > span {
   flex: 0 0 auto;
   width: 80px;
@@ -419,6 +427,11 @@ p {
   text-transform: uppercase;
 }
 
+.frontier-chart-score-selector > span {
+  width: auto;
+}
+
+.frontier-chart-score-selector > div,
 .frontier-chart-axis-group > div {
   display: grid;
   grid-auto-columns: minmax(88px, 1fr);
@@ -428,6 +441,12 @@ p {
   min-width: 0;
 }
 
+.frontier-chart-score-selector > div {
+  grid-auto-columns: minmax(82px, 1fr);
+  min-width: 170px;
+}
+
+.frontier-chart-score-selector button,
 .frontier-chart-axis-group button {
   min-width: 0;
   overflow: hidden;
@@ -442,6 +461,8 @@ p {
   font-size: var(--font-label);
 }
 
+.frontier-chart-score-selector button:hover,
+.frontier-chart-score-selector button.active,
 .frontier-chart-axis-group button:hover,
 .frontier-chart-axis-group button.active {
   border-color: var(--frontier-accent-border);

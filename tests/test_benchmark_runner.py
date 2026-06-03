@@ -405,6 +405,14 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
         seed=101,
         index=1,
     )
+    competition_rung = cast(Any, benchmark_runner)._competition_curriculum_rung(
+        generator=generator,
+        component_count=1,
+        sample_count=2,
+        seed=101,
+        index=1,
+        resolution_assignment=final_rung.resolution_assignment,
+    )
 
     fake_evaluation_results: list[tuple[object, tuple[tuple[float, ...], ...]]] = []
 
@@ -464,11 +472,36 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
             {"kind": "checkpoint-evaluation-throughput", "sample_count": 2, "seconds": 0.1},
         )
 
+    def fake_generate_model_checkpoint_competition_profile(**kwargs: object) -> object:
+        competition_probabilities = tuple(
+            (0.1,) * 10 for _sample in competition_rung.batch.samples
+        )
+        return (
+            cast(Any, benchmark_runner)._prediction_competition_profile_record(
+                batch=competition_rung.batch,
+                probabilities=competition_probabilities,
+                outcome_space=cast(Any, kwargs["outcome_space"]),
+                run_slug=cast(str, kwargs["run_slug"]),
+                benchmark_id=cast(Any, kwargs["benchmark_id"]),
+                architecture_digest=cast(Any, kwargs["architecture_digest"]),
+            ),
+            {
+                "kind": "checkpoint-competition-throughput",
+                "sample_count": 2,
+                "seconds": 0.1,
+            },
+        )
+
     monkeypatch.setattr(benchmark_runner, "_train_and_predict", fake_train_and_predict)
     monkeypatch.setattr(
         benchmark_runner,
         "evaluate_model_checkpoint_artifact",
         fake_evaluate_model_checkpoint_artifact,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "generate_model_checkpoint_competition_profile",
+        fake_generate_model_checkpoint_competition_profile,
     )
 
     summary = run_benchmark(
@@ -489,6 +522,10 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
         summary.training_summary_path.read_bytes(),
         description="training summary",
     )
+    competition_profile = load_object_document(
+        summary.competition_profile_path.read_bytes(),
+        description="competition profile",
+    )
     sampled_competence = cast(dict[str, object], training_summary["sampled_competence"])
     points = cast(list[dict[str, object]], sampled_competence["points"])
 
@@ -508,6 +545,18 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
     ]
     assert all(".final." in measurement_id for measurement_id in measurement_ids)
     assert all(".rung0." not in measurement_id for measurement_id in measurement_ids)
+    competition_entries = cast(list[dict[str, object]], competition_profile["entries"])
+    assert competition_profile["mechanic"] == "paired-prediction-accepted-mass"
+    assert summary.competition_profile_path.parent.name == "digits"
+    assert summary.competition_profile_path.parent.parent.name == "competitions"
+    assert all(".competition." in cast(str, entry["id"]) for entry in competition_entries)
+    assert not {
+        cast(str, entry["observation_id"])
+        for entry in competition_entries
+    } & {
+        str(measurement.raw_scoring_evidence.observation_id)
+        for measurement in dataset.measurements
+    }
 
 
 def test_digits_benchmark_runner_records_convergence_protocol_controls(
@@ -970,9 +1019,15 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
     throughput = cast(dict[str, object], training_summary["throughput"])
     fallbacks = cast(list[dict[str, object]], throughput["runtime_fallbacks"])
 
-    assert calls == ["mps", "cpu", "cpu"]
+    assert calls == ["mps", "cpu", "cpu", "cpu"]
     assert training_summary["tensor_device"] == "cpu"
     assert throughput["tensor_device"] == "cpu"
+    assert cast(dict[str, object], throughput["evaluation"])["kind"] == (
+        "checkpoint-evaluation-throughput"
+    )
+    assert cast(dict[str, object], throughput["competition"])["kind"] == (
+        "checkpoint-competition-throughput"
+    )
     assert fallbacks == [
         {
             "from_device": "mps",
@@ -1063,7 +1118,7 @@ def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_dev
         throughput["operation_runtime_fallbacks"],
     )
 
-    assert calls == ["mps", "mps"]
+    assert calls == ["mps", "mps", "mps"]
     assert training_summary["tensor_device"] == "mps"
     assert "runtime_fallbacks" not in throughput
     assert operation_fallbacks == [

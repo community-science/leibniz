@@ -155,6 +155,7 @@ export type BenchmarkResultRecord = {
   benchmark_id: string;
   complexity_axis?: string;
   cost_axes: CostAxisRecord[];
+  score_axes?: ScoreAxisRecord[];
   leaderboard: ModelResultRecord[];
   frontiers: Record<string, ModelResultRecord[]>;
   training_history: RunResultRecord[];
@@ -164,6 +165,18 @@ export type BenchmarkResultRecord = {
 export type CostAxisRecord = {
   key: string;
   label: string;
+};
+
+export type ScoreAxisRecord = {
+  key: string;
+  label: string;
+};
+
+export type ScoreViewRecord = {
+  key: string;
+  label: string;
+  score: number;
+  basis?: Record<string, unknown>;
 };
 
 export type CompetencePointRecord = {
@@ -189,6 +202,7 @@ export type ModelResultRecord = {
   benchmark_id: string;
   score: number;
   score_basis?: Record<string, unknown>;
+  score_views?: Record<string, ScoreViewRecord>;
   observed_complexities: number[];
   points: CompetencePointRecord[];
   cost_summary: CostSummaryRecord;
@@ -338,6 +352,7 @@ function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultReco
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     complexity_axis: optional(record.complexity_axis, `${path}.complexity_axis`, (item, itemPath) => requireString(item, itemPath, transportError)),
     cost_axes: arrayOf(record.cost_axes, `${path}.cost_axes`, parseCostAxis),
+    score_axes: optional(record.score_axes, `${path}.score_axes`, (value, valuePath) => arrayOf(value, valuePath, parseScoreAxis)),
     leaderboard: arrayOf(record.leaderboard, `${path}.leaderboard`, parseModelResult),
     frontiers: parseFrontiers(record.frontiers, `${path}.frontiers`),
     training_history: arrayOf(record.training_history, `${path}.training_history`, parseRunResult),
@@ -354,6 +369,7 @@ function parseModelResult(value: unknown, path: string): ModelResultRecord {
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
     score_basis: optional(record.score_basis, `${path}.score_basis`, parseScoreBasis),
+    score_views: optional(record.score_views, `${path}.score_views`, parseScoreViews),
     observed_complexities: numberArray(record.observed_complexities, `${path}.observed_complexities`),
     points: arrayOf(record.points, `${path}.points`, parseCompetencePoint),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
@@ -405,6 +421,32 @@ function parseCostAxis(value: unknown, path: string): CostAxisRecord {
   const record = requireRecord(value, path, transportError);
   requireStrings(record, path, ['key', 'label']);
   return record as CostAxisRecord;
+}
+
+function parseScoreAxis(value: unknown, path: string): ScoreAxisRecord {
+  const record = requireRecord(value, path, transportError);
+  requireStrings(record, path, ['key', 'label']);
+  return record as ScoreAxisRecord;
+}
+
+function parseScoreViews(value: unknown, path: string): Record<string, ScoreViewRecord> {
+  const record = requireRecord(value, path, transportError);
+  return Object.fromEntries(
+    Object.entries(record).map(([key, item]) => {
+      const itemPath = `${path}.${key}`;
+      const view = requireRecord(item, itemPath, transportError);
+      requireStrings(view, itemPath, ['key', 'label']);
+      return [
+        key,
+        {
+          key: requireString(view.key, `${itemPath}.key`, transportError),
+          label: requireString(view.label, `${itemPath}.label`, transportError),
+          score: requireNumber(view.score, `${itemPath}.score`, transportError),
+          basis: optional(view.basis, `${itemPath}.basis`, parseScoreBasis),
+        },
+      ];
+    }),
+  );
 }
 
 function parseCompetencePoint(value: unknown, path: string): CompetencePointRecord {

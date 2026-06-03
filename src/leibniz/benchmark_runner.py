@@ -73,6 +73,7 @@ __all__ = [
     "BenchmarkRunSummary",
     "CheckpointModelPredictor",
     "evaluate_model_checkpoint_artifact",
+    "generate_model_checkpoint_competition_profile",
     "load_model_checkpoint_artifact",
     "load_model_checkpoint_predictor",
     "ModelCheckpointArtifact",
@@ -436,6 +437,7 @@ class BenchmarkRunSummary:
     model_inspection_path: Path
     training_summary_path: Path
     model_artifact_root: Path
+    competition_profile_path: Path
     dry_run: bool
 
     def to_record(self) -> dict[str, object]:
@@ -452,6 +454,7 @@ class BenchmarkRunSummary:
             "model_inspection_path": self.model_inspection_path.as_posix(),
             "training_summary_path": self.training_summary_path.as_posix(),
             "model_artifact_root": self.model_artifact_root.as_posix(),
+            "competition_profile_path": self.competition_profile_path.as_posix(),
             "dry_run": self.dry_run,
         }
 
@@ -632,6 +635,31 @@ def run_benchmark(
             ),
         )
     )
+    competition_seed = _unpredictable_evaluation_seed()
+    competition_profile, checkpoint_competition_throughput = (
+        generate_model_checkpoint_competition_profile(
+            architecture=architecture,
+            generator=generator,
+            outcome_space=outcome_space,
+            component_count=_component_count,
+            sample_count=plan.resolved_evaluation_sample_count,
+            seed=competition_seed,
+            index=training_result.training_frontier_index,
+            resolution_assignment=(
+                training_result.training_rungs[
+                    training_result.training_frontier_index
+                ].resolution_assignment
+            ),
+            tensor_device=cast(
+                TensorRuntimeDevice,
+                training_result.training_run.protocol.tensor_device,
+            ),
+            checkpoint=selected_checkpoint,
+            run_slug=summary.run_slug,
+            benchmark_id=generator.benchmark_manifest.id,
+            architecture_digest=model_inspection.architecture.record_digest,
+        )
+    )
     measurements = tuple(
         measurement
         for group in measurement_groups
@@ -650,6 +678,7 @@ def run_benchmark(
     )
     _write_document(summary.measurement_dataset_path, dataset.to_record())
     _write_document(summary.model_inspection_path, model_inspection.to_record())
+    _write_document(summary.competition_profile_path, competition_profile)
     _write_document(
         summary.training_summary_path,
         {
@@ -693,6 +722,7 @@ def run_benchmark(
             "throughput": _completed_throughput_record(
                 training_result.throughput,
                 checkpoint_evaluation=checkpoint_evaluation_throughput,
+                checkpoint_competition=checkpoint_competition_throughput,
             ),
             "sampled_competence": sampled_competence,
             "architecture": model_inspection.architecture.to_record(),
@@ -705,6 +735,10 @@ def run_benchmark(
             "selected_model_checkpoint": selected_checkpoint.to_record(),
             "selected_model_checkpoint_policy": "lowest-validation-loss",
             "evaluation_model_artifact": selected_checkpoint.to_record(),
+            "competition_profile_path": summary.competition_profile_path.as_posix(),
+            "competition_profile_digest": str(ContentDigest.from_value(competition_profile)),
+            "competition_seed": competition_seed,
+            "competition_model_artifact": selected_checkpoint.to_record(),
         },
     )
     progress_path.unlink(missing_ok=True)
@@ -738,6 +772,12 @@ def _run_summary(
             plan.results_root / "training" / benchmark_atom / f"{run_slug}{_document_suffix}"
         ),
         model_artifact_root=(plan.results_root / "models" / benchmark_atom / run_slug),
+        competition_profile_path=(
+            plan.results_root
+            / "competitions"
+            / benchmark_atom
+            / f"{run_slug}{_document_suffix}"
+        ),
         dry_run=plan.dry_run,
     )
 
@@ -796,6 +836,30 @@ def _training_curriculum_rung(
             component_count=component_count,
             start_index=index,
         ),
+    )
+
+
+def _competition_curriculum_rung(
+    *,
+    generator: ObservationGenerator,
+    component_count: int,
+    sample_count: int,
+    seed: int,
+    index: int,
+    resolution_assignment: AxisAssignment,
+) -> _CurriculumRung:
+    batch = generator.sample_batch(
+        component_count=component_count,
+        sample_count=sample_count,
+        seed=seed + 9_000_009 + 2_000_003 * index,
+        resolution_assignment=resolution_assignment,
+        variation_extent=_full_variation_extent,
+    )
+    return _CurriculumRung(
+        index=index,
+        resolution_assignment=resolution_assignment,
+        seed=batch.seed,
+        batch=batch,
     )
 
 
@@ -1326,6 +1390,7 @@ def _train_and_predict_on_device(
                     training_counter=training_counter,
                     validation_counter=validation_counter,
                     evaluation_counter=evaluation_counter,
+                    competition_counter=None,
                     roofline=runtime_roofline_record(runtime),
                     work_estimates=work_estimates,
                     phase_timings=phase_timings,
@@ -1378,6 +1443,7 @@ def _train_and_predict_on_device(
             training_counter=training_counter,
             validation_counter=validation_counter,
             evaluation_counter=evaluation_counter,
+            competition_counter=None,
             roofline=runtime_roofline_record(runtime),
             work_estimates=work_estimates,
             phase_timings=phase_timings,
@@ -1437,6 +1503,58 @@ def evaluate_model_checkpoint_artifact(
     if not results:
         raise BenchmarkRunnerError("checkpoint evaluation did not produce any results")
     return tuple(results), evaluation_counter.to_record(kind="checkpoint-evaluation-throughput")
+
+
+def generate_model_checkpoint_competition_profile(
+    *,
+    architecture: ArchitectureManifest,
+    generator: ObservationGenerator,
+    outcome_space: OutcomeSpace,
+    component_count: int,
+    sample_count: int,
+    seed: int,
+    index: int,
+    resolution_assignment: AxisAssignment,
+    tensor_device: TensorRuntimeDevice,
+    checkpoint: ModelCheckpointArtifact,
+    run_slug: str,
+    benchmark_id: ProtocolIdentifier,
+    architecture_digest: ContentDigest | None,
+) -> tuple[dict[str, object], Mapping[str, object]]:
+    """Generate relative-competition evidence from a saved checkpoint artifact."""
+
+    predictor = load_model_checkpoint_predictor(
+        architecture=architecture,
+        outcome_space=outcome_space,
+        checkpoint=checkpoint,
+        tensor_device=tensor_device,
+    )
+    rung = _competition_curriculum_rung(
+        generator=generator,
+        component_count=component_count,
+        sample_count=sample_count,
+        seed=seed,
+        index=index,
+        resolution_assignment=resolution_assignment,
+    )
+    competition_counter = _ThroughputCounter()
+    competition_started = time.perf_counter()
+    predictions = predictor.predict_batch(rung.batch)
+    competition_counter.add(
+        seconds=time.perf_counter() - competition_started,
+        samples=len(rung.batch.samples),
+    )
+    return (
+        _prediction_competition_profile_record(
+            batch=rung.batch,
+            probabilities=predictions,
+            outcome_space=outcome_space,
+            run_slug=run_slug,
+            benchmark_id=benchmark_id,
+            architecture_digest=architecture_digest,
+        ),
+        competition_counter.to_record(kind="checkpoint-competition-throughput"),
+    )
 
 
 def load_model_checkpoint_predictor(
@@ -1553,10 +1671,14 @@ def _completed_throughput_record(
     training_throughput: Mapping[str, object],
     *,
     checkpoint_evaluation: Mapping[str, object],
+    checkpoint_competition: Mapping[str, object] | None = None,
 ) -> Mapping[str, object]:
     record = dict(training_throughput)
     record["evaluation"] = dict(checkpoint_evaluation)
     record["checkpoint_evaluation"] = dict(checkpoint_evaluation)
+    if checkpoint_competition is not None:
+        record["competition"] = dict(checkpoint_competition)
+        record["checkpoint_competition"] = dict(checkpoint_competition)
     return record
 
 
@@ -2126,6 +2248,7 @@ def _throughput_record(
     training_counter: _ThroughputCounter,
     validation_counter: _ThroughputCounter,
     evaluation_counter: _ThroughputCounter,
+    competition_counter: _ThroughputCounter | None,
     roofline: Mapping[str, object],
     work_estimates: _TrainingWorkEstimates | None,
     phase_timings: TimingCollector,
@@ -2135,6 +2258,11 @@ def _throughput_record(
     training = training_counter.to_record(kind="training-throughput")
     validation = validation_counter.to_record(kind="validation-throughput")
     evaluation = evaluation_counter.to_record(kind="evaluation-throughput")
+    competition = (
+        None
+        if competition_counter is None
+        else competition_counter.to_record(kind="competition-throughput")
+    )
     record: dict[str, object] = {
         "kind": "benchmark-throughput",
         "tensor_runtime": "pytorch",
@@ -2152,6 +2280,8 @@ def _throughput_record(
             work_estimates=work_estimates,
         ),
     }
+    if competition is not None:
+        record["competition"] = competition
     if fallback_errors:
         record["runtime_fallbacks"] = [
             {
@@ -2425,6 +2555,42 @@ def _mean_prediction_accepted_mass(
         for sample, row in zip(batch.samples, probabilities, strict=True)
     )
     return math.fsum(accepted_mass) / len(accepted_mass)
+
+
+def _prediction_competition_profile_record(
+    *,
+    batch: GeneratedObservationBatch,
+    probabilities: tuple[tuple[float, ...], ...],
+    outcome_space: OutcomeSpace,
+    run_slug: str,
+    benchmark_id: ProtocolIdentifier,
+    architecture_digest: ContentDigest | None,
+) -> dict[str, object]:
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    outcome_indexes = {outcome_id: index for index, outcome_id in enumerate(outcome_ids)}
+    return {
+        "format": "leibniz.model-competition-profile",
+        "format_version": 1,
+        "benchmark_id": str(benchmark_id),
+        "run_slug": run_slug,
+        "architecture_digest": None if architecture_digest is None else str(architecture_digest),
+        "mechanic": "paired-prediction-accepted-mass",
+        "seed": batch.seed,
+        "sample_count": len(batch.samples),
+        "outcome_space_id": str(outcome_space.id),
+        "entries": [
+            {
+                "id": (
+                    f"benchmarks.{_identifier_atom(benchmark_id)}.competition."
+                    f"{run_slug}.sample-{sample.index}@0.1.0"
+                ),
+                "observation_id": str(sample.observation.id),
+                "accepted_outcome_id": sample.outcome_id,
+                "score": row[outcome_indexes[sample.outcome_id]],
+            }
+            for sample, row in zip(batch.samples, probabilities, strict=True)
+        ],
+    }
 
 
 def _chance_accepted_mass(outcome_ids: tuple[str, ...]) -> float:

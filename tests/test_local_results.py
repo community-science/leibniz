@@ -1,7 +1,7 @@
 import math
 import subprocess
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -166,6 +166,51 @@ def test_console_result_view_validates_benchmark_leaderboard_models(tmp_path: Pa
 
     with pytest.raises(LocalResultImportError, match="model_key"):
         load_console_result_view(canonical_document_bytes(view))
+
+
+def test_relative_competition_does_not_read_absolute_measurements() -> None:
+    run_a = _benchmark_run_record_for_competition(
+        model_key="model-a",
+        run_id="run-a",
+        competition_profile=None,
+    )
+    run_b = _benchmark_run_record_for_competition(
+        model_key="model-b",
+        run_id="run-b",
+        competition_profile=None,
+    )
+
+    assert cast(Any, local_results)._prediction_competition_outcomes(
+        {"model-a": run_a, "model-b": run_b}
+    ) == ()
+
+    competition_a = _competition_profile_record(
+        run_slug="run-a",
+        score=0.9,
+    )
+    competition_b = _competition_profile_record(
+        run_slug="run-b",
+        score=0.1,
+    )
+    run_a = _benchmark_run_record_for_competition(
+        model_key="model-a",
+        run_id="run-a",
+        competition_profile=competition_a,
+    )
+    run_b = _benchmark_run_record_for_competition(
+        model_key="model-b",
+        run_id="run-b",
+        competition_profile=competition_b,
+    )
+
+    outcomes = cast(Any, local_results)._prediction_competition_outcomes(
+        {"model-a": run_a, "model-b": run_b}
+    )
+
+    assert len(outcomes) == 1
+    assert outcomes[0].left_model_key == "model-a"
+    assert outcomes[0].right_model_key == "model-b"
+    assert outcomes[0].left_score == 1.0
 
 
 def test_console_result_view_validates_model_detail_tables(tmp_path: Path) -> None:
@@ -770,6 +815,62 @@ def _digits_publication_bundle_record(
 
 def _digits_dataset() -> MeasurementDataset:
     return MeasurementDataset.from_record({"measurements": [_digits_measurement().to_record()]})
+
+
+def _benchmark_run_record_for_competition(
+    *,
+    model_key: str,
+    run_id: str,
+    competition_profile: dict[str, object] | None,
+) -> object:
+    dataset = _digits_dataset()
+    architecture = _architecture().manifest
+    digest = ContentDigest.from_value({"model": model_key})
+    return cast(Any, local_results)._BenchmarkRunRecord(
+        source_kind="test",
+        source_path=Path(f"results/training/{run_id}.json"),
+        run_id=run_id,
+        run_slug=run_id,
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
+        architecture_digest=digest,
+        model_key=model_key,
+        complexity=1.0,
+        measurement_count=len(dataset.measurements),
+        score=1.0,
+        cost_summary={"component_count": 1, "parameter_count": 1},
+        architecture=architecture.to_record(),
+        model_inspection={},
+        model_inspection_digest=digest,
+        model_inspection_path=None,
+        measurement_dataset=dataset,
+        measurement_dataset_digest=dataset.digest,
+        competition_profile=competition_profile,
+        competition_profile_digest=(
+            None if competition_profile is None else ContentDigest.from_value(competition_profile)
+        ),
+    )
+
+
+def _competition_profile_record(*, run_slug: str, score: float) -> dict[str, object]:
+    return {
+        "format": "leibniz.model-competition-profile",
+        "format_version": 1,
+        "benchmark_id": "benchmarks.digits@0.1.0",
+        "run_slug": run_slug,
+        "architecture_digest": "sha256:0000000000000000",
+        "mechanic": "paired-prediction-accepted-mass",
+        "seed": 9000110,
+        "sample_count": 1,
+        "outcome_space_id": "benchmarks.digits.outcomes@0.1.0",
+        "entries": [
+            {
+                "id": f"benchmarks.digits.competition.{run_slug}.sample-0@0.1.0",
+                "observation_id": "benchmarks.digits.observations.competition.sample-0@0.1.0",
+                "accepted_outcome_id": "digit-7",
+                "score": score,
+            }
+        ],
+    }
 
 
 def _git(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
