@@ -49,7 +49,7 @@ import type {
 } from './resultViews.ts';
 
 type SampleCardDensity = 'standard' | 'compact';
-type ModelArtifactView = 'model' | 'architecture' | 'training' | 'artifacts';
+type ModelArtifactView = 'model' | 'architecture' | 'training' | 'provenance';
 type ModelArtifactFlowItem = {
   icon: LucideIcon;
   label: string;
@@ -372,7 +372,7 @@ function BenchmarkModelInspector({
       {artifactView === 'training' ? (
         <ModelTrainingDetail runs={runs} />
       ) : null}
-      {artifactView === 'artifacts' ? (
+      {artifactView === 'provenance' ? (
         <ModelProvenanceDetail inspection={inspection} />
       ) : null}
     </article>
@@ -417,11 +417,11 @@ function ModelArtifactFlow({
     },
     {
       icon: Fingerprint,
-      label: 'Artifacts',
-      value: inspection?.model_artifacts.length
-        ? `${inspection.model_artifacts.length} records`
-        : 'not recorded',
-      view: 'artifacts',
+      label: 'Provenance',
+      value: inspection === undefined
+        ? 'inspection pending'
+        : `${modelProvenanceReferences(inspection).length} references`,
+      view: 'provenance',
     },
   ];
   return (
@@ -898,19 +898,7 @@ function ModelProvenanceDetail({
   if (inspection === undefined) {
     return null;
   }
-  const references = [
-    referenceEntry('Architecture', inspection.architecture),
-    referenceEntry('Model manifest', inspection.model_manifest),
-    referenceEntry('Submission package', inspection.submission_package),
-    referenceEntry('Benchmark', inspection.benchmark_manifest),
-    referenceEntry('Measurements', inspection.measurement_dataset),
-    ...inspection.model_artifacts.map((reference, index) =>
-      referenceEntry(`Model artifact ${index + 1}`, reference),
-    ),
-    ...inspection.training_provenance.map((reference, index) =>
-      referenceEntry(`Training provenance ${index + 1}`, reference),
-    ),
-  ].filter((entry): entry is { label: string; reference: ArtifactReferenceRecord } => entry !== null);
+  const references = modelProvenanceReferences(inspection);
   if (references.length === 0) {
     return null;
   }
@@ -929,6 +917,24 @@ function ModelProvenanceDetail({
       </div>
     </section>
   );
+}
+
+function modelProvenanceReferences(
+  inspection: ModelInspectionRecord,
+): { label: string; reference: ArtifactReferenceRecord }[] {
+  return [
+    referenceEntry('Architecture', inspection.architecture),
+    referenceEntry('Model manifest', inspection.model_manifest),
+    referenceEntry('Submission package', inspection.submission_package),
+    referenceEntry('Benchmark', inspection.benchmark_manifest),
+    referenceEntry('Measurements', inspection.measurement_dataset),
+    ...inspection.model_artifacts.map((reference, index) =>
+      referenceEntry(`Model artifact ${index + 1}`, reference),
+    ),
+    ...inspection.training_provenance.map((reference, index) =>
+      referenceEntry(`Training provenance ${index + 1}`, reference),
+    ),
+  ].filter((entry): entry is { label: string; reference: ArtifactReferenceRecord } => entry !== null);
 }
 
 function runsForModel(
