@@ -7,7 +7,13 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast
 
-from leibniz.artifacts import ArtifactIndex, ArtifactReference, reference_for_record
+from leibniz.artifacts import (
+    ArtifactIndex,
+    ArtifactReference,
+    first_duplicate_reference,
+    reference_for_record,
+    reference_sort_key,
+)
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.federation_ingest import FederationIngestPlan
@@ -162,7 +168,7 @@ class AuthorityIndex:
             raise AuthorityIndexValidationError(
                 "validations must contain at least one validation entry"
             )
-        duplicate_artifact = _first_duplicate_reference(self.artifacts)
+        duplicate_artifact = first_duplicate_reference(self.artifacts)
         if duplicate_artifact is not None:
             raise AuthorityIndexValidationError(f"duplicate artifact: {duplicate_artifact}")
         duplicate_dependency = _first_duplicate_dependency(self.dependencies)
@@ -178,7 +184,7 @@ class AuthorityIndex:
         object.__setattr__(
             self,
             "artifacts",
-            tuple(sorted(self.artifacts, key=_reference_sort_key)),
+            tuple(sorted(self.artifacts, key=reference_sort_key)),
         )
         object.__setattr__(
             self,
@@ -394,7 +400,7 @@ def _validation_entries_for(
     artifacts: tuple[ArtifactReference, ...],
     dependencies: tuple[AuthorityDependency, ...],
 ) -> tuple[AuthorityIndexValidationEntry, ...]:
-    artifact_keys = {_reference_sort_key(artifact) for artifact in artifacts}
+    artifact_keys = {reference_sort_key(artifact) for artifact in artifacts}
     entries = [
         AuthorityIndexValidationEntry(
             artifact=artifact,
@@ -415,7 +421,7 @@ def _validation_entries_for(
             message="dependency endpoint was not supplied as an indexed artifact",
         )
         for reference in dependency_references
-        if _reference_sort_key(reference) not in artifact_keys
+        if reference_sort_key(reference) not in artifact_keys
     )
     return tuple(entries)
 
@@ -424,7 +430,7 @@ def _unique_references(references: Iterable[ArtifactReference]) -> tuple[Artifac
     seen: set[tuple[str, str, str, str, str]] = set()
     unique: list[ArtifactReference] = []
     for reference in references:
-        key = _reference_sort_key(reference)
+        key = reference_sort_key(reference)
         if key in seen:
             continue
         seen.add(key)
@@ -458,16 +464,6 @@ def _as_string(value: object, *, field: str) -> str:
     return value
 
 
-def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:
-    return (
-        reference.kind,
-        str(reference.protocol_id) if reference.protocol_id is not None else "",
-        str(reference.content_digest) if reference.content_digest is not None else "",
-        str(reference.record_digest) if reference.record_digest is not None else "",
-        reference.external_uri if reference.external_uri is not None else "",
-    )
-
-
 def _dependency_sort_key(dependency: AuthorityDependency) -> tuple[str, str, str]:
     return (
         _reference_identity(dependency.source),
@@ -484,18 +480,6 @@ def _validation_sort_key(
         validation.status,
         validation.message,
     )
-
-
-def _first_duplicate_reference(
-    references: tuple[ArtifactReference, ...],
-) -> str | None:
-    seen: set[tuple[str, str, str, str, str]] = set()
-    for reference in references:
-        key = _reference_sort_key(reference)
-        if key in seen:
-            return _reference_identity(reference)
-        seen.add(key)
-    return None
 
 
 def _first_duplicate_dependency(
@@ -523,4 +507,4 @@ def _first_duplicate_validation(
 
 
 def _reference_identity(reference: ArtifactReference) -> str:
-    return "/".join(_reference_sort_key(reference))
+    return "/".join(reference_sort_key(reference))

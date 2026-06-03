@@ -6,7 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from leibniz.architectures import ArchitectureManifest
-from leibniz.artifacts import ArtifactReference
+from leibniz.artifacts import (
+    ArtifactReference,
+    first_duplicate_reference,
+    reference_sort_key,
+)
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
@@ -143,12 +147,12 @@ class ModelArtifactManifest:
             raise ModelArtifactManifestValidationError(
                 "model_artifacts must contain at least one artifact reference"
             )
-        duplicate = _first_duplicate_reference(self.model_artifacts)
+        duplicate = first_duplicate_reference(self.model_artifacts)
         if duplicate is not None:
             raise ModelArtifactManifestValidationError(
                 f"duplicate model artifact reference: {duplicate}"
             )
-        duplicate_provenance = _first_duplicate_reference(self.training_provenance)
+        duplicate_provenance = first_duplicate_reference(self.training_provenance)
         if duplicate_provenance is not None:
             raise ModelArtifactManifestValidationError(
                 f"duplicate training provenance reference: {duplicate_provenance}"
@@ -156,12 +160,12 @@ class ModelArtifactManifest:
         object.__setattr__(
             self,
             "model_artifacts",
-            tuple(sorted(self.model_artifacts, key=_reference_sort_key)),
+            tuple(sorted(self.model_artifacts, key=reference_sort_key)),
         )
         object.__setattr__(
             self,
             "training_provenance",
-            tuple(sorted(self.training_provenance, key=_reference_sort_key)),
+            tuple(sorted(self.training_provenance, key=reference_sort_key)),
         )
 
     @classmethod
@@ -265,21 +269,3 @@ class ModelArtifactManifestDocument:
         return cls(manifest=manifest, digest=manifest.digest)
 
 
-def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:
-    return (
-        reference.kind,
-        str(reference.protocol_id) if reference.protocol_id is not None else "",
-        str(reference.content_digest) if reference.content_digest is not None else "",
-        str(reference.record_digest) if reference.record_digest is not None else "",
-        reference.external_uri if reference.external_uri is not None else "",
-    )
-
-
-def _first_duplicate_reference(references: tuple[ArtifactReference, ...]) -> str | None:
-    seen: set[str] = set()
-    for reference in references:
-        key = str(ContentDigest.from_value(reference.to_record()))
-        if key in seen:
-            return key
-        seen.add(key)
-    return None

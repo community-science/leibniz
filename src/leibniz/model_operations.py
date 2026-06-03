@@ -7,7 +7,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
-from leibniz.artifacts import ArtifactReference
+from leibniz.artifacts import (
+    ArtifactReference,
+    first_duplicate,
+    first_duplicate_reference,
+    reference_sort_key,
+)
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
@@ -109,18 +114,18 @@ class ModelOperation:
             raise ModelOperationValidationError("outputs must contain at least one artifact")
         if self.observed_at == "":
             raise ModelOperationValidationError("observed_at must be nonempty")
-        duplicate_input = _first_duplicate(tuple(item.role for item in self.inputs))
+        duplicate_input = first_duplicate(tuple(item.role for item in self.inputs))
         if duplicate_input is not None:
             raise ModelOperationValidationError(f"duplicate input role: {duplicate_input}")
-        duplicate_output = _first_duplicate(tuple(item.role for item in self.outputs))
+        duplicate_output = first_duplicate(tuple(item.role for item in self.outputs))
         if duplicate_output is not None:
             raise ModelOperationValidationError(f"duplicate output role: {duplicate_output}")
-        duplicate_report = _first_duplicate_reference(self.reports)
+        duplicate_report = first_duplicate_reference(self.reports)
         if duplicate_report is not None:
             raise ModelOperationValidationError(f"duplicate report reference: {duplicate_report}")
         object.__setattr__(self, "inputs", tuple(sorted(self.inputs, key=lambda item: item.role)))
         object.__setattr__(self, "outputs", tuple(sorted(self.outputs, key=lambda item: item.role)))
-        object.__setattr__(self, "reports", tuple(sorted(self.reports, key=_reference_sort_key)))
+        object.__setattr__(self, "reports", tuple(sorted(self.reports, key=reference_sort_key)))
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ModelOperation:
@@ -212,7 +217,7 @@ def _operation_content_record(
     }
     if reports:
         record["reports"] = [
-            report.to_record() for report in sorted(reports, key=_reference_sort_key)
+            report.to_record() for report in sorted(reports, key=reference_sort_key)
         ]
     if observed_at is not None:
         record["observed_at"] = observed_at
@@ -254,30 +259,3 @@ def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
     return cast(tuple[object, ...], value)
 
 
-def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:
-    return (
-        reference.kind,
-        str(reference.protocol_id) if reference.protocol_id is not None else "",
-        str(reference.content_digest) if reference.content_digest is not None else "",
-        str(reference.record_digest) if reference.record_digest is not None else "",
-        reference.external_uri if reference.external_uri is not None else "",
-    )
-
-
-def _first_duplicate(values: tuple[object, ...]) -> object | None:
-    seen: set[object] = set()
-    for value in values:
-        if value in seen:
-            return value
-        seen.add(value)
-    return None
-
-
-def _first_duplicate_reference(references: tuple[ArtifactReference, ...]) -> str | None:
-    seen: set[str] = set()
-    for reference in references:
-        key = str(ContentDigest.from_value(reference.to_record()))
-        if key in seen:
-            return key
-        seen.add(key)
-    return None
