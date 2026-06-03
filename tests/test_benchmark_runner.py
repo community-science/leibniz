@@ -286,7 +286,10 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         "logarithmic"
     )
     assert evaluation_curriculum["rung_policy"] == "unbounded-competence-frontier"
-    assert evaluation_curriculum["gating_metric"] == "frontier-validation-loss-plateau"
+    assert (
+        evaluation_curriculum["gating_metric"]
+        == "monotone-frontier-validation-competence"
+    )
     assert evaluation_curriculum["frontier_index"] == 0
     assert [rung["index"] for rung in curriculum_rungs] == [0]
     assert {
@@ -305,7 +308,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         "source": "structured-training-curriculum",
         "frontier_sampling_weight": 0.7,
         "replay_sampling_weight": 0.3,
-        "gating_metric": "frontier-validation-loss-plateau",
+        "gating_metric": "monotone-frontier-validation-competence",
         "nuisance_policy": "warmup-to-full-then-fixed",
     }
     sampled_competence = cast(dict[str, object], training_summary["sampled_competence"])
@@ -606,6 +609,44 @@ def test_training_curriculum_is_not_step_indexed() -> None:
     assert "generation_memory_limit_bytes" not in source
     assert "on_plateau=advance_frontier" in source
     assert "initial_evaluation_rung" in source
+
+
+def test_training_curriculum_only_advances_on_improved_frontier_competence() -> None:
+    advances = cast(Any, benchmark_runner)._frontier_plateau_advances
+
+    assert advances(
+        frontier_competence=0.5,
+        previous_frontier_plateau_competence=None,
+    )
+    assert advances(
+        frontier_competence=0.75,
+        previous_frontier_plateau_competence=0.5,
+    )
+    assert not advances(
+        frontier_competence=0.5,
+        previous_frontier_plateau_competence=0.75,
+    )
+    assert not advances(
+        frontier_competence=0.75,
+        previous_frontier_plateau_competence=0.75,
+    )
+    assert not advances(
+        frontier_competence=0.0,
+        previous_frontier_plateau_competence=None,
+    )
+
+
+def test_frontier_plateau_competence_uses_bounded_validation_competence() -> None:
+    competence = cast(Any, benchmark_runner)._frontier_plateau_competence
+
+    assert math.isclose(
+        competence(validation_loss=0.0, outcome_count=10),
+        1.0,
+    )
+    assert math.isclose(
+        competence(validation_loss=math.log(10), outcome_count=10),
+        0.0,
+    )
 
 
 def test_evaluation_curriculum_candidates_are_complexity_sorted() -> None:
