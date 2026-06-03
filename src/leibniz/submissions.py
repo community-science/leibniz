@@ -13,7 +13,7 @@ from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDataset
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "SubmissionArtifact",
@@ -50,6 +50,9 @@ class SubmissionPackageValidationError(ValueError):
     """Raised when a submission package manifest is invalid."""
 
 
+_extract = RecordExtractor(error_type=SubmissionPackageValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class SubmissionArtifact:
     """Durable metadata for an artifact included in a submission package."""
@@ -73,7 +76,7 @@ class SubmissionArtifact:
         except ValueError as error:
             raise SubmissionPackageValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="artifacts.id"),
+            id=_extract.identifier(validated["id"], "artifacts.id"),
             digest=_as_digest(validated["digest"], field="artifacts.digest"),
             description=_as_optional_string(validated.get("description")),
         )
@@ -132,30 +135,30 @@ class SubmissionPackageManifest:
         try:
             validated = _submission_package_record.validate(record)
             benchmark_manifest = BenchmarkManifest.from_record(
-                _as_mapping(validated["benchmark_manifest"], field="benchmark_manifest")
+                _extract.mapping(validated["benchmark_manifest"], "benchmark_manifest")
             )
             architecture_manifest = ArchitectureManifest.from_record(
-                _as_mapping(validated["architecture_manifest"], field="architecture_manifest")
+                _extract.mapping(validated["architecture_manifest"], "architecture_manifest")
             )
             measurement_dataset = MeasurementDataset.from_record(
-                _as_mapping(validated["measurement_dataset"], field="measurement_dataset")
+                _extract.mapping(validated["measurement_dataset"], "measurement_dataset")
             )
             artifacts = tuple(
-                SubmissionArtifact.from_record(_as_mapping(item, field="artifacts"))
-                for item in _as_sequence(validated.get("artifacts", ()), field="artifacts")
+                SubmissionArtifact.from_record(_extract.mapping(item, "artifacts"))
+                for item in _extract.sequence(validated.get("artifacts", ()), "artifacts")
             )
-            sampled_competence = _optional_mapping(
+            sampled_competence = _extract.optional_mapping(
                 validated.get("sampled_competence"),
-                field="sampled_competence",
+                "sampled_competence",
             )
-            model_metadata = _optional_mapping(
+            model_metadata = _extract.optional_mapping(
                 validated.get("model_metadata"),
-                field="model_metadata",
+                "model_metadata",
             )
         except ValueError as error:
             raise SubmissionPackageValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             benchmark_manifest=benchmark_manifest,
             architecture_manifest=architecture_manifest,
             measurement_dataset=measurement_dataset,
@@ -202,41 +205,18 @@ class SubmissionPackageDocument:
             raise SubmissionPackageValidationError(str(error)) from error
         manifest = SubmissionPackageManifest.from_record(record)
         return cls(manifest=manifest, digest=manifest.digest)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise SubmissionPackageValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
 def _validate_measurement_dataset_manifest(
     *,
     dataset: MeasurementDataset,
     manifest: BenchmarkManifest,
 ) -> None:
     dataset.validate_manifest(manifest)
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise SubmissionPackageValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _optional_mapping(value: object, *, field: str) -> Mapping[str, object] | None:
-    if value is None:
-        return None
-    return _as_mapping(value, field=field)
-
-
 def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if isinstance(value, tuple):
-        return cast(tuple[object, ...], value)
     if isinstance(value, list):
         return tuple(cast(list[object], value))
-    else:
-        raise SubmissionPackageValidationError(f"{field}: expected parsed sequence")
+    if isinstance(value, tuple):
+        return cast(tuple[object, ...], value)
+    raise SubmissionPackageValidationError(f"{field}: expected sequence")
 
 
 def _as_optional_string(value: object) -> str | None:
@@ -286,7 +266,7 @@ def _validate_sampled_competence(
     points = record.get("points")
     if points is not None:
         for point in _as_sequence(points, field="sampled_competence.points"):
-            point_record = _as_mapping(point, field="sampled_competence.points")
+            point_record = _extract.mapping(point, "sampled_competence.points")
             _positive_int(
                 point_record.get("sample_count"),
                 field="sampled_competence.points.sample_count",
@@ -305,7 +285,7 @@ def _validate_model_metadata(record: Mapping[str, object]) -> None:
     cost_summary = record.get("cost_summary")
     if cost_summary is None:
         return
-    summary = _as_mapping(cost_summary, field="model_metadata.cost_summary")
+    summary = _extract.mapping(cost_summary, "model_metadata.cost_summary")
     for key, value in summary.items():
         if key.endswith("_components"):
             _as_sequence(value, field=f"model_metadata.cost_summary.{key}")

@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "ObservationShowcaseDocument",
@@ -42,6 +41,9 @@ _showcase_record = RecordSpec(
 
 class ObservationShowcaseValidationError(ValueError):
     """Raised when an observation showcase declaration is invalid."""
+
+
+_extract = RecordExtractor(error_type=ObservationShowcaseValidationError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,18 +88,18 @@ class ObservationShowcaseSample:
         except ValueError as error:
             raise ObservationShowcaseValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
-            label=_as_string(validated["label"], field="label"),
-            sample_index=_as_int(validated["sample_index"], field="sample_index"),
-            seed=_as_int(validated["seed"], field="seed"),
+            id=_extract.identifier(validated["id"], "id"),
+            label=_extract.string(validated["label"], "label"),
+            sample_index=_extract.integer(validated["sample_index"], "sample_index"),
+            seed=_extract.integer(validated["seed"], "seed"),
             component_sequence=tuple(
-                _as_int(index, field="component_sequence")
-                for index in _as_sequence(
+                _extract.integer(index, "component_sequence")
+                for index in _extract.sequence(
                     validated["component_sequence"],
-                    field="component_sequence",
+                    "component_sequence",
                 )
             ),
-            outcome_id=_optional_string(validated.get("outcome_id"), field="outcome_id"),
+            outcome_id=_extract.optional_string(validated.get("outcome_id"), "outcome_id"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -152,20 +154,20 @@ class ObservationShowcaseManifest:
         except ValueError as error:
             raise ObservationShowcaseValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
-            benchmark_id=_as_identifier(validated["benchmark_id"], field="benchmark_id"),
+            id=_extract.identifier(validated["id"], "id"),
+            benchmark_id=_extract.identifier(validated["benchmark_id"], "benchmark_id"),
             formation_declaration=ArtifactReference.from_record(
-                _as_mapping(validated["formation_declaration"], field="formation_declaration")
+                _extract.mapping(validated["formation_declaration"], "formation_declaration")
             ),
             materialization_declaration=ArtifactReference.from_record(
-                _as_mapping(
+                _extract.mapping(
                     validated["materialization_declaration"],
-                    field="materialization_declaration",
+                    "materialization_declaration",
                 )
             ),
             samples=tuple(
-                ObservationShowcaseSample.from_record(_as_mapping(sample, field="samples"))
-                for sample in _as_sequence(validated["samples"], field="samples")
+                ObservationShowcaseSample.from_record(_extract.mapping(sample, "samples"))
+                for sample in _extract.sequence(validated["samples"], "samples")
             ),
         )
 
@@ -198,44 +200,6 @@ class ObservationShowcaseDocument:
             raise ObservationShowcaseValidationError(str(error)) from error
         manifest = ObservationShowcaseManifest.from_record(record)
         return cls(manifest=manifest, digest=manifest.digest)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ObservationShowcaseValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ObservationShowcaseValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ObservationShowcaseValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
-def _as_string(value: object, *, field: str) -> str:
-    if not isinstance(value, str):
-        raise ObservationShowcaseValidationError(f"{field}: expected string")
-    return value
-
-
-def _optional_string(value: object, *, field: str) -> str | None:
-    if value is None:
-        return None
-    return _as_string(value, field=field)
-
-
-def _as_int(value: object, *, field: str) -> int:
-    if type(value) is not int:
-        raise ObservationShowcaseValidationError(f"{field}: expected integer")
-    return value
-
-
 def _first_duplicate(values: tuple[object, ...]) -> object | None:
     seen: set[object] = set()
     for value in values:

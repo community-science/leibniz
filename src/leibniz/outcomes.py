@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import cast
 
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.records import FieldSpec, RecordSpec, RecordValidationError
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec, RecordValidationError
 
 __all__ = [
     "AcceptedEvent",
@@ -80,6 +80,9 @@ class OutcomeSpaceValidationError(ValueError):
     """Raised when an outcome or outcome space is invalid."""
 
 
+_extract = RecordExtractor(error_type=OutcomeSpaceValidationError)
+
+
 class AcceptedEventValidationError(ValueError):
     """Raised when an accepted event is invalid."""
 
@@ -143,10 +146,10 @@ class OutcomeSpace:
         except RecordValidationError as error:
             raise OutcomeSpaceValidationError(str(error)) from error
         outcomes = tuple(
-            Outcome.from_record(_as_mapping(outcome, field="outcomes"))
+            Outcome.from_record(_extract.mapping(outcome, "outcomes"))
             for outcome in _as_tuple(validated["outcomes"], field="outcomes")
         )
-        identifier = _as_identifier(validated["id"], field="id")
+        identifier = _extract.identifier(validated["id"], "id")
         return cls(id=identifier, outcomes=outcomes)
 
     @property
@@ -193,8 +196,8 @@ class AcceptedEvent:
         except RecordValidationError as error:
             raise AcceptedEventValidationError(str(error)) from error
 
-        identifier = _as_identifier(validated["id"], field="id")
-        outcome_space_id = _as_identifier(validated["outcome_space_id"], field="outcome_space_id")
+        identifier = _extract.identifier(validated["id"], "id")
+        outcome_space_id = _extract.identifier(validated["outcome_space_id"], "outcome_space_id")
         if outcome_space_id != outcome_space.id:
             raise AcceptedEventValidationError(
                 f"outcome_space_id {outcome_space_id} does not match {outcome_space.id}"
@@ -315,15 +318,15 @@ class FiniteProbabilityMeasure:
         except RecordValidationError as error:
             raise ProbabilityMeasureValidationError(str(error)) from error
 
-        identifier = _as_identifier(validated["id"], field="id")
-        outcome_space_id = _as_identifier(validated["outcome_space_id"], field="outcome_space_id")
+        identifier = _extract.identifier(validated["id"], "id")
+        outcome_space_id = _extract.identifier(validated["outcome_space_id"], "outcome_space_id")
         if outcome_space_id != outcome_space.id:
             raise ProbabilityMeasureValidationError(
                 f"outcome_space_id {outcome_space_id} does not match {outcome_space.id}"
             )
 
         probabilities = tuple(
-            ProbabilityMass.from_record(_as_mapping(probability, field="probabilities"))
+            ProbabilityMass.from_record(_extract.mapping(probability, "probabilities"))
             for probability in _as_tuple(validated["probabilities"], field="probabilities")
         )
         unknown = tuple(
@@ -507,16 +510,16 @@ class RawScoringEvidence:
             )
 
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             observation_id=str(validated["observation_id"]),
-            outcome_space_id=_as_identifier(
-                validated["outcome_space_id"], field="outcome_space_id"
+            outcome_space_id=_extract.identifier(
+                validated["outcome_space_id"], "outcome_space_id"
             ),
-            accepted_event_id=_as_identifier(
-                validated["accepted_event_id"], field="accepted_event_id"
+            accepted_event_id=_extract.identifier(
+                validated["accepted_event_id"], "accepted_event_id"
             ),
-            probability_measure_id=_as_identifier(
-                validated["probability_measure_id"], field="probability_measure_id"
+            probability_measure_id=_extract.identifier(
+                validated["probability_measure_id"], "probability_measure_id"
             ),
             accepted_mass=float(cast(float | int, validated["accepted_mass"])),
             negative_log_score=negative_log_score,
@@ -537,22 +540,7 @@ class RawScoringEvidence:
             "accepted_mass": self.accepted_mass,
             "negative_log_score": negative_log_score,
         }
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise OutcomeSpaceValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
 def _as_tuple(value: object, *, field: str) -> tuple[object, ...]:
     if not isinstance(value, tuple):
         raise OutcomeSpaceValidationError(f"{field}: expected parsed sequence")
     return cast(tuple[object, ...], value)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise OutcomeSpaceValidationError(f"{field}: expected parsed identifier")
-    return value
-

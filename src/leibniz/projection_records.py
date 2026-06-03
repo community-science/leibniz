@@ -11,7 +11,7 @@ from leibniz.artifacts import ArtifactReference
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "ProjectionRecord",
@@ -66,6 +66,9 @@ _projection_record = RecordSpec(
 
 class ProjectionRecordValidationError(ValueError):
     """Raised when a projection record is invalid."""
+
+
+_extract = RecordExtractor(error_type=ProjectionRecordValidationError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,37 +134,37 @@ class ProjectionRecord:
         try:
             validated = _projection_record.validate(record)
             scope = tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="scope"))
-                for item in _as_sequence(validated["scope"], field="scope")
+                ArtifactReference.from_record(_extract.mapping(item, "scope"))
+                for item in _extract.sequence(validated["scope"], "scope")
             )
             evidence = tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="evidence"))
-                for item in _as_sequence(validated["evidence"], field="evidence")
+                ArtifactReference.from_record(_extract.mapping(item, "evidence"))
+                for item in _extract.sequence(validated["evidence"], "evidence")
             )
             assumptions = tuple(
-                _as_string(item, field="assumptions")
-                for item in _as_sequence(validated["assumptions"], field="assumptions")
+                _extract.non_empty_string(item, "assumptions")
+                for item in _extract.sequence(validated["assumptions"], "assumptions")
             )
             limitations = tuple(
-                _as_string(item, field="limitations")
-                for item in _as_sequence(validated["limitations"], field="limitations")
+                _extract.non_empty_string(item, "limitations")
+                for item in _extract.sequence(validated["limitations"], "limitations")
             )
         except ValueError as error:
             raise ProjectionRecordValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             subject=ArtifactReference.from_record(
-                _as_mapping(validated["subject"], field="subject")
+                _extract.mapping(validated["subject"], "subject")
             ),
-            predicate=_as_string(validated["predicate"], field="predicate"),
+            predicate=_extract.string(validated["predicate"], "predicate"),
             object=ArtifactReference.from_record(
-                _as_mapping(validated["object"], field="object")
+                _extract.mapping(validated["object"], "object")
             ),
             scope=scope,
             evidence=evidence,
-            modality=cast(_Modality, _as_string(validated["modality"], field="modality")),
-            status=cast(_Status, _as_string(validated["status"], field="status")),
-            statement=_as_string(validated["statement"], field="statement"),
+            modality=cast(_Modality, _extract.string(validated["modality"], "modality")),
+            status=cast(_Status, _extract.string(validated["status"], "status")),
+            statement=_extract.string(validated["statement"], "statement"),
             assumptions=assumptions,
             limitations=limitations,
         )
@@ -263,34 +266,6 @@ def _validate_nonempty_texts(values: tuple[str, ...], *, field: str) -> None:
         raise ProjectionRecordValidationError(f"{field} must contain at least one item")
     for value in values:
         _validate_nonempty_text(value, field=field)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ProjectionRecordValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ProjectionRecordValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ProjectionRecordValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
-def _as_string(value: object, *, field: str) -> str:
-    if not isinstance(value, str):
-        raise ProjectionRecordValidationError(f"{field}: expected string")
-    if not value:
-        raise ProjectionRecordValidationError(f"{field}: expected nonempty string")
-    return value
-
-
 def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:
     return (
         reference.kind,

@@ -7,6 +7,7 @@ data being checked against those rules.
 
 from __future__ import annotations
 
+import builtins
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -127,17 +128,41 @@ class RecordExtractor(ContractRuntimeSupport):
     def string(self, value: object, field: str) -> str:
         return _require_string(value, field=field, error_type=self.error_type)
 
+    def non_empty_string(self, value: object, field: str) -> str:
+        return _require_non_empty_string(value, field=field, error_type=self.error_type)
+
+    def optional_string(self, value: object, field: str) -> str | None:
+        return _require_optional_string(value, field=field, error_type=self.error_type)
+
     def boolean(self, value: object, field: str) -> bool:
         return _require_boolean(value, field=field, error_type=self.error_type)
 
     def integer(self, value: object, field: str) -> int:
         return _require_integer(value, field=field, error_type=self.error_type)
 
+    def positive_integer(self, value: object, field: str) -> int:
+        return _require_positive_integer(value, field=field, error_type=self.error_type)
+
+    def optional_integer(self, value: object, field: str) -> int | None:
+        return _require_optional_integer(value, field=field, error_type=self.error_type)
+
+    def float(self, value: object, field: str) -> float:
+        return _require_float(value, field=field, error_type=self.error_type)
+
+    def finite_float(self, value: object, field: str) -> float:
+        return _require_finite_float(value, field=field, error_type=self.error_type)
+
+    def optional_float(self, value: object, field: str) -> float | None:
+        return _require_optional_float(value, field=field, error_type=self.error_type)
+
     def identifier(self, value: object, field: str) -> ProtocolIdentifier:
         return _require_identifier(value, field=field, error_type=self.error_type)
 
     def mapping(self, value: object, field: str) -> Mapping[str, object]:
         return _require_mapping(value, field=field, error_type=self.error_type)
+
+    def optional_mapping(self, value: object, field: str) -> Mapping[str, object] | None:
+        return _require_optional_mapping(value, field=field, error_type=self.error_type)
 
     def sequence(self, value: object, field: str) -> tuple[object, ...]:
         return _require_sequence(value, field=field, error_type=self.error_type)
@@ -428,3 +453,93 @@ def _require_sequence(
     if not isinstance(value, tuple):
         raise error_type(f"{field}: expected parsed sequence")
     return cast(tuple[object, ...], value)
+
+
+def _require_non_empty_string(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> str:
+    if not isinstance(value, str) or not value:
+        raise error_type(f"{field}: expected nonempty string")
+    return value
+
+
+def _require_optional_string(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> str | None:
+    if value is None:
+        return None
+    return _require_string(value, field=field, error_type=error_type)
+
+
+def _require_float(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise error_type(f"{field}: expected number")
+    return builtins.float(value)
+
+
+def _require_finite_float(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> float:
+    result = _require_float(value, field=field, error_type=error_type)
+    if not math.isfinite(result):
+        raise error_type(f"{field}: expected finite number")
+    return result
+
+
+def _require_optional_float(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> float | None:
+    if value is None:
+        return None
+    return _require_float(value, field=field, error_type=error_type)
+
+
+def _require_optional_integer(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> int | None:
+    if value is None:
+        return None
+    return _require_integer(value, field=field, error_type=error_type)
+
+
+def _require_optional_mapping(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> Mapping[str, object] | None:
+    if value is None:
+        return None
+    return _require_mapping(value, field=field, error_type=error_type)
+
+
+def _require_positive_integer(
+    value: object,
+    *,
+    field: str,
+    error_type: type[ValueError] = ValueError,
+) -> int:
+    result = _require_integer(value, field=field, error_type=error_type)
+    if result <= 0:
+        raise error_type(f"{field}: expected positive integer")
+    return result

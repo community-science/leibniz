@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, cast
 
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "TrainingHistoryPoint",
@@ -84,6 +84,9 @@ class TrainingRunValidationError(ValueError):
     """Raised when a local training run record is invalid."""
 
 
+_extract = RecordExtractor(error_type=TrainingRunValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class TrainingProtocol:
     """Declared local training protocol for a benchmark run."""
@@ -148,46 +151,52 @@ class TrainingProtocol:
         except ValueError as error:
             raise TrainingRunValidationError(str(error)) from error
         return cls(
-            kind=_as_string(validated["kind"], "kind"),
-            objective=_as_string(validated["objective"], "objective"),
-            optimizer=cast(_optimizer_kind, _as_string(validated["optimizer"], "optimizer")),
-            learning_rate=_as_float(validated["learning_rate"], "learning_rate"),
-            schedule=cast(_schedule_kind, _as_string(validated["schedule"], "schedule")),
-            seed=_as_int(validated["seed"], "seed"),
-            batch_size=_as_int(validated["batch_size"], "batch_size"),
+            kind=_extract.non_empty_string(validated["kind"], "kind"),
+            objective=_extract.non_empty_string(validated["objective"], "objective"),
+            optimizer=cast(
+                _optimizer_kind,
+                _extract.non_empty_string(validated["optimizer"], "optimizer"),
+            ),
+            learning_rate=_extract.finite_float(validated["learning_rate"], "learning_rate"),
+            schedule=cast(
+                _schedule_kind,
+                _extract.non_empty_string(validated["schedule"], "schedule"),
+            ),
+            seed=_extract.integer(validated["seed"], "seed"),
+            batch_size=_extract.integer(validated["batch_size"], "batch_size"),
             max_steps=(
                 None
                 if "max_steps" not in validated
-                else _as_int(validated["max_steps"], "max_steps")
+                else _extract.integer(validated["max_steps"], "max_steps")
             ),
-            checkpoint_interval=_as_int(
+            checkpoint_interval=_extract.integer(
                 validated["checkpoint_interval"],
                 "checkpoint_interval",
             ),
-            gate_check_interval=_as_int(
+            gate_check_interval=_extract.integer(
                 validated["gate_check_interval"],
                 "gate_check_interval",
             ),
-            gate_sample_count=_as_int(
+            gate_sample_count=_extract.integer(
                 validated["gate_sample_count"],
                 "gate_sample_count",
             ),
-            gate_decision_rule=_as_string(
+            gate_decision_rule=_extract.non_empty_string(
                 validated["gate_decision_rule"],
                 "gate_decision_rule",
             ),
-            min_delta=_as_float(validated["min_delta"], "min_delta"),
-            patience=_as_int(validated["patience"], "patience"),
-            validation_source=_as_string(
+            min_delta=_extract.finite_float(validated["min_delta"], "min_delta"),
+            patience=_extract.integer(validated["patience"], "patience"),
+            validation_source=_extract.non_empty_string(
                 validated["validation_source"],
                 "validation_source",
             ),
-            min_steps=_as_int(validated.get("min_steps", 0), "min_steps"),
-            tensor_runtime=_as_string(
+            min_steps=_extract.integer(validated.get("min_steps", 0), "min_steps"),
+            tensor_runtime=_extract.non_empty_string(
                 validated.get("tensor_runtime", "pytorch"),
                 "tensor_runtime",
             ),
-            tensor_device=_as_string(
+            tensor_device=_extract.non_empty_string(
                 validated.get("tensor_device", "cpu"),
                 "tensor_device",
             ),
@@ -245,13 +254,13 @@ class TrainingHistoryPoint:
         except ValueError as error:
             raise TrainingRunValidationError(str(error)) from error
         return cls(
-            step=_as_int(validated["step"], "step"),
-            validation_check=_as_int(validated["validation_check"], "validation_check"),
-            validation_loss=_as_float(validated["validation_loss"], "validation_loss"),
-            stale_checks=_as_int(validated["stale_checks"], "stale_checks"),
+            step=_extract.integer(validated["step"], "step"),
+            validation_check=_extract.integer(validated["validation_check"], "validation_check"),
+            validation_loss=_extract.finite_float(validated["validation_loss"], "validation_loss"),
+            stale_checks=_extract.integer(validated["stale_checks"], "stale_checks"),
             learning_rates=tuple(
-                _as_float(rate, "learning_rates")
-                for rate in _as_sequence(validated.get("learning_rates", ()), "learning_rates")
+                _extract.finite_float(rate, "learning_rates")
+                for rate in _extract.sequence(validated.get("learning_rates", ()), "learning_rates")
             ),
         )
 
@@ -316,21 +325,21 @@ class TrainingRunRecord:
         except ValueError as error:
             raise TrainingRunValidationError(str(error)) from error
         return cls(
-            status=cast(_training_status, _as_string(validated["status"], "status")),
-            stop_reason=_as_string(validated["stop_reason"], "stop_reason"),
-            steps_run=_as_int(validated["steps_run"], "steps_run"),
+            status=cast(_training_status, _extract.non_empty_string(validated["status"], "status")),
+            stop_reason=_extract.non_empty_string(validated["stop_reason"], "stop_reason"),
+            steps_run=_extract.integer(validated["steps_run"], "steps_run"),
             training_compute=(
                 None
                 if "training_compute" not in validated
-                else _as_float(validated["training_compute"], "training_compute")
+                else _extract.finite_float(validated["training_compute"], "training_compute")
             ),
-            validation_checks=_as_int(validated["validation_checks"], "validation_checks"),
+            validation_checks=_extract.integer(validated["validation_checks"], "validation_checks"),
             protocol=TrainingProtocol.from_record(
-                _as_mapping(validated["protocol"], "protocol")
+                _extract.mapping(validated["protocol"], "protocol")
             ),
             validation_history=tuple(
-                TrainingHistoryPoint.from_record(_as_mapping(point, "validation_history"))
-                for point in _as_sequence(
+                TrainingHistoryPoint.from_record(_extract.mapping(point, "validation_history"))
+                for point in _extract.sequence(
                     validated["validation_history"],
                     "validation_history",
                 )
@@ -353,41 +362,6 @@ class TrainingRunRecord:
         if self.training_compute is not None:
             record["training_compute"] = self.training_compute
         return record
-
-
-def _as_float(value: object, field: str) -> float:
-    if not isinstance(value, int | float):
-        raise TrainingRunValidationError(f"{field}: expected number")
-    result = float(value)
-    if not math.isfinite(result):
-        raise TrainingRunValidationError(f"{field}: expected finite number")
-    return result
-
-
-def _as_int(value: object, field: str) -> int:
-    if type(value) is not int:
-        raise TrainingRunValidationError(f"{field}: expected integer")
-    return value
-
-
-def _as_mapping(value: object, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise TrainingRunValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple | list):
-        raise TrainingRunValidationError(f"{field}: expected sequence")
-    return tuple(cast(tuple[object, ...] | list[object], value))
-
-
-def _as_string(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise TrainingRunValidationError(f"{field}: expected nonempty string")
-    return value
-
-
 def _is_positive_finite(value: float) -> bool:
     return math.isfinite(float(value)) and value > 0
 

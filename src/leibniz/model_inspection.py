@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from leibniz.architectures import ArchitectureGraph, ArchitectureManifest
 from leibniz.artifacts import (
@@ -18,7 +17,7 @@ from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.model_manifests import ModelArtifactManifest
 from leibniz.model_operators import summarize_architecture_operators
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 from leibniz.submissions import SubmissionPackageManifest
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
@@ -158,6 +157,9 @@ class ModelInspectionValidationError(ValueError):
     """Raised when a model inspection record is invalid."""
 
 
+_extract = RecordExtractor(error_type=ModelInspectionValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class ModelGraphNodeEvidence:
     """Evidence references supporting claims about one architecture graph node path."""
@@ -198,18 +200,18 @@ class ModelGraphNodeEvidence:
             raise ModelInspectionValidationError(str(error)) from error
         return cls(
             node_path=tuple(
-                _as_string(node_id, field="node_path")
-                for node_id in _as_sequence(validated["node_path"], field="node_path")
+                _extract.string(node_id, "node_path")
+                for node_id in _extract.sequence(validated["node_path"], "node_path")
             ),
             claim_kinds=tuple(
-                _as_string(claim, field="claim_kinds")
-                for claim in _as_sequence(validated["claim_kinds"], field="claim_kinds")
+                _extract.string(claim, "claim_kinds")
+                for claim in _extract.sequence(validated["claim_kinds"], "claim_kinds")
             ),
             evidence_artifacts=tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="evidence_artifacts"))
-                for item in _as_sequence(
+                ArtifactReference.from_record(_extract.mapping(item, "evidence_artifacts"))
+                for item in _extract.sequence(
                     validated["evidence_artifacts"],
-                    field="evidence_artifacts",
+                    "evidence_artifacts",
                 )
             ),
         )
@@ -278,27 +280,27 @@ class ModelInspectionComponent:
         except ValueError as error:
             raise ModelInspectionValidationError(str(error)) from error
         return cls(
-            index=_as_int(validated["index"], field="index"),
-            kind=_as_string(validated["kind"], field="kind"),
-            parameters=_as_mapping(validated["parameters"], field="parameters"),
+            index=_extract.integer(validated["index"], "index"),
+            kind=_extract.string(validated["kind"], "kind"),
+            parameters=_extract.mapping(validated["parameters"], "parameters"),
             input_shape=_optional_shape(validated.get("input_shape"), field="input_shape"),
             output_shape=_optional_shape(validated.get("output_shape"), field="output_shape"),
-            operator=_optional_mapping(validated.get("operator"), field="operator"),
-            parameter_count=_optional_int(
+            operator=_extract.optional_mapping(validated.get("operator"), "operator"),
+            parameter_count=_extract.optional_integer(
                 validated.get("parameter_count"),
-                field="parameter_count",
+                "parameter_count",
             ),
-            storage_bytes=_optional_int(
+            storage_bytes=_extract.optional_integer(
                 validated.get("storage_bytes"),
-                field="storage_bytes",
+                "storage_bytes",
             ),
-            inference_compute=_optional_int(
+            inference_compute=_extract.optional_integer(
                 validated.get("inference_compute"),
-                field="inference_compute",
+                "inference_compute",
             ),
-            training_compute_per_sample=_optional_int(
+            training_compute_per_sample=_extract.optional_integer(
                 validated.get("training_compute_per_sample"),
-                field="training_compute_per_sample",
+                "training_compute_per_sample",
             ),
         )
 
@@ -382,35 +384,35 @@ class ModelInspectionCostSummary:
         except ValueError as error:
             raise ModelInspectionValidationError(str(error)) from error
         return cls(
-            component_count=_as_int(validated["component_count"], field="component_count"),
-            parameter_count=_optional_int(
+            component_count=_extract.integer(validated["component_count"], "component_count"),
+            parameter_count=_extract.optional_integer(
                 validated.get("parameter_count"),
-                field="parameter_count",
+                "parameter_count",
             ),
-            storage_bytes=_optional_int(
+            storage_bytes=_extract.optional_integer(
                 validated.get("storage_bytes"),
-                field="storage_bytes",
+                "storage_bytes",
             ),
-            inference_compute=_optional_int(
+            inference_compute=_extract.optional_integer(
                 validated.get("inference_compute"),
-                field="inference_compute",
+                "inference_compute",
             ),
-            training_compute_per_sample=_optional_int(
+            training_compute_per_sample=_extract.optional_integer(
                 validated.get("training_compute_per_sample"),
-                field="training_compute_per_sample",
+                "training_compute_per_sample",
             ),
             unknown_parameter_components=tuple(
-                _as_int(index, field="unknown_parameter_components")
-                for index in _as_sequence(
+                _extract.integer(index, "unknown_parameter_components")
+                for index in _extract.sequence(
                     validated["unknown_parameter_components"],
-                    field="unknown_parameter_components",
+                    "unknown_parameter_components",
                 )
             ),
             unknown_compute_components=tuple(
-                _as_int(index, field="unknown_compute_components")
-                for index in _as_sequence(
+                _extract.integer(index, "unknown_compute_components")
+                for index in _extract.sequence(
                     validated.get("unknown_compute_components", ()),
-                    field="unknown_compute_components",
+                    "unknown_compute_components",
                 )
             ),
         )
@@ -493,29 +495,29 @@ class ModelInspectionTraceStage:
         except ValueError as error:
             raise ModelInspectionValidationError(str(error)) from error
         return cls(
-            index=_as_int(validated["index"], field="index"),
-            kind=_as_string(validated["kind"], field="kind"),
-            syntax_alias=_as_string(validated["syntax_alias"], field="syntax_alias"),
-            operator_kind=_as_string(validated["operator_kind"], field="operator_kind"),
+            index=_extract.integer(validated["index"], "index"),
+            kind=_extract.string(validated["kind"], "kind"),
+            syntax_alias=_extract.string(validated["syntax_alias"], "syntax_alias"),
+            operator_kind=_extract.string(validated["operator_kind"], "operator_kind"),
             input_shape=_as_shape(validated["input_shape"], field="input_shape"),
             output_shape=_as_shape(validated["output_shape"], field="output_shape"),
             descriptor_axes=_string_mapping(
                 validated["descriptor_axes"],
                 field="descriptor_axes",
             ),
-            shape_law=_as_string(validated["shape_law"], field="shape_law"),
-            cost_law=_as_string(validated["cost_law"], field="cost_law"),
-            parameter_count=_optional_int(
+            shape_law=_extract.string(validated["shape_law"], "shape_law"),
+            cost_law=_extract.string(validated["cost_law"], "cost_law"),
+            parameter_count=_extract.optional_integer(
                 validated.get("parameter_count"),
-                field="parameter_count",
+                "parameter_count",
             ),
-            inference_compute=_optional_int(
+            inference_compute=_extract.optional_integer(
                 validated.get("inference_compute"),
-                field="inference_compute",
+                "inference_compute",
             ),
-            training_compute_per_sample=_optional_int(
+            training_compute_per_sample=_extract.optional_integer(
                 validated.get("training_compute_per_sample"),
-                field="training_compute_per_sample",
+                "training_compute_per_sample",
             ),
         )
 
@@ -581,14 +583,14 @@ class ModelInspectionTrace:
             input_shape=_as_shape(validated["input_shape"], field="input_shape"),
             output_shape=_as_shape(validated["output_shape"], field="output_shape"),
             stages=tuple(
-                ModelInspectionTraceStage.from_record(_as_mapping(stage, field="stages"))
-                for stage in _as_sequence(validated["stages"], field="stages")
+                ModelInspectionTraceStage.from_record(_extract.mapping(stage, "stages"))
+                for stage in _extract.sequence(validated["stages"], "stages")
             ),
             program_effects=tuple(
-                _as_mapping(effect, field="program_effects")
-                for effect in _as_sequence(
+                _extract.mapping(effect, "program_effects")
+                for effect in _extract.sequence(
                     validated.get("program_effects", ()),
-                    field="program_effects",
+                    "program_effects",
                 )
             ),
         )
@@ -674,43 +676,43 @@ class ModelInspectionGraphSummary:
         except ValueError as error:
             raise ModelInspectionValidationError(str(error)) from error
         return cls(
-            component_count=_as_int(validated["component_count"], field="component_count"),
-            edge_count=_as_int(validated["edge_count"], field="edge_count"),
-            input_count=_as_int(validated["input_count"], field="input_count"),
-            output_count=_as_int(validated["output_count"], field="output_count"),
+            component_count=_extract.integer(validated["component_count"], "component_count"),
+            edge_count=_extract.integer(validated["edge_count"], "edge_count"),
+            input_count=_extract.integer(validated["input_count"], "input_count"),
+            output_count=_extract.integer(validated["output_count"], "output_count"),
             input_node_ids=tuple(
-                _as_string(node_id, field="input_node_ids")
-                for node_id in _as_sequence(
+                _extract.string(node_id, "input_node_ids")
+                for node_id in _extract.sequence(
                     validated["input_node_ids"],
-                    field="input_node_ids",
+                    "input_node_ids",
                 )
             ),
             output_node_ids=tuple(
-                _as_string(node_id, field="output_node_ids")
-                for node_id in _as_sequence(
+                _extract.string(node_id, "output_node_ids")
+                for node_id in _extract.sequence(
                     validated["output_node_ids"],
-                    field="output_node_ids",
+                    "output_node_ids",
                 )
             ),
             component_kinds=tuple(
-                _as_string(kind, field="component_kinds")
-                for kind in _as_sequence(
+                _extract.string(kind, "component_kinds")
+                for kind in _extract.sequence(
                     validated["component_kinds"],
-                    field="component_kinds",
+                    "component_kinds",
                 )
             ),
             unsupported_parameter_components=tuple(
-                _as_int(index, field="unsupported_parameter_components")
-                for index in _as_sequence(
+                _extract.integer(index, "unsupported_parameter_components")
+                for index in _extract.sequence(
                     validated["unsupported_parameter_components"],
-                    field="unsupported_parameter_components",
+                    "unsupported_parameter_components",
                 )
             ),
             unsupported_compute_components=tuple(
-                _as_int(index, field="unsupported_compute_components")
-                for index in _as_sequence(
+                _extract.integer(index, "unsupported_compute_components")
+                for index in _extract.sequence(
                     validated["unsupported_compute_components"],
-                    field="unsupported_compute_components",
+                    "unsupported_compute_components",
                 )
             ),
         )
@@ -999,39 +1001,39 @@ class ModelInspectionRecord:
             validated = _inspection_record.validate(record)
             components = tuple(
                 ModelInspectionComponent.from_record(
-                    _as_mapping(component, field="components")
+                    _extract.mapping(component, "components")
                 )
-                for component in _as_sequence(validated["components"], field="components")
+                for component in _extract.sequence(validated["components"], "components")
             )
         except ValueError as error:
             raise ModelInspectionValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             architecture=ArtifactReference.from_record(
-                _as_mapping(validated["architecture"], field="architecture")
+                _extract.mapping(validated["architecture"], "architecture")
             ),
             input_shape=_as_shape(validated["input_shape"], field="input_shape"),
             output_shape=_as_shape(validated["output_shape"], field="output_shape"),
             components=components,
             cost_summary=ModelInspectionCostSummary.from_record(
-                _as_mapping(validated["cost_summary"], field="cost_summary")
+                _extract.mapping(validated["cost_summary"], "cost_summary")
             ),
             architecture_trace=ModelInspectionTrace.from_record(
-                _as_mapping(validated["architecture_trace"], field="architecture_trace")
+                _extract.mapping(validated["architecture_trace"], "architecture_trace")
             ),
             architecture_graph=ArchitectureGraph.from_record(
-                _as_mapping(validated["architecture_graph"], field="architecture_graph")
+                _extract.mapping(validated["architecture_graph"], "architecture_graph")
             ),
             architecture_summary=ModelInspectionGraphSummary.from_record(
-                _as_mapping(validated["architecture_summary"], field="architecture_summary")
+                _extract.mapping(validated["architecture_summary"], "architecture_summary")
             ),
             node_evidence=tuple(
                 ModelGraphNodeEvidence.from_record(
-                    _as_mapping(item, field="node_evidence")
+                    _extract.mapping(item, "node_evidence")
                 )
-                for item in _as_sequence(
+                for item in _extract.sequence(
                     validated["node_evidence"],
-                    field="node_evidence",
+                    "node_evidence",
                 )
             ),
             model_manifest=_optional_reference(validated.get("model_manifest"), "model_manifest"),
@@ -1048,17 +1050,17 @@ class ModelInspectionRecord:
                 "measurement_dataset",
             ),
             model_artifacts=tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="model_artifacts"))
-                for item in _as_sequence(
+                ArtifactReference.from_record(_extract.mapping(item, "model_artifacts"))
+                for item in _extract.sequence(
                     validated.get("model_artifacts", ()),
-                    field="model_artifacts",
+                    "model_artifacts",
                 )
             ),
             training_provenance=tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="training_provenance"))
-                for item in _as_sequence(
+                ArtifactReference.from_record(_extract.mapping(item, "training_provenance"))
+                for item in _extract.sequence(
                     validated.get("training_provenance", ()),
-                    field="training_provenance",
+                    "training_provenance",
                 )
             ),
         )
@@ -1226,29 +1228,9 @@ def _require_index_set(
 def _optional_reference(value: object, field: str) -> ArtifactReference | None:
     if value is None:
         return None
-    return ArtifactReference.from_record(_as_mapping(value, field=field))
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ModelInspectionValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ModelInspectionValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _optional_mapping(value: object, *, field: str) -> Mapping[str, object] | None:
-    if value is None:
-        return None
-    return _as_mapping(value, field=field)
-
-
+    return ArtifactReference.from_record(_extract.mapping(value, field))
 def _string_mapping(value: object, *, field: str) -> Mapping[str, str]:
-    mapping = _as_mapping(value, field=field)
+    mapping = _extract.mapping(value, field)
     result: dict[str, str] = {}
     for key, item in mapping.items():
         if not isinstance(item, str):
@@ -1257,34 +1239,10 @@ def _string_mapping(value: object, *, field: str) -> Mapping[str, str]:
     return result
 
 
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ModelInspectionValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
-def _as_string(value: object, *, field: str) -> str:
-    if not isinstance(value, str):
-        raise ModelInspectionValidationError(f"{field}: expected string")
-    return value
-
-
-def _as_int(value: object, *, field: str) -> int:
-    if type(value) is not int:
-        raise ModelInspectionValidationError(f"{field}: expected integer")
-    return value
-
-
-def _optional_int(value: object, *, field: str) -> int | None:
-    if value is None:
-        return None
-    return _as_int(value, field=field)
-
-
 def _as_shape(value: object, *, field: str) -> tuple[int, ...]:
     try:
         return TensorShape.from_record(
-            tuple(_as_int(axis, field=field) for axis in _as_sequence(value, field=field)),
+            tuple(_extract.integer(axis, field) for axis in _extract.sequence(value, field)),
             field=field,
         ).axes
     except TensorShapeValidationError as error:

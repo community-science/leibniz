@@ -14,7 +14,7 @@ from leibniz.prediction_spaces import (
     FiniteTokenSequenceSpace,
     PredictionSpaceValidationError,
 )
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "DirectFiniteProbabilityPrediction",
@@ -77,6 +77,9 @@ _token_sequence_prediction_record = RecordSpec(
 
 class PredictionResultValidationError(ValueError):
     """Raised when a prediction result record is invalid."""
+
+
+_extract = RecordExtractor(error_type=PredictionResultValidationError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,7 +164,7 @@ class PredictionMass:
         except ValueError as error:
             raise PredictionResultValidationError(str(error)) from error
         return cls(
-            outcome_index=_as_int(validated["outcome_index"], field="outcome_index"),
+            outcome_index=_extract.integer(validated["outcome_index"], "outcome_index"),
             probability=float(cast(float | int, validated["probability"])),
         )
 
@@ -197,7 +200,7 @@ class TokenSequenceProbability:
             raise PredictionResultValidationError(str(error)) from error
         return cls(
             tokens=tuple(
-                _as_int(token, field="tokens")
+                _extract.integer(token, "tokens")
                 for token in _as_tuple(validated["tokens"], field="tokens")
             ),
             probability=float(cast(float | int, validated["probability"])),
@@ -257,18 +260,18 @@ class TokenSequencePrediction:
         try:
             validated = _token_sequence_prediction_record.validate(record)
             prediction_space = FiniteTokenSequenceSpace.from_record(
-                _as_mapping(validated["prediction_space"], field="prediction_space")
+                _extract.mapping(validated["prediction_space"], "prediction_space")
             )
         except (ValueError, PredictionSpaceValidationError) as error:
             raise PredictionResultValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             prediction_space=prediction_space,
             prediction_kind=str(validated["prediction_kind"]),
             output_encoding=str(validated["output_encoding"]),
             sequence_probabilities=tuple(
                 TokenSequenceProbability.from_record(
-                    _as_mapping(item, field="sequence_probabilities")
+                    _extract.mapping(item, "sequence_probabilities")
                 )
                 for item in _as_tuple(
                     validated["sequence_probabilities"],
@@ -286,7 +289,7 @@ class TokenSequencePrediction:
         )
 
     def probability_of(self, tokens: Sequence[int]) -> float:
-        token_values = tuple(_as_int(token, field="tokens") for token in tokens)
+        token_values = tuple(_extract.integer(token, "tokens") for token in tokens)
         try:
             self.prediction_space.require_sequence(token_values)
         except PredictionSpaceValidationError as error:
@@ -400,18 +403,18 @@ class DirectFiniteProbabilityPrediction:
         try:
             validated = _direct_finite_probability_prediction_record.validate(record)
             prediction_space = FiniteOutcomeSpace.from_record(
-                _as_mapping(validated["prediction_space"], field="prediction_space")
+                _extract.mapping(validated["prediction_space"], "prediction_space")
             )
             prediction_space.validate_outcome_space(outcome_space)
         except (ValueError, PredictionSpaceValidationError) as error:
             raise PredictionResultValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             prediction_space=prediction_space,
             prediction_kind=str(validated["prediction_kind"]),
             output_encoding=str(validated["output_encoding"]),
             probabilities=tuple(
-                PredictionMass.from_record(_as_mapping(mass, field="probabilities"))
+                PredictionMass.from_record(_extract.mapping(mass, "probabilities"))
                 for mass in _as_tuple(validated["probabilities"], field="probabilities")
             ),
             normalization_tolerance=normalization_tolerance,
@@ -497,26 +500,6 @@ class DirectFiniteProbabilityPrediction:
                 for mass in sorted(self.probabilities, key=lambda item: item.outcome_index)
             ],
         }
-
-
-def _as_int(value: object, *, field: str) -> int:
-    if type(value) is not int:
-        raise PredictionResultValidationError(f"{field}: expected integer")
-    return value
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise PredictionResultValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise PredictionResultValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
 def _as_tuple(value: object, *, field: str) -> tuple[object, ...]:
     if not isinstance(value, tuple):
         raise PredictionResultValidationError(f"{field}: expected parsed sequence")

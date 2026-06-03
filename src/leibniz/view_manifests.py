@@ -11,7 +11,7 @@ from leibniz.artifacts import ArtifactReference
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "ViewManifest",
@@ -58,6 +58,9 @@ _view_manifest_record = RecordSpec(
 
 class ViewManifestValidationError(ValueError):
     """Raised when a view manifest is invalid."""
+
+
+_extract = RecordExtractor(error_type=ViewManifestValidationError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,33 +123,33 @@ class ViewManifest:
         try:
             validated = _view_manifest_record.validate(record)
             source_artifacts = tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="source_artifacts"))
-                for item in _as_sequence(
+                ArtifactReference.from_record(_extract.mapping(item, "source_artifacts"))
+                for item in _extract.sequence(
                     validated["source_artifacts"],
-                    field="source_artifacts",
+                    "source_artifacts",
                 )
             )
             cost_axes = tuple(
-                _as_string(item, field="cost_axes")
-                for item in _as_sequence(validated.get("cost_axes", ()), field="cost_axes")
+                _extract.string(item, "cost_axes")
+                for item in _extract.sequence(validated.get("cost_axes", ()), "cost_axes")
             )
         except ValueError as error:
             raise ViewManifestValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
-            subject_kind=_as_string(validated["subject_kind"], field="subject_kind"),
+            id=_extract.identifier(validated["id"], "id"),
+            subject_kind=_extract.string(validated["subject_kind"], "subject_kind"),
             subject=ArtifactReference.from_record(
-                _as_mapping(validated["subject"], field="subject")
+                _extract.mapping(validated["subject"], "subject")
             ),
             projection_kind=cast(
                 _ProjectionKind,
-                _as_string(validated["projection_kind"], field="projection_kind"),
+                _extract.string(validated["projection_kind"], "projection_kind"),
             ),
             source_artifacts=source_artifacts,
-            metric_name=_as_string(validated["metric_name"], field="metric_name"),
+            metric_name=_extract.string(validated["metric_name"], "metric_name"),
             score_direction=cast(
                 _ScoreDirection,
-                _as_string(validated["score_direction"], field="score_direction"),
+                _extract.string(validated["score_direction"], "score_direction"),
             ),
             cost_axes=cost_axes,
         )
@@ -215,34 +218,6 @@ class ViewManifestDocument:
 def _validate_name(value: str, *, field: str) -> None:
     if _name.fullmatch(value) is None:
         raise ViewManifestValidationError(f"{field} must be a valid metric or axis name")
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ViewManifestValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ViewManifestValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ViewManifestValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
-def _as_string(value: object, *, field: str) -> str:
-    if not isinstance(value, str):
-        raise ViewManifestValidationError(f"{field}: expected string")
-    if not value:
-        raise ViewManifestValidationError(f"{field}: expected nonempty string")
-    return value
-
-
 def _reference_sort_key(reference: ArtifactReference) -> tuple[str, str, str, str, str]:
     return (
         reference.kind,

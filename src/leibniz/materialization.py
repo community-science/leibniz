@@ -11,7 +11,7 @@ from leibniz.artifacts import ArtifactReference
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "AxisAssignment",
@@ -78,6 +78,9 @@ class MaterializationValidationError(ValueError):
     """Raised when materialization records are invalid."""
 
 
+_extract = RecordExtractor(error_type=MaterializationValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class AxisAssignment:
     """Integer values assigned to named complexity or resolution axes."""
@@ -107,8 +110,8 @@ class AxisAssignment:
         try:
             validated = _axis_assignment_record.validate(record)
             items = tuple(
-                _axis_value_record.validate(_as_mapping(item, field="values"))
-                for item in _as_sequence(validated["values"], field="values")
+                _axis_value_record.validate(_extract.mapping(item, "values"))
+                for item in _extract.sequence(validated["values"], "values")
             )
         except ValueError as error:
             raise MaterializationValidationError(str(error)) from error
@@ -117,7 +120,7 @@ class AxisAssignment:
             axis = str(item["axis"])
             if axis in values:
                 raise MaterializationValidationError(f"duplicate axis assignment: {axis}")
-            values[axis] = _as_int(item["value"], field=axis)
+            values[axis] = _extract.integer(item["value"], axis)
         return cls(values=values)
 
     def require_axis(self, axis: str) -> int:
@@ -179,11 +182,11 @@ class LinearResolutionRequirement:
             name=_as_name(validated["name"], field="name"),
             source_axis=str(validated["source_axis"]),
             resolution_axis=str(validated["resolution_axis"]),
-            coefficient=_as_float(validated["coefficient"], field="coefficient"),
-            intercept=_optional_float(validated.get("intercept"), field="intercept") or 0.0,
-            minimum=_optional_int(validated.get("minimum"), field="minimum"),
+            coefficient=_extract.float(validated["coefficient"], "coefficient"),
+            intercept=_extract.optional_float(validated.get("intercept"), "intercept") or 0.0,
+            minimum=_extract.optional_integer(validated.get("minimum"), "minimum"),
             basis=str(validated["basis"]),
-            description=_optional_string(validated.get("description"), field="description"),
+            description=_extract.optional_string(validated.get("description"), "description"),
         )
 
     def minimum_resolution(self, assignment: AxisAssignment) -> int:
@@ -259,22 +262,22 @@ class MaterializationDeclaration:
         except ValueError as error:
             raise MaterializationValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
-            benchmark_id=_as_identifier(validated["benchmark_id"], field="benchmark_id"),
+            id=_extract.identifier(validated["id"], "id"),
+            benchmark_id=_extract.identifier(validated["benchmark_id"], "benchmark_id"),
             requirements=tuple(
                 LinearResolutionRequirement.from_record(
-                    _as_mapping(requirement, field="requirements")
+                    _extract.mapping(requirement, "requirements")
                 )
-                for requirement in _as_sequence(
+                for requirement in _extract.sequence(
                     validated["requirements"],
-                    field="requirements",
+                    "requirements",
                 )
             ),
             latent_factor_declaration=_optional_reference(
                 validated.get("latent_factor_declaration"),
                 field="latent_factor_declaration",
             ),
-            layout=_optional_mapping(validated.get("layout"), field="layout"),
+            layout=_extract.optional_mapping(validated.get("layout"), "layout"),
         )
 
     def minimum_resolution(
@@ -409,16 +412,16 @@ class MaterializationPlan:
         except ValueError as error:
             raise MaterializationValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
-            benchmark_id=_as_identifier(validated["benchmark_id"], field="benchmark_id"),
+            id=_extract.identifier(validated["id"], "id"),
+            benchmark_id=_extract.identifier(validated["benchmark_id"], "benchmark_id"),
             materialization_declaration=_reference(
                 validated["materialization_declaration"],
                 field="materialization_declaration",
             ),
             resolution_assignment=AxisAssignment.from_record(
-                _as_mapping(validated["resolution_assignment"], field="resolution_assignment")
+                _extract.mapping(validated["resolution_assignment"], "resolution_assignment")
             ),
-            seed=_as_int(validated["seed"], field="seed"),
+            seed=_extract.integer(validated["seed"], "seed"),
             source_assignment=_optional_axis_assignment(
                 validated.get("source_assignment"),
                 field="source_assignment",
@@ -506,75 +509,13 @@ class MaterializationPlanDocument:
             raise MaterializationValidationError(str(error)) from error
         plan = MaterializationPlan.from_record(record)
         return cls(plan=plan, digest=plan.digest)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise MaterializationValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
 def _as_name(value: object, *, field: str) -> ProtocolName:
     if not isinstance(value, ProtocolName):
         raise MaterializationValidationError(f"{field}: expected parsed name")
     return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise MaterializationValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _optional_mapping(value: object, *, field: str) -> Mapping[str, object] | None:
-    if value is None:
-        return None
-    return _as_mapping(value, field=field)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise MaterializationValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
-def _as_int(value: object, *, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise MaterializationValidationError(f"{field}: expected integer")
-    return value
-
-
-def _optional_int(value: object, *, field: str) -> int | None:
-    if value is None:
-        return None
-    return _as_int(value, field=field)
-
-
-def _as_float(value: object, *, field: str) -> float:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return float(value)
-    if isinstance(value, float):
-        return value
-    raise MaterializationValidationError(f"{field}: expected number")
-
-
-def _optional_float(value: object, *, field: str) -> float | None:
-    if value is None:
-        return None
-    return _as_float(value, field=field)
-
-
-def _optional_string(value: object, *, field: str) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise MaterializationValidationError(f"{field}: expected string")
-    return value
-
-
 def _reference(value: object, *, field: str) -> ArtifactReference:
     try:
-        return ArtifactReference.from_record(_as_mapping(value, field=field))
+        return ArtifactReference.from_record(_extract.mapping(value, field))
     except ValueError as error:
         raise MaterializationValidationError(str(error)) from error
 
@@ -588,7 +529,7 @@ def _optional_reference(value: object, *, field: str) -> ArtifactReference | Non
 def _optional_axis_assignment(value: object, *, field: str) -> AxisAssignment | None:
     if value is None:
         return None
-    return AxisAssignment.from_record(_as_mapping(value, field=field))
+    return AxisAssignment.from_record(_extract.mapping(value, field))
 
 
 def _canonical_mapping(value: Mapping[str, object]) -> dict[str, object]:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from leibniz.artifacts import (
     ArtifactReference,
@@ -16,7 +15,7 @@ from leibniz.artifacts import (
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "ModelOperation",
@@ -58,6 +57,9 @@ class ModelOperationValidationError(ValueError):
     """Raised when a model operation record is invalid."""
 
 
+_extract = RecordExtractor(error_type=ModelOperationValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class ModelOperationArtifact:
     """One role-bound artifact reference in a model operation."""
@@ -76,9 +78,9 @@ class ModelOperationArtifact:
         except ValueError as error:
             raise ModelOperationValidationError(str(error)) from error
         return cls(
-            role=_as_string(validated["role"], field="role"),
+            role=_extract.string(validated["role"], "role"),
             artifact=ArtifactReference.from_record(
-                _as_mapping(validated["artifact"], field="artifact")
+                _extract.mapping(validated["artifact"], "artifact")
             ),
         )
 
@@ -132,34 +134,34 @@ class ModelOperation:
         try:
             validated = _model_operation_record.validate(record)
             inputs = tuple(
-                ModelOperationArtifact.from_record(_as_mapping(item, field="inputs"))
-                for item in _as_sequence(validated["inputs"], field="inputs")
+                ModelOperationArtifact.from_record(_extract.mapping(item, "inputs"))
+                for item in _extract.sequence(validated["inputs"], "inputs")
             )
             outputs = tuple(
-                ModelOperationArtifact.from_record(_as_mapping(item, field="outputs"))
-                for item in _as_sequence(validated["outputs"], field="outputs")
+                ModelOperationArtifact.from_record(_extract.mapping(item, "outputs"))
+                for item in _extract.sequence(validated["outputs"], "outputs")
             )
             reports = tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="reports"))
-                for item in _as_sequence(validated.get("reports", ()), field="reports")
+                ArtifactReference.from_record(_extract.mapping(item, "reports"))
+                for item in _extract.sequence(validated.get("reports", ()), "reports")
             )
         except ValueError as error:
             raise ModelOperationValidationError(str(error)) from error
         content_record = _operation_content_record(
-            operator_id=_as_identifier(validated["operator_id"], field="operator_id"),
+            operator_id=_extract.identifier(validated["operator_id"], "operator_id"),
             inputs=inputs,
             outputs=outputs,
             reports=reports,
-            observed_at=_as_optional_string(validated.get("observed_at"), field="observed_at"),
+            observed_at=_extract.optional_string(validated.get("observed_at"), "observed_at"),
         )
         operation_id = validated.get("id", _operation_id(content_record))
         return cls(
-            id=_as_identifier(operation_id, field="id"),
-            operator_id=_as_identifier(validated["operator_id"], field="operator_id"),
+            id=_extract.identifier(operation_id, "id"),
+            operator_id=_extract.identifier(validated["operator_id"], "operator_id"),
             inputs=inputs,
             outputs=outputs,
             reports=reports,
-            observed_at=_as_optional_string(validated.get("observed_at"), field="observed_at"),
+            observed_at=_extract.optional_string(validated.get("observed_at"), "observed_at"),
         )
 
     @property
@@ -227,35 +229,3 @@ def _operation_content_record(
 def _operation_id(content_record: Mapping[str, object]) -> ProtocolIdentifier:
     digest = ContentDigest.from_value(content_record)
     return ProtocolIdentifier.parse(f"model-operations.sha-{digest.hex}@0.1.0")
-
-
-def _as_string(value: object, *, field: str) -> str:
-    if not isinstance(value, str):
-        raise ModelOperationValidationError(f"{field}: expected string")
-    return value
-
-
-def _as_optional_string(value: object, *, field: str) -> str | None:
-    if value is None:
-        return None
-    return _as_string(value, field=field)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ModelOperationValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ModelOperationValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ModelOperationValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-

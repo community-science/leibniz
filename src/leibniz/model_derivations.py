@@ -20,7 +20,7 @@ from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
 from leibniz.model_interfaces import ModelInterface
 from leibniz.model_manifests import ModelArtifactManifest
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "ModelDerivationCompatibilityReport",
@@ -69,6 +69,9 @@ class ModelDerivationCompatibilityValidationError(ValueError):
     """Raised when a model derivation compatibility report is invalid."""
 
 
+_extract = RecordExtractor(error_type=ModelDerivationCompatibilityValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class ParameterMappingSummary:
     """A non-executable summary of a source-to-target parameter mapping."""
@@ -94,10 +97,10 @@ class ParameterMappingSummary:
         except ValueError as error:
             raise ModelDerivationCompatibilityValidationError(str(error)) from error
         return cls(
-            name=_as_string(validated["name"], field="name"),
-            source=_as_string(validated["source"], field="source"),
-            target=_as_string(validated["target"], field="target"),
-            summary=_as_string(validated["summary"], field="summary"),
+            name=_extract.string(validated["name"], "name"),
+            source=_extract.string(validated["source"], "source"),
+            target=_extract.string(validated["target"], "target"),
+            summary=_extract.string(validated["summary"], "summary"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -206,23 +209,23 @@ class ModelDerivationCompatibilityReport:
             validated = _compatibility_report_record.validate(record)
             mappings = tuple(
                 ParameterMappingSummary.from_record(
-                    _as_mapping(item, field="parameter_mappings")
+                    _extract.mapping(item, "parameter_mappings")
                 )
-                for item in _as_sequence(
+                for item in _extract.sequence(
                     validated["parameter_mappings"],
-                    field="parameter_mappings",
+                    "parameter_mappings",
                 )
             )
             resource_reports = tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="resource_reports"))
-                for item in _as_sequence(
+                ArtifactReference.from_record(_extract.mapping(item, "resource_reports"))
+                for item in _extract.sequence(
                     validated.get("resource_reports", ()),
-                    field="resource_reports",
+                    "resource_reports",
                 )
             )
             operation = (
                 ArtifactReference.from_record(
-                    _as_mapping(validated["operation"], field="operation")
+                    _extract.mapping(validated["operation"], "operation")
                 )
                 if "operation" in validated
                 else None
@@ -230,24 +233,24 @@ class ModelDerivationCompatibilityReport:
         except ValueError as error:
             raise ModelDerivationCompatibilityValidationError(str(error)) from error
         report = cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             source_model=ArtifactReference.from_record(
-                _as_mapping(validated["source_model"], field="source_model")
+                _extract.mapping(validated["source_model"], "source_model")
             ),
             target_architecture=ArtifactReference.from_record(
-                _as_mapping(validated["target_architecture"], field="target_architecture")
+                _extract.mapping(validated["target_architecture"], "target_architecture")
             ),
             target_interface=ArtifactReference.from_record(
-                _as_mapping(validated["target_interface"], field="target_interface")
+                _extract.mapping(validated["target_interface"], "target_interface")
             ),
-            operator_id=_as_identifier(validated["operator_id"], field="operator_id"),
-            status=cast(_Status, _as_string(validated["status"], field="status")),
+            operator_id=_extract.identifier(validated["operator_id"], "operator_id"),
+            status=cast(_Status, _extract.string(validated["status"], "status")),
             parameter_mappings=mappings,
             preservation_laws=tuple(
-                _as_string(item, field="preservation_laws")
-                for item in _as_sequence(
+                _extract.string(item, "preservation_laws")
+                for item in _extract.sequence(
                     validated["preservation_laws"],
-                    field="preservation_laws",
+                    "preservation_laws",
                 )
             ),
             operation=operation,
@@ -349,33 +352,3 @@ def _validate_name(value: str, *, field: str) -> None:
         raise ModelDerivationCompatibilityValidationError(
             f"{field} must be a stable lowercase name"
         )
-
-
-def _as_string(value: object, *, field: str) -> str:
-    if not isinstance(value, str):
-        raise ModelDerivationCompatibilityValidationError(f"{field}: expected string")
-    return value
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ModelDerivationCompatibilityValidationError(
-            f"{field}: expected parsed identifier"
-        )
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ModelDerivationCompatibilityValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ModelDerivationCompatibilityValidationError(
-            f"{field}: expected parsed sequence"
-        )
-    return cast(tuple[object, ...], value)
-
-

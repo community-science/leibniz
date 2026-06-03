@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
 
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
@@ -15,7 +14,7 @@ from leibniz.prediction_results import (
     TokenSequencePrediction,
 )
 from leibniz.prediction_spaces import PredictionSpaceValidationError
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "ExactSequenceScore",
@@ -41,6 +40,9 @@ _sequence_measurement_record = RecordSpec(
 
 class SequenceMeasurementValidationError(ValueError):
     """Raised when an exact sequence measurement is invalid."""
+
+
+_extract = RecordExtractor(error_type=SequenceMeasurementValidationError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +140,7 @@ class SequenceMeasurementRecord:
         try:
             validated = _sequence_measurement_record.validate(record)
             prediction = TokenSequencePrediction.from_record(
-                _as_mapping(validated["prediction"], "prediction")
+                _extract.mapping(validated["prediction"], "prediction")
             )
         except (ValueError, PredictionResultValidationError) as error:
             raise SequenceMeasurementValidationError(str(error)) from error
@@ -150,17 +152,17 @@ class SequenceMeasurementRecord:
         negative_log_score = (
             math.inf
             if negative_log_score_value == "infinity"
-            else _as_float(negative_log_score_value, "negative_log_score")
+            else _extract.finite_float(negative_log_score_value, "negative_log_score")
         )
         return cls(
-            benchmark_id=_as_identifier(validated["benchmark_id"], "benchmark_id"),
+            benchmark_id=_extract.identifier(validated["benchmark_id"], "benchmark_id"),
             observation_id=str(validated["observation_id"]),
             prediction=prediction,
             accepted_sequence=tuple(
-                _as_int(token, "accepted_sequence")
-                for token in _as_tuple(validated["accepted_sequence"], "accepted_sequence")
+                _extract.integer(token, "accepted_sequence")
+                for token in _extract.sequence(validated["accepted_sequence"], "accepted_sequence")
             ),
-            accepted_mass=_as_float(validated["accepted_mass"], "accepted_mass"),
+            accepted_mass=_extract.finite_float(validated["accepted_mass"], "accepted_mass"),
             negative_log_score=negative_log_score,
             scoring_rule=str(validated["scoring_rule"]),
         )
@@ -202,36 +204,3 @@ class SequenceMeasurementDocument:
             raise SequenceMeasurementValidationError(str(error)) from error
         measurement = SequenceMeasurementRecord.from_record(record)
         return cls(measurement=measurement, digest=measurement.digest)
-
-
-def _as_identifier(value: object, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise SequenceMeasurementValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise SequenceMeasurementValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_tuple(value: object, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise SequenceMeasurementValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
-def _as_int(value: object, field: str) -> int:
-    if type(value) is not int:
-        raise SequenceMeasurementValidationError(f"{field}: expected integer")
-    return value
-
-
-def _as_float(value: object, field: str) -> float:
-    if not isinstance(value, int | float) or isinstance(value, bool):
-        raise SequenceMeasurementValidationError(f"{field}: expected number")
-    result = float(value)
-    if not math.isfinite(result):
-        raise SequenceMeasurementValidationError(f"{field}: expected finite number")
-    return result

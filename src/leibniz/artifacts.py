@@ -5,13 +5,12 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 from urllib.parse import urlparse
 
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "ArtifactIndex",
@@ -54,6 +53,9 @@ class ArtifactReferenceValidationError(ValueError):
     """Raised when an artifact reference is invalid."""
 
 
+_extract = RecordExtractor(error_type=ArtifactReferenceValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactReference:
     """A durable reference to an artifact without lookup behavior."""
@@ -90,7 +92,7 @@ class ArtifactReference:
         except ValueError as error:
             raise ArtifactReferenceValidationError(str(error)) from error
         return cls(
-            kind=_as_string(validated["kind"], field="kind"),
+            kind=_extract.string(validated["kind"], "kind"),
             protocol_id=_as_optional_identifier(validated.get("protocol_id")),
             content_digest=_as_optional_digest(
                 validated.get("content_digest"),
@@ -100,7 +102,7 @@ class ArtifactReference:
                 validated.get("record_digest"),
                 field="record_digest",
             ),
-            external_uri=_as_optional_string(validated.get("external_uri"), field="external_uri"),
+            external_uri=_extract.optional_string(validated.get("external_uri"), "external_uri"),
         )
 
     def matches_record(self, record: Mapping[str, object]) -> bool:
@@ -195,15 +197,15 @@ class ArtifactIndex:
         try:
             validated = _artifact_index_record.validate(record)
             artifacts = tuple(
-                ArtifactReference.from_record(_as_mapping(item, field="artifacts"))
-                for item in _as_sequence(validated["artifacts"], field="artifacts")
+                ArtifactReference.from_record(_extract.mapping(item, "artifacts"))
+                for item in _extract.sequence(validated["artifacts"], "artifacts")
             )
         except ValueError as error:
             raise ArtifactReferenceValidationError(str(error)) from error
         index = cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             artifacts=artifacts,
-            source_kind=_as_optional_string(validated.get("source_kind"), field="source_kind"),
+            source_kind=_extract.optional_string(validated.get("source_kind"), "source_kind"),
             source_digest=_as_optional_digest(
                 validated.get("source_digest"),
                 field="source_digest",
@@ -317,38 +319,6 @@ def _validate_external_uri(uri: str) -> None:
         raise ArtifactReferenceValidationError("external_uri must include a URI authority")
     if parsed.username is not None or parsed.password is not None:
         raise ArtifactReferenceValidationError("external_uri must not include credentials")
-
-
-def _as_string(value: object, *, field: str) -> str:
-    if not isinstance(value, str):
-        raise ArtifactReferenceValidationError(f"{field}: expected string")
-    return value
-
-
-def _as_optional_string(value: object, *, field: str) -> str | None:
-    if value is None:
-        return None
-    return _as_string(value, field=field)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ArtifactReferenceValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ArtifactReferenceValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ArtifactReferenceValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
 def _as_optional_identifier(value: object) -> ProtocolIdentifier | None:
     if value is None:
         return None

@@ -12,7 +12,7 @@ from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementDataset
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 from leibniz.relationships import RelationshipFitRecord
 from leibniz.submissions import SubmissionPackageManifest
 
@@ -68,6 +68,9 @@ _proposal_record = RecordSpec(
 
 class ExperimentProposalValidationError(ValueError):
     """Raised when an experiment proposal record is invalid."""
+
+
+_extract = RecordExtractor(error_type=ExperimentProposalValidationError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,78 +164,80 @@ class ExperimentProposal:
         except ValueError as error:
             raise ExperimentProposalValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
-            rank=_as_int(validated["rank"], field="rank"),
+            id=_extract.identifier(validated["id"], "id"),
+            rank=_extract.integer(validated["rank"], "rank"),
             candidate_kind=cast(_CandidateKind, str(validated["candidate_kind"])),
-            candidate_id=_as_identifier(validated["candidate_id"], field="candidate_id"),
+            candidate_id=_extract.identifier(validated["candidate_id"], "candidate_id"),
             rationale=str(validated["rationale"]),
             source_relationship_fit_id=(
-                _as_identifier(
+                _extract.identifier(
                     validated["source_relationship_fit_id"],
-                    field="source_relationship_fit_id",
+                    "source_relationship_fit_id",
                 )
                 if "source_relationship_fit_id" in validated
                 else None
             ),
-            predicted_score=_optional_float(validated.get("predicted_score"), "predicted_score"),
-            uncertainty=_optional_float(validated.get("uncertainty"), "uncertainty"),
-            acquisition_value=_optional_float(
+            predicted_score=_extract.optional_float(
+                validated.get("predicted_score"), "predicted_score"
+            ),
+            uncertainty=_extract.optional_float(validated.get("uncertainty"), "uncertainty"),
+            acquisition_value=_extract.optional_float(
                 validated.get("acquisition_value"),
                 "acquisition_value",
             ),
             acquisition_model=(
-                _as_string(validated["acquisition_model"], field="acquisition_model")
+                _extract.non_empty_string(validated["acquisition_model"], "acquisition_model")
                 if "acquisition_model" in validated
                 else None
             ),
             acquisition_components=(
-                _as_mapping(
+                _extract.mapping(
                     validated["acquisition_components"],
-                    field="acquisition_components",
+                    "acquisition_components",
                 )
                 if "acquisition_components" in validated
                 else None
             ),
             search_diagnostics=(
-                _as_mapping(
+                _extract.mapping(
                     validated["search_diagnostics"],
-                    field="search_diagnostics",
+                    "search_diagnostics",
                 )
                 if "search_diagnostics" in validated
                 else None
             ),
-            novelty=_optional_float(validated.get("novelty"), "novelty"),
-            expected_frontier_improvement=_optional_float(
+            novelty=_extract.optional_float(validated.get("novelty"), "novelty"),
+            expected_frontier_improvement=_extract.optional_float(
                 validated.get("expected_frontier_improvement"),
                 "expected_frontier_improvement",
             ),
             selector_name=(
-                _as_string(validated["selector_name"], field="selector_name")
+                _extract.non_empty_string(validated["selector_name"], "selector_name")
                 if "selector_name" in validated
                 else None
             ),
             source_candidate_rank=(
-                _as_int(validated["source_candidate_rank"], field="source_candidate_rank")
+                _extract.integer(validated["source_candidate_rank"], "source_candidate_rank")
                 if "source_candidate_rank" in validated
                 else None
             ),
-            comparable_cost_best_score=_optional_float(
+            comparable_cost_best_score=_extract.optional_float(
                 validated.get("comparable_cost_best_score"),
                 "comparable_cost_best_score",
             ),
             resource_stratum_index=(
-                _as_int(validated["resource_stratum_index"], field="resource_stratum_index")
+                _extract.integer(validated["resource_stratum_index"], "resource_stratum_index")
                 if "resource_stratum_index" in validated
                 else None
             ),
             resource_stratum_count=(
-                _as_int(validated["resource_stratum_count"], field="resource_stratum_count")
+                _extract.integer(validated["resource_stratum_count"], "resource_stratum_count")
                 if "resource_stratum_count" in validated
                 else None
             ),
             command=tuple(
-                _as_string(argument, field="command")
-                for argument in _as_sequence(validated.get("command", ()), field="command")
+                _extract.non_empty_string(argument, "command")
+                for argument in _extract.sequence(validated.get("command", ()), "command")
             ),
         )
 
@@ -314,13 +319,13 @@ class ExperimentProposalSet:
         try:
             validated = _proposal_set_record.validate(record)
             proposals = tuple(
-                ExperimentProposal.from_record(_as_mapping(item, field="proposals"))
-                for item in _as_sequence(validated["proposals"], field="proposals")
+                ExperimentProposal.from_record(_extract.mapping(item, "proposals"))
+                for item in _extract.sequence(validated["proposals"], "proposals")
             )
         except ValueError as error:
             raise ExperimentProposalValidationError(str(error)) from error
         proposal_set = cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             source_dataset_digest=_as_digest(
                 validated["source_dataset_digest"],
                 field="source_dataset_digest",
@@ -423,26 +428,6 @@ class ExperimentProposalDocument:
             submission_packages=submission_packages,
         )
         return cls(proposal_set=proposal_set, digest=proposal_set.digest)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise ExperimentProposalValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ExperimentProposalValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ExperimentProposalValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
 def _as_digest(value: object, *, field: str) -> ContentDigest:
     if not isinstance(value, str):
         raise ExperimentProposalValidationError(f"{field}: expected digest string")
@@ -453,28 +438,6 @@ def _as_digest(value: object, *, field: str) -> ContentDigest:
         return ContentDigest(algorithm=algorithm, hex=digest_hex)
     except ContentEncodingError as error:
         raise ExperimentProposalValidationError(str(error)) from error
-
-
-def _as_int(value: object, *, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ExperimentProposalValidationError(f"{field}: expected parsed integer")
-    return value
-
-
-def _as_string(value: object, *, field: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ExperimentProposalValidationError(f"{field}: expected nonempty string")
-    return value
-
-
-def _optional_float(value: object, field: str) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ExperimentProposalValidationError(f"{field}: expected number")
-    return float(value)
-
-
 def _require_optional_probability(value: float | None, *, field: str) -> None:
     if value is None:
         return

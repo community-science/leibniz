@@ -13,7 +13,7 @@ from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlan
 from leibniz.measurements import MeasurementDataset, MeasurementRecord
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "CompetenceIntegralEntry",
@@ -102,6 +102,9 @@ class MeasurementScoreViewValidationError(ValueError):
     """Raised when a derived measurement score view is invalid."""
 
 
+_extract = RecordExtractor(error_type=MeasurementScoreViewValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class CompetenceIntegralSource:
     """A measurement paired with its materialization plan and derived complexity."""
@@ -152,12 +155,12 @@ class CompetenceIntegralPoint:
         except ValueError as error:
             raise MeasurementScoreViewValidationError(str(error)) from error
         return cls(
-            measurement_id=_as_identifier(validated["measurement_id"], field="measurement_id"),
+            measurement_id=_extract.identifier(validated["measurement_id"], "measurement_id"),
             materialization_plan=ArtifactReference.from_record(
-                _as_mapping(validated["materialization_plan"], field="materialization_plan")
+                _extract.mapping(validated["materialization_plan"], "materialization_plan")
             ),
-            complexity=_as_float(validated["complexity"], field="complexity"),
-            competence=_as_float(validated["competence"], field="competence"),
+            complexity=_extract.float(validated["complexity"], "complexity"),
+            competence=_extract.float(validated["competence"], "competence"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -203,9 +206,9 @@ class CompetenceIntegralEntry:
         except ValueError as error:
             raise MeasurementScoreViewValidationError(str(error)) from error
         return cls(
-            benchmark_id=_as_identifier(validated["benchmark_id"], field="benchmark_id"),
-            integral=_as_float(validated["integral"], field="integral"),
-            coverage=_as_float(validated["coverage"], field="coverage"),
+            benchmark_id=_extract.identifier(validated["benchmark_id"], "benchmark_id"),
+            integral=_extract.float(validated["integral"], "integral"),
+            coverage=_extract.float(validated["coverage"], "coverage"),
             observed_complexities=_float_sequence(
                 validated["observed_complexities"],
                 field="observed_complexities",
@@ -216,8 +219,8 @@ class CompetenceIntegralEntry:
                 allow_empty=True,
             ),
             points=tuple(
-                CompetenceIntegralPoint.from_record(_as_mapping(point, field="points"))
-                for point in _as_sequence(validated["points"], field="points")
+                CompetenceIntegralPoint.from_record(_extract.mapping(point, "points"))
+                for point in _extract.sequence(validated["points"], "points")
             ),
         )
 
@@ -280,7 +283,7 @@ class CompetenceIntegralView:
     ) -> CompetenceIntegralView:
         normalized_expected = _ordered_unique_values(
             tuple(
-                _as_float(value, field="expected_complexities")
+                _extract.float(value, "expected_complexities")
                 for value in expected_complexities
             ),
             field="expected_complexities",
@@ -315,13 +318,13 @@ class CompetenceIntegralView:
         try:
             validated = _competence_integral_view_record.validate(record)
             entries = tuple(
-                CompetenceIntegralEntry.from_record(_as_mapping(entry, field="entries"))
-                for entry in _as_sequence(validated["entries"], field="entries")
+                CompetenceIntegralEntry.from_record(_extract.mapping(entry, "entries"))
+                for entry in _extract.sequence(validated["entries"], "entries")
             )
         except ValueError as error:
             raise MeasurementScoreViewValidationError(str(error)) from error
         view = cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             source_dataset_digest=_as_digest(
                 validated["source_dataset_digest"],
                 field="source_dataset_digest",
@@ -389,10 +392,10 @@ class MeasurementScoreEntry:
         except ValueError as error:
             raise MeasurementScoreViewValidationError(str(error)) from error
         return cls(
-            measurement_id=_as_identifier(validated["measurement_id"], field="measurement_id"),
-            benchmark_id=_as_identifier(validated["benchmark_id"], field="benchmark_id"),
+            measurement_id=_extract.identifier(validated["measurement_id"], "measurement_id"),
+            benchmark_id=_extract.identifier(validated["benchmark_id"], "benchmark_id"),
             observation_id=str(validated["observation_id"]),
-            accepted_mass=_as_float(validated["accepted_mass"], field="accepted_mass"),
+            accepted_mass=_extract.float(validated["accepted_mass"], "accepted_mass"),
             negative_log_score=_as_score(record),
         )
 
@@ -469,13 +472,13 @@ class MeasurementScoreView:
         try:
             validated = _measurement_score_view_record.validate(record)
             entries = tuple(
-                MeasurementScoreEntry.from_record(_as_mapping(entry, field="entries"))
-                for entry in _as_sequence(validated["entries"], field="entries")
+                MeasurementScoreEntry.from_record(_extract.mapping(entry, "entries"))
+                for entry in _extract.sequence(validated["entries"], "entries")
             )
         except ValueError as error:
             raise MeasurementScoreViewValidationError(str(error)) from error
         view = cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             source_dataset_digest=_as_digest(
                 validated["source_dataset_digest"],
                 field="source_dataset_digest",
@@ -684,26 +687,6 @@ def _competence_point_sort_key(point: CompetenceIntegralPoint) -> tuple[float, s
 
 def _competence_entry_sort_key(entry: CompetenceIntegralEntry) -> tuple[float, str]:
     return (-entry.integral, str(entry.benchmark_id))
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise MeasurementScoreViewValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise MeasurementScoreViewValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise MeasurementScoreViewValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
 def _float_sequence(
     value: object,
     *,
@@ -712,8 +695,8 @@ def _float_sequence(
 ) -> tuple[float, ...]:
     return _ordered_unique_values(
         tuple(
-            _as_float(item, field=field)
-            for item in _as_sequence(value, field=field)
+            _extract.float(item, field)
+            for item in _extract.sequence(value, field)
         ),
         field=field,
         allow_empty=allow_empty,
@@ -730,16 +713,6 @@ def _as_digest(value: object, *, field: str) -> ContentDigest:
         return ContentDigest(algorithm=algorithm, hex=digest_hex)
     except ContentEncodingError as error:
         raise MeasurementScoreViewValidationError(str(error)) from error
-
-
-def _as_float(value: object, *, field: str) -> float:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return float(value)
-    if isinstance(value, float):
-        return value
-    raise MeasurementScoreViewValidationError(f"{field}: expected parsed number")
-
-
 def _ordered_unique_values(
     values: tuple[float, ...],
     *,

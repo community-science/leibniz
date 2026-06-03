@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
@@ -52,6 +52,9 @@ class ModelScaleContractValidationError(ValueError):
     """Raised when a model scale contract is invalid."""
 
 
+_extract = RecordExtractor(error_type=ModelScaleContractValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class ModelScaleContract:
     """A variable-shape input envelope over positive integer tensor axes."""
@@ -72,13 +75,13 @@ class ModelScaleContract:
             raise ModelScaleContractValidationError("axes length must match anchor_shape rank")
         scaled_axes = 0
         for expected_index, axis in enumerate(self.axes):
-            index = _as_int(axis.get("index"), "axes.index")
+            index = _extract.integer(axis.get("index"), "axes.index")
             if index != expected_index:
                 raise ModelScaleContractValidationError("axis indexes must be contiguous")
-            kind = _as_string(axis.get("kind"), "axes.kind")
+            kind = _extract.non_empty_string(axis.get("kind"), "axes.kind")
             if kind == _scaled_axis_kind:
                 scaled_axes += 1
-                if _as_string(axis.get("symbol"), "axes.symbol") != self.axis_symbol:
+                if _extract.non_empty_string(axis.get("symbol"), "axes.symbol") != self.axis_symbol:
                     raise ModelScaleContractValidationError(
                         "scaled axis symbol must match axis_symbol"
                     )
@@ -87,7 +90,7 @@ class ModelScaleContract:
                         "scaled anchor axes must be at least minimum"
                     )
             elif kind == _fixed_axis_kind:
-                if _as_int(axis.get("size"), "axes.size") != self.anchor_shape[index]:
+                if _extract.integer(axis.get("size"), "axes.size") != self.anchor_shape[index]:
                     raise ModelScaleContractValidationError(
                         "fixed axis size must match anchor_shape"
                     )
@@ -163,17 +166,17 @@ class ModelScaleContract:
             raise ModelScaleContractValidationError(str(error)) from error
         domain = cast(Mapping[str, object], validated["scale_domain"])
         return cls(
-            axis_symbol=_as_string(validated["axis_symbol"], "axis_symbol"),
+            axis_symbol=_extract.non_empty_string(validated["axis_symbol"], "axis_symbol"),
             anchor_shape=_shape(validated["anchor_shape"], "anchor_shape"),
             axes=tuple(
                 cast(Mapping[str, object], axis)
-                for axis in _as_sequence(validated["axes"], "axes")
+                for axis in _extract.sequence(validated["axes"], "axes")
             ),
-            minimum=_as_int(domain["minimum"], "scale_domain.minimum"),
+            minimum=_extract.integer(domain["minimum"], "scale_domain.minimum"),
             maximum=(
                 None
                 if "maximum" not in domain
-                else _as_int(domain["maximum"], "scale_domain.maximum")
+                else _extract.integer(domain["maximum"], "scale_domain.maximum")
             ),
         )
 
@@ -248,24 +251,6 @@ def _require_shape(shape: tuple[int, ...], *, field: str) -> None:
 
 def _shape(value: object, field: str) -> tuple[int, ...]:
     try:
-        return TensorShape.from_record(_as_sequence(value, field), field=field).axes
+        return TensorShape.from_record(_extract.sequence(value, field), field=field).axes
     except TensorShapeValidationError as error:
         raise ModelScaleContractValidationError(str(error)) from error
-
-
-def _as_int(value: object, field: str) -> int:
-    if type(value) is not int:
-        raise ModelScaleContractValidationError(f"{field}: expected integer")
-    return value
-
-
-def _as_sequence(value: object, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise ModelScaleContractValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
-def _as_string(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ModelScaleContractValidationError(f"{field}: expected nonempty string")
-    return value

@@ -5,12 +5,12 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, cast
+from typing import Literal, TypeAlias
 
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "ComplexityProjection",
@@ -105,6 +105,9 @@ class LatentFactorValidationError(ValueError):
     """Raised when a latent-factor declaration is invalid."""
 
 
+_extract = RecordExtractor(error_type=LatentFactorValidationError)
+
+
 @dataclass(frozen=True, slots=True)
 class DegreeMeasure:
     """The dimensional or counted contribution made by one factor."""
@@ -156,8 +159,8 @@ class DegreeMeasure:
             raise LatentFactorValidationError(str(error)) from error
         return cls(
             kind=str(validated["kind"]),
-            count=_as_float(validated["count"], field="count"),
-            domain_size=_optional_int(validated.get("domain_size"), field="domain_size"),
+            count=_extract.float(validated["count"], "count"),
+            domain_size=_extract.optional_integer(validated.get("domain_size"), "domain_size"),
         )
 
     @classmethod
@@ -206,9 +209,9 @@ class GeneratorConstructionFactor:
         return cls(
             name=_as_name(validated["name"], field="name"),
             degree_measure=DegreeMeasure.from_record(
-                _as_mapping(validated["degree_measure"], field="degree_measure")
+                _extract.mapping(validated["degree_measure"], "degree_measure")
             ),
-            description=_optional_string(validated.get("description"), field="description"),
+            description=_extract.optional_string(validated.get("description"), "description"),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -249,11 +252,11 @@ class SampleLatentFactor:
             name=_as_name(validated["name"], field="name"),
             role=_as_role(validated["role"]),
             degree_measure=DegreeMeasure.from_record(
-                _as_mapping(validated["degree_measure"], field="degree_measure")
+                _extract.mapping(validated["degree_measure"], "degree_measure")
             ),
-            multiplicity=_optional_int(validated.get("multiplicity"), field="multiplicity")
+            multiplicity=_extract.optional_integer(validated.get("multiplicity"), "multiplicity")
             or 1,
-            description=_optional_string(validated.get("description"), field="description"),
+            description=_extract.optional_string(validated.get("description"), "description"),
         )
 
     @property
@@ -302,13 +305,13 @@ class ComplexityProjection:
         except ValueError as error:
             raise LatentFactorValidationError(str(error)) from error
         roles: frozenset[LatentFactorRole] = frozenset(
-            _as_role(role) for role in _as_sequence(validated["included_roles"], field="roles")
+            _as_role(role) for role in _extract.sequence(validated["included_roles"], "roles")
         )
         return cls(
             name=_as_name(validated["name"], field="name"),
             coordinate=str(validated["coordinate"]),
             included_roles=roles,
-            description=_optional_string(validated.get("description"), field="description"),
+            description=_extract.optional_string(validated.get("description"), "description"),
         )
 
     def evaluate(self, factors: Iterable[SampleLatentFactor]) -> float:
@@ -365,16 +368,16 @@ class ResolutionRequirement:
             name=_as_name(validated["name"], field="name"),
             resolution_axis=str(validated["resolution_axis"]),
             content_coordinate=str(validated["content_coordinate"]),
-            content_complexity=_as_float(
+            content_complexity=_extract.float(
                 validated["content_complexity"],
-                field="content_complexity",
+                "content_complexity",
             ),
-            minimum_resolution=_as_int(
+            minimum_resolution=_extract.integer(
                 validated["minimum_resolution"],
-                field="minimum_resolution",
+                "minimum_resolution",
             ),
             basis=str(validated["basis"]),
-            description=_optional_string(validated.get("description"), field="description"),
+            description=_extract.optional_string(validated.get("description"), "description"),
         )
 
     def require_resolution(self, resolution: int) -> None:
@@ -440,36 +443,36 @@ class LatentFactorDeclaration:
         except ValueError as error:
             raise LatentFactorValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             construction_factors=tuple(
                 GeneratorConstructionFactor.from_record(
-                    _as_mapping(factor, field="construction_factors")
+                    _extract.mapping(factor, "construction_factors")
                 )
-                for factor in _as_sequence(
+                for factor in _extract.sequence(
                     validated["construction_factors"],
-                    field="construction_factors",
+                    "construction_factors",
                 )
             ),
             sample_factors=tuple(
-                SampleLatentFactor.from_record(_as_mapping(factor, field="sample_factors"))
-                for factor in _as_sequence(validated["sample_factors"], field="sample_factors")
+                SampleLatentFactor.from_record(_extract.mapping(factor, "sample_factors"))
+                for factor in _extract.sequence(validated["sample_factors"], "sample_factors")
             ),
             complexity_projections=tuple(
                 ComplexityProjection.from_record(
-                    _as_mapping(projection, field="complexity_projections")
+                    _extract.mapping(projection, "complexity_projections")
                 )
-                for projection in _as_sequence(
+                for projection in _extract.sequence(
                     validated.get("complexity_projections", ()),
-                    field="complexity_projections",
+                    "complexity_projections",
                 )
             ),
             resolution_requirements=tuple(
                 ResolutionRequirement.from_record(
-                    _as_mapping(requirement, field="resolution_requirements")
+                    _extract.mapping(requirement, "resolution_requirements")
                 )
-                for requirement in _as_sequence(
+                for requirement in _extract.sequence(
                     validated.get("resolution_requirements", ()),
-                    field="resolution_requirements",
+                    "resolution_requirements",
                 )
             ),
         )
@@ -527,68 +530,16 @@ class LatentFactorDeclarationDocument:
             raise LatentFactorValidationError(str(error)) from error
         declaration = LatentFactorDeclaration.from_record(record)
         return cls(declaration=declaration, digest=declaration.digest)
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise LatentFactorValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
 def _as_name(value: object, *, field: str) -> ProtocolName:
     if not isinstance(value, ProtocolName):
         raise LatentFactorValidationError(f"{field}: expected parsed name")
     return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise LatentFactorValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
-def _as_sequence(value: object, *, field: str) -> tuple[object, ...]:
-    if not isinstance(value, tuple):
-        raise LatentFactorValidationError(f"{field}: expected parsed sequence")
-    return cast(tuple[object, ...], value)
-
-
 def _as_role(value: object) -> LatentFactorRole:
     if not isinstance(value, str):
         raise LatentFactorValidationError("role: expected string")
     if value not in _latent_factor_roles:
         raise LatentFactorValidationError(f"unsupported latent factor role: {value}")
     return value
-
-
-def _as_float(value: object, *, field: str) -> float:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return float(value)
-    if isinstance(value, float):
-        return value
-    raise LatentFactorValidationError(f"{field}: expected number")
-
-
-def _as_int(value: object, *, field: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise LatentFactorValidationError(f"{field}: expected integer")
-    return value
-
-
-def _optional_int(value: object, *, field: str) -> int | None:
-    if value is None:
-        return None
-    return _as_int(value, field=field)
-
-
-def _optional_string(value: object, *, field: str) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise LatentFactorValidationError(f"{field}: expected string")
-    return value
-
-
 def _require_nonempty(values: tuple[object, ...], description: str) -> None:
     if not values:
         raise LatentFactorValidationError(f"{description} must contain at least one item")

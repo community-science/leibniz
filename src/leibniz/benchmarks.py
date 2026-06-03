@@ -11,7 +11,7 @@ from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.outcomes import OutcomeSpace
-from leibniz.records import FieldSpec, RecordSpec
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "BenchmarkManifestDocument",
@@ -37,6 +37,9 @@ _benchmark_manifest_record = RecordSpec(
 
 class BenchmarkManifestValidationError(ValueError):
     """Raised when a benchmark manifest is invalid."""
+
+
+_extract = RecordExtractor(error_type=BenchmarkManifestValidationError)
 
 
 class _RecordSerializable(Protocol):
@@ -151,7 +154,7 @@ class BenchmarkManifest:
         except ValueError as error:
             raise BenchmarkManifestValidationError(str(error)) from error
         return cls(
-            id=_as_identifier(validated["id"], field="id"),
+            id=_extract.identifier(validated["id"], "id"),
             name=_manifest_name(validated),
             outcome_space=_manifest_outcome_space(validated),
             observation_ids=_manifest_observation_ids(validated),
@@ -244,28 +247,12 @@ class BenchmarkManifestDocument:
             raise BenchmarkManifestValidationError(str(error)) from error
         manifest = BenchmarkManifest.from_record(record)
         return cls(manifest=manifest, digest=ContentDigest.from_value(manifest.to_record()))
-
-
-def _as_identifier(value: object, *, field: str) -> ProtocolIdentifier:
-    if not isinstance(value, ProtocolIdentifier):
-        raise BenchmarkManifestValidationError(f"{field}: expected parsed identifier")
-    return value
-
-
 def _as_name(value: object, *, field: str) -> ProtocolName:
     if not isinstance(value, ProtocolName):
         raise BenchmarkManifestValidationError(f"{field}: expected parsed name")
     return value
-
-
-def _as_mapping(value: object, *, field: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise BenchmarkManifestValidationError(f"{field}: expected record")
-    return cast(Mapping[str, object], value)
-
-
 def _manifest_name(validated: Mapping[str, object]) -> ProtocolName:
-    identifier = _as_identifier(validated["id"], field="id")
+    identifier = _extract.identifier(validated["id"], "id")
     value = validated.get("name")
     if value is None:
         return identifier.name
@@ -277,7 +264,7 @@ def _manifest_outcome_space(validated: Mapping[str, object]) -> OutcomeSpace:
     if value is None:
         raise BenchmarkManifestValidationError("manifest must declare outcome_space")
     try:
-        return OutcomeSpace.from_record(_as_mapping(value, field="outcome_space"))
+        return OutcomeSpace.from_record(_extract.mapping(value, "outcome_space"))
     except ValueError as error:
         raise BenchmarkManifestValidationError(str(error)) from error
 
@@ -304,7 +291,7 @@ def _manifest_latent_factor_declaration(
         return None
     try:
         return ArtifactReference.from_record(
-            _as_mapping(value, field="latent_factor_declaration")
+            _extract.mapping(value, "latent_factor_declaration")
         )
     except ValueError as error:
         raise BenchmarkManifestValidationError(str(error)) from error
@@ -316,4 +303,4 @@ def _manifest_resolution_analysis(
     value = validated.get("resolution_analysis")
     if value is None:
         return None
-    return dict(_as_mapping(value, field="resolution_analysis"))
+    return dict(_extract.mapping(value, "resolution_analysis"))
