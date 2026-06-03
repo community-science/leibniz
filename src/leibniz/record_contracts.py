@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from importlib.resources import files
 from typing import Literal, TypeAlias, cast
 
 from leibniz.contracts import (
@@ -13,7 +12,6 @@ from leibniz.contracts import (
     ContractRuntimeSupport,
     RuntimeProjection,
 )
-from leibniz.documents import document_filename_suffix, load_object_document
 
 __all__ = [
     "ConformanceCase",
@@ -29,7 +27,6 @@ __all__ = [
     "ScalarKind",
     "TypeScriptRecordModule",
     "record_contract_set_from_contract",
-    "record_contract_set_from_package",
     "typescript_literal",
 ]
 
@@ -292,21 +289,6 @@ def record_contract_set_from_contract(contract: Mapping[str, object]) -> RecordC
             ),
         )
     return RecordContractSet(records=parsed)
-
-
-def record_contract_set_from_package(
-    package: str,
-    name: str,
-    *,
-    description: str,
-) -> RecordContractSet:
-    """Parse a bundled authored record-contract document."""
-
-    contract = load_object_document(
-        files(package).joinpath(f"{name}{document_filename_suffix()}").read_bytes(),
-        description=description,
-    )
-    return record_contract_set_from_contract(contract)
 
 
 def _field_contract_from_contract(

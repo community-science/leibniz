@@ -10,10 +10,7 @@ from typing import Literal, TypeAlias, cast
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
-from leibniz.records import (
-    RecordExtractor,
-    record_specs_from_package_contract,
-)
+from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "SubmissionRegistry",
@@ -24,13 +21,19 @@ __all__ = [
 
 _RepositoryType: TypeAlias = Literal["dataset", "model", "space"]
 _repo_part = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-_record_contracts = record_specs_from_package_contract(
-    "leibniz.contract_artifacts",
-    "submission_registries",
-    description="submission registry record contracts",
+_submission_registry_source_record = RecordSpec(
+    fields={
+        "repository": FieldSpec(kind="string"),
+        "repository_type": FieldSpec(kind="string"),
+        "enabled": FieldSpec(kind="boolean"),
+    },
 )
-_submission_registry_source_record = _record_contracts["submission_registry_source"]
-_submission_registry_record = _record_contracts["submission_registry"]
+_submission_registry_record = RecordSpec(
+    fields={
+        "id": FieldSpec(kind="identifier"),
+        "sources": FieldSpec(kind="sequence", item=FieldSpec(kind="record")),
+    },
+)
 
 
 class SubmissionRegistryValidationError(ValueError):
