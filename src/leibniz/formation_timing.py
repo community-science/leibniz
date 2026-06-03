@@ -15,6 +15,7 @@ from leibniz.tensor_runtime import (
     TensorRuntimeError,
     resolve_tensor_runtime,
     runtime_roofline_record,
+    synchronize_runtime,
     tensor_runtime_available_memory_bytes,
     validate_tensor_runtime_device,
 )
@@ -210,11 +211,4 @@ def _time_repeats(
 
 
 def _synchronize(runtime: TensorRuntime) -> None:
-    torch = runtime.torch
-    if runtime.device_kind == "cuda":
-        torch.cuda.synchronize(runtime.device)
-    elif runtime.device_kind == "mps":
-        mps = getattr(torch, "mps", None)
-        synchronize = getattr(mps, "synchronize", None)
-        if callable(synchronize):
-            synchronize()
+    synchronize_runtime(runtime)

@@ -209,6 +209,20 @@ def test_legacy_performance_bundles_are_not_supported() -> None:
     ).exists()
 
 
+def test_torch_is_imported_only_in_tensor_runtime() -> None:
+    source_root = _repository_root / "src" / "leibniz"
+
+    offenders = tuple(
+        f"{path.relative_to(_repository_root)}:{line_number}"
+        for path in sorted(source_root.rglob("*.py"))
+        if path.relative_to(source_root).as_posix() != "tensor_runtime.py"
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if re.search(r"\btorch", line)
+    )
+
+    assert offenders == ()
+
+
 def test_document_suffix_is_funneled_through_documents_module() -> None:
     source_root = _repository_root / "src" / "leibniz"
 

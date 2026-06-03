@@ -13,13 +13,26 @@ from typing import Any, Literal, cast
 from leibniz.architectures import ArchitectureManifest
 from leibniz.observation_formation import ObservationFormationDeclaration
 from leibniz.observation_generation import GeneratedFormationBatch
+from leibniz.tensor_shapes import TensorShape
 
 __all__ = [
+    "apply_softmax_predictions",
     "architecture_tensor_runtime_issue",
     "architecture_supported_by_tensor_runtime",
+    "build_architecture_modules",
+    "build_architecture_sequential",
+    "build_cosine_lr_schedule",
+    "build_cross_entropy_loss",
+    "build_optimizer",
+    "build_plateau_lr_schedule",
     "FormationTensorCache",
+    "make_float_tensor",
+    "make_long_tensor",
+    "no_grad_context",
     "OperationFallbackSequential",
     "preferred_tensor_runtime_device_kind",
+    "seed_runtime",
+    "synchronize_runtime",
     "TensorRuntime",
     "TensorRuntimeError",
     "TensorRuntimeDevice",
@@ -524,6 +537,204 @@ def runtime_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
     return dict(record)
 
 
+def build_architecture_modules(
+    architecture: ArchitectureManifest,
+    *,
+    canonical_layer_kinds: tuple[str, ...],
+) -> tuple[Any, ...]:
+    """Build PyTorch operation modules for an architecture with pre-resolved layer kinds."""
+
+    if len(canonical_layer_kinds) != len(architecture.layers):
+        raise TensorRuntimeError("canonical_layer_kinds length must match architecture layers")
+    torch = _torch()
+    modules: list[Any] = []
+    shape = architecture.input_shape
+    for layer, kind in zip(architecture.layers, canonical_layer_kinds, strict=True):
+        parameters = layer.parameters
+        if kind == "local-aggregation":
+            dimension = _require_int_parameter(parameters, "dimension")
+            if dimension != 2:
+                raise TensorRuntimeError("local aggregation currently supports dimension 2")
+            out_height, out_width = _require_fixed_support(parameters)
+            modules.append(torch.nn.AdaptiveAvgPool2d((out_height, out_width)))
+            shape = (*shape[: len(shape) - dimension], out_height, out_width)
+        elif kind == "fixed-support-affine":
+            dimension = _require_int_parameter(parameters, "dimension")
+            if dimension != 2:
+                raise TensorRuntimeError("fixed support affine currently supports dimension 2")
+            if len(shape) <= dimension:
+                raise TensorRuntimeError(
+                    "fixed support affine requires a channel axis before support axes"
+                )
+            channel_axis_index = len(shape) - dimension - 1
+            out_channels = _require_int_parameter(parameters, "out_channels")
+            out_height = _require_int_parameter(parameters, "out_height")
+            out_width = _require_int_parameter(parameters, "out_width")
+            modules.append(
+                torch.nn.Sequential(
+                    torch.nn.AdaptiveAvgPool2d((out_height, out_width)),
+                    torch.nn.Conv2d(
+                        in_channels=shape[channel_axis_index],
+                        out_channels=out_channels,
+                        kernel_size=1,
+                    ),
+                )
+            )
+            shape = (*shape[:channel_axis_index], out_channels, out_height, out_width)
+        elif kind == "local-affine":
+            dimension = _require_int_parameter(parameters, "dimension")
+            if dimension != 2:
+                raise TensorRuntimeError("local affine currently supports dimension 2")
+            if len(shape) <= dimension:
+                raise TensorRuntimeError(
+                    "local affine requires a channel axis before local support axes"
+                )
+            channel_axis_index = len(shape) - dimension - 1
+            spatial_axis_start = len(shape) - dimension
+            size = _require_int_parameter(parameters, "size")
+            out_channels = _require_int_parameter(parameters, "out_channels")
+            stride = _require_int_parameter(parameters, "stride")
+            padding = _require_nonneg_int_parameter(parameters, "padding")
+            modules.append(
+                torch.nn.Conv2d(
+                    in_channels=shape[channel_axis_index],
+                    out_channels=out_channels,
+                    kernel_size=size,
+                    stride=stride,
+                    padding=padding,
+                )
+            )
+            output_spatial_axes = tuple(
+                _local_window_output_size(axis, size=size, stride=stride, padding=padding)
+                for axis in shape[spatial_axis_start:]
+            )
+            shape = (*shape[:channel_axis_index], out_channels, *output_spatial_axes)
+        elif kind == "rank-collapse":
+            modules.append(torch.nn.Flatten())
+            shape = (TensorShape.from_axes(shape).element_count,)
+        elif kind == "affine-readout":
+            if len(shape) != 1:
+                raise TensorRuntimeError("affine readout requires rank-1 input")
+            out = _require_int_parameter(parameters, "out")
+            modules.append(torch.nn.Linear(shape[0], out))
+            shape = (out,)
+        else:
+            raise TensorRuntimeError(f"unsupported operator kind: {kind}")
+    return tuple(modules)
+
+
+def build_architecture_sequential(
+    architecture: ArchitectureManifest,
+    *,
+    canonical_layer_kinds: tuple[str, ...],
+) -> Any:
+    """Build a PyTorch Sequential module for an architecture with pre-resolved layer kinds."""
+
+    torch = _torch()
+    modules = build_architecture_modules(architecture, canonical_layer_kinds=canonical_layer_kinds)
+    return torch.nn.Sequential(*modules)
+
+
+def synchronize_runtime(runtime: TensorRuntime) -> None:
+    """Synchronize the runtime device; no-op on CPU."""
+
+    _synchronize_runtime(runtime)
+
+
+def seed_runtime(runtime: TensorRuntime, *, seed: int) -> None:
+    """Set the global random seed for reproducible training."""
+
+    _ = runtime
+    _torch().manual_seed(seed)
+
+
+def build_cross_entropy_loss(runtime: TensorRuntime) -> Any:
+    """Build a cross-entropy classification loss module."""
+
+    _ = runtime
+    return _torch().nn.CrossEntropyLoss()
+
+
+def no_grad_context(runtime: TensorRuntime) -> Any:
+    """Return a torch.no_grad() context manager for inference."""
+
+    _ = runtime
+    return _torch().no_grad()
+
+
+def apply_softmax_predictions(
+    runtime: TensorRuntime, module: Any, fields: Any
+) -> list[list[float]]:
+    _ = runtime
+    return _torch().softmax(module(fields), dim=1).tolist()
+
+
+def build_optimizer(
+    runtime: TensorRuntime,
+    *,
+    name: str,
+    parameters: Any,
+    learning_rate: float,
+) -> Any:
+    """Build a named optimizer for module parameters."""
+
+    _ = runtime
+    torch = _torch()
+    if name == "sgd":
+        return torch.optim.SGD(parameters, lr=learning_rate)
+    if name == "adam":
+        return torch.optim.Adam(parameters, lr=learning_rate)
+    if name == "adamw":
+        return torch.optim.AdamW(parameters, lr=learning_rate)
+    raise TensorRuntimeError(f"unsupported optimizer: {name}")
+
+
+def build_cosine_lr_schedule(runtime: TensorRuntime, optimizer: Any, *, T_max: int) -> Any:
+    """Build a cosine annealing learning rate scheduler."""
+
+    _ = runtime
+    return _torch().optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max)
+
+
+def build_plateau_lr_schedule(
+    runtime: TensorRuntime,
+    optimizer: Any,
+    *,
+    factor: float,
+    threshold: float,
+    patience: int,
+    eps: float,
+) -> Any:
+    """Build a reduce-on-plateau learning rate scheduler."""
+
+    _ = runtime
+    return _torch().optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=factor,
+        threshold=threshold,
+        threshold_mode="abs",
+        patience=patience,
+        eps=eps,
+    )
+
+
+def make_float_tensor(runtime: TensorRuntime, values: Any, *, device: Any) -> Any:
+    """Create a float32 tensor on the given device."""
+
+    _ = runtime
+    torch = _torch()
+    return torch.tensor(values, dtype=torch.float32, device=device)
+
+
+def make_long_tensor(runtime: TensorRuntime, values: Any, *, device: Any) -> Any:
+    """Create a long (int64) tensor on the given device."""
+
+    _ = runtime
+    torch = _torch()
+    return torch.tensor(values, dtype=torch.long, device=device)
+
+
 def _calibrated_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
     record: dict[str, object] = {
         "kind": "system-roofline",
@@ -696,6 +907,35 @@ def _host_memory_bytes() -> int:
 def _require_sequence_index(*, sequence_index: int, sequence_length: int) -> None:
     if type(sequence_index) is not int or sequence_index < 0 or sequence_index >= sequence_length:
         raise TensorRuntimeError("sequence_index must be within sequence_length")
+
+
+def _require_int_parameter(parameters: Mapping[str, object], key: str) -> int:
+    value = parameters.get(key)
+    if type(value) is not int or value < 1:
+        raise TensorRuntimeError(f"{key} must be a positive integer")
+    return value
+
+
+def _require_nonneg_int_parameter(parameters: Mapping[str, object], key: str) -> int:
+    value = parameters.get(key)
+    if type(value) is not int or value < 0:
+        raise TensorRuntimeError(f"{key} must be a nonnegative integer")
+    return value
+
+
+def _require_fixed_support(parameters: Mapping[str, object]) -> tuple[int, int]:
+    out_height = parameters.get("out_height")
+    out_width = parameters.get("out_width")
+    if type(out_height) is int and out_height > 0 and type(out_width) is int and out_width > 0:
+        return out_height, out_width
+    return _require_int_parameter(parameters, "size"), _require_int_parameter(parameters, "size")
+
+
+def _local_window_output_size(axis: int, *, size: int, stride: int, padding: int) -> int:
+    result = ((axis + 2 * padding - size) // stride) + 1
+    if result < 1:
+        raise TensorRuntimeError("local affine output axis must be positive")
+    return result
 
 
 @dataclass(frozen=True, slots=True)

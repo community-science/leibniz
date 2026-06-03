@@ -534,13 +534,15 @@ def test_plateau_scheduler_resets_learning_rate_for_curriculum_expansion() -> No
 
 
 def test_reduce_on_plateau_scheduler_uses_convergence_patience() -> None:
+    import importlib
+
     runtime = resolve_tensor_runtime("cpu")
-    torch = runtime.torch
+    torch = importlib.import_module("torch")
     parameter = torch.nn.Parameter(torch.tensor(1.0))
     optimizer = torch.optim.Adam([parameter], lr=0.01)
 
     schedule = cast(Any, benchmark_runner)._make_scheduler(
-        torch=torch,
+        runtime=runtime,
         optimizer=optimizer,
         name="reduce-on-plateau",
         max_steps=None,
@@ -563,7 +565,7 @@ def test_training_stage_records_current_validation_loss_without_global_best(
 
     monkeypatch.setattr(benchmark_runner, "_validation_loss", constant_validation_loss)
     stage_result = cast(Any, benchmark_runner)._train_until_convergence(
-        torch=object(),
+        runtime=resolve_tensor_runtime("cpu"),
         module=object(),
         optimizer=type("FakeOptimizer", (), {"param_groups": [{"lr": 0.01}]})(),
         scheduler=None,
@@ -698,23 +700,23 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
             device_kind=cast(Any, device_kind),
         )
 
-    original_torch_operation_modules = (
-        benchmark_runner.ExecutableModelOperator.torch_operation_modules
+    original_operation_modules = (
+        benchmark_runner.ExecutableModelOperator.operation_modules
     )
 
-    def flaky_torch_operation_modules(self: object, *, torch: object | None = None) -> object:
+    def flaky_operation_modules(self: object) -> object:
         nonlocal module_calls
         module_calls += 1
         if module_calls == 1:
             raise RuntimeError("MPS backend failed to compile adaptive pooling")
-        return original_torch_operation_modules(cast(Any, self), torch=cast(Any, torch))
+        return original_operation_modules(cast(Any, self))
 
     monkeypatch.setattr(benchmark_runner, "tensor_runtime_device_kinds", fake_device_kinds)
     monkeypatch.setattr(benchmark_runner, "resolve_tensor_runtime", fake_resolve_tensor_runtime)
     monkeypatch.setattr(
         benchmark_runner.ExecutableModelOperator,
-        "torch_operation_modules",
-        flaky_torch_operation_modules,
+        "operation_modules",
+        flaky_operation_modules,
     )
 
     summary = run_benchmark(
@@ -787,16 +789,15 @@ def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_dev
             "peak_bytes_per_second": 1_000_000.0,
         }
 
-    original_torch_operation_modules = (
-        benchmark_runner.ExecutableModelOperator.torch_operation_modules
+    original_operation_modules = (
+        benchmark_runner.ExecutableModelOperator.operation_modules
     )
 
-    def flaky_first_operation(self: object, *, torch: object | None = None) -> object:
-        torch_module = cast(Any, torch)
-        modules = list(
-            original_torch_operation_modules(cast(Any, self), torch=torch_module)
-        )
-        modules[0] = torch_module.nn.Sequential(FlakyOperation(), modules[0])
+    def flaky_first_operation(self: object) -> object:
+        import importlib
+        torch = cast(Any, importlib.import_module("torch"))
+        modules = list(original_operation_modules(cast(Any, self)))
+        modules[0] = torch.nn.Sequential(FlakyOperation(), modules[0])
         return tuple(modules)
 
     monkeypatch.setattr(benchmark_runner, "tensor_runtime_device_kinds", fake_device_kinds)
@@ -804,7 +805,7 @@ def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_dev
     monkeypatch.setattr(benchmark_runner, "runtime_roofline_record", fake_roofline_record)
     monkeypatch.setattr(
         benchmark_runner.ExecutableModelOperator,
-        "torch_operation_modules",
+        "operation_modules",
         flaky_first_operation,
     )
 

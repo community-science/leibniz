@@ -33,11 +33,21 @@ from leibniz.outcomes import OutcomeSpace
 from leibniz.tensor_runtime import (
     FormationTensorCache,
     OperationFallbackSequential,
+    TensorRuntime,
     TensorRuntimeDevice,
     TensorRuntimeDeviceKind,
     TensorRuntimeError,
+    apply_softmax_predictions,
+    build_cosine_lr_schedule,
+    build_cross_entropy_loss,
+    build_optimizer,
+    build_plateau_lr_schedule,
+    make_float_tensor,
+    make_long_tensor,
+    no_grad_context,
     resolve_tensor_runtime,
     runtime_roofline_record,
+    seed_runtime,
     tensor_runtime_device_kinds,
     validate_tensor_runtime_device,
 )
@@ -1000,25 +1010,24 @@ def _train_and_predict_on_device(
         runtime = resolve_tensor_runtime(tensor_device)
     except TensorRuntimeError as error:
         raise BenchmarkRunnerError(str(error)) from error
-    torch = runtime.torch
-    torch.manual_seed(seed)
+    seed_runtime(runtime, seed=seed)
     executable = ExecutableModelOperator(architecture)
     module = OperationFallbackSequential(
         runtime=runtime,
-        operations=executable.torch_operation_modules(torch=torch),
+        operations=executable.operation_modules(),
     )
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     formation_cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
-    loss_function = torch.nn.CrossEntropyLoss()
+    loss_function = build_cross_entropy_loss(runtime)
     optimizer = _make_optimizer(
-        torch=torch,
+        runtime=runtime,
         parameters=module.parameters(),
         name=optimizer_name,
         learning_rate=learning_rate,
     )
     module.attach_optimizer(optimizer)
     scheduler = _make_scheduler(
-        torch=torch,
+        runtime=runtime,
         optimizer=optimizer,
         name=schedule_name,
         max_steps=train_steps,
@@ -1101,7 +1110,7 @@ def _train_and_predict_on_device(
         return True
 
     training_result = _train_until_convergence(
-        torch=torch,
+        runtime=runtime,
         module=module,
         optimizer=optimizer,
         scheduler=scheduler,
@@ -1205,18 +1214,18 @@ def _train_and_predict_on_device(
             samples=len(candidate_batch.samples),
         ):
             eval_fields, _eval_labels = _batch_tensors(
-                torch=torch,
+                runtime=runtime,
                 batch=candidate_batch,
                 outcome_ids=outcome_ids,
                 device=runtime.device,
             )
         with (
             phase_timings.span("evaluation_forward", samples=len(candidate_batch.samples)),
-            torch.no_grad(),
+            no_grad_context(runtime),
         ):
             predictions = tuple(
                 _renormalized_probabilities(row)
-                for row in torch.softmax(module(eval_fields), dim=1).tolist()
+                for row in apply_softmax_predictions(runtime, module, eval_fields)
             )
         evaluation_counter.add(
             seconds=time.perf_counter() - evaluation_started,
@@ -1271,7 +1280,7 @@ def training_stage_converged(stop_reason: str) -> bool:
 
 def _train_until_convergence(
     *,
-    torch: Any,
+    runtime: TensorRuntime,
     module: Any,
     optimizer: Any,
     scheduler: _LearningRateSchedule | None,
@@ -1310,7 +1319,7 @@ def _train_until_convergence(
         actual_gate_sample_count = _tensor_batch_size(fields, fallback=gate_sample_count)
         with phase_timings.span("validation_forward_loss", samples=actual_gate_sample_count):
             validation_loss = _validation_loss(
-                torch=torch,
+                runtime=runtime,
                 module=module,
                 fields=fields,
                 labels=labels,
@@ -1414,7 +1423,7 @@ def _train_until_convergence(
 
 def _validation_loss(
     *,
-    torch: Any,
+    runtime: TensorRuntime,
     module: Any,
     fields: Any,
     labels: Any,
@@ -1422,7 +1431,7 @@ def _validation_loss(
 ) -> float:
     was_training = bool(module.training)
     module.eval()
-    with torch.no_grad():
+    with no_grad_context(runtime):
         loss = float(loss_function(module(fields), labels).item())
     if was_training:
         module.train()
@@ -1851,23 +1860,22 @@ def _shape_bytes(shape: Sequence[int]) -> float:
 
 def _make_optimizer(
     *,
-    torch: Any,
+    runtime: TensorRuntime,
     parameters: Any,
     name: str,
     learning_rate: float,
 ) -> Any:
-    if name == "sgd":
-        return torch.optim.SGD(parameters, lr=learning_rate)
-    if name == "adam":
-        return torch.optim.Adam(parameters, lr=learning_rate)
-    if name == "adamw":
-        return torch.optim.AdamW(parameters, lr=learning_rate)
-    raise BenchmarkRunnerError(f"unsupported optimizer: {name}")
+    try:
+        return build_optimizer(
+            runtime, name=name, parameters=parameters, learning_rate=learning_rate
+        )
+    except TensorRuntimeError as error:
+        raise BenchmarkRunnerError(str(error)) from error
 
 
 def _make_scheduler(
     *,
-    torch: Any,
+    runtime: TensorRuntime,
     optimizer: Any,
     name: str,
     max_steps: int | None,
@@ -1880,10 +1888,7 @@ def _make_scheduler(
         if max_steps is None:
             raise BenchmarkRunnerError("cosine schedule requires train_steps")
         return _LearningRateSchedule(
-            scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer,
-                T_max=max(1, max_steps),
-            ),
+            scheduler=build_cosine_lr_schedule(runtime, optimizer, T_max=max(1, max_steps)),
             optimizer=optimizer,
             update_on="optimizer-step",
             base_learning_rates=tuple(float(group["lr"]) for group in optimizer.param_groups),
@@ -1892,12 +1897,11 @@ def _make_scheduler(
         factor = 0.1
         eps = 1e-8
         return _LearningRateSchedule(
-            scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(
+            scheduler=build_plateau_lr_schedule(
+                runtime,
                 optimizer,
-                mode="min",
                 factor=factor,
                 threshold=min_delta,
-                threshold_mode="abs",
                 patience=patience,
                 eps=eps,
             ),
@@ -1911,24 +1915,24 @@ def _make_scheduler(
 
 def _batch_tensors(
     *,
-    torch: Any,
+    runtime: TensorRuntime,
     batch: GeneratedObservationBatch,
     outcome_ids: tuple[str, ...],
     device: Any,
 ) -> tuple[Any, Any]:
     return (
-        _batch_tensor(torch=torch, batch=batch, device=device),
-        torch.tensor(
+        _batch_tensor(runtime=runtime, batch=batch, device=device),
+        make_long_tensor(
+            runtime,
             [outcome_ids.index(sample.outcome_id) for sample in batch.samples],
-            dtype=torch.long,
             device=device,
         ),
     )
 
 
-def _batch_tensor(*, torch: Any, batch: GeneratedObservationBatch, device: Any) -> Any:
+def _batch_tensor(*, runtime: TensorRuntime, batch: GeneratedObservationBatch, device: Any) -> Any:
     values = [list(sample.field.values) for sample in batch.samples]
-    fields = torch.tensor(values, dtype=torch.float32, device=device)
+    fields = make_float_tensor(runtime, values, device=device)
     return fields.reshape((len(batch.samples), *batch.samples[0].field.shape))
 
 
