@@ -356,8 +356,9 @@ def _png_dimensions(data_url: str) -> tuple[int, int]:
 
 def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
     result_root = tmp_path / "views"
-    result_root.mkdir()
-    (result_root / "benchmark_results.json").write_text(
+    benchmark_view_root = result_root / "digits"
+    benchmark_view_root.mkdir(parents=True)
+    (benchmark_view_root / "benchmark_results.json").write_text(
         """
 {
   "format": "leibniz.console.benchmark-results",
@@ -492,8 +493,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
 def test_console_data_discovers_materialized_result_root_views(tmp_path: Path) -> None:
     result_root = tmp_path / "results"
     view_root = result_root / "views"
-    view_root.mkdir(parents=True)
-    (view_root / "benchmark_results.json").write_text(
+    (view_root / "digits").mkdir(parents=True)
+    (view_root / "digits" / "benchmark_results.json").write_text(
         """
 {
   "format": "leibniz.console.benchmark-results",
@@ -528,7 +529,7 @@ def test_console_data_discovers_materialized_result_root_views(tmp_path: Path) -
 
     assert len(result_views) == 1
     assert result_views[0]["source_path"] == (
-        view_root / "benchmark_results.json"
+        view_root / "digits" / "benchmark_results.json"
     ).as_posix()
 
 

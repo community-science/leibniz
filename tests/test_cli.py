@@ -62,7 +62,7 @@ def test_cli_validate_help_lists_expanded_artifacts(capsys: pytest.CaptureFixtur
     assert "competition-bundle" in output
 
 
-def test_cli_benchmark_evaluate_requires_checkpoint_artifact_contract(
+def test_cli_benchmark_evaluate_keeps_checkpoint_artifact_contract(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as exit_info:
@@ -75,6 +75,64 @@ def test_cli_benchmark_evaluate_requires_checkpoint_artifact_contract(
     assert "--run-slug" not in output
     assert "--evaluation-rung-count" not in output
     assert "--training-compute" not in output
+
+
+def test_cli_benchmark_train_discovers_architecture_manifests(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["benchmark", "train", "--help"])
+
+    output = capsys.readouterr().out
+    assert exit_info.value.code == 0
+    assert "--architecture ARCHITECTURE" in output
+    assert "--benchmark-root BENCHMARK_ROOT" in output
+    assert "benchmark ids or names" in output
+    assert "may be" in output
+    assert "repeated" in output
+    assert "discovered under results/training" in output
+
+
+def test_cli_benchmark_help_advertises_current_workflow_commands(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["benchmark", "--help"])
+
+    output = capsys.readouterr().out
+    assert exit_info.value.code == 0
+    assert "init" in output
+    assert "publish" in output
+    assert "train" in output
+    assert "evaluate" in output
+    assert "profile" in output
+    assert "compete" not in output
+    assert "push" not in output
+    assert "materialize" not in output
+    assert "time-formation" not in output
+
+
+def test_cli_benchmark_publish_push_is_opt_out(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["benchmark", "publish", "--help"])
+
+    output = capsys.readouterr().out
+    assert exit_info.value.code == 0
+    assert "--no-push" in output
+    assert "  --push" not in output
+
+
+def test_cli_root_exposes_benchmark_surface_without_result_management_command(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--help"])
+
+    output = capsys.readouterr().out
+    assert exit_info.value.code == 0
+    assert "results" not in output
 
 
 def test_cli_console_dev_runs_npm_dev_script(
@@ -415,13 +473,13 @@ def test_cli_reports_model_interface_pairing_failure(
     )
 
 
-def test_cli_times_benchmark_formation_paths(
+def test_cli_profiles_benchmark_formation_paths(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     exit_code = main(
         [
             "benchmark",
-            "time-formation",
+            "profile",
             "--benchmark-root",
             str(_digits_benchmark_root),
             "--sample-count",

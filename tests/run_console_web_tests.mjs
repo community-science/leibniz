@@ -459,7 +459,7 @@ function assertConsoleResultRootPolicy() {
     );
     assertEqual(
       isMaterializedResultViewEvent(
-        resolve(defaultRoot, 'views', 'benchmark_results.json'),
+        resolve(defaultRoot, 'views', 'digits', 'benchmark_results.json'),
         [defaultRoot],
       ),
       true,
@@ -468,7 +468,7 @@ function assertConsoleResultRootPolicy() {
     const explicitViewsRoot = resolve(defaultRoot, 'views');
     assertEqual(
       isMaterializedResultViewEvent(
-        resolve(explicitViewsRoot, 'benchmark_results.json'),
+        resolve(explicitViewsRoot, 'digits', 'benchmark_results.json'),
         [explicitViewsRoot],
       ),
       false,

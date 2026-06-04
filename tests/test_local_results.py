@@ -288,7 +288,10 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert summary.benchmark_count == 1
     assert summary.model_count == 1
     assert summary.run_count == 1
-    assert summary.view_file == tmp_path / "results" / "views" / "benchmark_results.json"
+    assert summary.view_file == (
+        tmp_path / "results" / "views" / "digits" / "benchmark_results.json"
+    )
+    assert summary.benchmark_view_files == (summary.view_file,)
 
     view = load_console_result_view(summary.view_file.read_bytes())
     assert view["format"] == "leibniz.console.benchmark-results"
@@ -328,6 +331,229 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     }
 
 
+def test_cli_benchmark_evaluate_discovers_training_checkpoints(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    results_root = tmp_path / "results"
+    pending_root = results_root / "training" / "digits" / "pending"
+    pending_root.mkdir(parents=True)
+    (pending_root / "queued_architecture.json").write_bytes(_digits_architecture.read_bytes())
+    run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=_digits_architecture,
+            benchmark_root=_digits_benchmark_root,
+            results_root=results_root,
+            sample_count=1,
+            evaluation_sample_count=1,
+            train_steps=0,
+            tensor_device="cpu",
+        )
+    )
+
+    exit_code = main(
+        [
+            "benchmark",
+            "evaluate",
+            "digits",
+            "--benchmark-root",
+            str(_digits_benchmark_root),
+            "--results-root",
+            str(results_root),
+            "--device",
+            "cpu",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "completed benchmark absolute evaluation" in captured.out
+    assert "materialized 1 benchmark result view(s)" in captured.out
+    assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 1
+    assert (results_root / "views" / "digits" / "benchmark_results.json").is_file()
+
+    (results_root / "views" / "digits" / "benchmark_results.json").unlink()
+    assert main(
+        [
+            "benchmark",
+            "evaluate",
+            "digits",
+            "--benchmark-root",
+            str(_digits_benchmark_root),
+            "--results-root",
+            str(results_root),
+            "--device",
+            "cpu",
+        ]
+    ) == 0
+    rerun = capsys.readouterr()
+    assert "no unevaluated benchmark checkpoints found" in rerun.out
+    assert "materialized 1 benchmark result view(s)" in rerun.out
+    assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 1
+    assert (results_root / "views" / "digits" / "benchmark_results.json").is_file()
+
+
+def test_cli_benchmark_train_discovers_uncompleted_architecture_manifests(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    results_root = tmp_path / "results"
+    pending_root = results_root / "training" / "digits" / "pending"
+    pending_root.mkdir(parents=True)
+    completed_architecture = pending_root / "digits_pool.json"
+    uncompleted_architecture = pending_root / "digits_convnet.json"
+    completed_architecture.write_bytes(_digits_architecture.read_bytes())
+    uncompleted_architecture.write_bytes(
+        (_repository_root / "tests" / "fixtures" / "architecture" / "digits_convnet.json")
+        .read_bytes()
+    )
+
+    assert (
+        main(
+            [
+                "benchmark",
+                "train",
+                "digits",
+                "--architecture",
+                str(completed_architecture),
+                "--results-root",
+                str(results_root),
+                "--sample-count",
+                "1",
+                "--train-steps",
+                "0",
+                "--device",
+                "cpu",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    exit_code = main(
+        [
+            "benchmark",
+            "train",
+            "digits",
+            "--results-root",
+            str(results_root),
+            "--sample-count",
+            "1",
+            "--train-steps",
+            "0",
+            "--device",
+            "cpu",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert captured.out.count("completed benchmark training run ") == 1
+    assert "skipped 1 completed benchmark training manifest(s)" in captured.out
+    assert "moved 2 completed benchmark training manifest(s) out of pending" in captured.out
+    completed_root = results_root / "training" / "digits" / "completed"
+    assert not completed_architecture.exists()
+    assert not uncompleted_architecture.exists()
+    assert (completed_root / completed_architecture.name).is_file()
+    assert (completed_root / uncompleted_architecture.name).is_file()
+    assert len(tuple((results_root / "training" / "digits").glob("*.json"))) == 2
+
+    assert (
+        main(
+            [
+                "benchmark",
+                "train",
+                "digits",
+                "--results-root",
+                str(results_root),
+                "--sample-count",
+                "1",
+                "--train-steps",
+                "0",
+                "--device",
+                "cpu",
+            ]
+        )
+        == 0
+    )
+    rerun = capsys.readouterr()
+    assert "no uncompleted benchmark training manifests found" in rerun.out
+
+
+def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    results_root = tmp_path / "results"
+    for seed in (101, 202):
+        run_benchmark(
+            BenchmarkRunPlan(
+                architecture_path=_digits_architecture,
+                benchmark_root=_digits_benchmark_root,
+                results_root=results_root,
+                sample_count=1,
+                evaluation_sample_count=1,
+                seed=seed,
+                train_steps=0,
+                tensor_device="cpu",
+            )
+        )
+
+    exit_code = main(
+        [
+            "benchmark",
+            "evaluate",
+            "digits",
+            "--benchmark-root",
+            str(_digits_benchmark_root),
+            "--results-root",
+            str(results_root),
+            "--sample-count",
+            "1",
+            "--device",
+            "cpu",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    assert "completed benchmark absolute evaluation" in captured.out
+    assert "completed benchmark relative evaluation" in captured.out
+    assert "materialized 1 benchmark result view(s)" in captured.out
+    assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 2
+    competition_paths = tuple(
+        (results_root / "evaluations" / "digits" / "competitions").glob("*.json")
+    )
+    assert len(competition_paths) == 1
+
+    assert main(
+        [
+            "benchmark",
+            "evaluate",
+            "digits",
+            "--benchmark-root",
+            str(_digits_benchmark_root),
+            "--results-root",
+            str(results_root),
+            "--sample-count",
+            "1",
+            "--device",
+            "cpu",
+        ]
+    ) == 0
+    rerun = capsys.readouterr()
+    assert "no unevaluated benchmark checkpoints found" in rerun.out
+    assert "skipped 1 existing benchmark relative evaluation(s)" in rerun.out
+    assert "materialized 1 benchmark result view(s)" in rerun.out
+    competition_paths = tuple(
+        (results_root / "evaluations" / "digits" / "competitions").glob("*.json")
+    )
+    assert len(competition_paths) == 1
+
+
 def test_materialize_benchmark_result_views_rejects_empty_results_root(tmp_path: Path) -> None:
     with pytest.raises(LocalResultImportError, match="no benchmark result records"):
         materialize_benchmark_result_views(
@@ -346,10 +572,11 @@ def test_cli_publishes_local_benchmark_results(
 
     exit_code = main(
         [
-            "results",
+            "benchmark",
             "publish",
             "--results-root",
             str(results_root),
+            "--no-push",
             "--message",
             "Publish test results",
         ]
@@ -368,10 +595,12 @@ def test_publish_can_commit_results_root_checkout(tmp_path: Path) -> None:
     results_root = tmp_path / "results"
     _init_git(results_root)
     _run_and_evaluate_digits_benchmark(results_root)
+    assert not (results_root / "views").exists()
 
     summary = publish_local_benchmark_results(
         repository_root=_repository_root,
         results_root=results_root,
+        push=False,
         commit_message="Publish test results",
     )
 
@@ -379,11 +608,11 @@ def test_publish_can_commit_results_root_checkout(tmp_path: Path) -> None:
     assert summary.git_pushed is False
     assert _git(results_root, "status", "--porcelain").stdout == ""
     tracked_files = _git(results_root, "ls-files").stdout.splitlines()
-    assert "views/benchmark_results.json" in tracked_files
+    assert "views/digits/benchmark_results.json" not in tracked_files
     assert any(path.startswith("evaluations/digits/") for path in tracked_files)
 
 
-def test_publish_pushes_only_when_requested(tmp_path: Path) -> None:
+def test_publish_pushes_by_default(tmp_path: Path) -> None:
     results_root = tmp_path / "results"
     remote_root = tmp_path / "remote.git"
     _git(tmp_path, "init", "--bare", str(remote_root))
@@ -394,7 +623,6 @@ def test_publish_pushes_only_when_requested(tmp_path: Path) -> None:
     summary = publish_local_benchmark_results(
         repository_root=_repository_root,
         results_root=results_root,
-        push=True,
         commit_message="Publish test results",
     )
 
@@ -434,7 +662,6 @@ def test_publish_prefers_hugging_face_api_when_token_is_available(
     summary = publish_local_benchmark_results(
         repository_root=_repository_root,
         results_root=results_root,
-        push=True,
         repo_id="operator/leibniz-results",
         token="hf_test",
         commit_message="Publish test results",
@@ -443,7 +670,7 @@ def test_publish_prefers_hugging_face_api_when_token_is_available(
     assert summary.remote == "hf"
     assert summary.remote_commit == "hf-commit"
     assert summary.git_commit is None
-    assert "views/benchmark_results.json" in uploaded_paths
+    assert "views/digits/benchmark_results.json" not in uploaded_paths
     assert any(path.startswith("evaluations/digits/") for path in uploaded_paths)
 
 
@@ -464,39 +691,6 @@ def test_push_result_checkout_pushes_existing_commit(tmp_path: Path) -> None:
 
     assert summary.pushed_commit == _git(results_root, "rev-parse", "HEAD").stdout.strip()
     assert _git(remote_root, "rev-parse", "HEAD").stdout.strip() == summary.pushed_commit
-
-
-def test_cli_pushes_result_checkout(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    results_root = tmp_path / "results"
-    remote_root = tmp_path / "remote.git"
-    _git(tmp_path, "init", "--bare", str(remote_root))
-    _init_git(results_root)
-    _git(results_root, "remote", "add", "origin", str(remote_root))
-    (results_root / "README.md").write_text("result checkout\n", encoding="utf-8")
-    _git(results_root, "add", "README.md")
-    _git(results_root, "commit", "-m", "Prepare checkout")
-
-    exit_code = main(
-        [
-            "results",
-            "push",
-            "--results-root",
-            str(results_root),
-            "--remote",
-            "git",
-        ]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert captured.err == ""
-    assert "pushed: " in captured.out
-    assert _git(remote_root, "rev-parse", "HEAD").stdout.strip() == _git(
-        results_root, "rev-parse", "HEAD"
-    ).stdout.strip()
 
 
 def test_initialize_result_checkout_scaffolds_existing_git_checkout(
@@ -594,7 +788,7 @@ def test_cli_initializes_local_result_checkout_with_default_results_root(
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    exit_code = main(["results", "init", "--local-only"])
+    exit_code = main(["benchmark", "init", "--local-only"])
 
     captured = capsys.readouterr()
     assert exit_code == 0

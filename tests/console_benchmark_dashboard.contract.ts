@@ -309,7 +309,7 @@ const resultViews: ResultViewRecord[] = [
     format: 'leibniz.console.benchmark-results',
     format_version: 1,
     source_mtime_ms: 123456789,
-    source_path: 'results/benchmark_results.json',
+    source_path: 'results/views/digits/benchmark_results.json',
     source_size_bytes: 4096,
   },
 ];
@@ -447,6 +447,19 @@ assertEqual(plotModel.yTicks.join(','), '0,0.2,0.4,0.6,0.8,1', 'absolute plot y 
 assertEqual(relativePlotModel.yTicks.join(','), '0,200,400,600,800,1000,1200', 'relative plot y ticks');
 assertEqual(scoreTickLabel(1200), '1,200', 'relative score tick label');
 assertEqual(scoreTickLabel(0.2), '0.2', 'fractional score tick label');
+const acceptedDominatedRelativeScaleResult: BenchmarkResultRecord = {
+  ...result,
+  plot_runs: [
+    {
+      ...result.plot_runs[1]!,
+    },
+  ],
+};
+assertEqual(
+  benchmarkPlotModel(acceptedDominatedRelativeScaleResult, 'parameter_count', 'relative').yDomain[1],
+  1260,
+  'plot y ceiling includes accepted frontier points as well as tentative runs',
+);
 assertEqual(
   sortedModelResults(result.leaderboard, 'parameter_count', 'absolute', {
     key: 'cost',
@@ -532,7 +545,7 @@ const parsedResultViews = parseResultViewRecords([
     ],
     format: 'leibniz.console.benchmark-results',
     format_version: 1,
-    source_path: 'results/benchmark_results.json',
+    source_path: 'results/views/digits/benchmark_results.json',
   },
 ]);
 const parsedBenchmarkResult = parsedResultViews[0];
@@ -577,7 +590,7 @@ assertThrows(
         ],
         format: 'leibniz.console.benchmark-results',
         format_version: 1,
-        source_path: 'results/benchmark_results.json',
+        source_path: 'results/views/digits/benchmark_results.json',
       },
     ]),
   'parser rejects malformed console view models',

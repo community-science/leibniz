@@ -84,55 +84,67 @@ Before starting benchmark runs, prepare the result repository with the same
 setup command for either Hugging Face API auth or Git/SSH auth:
 
 ```bash
-leibniz results init --repo owner/leibniz-results
+leibniz benchmark init --repo owner/leibniz-results
 ```
 
 With Hugging Face API auth, install `huggingface_hub` and authenticate with
-`hf auth login` or `HF_TOKEN`; `results init` can create the empty dataset
+`hf auth login` or `HF_TOKEN`; `benchmark init` can create the empty dataset
 repository as part of setup. With SSH-only Git auth, create the empty Hugging
-Face dataset repository first; `results init` then clones it into
+Face dataset repository first; `benchmark init` then clones it into
 `results/` using `git@hf.co:datasets/owner/leibniz-results.git`. If you prefer
 to keep the clone outside this source checkout, clone it elsewhere, symlink
-`results/` to that clone, and then run the same `results init` command to
+`results/` to that clone, and then run the same `benchmark init` command to
 validate and scaffold it:
 
 ```bash
 git clone git@hf.co:datasets/owner/leibniz-results.git ../leibniz-results
 ln -s ../leibniz-results results
-leibniz results init --repo owner/leibniz-results
+leibniz benchmark init --repo owner/leibniz-results
 ```
 
-After benchmark runs have written results locally, push them to that repository:
+After benchmark evaluation has written accepted evidence and materialized local
+views, push the existing result state to that repository:
 
 ```bash
-leibniz results publish --push --repo owner/leibniz-results
+leibniz benchmark publish --repo owner/leibniz-results
 ```
 
-`results publish --push` uses the Hugging Face API when API credentials are
-available for `--repo`; otherwise it falls back to plain Git push when
-`results/` is a Git checkout. Without a Hugging Face account, prepare the same
-local result directory and skip any push step:
+`benchmark publish` commits and pushes the current result checkout. It uses the
+Hugging Face API when API credentials are available for `--repo`; otherwise it
+falls back to plain Git push when `results/` is a Git checkout. Without a
+Hugging Face account, prepare the same local result directory and use
+`--no-push` when publishing local-only result state:
 
 ```bash
-leibniz results init --local-only
+leibniz benchmark init --local-only
 ```
 
 Run the canonical reference trainer against an explicit architecture:
 
 ```bash
 leibniz benchmark train \
-  --benchmark-root src/leibniz/benchmarks/digits \
+  digits \
   --architecture tests/fixtures/architecture/digits_pool.json
 ```
 
 `benchmark train` is a reference implementation for local benchmark training and
-evaluation. It requires an explicit architecture manifest and does not propose
-or choose architectures. The default local training profile is an uncapped
-convergence run: competence gates are checked every 32 steps, every gate check
-updates the running progress record, model checkpoint artifacts are written
-every gate check, training runs at least 500 steps before early stopping,
-patience is 6 gate checks, and convergence min delta is `1e-3`. Override those
-with `--train-steps`, `--convergence-min-steps`, `--gate-check-interval`,
+evaluation. It trains supplied architecture manifests and does not propose or
+choose architectures. `--architecture` may be repeated and may name either a
+manifest file or a directory. When omitted, `benchmark train` discovers
+architecture manifests under `results/training/<benchmark>/pending/`, skips
+manifests whose deterministic completed training summary already exists for the
+active benchmark and training controls, sequentially trains the remaining
+manifests, and then moves completed queue entries to the sibling
+`completed/` directory. `benchmark train digits` narrows training to the Digits
+benchmark, and omitting the benchmark name scans all local benchmarks. The
+command accepts repeated `--benchmark-root` arguments and otherwise resolves
+packaged benchmark roots by benchmark id. The default local training profile is
+an uncapped convergence run:
+competence gates are checked every 32 steps, every gate check updates the
+running progress record, model checkpoint artifacts are written every gate
+check, training runs at least 500 steps before early stopping, patience is 6
+gate checks, and convergence min delta is `1e-3`. Override those with
+`--train-steps`, `--convergence-min-steps`, `--gate-check-interval`,
 `--gate-sample-count`, `--model-checkpoint-gate-interval`,
 `--convergence-patience`, and `--convergence-min-delta` when you need a shorter
 diagnostic run or a cheaper checkpoint cadence.
@@ -181,17 +193,32 @@ record, evaluation protocol, evaluation curriculum, seed, and throughput.
 Pairwise relative-score evidence is generated as an accepted benchmark
 competition bundle under `results/evaluations/<benchmark>/competitions/`, using
 two evaluation bundles and their checkpoint artifacts as the handoff surface.
+`benchmark evaluate` accepts an explicit `--checkpoint-artifact`; when omitted,
+it discovers selected checkpoint artifact sidecars from local training summaries
+under `results/training/` and evaluates completed training runs whose matching
+checkpoints do not already have accepted evaluation bundles, then completes
+missing relative pairwise evaluations among the accepted bundles. Pending queue
+manifests and in-progress training records are ignored by evaluation discovery.
+`benchmark evaluate digits` narrows both phases to the Digits benchmark, and
+omitting the benchmark name scans all local benchmarks. Use
+`benchmark evaluate absolute` or
+`benchmark evaluate relative` to run only one phase. Relative evaluation also
+accepts explicit `--left-evaluation` and `--right-evaluation` paths for a
+single pair. The command accepts repeated `--benchmark-root` arguments and
+otherwise resolves packaged benchmark roots by benchmark id. Materialized
+console views are refreshed by evaluation and written per benchmark under
+`results/views/<benchmark>/benchmark_results.json`.
 
-Publish the local dirty state as a commit:
+Commit and push the existing local result checkout:
 
 ```bash
-leibniz results publish
+leibniz benchmark publish
 ```
 
-Push only when you want to update the public Hugging Face repository:
+Commit without pushing when you only want to save local result state:
 
 ```bash
-leibniz results publish --push --repo owner/leibniz-results
+leibniz benchmark publish --no-push
 ```
 
 ## License
