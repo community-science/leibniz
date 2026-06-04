@@ -14,11 +14,8 @@ from leibniz.architectures import ArchitectureManifest
 from leibniz.observation_formation import (
     AffineMatrix2D,
     ObservationFormationDeclaration,
-    VariationCoordinate,
     affine_translation,
     linear_affine_matrix,
-    sequence_center,
-    sequence_relative_translation,
 )
 from leibniz.observation_generation import GeneratedSampleSet
 from leibniz.tensor_shapes import TensorShape
@@ -254,100 +251,9 @@ class FormationTensorCache:
 
     runtime: TensorRuntime
     formation: ObservationFormationDeclaration
-    _component_tensors: dict[tuple[int, int, int, int, int], Any] = field(
-        default_factory=lambda: cast(dict[tuple[int, int, int, int, int], Any], {})
+    _component_tensors: dict[tuple[int, int, int], Any] = field(
+        default_factory=lambda: cast(dict[tuple[int, int, int], Any], {})
     )
-
-    def component_sequence_tensor(
-        self,
-        *,
-        width: int,
-        height: int,
-        component_sequence: Sequence[int],
-    ) -> Any:
-        """Return an unvaried formed-field tensor for a component sequence."""
-
-        _require_positive_integer(width, "width")
-        _require_positive_integer(height, "height")
-        sequence = tuple(component_sequence)
-        if not sequence:
-            raise TensorRuntimeError("component_sequence must not be empty")
-        tensors = [
-            self.component_tensor(
-                width=width,
-                height=height,
-                sequence_length=len(sequence),
-                sequence_index=sequence_index,
-                component_index=component_index,
-            )
-            for sequence_index, component_index in enumerate(sequence)
-        ]
-        return self.runtime.torch.stack(tensors).amax(dim=0)
-
-    def varied_component_sequence_tensor(
-        self,
-        *,
-        width: int,
-        height: int,
-        component_sequence: Sequence[int],
-        variation_coordinates: Sequence[Mapping[str, object]],
-    ) -> Any:
-        """Return a formed-field tensor with recorded per-position variation applied."""
-
-        _require_positive_integer(width, "width")
-        _require_positive_integer(height, "height")
-        sequence = tuple(component_sequence)
-        if not sequence:
-            raise TensorRuntimeError("component_sequence must not be empty")
-        coordinates = tuple(variation_coordinates)
-        if len(coordinates) != len(sequence):
-            raise TensorRuntimeError("variation_coordinates length must match sequence length")
-        source_tensors: list[Any] = []
-        affine_rows: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
-        for sequence_index, component_index in enumerate(sequence):
-            coordinate = _variation_coordinate(
-                coordinates[sequence_index],
-                expected_sequence_index=sequence_index,
-            )
-            source_tensors.append(
-                self.component_tensor(
-                    width=width,
-                    height=height,
-                    sequence_length=len(sequence),
-                    sequence_index=sequence_index,
-                    component_index=component_index,
-                )
-            )
-            affine_rows.append(
-                _affine_grid_row(
-                    coordinate=coordinate,
-                    sequence_length=len(sequence),
-                    sequence_index=sequence_index,
-                    placement_axis=self.formation.sequence_layout.placement_axis,
-                    width=width,
-                    height=height,
-                )
-            )
-        torch = self.runtime.torch
-        sources = torch.stack(source_tensors)
-        theta = torch.tensor(
-            affine_rows,
-            dtype=torch.float32,
-            device=self.runtime.device,
-        )
-        grid = torch.nn.functional.affine_grid(
-            theta,
-            sources.shape,
-            align_corners=False,
-        )
-        transformed = torch.nn.functional.grid_sample(
-            sources,
-            grid,
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=False,
-        )
-        return transformed.amax(dim=0)
 
     def batch_tensors(
         self,
@@ -373,38 +279,27 @@ class FormationTensorCache:
             raise TensorRuntimeError("batch samples must not be empty")
         width = batch.samples[0].width
         height = batch.samples[0].height
-        sequence_length = len(batch.samples[0].component_sequence)
-        if sequence_length < 1:
-            raise TensorRuntimeError("component_sequence must not be empty")
         source_tensors: list[Any] = []
         affine_rows: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
         for sample in batch.samples:
             if sample.width != width or sample.height != height:
                 raise TensorRuntimeError("batch sample canvas shapes must match")
-            if len(sample.component_sequence) != sequence_length:
-                raise TensorRuntimeError("batch sample sequence lengths must match")
-            if len(sample.variation_coordinates) != sequence_length:
-                raise TensorRuntimeError("variation_coordinates length must match sequence length")
-            for sequence_index, component_index in enumerate(sample.component_sequence):
-                source_tensors.append(
-                    self.component_tensor(
-                        width=width,
-                        height=height,
-                        sequence_length=sequence_length,
-                        sequence_index=sequence_index,
-                        component_index=component_index,
-                    )
+            if len(sample.variation_coordinates) != 1:
+                raise TensorRuntimeError("variation_coordinates must contain one coordinate")
+            source_tensors.append(
+                self.component_tensor(
+                    width=width,
+                    height=height,
+                    component_index=sample.component_index,
                 )
-                affine_rows.append(
-                    _generated_affine_grid_row(
-                        sample.variation_coordinates[sequence_index],
-                        sequence_length=sequence_length,
-                        sequence_index=sequence_index,
-                        placement_axis=self.formation.sequence_layout.placement_axis,
-                        width=width,
-                        height=height,
-                    )
+            )
+            affine_rows.append(
+                _generated_affine_grid_row(
+                    sample.variation_coordinates[0],
+                    width=width,
+                    height=height,
                 )
+            )
         torch = self.runtime.torch
         sources = torch.stack(source_tensors)
         theta = torch.tensor(
@@ -425,40 +320,32 @@ class FormationTensorCache:
             align_corners=False,
         )
         channels, height, width = transformed.shape[1:]
-        return transformed.reshape((sample_count, sequence_length, channels, height, width)).amax(
-            dim=1
-        )
+        return transformed.reshape((sample_count, 1, channels, height, width)).amax(dim=1)
 
     def component_tensor(
         self,
         *,
         width: int,
         height: int,
-        sequence_length: int,
-        sequence_index: int,
         component_index: int,
     ) -> Any:
-        """Return a cached tensor for one component drawn at one sequence position."""
+        """Return a cached tensor for one unvaried component."""
 
         _require_positive_integer(width, "width")
         _require_positive_integer(height, "height")
-        _require_positive_integer(sequence_length, "sequence_length")
-        _require_sequence_index(sequence_index=sequence_index, sequence_length=sequence_length)
         if (
             type(component_index) is not int
             or component_index < 0
             or component_index >= len(self.formation.components)
         ):
             raise TensorRuntimeError("component_index is outside component vocabulary")
-        key = (width, height, sequence_length, sequence_index, component_index)
+        key = (width, height, component_index)
         cached = self._component_tensors.get(key)
         if cached is not None:
             return cached
         tensor = self._build_component_tensor(
             width=width,
             height=height,
-            sequence_length=sequence_length,
-            sequence_index=sequence_index,
             component_index=component_index,
         )
         self._component_tensors[key] = tensor
@@ -469,15 +356,11 @@ class FormationTensorCache:
         *,
         width: int,
         height: int,
-        sequence_length: int,
-        sequence_index: int,
         component_index: int,
     ) -> Any:
         field = self.formation.component_field(
             width=width,
             height=height,
-            sequence_length=sequence_length,
-            sequence_index=sequence_index,
             component_index=component_index,
         )
         tensor = self.runtime.torch.tensor(
@@ -931,11 +814,6 @@ def _host_memory_bytes() -> int:
     return 1_073_741_824
 
 
-def _require_sequence_index(*, sequence_index: int, sequence_length: int) -> None:
-    if type(sequence_index) is not int or sequence_index < 0 or sequence_index >= sequence_length:
-        raise TensorRuntimeError("sequence_index must be within sequence_length")
-
-
 def _require_int_parameter(parameters: Mapping[str, object], key: str) -> int:
     value = parameters.get(key)
     if type(value) is not int or value < 1:
@@ -965,70 +843,17 @@ def _local_window_output_size(axis: int, *, size: int, stride: int, padding: int
     return result
 
 
-def _variation_coordinate(
-    record: Mapping[str, object],
-    *,
-    expected_sequence_index: int,
-) -> VariationCoordinate:
-    if str(record.get("kind")) != "field-variation-transform-coordinate":
-        raise TensorRuntimeError(
-            "variation coordinate kind must be field-variation-transform-coordinate"
-        )
-    sequence_index = _integer(record.get("sequence_index"), "sequence_index")
-    if sequence_index != expected_sequence_index:
-        raise TensorRuntimeError(
-            "variation coordinate sequence_index must match coordinate position"
-        )
-    spatial = _mapping(record.get("spatial_affine"), "spatial_affine")
-    if str(spatial.get("kind")) != "spatial-affine-coordinate":
-        raise TensorRuntimeError("spatial_affine kind must be spatial-affine-coordinate")
-    if str(spatial.get("coordinate_system")) != "normalized-sequence-element":
-        raise TensorRuntimeError(
-            "spatial_affine coordinate_system must be normalized-sequence-element"
-        )
-    matrix = _matrix(spatial.get("matrix"), "spatial_affine.matrix")
-    return VariationCoordinate(
-        sequence_index=sequence_index,
-        matrix=matrix,
-    )
-
-
 def _generated_affine_grid_row(
     record: Mapping[str, object],
     *,
     width: int,
     height: int,
-    sequence_length: int,
-    sequence_index: int,
-    placement_axis: str,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     spatial = cast(Mapping[str, object], record["spatial_affine"])
     return _affine_grid_row_from_values(
         matrix=_trusted_matrix(spatial["matrix"]),
         width=width,
         height=height,
-        sequence_length=sequence_length,
-        sequence_index=sequence_index,
-        placement_axis=placement_axis,
-    )
-
-
-def _affine_grid_row(
-    *,
-    coordinate: VariationCoordinate,
-    width: int,
-    height: int,
-    sequence_length: int,
-    sequence_index: int,
-    placement_axis: str,
-) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    return _affine_grid_row_from_values(
-        matrix=coordinate.matrix,
-        width=width,
-        height=height,
-        sequence_length=sequence_length,
-        sequence_index=sequence_index,
-        placement_axis=placement_axis,
     )
 
 
@@ -1037,26 +862,13 @@ def _affine_grid_row_from_values(
     matrix: AffineMatrix2D,
     width: int,
     height: int,
-    sequence_length: int,
-    sequence_index: int,
-    placement_axis: str,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     linear_matrix = linear_affine_matrix(matrix)
     inverse = _inverse_affine_matrix_from_values(matrix=linear_matrix)
-    center = sequence_center(
-        width=width,
-        height=height,
-        sequence_length=sequence_length,
-        sequence_index=sequence_index,
-        placement_axis=placement_axis,
-    )
+    center = (0.5, 0.5)
     center_x = 2.0 * center[0] - 1.0
     center_y = 2.0 * center[1] - 1.0
-    field_translation = sequence_relative_translation(
-        affine_translation(matrix),
-        sequence_length=sequence_length,
-        placement_axis=placement_axis,
-    )
+    field_translation = affine_translation(matrix)
     translation_x = 2.0 * field_translation[0]
     translation_y = 2.0 * field_translation[1]
     return (
@@ -1088,50 +900,12 @@ def _inverse_affine_matrix_from_values(
     return ((d / determinant, -b / determinant), (-c / determinant, a / determinant))
 
 
-def _mapping(value: object, name: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise TensorRuntimeError(f"{name} must be a record")
-    return cast(Mapping[str, object], value)
-
-
-def _matrix(
-    value: object,
-    name: str,
-) -> AffineMatrix2D:
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        raise TensorRuntimeError(f"{name} must contain three rows")
-    sequence = cast(Sequence[object], value)
-    if len(sequence) != 3:
-        raise TensorRuntimeError(f"{name} must contain three rows")
-    matrix = (
-        _triple(sequence[0], f"{name}.0"),
-        _triple(sequence[1], f"{name}.1"),
-        _triple(sequence[2], f"{name}.2"),
-    )
-    if matrix[2] != (0.0, 0.0, 1.0):
-        raise TensorRuntimeError(f"{name} final row must be fixed affine coordinates")
-    return matrix
-
-
 def _trusted_matrix(value: object) -> AffineMatrix2D:
     sequence = cast(Sequence[object], value)
     return (
         _trusted_triple(sequence[0]),
         _trusted_triple(sequence[1]),
         _trusted_triple(sequence[2]),
-    )
-
-
-def _triple(value: object, name: str) -> tuple[float, float, float]:
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        raise TensorRuntimeError(f"{name} must contain three values")
-    sequence = cast(Sequence[object], value)
-    if len(sequence) != 3:
-        raise TensorRuntimeError(f"{name} must contain three values")
-    return (
-        _number(sequence[0], f"{name}.0"),
-        _number(sequence[1], f"{name}.1"),
-        _number(sequence[2], f"{name}.2"),
     )
 
 
@@ -1147,17 +921,3 @@ def _trusted_triple(value: object) -> tuple[float, float, float]:
 def _trusted_float(value: object) -> float:
     return float(cast(int | float, value))
 
-
-def _number(value: object, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise TensorRuntimeError(f"{name} must be a number")
-    number = float(value)
-    if not math.isfinite(number):
-        raise TensorRuntimeError(f"{name} must be finite")
-    return number
-
-
-def _integer(value: object, name: str) -> int:
-    if type(value) is not int:
-        raise TensorRuntimeError(f"{name} must be an integer")
-    return value

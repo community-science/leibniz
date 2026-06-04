@@ -472,65 +472,62 @@ class ConsoleDataBuilder:
             _generated_batch_cache[cache_key] = cached
             return cached
         samples: list[Mapping[str, object]] = []
-        samples_per_component_count = 40
-        component_counts = (1,)
-        component_sequences = _balanced_component_sequences(
-            component_counts=component_counts,
-            samples_per_component_count=samples_per_component_count,
+        sample_count = 40
+        component_indices = _balanced_component_indices(
+            sample_count=sample_count,
             atom_count=atom_count,
             seed=f"{generator.benchmark_manifest.id}:balanced-console-samples",
         )
         used_field_shapes: set[tuple[int, ...]] = set()
-        for component_count in component_counts:
-            for sample_index, sequence in enumerate(component_sequences[component_count]):
-                seed = 4000 + component_count * 100 + sample_index
-                attempt_count = 0
-                while True:
-                    attempt_count += 1
-                    if attempt_count > 512:
-                        raise ConsoleDataValidationError(
-                            "could not generate unique console sample canvas shapes"
-                        )
-                    sample_set = generator(
-                        component_count=component_count,
-                        shape=(),
-                        seed=seed,
-                        include_fields=True,
-                        component_sequences=(sequence,),
+        for sample_index, component_index in enumerate(component_indices):
+            seed = 4100 + sample_index
+            attempt_count = 0
+            while True:
+                attempt_count += 1
+                if attempt_count > 512:
+                    raise ConsoleDataValidationError(
+                        "could not generate unique console sample canvas shapes"
                     )
-                    if not sample_set.includes_fields:
-                        raise ConsoleDataValidationError(
-                            "generator did not include generated fields"
-                        )
-                    batch = sample_set
-                    sample = batch.samples[0]
-                    field_shape = tuple(sample.require_field().shape)
-                    if field_shape not in used_field_shapes:
-                        used_field_shapes.add(field_shape)
-                        break
-                    seed += 1000
-                samples.append(
-                    {
-                        "index": len(samples),
-                        "outcome_id": sample.outcome_id,
-                        "component_sequence": list(
-                            sample.field_record().component_sequence
-                        ),
-                        "complexity": sample.complexity,
-                        "field_shape": list(sample.require_field().shape),
-                        "image_data_url": field_to_png_data_url(sample.require_field()),
-                        "materialization_plan": sample.materialization_plan.to_record(),
-                        "latent_coordinates": [
-                            dict(coordinate) for coordinate in sample.latent_coordinates
-                        ],
-                    }
+                sample_set = generator(
+                    shape=(),
+                    seed=seed,
+                    include_fields=True,
+                    component_indices=(component_index,),
                 )
-        sample_count = len(samples)
-        samples.sort(key=lambda sample: _sample_display_key(sample, sample_count))
+                if not sample_set.includes_fields:
+                    raise ConsoleDataValidationError(
+                        "generator did not include generated fields"
+                    )
+                batch = sample_set
+                sample = batch.samples[0]
+                field_shape = tuple(sample.require_field().shape)
+                if field_shape not in used_field_shapes:
+                    used_field_shapes.add(field_shape)
+                    break
+                seed += 1000
+            samples.append(
+                {
+                    "index": len(samples),
+                    "outcome_id": sample.outcome_id,
+                    "component_index": sample.component_index,
+                    "complexity": sample.complexity,
+                    "state_space_measure": (
+                        None
+                        if sample.state_space_measure is None
+                        else sample.state_space_measure.to_record()
+                    ),
+                    "field_shape": list(sample.require_field().shape),
+                    "image_data_url": field_to_png_data_url(sample.require_field()),
+                    "materialization_plan": sample.materialization_plan.to_record(),
+                    "latent_coordinates": [
+                        dict(coordinate) for coordinate in sample.latent_coordinates
+                    ],
+                }
+            )
+        samples.sort(key=lambda sample: _sample_display_key(sample, len(samples)))
         record = {
             "mode": "balanced",
             "label": "Balanced samples",
-            "component_count": 1,
             "seed": 401,
             "sample_count": len(samples),
             "presentation": {
@@ -696,15 +693,13 @@ def _outcome_atom_name(outcome_ids: tuple[str, ...]) -> str:
     return "outcome"
 
 
-def _balanced_component_sequences(
+def _balanced_component_indices(
     *,
-    component_counts: tuple[int, ...],
-    samples_per_component_count: int,
+    sample_count: int,
     atom_count: int,
     seed: str,
-) -> dict[int, tuple[tuple[int, ...], ...]]:
-    total_tokens = samples_per_component_count * sum(component_counts)
-    if total_tokens % atom_count != 0:
+) -> tuple[int, ...]:
+    if sample_count % atom_count != 0:
         raise ConsoleDataValidationError(
             "balanced console samples require total token count to divide atom count"
         )
@@ -712,17 +707,10 @@ def _balanced_component_sequences(
     tokens = [
         digit
         for digit in range(atom_count)
-        for _occurrence in range(total_tokens // atom_count)
+        for _occurrence in range(sample_count // atom_count)
     ]
     generator.shuffle(tokens)
-    token_iter = iter(tokens)
-    return {
-        component_count: tuple(
-            tuple(next(token_iter) for _token in range(component_count))
-            for _sample in range(samples_per_component_count)
-        )
-        for component_count in component_counts
-    }
+    return tuple(tokens)
 
 
 def _repository_relative_path(path: Path, *, repository_root: Path) -> str:

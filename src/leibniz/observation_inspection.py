@@ -44,7 +44,7 @@ _inspection_record = RecordSpec(
         "formation_declaration": FieldSpec(kind="record"),
         "materialization_plan": FieldSpec(kind="record"),
         "sample_index": FieldSpec(kind="integer"),
-        "component_sequence": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
+        "component_index": FieldSpec(kind="integer"),
         "resolution_assignment": FieldSpec(kind="record"),
         "field_shape": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
         "field_digest": FieldSpec(kind="string"),
@@ -151,7 +151,7 @@ class ObservationInspectionRecord:
     formation_declaration: ArtifactReference
     materialization_plan: ArtifactReference
     sample_index: int
-    component_sequence: tuple[int, ...]
+    component_index: int
     resolution_assignment: AxisAssignment
     field_shape: tuple[int, int, int]
     field_digest: ContentDigest
@@ -175,11 +175,9 @@ class ObservationInspectionRecord:
             raise ObservationInspectionValidationError("sample_index must be an integer")
         if self.sample_index < 0:
             raise ObservationInspectionValidationError("sample_index must be nonnegative")
-        if not self.component_sequence:
-            raise ObservationInspectionValidationError("component_sequence must not be empty")
-        if any(type(index) is not int or index < 0 for index in self.component_sequence):
+        if type(self.component_index) is not int or self.component_index < 0:
             raise ObservationInspectionValidationError(
-                "component_sequence values must be nonnegative integers"
+                "component_index must be a nonnegative integer"
             )
         _validate_shape(self.field_shape, field="field_shape")
         if self.field_preview is not None and self.field_preview.shape != self.field_shape:
@@ -219,7 +217,7 @@ class ObservationInspectionRecord:
             formation_declaration=observation.formation_declaration,
             materialization_plan=observation.materialization_plan,
             sample_index=sample_index,
-            component_sequence=observation.component_sequence,
+            component_index=observation.component_index,
             resolution_assignment=materialization_plan.resolution_assignment,
             field_shape=observation.field.shape,
             field_digest=observation.field.digest,
@@ -247,13 +245,7 @@ class ObservationInspectionRecord:
                 _extract.mapping(validated["materialization_plan"], "materialization_plan")
             ),
             sample_index=_extract.integer(validated["sample_index"], "sample_index"),
-            component_sequence=tuple(
-                _extract.integer(index, "component_sequence")
-                for index in _extract.sequence(
-                    validated["component_sequence"],
-                    "component_sequence",
-                )
-            ),
+            component_index=_extract.integer(validated["component_index"], "component_index"),
             resolution_assignment=AxisAssignment.from_record(
                 _extract.mapping(validated["resolution_assignment"], "resolution_assignment")
             ),
@@ -279,7 +271,7 @@ class ObservationInspectionRecord:
             "formation_declaration": self.formation_declaration.to_record(),
             "materialization_plan": self.materialization_plan.to_record(),
             "sample_index": self.sample_index,
-            "component_sequence": list(self.component_sequence),
+            "component_index": self.component_index,
             "resolution_assignment": self.resolution_assignment.to_record(),
             "field_shape": list(self.field_shape),
             "field_digest": str(self.field_digest),

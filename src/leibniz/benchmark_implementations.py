@@ -16,7 +16,10 @@ from leibniz.observation_formation import ObservationFormationDeclaration
 from leibniz.timing import TimingCollector
 
 if TYPE_CHECKING:
-    from leibniz.observation_generation import GeneratedSampleSet
+    from leibniz.observation_generation import (
+        GeneratedSampleSet,
+        StateSpaceMeasureRequest,
+    )
 
 __all__ = [
     "Benchmark",
@@ -58,14 +61,12 @@ class Generator(Protocol):
     def minimum_discriminatable_resolution_assignment(
         self,
         *,
-        component_count: int,
         minimum_assignment: AxisAssignment,
     ) -> AxisAssignment: ...
 
     def distinguishable_state_complexity(
         self,
         *,
-        component_count: int,
         width: int,
         height: int,
         variation_extent: float = 1.0,
@@ -74,11 +75,11 @@ class Generator(Protocol):
     def __call__(
         self,
         *,
-        component_count: int,
         seed: int,
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
-        component_sequences: Iterable[Sequence[int]] | None = None,
+        state_space_request: StateSpaceMeasureRequest | None = None,
+        component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,

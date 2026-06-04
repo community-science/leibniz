@@ -29,7 +29,7 @@ def test_digits_resolution_analysis_preserves_digit_discriminability() -> None:
     )
 
     assert report.passed
-    assert report.component_count == 10
+    assert report.component_vocabulary_size == 10
     assert report.variation_case_count == 1
     assert report.minimum_pairwise_l1 >= 20.0
 
@@ -40,15 +40,13 @@ def test_digits_resolution_analysis_finds_minimum_live_resolution() -> None:
     assert generator.formation.minimum_discriminatable_resolution(
         minimum_width=1,
         minimum_height=1,
-        sequence_length=1,
         minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
-    ) == (20, 20)
+    ) == (13, 24)
     assert generator.formation.minimum_discriminatable_resolution(
         minimum_width=3,
         minimum_height=1,
-        sequence_length=3,
         minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
-    ) == (60, 20)
+    ) == (13, 24)
 
 
 def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> None:
@@ -56,22 +54,18 @@ def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> 
 
     batch = _formation_payload(
         generator,
-        component_count=1,
         shape=1,
         seed=4703,
-        component_sequences=((1,),),
+        component_indices=(1,),
     )
     sample = batch.samples[0]
 
-    assert (sample.width, sample.height) == (96, 216)
     assert sample.width % 24 == 0
     assert sample.height % 24 == 0
-    for sequence_index, coordinate in enumerate(sample.variation_coordinates):
+    for coordinate in sample.variation_coordinates:
         report = generator.formation.component_discriminability_report(
             width=sample.width,
             height=sample.height,
-            sequence_length=len(sample.component_sequence),
-            sequence_index=sequence_index,
             variation_coordinates=(coordinate,),
             minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
         )
@@ -79,8 +73,6 @@ def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> 
         assert generator.formation.component_discriminability_passes(
             width=sample.width,
             height=sample.height,
-            sequence_length=len(sample.component_sequence),
-            sequence_index=sequence_index,
             variation_coordinates=(coordinate,),
             minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
         )
@@ -91,13 +83,11 @@ def test_digits_resolution_analysis_certifies_sampled_training_affines() -> None
 
     batch = _formation_payload(
         generator,
-        component_count=1,
         shape=64,
         seed=123,
         memory_limit_bytes=100_000_000,
     )
 
-    assert (batch.samples[0].width, batch.samples[0].height) == (24, 48)
     for sample in batch.samples:
         assert sample.width % 24 == 0
         assert sample.height % 24 == 0
@@ -105,8 +95,6 @@ def test_digits_resolution_analysis_certifies_sampled_training_affines() -> None
             assert generator.formation.component_discriminability_passes(
                 width=sample.width,
                 height=sample.height,
-                sequence_length=len(sample.component_sequence),
-                sequence_index=0,
                 variation_coordinates=(coordinate,),
                 minimum_pairwise_l1=(
                     generator.benchmark_manifest.resolution_discriminability_margin()

@@ -3,16 +3,12 @@ from typing import Any, cast
 
 import pytest
 
-import leibniz.tensor_runtime as tensor_runtime
 from leibniz.architectures import ArchitectureManifest
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlanDocument
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
-from leibniz.observation_generation import (
-    load_generator,
-    sample_variation_transform_coordinates,
-)
+from leibniz.observation_generation import load_generator
 from leibniz.tensor_runtime import (
     FormationTensorCache,
     TensorRuntimeError,
@@ -31,16 +27,14 @@ _digits_fixture_root = _repository_root / "tests" / "fixtures" / "digits"
 
 def _formation_payload(generator: BenchmarkGenerator, *, sample_count: int, seed: int):
     sample_set = generator(
-        component_count=1,
         shape=sample_count,
         seed=seed,
-            )
+    )
     return sample_set
 
 
 def _observation_payload(generator: BenchmarkGenerator, *, sample_count: int, seed: int):
     sample_set = generator(
-        component_count=1,
         shape=sample_count,
         seed=seed,
         include_fields=True,
@@ -135,7 +129,7 @@ def test_formation_tensor_cache_matches_unvaried_pure_digits_formation() -> None
     plan = MaterializationPlanDocument.from_bytes(
         (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
     ).plan
-    sequence = (1, 2, 3)
+    component_index = 1
     width = plan.resolution_assignment.require_axis(declaration.width_axis)
     height = plan.resolution_assignment.require_axis(declaration.height_axis)
     cache = FormationTensorCache(runtime=runtime, formation=declaration)
@@ -143,60 +137,16 @@ def test_formation_tensor_cache_matches_unvaried_pure_digits_formation() -> None
     pure = declaration.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.observations.tensor-cache@0.1.0"),
         plan=plan,
-        component_sequence=sequence,
+        component_index=component_index,
     )
-    tensor = cache.component_sequence_tensor(
+    tensor = cache.component_tensor(
         width=width,
         height=height,
-        component_sequence=sequence,
+        component_index=component_index,
     )
 
     assert tensor.shape == pure.field.shape
     assert tuple(tensor.reshape(-1).cpu().tolist()) == pure.field.values
-
-
-def test_formation_tensor_cache_matches_varied_pure_digits_formation() -> None:
-    runtime = resolve_tensor_runtime("cpu")
-    declaration = ObservationFormationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "observation_formation.json").read_bytes()
-    ).declaration
-    plan = MaterializationPlanDocument.from_bytes(
-        (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
-    ).plan
-    sequence = (1, 2, 3)
-    width = plan.resolution_assignment.require_axis(declaration.width_axis)
-    height = plan.resolution_assignment.require_axis(declaration.height_axis)
-    coordinates = tuple(
-        sample_variation_transform_coordinates(
-            transform=declaration.variation_transform,
-            seed=plan.seed,
-            sample_index=7,
-            sequence_index=sequence_index,
-        )
-        for sequence_index in range(len(sequence))
-    )
-    cache = FormationTensorCache(runtime=runtime, formation=declaration)
-
-    pure = declaration.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.digits.observations.tensor-varied@0.1.0"),
-        plan=plan,
-        component_sequence=sequence,
-        variation_coordinates=coordinates,
-    )
-    tensor = cache.varied_component_sequence_tensor(
-        width=width,
-        height=height,
-        component_sequence=sequence,
-        variation_coordinates=coordinates,
-    )
-
-    pure_tensor = runtime.torch.tensor(
-        pure.field.values,
-        dtype=runtime.torch.float32,
-        device=runtime.device,
-    ).reshape(pure.field.shape)
-    assert tensor.shape == pure.field.shape
-    assert runtime.torch.allclose(tensor, pure_tensor, atol=2e-5)
 
 
 def test_formation_tensor_cache_batch_tensors_match_pure_observation_batch() -> None:
@@ -263,9 +213,7 @@ def test_formation_tensor_cache_batches_grid_sampling_once(
     assert calls == {"affine_grid": 1, "grid_sample": 1}
 
 
-def test_formation_tensor_cache_batch_tensors_use_generated_coordinate_values(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_formation_tensor_cache_batch_tensors_use_generated_coordinate_values() -> None:
     runtime = resolve_tensor_runtime("cpu")
     generator = load_generator(_digits_benchmark_root)
     formation_batch = _formation_payload(generator, sample_count=3, seed=515)
@@ -274,23 +222,6 @@ def test_formation_tensor_cache_batch_tensors_use_generated_coordinate_values(
         for outcome in generator.benchmark_manifest.resolve_outcome_space().outcomes
     )
     cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
-
-    def reject_record_parse(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("batch_tensors should use generated coordinate values")
-
-    def reject_general_affine_row(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("batch_tensors should use trusted generated affine rows")
-
-    monkeypatch.setattr(
-        tensor_runtime,
-        "_variation_coordinate",
-        cast(Any, reject_record_parse),
-    )
-    monkeypatch.setattr(
-        tensor_runtime,
-        "_affine_grid_row",
-        cast(Any, reject_general_affine_row),
-    )
 
     fields, labels = cache.batch_tensors(batch=formation_batch, outcome_ids=outcome_ids)
 
@@ -310,15 +241,11 @@ def test_formation_tensor_cache_reuses_component_tensors() -> None:
     left = cache.component_tensor(
         width=96,
         height=32,
-        sequence_length=3,
-        sequence_index=1,
         component_index=4,
     )
     right = cache.component_tensor(
         width=96,
         height=32,
-        sequence_length=3,
-        sequence_index=1,
         component_index=4,
     )
 
@@ -332,50 +259,9 @@ def test_formation_tensor_cache_rejects_invalid_component_requests() -> None:
     ).declaration
     cache = FormationTensorCache(runtime=runtime, formation=declaration)
 
-    with pytest.raises(TensorRuntimeError, match="component_sequence must not be empty"):
-        cache.component_sequence_tensor(width=96, height=32, component_sequence=())
-    with pytest.raises(TensorRuntimeError, match="sequence_index must be within sequence_length"):
-        cache.component_tensor(
-            width=96,
-            height=32,
-            sequence_length=3,
-            sequence_index=3,
-            component_index=0,
-        )
     with pytest.raises(TensorRuntimeError, match="component_index is outside"):
         cache.component_tensor(
             width=96,
             height=32,
-            sequence_length=3,
-            sequence_index=0,
             component_index=len(declaration.components),
-        )
-
-
-def test_formation_tensor_cache_rejects_invalid_variation_coordinates() -> None:
-    runtime = resolve_tensor_runtime("cpu")
-    declaration = ObservationFormationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "observation_formation.json").read_bytes()
-    ).declaration
-    cache = FormationTensorCache(runtime=runtime, formation=declaration)
-
-    with pytest.raises(TensorRuntimeError, match="length must match sequence length"):
-        cache.varied_component_sequence_tensor(
-            width=96,
-            height=32,
-            component_sequence=(1, 2),
-            variation_coordinates=(),
-        )
-    coordinate = sample_variation_transform_coordinates(
-        transform=declaration.variation_transform,
-        seed=101,
-        sample_index=0,
-        sequence_index=1,
-    )
-    with pytest.raises(TensorRuntimeError, match="sequence_index must match"):
-        cache.varied_component_sequence_tensor(
-            width=96,
-            height=32,
-            component_sequence=(1,),
-            variation_coordinates=(coordinate,),
         )

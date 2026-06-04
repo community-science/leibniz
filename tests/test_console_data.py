@@ -314,10 +314,10 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert task["outcome_atom_count"] == 10
     batches = cast(list[dict[str, object]], task["batches"])
     assert [
-        (batch["mode"], batch["component_count"], batch["sample_count"])
+        (batch["mode"], batch["sample_count"])
         for batch in batches
     ] == [
-        ("balanced", 1, 40),
+        ("balanced", 40),
     ]
     batch = batches[0]
     presentation = cast(dict[str, object], batch["presentation"])
@@ -326,11 +326,8 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         "aggregate_mode": False,
     }
     samples = cast(list[dict[str, object]], batch["samples"])
-    component_sequences = [
-        cast(list[int], sample["component_sequence"]) for sample in samples
-    ]
-    assert Counter(len(sequence) for sequence in component_sequences) == {1: 40}
-    digit_counts = Counter(digit for sequence in component_sequences for digit in sequence)
+    component_indices = [cast(int, sample["component_index"]) for sample in samples]
+    digit_counts = Counter(component_indices)
     assert digit_counts == dict.fromkeys(range(10), 4)
     field_shapes = [tuple(cast(list[int], sample["field_shape"])) for sample in samples]
     assert len(set(field_shapes)) == len(field_shapes)
@@ -340,9 +337,9 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert all(".sample-0@" in str(plan["id"]) for plan in materialization_plans)
     assert len({plan["seed"] for plan in materialization_plans}) == len(materialization_plans)
     assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
-    assert samples[0]["field_shape"] == [1, 144, 120]
-    assert _png_dimensions(str(samples[0]["image_data_url"])) == (120, 144)
-    assert _png_dimensions(str(samples[1]["image_data_url"])) == (48, 120)
+    assert samples[0]["field_shape"] == [1, 168, 216]
+    assert _png_dimensions(str(samples[0]["image_data_url"])) == (216, 168)
+    assert _png_dimensions(str(samples[1]["image_data_url"])) == (96, 72)
     assert "preview_crop" not in samples[0]
     assert "preview_crop" not in samples[1]
     latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])

@@ -24,7 +24,7 @@ _sample_record = RecordSpec(
         "label": FieldSpec(kind="string"),
         "sample_index": FieldSpec(kind="integer"),
         "seed": FieldSpec(kind="integer"),
-        "component_sequence": FieldSpec(kind="sequence", item=FieldSpec(kind="integer")),
+        "component_index": FieldSpec(kind="integer"),
         "outcome_id": FieldSpec(kind="string", required=False),
     }
 )
@@ -54,7 +54,7 @@ class ObservationShowcaseSample:
     label: str
     sample_index: int
     seed: int
-    component_sequence: tuple[int, ...]
+    component_index: int
     outcome_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -72,11 +72,9 @@ class ObservationShowcaseSample:
             raise ObservationShowcaseValidationError("seed must be an integer")
         if self.seed < 0:
             raise ObservationShowcaseValidationError("seed must be nonnegative")
-        if not self.component_sequence:
-            raise ObservationShowcaseValidationError("component_sequence must not be empty")
-        if any(type(index) is not int or index < 0 for index in self.component_sequence):
+        if type(self.component_index) is not int or self.component_index < 0:
             raise ObservationShowcaseValidationError(
-                "component_sequence values must be nonnegative integers"
+                "component_index must be a nonnegative integer"
             )
         if self.outcome_id is not None and self.outcome_id == "":
             raise ObservationShowcaseValidationError("outcome_id must be nonempty")
@@ -92,13 +90,7 @@ class ObservationShowcaseSample:
             label=_extract.string(validated["label"], "label"),
             sample_index=_extract.integer(validated["sample_index"], "sample_index"),
             seed=_extract.integer(validated["seed"], "seed"),
-            component_sequence=tuple(
-                _extract.integer(index, "component_sequence")
-                for index in _extract.sequence(
-                    validated["component_sequence"],
-                    "component_sequence",
-                )
-            ),
+            component_index=_extract.integer(validated["component_index"], "component_index"),
             outcome_id=_extract.optional_string(validated.get("outcome_id"), "outcome_id"),
         )
 
@@ -108,7 +100,7 @@ class ObservationShowcaseSample:
             "label": self.label,
             "sample_index": self.sample_index,
             "seed": self.seed,
-            "component_sequence": list(self.component_sequence),
+            "component_index": self.component_index,
         }
         if self.outcome_id is not None:
             record["outcome_id"] = self.outcome_id

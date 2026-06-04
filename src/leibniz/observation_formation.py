@@ -32,8 +32,6 @@ __all__ = [
     "VariationCoordinate",
     "affine_translation",
     "linear_affine_matrix",
-    "sequence_center",
-    "sequence_relative_translation",
 ]
 
 _interpreter = "field-mark-composition@0.1.0"
@@ -126,7 +124,7 @@ AffineMatrix2D = tuple[
 
 @dataclass(frozen=True, slots=True)
 class VariationCoordinate:
-    sequence_index: int
+    component_index: int
     matrix: AffineMatrix2D
 
 
@@ -431,7 +429,7 @@ class FormedObservation:
     benchmark_id: ProtocolIdentifier
     formation_declaration: ArtifactReference
     materialization_plan: ArtifactReference
-    component_sequence: tuple[int, ...]
+    component_index: int
     field: FieldObservation
 
     def __post_init__(self) -> None:
@@ -448,12 +446,8 @@ class FormedObservation:
             raise ObservationFormationValidationError(
                 "materialization_plan reference must have kind materialization-plan"
             )
-        if not self.component_sequence:
-            raise ObservationFormationValidationError("component_sequence must not be empty")
-        if any(index < 0 for index in self.component_sequence):
-            raise ObservationFormationValidationError(
-                "component_sequence indexes must be nonnegative"
-            )
+        if self.component_index < 0:
+            raise ObservationFormationValidationError("component_index must be nonnegative")
 
     @property
     def digest(self) -> ContentDigest:
@@ -465,7 +459,7 @@ class FormedObservation:
             "benchmark_id": str(self.benchmark_id),
             "formation_declaration": self.formation_declaration.to_record(),
             "materialization_plan": self.materialization_plan.to_record(),
-            "component_sequence": list(self.component_sequence),
+            "component_index": self.component_index,
             "field_shape": list(self.field.shape),
             "field_digest": str(self.field.digest),
         }
@@ -477,9 +471,7 @@ class ObservationComponentDiscriminabilityReport:
 
     width: int
     height: int
-    sequence_length: int
-    sequence_index: int
-    component_count: int
+    component_vocabulary_size: int
     variation_case_count: int
     required_pairwise_l1: float
     minimum_pairwise_l1: float
@@ -581,29 +573,23 @@ class ObservationFormationDeclaration:
             ),
         )
 
-    def sample_component_sequence(
+    def sample_component_index(
         self,
         *,
         seed: int,
-        component_count: int,
         sample_index: int,
-    ) -> tuple[int, ...]:
+    ) -> int:
         if sample_index < 0:
             raise ObservationFormationValidationError("sample_index must be nonnegative")
-        if component_count < 1:
-            raise ObservationFormationValidationError("component_count must be positive")
         generator = random.Random(seed + sample_index)
-        return tuple(
-            generator.randrange(len(self.components))
-            for _sequence_element in range(component_count)
-        )
+        return generator.randrange(len(self.components))
 
     def form_observation(
         self,
         *,
         id: ProtocolIdentifier,
         plan: MaterializationPlan,
-        component_sequence: Sequence[int],
+        component_index: int,
         variation_coordinates: Sequence[Mapping[str, object]] | None = None,
     ) -> FormedObservation:
         if plan.benchmark_id != self.benchmark_id:
@@ -612,22 +598,13 @@ class ObservationFormationDeclaration:
             )
         width = plan.resolution_assignment.require_axis(self.width_axis)
         height = plan.resolution_assignment.require_axis(self.height_axis)
-        sequence = tuple(
-            _extract.integer(index, "component_sequence") for index in component_sequence
-        )
-        sequence_elements = len(sequence)
-        if sequence_elements < 1:
-            raise ObservationFormationValidationError("component_sequence must not be empty")
-        if any(index >= len(self.components) for index in sequence):
+        if component_index < 0 or component_index >= len(self.components):
             raise ObservationFormationValidationError(
-                "component_sequence index is outside component vocabulary"
+                "component_index is outside component vocabulary"
             )
-        coordinates = self._variation_coordinates(
-            sequence_length=sequence_elements,
-            variation_coordinates=variation_coordinates,
-        )
+        coordinates = self._variation_coordinates(variation_coordinates=variation_coordinates)
         field = self._form_field(
-            sequence=sequence,
+            component_index=component_index,
             width=width,
             height=height,
             variation_coordinates=coordinates,
@@ -645,7 +622,7 @@ class ObservationFormationDeclaration:
                 protocol_id=plan.id,
                 record_digest=plan.digest,
             ),
-            component_sequence=sequence,
+            component_index=component_index,
             field=field,
         )
 
@@ -654,22 +631,14 @@ class ObservationFormationDeclaration:
         *,
         width: int,
         height: int,
-        sequence_length: int,
-        sequence_index: int,
         component_index: int,
     ) -> FieldObservation:
-        """Form one unvaried component at one sequence position in the output field."""
+        """Form one unvaried component in the output field."""
 
         if width < 1:
             raise ObservationFormationValidationError("width must be positive")
         if height < 1:
             raise ObservationFormationValidationError("height must be positive")
-        if sequence_length < 1:
-            raise ObservationFormationValidationError("sequence_length must be positive")
-        if sequence_index < 0 or sequence_index >= sequence_length:
-            raise ObservationFormationValidationError(
-                "sequence_index must be within sequence_length"
-            )
         if component_index < 0 or component_index >= len(self.components):
             raise ObservationFormationValidationError(
                 "component_index is outside component vocabulary"
@@ -682,9 +651,6 @@ class ObservationFormationDeclaration:
                 channel_count=self.channel_count,
                 width=width,
                 height=height,
-                sequence_length=sequence_length,
-                sequence_index=sequence_index,
-                placement_axis=self.sequence_layout.placement_axis,
                 mark=mark,
             )
         return FieldObservation(
@@ -697,8 +663,6 @@ class ObservationFormationDeclaration:
         *,
         width: int,
         height: int,
-        sequence_length: int = 1,
-        sequence_index: int = 0,
         variation_coordinates: Sequence[Mapping[str, object] | None] = (None,),
         minimum_pairwise_l1: float = 0.0,
     ) -> ObservationComponentDiscriminabilityReport:
@@ -708,12 +672,6 @@ class ObservationFormationDeclaration:
             raise ObservationFormationValidationError("width must be positive")
         if height < 1:
             raise ObservationFormationValidationError("height must be positive")
-        if sequence_length < 1:
-            raise ObservationFormationValidationError("sequence_length must be positive")
-        if sequence_index < 0 or sequence_index >= sequence_length:
-            raise ObservationFormationValidationError(
-                "sequence_index must be within sequence_length"
-            )
         if not math.isfinite(minimum_pairwise_l1) or minimum_pairwise_l1 < 0.0:
             raise ObservationFormationValidationError(
                 "minimum_pairwise_l1 must be finite and nonnegative"
@@ -730,8 +688,6 @@ class ObservationFormationDeclaration:
                 self._component_analysis_field(
                     width=width,
                     height=height,
-                    sequence_length=sequence_length,
-                    sequence_index=sequence_index,
                     component_index=component_index,
                     variation_coordinate=coordinate,
                 )
@@ -746,9 +702,7 @@ class ObservationFormationDeclaration:
                         return ObservationComponentDiscriminabilityReport(
                             width=width,
                             height=height,
-                            sequence_length=sequence_length,
-                            sequence_index=sequence_index,
-                            component_count=len(self.components),
+                            component_vocabulary_size=len(self.components),
                             variation_case_count=len(coordinate_cases),
                             required_pairwise_l1=minimum_pairwise_l1,
                             minimum_pairwise_l1=minimum_distance,
@@ -757,9 +711,7 @@ class ObservationFormationDeclaration:
         return ObservationComponentDiscriminabilityReport(
             width=width,
             height=height,
-            sequence_length=sequence_length,
-            sequence_index=sequence_index,
-            component_count=len(self.components),
+            component_vocabulary_size=len(self.components),
             variation_case_count=len(coordinate_cases),
             required_pairwise_l1=minimum_pairwise_l1,
             minimum_pairwise_l1=minimum_distance if nearest_pair is not None else 0.0,
@@ -771,8 +723,6 @@ class ObservationFormationDeclaration:
         *,
         width: int,
         height: int,
-        sequence_length: int = 1,
-        sequence_index: int = 0,
         variation_coordinates: Sequence[Mapping[str, object] | None] = (None,),
         minimum_pairwise_l1: float = 0.0,
     ) -> bool:
@@ -782,8 +732,6 @@ class ObservationFormationDeclaration:
             return self.component_discriminability_report(
                 width=width,
                 height=height,
-                sequence_length=sequence_length,
-                sequence_index=sequence_index,
                 variation_coordinates=variation_coordinates,
                 minimum_pairwise_l1=minimum_pairwise_l1,
             ).passed
@@ -791,12 +739,6 @@ class ObservationFormationDeclaration:
             raise ObservationFormationValidationError("width must be positive")
         if height < 1:
             raise ObservationFormationValidationError("height must be positive")
-        if sequence_length < 1:
-            raise ObservationFormationValidationError("sequence_length must be positive")
-        if sequence_index < 0 or sequence_index >= sequence_length:
-            raise ObservationFormationValidationError(
-                "sequence_index must be within sequence_length"
-            )
         if not math.isfinite(minimum_pairwise_l1):
             raise ObservationFormationValidationError(
                 "minimum_pairwise_l1 must be finite and nonnegative"
@@ -809,8 +751,6 @@ class ObservationFormationDeclaration:
         return self._component_fields_clear_margin(
             width=width,
             height=height,
-            sequence_length=sequence_length,
-            sequence_index=sequence_index,
             variation_coordinates=coordinate_cases,
             minimum_pairwise_l1=minimum_pairwise_l1,
         )
@@ -820,7 +760,6 @@ class ObservationFormationDeclaration:
         *,
         minimum_width: int,
         minimum_height: int,
-        sequence_length: int,
         maximum_width: int | None = None,
         maximum_height: int | None = None,
         variation_coordinates: Sequence[Mapping[str, object] | None] | None = None,
@@ -832,13 +771,7 @@ class ObservationFormationDeclaration:
             raise ObservationFormationValidationError("minimum_width must be positive")
         if minimum_height < 1:
             raise ObservationFormationValidationError("minimum_height must be positive")
-        if sequence_length < 1:
-            raise ObservationFormationValidationError("sequence_length must be positive")
-        width_default = (
-            max(minimum_width * 4, 64 * sequence_length)
-            if self.sequence_layout.placement_axis == "x"
-            else max(minimum_width * 4, 64)
-        )
+        width_default = max(minimum_width * 4, 64)
         width_limit = maximum_width if maximum_width is not None else width_default
         height_limit = maximum_height if maximum_height is not None else max(minimum_height * 4, 64)
         if width_limit < minimum_width:
@@ -846,16 +779,6 @@ class ObservationFormationDeclaration:
         if height_limit < minimum_height:
             raise ObservationFormationValidationError("maximum_height is below minimum_height")
         coordinate_cases = tuple(variation_coordinates or (None,))
-        if self.sequence_layout.placement_axis in {"x", "y"}:
-            return self._minimum_discriminatable_sequence_resolution(
-                minimum_width=minimum_width,
-                minimum_height=minimum_height,
-                sequence_length=sequence_length,
-                maximum_width=width_limit,
-                maximum_height=height_limit,
-                variation_coordinates=coordinate_cases,
-                minimum_pairwise_l1=minimum_pairwise_l1,
-            )
         for total in range(minimum_width + minimum_height, width_limit + height_limit + 1):
             width_start = max(minimum_width, total - height_limit)
             width_stop = min(width_limit, total - minimum_height)
@@ -864,56 +787,12 @@ class ObservationFormationDeclaration:
                 if self._resolution_is_discriminatable(
                     width=width,
                     height=height,
-                    sequence_length=sequence_length,
                     variation_coordinates=coordinate_cases,
                     minimum_pairwise_l1=minimum_pairwise_l1,
                 ):
                     return (width, height)
         raise ObservationFormationValidationError(
             "no discriminatable resolution found within search bounds"
-        )
-
-    def _minimum_discriminatable_sequence_resolution(
-        self,
-        *,
-        minimum_width: int,
-        minimum_height: int,
-        sequence_length: int,
-        maximum_width: int,
-        maximum_height: int,
-        variation_coordinates: tuple[Mapping[str, object] | None, ...],
-        minimum_pairwise_l1: float,
-    ) -> tuple[int, int]:
-        if self.sequence_layout.placement_axis == "x":
-            minimum_cell_width = max(1, math.ceil(minimum_width / sequence_length))
-            maximum_cell_width = max(1, maximum_width // sequence_length)
-            for side in range(
-                max(minimum_cell_width, minimum_height),
-                min(maximum_cell_width, maximum_height) + 1,
-            ):
-                if self._component_cell_is_discriminatable(
-                    width=side,
-                    height=side,
-                    variation_coordinates=variation_coordinates,
-                    minimum_pairwise_l1=minimum_pairwise_l1,
-                ):
-                    return (side * sequence_length, side)
-        else:
-            minimum_cell_height = max(1, math.ceil(minimum_height / sequence_length))
-            maximum_cell_height = max(1, maximum_height // sequence_length)
-            for side in range(
-                max(minimum_width, minimum_cell_height),
-                min(maximum_width, maximum_cell_height) + 1,
-            ):
-                if self._component_cell_is_discriminatable(
-                    width=side,
-                    height=side,
-                    variation_coordinates=variation_coordinates,
-                    minimum_pairwise_l1=minimum_pairwise_l1,
-                ):
-                    return (side, side * sequence_length)
-        raise ObservationFormationValidationError(
-            "no discriminatable sequence resolution found within search bounds"
         )
 
     def _component_cell_is_discriminatable(
@@ -934,8 +813,6 @@ class ObservationFormationDeclaration:
         if not self._component_fields_clear_margin(
             width=width,
             height=height,
-            sequence_length=1,
-            sequence_index=0,
             variation_coordinates=(None,),
             minimum_pairwise_l1=minimum_pairwise_l1,
         ):
@@ -943,8 +820,6 @@ class ObservationFormationDeclaration:
         return self._component_fields_clear_margin(
             width=width,
             height=height,
-            sequence_length=1,
-            sequence_index=0,
             variation_coordinates=variation_coordinates,
             minimum_pairwise_l1=minimum_pairwise_l1,
         )
@@ -960,8 +835,6 @@ class ObservationFormationDeclaration:
         unvaried = self.component_discriminability_report(
             width=width,
             height=height,
-            sequence_length=1,
-            sequence_index=0,
             minimum_pairwise_l1=minimum_pairwise_l1,
         )
         if not unvaried.passed:
@@ -969,8 +842,6 @@ class ObservationFormationDeclaration:
         varied = self.component_discriminability_report(
             width=width,
             height=height,
-            sequence_length=1,
-            sequence_index=0,
             variation_coordinates=variation_coordinates,
             minimum_pairwise_l1=minimum_pairwise_l1,
         )
@@ -981,8 +852,6 @@ class ObservationFormationDeclaration:
         *,
         width: int,
         height: int,
-        sequence_length: int,
-        sequence_index: int,
         variation_coordinates: tuple[Mapping[str, object] | None, ...],
         minimum_pairwise_l1: float,
     ) -> bool:
@@ -991,8 +860,6 @@ class ObservationFormationDeclaration:
                 self._component_analysis_field(
                     width=width,
                     height=height,
-                    sequence_length=sequence_length,
-                    sequence_index=sequence_index,
                     component_index=component_index,
                     variation_coordinate=coordinate,
                 )
@@ -1009,13 +876,9 @@ class ObservationFormationDeclaration:
 
     def boundary_variation_coordinates(
         self,
-        *,
-        sequence_index: int,
     ) -> tuple[Mapping[str, object], ...]:
         """Return transform-bound coordinates for live resolution analysis."""
 
-        if sequence_index < 0:
-            raise ObservationFormationValidationError("sequence_index must be nonnegative")
         spatial = self.variation_transform.spatial_affine
         cases: list[Mapping[str, object]] = []
         for values in product(*(bounds for row in spatial.matrix for bounds in row)):
@@ -1026,7 +889,7 @@ class ObservationFormationDeclaration:
             cases.append(
                 {
                     "kind": "field-variation-transform-coordinate",
-                    "sequence_index": sequence_index,
+                    "component_index": 0,
                     "spatial_affine": {
                         "kind": "spatial-affine-coordinate",
                         "coordinate_system": spatial.coordinate_system,
@@ -1041,36 +904,22 @@ class ObservationFormationDeclaration:
         *,
         width: int,
         height: int,
-        sequence_length: int,
         variation_coordinates: tuple[Mapping[str, object] | None, ...],
         minimum_pairwise_l1: float,
     ) -> bool:
-        for sequence_index in range(sequence_length):
-            coordinates = tuple(
-                None
-                if coordinate is None
-                else _variation_coordinate_with_sequence_index(coordinate, sequence_index)
-                for coordinate in variation_coordinates
-            )
-            report = self.component_discriminability_report(
-                width=width,
-                height=height,
-                sequence_length=sequence_length,
-                sequence_index=sequence_index,
-                variation_coordinates=coordinates,
-                minimum_pairwise_l1=minimum_pairwise_l1,
-            )
-            if not report.passed:
-                return False
-        return True
+        report = self.component_discriminability_report(
+            width=width,
+            height=height,
+            variation_coordinates=variation_coordinates,
+            minimum_pairwise_l1=minimum_pairwise_l1,
+        )
+        return report.passed
 
     def _component_analysis_field(
         self,
         *,
         width: int,
         height: int,
-        sequence_length: int,
-        sequence_index: int,
         component_index: int,
         variation_coordinate: Mapping[str, object] | None,
     ) -> FieldObservation:
@@ -1078,8 +927,6 @@ class ObservationFormationDeclaration:
             return self._cached_component_analysis_field(
                 width=width,
                 height=height,
-                sequence_length=sequence_length,
-                sequence_index=sequence_index,
                 component_index=component_index,
             )
         values = [0.0] * (self.channel_count * width * height)
@@ -1087,20 +934,15 @@ class ObservationFormationDeclaration:
             self._cached_component_analysis_field(
                 width=width,
                 height=height,
-                sequence_length=sequence_length,
-                sequence_index=sequence_index,
                 component_index=component_index,
             ).values
         )
-        _merge_transformed_sequence_element(
+        _merge_transformed_component(
             values=values,
             source_values=source_values,
             channel_count=self.channel_count,
             width=width,
             height=height,
-            sequence_length=sequence_length,
-            sequence_index=sequence_index,
-            placement_axis=self.sequence_layout.placement_axis,
             coordinate=_parse_variation_coordinate(
                 variation_coordinate,
                 field="variation_coordinates",
@@ -1116,26 +958,14 @@ class ObservationFormationDeclaration:
         *,
         width: int,
         height: int,
-        sequence_length: int,
-        sequence_index: int,
         component_index: int,
     ) -> FieldObservation:
-        if sequence_length != 1 or sequence_index != 0:
-            return self.component_field(
-                width=width,
-                height=height,
-                sequence_length=sequence_length,
-                sequence_index=sequence_index,
-                component_index=component_index,
-            )
         key = (str(self.digest), width, height, component_index)
         cached = _component_analysis_field_cache.get(key)
         if cached is None:
             cached = self.component_field(
                 width=width,
                 height=height,
-                sequence_length=sequence_length,
-                sequence_index=sequence_index,
                 component_index=component_index,
             )
             _component_analysis_field_cache[key] = cached
@@ -1163,30 +993,25 @@ class ObservationFormationDeclaration:
     def _variation_coordinates(
         self,
         *,
-        sequence_length: int,
         variation_coordinates: Sequence[Mapping[str, object]] | None,
     ) -> tuple[VariationCoordinate, ...] | None:
         if variation_coordinates is None:
             return None
         coordinates = tuple(variation_coordinates)
-        if len(coordinates) != sequence_length:
+        if len(coordinates) != 1:
             raise ObservationFormationValidationError(
-                "variation_coordinates length must match sequence length"
+                "variation_coordinates must contain one coordinate"
             )
         parsed_coordinates: list[VariationCoordinate] = []
-        for sequence_index, coordinate in enumerate(coordinates):
+        for coordinate in coordinates:
             parsed = _parse_variation_coordinate(coordinate, field="variation_coordinates")
-            if parsed.sequence_index != sequence_index:
-                raise ObservationFormationValidationError(
-                    "variation coordinate sequence_index must match coordinate position"
-                )
             parsed_coordinates.append(parsed)
         return tuple(parsed_coordinates)
 
     def _form_field(
         self,
         *,
-        sequence: tuple[int, ...],
+        component_index: int,
         width: int,
         height: int,
         variation_coordinates: tuple[VariationCoordinate, ...] | None = None,
@@ -1196,43 +1021,34 @@ class ObservationFormationDeclaration:
         if height < 1:
             raise ObservationFormationValidationError("height must be positive")
         values = [0.0] * (self.channel_count * width * height)
-        for sequence_index, component_index in enumerate(sequence):
-            target_values = values
-            if variation_coordinates is not None:
-                target_values = list(
-                    self._cached_component_analysis_field(
-                        width=width,
-                        height=height,
-                        sequence_length=len(sequence),
-                        sequence_index=sequence_index,
-                        component_index=component_index,
-                    ).values
-                )
-            else:
-                component = self.components[component_index]
-                for mark in component.marks:
-                    _draw_mark(
-                        values=target_values,
-                        channel_count=self.channel_count,
-                        width=width,
-                        height=height,
-                        sequence_length=len(sequence),
-                        sequence_index=sequence_index,
-                        placement_axis=self.sequence_layout.placement_axis,
-                        mark=mark,
-                    )
-            if variation_coordinates is not None:
-                _merge_transformed_sequence_element(
-                    values=values,
-                    source_values=target_values,
+        target_values = values
+        if variation_coordinates is not None:
+            target_values = list(
+                self._cached_component_analysis_field(
+                    width=width,
+                    height=height,
+                    component_index=component_index,
+                ).values
+            )
+        else:
+            component = self.components[component_index]
+            for mark in component.marks:
+                _draw_mark(
+                    values=target_values,
                     channel_count=self.channel_count,
                     width=width,
                     height=height,
-                    sequence_length=len(sequence),
-                    sequence_index=sequence_index,
-                    placement_axis=self.sequence_layout.placement_axis,
-                    coordinate=variation_coordinates[sequence_index],
+                    mark=mark,
                 )
+        if variation_coordinates is not None:
+            _merge_transformed_component(
+                values=values,
+                source_values=target_values,
+                channel_count=self.channel_count,
+                width=width,
+                height=height,
+                coordinate=variation_coordinates[0],
+            )
         return FieldObservation(
             shape=(self.channel_count, height, width),
             values=tuple(values),
@@ -1262,9 +1078,6 @@ def _draw_mark(
     channel_count: int,
     width: int,
     height: int,
-    sequence_length: int,
-    sequence_index: int,
-    placement_axis: str,
     mark: ComponentMark,
 ) -> None:
     curve_points = tuple(
@@ -1272,9 +1085,6 @@ def _draw_mark(
             point,
             width=width,
             height=height,
-            sequence_length=sequence_length,
-            sequence_index=sequence_index,
-            placement_axis=placement_axis,
         )
         for point in _sample_bezier_curve(mark.control_points)
     )
@@ -1298,16 +1108,13 @@ def _draw_mark(
                 values[value_index] = max(values[value_index], mark.value)
 
 
-def _merge_transformed_sequence_element(
+def _merge_transformed_component(
     *,
     values: list[float],
     source_values: list[float],
     channel_count: int,
     width: int,
     height: int,
-    sequence_length: int,
-    sequence_index: int,
-    placement_axis: str,
     coordinate: VariationCoordinate,
 ) -> None:
     if _is_identity_variation_coordinate(coordinate):
@@ -1315,20 +1122,10 @@ def _merge_transformed_sequence_element(
             if value > values[index]:
                 values[index] = value
         return
-    center = sequence_center(
-        width=width,
-        height=height,
-        sequence_length=sequence_length,
-        sequence_index=sequence_index,
-        placement_axis=placement_axis,
-    )
+    center = (0.5, 0.5)
     linear_matrix = linear_affine_matrix(coordinate.matrix)
     inverse = _inverse_affine_matrix(linear_matrix)
-    translation = sequence_relative_translation(
-        affine_translation(coordinate.matrix),
-        sequence_length=sequence_length,
-        placement_axis=placement_axis,
-    )
+    translation = affine_translation(coordinate.matrix)
     target_x_range, target_y_range = _transformed_source_pixel_ranges(
         source_values=source_values,
         channel_count=channel_count,
@@ -1438,35 +1235,6 @@ def _is_identity_variation_coordinate(coordinate: VariationCoordinate) -> bool:
         (0.0, 1.0, 0.0),
         (0.0, 0.0, 1.0),
     )
-
-
-def sequence_center(
-    *,
-    width: int,
-    height: int,
-    sequence_length: int,
-    sequence_index: int,
-    placement_axis: str,
-) -> tuple[float, float]:
-    return _sequence_point(
-        (0.5, 0.5),
-        width=width,
-        height=height,
-        sequence_length=sequence_length,
-        sequence_index=sequence_index,
-        placement_axis=placement_axis,
-    )
-
-
-def sequence_relative_translation(
-    translation: tuple[float, float],
-    *,
-    sequence_length: int,
-    placement_axis: str,
-) -> tuple[float, float]:
-    if placement_axis == "x":
-        return (translation[0] / sequence_length, translation[1])
-    return (translation[0], translation[1] / sequence_length)
 
 
 def _inverse_affine_matrix(
@@ -1586,38 +1354,13 @@ def _bezier_point(
     return working[0]
 
 
-def _sequence_point(
-    point: tuple[float, float],
-    *,
-    width: int,
-    height: int,
-    sequence_length: int,
-    sequence_index: int,
-    placement_axis: str,
-) -> tuple[float, float]:
-    x, y = point
-    if placement_axis == "x":
-        return ((sequence_index + x) / sequence_length, y)
-    return (x, (sequence_index + y) / sequence_length)
-
-
 def _field_pixel_point(
     point: tuple[float, float],
     *,
     width: int,
     height: int,
-    sequence_length: int,
-    sequence_index: int,
-    placement_axis: str,
 ) -> tuple[float, float]:
-    x, y = _sequence_point(
-        point,
-        width=width,
-        height=height,
-        sequence_length=sequence_length,
-        sequence_index=sequence_index,
-        placement_axis=placement_axis,
-    )
+    x, y = point
     return (x * width, y * height)
 
 
@@ -1705,18 +1448,12 @@ def _parse_variation_coordinate(
             f"{field}.spatial_affine: coordinate_system must be normalized-sequence-element"
         )
     return VariationCoordinate(
-        sequence_index=_extract.integer(value.get("sequence_index"), f"{field}.sequence_index"),
+        component_index=_extract.integer(
+            value.get("component_index", 0),
+            f"{field}.component_index",
+        ),
         matrix=_coordinate_matrix(spatial.get("matrix"), field=f"{field}.spatial_affine.matrix"),
     )
-
-
-def _variation_coordinate_with_sequence_index(
-    coordinate: Mapping[str, object],
-    sequence_index: int,
-) -> Mapping[str, object]:
-    updated = dict(coordinate)
-    updated["sequence_index"] = sequence_index
-    return updated
 
 
 def _coordinate_matrix(
