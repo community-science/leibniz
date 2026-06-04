@@ -28,6 +28,7 @@ import {
   sortedModelResults,
   type ModelResultSort,
   type ModelResultSortKey,
+  type BenchmarkPlotModelPoint,
 } from './benchmarkDashboardModel.ts';
 import type {
   BenchmarkResultRecord,
@@ -116,6 +117,9 @@ export function BenchmarkResultDashboard({
     defaultLeaderboardSort,
   );
   const plot = benchmarkPlotModel(result, costAxis, scoreAxis);
+  const frontierModels = plot.frontierPoints
+    .map((point) => point.model)
+    .filter((model): model is ModelResultRecord => model !== undefined);
   const selection = selectionForId(result, selectedId);
   const selectedSelectionModelKey =
     selection.selectedModel?.model_key ??
@@ -165,7 +169,7 @@ export function BenchmarkResultDashboard({
       <ModelResultTable
         costAxis={costAxis}
         costAxisLabel={costAxisLabel}
-        models={result.leaderboard}
+        models={frontierModels}
         onSelect={setSelectedId}
         onSort={(key) => setLeaderboardSort((current) => nextModelResultSort(current, key))}
         scoreAxis={scoreAxis}
@@ -224,6 +228,7 @@ function BenchmarkFrontierPlot({
       point.score >= view.yDomain[0] &&
       point.score <= view.yDomain[1],
   );
+  const renderedPoints = [...visiblePoints].sort(comparePlotPointRenderOrder);
   const selectedPoint = model.points.find((point) => point.id === selectedId);
   const hoveredPoint = model.points.find((point) => point.id === hoveredId);
   const activePoint = hoveredPoint ?? selectedPoint;
@@ -401,7 +406,7 @@ function BenchmarkFrontierPlot({
                 points={model.staircase.map(([logCost, score]) => `${x(logCost)},${y(score)}`).join(' ')}
               />
             ) : null}
-            {visiblePoints.map((point) => (
+            {renderedPoints.map((point) => (
               <circle
                 className={[
                   'frontier-chart-point',
@@ -520,6 +525,16 @@ function PlotAxisSelector({
       ))}
     </>
   );
+}
+
+function comparePlotPointRenderOrder(
+  left: BenchmarkPlotModelPoint,
+  right: BenchmarkPlotModelPoint,
+): number {
+  if (left.frontier !== right.frontier) {
+    return left.frontier ? 1 : -1;
+  }
+  return left.cost - right.cost || left.score - right.score;
 }
 
 function ModelResultTable({

@@ -632,7 +632,12 @@ def _run_benchmark_training(args: argparse.Namespace) -> tuple[list[BenchmarkRun
         architecture_inputs=tuple(args.architecture),
         results_root=args.results_root,
     ):
-        completed_for_all_selected_benchmarks = True
+        moved_architecture_path = None
+        if not args.architecture and not args.dry_run:
+            moved_architecture_path = _move_training_manifest_out_of_pending(architecture_path)
+            if moved_architecture_path is not None:
+                architecture_path = moved_architecture_path
+                moved += 1
         for benchmark_root in benchmark_roots:
             plan = _benchmark_run_plan(
                 args,
@@ -643,14 +648,6 @@ def _run_benchmark_training(args: argparse.Namespace) -> tuple[list[BenchmarkRun
                 skipped += 1
                 continue
             summaries.append(run_benchmark(plan))
-            completed_for_all_selected_benchmarks = not plan.dry_run
-        if (
-            completed_for_all_selected_benchmarks
-            and not args.architecture
-            and not args.dry_run
-            and _move_completed_training_manifest_out_of_pending(architecture_path)
-        ):
-            moved += 1
     return summaries, skipped, moved
 
 
@@ -782,23 +779,60 @@ def _benchmark_training_completed(plan: BenchmarkRunPlan) -> bool:
     if not summary.training_summary_path.is_file():
         return False
     record = _load_object_record(summary.training_summary_path, description="training summary")
-    return record.get("run_status") == "completed"
+    completed = record.get("run_status") == "completed"
+    if completed:
+        _rewrite_training_summary_architecture_path(
+            summary.training_summary_path,
+            architecture_path=summary.architecture_path,
+            results_root=summary.results_root,
+        )
+    return completed
 
 
-def _move_completed_training_manifest_out_of_pending(path: Path) -> bool:
+def _move_training_manifest_out_of_pending(path: Path) -> Path | None:
     if path.parent.name != "pending" or not path.is_file():
-        return False
+        return None
     completed_root = path.parent.parent / "completed"
     completed_root.mkdir(parents=True, exist_ok=True)
     target = completed_root / path.name
     if target.exists():
         if target.read_bytes() == path.read_bytes():
             path.unlink()
-            return True
+            return target
         manifest = ArchitectureManifestDocument.from_bytes(path.read_bytes()).manifest
         target = completed_root / f"{path.stem}-{manifest.digest.hex[:12]}{path.suffix}"
     path.replace(target)
-    return True
+    return target
+
+
+def _rewrite_training_summary_architecture_path(
+    summary_path: Path,
+    *,
+    architecture_path: Path,
+    results_root: Path,
+) -> None:
+    record = _load_object_record(summary_path, description="training summary")
+    architecture_path_record = _portable_record_path(
+        architecture_path,
+        results_root=results_root,
+    )
+    if record.get("architecture_path") == architecture_path_record:
+        return
+    record["architecture_path"] = architecture_path_record
+    summary_path.write_bytes(canonical_document_bytes(record) + b"\n")
+
+
+def _portable_record_path(path: Path, *, results_root: Path) -> str:
+    if not path.is_absolute():
+        return path.as_posix()
+    resolved = path.resolve()
+    resolved_results_root = results_root.resolve()
+    if resolved.is_relative_to(resolved_results_root):
+        return (Path(results_root.name) / resolved.relative_to(resolved_results_root)).as_posix()
+    working_root = Path.cwd().resolve()
+    if resolved.is_relative_to(working_root):
+        return resolved.relative_to(working_root).as_posix()
+    return path.as_posix()
 
 
 def _materialize_benchmark_views_if_present(*, results_root: Path) -> None:
