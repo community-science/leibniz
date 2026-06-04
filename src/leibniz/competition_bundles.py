@@ -16,6 +16,7 @@ from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 __all__ = [
     "BenchmarkCompetitionBundle",
     "BenchmarkCompetitionBundleDocument",
+    "BenchmarkCompetitionBundleSummary",
     "BenchmarkCompetitionBundleValidationError",
 ]
 
@@ -40,6 +41,93 @@ class BenchmarkCompetitionBundleValidationError(ValueError):
 
 
 _record = RecordExtractor(BenchmarkCompetitionBundleValidationError)
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkCompetitionBundleSummary:
+    """Compact competition evidence fields used by schedulers and derived views."""
+
+    benchmark_id: str
+    competition_id: str
+    left_model_key: str
+    right_model_key: str
+    left_score: float
+    right_score: float
+    sample_count: int
+    throughput: Mapping[str, object]
+
+    @classmethod
+    def from_record(
+        cls,
+        record: Mapping[str, object],
+    ) -> BenchmarkCompetitionBundleSummary:
+        if record.get("format") != "leibniz.benchmark-competition":
+            raise BenchmarkCompetitionBundleValidationError(
+                "competition bundle has unsupported format"
+            )
+        if record.get("format_version") != 1:
+            raise BenchmarkCompetitionBundleValidationError(
+                "competition bundle has unsupported format_version"
+            )
+        result = _record.mapping(
+            record.get("competition_result"),
+            "competition_result",
+        )
+        _validate_competition_result_summary(result)
+        benchmark_id = _record.non_empty_string(
+            result.get("benchmark_id"),
+            "competition_result.benchmark_id",
+        )
+        raw_manifest = record.get("benchmark_manifest")
+        if isinstance(raw_manifest, Mapping):
+            manifest = cast(Mapping[str, object], raw_manifest)
+            manifest_id = manifest.get("id")
+            if isinstance(manifest_id, str) and manifest_id and manifest_id != benchmark_id:
+                raise BenchmarkCompetitionBundleValidationError(
+                    "competition_result benchmark_id does not match benchmark_manifest"
+                )
+        return cls(
+            benchmark_id=benchmark_id,
+            competition_id=_record.non_empty_string(
+                result.get("competition_id"),
+                "competition_result.competition_id",
+            ),
+            left_model_key=_record.non_empty_string(
+                result.get("left_model_key"),
+                "competition_result.left_model_key",
+            ),
+            right_model_key=_record.non_empty_string(
+                result.get("right_model_key"),
+                "competition_result.right_model_key",
+            ),
+            left_score=_probability(
+                result.get("left_score"),
+                "competition_result.left_score",
+            ),
+            right_score=_probability(
+                result.get("right_score"),
+                "competition_result.right_score",
+            ),
+            sample_count=_record.positive_integer(
+                result.get("sample_count"),
+                "competition_result.sample_count",
+            ),
+            throughput=_record.mapping(record.get("throughput"), "throughput"),
+        )
+
+    def competition_result_record(self) -> dict[str, object]:
+        return {
+            "format": "leibniz.model-competition",
+            "format_version": 1,
+            "benchmark_id": self.benchmark_id,
+            "competition_id": self.competition_id,
+            "left_model_key": self.left_model_key,
+            "right_model_key": self.right_model_key,
+            "left_score": self.left_score,
+            "right_score": self.right_score,
+            "sample_count": self.sample_count,
+            "throughput": dict(self.throughput),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +343,24 @@ def _validate_competition_result(
             )
         _probability(entry_record.get("left_score"), "competition_result.entries.left_score")
         _probability(entry_record.get("right_score"), "competition_result.entries.right_score")
+
+
+def _validate_competition_result_summary(record: Mapping[str, object]) -> None:
+    if record.get("format") != "leibniz.model-competition":
+        raise BenchmarkCompetitionBundleValidationError(
+            "competition_result has unsupported format"
+        )
+    if record.get("format_version") != 1:
+        raise BenchmarkCompetitionBundleValidationError(
+            "competition_result has unsupported format_version"
+        )
+    _record.non_empty_string(record.get("benchmark_id"), "competition_result.benchmark_id")
+    _record.non_empty_string(record.get("competition_id"), "competition_result.competition_id")
+    _record.non_empty_string(record.get("left_model_key"), "competition_result.left_model_key")
+    _record.non_empty_string(record.get("right_model_key"), "competition_result.right_model_key")
+    _record.positive_integer(record.get("sample_count"), "competition_result.sample_count")
+    _probability(record.get("left_score"), "competition_result.left_score")
+    _probability(record.get("right_score"), "competition_result.right_score")
 
 
 def _probability(value: object, field: str) -> float:

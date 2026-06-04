@@ -350,6 +350,65 @@ def test_relative_score_view_exposes_batch_rating_evidence() -> None:
     assert size_confidence["risk_threshold"] == 0.05
 
 
+def test_local_competition_records_use_compact_bundle_summaries(tmp_path: Path) -> None:
+    results_root = tmp_path / "results"
+    competition_path = (
+        results_root
+        / "evaluations"
+        / "digits"
+        / "competitions"
+        / "models-a-b.json"
+    )
+    competition_path.parent.mkdir(parents=True)
+    competition_path.write_bytes(
+        canonical_document_bytes(
+            _competition_bundle_record(
+                left_model_key="model-a",
+                right_model_key="model-b",
+            )
+        )
+    )
+
+    records = cast(Any, local_results)._local_competition_records(results_root)
+
+    assert len(records) == 1
+    assert records[0]["left_model_key"] == "model-a"
+    assert records[0]["right_model_key"] == "model-b"
+    assert records[0]["sample_count"] == 1
+
+
+def test_cli_competition_pair_index_uses_compact_bundle_summaries(tmp_path: Path) -> None:
+    import leibniz.cli as cli
+
+    results_root = tmp_path / "results"
+    competition_path = (
+        results_root
+        / "evaluations"
+        / "digits"
+        / "competitions"
+        / "models-a-b.json"
+    )
+    competition_path.parent.mkdir(parents=True)
+    competition_path.write_bytes(
+        canonical_document_bytes(
+            _competition_bundle_record(
+                left_model_key="model-b",
+                right_model_key="model-a",
+            )
+        )
+    )
+
+    pairs = cast(Any, cli)._competition_pair_index(results_root=results_root)
+
+    assert pairs == {
+        cast(Any, cli)._CompetitionPairKey(
+            benchmark_id="benchmarks.digits@0.1.0",
+            left_model_key="model-a",
+            right_model_key="model-b",
+        )
+    }
+
+
 def test_relative_frontier_confidence_requests_uncertain_nearest_competition() -> None:
     best_runs = {
         "model-a": _benchmark_run_record_for_competition(
@@ -1083,6 +1142,30 @@ def _competition_record(*, left_model_key: str, right_model_key: str) -> dict[st
                 "winner": "left",
             }
         ],
+    }
+
+
+def _competition_bundle_record(*, left_model_key: str, right_model_key: str) -> dict[str, object]:
+    return {
+        "format": "leibniz.benchmark-competition",
+        "format_version": 1,
+        "id": "benchmark-competitions.models-a-b@0.1.0",
+        "benchmark_manifest": {"id": "benchmarks.digits@0.1.0"},
+        "left_evaluation_bundle": {"invalid": "not read by compact summary"},
+        "right_evaluation_bundle": {"invalid": "not read by compact summary"},
+        "competition_result": _competition_record(
+            left_model_key=left_model_key,
+            right_model_key=right_model_key,
+        ),
+        "competition_protocol": {
+            "kind": "checkpoint-benchmark-competition",
+            "sample_count": 1,
+        },
+        "competition_seed": 9000110,
+        "throughput": {
+            "kind": "checkpoint-competition-throughput",
+            "sample_count": 2,
+        },
     }
 
 
