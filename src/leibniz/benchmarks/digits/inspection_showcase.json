@@ -8,23 +8,19 @@
   "materialization_declaration": {
     "kind": "materialization-declaration",
     "protocol_id": "benchmarks.digits.materialization@0.1.0"
-    },
-    "samples": [
+  },
+  "samples": [
     {
-      "component_sequence": [
-        7
-      ],
-      "id": "benchmarks.digits.inspection-samples.sequence-1.digit-7@0.1.0",
+      "component_index": 7,
+      "id": "benchmarks.digits.inspection-samples.digit-7@0.1.0",
       "label": "Single digit 7",
       "outcome_id": "digit-7",
       "sample_index": 0,
       "seed": 101
     },
     {
-      "component_sequence": [
-        3
-      ],
-      "id": "benchmarks.digits.inspection-samples.sequence-1.digit-3@0.1.0",
+      "component_index": 3,
+      "id": "benchmarks.digits.inspection-samples.digit-3@0.1.0",
       "label": "Single digit 3",
       "outcome_id": "digit-3",
       "sample_index": 1,

@@ -29,8 +29,8 @@ def test_digits_observation_showcase_loads_benchmark_owned_samples() -> None:
         "Single digit 7",
         "Single digit 3",
     ]
-    assert manifest.samples[0].component_sequence == (7,)
-    assert manifest.samples[1].component_sequence == (3,)
+    assert manifest.samples[0].component_index == 7
+    assert manifest.samples[1].component_index == 3
 
 
 def test_observation_showcase_round_trips_canonically() -> None:

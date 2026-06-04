@@ -27,15 +27,11 @@ def test_digits_observation_inspection_records_sample_provenance() -> None:
     plan = MaterializationPlanDocument.from_bytes(
         (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
     ).plan
-    sequence = declaration.sample_component_sequence(
-        seed=plan.seed,
-        component_count=3,
-        sample_index=2,
-    )
+    component_index = declaration.sample_component_index(seed=plan.seed, sample_index=2)
     observation = declaration.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.observations.l3.sample-2@0.1.0"),
         plan=plan,
-        component_sequence=sequence,
+        component_index=component_index,
     )
 
     inspection = ObservationInspectionRecord.from_formed_observation(
@@ -43,16 +39,17 @@ def test_digits_observation_inspection_records_sample_provenance() -> None:
         observation=observation,
         materialization_plan=plan,
         sample_index=2,
-        outcome_id="digit-" + "-".join(str(index) for index in sequence),
+        outcome_id=f"digit-{component_index}",
     )
     record = inspection.to_record()
 
     assert inspection.benchmark_id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
-    assert inspection.component_sequence == sequence
+    assert inspection.component_index == component_index
     assert inspection.resolution_assignment.values == {"W": 72, "H": 24}
     assert inspection.field_shape == (1, 24, 72)
     assert inspection.field_preview is not None
     assert sum(run.count for run in inspection.field_preview.runs) == 72 * 24
+    assert record["component_index"] == component_index
     assert record["field_digest"] == str(observation.field.digest)
     assert record["formed_observation"] == {
         "kind": "formed-observation",
@@ -130,7 +127,7 @@ def test_non_digits_observation_uses_same_inspection_record_path() -> None:
     observation = declaration.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.synthetic-bars.observations.sample-0@0.1.0"),
         plan=plan,
-        component_sequence=(0, 0),
+        component_index=0,
     )
 
     inspection = ObservationInspectionRecord.from_formed_observation(
@@ -199,11 +196,7 @@ def _digits_observation():
     return declaration.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.observations.l3.sample-0@0.1.0"),
         plan=plan,
-        component_sequence=declaration.sample_component_sequence(
-            seed=plan.seed,
-            component_count=3,
-            sample_index=0,
-        ),
+        component_index=declaration.sample_component_index(seed=plan.seed, sample_index=0),
     )
 
 
@@ -215,11 +208,7 @@ def _digits_inspection() -> ObservationInspectionRecord:
     observation = declaration.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.observations.l3.sample-0@0.1.0"),
         plan=plan,
-        component_sequence=declaration.sample_component_sequence(
-            seed=plan.seed,
-            component_count=3,
-            sample_index=0,
-        ),
+        component_index=declaration.sample_component_index(seed=plan.seed, sample_index=0),
     )
     return ObservationInspectionRecord.from_formed_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.inspections.l3.sample-0@0.1.0"),

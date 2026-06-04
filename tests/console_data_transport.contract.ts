@@ -151,16 +151,11 @@ if (benchmarkTask === undefined) {
 assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind');
 assertEqual(benchmarkTask?.batches.length, 1, 'benchmark batch count');
 assertEqual(
-  benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.component_count}:${batch.sample_count}`).join('|'),
-  'balanced:1:40',
+  benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.sample_count}`).join('|'),
+  'balanced:40',
   'generated benchmark batches',
 );
 const generatedSamples = benchmarkTask?.batches[0]?.samples ?? [];
-assertEqual(
-  scaleCounts(generatedSamples).join(','),
-  '40',
-  'balanced scale samples',
-);
 assertEqual(
   digitCounts(generatedSamples).join(','),
   '4,4,4,4,4,4,4,4,4,4',
@@ -186,7 +181,7 @@ if (generatedSample === undefined) {
   throw new Error('expected generated sample');
 }
 assertEqual(generatedSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
-assertEqual(generatedSample.field_shape.join('x'), '1x144x120', 'sample field shape');
+assertEqual(generatedSample.field_shape.join('x'), '1x168x216', 'sample field shape');
 assertEqual(
   Object.hasOwn(generatedSample, 'preview_crop'),
   false,
@@ -224,7 +219,7 @@ assertEqual(
 const materializationPlan = generatedSample.materialization_plan as Record<string, unknown>;
 assertEqual(
   assignmentLabel(materializationPlan.resolution_assignment),
-  'H=144,W=120',
+  'H=168,W=216',
   'sample resolution assignment',
 );
 assertDataError(
@@ -272,23 +267,10 @@ function assertDataError(callback: () => void, expectedMessage: string) {
   throw new Error(`expected console data transport error: ${expectedMessage}`);
 }
 
-function digitCounts(samples: { component_sequence: number[] }[]): number[] {
+function digitCounts(samples: { component_index: number }[]): number[] {
   const counts = new Map<number, number>();
   for (const sample of samples) {
-    for (const digit of sample.component_sequence) {
-      counts.set(digit, (counts.get(digit) ?? 0) + 1);
-    }
-  }
-  return Array.from(counts.entries())
-    .sort(([left], [right]) => left - right)
-    .map(([, count]) => count);
-}
-
-function scaleCounts(samples: { component_sequence: number[] }[]): number[] {
-  const counts = new Map<number, number>();
-  for (const sample of samples) {
-    const scale = sample.component_sequence.length;
-    counts.set(scale, (counts.get(scale) ?? 0) + 1);
+    counts.set(sample.component_index, (counts.get(sample.component_index) ?? 0) + 1);
   }
   return Array.from(counts.entries())
     .sort(([left], [right]) => left - right)

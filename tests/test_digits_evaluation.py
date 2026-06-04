@@ -80,7 +80,7 @@ def _measurement_for_sequence(
     plan = MaterializationPlanDocument.from_bytes(
         (_digits_fixture_root / plan_name).read_bytes()
     ).plan
-    scale = len(sequence)
+    scale = 1
     outcome_space = manifest.resolve_outcome_space()
     assert manifest.outcome_space is not None
     assert len(sequence) == 1
@@ -92,7 +92,7 @@ def _measurement_for_sequence(
     observation = declaration.form_observation(
         id=observation_id,
         plan=plan,
-        component_sequence=sequence,
+        component_index=sequence[0],
     )
     accepted_event = AcceptedEvent.from_record(
         {

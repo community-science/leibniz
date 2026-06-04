@@ -54,7 +54,7 @@ def test_generator_loads_through_benchmark_implementation() -> None:
     generator = load_generator(_digits_benchmark_root)
 
     assert str(generator.benchmark_manifest.id) == "benchmarks.digits@0.1.0"
-    sample_set = generator(component_count=1, shape=1, seed=101)
+    sample_set = generator(shape=1, seed=101)
     assert str(sample_set.generator_id) == "benchmarks.digits.generator@0.1.0"
     assert sample_set.shape == (1,)
     assert sample_set.samples

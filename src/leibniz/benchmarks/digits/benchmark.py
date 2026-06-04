@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -28,6 +29,8 @@ from leibniz.observation_generation import (
     GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
+    StateSpaceMeasureRequest,
+    StateSpaceMeasureValue,
     _ObservationGenerationEngine,  # pyright: ignore[reportPrivateUsage]
     _timing_span,  # pyright: ignore[reportPrivateUsage]
 )
@@ -42,6 +45,7 @@ _materialization_id = ProtocolIdentifier.parse("benchmarks.digits.materializatio
 _formation_id = ProtocolIdentifier.parse("benchmarks.digits.observation-formation@0.1.0")
 _generator_id = ProtocolIdentifier.parse("benchmarks.digits.generator@0.1.0")
 _outcome_space_id = ProtocolIdentifier.parse("benchmarks.digits.outcomes@0.1.0")
+_state_space_measure_id = "log2_latent_state_set_size"
 
 
 def benchmark(root: Path) -> BenchmarkProtocol:
@@ -105,11 +109,11 @@ class Generator(_ObservationGenerationEngine):
     def __call__(
         self,
         *,
-        component_count: int,
         seed: int,
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
-        component_sequences: Iterable[Sequence[int]] | None = None,
+        state_space_request: StateSpaceMeasureRequest | None = None,
+        component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
@@ -120,14 +124,33 @@ class Generator(_ObservationGenerationEngine):
 
         sample_shape = _sample_shape(shape)
         sample_count = _sample_count(sample_shape)
+        if state_space_request is not None:
+            if resolution_assignment is not None:
+                raise ObservationGenerationError(
+                    "state-space request cannot be combined with resolution_assignment"
+                )
+            resolution_assignment = self._resolution_assignment_for_state_space_request(
+                request=state_space_request,
+                variation_extent=variation_extent,
+            )
+            if resolution_assignment is None:
+                return GeneratedSampleSet(
+                    benchmark_id=self.benchmark_manifest.id,
+                    generator_id=self.id,
+                    generator_version=self.version,
+                    seed=seed,
+                    shape=(0,),
+                    variation_extent=variation_extent,
+                    state_space_request=state_space_request,
+                    samples=(),
+                )
         formation_timing_prefix = (
             f"{timing_prefix}formation_batch." if include_fields else timing_prefix
         )
         formation_batch = self._sample_formation_batch(
-            component_count=component_count,
             sample_count=sample_count,
             seed=seed,
-            component_sequences=component_sequences,
+            component_indices=component_indices,
             memory_limit_bytes=memory_limit_bytes,
             resolution_assignment=resolution_assignment,
             variation_extent=variation_extent,
@@ -146,12 +169,11 @@ class Generator(_ObservationGenerationEngine):
                 field_records = tuple(
                     self.formation.form_observation(
                         id=self._observation_id(
-                            component_count=component_count,
                             seed=seed,
                             index=sample.index,
                         ),
                         plan=sample.materialization_plan,
-                        component_sequence=sample.component_sequence,
+                        component_index=sample.component_index,
                         variation_coordinates=sample.variation_coordinates,
                     )
                     for sample in samples
@@ -159,7 +181,7 @@ class Generator(_ObservationGenerationEngine):
             with _timing_span(timing, f"{timing_prefix}latent_coordinates", samples=sample_count):
                 latent_coordinate_samples = tuple(
                     self._latent_coordinates(
-                        sequence=sample.component_sequence,
+                        component_index=sample.component_index,
                         scaled_factors=scaled_factors,
                         plan=sample.materialization_plan,
                         variation_values=sample.variation_values,
@@ -172,11 +194,12 @@ class Generator(_ObservationGenerationEngine):
                     materialization_plan=sample.materialization_plan,
                     width=sample.width,
                     height=sample.height,
-                    component_sequence=sample.component_sequence,
+                    component_index=sample.component_index,
                     variation_coordinates=sample.variation_coordinates,
                     variation_values=sample.variation_values,
                     outcome_id=sample.outcome_id,
                     complexity=sample.complexity,
+                    state_space_measure=_state_space_measure(sample.complexity),
                     latent_coordinates=latent_coordinates,
                     field=field_record.field,
                     _field_record=field_record,
@@ -197,13 +220,14 @@ class Generator(_ObservationGenerationEngine):
                         materialization_plan=sample.materialization_plan,
                         width=sample.width,
                         height=sample.height,
-                        component_sequence=sample.component_sequence,
+                        component_index=sample.component_index,
                         variation_coordinates=sample.variation_coordinates,
                         variation_values=sample.variation_values,
                         outcome_id=sample.outcome_id,
                         complexity=sample.complexity,
+                        state_space_measure=_state_space_measure(sample.complexity),
                         latent_coordinates=self._latent_coordinates(
-                            sequence=sample.component_sequence,
+                            component_index=sample.component_index,
                             scaled_factors=scaled_factors,
                             plan=sample.materialization_plan,
                             variation_values=sample.variation_values,
@@ -217,10 +241,60 @@ class Generator(_ObservationGenerationEngine):
             generator_version=self.version,
             seed=seed,
             shape=sample_shape,
-            component_count=component_count,
             variation_extent=variation_extent,
+            state_space_request=state_space_request,
             samples=samples,
         )
+
+    def _resolution_assignment_for_state_space_request(
+        self,
+        *,
+        request: StateSpaceMeasureRequest,
+        variation_extent: float,
+    ) -> AxisAssignment | None:
+        if request.measure_id != _state_space_measure_id:
+            return None
+        minimum_assignment = self.minimum_discriminatable_resolution_assignment(
+            minimum_assignment=self.materialization.minimum_resolution(),
+        )
+        width_axis = self.formation.width_axis
+        height_axis = self.formation.height_axis
+        minimum_width = minimum_assignment.require_axis(width_axis)
+        minimum_height = minimum_assignment.require_axis(height_axis)
+        lattice_steps = self.materialization.resolution_lattice_steps()
+        width_step = lattice_steps.get(width_axis, 1)
+        height_step = lattice_steps.get(height_axis, 1)
+        widths = _logarithmic_lattice_axis_values(
+            minimum=minimum_width,
+            step=width_step,
+            count=32,
+        )
+        heights = _logarithmic_lattice_axis_values(
+            minimum=minimum_height,
+            step=height_step,
+            count=32,
+        )
+        selected: tuple[float, AxisAssignment] | None = None
+        for width in widths:
+            for height in heights:
+                complexity = self.distinguishable_state_complexity(
+                    width=width,
+                    height=height,
+                    variation_extent=variation_extent,
+                )
+                value = _state_space_measure(complexity)
+                if not request.contains(value):
+                    continue
+                assignment = AxisAssignment(
+                    values={
+                        **minimum_assignment.values,
+                        width_axis: width,
+                        height_axis: height,
+                    }
+                )
+                if selected is None or value.value < selected[0]:
+                    selected = (value.value, assignment)
+        return None if selected is None else selected[1]
 
 
 def _sample_shape(shape: int | Sequence[int] | None) -> tuple[int, ...]:
@@ -243,6 +317,36 @@ def _sample_count(shape: Sequence[int]) -> int:
     for axis in shape:
         count *= axis
     return count
+
+
+def _state_space_measure(complexity: float) -> StateSpaceMeasureValue:
+    return StateSpaceMeasureValue(
+        measure_id=_state_space_measure_id,
+        value=complexity,
+    )
+
+
+def _logarithmic_lattice_axis_values(
+    *,
+    minimum: int,
+    step: int,
+    count: int,
+) -> tuple[int, ...]:
+    values: list[int] = []
+    seen: set[int] = set()
+    stage = 0
+    minimum_multiplier = max(1, math.ceil(minimum / step))
+    while len(values) < count:
+        multiplier = max(
+            minimum_multiplier,
+            math.ceil(minimum_multiplier * (math.sqrt(2.0) ** stage)),
+        )
+        value = multiplier * step
+        if value not in seen:
+            seen.add(value)
+            values.append(value)
+        stage += 1
+    return tuple(values)
 
 
 def _benchmark_manifest() -> BenchmarkManifest:

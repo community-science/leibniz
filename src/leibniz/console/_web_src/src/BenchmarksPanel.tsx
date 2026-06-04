@@ -1063,7 +1063,7 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
         {visibleSamples.map(({ batch, sample }) => (
           <BenchmarkSampleCard
             density={batch.presentation.sample_card_density}
-            key={`${batch.mode}-${batch.component_count}-${sample.index}-${sample.outcome_id}`}
+            key={`${batch.mode}-${sample.index}-${sample.outcome_id}`}
             onSelect={() => setSelectedSampleKey(sampleKey(batch, sample))}
             sample={sample}
             selected={sampleKey(batch, sample) === selectedKey}
@@ -1150,8 +1150,16 @@ function BenchmarkSampleCoordinateInspector({
   sample: GeneratedObservationSampleRecord;
 }) {
   const entries: [string, string][] = [
-    ['Components', sample.component_sequence.join(' ')],
+    ['Component', String(sample.component_index)],
     ['Complexity', String(sample.complexity)],
+    ...(sample.state_space_measure
+      ? [
+          [
+            'State Space',
+            `${sample.state_space_measure.measure_id}: ${sample.state_space_measure.value}`,
+          ] as [string, string],
+        ]
+      : []),
     ['Field', sample.field_shape.join(' x ')],
   ];
   return (
@@ -1176,5 +1184,5 @@ function sampleKey(
   batch: GeneratedObservationBatchRecord,
   sample: GeneratedObservationSampleRecord,
 ): string {
-  return `${batch.mode}:${batch.component_count}:${batch.seed}:${batch.sample_count}:${sample.index}:${sample.outcome_id}`;
+  return `${batch.mode}:${batch.seed}:${batch.sample_count}:${sample.index}:${sample.outcome_id}`;
 }

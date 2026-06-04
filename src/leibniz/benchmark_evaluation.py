@@ -122,10 +122,9 @@ def sampled_competence_record(
         mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
     return {
         "kind": "sampled-complexity-class",
-        "sampling_rule": "generator-uniform-component-sequence-v1",
+        "sampling_rule": "generator-uniform-component-index-v1",
         "difficulty_assumption": "approximately-uniform-within-complexity-class",
         "benchmark_id": str(batch.benchmark_id),
-        "component_count": batch.component_count,
         "complexity_axis": complexity_axis,
         "complexity": next(iter(complexities)),
         "seed": batch.seed,
@@ -182,7 +181,6 @@ def sampled_competence_curriculum_record(
         "sampling_rule": first.get("sampling_rule"),
         "difficulty_assumption": first.get("difficulty_assumption"),
         "benchmark_id": first.get("benchmark_id"),
-        "component_count": first.get("component_count"),
         "complexity_axis": first.get("complexity_axis"),
         "complexity": first.get("complexity"),
         "sample_count": total_samples,

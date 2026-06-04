@@ -47,6 +47,7 @@ from leibniz.model_manifests import (
 from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
 from leibniz.observation_generation import (
     GeneratedSampleSet,
+    StateSpaceMeasureRequest,
     load_generator,
 )
 from leibniz.outcomes import OutcomeSpace
@@ -109,11 +110,11 @@ _default_model_checkpoint_gate_interval = 1
 _default_convergence_patience = 6
 _default_convergence_min_delta = 1e-3
 _default_convergence_min_steps = 500
-_component_count = 1
 _converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
 _minimum_plateau_lr_reductions = 3
 _full_variation_extent = 1.0
 _canvas_logarithmic_growth_factor = math.sqrt(2.0)
+_state_space_measure_id = "log2_latent_state_set_size"
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,15 +210,34 @@ class _CurriculumRung:
         return self.batch.samples[0].complexity
 
     def to_record(self, *, status: str) -> dict[str, object]:
+        state_space_measure = self.batch.samples[0].state_space_measure
         return {
             "index": self.index,
             "status": status,
             "resolution_assignment": self.resolution_assignment.to_record(),
             "seed": self.seed,
-            "complexity_axis": "internal-distinguishable-state-complexity",
+            "complexity_axis": _state_space_measure_id,
             "complexity": self.complexity,
+            "state_space_measure": (
+                None if state_space_measure is None else state_space_measure.to_record()
+            ),
+            "state_space_request": (
+                None
+                if self.batch.state_space_request is None
+                else self.batch.state_space_request.to_record()
+            ),
             "sample_count": len(self.batch.samples),
         }
+
+
+def _rung_state_space_request(rung: _CurriculumRung) -> StateSpaceMeasureRequest:
+    if rung.batch.state_space_request is not None:
+        return rung.batch.state_space_request
+    return StateSpaceMeasureRequest(
+        measure_id=_state_space_measure_id,
+        minimum=rung.complexity,
+        maximum=rung.complexity,
+    )
 
 
 @dataclass(slots=True)
@@ -471,7 +491,7 @@ class BenchmarkRunPlan:
         """Return the deterministic local run suffix."""
 
         base = (
-            f"c{_component_count}-seed{self.seed}-samples{self.sample_count}"
+            f"seed{self.seed}-samples{self.sample_count}"
             f"-steps{self.train_steps if self.train_steps is not None else 'converge'}"
         )
         if self.resolved_evaluation_sample_count == self.sample_count:
@@ -567,7 +587,6 @@ def run_benchmark(
     initial_evaluation_rung = _evaluation_curriculum_rung(
         architecture=architecture,
         generator=generator,
-        component_count=_component_count,
         sample_count=plan.resolved_evaluation_sample_count,
         seed=plan.seed,
         index=0,
@@ -698,7 +717,6 @@ def run_benchmark(
         initial_evaluation_rung=initial_evaluation_rung,
         generator=generator,
         outcome_space=outcome_space,
-        component_count=_component_count,
         sample_count=plan.sample_count,
         evaluation_sample_count=plan.resolved_evaluation_sample_count,
         gate_sample_count=plan.resolved_gate_sample_count,
@@ -756,7 +774,6 @@ def run_benchmark(
             **summary.to_record(),
             "dry_run": False,
             "run_status": "completed",
-            "component_count": _component_count,
             "sample_count": plan.sample_count,
             "evaluation_sample_count": plan.resolved_evaluation_sample_count,
             "training_curriculum": _curriculum_record(
@@ -864,7 +881,6 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         architecture=architecture,
         generator=generator,
         outcome_space=outcome_space,
-        component_count=_component_count,
         evaluation_sample_count=evaluation_input.evaluation_sample_count,
         training_rung_count=evaluation_input.evaluation_rung_count,
         seed=evaluation_seed,
@@ -1093,7 +1109,6 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
         right_architecture=right_architecture,
         generator=generator,
         outcome_space=outcome_space,
-        component_count=_component_count,
         sample_count=plan.sample_count,
         seed=competition_seed,
         index=0,
@@ -1151,7 +1166,6 @@ def _evaluation_curriculum_rung(
     *,
     architecture: ArchitectureManifest,
     generator: BenchmarkGenerator,
-    component_count: int,
     sample_count: int,
     seed: int,
     index: int,
@@ -1159,13 +1173,11 @@ def _evaluation_curriculum_rung(
     return _curriculum_rung_from_candidates(
         architecture=architecture,
         generator=generator,
-        component_count=component_count,
         sample_count=sample_count,
         seed=seed,
         index=index,
         candidates=_logarithmic_curriculum_candidates(
             generator=generator,
-            component_count=component_count,
             start_index=index,
         ),
     )
@@ -1175,7 +1187,6 @@ def _training_curriculum_rung(
     *,
     architecture: ArchitectureManifest,
     generator: BenchmarkGenerator,
-    component_count: int,
     sample_count: int,
     seed: int,
     index: int,
@@ -1183,13 +1194,11 @@ def _training_curriculum_rung(
     return _curriculum_rung_from_candidates(
         architecture=architecture,
         generator=generator,
-        component_count=component_count,
         sample_count=sample_count,
         seed=seed,
         index=index,
         candidates=_structured_training_curriculum_candidates(
             generator=generator,
-            component_count=component_count,
             start_index=index,
         ),
     )
@@ -1198,14 +1207,12 @@ def _training_curriculum_rung(
 def _competition_curriculum_rung(
     *,
     generator: BenchmarkGenerator,
-    component_count: int,
     sample_count: int,
     seed: int,
     index: int,
     resolution_assignment: AxisAssignment,
 ) -> _CurriculumRung:
     sample_set = generator(
-        component_count=component_count,
         shape=sample_count,
         seed=seed + 9_000_009 + 2_000_003 * index,
         include_fields=True,
@@ -1225,7 +1232,6 @@ def _curriculum_rung_from_candidates(
     *,
     architecture: ArchitectureManifest,
     generator: BenchmarkGenerator,
-    component_count: int,
     sample_count: int,
     seed: int,
     index: int,
@@ -1236,14 +1242,15 @@ def _curriculum_rung_from_candidates(
             continue
         rung_seed = seed if index == 0 else seed + 2_000_003 * index
         sample_set = generator(
-            component_count=component_count,
             shape=sample_count,
             seed=rung_seed,
             include_fields=True,
-            resolution_assignment=candidate.resolution_assignment,
+            state_space_request=candidate.state_space_request,
             variation_extent=_full_variation_extent,
         )
         batch = sample_set
+        if not batch.samples:
+            continue
         input_reason = _input_shape_boundary_reason(
             architecture=architecture,
             sample_shape=batch.samples[0].require_field().shape,
@@ -1257,7 +1264,7 @@ def _curriculum_rung_from_candidates(
             )
         return _CurriculumRung(
             index=index,
-            resolution_assignment=candidate.resolution_assignment,
+            resolution_assignment=batch.samples[0].materialization_plan.resolution_assignment,
             seed=batch.seed,
             batch=batch,
         )
@@ -1269,16 +1276,22 @@ class _CurriculumCandidate:
     resolution_assignment: AxisAssignment
     complexity: float
 
+    @property
+    def state_space_request(self) -> StateSpaceMeasureRequest:
+        return StateSpaceMeasureRequest(
+            measure_id=_state_space_measure_id,
+            minimum=self.complexity,
+            maximum=self.complexity,
+        )
+
 
 def _logarithmic_curriculum_candidates(
     *,
     generator: BenchmarkGenerator,
-    component_count: int,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
     candidates = _curriculum_candidate_grid(
         generator=generator,
-        component_count=component_count,
         start_index=start_index,
     )
     return tuple(sorted(candidates, key=lambda candidate: candidate.complexity))
@@ -1287,12 +1300,10 @@ def _logarithmic_curriculum_candidates(
 def _structured_training_curriculum_candidates(
     *,
     generator: BenchmarkGenerator,
-    component_count: int,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
     return _curriculum_candidate_grid(
         generator=generator,
-        component_count=component_count,
         start_index=start_index,
     )
 
@@ -1300,11 +1311,9 @@ def _structured_training_curriculum_candidates(
 def _curriculum_candidate_grid(
     *,
     generator: BenchmarkGenerator,
-    component_count: int,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
     minimum_assignment = generator.minimum_discriminatable_resolution_assignment(
-        component_count=component_count,
         minimum_assignment=generator.materialization.minimum_resolution(),
     )
     width_axis = generator.formation.width_axis
@@ -1332,7 +1341,6 @@ def _curriculum_candidate_grid(
                 if max(width_index, height_index) != stage:
                     continue
                 complexity = generator.distinguishable_state_complexity(
-                    component_count=component_count,
                     width=width,
                     height=height,
                     variation_extent=_full_variation_extent,
@@ -1386,10 +1394,14 @@ def _curriculum_record(
 ) -> dict[str, object]:
     record: dict[str, object] = {
         "kind": kind,
-        "curriculum_variable": "internal-distinguishable-state-complexity",
-        "complexity_axis": "internal-distinguishable-state-complexity",
-        "sampling_levers": ["canvas-size"],
-        "canvas_growth": {
+        "curriculum_variable": "state-space-measure",
+        "complexity_axis": _state_space_measure_id,
+        "sampling_levers": ["state-space-measure"],
+        "state_space_measure": {
+            "measure_id": _state_space_measure_id,
+            "scale": "log2",
+        },
+        "candidate_policy": {
             "kind": "logarithmic",
             "factor": _canvas_logarithmic_growth_factor,
         },
@@ -1488,7 +1500,6 @@ def _train_and_predict(
     initial_evaluation_rung: _CurriculumRung,
     generator: BenchmarkGenerator,
     outcome_space: OutcomeSpace,
-    component_count: int,
     sample_count: int,
     evaluation_sample_count: int,
     gate_sample_count: int,
@@ -1521,7 +1532,6 @@ def _train_and_predict(
                 initial_evaluation_rung=initial_evaluation_rung,
                 generator=generator,
                 outcome_space=outcome_space,
-                component_count=component_count,
                 sample_count=sample_count,
                 evaluation_sample_count=evaluation_sample_count,
                 gate_sample_count=gate_sample_count,
@@ -1553,7 +1563,6 @@ def _train_and_predict_on_device(
     initial_evaluation_rung: _CurriculumRung,
     generator: BenchmarkGenerator,
     outcome_space: OutcomeSpace,
-    component_count: int,
     sample_count: int,
     evaluation_sample_count: int,
     gate_sample_count: int,
@@ -1615,19 +1624,22 @@ def _train_and_predict_on_device(
         batch_sample_count: int,
         generation_phase: str,
         tensor_phase: str,
-        resolution_assignment: AxisAssignment,
+        state_space_request: StateSpaceMeasureRequest,
     ) -> tuple[Any, Any]:
         with phase_timings.span(generation_phase, samples=batch_sample_count):
             sample_set = generator(
-                component_count=component_count,
                 shape=batch_sample_count,
                 seed=batch_seed,
-                resolution_assignment=resolution_assignment,
+                state_space_request=state_space_request,
                 variation_extent=_full_variation_extent,
                 timing=phase_timings,
                 timing_prefix=f"{generation_phase}.",
             )
             generated = sample_set
+            if not generated.samples:
+                raise BenchmarkRunnerError(
+                    "generator returned no samples for selected state-space measure"
+                )
         with phase_timings.span(tensor_phase, samples=batch_sample_count):
             tensors = formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
         return tensors
@@ -1636,7 +1648,6 @@ def _train_and_predict_on_device(
         _training_curriculum_rung(
             architecture=architecture,
             generator=generator,
-            component_count=component_count,
             sample_count=sample_count,
             seed=seed,
             index=0,
@@ -1678,7 +1689,6 @@ def _train_and_predict_on_device(
             _training_curriculum_rung(
                 architecture=architecture,
                 generator=generator,
-                component_count=component_count,
                 sample_count=sample_count,
                 seed=seed,
                 index=next_index,
@@ -1702,7 +1712,7 @@ def _train_and_predict_on_device(
                 batch_sample_count=sample_count,
                 generation_phase="training_formation_generation",
                 tensor_phase="training_tensor_batch",
-                resolution_assignment=training_rung_for_step(step).resolution_assignment,
+                state_space_request=_rung_state_space_request(training_rung_for_step(step)),
             )
         ),
         validation_batch=lambda check: batch_for_seed(
@@ -1710,7 +1720,7 @@ def _train_and_predict_on_device(
             batch_sample_count=gate_sample_count,
             generation_phase="validation_formation_generation",
             tensor_phase="validation_tensor_batch",
-            resolution_assignment=current_frontier().resolution_assignment,
+            state_space_request=_rung_state_space_request(current_frontier()),
         ),
         max_steps=train_steps,
         gate_check_interval=gate_check_interval,
@@ -1819,7 +1829,6 @@ def evaluate_model_checkpoint_artifact(
     architecture: ArchitectureManifest,
     generator: BenchmarkGenerator,
     outcome_space: OutcomeSpace,
-    component_count: int,
     evaluation_sample_count: int,
     training_rung_count: int,
     seed: int,
@@ -1844,7 +1853,6 @@ def evaluate_model_checkpoint_artifact(
         rung = _evaluation_curriculum_rung(
             architecture=architecture,
             generator=generator,
-            component_count=component_count,
             sample_count=evaluation_sample_count,
             seed=seed,
             index=index,
@@ -1893,7 +1901,6 @@ def generate_model_checkpoint_competition_record(
     right_architecture: ArchitectureManifest,
     generator: BenchmarkGenerator,
     outcome_space: OutcomeSpace,
-    component_count: int,
     sample_count: int,
     seed: int,
     index: int,
@@ -1922,7 +1929,6 @@ def generate_model_checkpoint_competition_record(
     )
     rung = _competition_curriculum_rung(
         generator=generator,
-        component_count=component_count,
         sample_count=sample_count,
         seed=seed,
         index=index,
@@ -2614,7 +2620,6 @@ def _training_progress_record(
         "run_status": "running",
         "benchmark_id": str(summary.benchmark_id),
         "architecture_path": summary.architecture_path.as_posix(),
-        "component_count": _component_count,
         "sample_count": plan.sample_count,
         "evaluation_sample_count": plan.resolved_evaluation_sample_count,
         "seed": plan.seed,
@@ -2660,7 +2665,6 @@ def _training_progress_record(
             "sampling_rule": "generator-validation-resample-v1",
             "difficulty_assumption": "validation-loss-proxy-for-sampled-competence",
             "benchmark_id": str(summary.benchmark_id),
-            "component_count": evaluation_batch.component_count,
             "complexity_axis": None,
             "complexity": progress_complexity,
             "seed": evaluation_batch.seed,
@@ -2699,7 +2703,6 @@ def _training_estimate_record(
         "status": "tentative",
         "score_basis": "validation-loss-proxy-for-accepted-mass",
         "benchmark_id": str(summary.benchmark_id),
-        "component_count": batch.component_count,
         "complexity_axis": None,
         "complexity": complexity,
         "seed": batch.seed,

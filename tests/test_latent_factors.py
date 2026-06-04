@@ -45,7 +45,7 @@ def test_degree_measure_validates_supported_kinds() -> None:
 
 
 def test_complexity_projection_counts_content_and_excludes_variation() -> None:
-    declaration = _digits_declaration(sequence_length=3)
+    declaration = _digits_declaration(sample_multiplicity=3)
 
     assert declaration.evaluate_complexity("C") == 3.0
     assert [
@@ -61,10 +61,10 @@ def test_complexity_projection_counts_content_and_excludes_variation() -> None:
     )
 
 
-def test_digits_content_complexity_is_linear_in_sequence_length() -> None:
+def test_digits_content_complexity_is_linear_in_sample_multiplicity() -> None:
     values = [
-        _digits_declaration(sequence_length=length).evaluate_complexity("C")
-        for length in (1, 2, 5)
+        _digits_declaration(sample_multiplicity=multiplicity).evaluate_complexity("C")
+        for multiplicity in (1, 2, 5)
     ]
 
     assert values == [1.0, 2.0, 5.0]
@@ -114,7 +114,7 @@ def test_latent_factor_declaration_document_loads_digits_source_artifact() -> No
 
 
 def test_latent_factor_declaration_digest_is_stable() -> None:
-    declaration = _digits_declaration(sequence_length=2)
+    declaration = _digits_declaration(sample_multiplicity=2)
     record = declaration.to_record()
     reordered = {
         "sample_factors": record["sample_factors"],
@@ -127,7 +127,7 @@ def test_latent_factor_declaration_digest_is_stable() -> None:
 
 
 def test_latent_factor_declaration_rejects_duplicate_factor_names() -> None:
-    record = _digits_declaration(sequence_length=1).to_record()
+    record = _digits_declaration(sample_multiplicity=1).to_record()
     sample_factors = list(cast(list[dict[str, object]], record["sample_factors"]))
     sample_factors.append(sample_factors[0])
     record["sample_factors"] = sample_factors
@@ -146,7 +146,7 @@ def test_latent_factor_declaration_document_rejects_invalid_bytes() -> None:
     ) == "latent factor declaration must contain an object"
 
 
-def _digits_declaration(sequence_length: int) -> LatentFactorDeclaration:
+def _digits_declaration(sample_multiplicity: int) -> LatentFactorDeclaration:
     return LatentFactorDeclaration(
         id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
         construction_factors=(
@@ -160,13 +160,13 @@ def _digits_declaration(sequence_length: int) -> LatentFactorDeclaration:
                 name=ProtocolName.parse("benchmarks.digits.sample.digit-identity"),
                 role="content",
                 degree_measure=DegreeMeasure.discrete_choice(10),
-                multiplicity=sequence_length,
+                multiplicity=sample_multiplicity,
             ),
             SampleLatentFactor(
                 name=ProtocolName.parse("benchmarks.digits.sample.field-variation-transform"),
                 role="variation",
                 degree_measure=DegreeMeasure.vector_dimension(6),
-                multiplicity=sequence_length,
+                multiplicity=sample_multiplicity,
             ),
             SampleLatentFactor(
                 name=ProtocolName.parse("benchmarks.digits.materialization.canvas-side"),

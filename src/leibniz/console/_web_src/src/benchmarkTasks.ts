@@ -26,7 +26,6 @@ export type BenchmarkCodeSurfaceRecord = {
 export type GeneratedObservationBatchRecord = {
   mode: string;
   label: string;
-  component_count: number;
   seed: number;
   sample_count: number;
   presentation: GeneratedObservationBatchPresentationRecord;
@@ -41,12 +40,18 @@ export type GeneratedObservationBatchPresentationRecord = {
 export type GeneratedObservationSampleRecord = {
   index: number;
   outcome_id: string;
-  component_sequence: number[];
+  component_index: number;
   complexity: number;
+  state_space_measure?: GeneratedStateSpaceMeasureRecord | null;
   field_shape: number[];
   image_data_url: string;
   materialization_plan: Record<string, unknown>;
   latent_coordinates: GeneratedLatentCoordinateRecord[];
+};
+
+export type GeneratedStateSpaceMeasureRecord = {
+  measure_id: string;
+  value: number;
 };
 
 export type GeneratedLatentCoordinateRecord = {

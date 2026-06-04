@@ -40,7 +40,6 @@ class FormationTimingPlan:
     """Plan for timing pure and tensor-backed formation paths."""
 
     benchmark_root: Path
-    component_count: int = 1
     sample_count: int = 64
     seed: int = 101
     repeats: int = 3
@@ -48,8 +47,6 @@ class FormationTimingPlan:
     tensor_device: TensorRuntimeDevice = "auto"
 
     def __post_init__(self) -> None:
-        if type(self.component_count) is not int or self.component_count < 1:
-            raise FormationTimingError("component_count must be a positive integer")
         if type(self.sample_count) is not int or self.sample_count < 1:
             raise FormationTimingError("sample_count must be a positive integer")
         if type(self.seed) is not int or self.seed < 0:
@@ -69,7 +66,6 @@ class FormationTimingSummary:
     """Measured wall-time summary for formation paths."""
 
     benchmark_id: str
-    component_count: int
     sample_count: int
     repeats: int
     seed: int
@@ -96,7 +92,6 @@ class FormationTimingSummary:
             "format": "leibniz.formation-timing",
             "format_version": 1,
             "benchmark_id": self.benchmark_id,
-            "component_count": self.component_count,
             "sample_count": self.sample_count,
             "repeats": self.repeats,
             "seed": self.seed,
@@ -138,7 +133,6 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
 
     def pure_once(seed: int, timing: TimingCollector | None = None) -> None:
         sample_set = generator(
-            component_count=plan.component_count,
             shape=plan.sample_count,
             seed=seed,
             include_fields=True,
@@ -151,7 +145,6 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
 
     def tensor_once(seed: int, timing: TimingCollector | None = None) -> None:
         sample_set = generator(
-            component_count=plan.component_count,
             shape=plan.sample_count,
             seed=seed,
             memory_limit_bytes=memory_limit_bytes,
@@ -185,7 +178,6 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
     )
     return FormationTimingSummary(
         benchmark_id=str(generator.benchmark_manifest.id),
-        component_count=plan.component_count,
         sample_count=plan.sample_count,
         repeats=plan.repeats,
         seed=plan.seed,

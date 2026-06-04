@@ -2303,13 +2303,11 @@ def _benchmark_base_complexity(
         repository_root / "src" / "leibniz" / "benchmarks" / _identifier_atom(manifest.id)
     )
     resolution = generator.minimum_discriminatable_resolution_assignment(
-        component_count=1,
         minimum_assignment=generator.materialization.minimum_resolution(),
     )
     width = resolution.require_axis(generator.formation.width_axis)
     height = resolution.require_axis(generator.formation.height_axis)
     return generator.distinguishable_state_complexity(
-        component_count=1,
         width=width,
         height=height,
         variation_extent=0.0,

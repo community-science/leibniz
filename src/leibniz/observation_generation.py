@@ -44,6 +44,8 @@ __all__ = [
     "GeneratedSample",
     "GeneratedSampleSet",
     "ObservationGenerationError",
+    "StateSpaceMeasureRequest",
+    "StateSpaceMeasureValue",
     "field_to_png_bytes",
     "field_to_png_data_url",
     "load_generator",
@@ -51,7 +53,7 @@ __all__ = [
 ]
 
 _discriminatable_resolution_cache: dict[
-    tuple[str, int, str, str, int, int, float],
+    tuple[str, str, str, int, int, float],
     tuple[int, int],
 ] = {}
 _canvas_fit_component_bounds_cache: dict[
@@ -70,6 +72,69 @@ class ObservationGenerationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class StateSpaceMeasureRequest:
+    """A benchmark-declared state-space measure interval requested by a runner."""
+
+    measure_id: str
+    minimum: float
+    maximum: float
+
+    def __post_init__(self) -> None:
+        if not self.measure_id:
+            raise ObservationGenerationError("state-space measure id must be nonempty")
+        if not math.isfinite(float(self.minimum)):
+            raise ObservationGenerationError("state-space measure minimum must be finite")
+        if not math.isfinite(float(self.maximum)):
+            raise ObservationGenerationError("state-space measure maximum must be finite")
+        if self.minimum < 0.0:
+            raise ObservationGenerationError("state-space measure minimum must be nonnegative")
+        if self.maximum < self.minimum:
+            raise ObservationGenerationError(
+                "state-space measure maximum must be at least the minimum"
+            )
+
+    def contains(self, value: StateSpaceMeasureValue) -> bool:
+        """Return whether a measured sample satisfies this interval."""
+
+        if value.measure_id != self.measure_id:
+            return False
+        return self.minimum <= value.value <= self.maximum
+
+    def to_record(self) -> dict[str, object]:
+        """Return a record for this request."""
+
+        return {
+            "measure_id": self.measure_id,
+            "minimum": self.minimum,
+            "maximum": self.maximum,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StateSpaceMeasureValue:
+    """A generated sample's value for a benchmark-declared state-space measure."""
+
+    measure_id: str
+    value: float
+
+    def __post_init__(self) -> None:
+        if not self.measure_id:
+            raise ObservationGenerationError("state-space measure id must be nonempty")
+        if not math.isfinite(float(self.value)):
+            raise ObservationGenerationError("state-space measure value must be finite")
+        if self.value < 0.0:
+            raise ObservationGenerationError("state-space measure value must be nonnegative")
+
+    def to_record(self) -> dict[str, object]:
+        """Return a record for this measured value."""
+
+        return {
+            "measure_id": self.measure_id,
+            "value": self.value,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class _ResolutionSampling:
     width_axis: str
     height_axis: str
@@ -83,11 +148,12 @@ class GeneratedSample:
     materialization_plan: MaterializationPlan
     width: int
     height: int
-    component_sequence: tuple[int, ...]
+    component_index: int
     variation_coordinates: tuple[Mapping[str, object], ...]
     variation_values: Mapping[str, object]
     outcome_id: str
     complexity: float
+    state_space_measure: StateSpaceMeasureValue | None = None
     latent_coordinates: tuple[Mapping[str, object], ...] = ()
     field: FieldObservation | None = None
     _field_record: FormedObservation | None = dataclass_field(
@@ -118,13 +184,15 @@ class GeneratedSample:
             "materialization_plan": self.materialization_plan.to_record(),
             "width": self.width,
             "height": self.height,
-            "component_sequence": list(self.component_sequence),
+            "component_index": self.component_index,
             "variation_coordinates": [dict(item) for item in self.variation_coordinates],
             "variation_values": dict(self.variation_values),
             "outcome_id": self.outcome_id,
             "complexity": self.complexity,
             "latent_coordinates": [dict(coordinate) for coordinate in self.latent_coordinates],
         }
+        if self.state_space_measure is not None:
+            record["state_space_measure"] = self.state_space_measure.to_record()
         if self.field is not None and include_field:
             record["field"] = self.field.to_record()
         return record
@@ -135,13 +203,10 @@ class _FormationSamples:
     """A deterministic batch of formation specifications."""
 
     benchmark_id: ProtocolIdentifier
-    component_count: int
     seed: int
     samples: tuple[GeneratedSample, ...]
 
     def __post_init__(self) -> None:
-        if type(self.component_count) is not int or self.component_count < 1:
-            raise ObservationGenerationError("component_count must be a positive integer")
         if type(self.seed) is not int or self.seed < 0:
             raise ObservationGenerationError("seed must be a nonnegative integer")
         if not self.samples:
@@ -157,34 +222,46 @@ class GeneratedSampleSet:
     generator_version: str
     seed: int
     shape: tuple[int, ...]
-    component_count: int
     variation_extent: float
     samples: tuple[GeneratedSample, ...]
+    state_space_request: StateSpaceMeasureRequest | None = None
 
     def __post_init__(self) -> None:
         if type(self.seed) is not int or self.seed < 0:
             raise ObservationGenerationError("seed must be a nonnegative integer")
-        if type(self.component_count) is not int or self.component_count < 1:
-            raise ObservationGenerationError("component_count must be a positive integer")
         if not math.isfinite(float(self.variation_extent)):
             raise ObservationGenerationError("variation_extent must be finite")
         if self.variation_extent < 0.0 or self.variation_extent > 1.0:
             raise ObservationGenerationError("variation_extent must be between 0 and 1")
-        if any(type(axis) is not int or axis < 1 for axis in self.shape):
-            raise ObservationGenerationError("sample shape axes must be positive integers")
+        if self.samples:
+            if any(type(axis) is not int or axis < 1 for axis in self.shape):
+                raise ObservationGenerationError("sample shape axes must be positive integers")
+        elif self.shape != (0,):
+            raise ObservationGenerationError("empty sample sets must have shape [0]")
         if len(self.samples) != self.sample_count:
             raise ObservationGenerationError("sample count does not match sample shape")
-        if not self.samples:
-            raise ObservationGenerationError("samples must not be empty")
+        if not self.samples and self.state_space_request is None:
+            raise ObservationGenerationError(
+                "empty sample sets require a state-space request"
+            )
         for sample in self.samples:
             if sample.materialization_plan.benchmark_id != self.benchmark_id:
                 raise ObservationGenerationError("sample benchmark_id does not match sample set")
+            if self.state_space_request is not None:
+                if sample.state_space_measure is None:
+                    raise ObservationGenerationError(
+                        "state-space request requires sample measure values"
+                    )
+                if not self.state_space_request.contains(sample.state_space_measure):
+                    raise ObservationGenerationError(
+                        "sample state-space measure is outside requested interval"
+                    )
 
     @property
     def includes_fields(self) -> bool:
         """Return whether all samples include generated field data."""
 
-        return all(sample.field is not None for sample in self.samples)
+        return bool(self.samples) and all(sample.field is not None for sample in self.samples)
 
     @property
     def sample_count(self) -> int:
@@ -218,8 +295,12 @@ class GeneratedSampleSet:
             "generator_version": self.generator_version,
             "seed": self.seed,
             "shape": list(self.shape),
-            "component_count": self.component_count,
             "variation_extent": self.variation_extent,
+            "state_space_request": (
+                None
+                if self.state_space_request is None
+                else self.state_space_request.to_record()
+            ),
             "includes_fields": self.includes_fields,
             "samples": [
                 sample.to_record(include_field=include_fields) for sample in self.samples
@@ -277,10 +358,9 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
     def _sample_formation_batch(
         self,
         *,
-        component_count: int,
         sample_count: int,
         seed: int,
-        component_sequences: Iterable[Sequence[int]] | None = None,
+        component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
@@ -293,8 +373,6 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
             raise ObservationGenerationError("sample_count must be a positive integer")
         if type(seed) is not int or seed < 0:
             raise ObservationGenerationError("seed must be a nonnegative integer")
-        if type(component_count) is not int or component_count < 1:
-            raise ObservationGenerationError("component_count must be a positive integer")
         try:
             variation_extent_value = float(variation_extent)
         except (TypeError, ValueError) as error:
@@ -303,23 +381,17 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
             raise ObservationGenerationError("variation_extent must be finite")
         if variation_extent_value < 0.0 or variation_extent_value > 1.0:
             raise ObservationGenerationError("variation_extent must be between 0 and 1")
-        if component_count != 1:
-            raise ObservationGenerationError(
-                "fixed-outcome component samples require one component"
-            )
-        with _timing_span(timing, f"{timing_prefix}component_sequences"):
-            sequences = tuple(component_sequences) if component_sequences is not None else ()
-        if sequences and len(sequences) != sample_count:
-            raise ObservationGenerationError("component_sequences length must match sample_count")
+        with _timing_span(timing, f"{timing_prefix}component_indices"):
+            indices = tuple(component_indices) if component_indices is not None else ()
+        if indices and len(indices) != sample_count:
+            raise ObservationGenerationError("component_indices length must match sample_count")
         requested_resolution_assignment = resolution_assignment
         resolved_resolution_assignment = self.materialization.minimum_resolution()
         resolved_resolution_assignment = self._minimum_discriminatable_resolution_assignment(
-            component_count=component_count,
             minimum_assignment=resolved_resolution_assignment,
         )
         if requested_resolution_assignment is None:
             resolved_resolution_assignment = self._sample_resolution_assignment(
-                component_count=component_count,
                 sample_count=sample_count,
                 seed=seed,
                 minimum_assignment=resolved_resolution_assignment,
@@ -346,7 +418,6 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
         transform_record = transform.to_record()
         with _timing_span(timing, f"{timing_prefix}complexity"):
             complexity = self._distinguishable_state_complexity(
-                component_count=component_count,
                 width=width,
                 height=height,
                 variation_extent=variation_extent_value,
@@ -367,7 +438,6 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
         ):
             plans = tuple(
                 self._materialization_plan(
-                    component_count=component_count,
                     seed=seed,
                     index=index,
                     resolution_assignment=resolution_assignment,
@@ -375,23 +445,23 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
                 )
                 for index in range(sample_count)
             )
-        with _timing_span(timing, f"{timing_prefix}component_sequence", samples=sample_count):
-            sequence_samples = tuple(
+        with _timing_span(timing, f"{timing_prefix}component_index", samples=sample_count):
+            component_index_samples = tuple(
                 (
-                    tuple(sequences[index])
-                    if sequences
-                    else _sample_component_sequence(
+                    indices[index]
+                    if indices
+                    else _sample_component_index(
                         generator=component_generator,
-                        sequence_length=1,
-                        component_count=len(self.formation.components),
+                        component_vocabulary_size=len(self.formation.components),
                     )
                 )
                 for index in range(sample_count)
             )
-        if any(len(sequence) != 1 for sequence in sequence_samples):
-            raise ObservationGenerationError(
-                "fixed-outcome component samples require one component"
-            )
+        if any(
+            index < 0 or index >= len(self.formation.components)
+            for index in component_index_samples
+        ):
+            raise ObservationGenerationError("component index is outside component vocabulary")
         variation_samples: list[
             tuple[
                 Mapping[str, object],
@@ -419,10 +489,10 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
                 )
         samples: list[GeneratedSample] = []
         with _timing_span(timing, f"{timing_prefix}sample_assembly", samples=sample_count):
-            for index, plan, sequence, variation_sample in zip(
+            for index, plan, component_index, variation_sample in zip(
                 range(sample_count),
                 plans,
-                sequence_samples,
+                component_index_samples,
                 variation_samples,
                 strict=True,
             ):
@@ -433,17 +503,16 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
                         materialization_plan=plan,
                         width=plan.resolution_assignment.require_axis(self.formation.width_axis),
                         height=plan.resolution_assignment.require_axis(self.formation.height_axis),
-                        component_sequence=sequence,
+                        component_index=component_index,
                         variation_coordinates=variation_coordinates,
                         variation_values=variation_values,
-                        outcome_id=self._outcome_id(sequence),
+                        outcome_id=self._outcome_id(component_index),
                         complexity=complexity,
                     )
                 )
 
         return _FormationSamples(
             benchmark_id=self.benchmark_manifest.id,
-            component_count=component_count,
             seed=seed,
             samples=tuple(samples),
         )
@@ -451,13 +520,11 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
     def _distinguishable_state_complexity(
         self,
         *,
-        component_count: int,
         width: int,
         height: int,
         variation_extent: float = 1.0,
     ) -> float:
         return self.distinguishable_state_complexity(
-            component_count=component_count,
             width=width,
             height=height,
             variation_extent=variation_extent,
@@ -466,18 +533,16 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
     def distinguishable_state_complexity(
         self,
         *,
-        component_count: int,
         width: int,
         height: int,
         variation_extent: float = 1.0,
     ) -> float:
-        component_complexity = component_count * math.log2(len(self.formation.components))
-        variation_complexity = component_count * _variation_transform_complexity(
+        component_complexity = math.log2(len(self.formation.components))
+        variation_complexity = _variation_transform_complexity(
             _variation_transform_at_extent(
                 self.formation.variation_transform,
                 extent=variation_extent,
             ),
-            sequence_length=component_count,
             width=width,
             height=height,
         )
@@ -486,14 +551,13 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
     def _materialization_plan(
         self,
         *,
-        component_count: int,
         seed: int,
         index: int,
         resolution_assignment: AxisAssignment,
         materialization_declaration: ArtifactReference,
     ) -> MaterializationPlan:
         return MaterializationPlan(
-            id=self._plan_id(component_count=component_count, seed=seed, index=index),
+            id=self._plan_id(seed=seed, index=index),
             benchmark_id=self.materialization.benchmark_id,
             materialization_declaration=materialization_declaration,
             resolution_assignment=resolution_assignment,
@@ -504,7 +568,6 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
     def _sample_resolution_assignment(
         self,
         *,
-        component_count: int,
         sample_count: int,
         seed: int,
         minimum_assignment: AxisAssignment,
@@ -558,7 +621,7 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
         if maximum_height_multiplier < minimum_height_multiplier:
             maximum_height_multiplier = minimum_height_multiplier
         generator = random.Random(
-            f"{seed}:resolution:{component_count}:{sampling.width_axis}:{minimum_width}:"
+            f"{seed}:resolution:{sampling.width_axis}:{minimum_width}:"
             f"{maximum_width}:{width_step}:{sampling.height_axis}:{minimum_height}:"
             f"{maximum_height}:{height_step}:"
             f"{maximum_pixel_count}"
@@ -594,18 +657,15 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
     def _minimum_discriminatable_resolution_assignment(
         self,
         *,
-        component_count: int,
         minimum_assignment: AxisAssignment,
     ) -> AxisAssignment:
         return self.minimum_discriminatable_resolution_assignment(
-            component_count=component_count,
             minimum_assignment=minimum_assignment,
         )
 
     def minimum_discriminatable_resolution_assignment(
         self,
         *,
-        component_count: int,
         minimum_assignment: AxisAssignment,
     ) -> AxisAssignment:
         sampling = _resolution_sampling(self.materialization.layout)
@@ -616,7 +676,6 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
         margin = self.benchmark_manifest.resolution_discriminability_margin()
         cache_key = (
             str(self.formation.digest),
-            component_count,
             sampling.width_axis,
             sampling.height_axis,
             minimum_width,
@@ -628,8 +687,7 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
             cached = self.formation.minimum_discriminatable_resolution(
                 minimum_width=minimum_width,
                 minimum_height=minimum_height,
-                sequence_length=component_count,
-                maximum_width=max(minimum_width * 64, component_count * 64),
+                maximum_width=max(minimum_width * 64, 64),
                 maximum_height=max(minimum_height * 64, 64),
                 minimum_pairwise_l1=margin,
             )
@@ -640,20 +698,15 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
         values[sampling.height_axis] = max(values.get(sampling.height_axis, 0), height)
         return AxisAssignment(values=values)
 
-    def _outcome_id(self, sequence: tuple[int, ...]) -> str:
-        if len(sequence) != 1:
-            raise ObservationGenerationError(
-                "fixed-outcome component samples require one component"
-            )
-        index = sequence[0]
-        if index >= len(self.benchmark_manifest.outcome_space.outcomes):
+    def _outcome_id(self, component_index: int) -> str:
+        if component_index >= len(self.benchmark_manifest.outcome_space.outcomes):
             raise ObservationGenerationError("component index is outside outcome space")
-        return self.benchmark_manifest.outcome_space.outcomes[index].id
+        return self.benchmark_manifest.outcome_space.outcomes[component_index].id
 
     def _latent_coordinates(
         self,
         *,
-        sequence: tuple[int, ...],
+        component_index: int,
         scaled_factors: tuple[SampleLatentFactor, ...],
         plan: MaterializationPlan,
         variation_values: Mapping[str, object],
@@ -661,7 +714,7 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
         records: list[Mapping[str, object]] = []
         for factor in scaled_factors:
             if factor.role == "content":
-                values: object = list(sequence)
+                values: object = component_index
             elif factor.role == "materialization":
                 values = dict(plan.resolution_assignment.values)
             else:
@@ -680,25 +733,23 @@ class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
     def _plan_id(
         self,
         *,
-        component_count: int,
         seed: int,
         index: int,
     ) -> ProtocolIdentifier:
         return _child_identifier(
             self.benchmark_manifest.id,
-            f"materialization-plans.c{component_count}.seed{seed}.sample-{index}",
+            f"materialization-plans.seed{seed}.sample-{index}",
         )
 
     def _observation_id(
         self,
         *,
-        component_count: int,
         seed: int,
         index: int,
     ) -> ProtocolIdentifier:
         return _child_identifier(
             self.benchmark_manifest.id,
-            f"observations.c{component_count}.seed{seed}.sample-{index}",
+            f"observations.seed{seed}.sample-{index}",
         )
 
 
@@ -714,26 +765,26 @@ def sample_variation_transform_coordinates(
     transform: VariationTransformDeclaration,
     seed: int,
     sample_index: int,
-    sequence_index: int,
+    component_index: int = 0,
 ) -> Mapping[str, object]:
-    """Sample one deterministic per-sequence-position variation coordinate."""
+    """Sample one deterministic component variation coordinate."""
 
     if type(seed) is not int or seed < 0:
         raise ObservationGenerationError("seed must be a nonnegative integer")
     if type(sample_index) is not int or sample_index < 0:
         raise ObservationGenerationError("sample_index must be a nonnegative integer")
-    if type(sequence_index) is not int or sequence_index < 0:
-        raise ObservationGenerationError("sequence_index must be a nonnegative integer")
+    if type(component_index) is not int or component_index < 0:
+        raise ObservationGenerationError("component_index must be a nonnegative integer")
     generator = _variation_random(
         seed=seed,
         sample_index=sample_index,
-        sequence_index=sequence_index,
+        component_index=component_index,
         transform_digest=str(ContentDigest.from_value(transform.to_record())),
     )
     return _variation_coordinate_record(
         transform=transform,
         generator=generator,
-        sequence_index=sequence_index,
+        component_index=component_index,
     )
 
 
@@ -741,11 +792,11 @@ def _variation_random(
     *,
     seed: int,
     sample_index: int,
-    sequence_index: int,
+    component_index: int,
     transform_digest: str,
 ) -> random.Random:
     return random.Random(
-        ":".join((str(seed), str(sample_index), str(sequence_index), transform_digest))
+        ":".join((str(seed), str(sample_index), str(component_index), transform_digest))
     )
 
 
@@ -784,13 +835,13 @@ def _variation_coordinate_record(
     *,
     transform: VariationTransformDeclaration,
     generator: random.Random,
-    sequence_index: int,
+    component_index: int,
     thresholds: Mapping[str, float] | None = None,
 ) -> Mapping[str, object]:
     spatial = transform.spatial_affine
     return {
         "kind": "field-variation-transform-coordinate",
-        "sequence_index": sequence_index,
+        "component_index": component_index,
         "spatial_affine": {
             "kind": "spatial-affine-coordinate",
             "coordinate_system": spatial.coordinate_system,
@@ -861,7 +912,7 @@ def _variation_transform_values_and_coordinates(
         formation=formation,
         transform=transform,
         generator=generator,
-        sequence_index=0,
+        component_index=0,
         width=width,
         height=height,
         affine_acceptance_thresholds=affine_acceptance_thresholds,
@@ -886,7 +937,7 @@ def _accepted_variation_coordinate(
     formation: ObservationFormationDeclaration,
     transform: VariationTransformDeclaration,
     generator: random.Random,
-    sequence_index: int,
+    component_index: int,
     width: int,
     height: int,
     affine_acceptance_thresholds: Mapping[str, float],
@@ -904,7 +955,7 @@ def _accepted_variation_coordinate(
             _variation_coordinate_record(
                 transform=transform,
                 generator=generator,
-                sequence_index=sequence_index,
+                component_index=component_index,
             )
         )
         cache_cell = _rejection_cache_cell_key(
@@ -942,7 +993,6 @@ def _accepted_variation_coordinate(
             formation=formation,
             width=width,
             height=height,
-            sequence_index=sequence_index,
             coordinate=coordinate,
         ):
             _increment_counter(counters, "canvas_fit_reject_count")
@@ -951,7 +1001,7 @@ def _accepted_variation_coordinate(
         return coordinate
     identity_coordinate = _identity_variation_coordinate_record(
         transform=transform,
-        sequence_index=sequence_index,
+        component_index=component_index,
     )
     _increment_counter(counters, "identity_fallback_count")
     return identity_coordinate
@@ -1119,7 +1169,7 @@ def _projected_unit_interval(
 def _identity_variation_coordinate_record(
     *,
     transform: VariationTransformDeclaration,
-    sequence_index: int,
+    component_index: int,
 ) -> Mapping[str, object]:
     spatial = transform.spatial_affine
     spatial_rank = spatial.spatial_rank
@@ -1129,7 +1179,7 @@ def _identity_variation_coordinate_record(
     ]
     return {
         "kind": "field-variation-transform-coordinate",
-        "sequence_index": sequence_index,
+        "component_index": component_index,
         "spatial_affine": {
             "kind": "spatial-affine-coordinate",
             "coordinate_system": spatial.coordinate_system,
@@ -1215,7 +1265,6 @@ def _affine_coordinate_fits_canvas(
     formation: ObservationFormationDeclaration,
     width: int,
     height: int,
-    sequence_index: int,
     coordinate: Mapping[str, object],
 ) -> bool:
     matrix = _affine_coordinate_matrix(coordinate)
@@ -1226,7 +1275,6 @@ def _affine_coordinate_fits_canvas(
         formation=formation,
         width=width,
         height=height,
-        sequence_index=sequence_index,
     ):
         if bounds is None:
             continue
@@ -1252,9 +1300,8 @@ def _canvas_fit_component_bounds(
     formation: ObservationFormationDeclaration,
     width: int,
     height: int,
-    sequence_index: int,
 ) -> tuple[tuple[int, int, int, int] | None, ...]:
-    key = (str(formation.digest), width, height, sequence_index)
+    key = (str(formation.digest), width, height, 0)
     cached = _canvas_fit_component_bounds_cache.get(key)
     if cached is not None:
         return cached
@@ -1263,8 +1310,6 @@ def _canvas_fit_component_bounds(
             formation.component_field(
                 width=width,
                 height=height,
-                sequence_length=1,
-                sequence_index=sequence_index,
                 component_index=component_index,
             )
         )
@@ -1371,14 +1416,10 @@ def _resolution_sampling(
 def _variation_transform_complexity(
     transform: VariationTransformDeclaration,
     *,
-    sequence_length: int,
     width: int,
     height: int,
 ) -> float:
-    if sequence_length < 1:
-        raise ObservationGenerationError("sequence_length must be positive")
-    element_width = max(1, width // sequence_length)
-    row_extents = (element_width, height, 1)
+    row_extents = (width, height, 1)
     complexity = 0.0
     for row_index, row in enumerate(transform.spatial_affine.matrix):
         extent = row_extents[row_index] if row_index < len(row_extents) else 1
@@ -1445,17 +1486,12 @@ def _batch_sample_pixel_limit(
     return max(1, budget // per_sample_denominator)
 
 
-def _sample_component_sequence(
+def _sample_component_index(
     *,
     generator: random.Random,
-    sequence_length: int,
-    component_count: int,
-) -> tuple[int, ...]:
-    if sequence_length < 1:
-        raise ObservationGenerationError("sequence length must be positive")
-    return tuple(
-        generator.randrange(component_count) for _sequence_element in range(sequence_length)
-    )
+    component_vocabulary_size: int,
+) -> int:
+    return generator.randrange(component_vocabulary_size)
 
 
 def _sample_interval(

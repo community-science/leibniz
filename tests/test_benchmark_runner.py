@@ -69,7 +69,7 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     assert summary.dry_run is True
     assert summary.measurement_count == 2
     assert summary.run_slug.startswith(
-        "digits-arch-4a2277aa9fd5-c1-seed101-samples2-steps1-train-"
+        "digits-arch-4a2277aa9fd5-seed101-samples2-steps1-train-"
     )
     assert not (tmp_path / "results").exists()
 
@@ -118,7 +118,6 @@ def test_digits_benchmark_runner_rejects_fixed_shape_architecture(
     generator = load_generator(_digits_benchmark_root)
     sample = _observation_payload(
         generator,
-        component_count=1,
         shape=1,
         seed=101,
     ).samples[0]
@@ -309,12 +308,14 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     training_curriculum = cast(dict[str, object], training_summary["training_curriculum"])
     curriculum_rungs = cast(list[dict[str, object]], evaluation_curriculum["rungs"])
     assert evaluation_curriculum["kind"] == "checkpoint-benchmark-evaluation-curriculum"
-    assert (
-        evaluation_curriculum["curriculum_variable"]
-        == "internal-distinguishable-state-complexity"
-    )
-    assert evaluation_curriculum["sampling_levers"] == ["canvas-size"]
-    assert cast(dict[str, object], evaluation_curriculum["canvas_growth"])["kind"] == (
+    assert evaluation_curriculum["curriculum_variable"] == "state-space-measure"
+    assert evaluation_curriculum["sampling_levers"] == ["state-space-measure"]
+    state_space_measure = cast(dict[str, object], evaluation_curriculum["state_space_measure"])
+    assert state_space_measure == {
+        "measure_id": "log2_latent_state_set_size",
+        "scale": "log2",
+    }
+    assert cast(dict[str, object], evaluation_curriculum["candidate_policy"])["kind"] == (
         "logarithmic"
     )
     assert evaluation_curriculum["rung_policy"] == "unbounded-competence-frontier"
@@ -327,7 +328,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert {
         cast(str, rung["complexity_axis"])
         for rung in curriculum_rungs
-    } == {"internal-distinguishable-state-complexity"}
+    } == {"log2_latent_state_set_size"}
     assert all("generation_memory_limit_bytes" not in rung for rung in curriculum_rungs)
     assert all("resolution_assignment" in rung for rung in curriculum_rungs)
     expected_rung_keys = {
@@ -337,9 +338,28 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         "resolution_assignment",
         "sample_count",
         "seed",
+        "state_space_measure",
+        "state_space_request",
         "status",
     }
     assert all(set(rung) == expected_rung_keys for rung in curriculum_rungs)
+    for rung in curriculum_rungs:
+        state_space_measure = cast(dict[str, object], rung["state_space_measure"])
+        state_space_request = cast(dict[str, object], rung["state_space_request"])
+        assert state_space_measure["measure_id"] == "log2_latent_state_set_size"
+        assert state_space_request["measure_id"] == "log2_latent_state_set_size"
+        assert math.isclose(
+            cast(float, state_space_measure["value"]),
+            cast(float, rung["complexity"]),
+        )
+        assert math.isclose(
+            cast(float, state_space_request["minimum"]),
+            cast(float, rung["complexity"]),
+        )
+        assert math.isclose(
+            cast(float, state_space_request["maximum"]),
+            cast(float, rung["complexity"]),
+        )
     assert [rung["sample_count"] for rung in curriculum_rungs] == [3]
     assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
         cast(float, rung["complexity"]) for rung in curriculum_rungs
@@ -352,14 +372,14 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         training_curriculum["gating_metric"]
         == "monotone-frontier-validation-competence"
     )
-    assert training_curriculum["sampling_levers"] == ["canvas-size"]
+    assert training_curriculum["sampling_levers"] == ["state-space-measure"]
     assert training_curriculum["frontier_index"] == 0
     training_rungs = cast(list[dict[str, object]], training_curriculum["rungs"])
     assert [rung["index"] for rung in training_rungs] == [0]
     assert all(set(rung) == expected_rung_keys for rung in training_rungs)
     sampled_competence = cast(dict[str, object], evaluation_record["sampled_competence"])
     assert sampled_competence["kind"] == "sampled-competence-curriculum"
-    assert sampled_competence["sampling_rule"] == "generator-uniform-component-sequence-v1"
+    assert sampled_competence["sampling_rule"] == "generator-uniform-component-index-v1"
     assert (
         sampled_competence["difficulty_assumption"]
         == "approximately-uniform-within-complexity-class"
@@ -368,7 +388,6 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     expected_complexity = load_generator(
         _digits_benchmark_root
     ).distinguishable_state_complexity(
-        component_count=1,
         width=24,
         height=24,
         variation_extent=1.0,
@@ -478,7 +497,6 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
     final_rung = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
         architecture=architecture,
         generator=generator,
-        component_count=1,
         sample_count=2,
         seed=101,
         index=1,
@@ -897,7 +915,6 @@ def test_evaluation_curriculum_candidates_are_complexity_sorted() -> None:
 
     candidates = cast(Any, benchmark_runner)._logarithmic_curriculum_candidates(
         generator=generator,
-        component_count=1,
         start_index=0,
     )
 
@@ -912,7 +929,6 @@ def test_training_curriculum_candidates_increment_canvas_size_only() -> None:
 
     candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
         generator=generator,
-        component_count=1,
         start_index=0,
     )
     first_assignments = [
@@ -1142,8 +1158,8 @@ def test_digits_benchmark_runner_run_slug_includes_training_controls() -> None:
         optimizer="adam",
     )
 
-    assert base_plan.run_slug.startswith("c1-seed401-samples4-steps10-train-")
-    assert alternate_plan.run_slug.startswith("c1-seed401-samples4-steps10-train-")
+    assert base_plan.run_slug.startswith("seed401-samples4-steps10-train-")
+    assert alternate_plan.run_slug.startswith("seed401-samples4-steps10-train-")
     assert base_plan.run_slug != alternate_plan.run_slug
 
 
@@ -1219,7 +1235,6 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     expected_complexity = load_generator(
         _digits_benchmark_root
     ).distinguishable_state_complexity(
-        component_count=1,
         width=24,
         height=24,
         variation_extent=1.0,
@@ -1411,7 +1426,7 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     assert final_plot_runs[0]["result_status"] == "tentative"
 
 
-def test_digits_benchmark_runner_records_fixed_component_count(
+def test_digits_benchmark_runner_omits_legacy_component_count(
     tmp_path: Path,
 ) -> None:
     summary = run_benchmark(
@@ -1429,7 +1444,7 @@ def test_digits_benchmark_runner_records_fixed_component_count(
         summary.training_summary_path.read_bytes(),
         description="training summary",
     )
-    assert training_summary["component_count"] == 1
+    assert "component_count" not in training_summary
 
 
 def test_cli_runs_digits_benchmark_dry_run(
@@ -1457,7 +1472,7 @@ def test_cli_runs_digits_benchmark_dry_run(
     assert captured.err == ""
     assert captured.out.startswith(
         "planned benchmark training run "
-        "digits-arch-4a2277aa9fd5-c1-seed101-samples2-stepsconverge-train-"
+        "digits-arch-4a2277aa9fd5-seed101-samples2-stepsconverge-train-"
     )
     assert not (tmp_path / "results").exists()
 
