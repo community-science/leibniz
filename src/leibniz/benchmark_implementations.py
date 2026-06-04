@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import importlib.util
-from collections.abc import Iterable, Sequence
+import sys
+from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
-from leibniz.latent_factors import LatentFactorDeclaration
-from leibniz.materialization import AxisAssignment, MaterializationDeclaration
-from leibniz.observation_formation import ObservationFormationDeclaration
 from leibniz.timing import TimingCollector
 
 if TYPE_CHECKING:
@@ -49,29 +47,6 @@ class Generator(Protocol):
     @property
     def benchmark_manifest(self) -> BenchmarkManifest: ...
 
-    @property
-    def latent_factors(self) -> LatentFactorDeclaration: ...
-
-    @property
-    def materialization(self) -> MaterializationDeclaration: ...
-
-    @property
-    def formation(self) -> ObservationFormationDeclaration: ...
-
-    def minimum_discriminatable_resolution_assignment(
-        self,
-        *,
-        minimum_assignment: AxisAssignment,
-    ) -> AxisAssignment: ...
-
-    def distinguishable_state_complexity(
-        self,
-        *,
-        width: int,
-        height: int,
-        variation_extent: float = 1.0,
-    ) -> float: ...
-
     def __call__(
         self,
         *,
@@ -79,10 +54,6 @@ class Generator(Protocol):
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
         state_space_request: StateSpaceMeasureRequest | None = None,
-        component_indices: Iterable[int] | None = None,
-        memory_limit_bytes: int | None = None,
-        resolution_assignment: AxisAssignment | None = None,
-        variation_extent: float = 1.0,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...
@@ -96,15 +67,6 @@ class Benchmark(Protocol):
 
     @property
     def benchmark_manifest(self) -> BenchmarkManifest: ...
-
-    @property
-    def latent_factors(self) -> LatentFactorDeclaration: ...
-
-    @property
-    def materialization(self) -> MaterializationDeclaration: ...
-
-    @property
-    def formation(self) -> ObservationFormationDeclaration: ...
 
     @property
     def generator(self) -> Generator: ...
@@ -151,6 +113,7 @@ def _load_entrypoint_module(entrypoint: Path) -> ModuleType:
     if spec is None or spec.loader is None:
         raise BenchmarkError(f"{entrypoint}: could not load module spec")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -160,13 +123,7 @@ def _validate_benchmark_implementation(
     *,
     entrypoint: Path,
 ) -> None:
-    for name in (
-        "root",
-        "benchmark_manifest",
-        "latent_factors",
-        "materialization",
-        "formation",
-    ):
+    for name in ("root", "benchmark_manifest"):
         try:
             getattr(value, name)
         except Exception as error:

@@ -4,8 +4,15 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from benchmark_typing import (
+    DigitsGenerator,
+    load_digits_generator,
+    sample_component_index,
+    sample_height,
+    sample_materialization_plan,
+    sample_width,
+)
 
-from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment, MaterializationPlan
 from leibniz.observation_formation import FieldObservation
@@ -13,9 +20,9 @@ from leibniz.observation_generation import (
     GeneratedSampleSet,
     ObservationGenerationError,
     StateSpaceMeasureRequest,
+    StateSpaceMeasureValue,
     field_to_png_bytes,
     field_to_png_data_url,
-    load_generator,
     sample_variation_transform_coordinates,
 )
 from leibniz.timing import TimingCollector
@@ -25,7 +32,7 @@ _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "
 
 
 def _observation_payload(
-    generator: BenchmarkGenerator,
+    generator: DigitsGenerator,
     **kwargs: object,
 ) -> GeneratedSampleSet:
     sample_count = cast(int, kwargs.pop("sample_count"))
@@ -38,7 +45,7 @@ def _observation_payload(
 
 
 def _formation_payload(
-    generator: BenchmarkGenerator,
+    generator: DigitsGenerator,
     **kwargs: object,
 ) -> GeneratedSampleSet:
     sample_count = cast(int, kwargs.pop("sample_count"))
@@ -50,7 +57,7 @@ def _formation_payload(
 
 
 def test_digits_generator_is_deterministic() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
 
     left = _observation_payload(generator, sample_count=2, seed=101)
     right = _observation_payload(generator, sample_count=2, seed=101)
@@ -58,20 +65,23 @@ def test_digits_generator_is_deterministic() -> None:
     assert left == right
     assert "component_count" not in left.to_record()
     first_sample = left.samples[0]
+    first_width = sample_width(first_sample)
+    first_height = sample_height(first_sample)
+    first_plan = sample_materialization_plan(first_sample)
     assert first_sample.require_field().shape == (
         1,
-        first_sample.height,
-        first_sample.width,
+        first_height,
+        first_width,
     )
     assert math.isclose(
         first_sample.complexity,
         generator.distinguishable_state_complexity(
-            width=first_sample.width,
-            height=first_sample.height,
+            width=first_width,
+            height=first_height,
         ),
     )
     field_record = left.samples[0].field_record()
-    assert first_sample.component_index == field_record.component_index
+    assert sample_component_index(first_sample) == field_record.component_index
     assert first_sample.outcome_id == "digit-8"
     assert _coordinate(first_sample.latent_coordinates, role="content")["values"] == (
         field_record.component_index
@@ -94,8 +104,8 @@ def test_digits_generator_is_deterministic() -> None:
     )
     for coordinate in coordinates:
         report = generator.formation.component_discriminability_report(
-            width=first_sample.materialization_plan.resolution_assignment.require_axis("W"),
-            height=first_sample.materialization_plan.resolution_assignment.require_axis("H"),
+            width=first_plan.resolution_assignment.require_axis("W"),
+            height=first_plan.resolution_assignment.require_axis("H"),
             variation_coordinates=(coordinate,),
             minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
         )
@@ -103,7 +113,7 @@ def test_digits_generator_is_deterministic() -> None:
 
 
 def test_digits_generator_samples_formation_batch_without_fields() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
 
     observation_batch = _observation_payload(generator, sample_count=2, seed=101)
     formation_batch = _formation_payload(generator, sample_count=2, seed=101)
@@ -132,22 +142,24 @@ def test_digits_generator_samples_formation_batch_without_fields() -> None:
         )
         for sample in observation_batch.samples
     ]
+    generated_plan = sample_materialization_plan(formation_batch.samples[0])
     minimum_plan = MaterializationPlan.resolve(
-        id=formation_batch.samples[0].materialization_plan.id,
+        id=generated_plan.id,
         declaration=generator.materialization,
         seed=101,
     )
-    generated_plan = formation_batch.samples[0].materialization_plan
     assert minimum_plan.resolution_assignment.values == {"W": 24, "H": 24}
     assert generated_plan.resolution_assignment.values == (
-        formation_batch.samples[0].materialization_plan.resolution_assignment.values
+        sample_materialization_plan(
+            formation_batch.samples[0]
+        ).resolution_assignment.values
     )
     assert generated_plan.resolution_assignment.require_axis("W") % 24 == 0
     assert generated_plan.resolution_assignment.require_axis("H") % 24 == 0
 
 
 def test_digits_generator_accepts_lattice_resolution_assignment() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
 
     batch = _formation_payload(generator,
         sample_count=2,
@@ -156,13 +168,13 @@ def test_digits_generator_accepts_lattice_resolution_assignment() -> None:
     )
 
     assert [
-        sample.materialization_plan.resolution_assignment.values
+        sample_materialization_plan(sample).resolution_assignment.values
         for sample in batch.samples
     ] == [{"W": 48, "H": 24}, {"W": 48, "H": 24}]
 
 
 def test_digits_generator_rejects_off_lattice_resolution_assignment() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
 
     assert str(
         capture_generation_error(
@@ -176,7 +188,7 @@ def test_digits_generator_rejects_off_lattice_resolution_assignment() -> None:
 
 
 def test_digits_generator_records_optional_timing() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
     timing = TimingCollector()
 
     _observation_payload(generator,
@@ -217,7 +229,7 @@ def test_digits_generator_records_optional_timing() -> None:
 
 
 def test_digits_generator_samples_resolution_from_memory_bound() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
 
     batch = _observation_payload(generator,
         sample_count=1,
@@ -225,19 +237,21 @@ def test_digits_generator_samples_resolution_from_memory_bound() -> None:
         component_indices=(1,),
     )
     sample = batch.samples[0]
+    width = sample_width(sample)
+    height = sample_height(sample)
 
-    assert sample.require_field().shape == (1, sample.height, sample.width)
-    assert sample.width % 24 == 0
-    assert sample.height % 24 == 0
+    assert sample.require_field().shape == (1, height, width)
+    assert width % 24 == 0
+    assert height % 24 == 0
     assert math.isclose(
         sample.complexity,
-        generator.distinguishable_state_complexity(width=sample.width, height=sample.height),
+        generator.distinguishable_state_complexity(width=width, height=height),
     )
     assert sample.outcome_id == "digit-1"
 
 
 def test_digits_generator_counts_discretized_nuisance_state_space() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
 
     scale_one = _formation_payload(generator, sample_count=3, seed=101)
     scale_one_other_seed = _formation_payload(generator,
@@ -251,8 +265,8 @@ def test_digits_generator_counts_discretized_nuisance_state_space() -> None:
     } == {
         round(
             generator.distinguishable_state_complexity(
-                width=scale_one.samples[0].width,
-                height=scale_one.samples[0].height,
+                width=sample_width(scale_one.samples[0]),
+                height=sample_height(scale_one.samples[0]),
             ),
             12,
         )
@@ -263,19 +277,19 @@ def test_digits_generator_counts_discretized_nuisance_state_space() -> None:
     } == {
         round(
             generator.distinguishable_state_complexity(
-                width=scale_one_other_seed.samples[0].width,
-                height=scale_one_other_seed.samples[0].height,
+                width=sample_width(scale_one_other_seed.samples[0]),
+                height=sample_height(scale_one_other_seed.samples[0]),
             ),
             12,
         )
     }
-    assert scale_one.samples[0].width % 24 == 0
-    assert scale_one.samples[0].height % 24 == 0
-    assert (scale_one.samples[0].width, scale_one.samples[0].height) != (24, 24)
+    assert sample_width(scale_one.samples[0]) % 24 == 0
+    assert sample_height(scale_one.samples[0]) % 24 == 0
+    assert (sample_width(scale_one.samples[0]), sample_height(scale_one.samples[0])) != (24, 24)
 
 
 def test_digits_generator_uses_runtime_memory_limit_as_canvas_cap() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
 
     small = _formation_payload(generator,
         sample_count=3,
@@ -288,32 +302,35 @@ def test_digits_generator_uses_runtime_memory_limit_as_canvas_cap() -> None:
         memory_limit_bytes=100_000_000,
     )
 
-    assert [(sample.width, sample.height) for sample in small.samples] == [
+    assert [(sample_width(sample), sample_height(sample)) for sample in small.samples] == [
         (24, 24),
         (24, 24),
         (24, 24),
     ]
-    assert all(sample.width % 24 == 0 and sample.height % 24 == 0 for sample in large.samples)
+    assert all(
+        sample_width(sample) % 24 == 0 and sample_height(sample) % 24 == 0
+        for sample in large.samples
+    )
     assert large.samples[0].complexity > small.samples[0].complexity
 
 
 def test_digits_generator_accepts_state_space_measure_requests() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
     requested_complexity = generator.distinguishable_state_complexity(
         width=24,
         height=24,
         variation_extent=1.0,
     )
 
+    state_space_request = StateSpaceMeasureRequest(
+        minimum=requested_complexity,
+        maximum=requested_complexity,
+    )
     batch = _observation_payload(
         generator,
         sample_count=2,
         seed=101,
-        state_space_request=StateSpaceMeasureRequest(
-            measure_id="log2_latent_state_set_size",
-            minimum=requested_complexity,
-            maximum=requested_complexity,
-        ),
+        state_space_request=state_space_request,
     )
 
     assert batch.state_space_request is not None
@@ -329,31 +346,57 @@ def test_digits_generator_accepts_state_space_measure_requests() -> None:
         batch.samples[0].state_space_measure,
     }
     assert batch.samples[0].state_space_measure is not None
-    assert batch.samples[0].state_space_measure.measure_id == "log2_latent_state_set_size"
+    assert batch.samples[0].state_space_measure.measure_id == state_space_request.measure_id
     assert math.isclose(batch.samples[0].state_space_measure.value, requested_complexity)
 
 
 def test_digits_generator_returns_empty_set_for_unexpressible_state_space_request() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
 
+    state_space_request = StateSpaceMeasureRequest(
+        minimum=1.0,
+        maximum=1.0,
+    )
     batch = generator(
         shape=3,
         seed=101,
-        state_space_request=StateSpaceMeasureRequest(
-            measure_id="log2_latent_state_set_size",
-            minimum=1.0,
-            maximum=1.0,
-        ),
+        state_space_request=state_space_request,
     )
 
     assert batch.shape == (0,)
     assert batch.samples == ()
     assert batch.state_space_request is not None
-    assert batch.state_space_request.measure_id == "log2_latent_state_set_size"
+    assert batch.state_space_request.measure_id == state_space_request.measure_id
+
+
+def test_state_space_measure_ids_are_core_contract() -> None:
+    assert (
+        str(
+            capture_generation_error(
+                lambda: StateSpaceMeasureRequest(
+                    measure_id="benchmarks.chess.valid-move-count",
+                    minimum=1.0,
+                    maximum=1.0,
+                )
+            )
+        )
+        == "state-space measure id is not a core measure"
+    )
+    assert (
+        str(
+            capture_generation_error(
+                lambda: StateSpaceMeasureValue(
+                    measure_id="benchmarks.chess.valid-move-count",
+                    value=1.0,
+                )
+            )
+        )
+        == "state-space measure id is not a core measure"
+    )
 
 
 def test_digits_generator_keeps_minimum_canvas_when_memory_cap_is_tiny() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
 
     batch = _formation_payload(generator,
         sample_count=8,
@@ -365,7 +408,7 @@ def test_digits_generator_keeps_minimum_canvas_when_memory_cap_is_tiny() -> None
 
 
 def test_digits_generator_applies_recorded_variation_coordinates() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
     sample = _observation_payload(generator,
         sample_count=1,
         seed=909,
@@ -373,10 +416,12 @@ def test_digits_generator_applies_recorded_variation_coordinates() -> None:
     ).samples[0]
     variation = _coordinate(sample.latent_coordinates, role="variation")
     variation_values = cast(dict[str, object], variation["values"])
+    plan = sample_materialization_plan(sample)
+    component_index = sample_component_index(sample)
     direct = generator.formation.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.observations.direct@0.1.0"),
-        plan=sample.materialization_plan,
-        component_index=sample.component_index,
+        plan=plan,
+        component_index=component_index,
         variation_coordinates=cast(
             list[Mapping[str, object]],
             variation_values["coordinates"],
@@ -384,8 +429,8 @@ def test_digits_generator_applies_recorded_variation_coordinates() -> None:
     )
     untransformed = generator.formation.form_observation(
         id=ProtocolIdentifier.parse("benchmarks.digits.observations.untransformed@0.1.0"),
-        plan=sample.materialization_plan,
-        component_index=sample.component_index,
+        plan=plan,
+        component_index=component_index,
     )
 
     field_record = sample.field_record()
@@ -395,7 +440,7 @@ def test_digits_generator_applies_recorded_variation_coordinates() -> None:
 
 
 def test_digits_generator_rejects_edge_clipped_affine_samples() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
 
     batch = _observation_payload(generator, sample_count=3, seed=1)
 
@@ -404,7 +449,7 @@ def test_digits_generator_rejects_edge_clipped_affine_samples() -> None:
 
 
 def test_generated_observation_records_can_include_fields() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
     batch = _observation_payload(generator, sample_count=1, seed=303)
 
     compact = batch.to_record()
@@ -417,7 +462,7 @@ def test_generated_observation_records_can_include_fields() -> None:
 
 
 def test_variation_transform_sampling_is_deterministic_and_declaration_driven() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
     transform = generator.formation.variation_transform
 
     left = sample_variation_transform_coordinates(
@@ -452,7 +497,7 @@ def test_variation_transform_sampling_is_deterministic_and_declaration_driven() 
 
 
 def test_field_png_encoding_is_deterministic() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
     field = _observation_payload(
         generator,
         sample_count=1,
@@ -469,7 +514,7 @@ def test_field_png_encoding_is_deterministic() -> None:
 
 
 def test_generator_rejects_invalid_requests() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
 
     assert (
         str(
@@ -506,7 +551,7 @@ def test_generator_rejects_invalid_requests() -> None:
 
 
 def test_digits_variation_extent_zero_samples_canonical_affine() -> None:
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
 
     canonical = _observation_payload(generator,
         sample_count=1,

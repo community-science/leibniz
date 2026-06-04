@@ -6,11 +6,11 @@ import hashlib
 import math
 import secrets
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import count
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.artifacts import ArtifactReference, reference_for_record
@@ -35,7 +35,7 @@ from leibniz.evaluation_bundles import (
     BenchmarkEvaluationBundleDocument,
 )
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import AxisAssignment
+from leibniz.materialization import AxisAssignment, MaterializationDeclaration
 from leibniz.measurements import MeasurementDataset
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_interfaces import ModelInterface
@@ -45,6 +45,7 @@ from leibniz.model_manifests import (
     ModelExecutionFamily,
 )
 from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
+from leibniz.observation_formation import ObservationFormationDeclaration
 from leibniz.observation_generation import (
     GeneratedSampleSet,
     StateSpaceMeasureRequest,
@@ -114,7 +115,45 @@ _converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
 _minimum_plateau_lr_reductions = 3
 _full_variation_extent = 1.0
 _canvas_logarithmic_growth_factor = math.sqrt(2.0)
-_state_space_measure_id = "log2_latent_state_set_size"
+
+
+class _FieldBenchmarkGenerator(BenchmarkGenerator, Protocol):
+    """Internal contract for tensor-backed benchmark training."""
+
+    @property
+    def materialization(self) -> MaterializationDeclaration: ...
+
+    @property
+    def formation(self) -> ObservationFormationDeclaration: ...
+
+    def minimum_discriminatable_resolution_assignment(
+        self,
+        *,
+        minimum_assignment: AxisAssignment,
+    ) -> AxisAssignment: ...
+
+    def distinguishable_state_complexity(
+        self,
+        *,
+        width: int,
+        height: int,
+        variation_extent: float = 1.0,
+    ) -> float: ...
+
+    def __call__(
+        self,
+        *,
+        seed: int,
+        shape: int | Sequence[int] | None = None,
+        include_fields: bool = False,
+        state_space_request: StateSpaceMeasureRequest | None = None,
+        component_indices: Iterable[int] | None = None,
+        memory_limit_bytes: int | None = None,
+        resolution_assignment: AxisAssignment | None = None,
+        variation_extent: float = 1.0,
+        timing: TimingCollector | None = None,
+        timing_prefix: str = "",
+    ) -> GeneratedSampleSet: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +231,25 @@ class CheckpointModelPredictor:
             )
 
 
+def _require_field_generator(generator: BenchmarkGenerator) -> _FieldBenchmarkGenerator:
+    missing = tuple(
+        name
+        for name in (
+            "materialization",
+            "formation",
+            "minimum_discriminatable_resolution_assignment",
+            "distinguishable_state_complexity",
+        )
+        if not hasattr(generator, name)
+    )
+    if missing:
+        raise BenchmarkRunnerError(
+            "tensor benchmark runner requires a field-generating benchmark; missing "
+            + ", ".join(missing)
+        )
+    return cast(_FieldBenchmarkGenerator, generator)
+
+
 @dataclass(frozen=True, slots=True)
 class _TrainingStageResult:
     validation_history: tuple[TrainingHistoryPoint, ...]
@@ -216,7 +274,7 @@ class _CurriculumRung:
             "status": status,
             "resolution_assignment": self.resolution_assignment.to_record(),
             "seed": self.seed,
-            "complexity_axis": _state_space_measure_id,
+            "complexity_axis": _core_state_space_measure_id(),
             "complexity": self.complexity,
             "state_space_measure": (
                 None if state_space_measure is None else state_space_measure.to_record()
@@ -234,10 +292,13 @@ def _rung_state_space_request(rung: _CurriculumRung) -> StateSpaceMeasureRequest
     if rung.batch.state_space_request is not None:
         return rung.batch.state_space_request
     return StateSpaceMeasureRequest(
-        measure_id=_state_space_measure_id,
         minimum=rung.complexity,
         maximum=rung.complexity,
     )
+
+
+def _core_state_space_measure_id() -> str:
+    return StateSpaceMeasureRequest(minimum=0.0, maximum=0.0).measure_id
 
 
 @dataclass(slots=True)
@@ -579,7 +640,7 @@ def run_benchmark(
 ) -> BenchmarkRunSummary:
     """Run or dry-run a tiny local benchmark workflow."""
 
-    generator = load_generator(plan.benchmark_root)
+    generator = _require_field_generator(load_generator(plan.benchmark_root))
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
@@ -865,7 +926,7 @@ def _training_progress_path(summary: BenchmarkRunSummary) -> Path:
 def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEvaluationSummary:
     """Generate benchmark evidence from a saved training checkpoint artifact."""
 
-    generator = load_generator(plan.benchmark_root)
+    generator = _require_field_generator(load_generator(plan.benchmark_root))
     evaluation_input = _evaluation_input_from_plan(plan, generator=generator)
     outcome_space = generator.benchmark_manifest.resolve_outcome_space()
     architecture = evaluation_input.architecture
@@ -1060,7 +1121,7 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
         raise BenchmarkRunnerError(str(error)) from error
     left_evaluation = left_evaluation_bundle.to_record()
     right_evaluation = right_evaluation_bundle.to_record()
-    generator = load_generator(plan.benchmark_root)
+    generator = _require_field_generator(load_generator(plan.benchmark_root))
     benchmark_id = generator.benchmark_manifest.id
     outcome_space = generator.benchmark_manifest.resolve_outcome_space()
     left_architecture = left_evaluation_bundle.architecture_manifest
@@ -1165,7 +1226,7 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
 def _evaluation_curriculum_rung(
     *,
     architecture: ArchitectureManifest,
-    generator: BenchmarkGenerator,
+    generator: _FieldBenchmarkGenerator,
     sample_count: int,
     seed: int,
     index: int,
@@ -1186,7 +1247,7 @@ def _evaluation_curriculum_rung(
 def _training_curriculum_rung(
     *,
     architecture: ArchitectureManifest,
-    generator: BenchmarkGenerator,
+    generator: _FieldBenchmarkGenerator,
     sample_count: int,
     seed: int,
     index: int,
@@ -1206,7 +1267,7 @@ def _training_curriculum_rung(
 
 def _competition_curriculum_rung(
     *,
-    generator: BenchmarkGenerator,
+    generator: _FieldBenchmarkGenerator,
     sample_count: int,
     seed: int,
     index: int,
@@ -1231,7 +1292,7 @@ def _competition_curriculum_rung(
 def _curriculum_rung_from_candidates(
     *,
     architecture: ArchitectureManifest,
-    generator: BenchmarkGenerator,
+    generator: _FieldBenchmarkGenerator,
     sample_count: int,
     seed: int,
     index: int,
@@ -1262,9 +1323,14 @@ def _curriculum_rung_from_candidates(
                 "architecture scale contract rejected the next curriculum rung: "
                 f"{input_reason}"
             )
+        materialization_plan = batch.samples[0].materialization_plan
+        if materialization_plan is None:
+            raise BenchmarkRunnerError(
+                "field curriculum sample did not include a materialization plan"
+            )
         return _CurriculumRung(
             index=index,
-            resolution_assignment=batch.samples[0].materialization_plan.resolution_assignment,
+            resolution_assignment=materialization_plan.resolution_assignment,
             seed=batch.seed,
             batch=batch,
         )
@@ -1279,7 +1345,6 @@ class _CurriculumCandidate:
     @property
     def state_space_request(self) -> StateSpaceMeasureRequest:
         return StateSpaceMeasureRequest(
-            measure_id=_state_space_measure_id,
             minimum=self.complexity,
             maximum=self.complexity,
         )
@@ -1287,7 +1352,7 @@ class _CurriculumCandidate:
 
 def _logarithmic_curriculum_candidates(
     *,
-    generator: BenchmarkGenerator,
+    generator: _FieldBenchmarkGenerator,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
     candidates = _curriculum_candidate_grid(
@@ -1299,7 +1364,7 @@ def _logarithmic_curriculum_candidates(
 
 def _structured_training_curriculum_candidates(
     *,
-    generator: BenchmarkGenerator,
+    generator: _FieldBenchmarkGenerator,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
     return _curriculum_candidate_grid(
@@ -1310,7 +1375,7 @@ def _structured_training_curriculum_candidates(
 
 def _curriculum_candidate_grid(
     *,
-    generator: BenchmarkGenerator,
+    generator: _FieldBenchmarkGenerator,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
     minimum_assignment = generator.minimum_discriminatable_resolution_assignment(
@@ -1395,10 +1460,10 @@ def _curriculum_record(
     record: dict[str, object] = {
         "kind": kind,
         "curriculum_variable": "state-space-measure",
-        "complexity_axis": _state_space_measure_id,
+        "complexity_axis": _core_state_space_measure_id(),
         "sampling_levers": ["state-space-measure"],
         "state_space_measure": {
-            "measure_id": _state_space_measure_id,
+            "measure_id": _core_state_space_measure_id(),
             "scale": "log2",
         },
         "candidate_policy": {
@@ -1498,7 +1563,7 @@ def _train_and_predict(
     *,
     architecture: ArchitectureManifest,
     initial_evaluation_rung: _CurriculumRung,
-    generator: BenchmarkGenerator,
+    generator: _FieldBenchmarkGenerator,
     outcome_space: OutcomeSpace,
     sample_count: int,
     evaluation_sample_count: int,
@@ -1561,7 +1626,7 @@ def _train_and_predict_on_device(
     *,
     architecture: ArchitectureManifest,
     initial_evaluation_rung: _CurriculumRung,
-    generator: BenchmarkGenerator,
+    generator: _FieldBenchmarkGenerator,
     outcome_space: OutcomeSpace,
     sample_count: int,
     evaluation_sample_count: int,
@@ -1827,7 +1892,7 @@ def _train_and_predict_on_device(
 def evaluate_model_checkpoint_artifact(
     *,
     architecture: ArchitectureManifest,
-    generator: BenchmarkGenerator,
+    generator: _FieldBenchmarkGenerator,
     outcome_space: OutcomeSpace,
     evaluation_sample_count: int,
     training_rung_count: int,
@@ -1899,7 +1964,7 @@ def generate_model_checkpoint_competition_record(
     *,
     left_architecture: ArchitectureManifest,
     right_architecture: ArchitectureManifest,
-    generator: BenchmarkGenerator,
+    generator: _FieldBenchmarkGenerator,
     outcome_space: OutcomeSpace,
     sample_count: int,
     seed: int,

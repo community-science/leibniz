@@ -9,12 +9,15 @@ import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
     sampled_competence_frontier_score,
+)
+from leibniz.benchmark_implementations import (
+    Generator as BenchmarkGenerator,
 )
 from leibniz.benchmark_implementations import (
     discover_benchmark_roots,
@@ -33,12 +36,14 @@ from leibniz.documents import (
     load_object_document,
 )
 from leibniz.identifiers import ProtocolIdentifier
+from leibniz.materialization import AxisAssignment, MaterializationDeclaration
 from leibniz.measurements import (
     MeasurementDataset,
 )
 from leibniz.model_inspection import (
     ModelInspectionRecord,
 )
+from leibniz.observation_formation import ObservationFormationDeclaration
 from leibniz.observation_generation import load_generator
 from leibniz.records import RecordExtractor
 from leibniz.training_runs import TrainingRunRecord
@@ -89,6 +94,28 @@ class LocalResultImportError(ValueError):
 
 
 _extract = RecordExtractor(error_type=LocalResultImportError)
+
+
+class _FieldComplexityGenerator(BenchmarkGenerator, Protocol):
+    @property
+    def materialization(self) -> MaterializationDeclaration: ...
+
+    @property
+    def formation(self) -> ObservationFormationDeclaration: ...
+
+    def minimum_discriminatable_resolution_assignment(
+        self,
+        *,
+        minimum_assignment: AxisAssignment,
+    ) -> AxisAssignment: ...
+
+    def distinguishable_state_complexity(
+        self,
+        *,
+        width: int,
+        height: int,
+        variation_extent: float = 1.0,
+    ) -> float: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -2299,8 +2326,11 @@ def _benchmark_base_complexity(
     manifest: BenchmarkManifest,
     repository_root: Path,
 ) -> float:
-    generator = load_generator(
-        repository_root / "src" / "leibniz" / "benchmarks" / _identifier_atom(manifest.id)
+    generator = cast(
+        _FieldComplexityGenerator,
+        load_generator(
+            repository_root / "src" / "leibniz" / "benchmarks" / _identifier_atom(manifest.id)
+        ),
     )
     resolution = generator.minimum_discriminatable_resolution_assignment(
         minimum_assignment=generator.materialization.minimum_resolution(),
