@@ -86,6 +86,17 @@ class BenchmarkCompetitionBundleSummary:
                 raise BenchmarkCompetitionBundleValidationError(
                     "competition_result benchmark_id does not match benchmark_manifest"
                 )
+        throughput = _record.mapping(record.get("throughput"), "throughput")
+        _validate_measured_max_inference_compute(
+            throughput,
+            "throughput.left_max_inference_compute",
+            field="left_max_inference_compute",
+        )
+        _validate_measured_max_inference_compute(
+            throughput,
+            "throughput.right_max_inference_compute",
+            field="right_max_inference_compute",
+        )
         return cls(
             benchmark_id=benchmark_id,
             competition_id=_record.non_empty_string(
@@ -112,7 +123,7 @@ class BenchmarkCompetitionBundleSummary:
                 result.get("sample_count"),
                 "competition_result.sample_count",
             ),
-            throughput=_record.mapping(record.get("throughput"), "throughput"),
+            throughput=throughput,
         )
 
     def competition_result_record(self) -> dict[str, object]:
@@ -246,6 +257,16 @@ class BenchmarkCompetitionBundle:
             raise BenchmarkCompetitionBundleValidationError(
                 "competition_protocol sample_count does not match competition_result"
             )
+        _validate_measured_max_inference_compute(
+            self.throughput,
+            "throughput.left_max_inference_compute",
+            field="left_max_inference_compute",
+        )
+        _validate_measured_max_inference_compute(
+            self.throughput,
+            "throughput.right_max_inference_compute",
+            field="right_max_inference_compute",
+        )
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -370,6 +391,18 @@ def _probability(value: object, field: str) -> float:
     if probability < 0.0 or probability > 1.0:
         raise BenchmarkCompetitionBundleValidationError(f"{field} must be a probability")
     return probability
+
+
+def _validate_measured_max_inference_compute(
+    throughput: Mapping[str, object],
+    field_path: str,
+    *,
+    field: str,
+) -> int:
+    value = _record.integer(throughput.get(field), field_path)
+    if value < 0:
+        raise BenchmarkCompetitionBundleValidationError(f"{field_path} must be nonnegative")
+    return value
 
 
 def _checkpoint_model_key(record: Mapping[str, object]) -> str:

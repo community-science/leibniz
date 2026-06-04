@@ -509,7 +509,7 @@ def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: 
         load_console_result_view(canonical_document_bytes(view))
 
 
-def test_materialize_benchmark_result_views_projects_evaluation_bundles(
+def test_materialize_benchmark_result_views_rejects_evaluation_bundle_without_inference_compute(
     tmp_path: Path,
 ) -> None:
     results_root = tmp_path / "results"
@@ -523,6 +523,22 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
             phase = cast(dict[str, object], throughput[key])
             phase.pop("max_inference_compute", None)
         path.write_bytes(canonical_document_bytes(record) + b"\n")
+
+    with pytest.raises(
+        LocalResultImportError,
+        match="missing measured max_inference_compute",
+    ):
+        materialize_benchmark_result_views(
+            repository_root=_repository_root,
+            results_root=results_root,
+        )
+
+
+def test_materialize_benchmark_result_views_projects_evaluation_bundles(
+    tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    _run_and_evaluate_digits_benchmark(results_root)
 
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
@@ -817,7 +833,7 @@ def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
     rerun = capsys.readouterr()
     assert "no unevaluated benchmark checkpoints found" in rerun.out
     assert "no missing benchmark relative evaluations found" in rerun.out
-    assert "materialized 1 benchmark result view(s)" in rerun.out
+    assert "benchmark result views already current" in rerun.out
     competition_paths = tuple(
         (results_root / "evaluations" / "digits" / "competitions").glob("*.json")
     )
@@ -1165,6 +1181,8 @@ def _competition_bundle_record(*, left_model_key: str, right_model_key: str) -> 
         "throughput": {
             "kind": "checkpoint-competition-throughput",
             "sample_count": 2,
+            "left_max_inference_compute": 20,
+            "right_max_inference_compute": 30,
         },
     }
 

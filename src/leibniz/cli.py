@@ -584,6 +584,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                     raise ValueError("no checkpoint artifacts matched benchmark evaluation inputs")
                 if not evaluation_summaries:
                     print("no unevaluated benchmark checkpoints found")
+            competition_summaries: list[BenchmarkCompetitionSummary] = []
             if evaluation_phase in {"all", "relative"}:
                 competition_summaries, skipped = _run_benchmark_competitions(
                     results_root=args.results_root,
@@ -600,7 +601,13 @@ def _benchmark(args: argparse.Namespace) -> int:
                 )
                 if not competition_summaries and not skipped:
                     print("no missing benchmark relative evaluations found")
-            _materialize_benchmark_views_if_present(results_root=args.results_root)
+            if evaluation_summaries or competition_summaries or not _benchmark_views_present(
+                results_root=args.results_root,
+                benchmark_selectors=benchmark_selectors,
+            ):
+                _materialize_benchmark_views_if_present(results_root=args.results_root)
+            else:
+                print("benchmark result views already current")
             return 0
         if str(args.benchmark_command) == "profile":
             summary = time_formation_paths(
@@ -863,6 +870,35 @@ def _materialize_benchmark_views_if_present(*, results_root: Path) -> None:
     )
     for view_file in summary.benchmark_view_files or (summary.view_file,):
         print(f"view: {view_file}")
+
+
+def _benchmark_views_present(
+    *,
+    results_root: Path,
+    benchmark_selectors: tuple[str, ...],
+) -> bool:
+    paths = _evaluation_bundle_paths(
+        results_root=results_root,
+        benchmark_selectors=benchmark_selectors,
+    )
+    if not paths:
+        return False
+    benchmark_ids = {
+        _benchmark_id_from_record(
+            _load_evaluation_summary_record(path),
+            description="evaluation",
+        )
+        for path in paths
+    }
+    return all(
+        (
+            results_root
+            / "views"
+            / _benchmark_atom(benchmark_id)
+            / ("benchmark_results" + document_filename_suffix())
+        ).is_file()
+        for benchmark_id in benchmark_ids
+    )
 
 
 def _evaluation_checkpoint_artifacts(

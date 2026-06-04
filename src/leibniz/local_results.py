@@ -28,19 +28,13 @@ from leibniz.documents import (
     document_filename_suffix,
     load_object_document,
 )
-from leibniz.evaluation_bundles import (
-    BenchmarkEvaluationBundle,
-    BenchmarkEvaluationBundleDocument,
-)
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import AxisAssignment
 from leibniz.measurements import (
     MeasurementDataset,
 )
 from leibniz.model_inspection import (
     ModelInspectionRecord,
 )
-from leibniz.model_operators import summarize_architecture_operators
 from leibniz.observation_generation import load_observation_generator
 from leibniz.records import RecordExtractor
 from leibniz.training_runs import TrainingRunRecord
@@ -269,7 +263,7 @@ def publish_local_benchmark_results(
     results_root = _resolve_output_root(repository_root, results_root)
     if push and not commit:
         raise LocalResultImportError("push requires committing the result checkout")
-    runs = _local_run_records(results_root, repository_root=repository_root)
+    runs = _local_run_records(results_root)
     if not runs:
         raise LocalResultImportError("no local benchmark result records found")
     measurement_count = sum(run.measurement_count for run in runs)
@@ -305,7 +299,7 @@ def materialize_benchmark_result_views(
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     results_root = _resolve_output_root(repository_root, results_root)
     manifests = _known_benchmark_manifests(repository_root)
-    local_runs = _local_run_records(results_root, repository_root=repository_root)
+    local_runs = _local_run_records(results_root)
     local_training_estimates = _local_training_estimate_records(
         results_root,
         repository_root=repository_root,
@@ -389,7 +383,10 @@ def relative_frontier_competition_requests(
     competitions = _local_competition_records(results_root)
     requests: set[tuple[str, str]] = set()
     runs_by_benchmark: dict[str, dict[str, _BenchmarkRunRecord]] = {}
-    for run in _local_run_records(results_root, repository_root=Path.cwd().resolve()):
+    for run in _local_run_records(
+        results_root,
+        include_model_details=False,
+    ):
         benchmark_id = str(run.benchmark_id)
         if not _benchmark_selected_for_relative_requests(benchmark_id, benchmark_selectors):
             continue
@@ -489,6 +486,20 @@ class _ModelCompetitionOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class _EvaluationBundleSummary:
+    run_slug: str
+    benchmark_manifest: Mapping[str, object]
+    architecture_manifest: ArchitectureManifest
+    model_checkpoint: Mapping[str, object]
+    model_inspection: Mapping[str, object]
+    measurement_score_view: Mapping[str, object]
+    sampled_competence: Mapping[str, object]
+    evaluation_protocol: Mapping[str, object]
+    evaluation_curriculum: Mapping[str, object]
+    throughput: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
 class _AggregatedCompetitionPair:
     lower_model_key: str
     upper_model_key: str
@@ -542,7 +553,7 @@ def _known_benchmark_manifests(
 def _local_run_records(
     results_root: Path,
     *,
-    repository_root: Path | None = None,
+    include_model_details: bool = True,
 ) -> tuple[_BenchmarkRunRecord, ...]:
     evaluation_root = results_root / "evaluations"
     if not evaluation_root.is_dir():
@@ -552,46 +563,74 @@ def _local_run_records(
         record = load_object_document(path.read_bytes(), description="benchmark evaluation")
         if record.get("format") != "leibniz.benchmark-evaluation":
             continue
-        bundle = BenchmarkEvaluationBundleDocument.from_bytes(path.read_bytes()).bundle
-        model_key = _model_key_from_checkpoint_record(bundle.model_checkpoint)
+        source_path = _result_state_record_path(path, results_root=results_root)
+        try:
+            summary = _evaluation_bundle_summary_from_record(record)
+        except LocalResultImportError as error:
+            raise LocalResultImportError(f"{source_path}: {error}") from error
+        model_key = _model_key_from_checkpoint_record(summary.model_checkpoint)
+        benchmark_id = ProtocolIdentifier.parse(
+            _extract.non_empty_string(
+                summary.benchmark_manifest.get("id"),
+                "benchmark_manifest.id",
+            )
+        )
+        measurement_dataset_digest = ContentDigest.from_string(
+            summary.measurement_score_view.get("source_dataset_digest"),
+            field="measurement_score_view.source_dataset_digest",
+            error_type=LocalResultImportError,
+        )
+        model_inspection_digest = ContentDigest.from_value(summary.model_inspection)
+        model_inspection: Mapping[str, object]
+        cost_summary: Mapping[str, object]
+        try:
+            cost_summary = _evaluation_summary_cost_summary(
+                summary,
+            )
+        except LocalResultImportError as error:
+            raise LocalResultImportError(f"{source_path}: {error}") from error
+        if include_model_details:
+            model_inspection = _model_inspection_view_record(
+                inspection=summary.model_inspection,
+                source_path=source_path,
+                measurement_dataset_digest=measurement_dataset_digest,
+                training_summary=None,
+                artifact_references=_evaluation_summary_artifact_references(summary),
+            )
+            model_inspection_path = source_path
+        else:
+            model_inspection = {}
+            model_inspection_path = None
         records.append(
             _BenchmarkRunRecord(
                 source_kind="local-run",
                 result_status="accepted",
-                source_path=_result_state_record_path(path, results_root=results_root),
-                run_id=bundle.run_slug,
-                run_slug=bundle.run_slug,
-                benchmark_id=bundle.benchmark_manifest.id,
-                architecture_digest=bundle.architecture_manifest.digest,
+                source_path=source_path,
+                run_id=summary.run_slug,
+                run_slug=summary.run_slug,
+                benchmark_id=benchmark_id,
+                architecture_digest=summary.architecture_manifest.digest,
                 model_key=model_key,
-                complexity=_sampled_competence_record_complexity(bundle.sampled_competence),
-                measurement_count=len(bundle.measurement_dataset.measurements),
-                score=_mean_accepted_mass(bundle.measurement_dataset),
-                cost_summary=_evaluation_bundle_cost_summary(
-                    bundle,
-                    benchmark_root=(
-                        None
-                        if repository_root is None
-                        else repository_root
-                        / "src"
-                        / "leibniz"
-                        / "benchmarks"
-                        / _identifier_atom(bundle.benchmark_manifest.id)
-                    ),
+                complexity=_sampled_competence_record_complexity(summary.sampled_competence),
+                measurement_count=_as_positive_int(
+                    summary.sampled_competence.get("sample_count"),
+                    "sampled_competence.sample_count",
                 ),
-                architecture=bundle.model_inspection.architecture.to_record(),
-                model_inspection=_model_inspection_view_record(
-                    inspection=bundle.model_inspection.to_record(),
-                    source_path=_result_state_record_path(path, results_root=results_root),
-                    measurement_dataset_digest=bundle.measurement_dataset.digest,
-                    training_summary=None,
-                    artifact_references=_evaluation_bundle_artifact_references(bundle),
+                score=_as_probability(
+                    summary.sampled_competence.get("mean_accepted_mass"),
+                    "sampled_competence.mean_accepted_mass",
                 ),
-                model_inspection_digest=bundle.model_inspection.digest,
-                model_inspection_path=_result_state_record_path(path, results_root=results_root),
-                measurement_dataset=bundle.measurement_dataset,
-                measurement_dataset_digest=bundle.measurement_dataset.digest,
-                sampled_competence=bundle.sampled_competence,
+                cost_summary=cost_summary,
+                architecture=_extract.mapping(
+                    summary.model_inspection.get("architecture"),
+                    "model_inspection.architecture",
+                ),
+                model_inspection=model_inspection,
+                model_inspection_digest=model_inspection_digest,
+                model_inspection_path=model_inspection_path,
+                measurement_dataset=MeasurementDataset(measurements=()),
+                measurement_dataset_digest=measurement_dataset_digest,
+                sampled_competence=summary.sampled_competence,
             )
         )
     return tuple(records)
@@ -750,23 +789,56 @@ def _model_key_from_checkpoint_record(record: Mapping[str, object]) -> str:
     )
 
 
-def _evaluation_bundle_cost_summary(
-    bundle: BenchmarkEvaluationBundle,
-    *,
-    benchmark_root: Path | None = None,
+def _evaluation_bundle_summary_from_record(
+    record: Mapping[str, object],
+) -> _EvaluationBundleSummary:
+    if record.get("format") != "leibniz.benchmark-evaluation":
+        raise LocalResultImportError("benchmark evaluation has unsupported format")
+    if record.get("format_version") != 1:
+        raise LocalResultImportError("benchmark evaluation has unsupported format_version")
+    return _EvaluationBundleSummary(
+        run_slug=_extract.non_empty_string(record.get("run_slug"), "run_slug"),
+        benchmark_manifest=_extract.mapping(
+            record.get("benchmark_manifest"),
+            "benchmark_manifest",
+        ),
+        architecture_manifest=ArchitectureManifest.from_record(
+            _extract.mapping(record.get("architecture_manifest"), "architecture_manifest")
+        ),
+        model_checkpoint=_extract.mapping(record.get("model_checkpoint"), "model_checkpoint"),
+        model_inspection=_extract.mapping(record.get("model_inspection"), "model_inspection"),
+        measurement_score_view=_extract.mapping(
+            record.get("measurement_score_view"),
+            "measurement_score_view",
+        ),
+        sampled_competence=_extract.mapping(
+            record.get("sampled_competence"),
+            "sampled_competence",
+        ),
+        evaluation_protocol=_extract.mapping(
+            record.get("evaluation_protocol"),
+            "evaluation_protocol",
+        ),
+        evaluation_curriculum=_extract.mapping(
+            record.get("evaluation_curriculum"),
+            "evaluation_curriculum",
+        ),
+        throughput=_extract.mapping(record.get("throughput"), "throughput"),
+    )
+
+
+def _evaluation_summary_cost_summary(
+    summary: _EvaluationBundleSummary,
 ) -> Mapping[str, object]:
-    cost_summary = dict(bundle.model_inspection.cost_summary.to_record())
+    inspection_cost = _extract.mapping(
+        summary.model_inspection.get("cost_summary"),
+        "model_inspection.cost_summary",
+    )
+    cost_summary = dict(inspection_cost)
     cost_summary.pop("parameter_count", None)
     cost_summary.pop("inference_compute", None)
-    inference_compute = _evaluation_bundle_max_inference_compute(bundle)
-    if inference_compute is None and benchmark_root is not None:
-        inference_compute = _recorded_evaluation_batch_max_inference_compute(
-            bundle,
-            benchmark_root=benchmark_root,
-        )
-    if inference_compute is not None:
-        cost_summary["inference_compute"] = inference_compute
-    training_compute = bundle.evaluation_protocol.get("training_compute")
+    cost_summary["inference_compute"] = _evaluation_summary_max_inference_compute(summary)
+    training_compute = summary.evaluation_protocol.get("training_compute")
     if training_compute is not None:
         cost_summary["training_compute"] = _as_nonnegative_number(
             training_compute,
@@ -775,104 +847,49 @@ def _evaluation_bundle_cost_summary(
     return cost_summary
 
 
-def _evaluation_bundle_max_inference_compute(
-    bundle: BenchmarkEvaluationBundle,
-) -> float | None:
+def _evaluation_summary_max_inference_compute(
+    summary: _EvaluationBundleSummary,
+) -> float:
     checkpoint_value = _throughput_max_inference_compute(
-        bundle.throughput.get("checkpoint_evaluation"),
+        summary.throughput.get("checkpoint_evaluation"),
         "evaluation_bundle.throughput.checkpoint_evaluation",
     )
     if checkpoint_value is not None:
         return checkpoint_value
-    return _throughput_max_inference_compute(
-        bundle.throughput.get("evaluation"),
+    evaluation_value = _throughput_max_inference_compute(
+        summary.throughput.get("evaluation"),
         "evaluation_bundle.throughput.evaluation",
+    )
+    if evaluation_value is not None:
+        return evaluation_value
+    raise LocalResultImportError(
+        "benchmark evaluation bundle is missing measured max_inference_compute"
     )
 
 
-def _recorded_evaluation_batch_max_inference_compute(
-    bundle: BenchmarkEvaluationBundle,
-    *,
-    benchmark_root: Path,
-) -> float | None:
-    generator = load_observation_generator(benchmark_root)
-    max_compute: int | None = None
-    for index, rung_value in enumerate(
-        _as_sequence(
-            bundle.evaluation_curriculum.get("rungs", ()),
-            "evaluation_curriculum.rungs",
-        )
-    ):
-        rung = _extract.mapping(rung_value, f"evaluation_curriculum.rungs.{index}")
-        batch = generator.sample_batch(
-            component_count=_component_count,
-            sample_count=_as_positive_int(
-                rung.get("sample_count"),
-                f"evaluation_curriculum.rungs.{index}.sample_count",
-            ),
-            seed=_extract.integer(
-                rung.get("seed"),
-                f"evaluation_curriculum.rungs.{index}.seed",
-            ),
-            resolution_assignment=AxisAssignment.from_record(
-                _extract.mapping(
-                    rung.get("resolution_assignment"),
-                    f"evaluation_curriculum.rungs.{index}.resolution_assignment",
-                )
-            ),
-        )
-        batch_compute = _batch_max_inference_compute(
-            architecture=bundle.architecture_manifest,
-            batch_shapes=tuple({sample.field.shape for sample in batch.samples}),
-        )
-        if batch_compute is None:
-            return None
-        max_compute = batch_compute if max_compute is None else max(max_compute, batch_compute)
-    return None if max_compute is None else float(max_compute)
-
-
-def _batch_max_inference_compute(
-    *,
-    architecture: ArchitectureManifest,
-    batch_shapes: tuple[tuple[int, ...], ...],
-) -> int | None:
-    max_compute: int | None = None
-    for input_shape in sorted(batch_shapes):
-        plan = summarize_architecture_operators(
-            _architecture_with_input_shape(architecture, input_shape)
-        )
-        if plan.inference_compute is None:
-            return None
-        max_compute = plan.inference_compute if max_compute is None else max(
-            max_compute,
-            plan.inference_compute,
-        )
-    return max_compute
-
-
-def _architecture_with_input_shape(
-    architecture: ArchitectureManifest,
-    input_shape: tuple[int, ...],
-) -> ArchitectureManifest:
-    record = architecture.to_record()
-    record["input_shape"] = list(input_shape)
-    record.pop("id", None)
-    record.pop("model_scale_contract", None)
-    return ArchitectureManifest.from_record(record)
-
-
-def _evaluation_bundle_artifact_references(
-    bundle: BenchmarkEvaluationBundle,
+def _evaluation_summary_artifact_references(
+    summary: _EvaluationBundleSummary,
 ) -> tuple[Mapping[str, object], ...]:
-    checkpoint = dict(bundle.model_checkpoint)
+    checkpoint = dict(summary.model_checkpoint)
+    model_artifacts = _as_sequence(
+        checkpoint.get("model_artifacts", ()),
+        "model_checkpoint.model_artifacts",
+    )
+    training_provenance = _as_sequence(
+        checkpoint.get("training_provenance", ()),
+        "model_checkpoint.training_provenance",
+    )
     references: list[Mapping[str, object]] = [
         {
             "kind": "measurement-dataset",
-            "digest": str(bundle.measurement_dataset.digest),
+            "digest": _extract.non_empty_string(
+                summary.measurement_score_view.get("source_dataset_digest"),
+                "measurement_score_view.source_dataset_digest",
+            ),
         },
         {
             "kind": "model-inspection",
-            "digest": str(bundle.model_inspection.digest),
+            "digest": str(ContentDigest.from_value(summary.model_inspection)),
         },
         {
             "kind": "model-checkpoint",
@@ -897,6 +914,14 @@ def _evaluation_bundle_artifact_references(
             ),
         },
     ]
+    for index, artifact in enumerate(model_artifacts):
+        references.append(
+            _extract.mapping(artifact, f"model_checkpoint.model_artifacts.{index}")
+        )
+    for index, provenance in enumerate(training_provenance):
+        references.append(
+            _extract.mapping(provenance, f"model_checkpoint.training_provenance.{index}")
+        )
     return tuple(references)
 
 
@@ -2324,15 +2349,6 @@ def _frontier_records(
             frontier.append(model)
             best_score = score
     return frontier
-
-
-def _mean_accepted_mass(dataset: MeasurementDataset) -> float:
-    if not dataset.measurements:
-        return 0.0
-    return sum(
-        measurement.raw_scoring_evidence.accepted_mass
-        for measurement in dataset.measurements
-    ) / len(dataset.measurements)
 
 
 def _cost_value(cost_summary: Mapping[str, object], cost_axis: str) -> float:

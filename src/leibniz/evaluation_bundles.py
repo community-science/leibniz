@@ -185,6 +185,12 @@ class BenchmarkEvaluationBundle:
             raise BenchmarkEvaluationBundleValidationError(
                 "measurement_score_view is not derived from measurement_dataset"
             )
+        _validate_measured_max_inference_compute(
+            self.throughput,
+            "throughput.checkpoint_evaluation.max_inference_compute",
+            phase="checkpoint_evaluation",
+            field="max_inference_compute",
+        )
 
     def _validate_model_checkpoint(self) -> None:
         if self.model_checkpoint.get("kind") != "model-checkpoint":
@@ -285,3 +291,17 @@ def _single_benchmark_id(dataset: MeasurementDataset) -> ProtocolIdentifier:
             "measurement_dataset must contain one benchmark id"
         )
     return next(iter(benchmark_ids))
+
+
+def _validate_measured_max_inference_compute(
+    throughput: Mapping[str, object],
+    field_path: str,
+    *,
+    phase: str,
+    field: str,
+) -> int:
+    phase_record = _record.mapping(throughput.get(phase), f"throughput.{phase}")
+    value = _record.integer(phase_record.get(field), field_path)
+    if value < 0:
+        raise BenchmarkEvaluationBundleValidationError(f"{field_path} must be nonnegative")
+    return value
