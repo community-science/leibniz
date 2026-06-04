@@ -1,6 +1,7 @@
 import math
 import subprocess
 from pathlib import Path
+from textwrap import dedent
 from typing import Any, cast
 
 import pytest
@@ -95,6 +96,75 @@ def test_competent_complexity_score_integrates_bits_above_chance() -> None:
 def test_console_result_view_rejects_wrong_format() -> None:
     with pytest.raises(LocalResultImportError, match="unsupported format"):
         load_console_result_view(canonical_document_bytes({"format": "other", "format_version": 1}))
+
+
+def test_known_benchmark_manifests_loads_python_implementation_without_manifest_file(
+    tmp_path: Path,
+) -> None:
+    benchmark_root = tmp_path / "src" / "leibniz" / "benchmarks" / "digits"
+    benchmark_root.mkdir(parents=True)
+    (benchmark_root.parent / "__pycache__").mkdir()
+    (benchmark_root / "benchmark.py").write_text(
+        dedent(
+            f"""
+            from pathlib import Path
+
+            from leibniz.benchmarks import BenchmarkManifestDocument
+            from leibniz.latent_factors import LatentFactorDeclarationDocument
+            from leibniz.materialization import MaterializationDeclarationDocument
+            from leibniz.observation_formation import ObservationFormationDeclarationDocument
+
+            _source = Path({str(_digits_benchmark_root)!r})
+
+
+            class Impl:
+                def __init__(self, root: Path) -> None:
+                    self._root = root
+
+                @property
+                def root(self) -> Path:
+                    return self._root
+
+                @property
+                def benchmark_manifest(self):
+                    path = _source / "manifest.json"
+                    return BenchmarkManifestDocument.from_bytes(path.read_bytes()).manifest
+
+                @property
+                def latent_factors(self):
+                    path = _source / "latent_factors.json"
+                    return LatentFactorDeclarationDocument.from_bytes(
+                        path.read_bytes()
+                    ).declaration
+
+                @property
+                def materialization(self):
+                    path = _source / "materialization.json"
+                    return MaterializationDeclarationDocument.from_bytes(
+                        path.read_bytes()
+                    ).declaration
+
+                @property
+                def formation(self):
+                    path = _source / "observation_formation.json"
+                    return ObservationFormationDeclarationDocument.from_bytes(
+                        path.read_bytes()
+                    ).declaration
+
+                def observation_generator(self):
+                    return object()
+
+
+            def benchmark(root: Path):
+                return Impl(root)
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    manifests = cast(Any, local_results)._known_benchmark_manifests(tmp_path)
+
+    assert ProtocolIdentifier.parse("benchmarks.digits@0.1.0") in manifests
 
 
 def test_console_result_view_validates_embedded_model_inspections(tmp_path: Path) -> None:

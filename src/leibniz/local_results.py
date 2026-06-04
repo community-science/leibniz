@@ -16,7 +16,8 @@ from leibniz.benchmark_evaluation import (
     CompetencePoint,
     sampled_competence_frontier_score,
 )
-from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
+from leibniz.benchmark_implementations import load_benchmark_implementation
+from leibniz.benchmarks import BenchmarkManifest
 from leibniz.competition_bundles import BenchmarkCompetitionBundleSummary
 from leibniz.console.protocol import (
     console_protocol_format_versions,
@@ -59,6 +60,7 @@ _protocol_format_versions = console_protocol_format_versions()
 _benchmark_result_view_format = _protocol_formats.benchmark_result_view
 _console_result_view_format_version = _protocol_format_versions.result_view
 _document_suffix = document_filename_suffix()
+_benchmark_entrypoint_filename = "benchmark.py"
 _manifest_filename = "manifest" + _document_suffix
 _default_results_root = Path("results")
 _result_directories = (
@@ -542,9 +544,16 @@ def _known_benchmark_manifests(
 ) -> dict[ProtocolIdentifier, BenchmarkManifest]:
     benchmark_root = repository_root / "src" / "leibniz" / "benchmarks"
     manifests: dict[ProtocolIdentifier, BenchmarkManifest] = {}
-    for path in sorted(benchmark_root.rglob(_manifest_filename)):
-        document = BenchmarkManifestDocument.from_bytes(path.read_bytes())
-        manifests[document.manifest.id] = document.manifest
+    if benchmark_root.is_dir():
+        for path in sorted(benchmark_root.iterdir()):
+            if not path.is_dir():
+                continue
+            if not (path / _benchmark_entrypoint_filename).is_file() and not (
+                path / _manifest_filename
+            ).is_file():
+                continue
+            manifest = load_benchmark_implementation(path).benchmark_manifest
+            manifests[manifest.id] = manifest
     if not manifests:
         raise LocalResultImportError("no known benchmark manifests found")
     return manifests
