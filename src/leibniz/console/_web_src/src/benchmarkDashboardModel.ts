@@ -461,7 +461,7 @@ function logCostDomain(values: number[]): [number, number] {
 }
 
 function costAxisLogBase(costAxis: string): number {
-  return costAxis === 'training_compute' ? 10 : 2;
+  return costAxis === 'storage_bytes' ? 2 : 10;
 }
 
 function logCost(cost: number, costAxis: string): number {
