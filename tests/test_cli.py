@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -500,6 +501,33 @@ def test_cli_profiles_benchmark_formation_paths(
     assert record["format"] == "leibniz.formation-timing"
     assert record["tensor_device"] == "cpu"
     assert record["sample_count"] == 1
+
+
+def test_cli_benchmark_selection_loads_python_implementation_without_manifest_file(
+    tmp_path: Path,
+) -> None:
+    benchmark_root = tmp_path / "digits"
+    benchmark_root.mkdir()
+    (benchmark_root / "benchmark.py").write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "from leibniz.benchmark_implementations import load_benchmark_implementation",
+                f"_source = Path({str(_digits_benchmark_root)!r})",
+                "def benchmark(root: Path):",
+                "    return load_benchmark_implementation(_source)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    roots = cast(Any, cli)._benchmark_roots_by_id(
+        repository_root=tmp_path,
+        explicit_roots=(benchmark_root,),
+    )
+
+    assert roots == {"benchmarks.digits@0.1.0": benchmark_root}
 
 
 def _dataset_path(tmp_path: Path) -> Path:
