@@ -30,7 +30,10 @@ from leibniz.benchmark_runner import (
     run_benchmark,
 )
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
-from leibniz.competition_bundles import BenchmarkCompetitionBundleDocument
+from leibniz.competition_bundles import (
+    BenchmarkCompetitionBundleDocument,
+    BenchmarkCompetitionBundleSummary,
+)
 from leibniz.documents import (
     canonical_document_bytes,
     document_filename_suffix,
@@ -74,6 +77,13 @@ class _CompetitionEvaluationPair:
     left_path: Path
     right_path: Path
     repeat_existing: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _CompetitionPairKey:
+    benchmark_id: str
+    left_model_key: str
+    right_model_key: str
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -927,8 +937,8 @@ def _run_benchmark_competitions(
         for pair in pairs:
             left_path = pair.left_path
             right_path = pair.right_path
-            left_record = _load_evaluation_bundle_record(left_path)
-            right_record = _load_evaluation_bundle_record(right_path)
+            left_record = _load_evaluation_summary_record(left_path)
+            right_record = _load_evaluation_summary_record(right_path)
             benchmark_root = _benchmark_root_for_record(
                 left_record,
                 benchmark_roots=benchmark_roots,
@@ -941,16 +951,6 @@ def _run_benchmark_competitions(
             )
             if right_benchmark_root != benchmark_root:
                 raise ValueError("benchmark relative evaluation requires matching benchmark roots")
-            if (
-                not pair.repeat_existing
-                and _competition_pair_exists(
-                    results_root=results_root,
-                    left_evaluation=left_record,
-                    right_evaluation=right_record,
-                )
-            ):
-                skipped += 1
-                continue
             competition_summaries.append(
                 compete_benchmark_checkpoints(
                     BenchmarkCompetitionPlan(
@@ -1009,23 +1009,24 @@ def _competition_evaluation_pairs(
         results_root=results_root,
         benchmark_selectors=benchmark_selectors,
     )
+    existing_pairs = _competition_pair_index(results_root=results_root)
     by_benchmark: dict[str, list[Path]] = {}
+    evaluation_records: dict[Path, dict[str, object]] = {}
     for path in evaluations:
-        record = _load_evaluation_bundle_record(path)
+        record = _load_evaluation_summary_record(path)
+        evaluation_records[path] = record
         benchmark_id = _benchmark_id_from_record(record, description="evaluation")
         by_benchmark.setdefault(benchmark_id, []).append(path)
     missing_pairs: list[_CompetitionEvaluationPair] = []
     evaluation_paths_by_model_key: dict[str, Path] = {}
     for paths in by_benchmark.values():
         for path in paths:
-            model_key = _model_key_from_evaluation(_load_evaluation_bundle_record(path))
+            model_key = _model_key_from_evaluation(evaluation_records[path])
             evaluation_paths_by_model_key[model_key] = path
         for left_path, right_path in itertools.combinations(paths, 2):
-            if not _competition_pair_exists(
-                results_root=results_root,
-                left_evaluation=_load_evaluation_bundle_record(left_path),
-                right_evaluation=_load_evaluation_bundle_record(right_path),
-            ):
+            left_record = evaluation_records[left_path]
+            right_record = evaluation_records[right_path]
+            if _competition_pair_key(left_record, right_record) not in existing_pairs:
                 missing_pairs.append(
                     _CompetitionEvaluationPair(
                         left_path=left_path,
@@ -1066,7 +1067,7 @@ def _evaluation_bundle_paths(
     for path in sorted(evaluation_root.rglob("*" + document_filename_suffix())):
         if "competitions" in path.relative_to(evaluation_root).parts:
             continue
-        record = _load_evaluation_bundle_record(path)
+        record = _load_evaluation_summary_record(path)
         benchmark_id = _benchmark_id_from_record(record, description="evaluation")
         if not _benchmark_selected(benchmark_id, benchmark_selectors):
             continue
@@ -1074,17 +1075,8 @@ def _evaluation_bundle_paths(
     return tuple(paths)
 
 
-def _competition_pair_exists(
-    *,
-    results_root: Path,
-    left_evaluation: dict[str, object],
-    right_evaluation: dict[str, object],
-) -> bool:
-    left_key = _model_key_from_evaluation(left_evaluation)
-    right_key = _model_key_from_evaluation(right_evaluation)
-    if right_key < left_key:
-        left_key, right_key = right_key, left_key
-    benchmark_id = _benchmark_id_from_record(left_evaluation, description="left_evaluation")
+def _competition_pair_index(*, results_root: Path) -> set[_CompetitionPairKey]:
+    pairs: set[_CompetitionPairKey] = set()
     competition_paths = (results_root / "evaluations").rglob(
         "competitions/*" + document_filename_suffix()
     )
@@ -1092,21 +1084,41 @@ def _competition_pair_exists(
         record = _load_object_record(path, description="benchmark competition bundle")
         if record.get("format") != "leibniz.benchmark-competition":
             continue
-        raw_result = record.get("competition_result")
-        if not isinstance(raw_result, Mapping):
-            continue
-        result = cast(Mapping[str, object], raw_result)
-        if result.get("benchmark_id") != benchmark_id:
-            continue
-        existing_left = result.get("left_model_key")
-        existing_right = result.get("right_model_key")
-        if not isinstance(existing_left, str) or not isinstance(existing_right, str):
-            continue
-        if existing_right < existing_left:
-            existing_left, existing_right = existing_right, existing_left
-        if (existing_left, existing_right) == (left_key, right_key):
-            return True
-    return False
+        summary = BenchmarkCompetitionBundleSummary.from_record(record)
+        pairs.add(
+            _normalized_competition_pair_key(
+                benchmark_id=summary.benchmark_id,
+                left_model_key=summary.left_model_key,
+                right_model_key=summary.right_model_key,
+            )
+        )
+    return pairs
+
+
+def _competition_pair_key(
+    left_evaluation: Mapping[str, object],
+    right_evaluation: Mapping[str, object],
+) -> _CompetitionPairKey:
+    return _normalized_competition_pair_key(
+        benchmark_id=_benchmark_id_from_record(left_evaluation, description="left_evaluation"),
+        left_model_key=_model_key_from_evaluation(left_evaluation),
+        right_model_key=_model_key_from_evaluation(right_evaluation),
+    )
+
+
+def _normalized_competition_pair_key(
+    *,
+    benchmark_id: str,
+    left_model_key: str,
+    right_model_key: str,
+) -> _CompetitionPairKey:
+    if right_model_key < left_model_key:
+        left_model_key, right_model_key = right_model_key, left_model_key
+    return _CompetitionPairKey(
+        benchmark_id=benchmark_id,
+        left_model_key=left_model_key,
+        right_model_key=right_model_key,
+    )
 
 
 def _evaluation_bundle_exists(
@@ -1169,9 +1181,11 @@ def _benchmark_root_for_record(
     return benchmark_root
 
 
-def _load_evaluation_bundle_record(path: Path) -> dict[str, object]:
-    bundle = BenchmarkEvaluationBundleDocument.from_bytes(path.read_bytes()).bundle
-    return dict(bundle.to_record())
+def _load_evaluation_summary_record(path: Path) -> dict[str, object]:
+    record = _load_object_record(path, description="benchmark evaluation bundle")
+    if record.get("format") != "leibniz.benchmark-evaluation":
+        raise ValueError(f"unsupported benchmark evaluation bundle: {path}")
+    return record
 
 
 def _load_object_record(path: Path, *, description: str) -> dict[str, object]:

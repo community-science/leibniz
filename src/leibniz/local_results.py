@@ -17,7 +17,7 @@ from leibniz.benchmark_evaluation import (
     sampled_competence_frontier_score,
 )
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
-from leibniz.competition_bundles import BenchmarkCompetitionBundleDocument
+from leibniz.competition_bundles import BenchmarkCompetitionBundleSummary
 from leibniz.console.protocol import (
     console_protocol_format_versions,
     console_protocol_formats,
@@ -675,10 +675,9 @@ def _local_competition_records(results_root: Path) -> tuple[Mapping[str, object]
         record = load_object_document(path.read_bytes(), description="benchmark competition")
         if record.get("format") != "leibniz.benchmark-competition":
             continue
-        bundle = BenchmarkCompetitionBundleDocument.from_bytes(path.read_bytes()).bundle
-        result = dict(bundle.competition_result)
-        result["throughput"] = dict(bundle.throughput)
-        _validate_competition_record(result, "competition")
+        summary = BenchmarkCompetitionBundleSummary.from_record(record)
+        result = summary.competition_result_record()
+        _validate_competition_summary_record(result, "competition")
         records.append(result)
     return tuple(records)
 
@@ -2806,7 +2805,7 @@ def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
                 _extract.mapping(view_record["basis"], _field_path(view_path, "basis"))
 
 
-def _validate_competition_record(record: Mapping[str, object], prefix: str) -> None:
+def _validate_competition_summary_record(record: Mapping[str, object], prefix: str) -> None:
     if record.get("format") != "leibniz.model-competition":
         raise LocalResultImportError(f"{prefix}: unsupported format")
     if record.get("format_version") != 1:
@@ -2817,8 +2816,6 @@ def _validate_competition_record(record: Mapping[str, object], prefix: str) -> N
         (
             "benchmark_id",
             "competition_id",
-            "mechanic",
-            "outcome_space_id",
             "left_model_key",
             "right_model_key",
         ),
@@ -2826,19 +2823,8 @@ def _validate_competition_record(record: Mapping[str, object], prefix: str) -> N
     _as_positive_int(record.get("sample_count"), _field_path(prefix, "sample_count"))
     _as_probability(record.get("left_score"), _field_path(prefix, "left_score"))
     _as_probability(record.get("right_score"), _field_path(prefix, "right_score"))
-    entries = _as_sequence(record.get("entries"), _field_path(prefix, "entries"))
-    for index, entry in enumerate(entries):
-        entry_path = _field_path(prefix, f"entries.{index}")
-        entry_record = _extract.mapping(entry, entry_path)
-        _require_string_fields(
-            entry_record,
-            entry_path,
-            ("id", "observation_id", "accepted_outcome_id", "winner"),
-        )
-        _as_probability(entry_record.get("left_score"), _field_path(entry_path, "left_score"))
-        _as_probability(entry_record.get("right_score"), _field_path(entry_path, "right_score"))
-        if entry_record.get("winner") not in {"left", "right", "tie"}:
-            raise LocalResultImportError(f"{_field_path(entry_path, 'winner')} is invalid")
+    if "throughput" in record:
+        _extract.mapping(record["throughput"], _field_path(prefix, "throughput"))
 
 
 def _validate_run_result(record: Mapping[str, object], prefix: str) -> None:
