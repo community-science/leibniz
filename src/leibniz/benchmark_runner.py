@@ -1850,9 +1850,17 @@ def evaluate_model_checkpoint_artifact(
             seconds=time.perf_counter() - evaluation_started,
             samples=len(rung.batch.samples),
         )
+        batch_max_inference_compute = _batch_max_inference_compute(
+            architecture=architecture,
+            batch=rung.batch,
+        )
+        if batch_max_inference_compute is None:
+            raise BenchmarkRunnerError(
+                "checkpoint evaluation could not measure max_inference_compute"
+            )
         max_inference_compute = _max_optional_int(
             max_inference_compute,
-            _batch_max_inference_compute(architecture=architecture, batch=rung.batch),
+            batch_max_inference_compute,
         )
         results.append((rung, predictions))
         if _mean_prediction_accepted_mass(
@@ -1866,8 +1874,11 @@ def evaluate_model_checkpoint_artifact(
     throughput = evaluation_counter.to_record(kind="checkpoint-evaluation-throughput")
     throughput["tensor_runtime"] = "pytorch"
     throughput["tensor_device"] = predictor.runtime.device_kind
-    if max_inference_compute is not None:
-        throughput["max_inference_compute"] = max_inference_compute
+    if max_inference_compute is None:
+        raise BenchmarkRunnerError(
+            "checkpoint evaluation could not measure max_inference_compute"
+        )
+    throughput["max_inference_compute"] = max_inference_compute
     return tuple(results), throughput
 
 
@@ -1931,10 +1942,16 @@ def generate_model_checkpoint_competition_record(
         architecture=right_architecture,
         batch=rung.batch,
     )
-    if left_max_inference_compute is not None:
-        throughput["left_max_inference_compute"] = left_max_inference_compute
-    if right_max_inference_compute is not None:
-        throughput["right_max_inference_compute"] = right_max_inference_compute
+    if left_max_inference_compute is None:
+        raise BenchmarkRunnerError(
+            "checkpoint competition could not measure left_max_inference_compute"
+        )
+    if right_max_inference_compute is None:
+        raise BenchmarkRunnerError(
+            "checkpoint competition could not measure right_max_inference_compute"
+        )
+    throughput["left_max_inference_compute"] = left_max_inference_compute
+    throughput["right_max_inference_compute"] = right_max_inference_compute
     return (
         _checkpoint_competition_record(
             batch=rung.batch,
