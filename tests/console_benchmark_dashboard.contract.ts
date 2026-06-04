@@ -426,11 +426,12 @@ assertEqual(benchmarkScoreAxis('relative', benchmarkScoreAxes(result)), 'relativ
 assertEqual(plotModel.frontierPoints.length, 1, 'plot frontier count');
 assertEqual(relativePlotModel.points[0]?.score, 1200, 'relative plot score');
 assertEqual(plotModel.staircase.length, 1, 'plot staircase point count');
-assertEqual(plotModel.xTicks.includes(16), true, 'plot log ticks');
+assertEqual(plotModel.xTicks.includes(10), true, 'plot log ticks');
 assertEqual(plotModel.xDomain[0], 0, 'plot default x minimum');
 assertEqual(plotModel.xDomain[1], 20, 'plot default x maximum');
 assertEqual(plotModel.xMajorTicks.includes(1), true, 'plot major x ticks');
-assertEqual(plotModel.xMinorTicks.includes(2), true, 'plot minor x ticks');
+assertEqual(plotModel.xMajorTicks.includes(10), true, 'model size uses base-10 ticks');
+assertEqual(plotModel.xMajorTicks.includes(16), false, 'model size omits base-2 ticks');
 const trainingComputePlotModel = benchmarkPlotModel(result, 'training_compute');
 assertEqual(trainingComputePlotModel.xMajorTicks.includes(10), true, 'training compute uses base-10 ticks');
 assertEqual(trainingComputePlotModel.xMajorTicks.includes(16), false, 'training compute omits base-2 ticks');
@@ -502,7 +503,7 @@ const expandedPlotModel = benchmarkPlotModel(
         ...result.leaderboard[1]!,
         cost_summary: {
           ...result.leaderboard[1]!.cost_summary,
-          storage_bytes: 2 ** 22,
+          storage_bytes: 10 ** 22,
         },
         model_key: 'model-c',
       },
@@ -513,7 +514,7 @@ const expandedPlotModel = benchmarkPlotModel(
         ...result.plot_runs[1]!,
         cost_summary: {
           ...result.plot_runs[1]!.cost_summary,
-          storage_bytes: 2 ** 22,
+          storage_bytes: 10 ** 22,
         },
         model_key: 'model-c',
         run_id: 'run-c',
@@ -523,7 +524,7 @@ const expandedPlotModel = benchmarkPlotModel(
   },
   'storage_bytes',
 );
-assertEqual(expandedPlotModel.xDomain[1], 22, 'plot x maximum expands by log2 step');
+assertEqual(expandedPlotModel.xDomain[1], 22, 'plot x maximum expands by log10 step');
 
 const parsedResultViews = parseResultViewRecords([
   {

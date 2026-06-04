@@ -213,7 +213,7 @@ export function benchmarkPlotModel(
     .map((model) => plotPoint(model, costAxis, scoreAxis, true))
     .filter((point): point is BenchmarkPlotModelPoint => point !== null)
     .sort((left, right) => left.cost - right.cost || right.score - left.score);
-  const xLogBase = costAxisLogBase(costAxis);
+  const xLogBase = costAxisLogBase();
   const costLogs = points.map((point) => point.logCost);
   const scores = [...points, ...frontierPoints].map((point) => point.score);
   const xDomain = logCostDomain(costLogs);
@@ -386,7 +386,7 @@ function plotPoint(
     id: model.model_key,
     label: shortDigest(model.architecture_digest),
     cost,
-    logCost: logCost(cost, costAxis),
+    logCost: logCost(cost),
     score,
     frontier,
     resultStatus: 'accepted',
@@ -415,7 +415,7 @@ function plotRunPoint(
     id: runSelectionId(run),
     label: shortDigest(run.architecture_digest),
     cost,
-    logCost: logCost(cost, costAxis),
+    logCost: logCost(cost),
     score,
     frontier: run.result_status === 'accepted' && model !== undefined && frontierKeys.has(model.model_key),
     resultStatus: run.result_status,
@@ -460,12 +460,12 @@ function logCostDomain(values: number[]): [number, number] {
   return [min, max];
 }
 
-function costAxisLogBase(costAxis: string): number {
-  return costAxis === 'storage_bytes' ? 2 : 10;
+function costAxisLogBase(): number {
+  return 10;
 }
 
-function logCost(cost: number, costAxis: string): number {
-  return Math.log(cost) / Math.log(costAxisLogBase(costAxis));
+function logCost(cost: number): number {
+  return Math.log(cost) / Math.log(costAxisLogBase());
 }
 
 function scoreDomain(values: number[]): [number, number] {
