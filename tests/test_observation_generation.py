@@ -21,9 +21,6 @@ from leibniz.observation_generation import (
     ObservationGenerationError,
     StateSpaceMeasureRequest,
     StateSpaceMeasureValue,
-    field_to_png_bytes,
-    field_to_png_data_url,
-    sample_variation_transform_coordinates,
 )
 from leibniz.timing import TimingCollector
 
@@ -465,26 +462,22 @@ def test_variation_transform_sampling_is_deterministic_and_declaration_driven() 
     generator = load_digits_generator(_digits_benchmark_root)
     transform = generator.formation.variation_transform
 
-    left = sample_variation_transform_coordinates(
-        transform=transform,
+    left = generator.sample_variation_transform_coordinates(
         seed=707,
         sample_index=2,
         component_index=1,
     )
-    right = sample_variation_transform_coordinates(
-        transform=transform,
+    right = generator.sample_variation_transform_coordinates(
         seed=707,
         sample_index=2,
         component_index=1,
     )
-    other = sample_variation_transform_coordinates(
-        transform=transform,
+    other = generator.sample_variation_transform_coordinates(
         seed=707,
         sample_index=3,
         component_index=1,
     )
-    other_component = sample_variation_transform_coordinates(
-        transform=transform,
+    other_component = generator.sample_variation_transform_coordinates(
         seed=707,
         sample_index=2,
         component_index=2,
@@ -496,20 +489,15 @@ def test_variation_transform_sampling_is_deterministic_and_declaration_driven() 
     assert _within_transform_bounds(left, bounds=transform.to_record())
 
 
-def test_field_png_encoding_is_deterministic() -> None:
+def test_digits_console_preview_png_encoding_is_deterministic() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
-    field = _observation_payload(
-        generator,
-        sample_count=1,
-        seed=404,
-    ).samples[0].require_field()
 
-    left = field_to_png_bytes(field)
-    right = field_to_png_bytes(field)
-    data_url = field_to_png_data_url(field)
+    left = generator.console_preview_batch(atom_count=10)
+    right = generator.console_preview_batch(atom_count=10)
+    sample = cast(dict[str, object], cast(list[object], left["samples"])[0])
+    data_url = cast(str, sample["image_data_url"])
 
     assert left == right
-    assert left.startswith(b"\x89PNG\r\n\x1a\n")
     assert data_url.startswith("data:image/png;base64,")
 
 

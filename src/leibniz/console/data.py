@@ -5,12 +5,11 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
-import random
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_implementations import (
@@ -41,15 +40,9 @@ from leibniz.local_results import (
     load_console_result_view,
     materialize_benchmark_result_views,
 )
-from leibniz.materialization import AxisAssignment
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_operators import model_operator_vocabulary
-from leibniz.observation_generation import (
-    GeneratedSampleSet,
-    StateSpaceMeasureRequest,
-    field_to_png_data_url,
-    load_generator,
-)
+from leibniz.observation_generation import load_generator
 
 __all__ = [
     "ConsoleData",
@@ -72,23 +65,6 @@ _generated_batch_cache_path = (
     / ("generatedSampleSets" + _document_suffix)
 )
 _generated_batch_cache: dict[tuple[str, str, str], Mapping[str, object]] = {}
-
-
-class _BalancedPreviewGenerator(BenchmarkGenerator, Protocol):
-    def __call__(
-        self,
-        *,
-        seed: int,
-        shape: int | Sequence[int] | None = None,
-        include_fields: bool = False,
-        state_space_request: StateSpaceMeasureRequest | None = None,
-        component_indices: Iterable[int] | None = None,
-        memory_limit_bytes: int | None = None,
-        resolution_assignment: AxisAssignment | None = None,
-        variation_extent: float = 1.0,
-        timing: Any | None = None,
-        timing_prefix: str = "",
-    ) -> GeneratedSampleSet: ...
 
 
 class ConsoleDataValidationError(ValueError):
@@ -480,7 +456,6 @@ class ConsoleDataBuilder:
         atom_count: int,
         source_fingerprint: str,
     ) -> Mapping[str, object]:
-        preview_generator = cast(_BalancedPreviewGenerator, generator)
         cache_key = (
             str(generator.manifest.id),
             "balanced-component-samples",
@@ -495,80 +470,15 @@ class ConsoleDataBuilder:
         if cached is not None:
             _generated_batch_cache[cache_key] = cached
             return cached
-        samples: list[Mapping[str, object]] = []
-        sample_count = 40
-        component_indices = _balanced_component_indices(
-            sample_count=sample_count,
-            atom_count=atom_count,
-            seed=f"{generator.manifest.id}:balanced-console-samples",
-        )
-        used_field_shapes: set[tuple[int, ...]] = set()
-        for sample_index, component_index in enumerate(component_indices):
-            seed = 4100 + sample_index
-            attempt_count = 0
-            while True:
-                attempt_count += 1
-                if attempt_count > 512:
-                    raise ConsoleDataValidationError(
-                        "could not generate unique console sample canvas shapes"
-                    )
-                sample_set = preview_generator(
-                    shape=(),
-                    seed=seed,
-                    include_fields=True,
-                    component_indices=(component_index,),
-                )
-                if not sample_set.includes_fields:
-                    raise ConsoleDataValidationError(
-                        "generator did not include generated fields"
-                    )
-                batch = sample_set
-                sample = batch.samples[0]
-                field_shape = tuple(sample.require_field().shape)
-                if field_shape not in used_field_shapes:
-                    used_field_shapes.add(field_shape)
-                    break
-                seed += 1000
-            materialization_plan = sample.materialization_plan
-            if materialization_plan is None:
-                raise ConsoleDataValidationError(
-                    "generated preview sample did not include a materialization plan"
-                )
-            if sample.component_index is None:
-                raise ConsoleDataValidationError(
-                    "generated preview sample did not include a component index"
-                )
-            samples.append(
-                {
-                    "index": len(samples),
-                    "outcome_id": sample.outcome_id,
-                    "component_index": sample.component_index,
-                    "complexity": sample.complexity,
-                    "state_space_measure": (
-                        None
-                        if sample.state_space_measure is None
-                        else sample.state_space_measure.to_record()
-                    ),
-                    "field_shape": list(sample.require_field().shape),
-                    "image_data_url": field_to_png_data_url(sample.require_field()),
-                    "materialization_plan": materialization_plan.to_record(),
-                    "latent_coordinates": [
-                        dict(coordinate) for coordinate in sample.latent_coordinates
-                    ],
-                }
+        preview_batch = getattr(generator, "console_preview_batch", None)
+        if not callable(preview_batch):
+            raise ConsoleDataValidationError(
+                "benchmark generator does not expose a console preview batch"
             )
-        samples.sort(key=lambda sample: _sample_display_key(sample, len(samples)))
-        record = {
-            "mode": "balanced",
-            "label": "Balanced samples",
-            "seed": 401,
-            "sample_count": len(samples),
-            "presentation": {
-                "sample_card_density": "standard",
-                "aggregate_mode": False,
-            },
-            "samples": samples,
-        }
+        try:
+            record = cast(Mapping[str, object], preview_batch(atom_count=atom_count))
+        except ValueError as error:
+            raise ConsoleDataValidationError(str(error)) from error
         _generated_batch_cache[cache_key] = record
         persistent_cache[persistent_key] = record
         _store_generated_batch_cache(persistent_cache)
@@ -662,13 +572,6 @@ class ConsoleDataBuilder:
         return resolved.as_posix()
 
 
-def _sample_display_key(sample: Mapping[str, object], sample_count: int) -> int:
-    index = sample["index"]
-    if not isinstance(index, int):
-        raise ConsoleDataValidationError("generated sample index must be an integer")
-    return (index * 17) % (sample_count + 1)
-
-
 def _generated_batch_cache_key(cache_key: tuple[str, str, str]) -> str:
     return "\0".join(cache_key)
 
@@ -724,26 +627,6 @@ def _outcome_atom_name(outcome_ids: tuple[str, ...]) -> str:
     if len(prefixes) == 1:
         return prefixes.pop()
     return "outcome"
-
-
-def _balanced_component_indices(
-    *,
-    sample_count: int,
-    atom_count: int,
-    seed: str,
-) -> tuple[int, ...]:
-    if sample_count % atom_count != 0:
-        raise ConsoleDataValidationError(
-            "balanced console samples require total token count to divide atom count"
-        )
-    generator = random.Random(seed)
-    tokens = [
-        digit
-        for digit in range(atom_count)
-        for _occurrence in range(sample_count // atom_count)
-    ]
-    generator.shuffle(tokens)
-    return tuple(tokens)
 
 
 def _repository_relative_path(path: Path, *, repository_root: Path) -> str:

@@ -54,7 +54,6 @@ from leibniz.observation_generation import (
 from leibniz.outcomes import OutcomeSpace
 from leibniz.records import RecordExtractor
 from leibniz.tensor_runtime import (
-    FormationTensorCache,
     OperationFallbackSequential,
     TensorRuntime,
     TensorRuntimeDevice,
@@ -139,6 +138,14 @@ class _FieldBenchmarkGenerator(BenchmarkGenerator, Protocol):
         height: int,
         variation_extent: float = 1.0,
     ) -> float: ...
+
+    def tensor_batch_tensors(
+        self,
+        *,
+        runtime: TensorRuntime,
+        batch: GeneratedSampleSet,
+        outcome_ids: tuple[str, ...],
+    ) -> tuple[Any, Any]: ...
 
     def __call__(
         self,
@@ -239,6 +246,7 @@ def _require_field_generator(generator: BenchmarkGenerator) -> _FieldBenchmarkGe
             "formation",
             "minimum_discriminatable_resolution_assignment",
             "distinguishable_state_complexity",
+            "tensor_batch_tensors",
         )
         if not hasattr(generator, name)
     )
@@ -1660,7 +1668,6 @@ def _train_and_predict_on_device(
         operations=executable.operation_modules(),
     )
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    formation_cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
     loss_function = build_cross_entropy_loss(runtime)
     optimizer = _make_optimizer(
         runtime=runtime,
@@ -1706,7 +1713,11 @@ def _train_and_predict_on_device(
                     "generator returned no samples for selected state-space measure"
                 )
         with phase_timings.span(tensor_phase, samples=batch_sample_count):
-            tensors = formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
+            tensors = generator.tensor_batch_tensors(
+                runtime=runtime,
+                batch=generated,
+                outcome_ids=outcome_ids,
+            )
         return tensors
 
     training_rungs: list[_CurriculumRung] = [

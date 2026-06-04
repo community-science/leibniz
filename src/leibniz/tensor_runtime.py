@@ -3,21 +3,13 @@
 from __future__ import annotations
 
 import importlib
-import math
 import os
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from leibniz.architectures import ArchitectureManifest
-from leibniz.observation_formation import (
-    AffineMatrix2D,
-    ObservationFormationDeclaration,
-    affine_translation,
-    linear_affine_matrix,
-)
-from leibniz.observation_generation import GeneratedSample, GeneratedSampleSet
 from leibniz.tensor_shapes import TensorShape
 
 __all__ = [
@@ -30,7 +22,6 @@ __all__ = [
     "build_cross_entropy_loss",
     "build_optimizer",
     "build_plateau_lr_schedule",
-    "FormationTensorCache",
     "make_float_tensor",
     "make_long_tensor",
     "no_grad_context",
@@ -243,145 +234,6 @@ def tensor_runtime_available_memory_bytes(runtime: TensorRuntime) -> int:
             field="mps available memory",
         )
     return _host_memory_bytes()
-
-
-@dataclass(slots=True)
-class FormationTensorCache:
-    """Cache declaration-backed unvaried component fields as runtime tensors."""
-
-    runtime: TensorRuntime
-    formation: ObservationFormationDeclaration
-    _component_tensors: dict[tuple[int, int, int], Any] = field(
-        default_factory=lambda: cast(dict[tuple[int, int, int], Any], {})
-    )
-
-    def batch_tensors(
-        self,
-        *,
-        batch: GeneratedSampleSet,
-        outcome_ids: tuple[str, ...],
-    ) -> tuple[Any, Any]:
-        """Return field and label tensors for a generated formation batch."""
-
-        if not outcome_ids:
-            raise TensorRuntimeError("outcome_ids must not be empty")
-        fields = self._varied_batch_tensor(batch=batch)
-        labels = self.runtime.torch.tensor(
-            [outcome_ids.index(sample.outcome_id) for sample in batch.samples],
-            dtype=self.runtime.torch.long,
-            device=self.runtime.device,
-        )
-        return fields, labels
-
-    def _varied_batch_tensor(self, *, batch: GeneratedSampleSet) -> Any:
-        sample_count = len(batch.samples)
-        if sample_count < 1:
-            raise TensorRuntimeError("batch samples must not be empty")
-        width, height = _sample_field_size(batch.samples[0])
-        source_tensors: list[Any] = []
-        affine_rows: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
-        for sample in batch.samples:
-            sample_width, sample_height = _sample_field_size(sample)
-            if sample_width != width or sample_height != height:
-                raise TensorRuntimeError("batch sample canvas shapes must match")
-            if len(sample.variation_coordinates) != 1:
-                raise TensorRuntimeError("variation_coordinates must contain one coordinate")
-            source_tensors.append(
-                self.component_tensor(
-                    width=width,
-                    height=height,
-                    component_index=_sample_component_index(sample),
-                )
-            )
-            affine_rows.append(
-                _generated_affine_grid_row(
-                    sample.variation_coordinates[0],
-                    width=width,
-                    height=height,
-                )
-            )
-        torch = self.runtime.torch
-        sources = torch.stack(source_tensors)
-        theta = torch.tensor(
-            affine_rows,
-            dtype=torch.float32,
-            device=self.runtime.device,
-        )
-        grid = torch.nn.functional.affine_grid(
-            theta,
-            sources.shape,
-            align_corners=False,
-        )
-        transformed = torch.nn.functional.grid_sample(
-            sources,
-            grid,
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=False,
-        )
-        channels, height, width = transformed.shape[1:]
-        return transformed.reshape((sample_count, 1, channels, height, width)).amax(dim=1)
-
-    def component_tensor(
-        self,
-        *,
-        width: int,
-        height: int,
-        component_index: int,
-    ) -> Any:
-        """Return a cached tensor for one unvaried component."""
-
-        _require_positive_integer(width, "width")
-        _require_positive_integer(height, "height")
-        if (
-            type(component_index) is not int
-            or component_index < 0
-            or component_index >= len(self.formation.components)
-        ):
-            raise TensorRuntimeError("component_index is outside component vocabulary")
-        key = (width, height, component_index)
-        cached = self._component_tensors.get(key)
-        if cached is not None:
-            return cached
-        tensor = self._build_component_tensor(
-            width=width,
-            height=height,
-            component_index=component_index,
-        )
-        self._component_tensors[key] = tensor
-        return tensor
-
-    def _build_component_tensor(
-        self,
-        *,
-        width: int,
-        height: int,
-        component_index: int,
-    ) -> Any:
-        field = self.formation.component_field(
-            width=width,
-            height=height,
-            component_index=component_index,
-        )
-        tensor = self.runtime.torch.tensor(
-            field.values,
-            dtype=self.runtime.torch.float32,
-            device=self.runtime.device,
-        )
-        return tensor.reshape(field.shape)
-
-
-def _sample_field_size(sample: GeneratedSample) -> tuple[int, int]:
-    if sample.width is None or sample.height is None:
-        raise TensorRuntimeError("field sample is missing canvas dimensions")
-    return sample.width, sample.height
-
-
-def _sample_component_index(sample: GeneratedSample) -> int:
-    if sample.component_index is None:
-        raise TensorRuntimeError("field sample is missing component index")
-    return sample.component_index
-
 
 def validate_tensor_runtime_device(value: str) -> TensorRuntimeDevice:
     """Validate a requested tensor runtime device name."""
@@ -801,11 +653,6 @@ def _torch() -> Any:
         raise TensorRuntimeError("PyTorch is required to run benchmark training") from error
 
 
-def _require_positive_integer(value: int, name: str) -> None:
-    if type(value) is not int or value < 1:
-        raise TensorRuntimeError(f"{name} must be a positive integer")
-
-
 def _positive_memory_bytes(value: object, *, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise TensorRuntimeError(f"{field} must be numeric")
@@ -853,82 +700,3 @@ def _local_window_output_size(axis: int, *, size: int, stride: int, padding: int
     if result < 1:
         raise TensorRuntimeError("local affine output axis must be positive")
     return result
-
-
-def _generated_affine_grid_row(
-    record: Mapping[str, object],
-    *,
-    width: int,
-    height: int,
-) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    spatial = cast(Mapping[str, object], record["spatial_affine"])
-    return _affine_grid_row_from_values(
-        matrix=_trusted_matrix(spatial["matrix"]),
-        width=width,
-        height=height,
-    )
-
-
-def _affine_grid_row_from_values(
-    *,
-    matrix: AffineMatrix2D,
-    width: int,
-    height: int,
-) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    linear_matrix = linear_affine_matrix(matrix)
-    inverse = _inverse_affine_matrix_from_values(matrix=linear_matrix)
-    center = (0.5, 0.5)
-    center_x = 2.0 * center[0] - 1.0
-    center_y = 2.0 * center[1] - 1.0
-    field_translation = affine_translation(matrix)
-    translation_x = 2.0 * field_translation[0]
-    translation_y = 2.0 * field_translation[1]
-    return (
-        (
-            inverse[0][0],
-            inverse[0][1],
-            center_x
-            - inverse[0][0] * (center_x + translation_x)
-            - inverse[0][1] * (center_y + translation_y),
-        ),
-        (
-            inverse[1][0],
-            inverse[1][1],
-            center_y
-            - inverse[1][0] * (center_x + translation_x)
-            - inverse[1][1] * (center_y + translation_y),
-        ),
-    )
-
-
-def _inverse_affine_matrix_from_values(
-    *,
-    matrix: tuple[tuple[float, float], tuple[float, float]],
-) -> tuple[tuple[float, float], tuple[float, float]]:
-    (a, b), (c, d) = matrix
-    determinant = a * d - b * c
-    if not math.isfinite(determinant) or determinant == 0.0:
-        raise TensorRuntimeError("variation affine transform is singular")
-    return ((d / determinant, -b / determinant), (-c / determinant, a / determinant))
-
-
-def _trusted_matrix(value: object) -> AffineMatrix2D:
-    sequence = cast(Sequence[object], value)
-    return (
-        _trusted_triple(sequence[0]),
-        _trusted_triple(sequence[1]),
-        _trusted_triple(sequence[2]),
-    )
-
-
-def _trusted_triple(value: object) -> tuple[float, float, float]:
-    sequence = cast(Sequence[object], value)
-    return (
-        _trusted_float(sequence[0]),
-        _trusted_float(sequence[1]),
-        _trusted_float(sequence[2]),
-    )
-
-
-def _trusted_float(value: object) -> float:
-    return float(cast(int | float, value))
