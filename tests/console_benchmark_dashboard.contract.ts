@@ -431,11 +431,14 @@ const tentativeScalePlotModel = benchmarkPlotModel(
     ...result,
     leaderboard: [
       result.leaderboard[0]!,
+    ],
+    model_candidates: [
+      result.model_candidates[0]!,
       {
-        ...result.leaderboard[1]!,
+        ...result.model_candidates[1]!,
         score: 6,
         score_views: {
-          ...result.leaderboard[1]!.score_views,
+          ...result.model_candidates[1]!.score_views,
           absolute: { key: 'absolute', label: 'Absolute Score', score: 6 },
         },
       },
@@ -455,6 +458,11 @@ assertEqual(
   tentativeScalePlotModel.points.find((point) => point.resultStatus === 'tentative')?.score,
   6,
   'tentative plot points use score-axis scale',
+);
+assertEqual(
+  tentativeScalePlotModel.points.find((point) => point.resultStatus === 'tentative')?.frontier,
+  false,
+  'tentative plot points are not frontier points',
 );
 assertEqual(plotModel.xTicks.includes(10), true, 'plot log ticks');
 assertEqual(plotModel.xDomain[0], 0, 'plot default x minimum');

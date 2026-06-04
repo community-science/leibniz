@@ -206,9 +206,10 @@ export function benchmarkPlotModel(
 ): BenchmarkPlotModel {
   const frontierModels = frontierModelResults(result.leaderboard, costAxis, scoreAxis);
   const frontierKeys = new Set(frontierModels.map((model) => model.model_key));
-  const models = modelLookup(result.leaderboard);
+  const leaderboardModels = modelLookup(result.leaderboard);
+  const candidateModels = modelLookup(result.model_candidates);
   const points = result.plot_runs
-    .map((run) => plotRunPoint(run, models, costAxis, scoreAxis, frontierKeys))
+    .map((run) => plotRunPoint(run, leaderboardModels, candidateModels, costAxis, scoreAxis, frontierKeys))
     .filter((point): point is BenchmarkPlotModelPoint => point !== null)
     .sort((left, right) => left.cost - right.cost || right.score - left.score);
   const frontierPoints = frontierModels
@@ -398,14 +399,21 @@ function plotPoint(
 
 function plotRunPoint(
   run: RunResultRecord,
-  models: ReturnType<typeof modelLookup>,
+  leaderboardModels: ReturnType<typeof modelLookup>,
+  candidateModels: ReturnType<typeof modelLookup>,
   costAxis: string,
   scoreAxis: string,
   frontierKeys: Set<string>,
 ): BenchmarkPlotModelPoint | null {
-  const model =
-    models.byModelKey.get(run.model_key) ??
-    models.byArchitecture.get(normalizedDigest(run.architecture_digest));
+  const leaderboardModel =
+    leaderboardModels.byModelKey.get(run.model_key) ??
+    leaderboardModels.byArchitecture.get(normalizedDigest(run.architecture_digest));
+  const candidateModel =
+    candidateModels.byModelKey.get(run.model_key) ??
+    candidateModels.byArchitecture.get(normalizedDigest(run.architecture_digest));
+  const model = run.result_status === 'tentative'
+    ? candidateModel ?? leaderboardModel
+    : leaderboardModel;
   const cost = costValue(run.cost_summary, costAxis);
   const score = model === undefined
     ? run.result_status === 'tentative' && scoreAxis === 'absolute'
