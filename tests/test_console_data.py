@@ -346,6 +346,71 @@ def test_console_data_payload_is_a_canonical_object_document() -> None:
     assert record["format"] == "leibniz.console-data"
 
 
+def test_console_benchmark_tasks_load_python_implementation_without_exported_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    benchmark_parent = tmp_path / "src" / "leibniz" / "benchmarks"
+    benchmark_root = benchmark_parent / "digits"
+    benchmark_root.mkdir(parents=True)
+    source_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
+    (benchmark_root / "benchmark.py").write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "from leibniz.benchmark_implementations import load_benchmark_implementation",
+                f"_source = Path({str(source_root)!r})",
+                "def benchmark(root: Path):",
+                "    return load_benchmark_implementation(_source)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    architecture_root = tmp_path / "architectures"
+    architecture_root.mkdir()
+    architecture_source = (
+        _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool.json"
+    )
+    (architecture_root / "digits_pool.json").write_bytes(architecture_source.read_bytes())
+
+    def fake_batch(
+        self: ConsoleDataBuilder,
+        *,
+        generator: object,
+        atom_count: int,
+        source_fingerprint: str,
+    ) -> Mapping[str, object]:
+        assert atom_count == 10
+        assert source_fingerprint
+        return {
+            "mode": "balanced",
+            "label": "Fake samples",
+            "component_count": 1,
+            "seed": 401,
+            "sample_count": 0,
+            "presentation": {"sample_card_density": "standard", "aggregate_mode": False},
+            "samples": [],
+        }
+
+    monkeypatch.setattr(ConsoleDataBuilder, "_balanced_observation_batch", fake_batch)
+
+    data = ConsoleDataBuilder(tmp_path).discover(
+        (PurePosixPath("architectures"), PurePosixPath("src/leibniz/benchmarks"))
+    )
+    record = data.to_record()
+
+    artifact_index = cast(dict[str, object], record["artifact_index"])
+    artifacts = cast(list[dict[str, object]], artifact_index["artifacts"])
+    assert [artifact["source_path"] for artifact in artifacts] == [
+        "architectures/digits_pool.json"
+    ]
+    benchmark_tasks = cast(list[dict[str, object]], record["benchmark_tasks"])
+    assert len(benchmark_tasks) == 1
+    assert benchmark_tasks[0]["benchmark_id"] == "benchmarks.digits@0.1.0"
+    assert benchmark_tasks[0]["source_path"] == "src/leibniz/benchmarks/digits"
+
+
 def _png_dimensions(data_url: str) -> tuple[int, int]:
     prefix = "data:image/png;base64,"
     if not data_url.startswith(prefix):
