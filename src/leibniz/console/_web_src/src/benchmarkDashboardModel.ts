@@ -51,9 +51,11 @@ export type BenchmarkCostAxisGroup = {
 };
 
 const fallbackLogCostDomain: [number, number] = [0, 10];
-const fallbackScoreDomain: [number, number] = [0, 1.05];
+const defaultAbsoluteScoreMaximum = 1;
+const defaultRelativeScoreMaximum = 2000;
 const denseLogTickThreshold = 14;
 const targetScoreTickCount = 8;
+const expandedRelativeScoreTickCount = 12;
 const standardScoreAxes: ScoreAxisRecord[] = [
   { key: 'absolute', label: 'Absolute Score' },
   { key: 'relative', label: 'Relative Score' },
@@ -217,7 +219,7 @@ export function benchmarkPlotModel(
   const costLogs = points.map((point) => point.logCost);
   const scores = [...points, ...frontierPoints].map((point) => point.score);
   const xDomain = logCostDomain(costLogs);
-  const yDomain = scoreDomain(scores);
+  const yDomain = scoreDomain(scores, scoreAxis);
   const xTicks = logCostTicks(xDomain, xLogBase);
   return {
     points,
@@ -468,13 +470,24 @@ function logCost(cost: number): number {
   return Math.log(cost) / Math.log(costAxisLogBase());
 }
 
-function scoreDomain(values: number[]): [number, number] {
+function scoreDomain(values: number[], scoreAxis: string): [number, number] {
+  const defaultMaximum = defaultScoreMaximum(scoreAxis);
   const finite = values.filter(Number.isFinite);
   if (finite.length === 0) {
-    return fallbackScoreDomain;
+    return [0, defaultMaximum];
   }
-  const max = Math.max(1, Math.ceil(Math.max(...finite)));
-  return [Math.min(0, Math.floor(Math.min(...finite))), max * 1.05];
+  const min = Math.min(0, Math.floor(Math.min(...finite)));
+  const max = Math.max(...finite);
+  if (max <= defaultMaximum) {
+    return [min, defaultMaximum];
+  }
+  const expandedMaximum = 2 * max;
+  const step = niceScoreTickStep(max / Math.max(1, targetScoreTickCount - 1));
+  return [min, normalizedTick(Math.ceil(expandedMaximum / step) * step)];
+}
+
+function defaultScoreMaximum(scoreAxis: string): number {
+  return scoreAxis === 'relative' ? defaultRelativeScoreMaximum : defaultAbsoluteScoreMaximum;
 }
 
 function scoreTicks([min, max]: [number, number]): number[] {
@@ -482,7 +495,10 @@ function scoreTicks([min, max]: [number, number]): number[] {
   if (!Number.isFinite(span) || span <= 0) {
     return [min];
   }
-  const step = niceScoreTickStep(span / Math.max(1, targetScoreTickCount - 1));
+  const targetTickCount = max > defaultRelativeScoreMaximum
+    ? expandedRelativeScoreTickCount
+    : targetScoreTickCount;
+  const step = niceScoreTickStep(span / Math.max(1, targetTickCount - 1));
   const first = Math.ceil(min / step) * step;
   const last = Math.floor(max / step) * step;
   const ticks: number[] = [];

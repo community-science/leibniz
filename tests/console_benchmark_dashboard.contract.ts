@@ -439,9 +439,11 @@ const inferenceComputePlotModel = benchmarkPlotModel(result, 'inference_compute'
 assertEqual(inferenceComputePlotModel.xMajorTicks.includes(10), true, 'inference compute uses base-10 ticks');
 assertEqual(inferenceComputePlotModel.xMajorTicks.includes(16), false, 'inference compute omits base-2 ticks');
 assertEqual(plotModel.yDomain[0], 0, 'plot y starts at zero');
-assertEqual(plotModel.yDomain[1], 1.05, 'plot y ceiling follows score scale');
+assertEqual(plotModel.yDomain[1], 1, 'absolute plot y ceiling defaults to one');
+assertEqual(relativePlotModel.yDomain[0], 0, 'relative plot y starts at zero');
+assertEqual(relativePlotModel.yDomain[1], 2000, 'relative plot y ceiling defaults to two thousand');
 assertEqual(plotModel.yTicks.join(','), '0,0.2,0.4,0.6,0.8,1', 'absolute plot y ticks');
-assertEqual(relativePlotModel.yTicks.join(','), '0,200,400,600,800,1000,1200', 'relative plot y ticks');
+assertEqual(relativePlotModel.yTicks.join(','), '0,500,1000,1500,2000', 'relative plot y ticks');
 assertEqual(scoreTickLabel(1200), '1,200', 'relative score tick label');
 assertEqual(scoreTickLabel(0.2), '0.2', 'fractional score tick label');
 const acceptedDominatedRelativeScaleResult: BenchmarkResultRecord = {
@@ -454,8 +456,44 @@ const acceptedDominatedRelativeScaleResult: BenchmarkResultRecord = {
 };
 assertEqual(
   benchmarkPlotModel(acceptedDominatedRelativeScaleResult, 'storage_bytes', 'relative').yDomain[1],
-  1260,
-  'plot y ceiling includes accepted frontier points as well as tentative runs',
+  2000,
+  'relative plot y ceiling uses default when accepted frontier points fit',
+);
+const expandedRelativeScaleResult: BenchmarkResultRecord = {
+  ...result,
+  frontiers: {
+    ...result.frontiers,
+    storage_bytes: [
+      {
+        ...result.frontiers.storage_bytes[0]!,
+        score_views: {
+          ...result.frontiers.storage_bytes[0]!.score_views,
+          relative: { key: 'relative', label: 'Relative Score', score: 2600 },
+        },
+      },
+    ],
+  },
+  leaderboard: [
+    {
+      ...result.leaderboard[0]!,
+      score_views: {
+        ...result.leaderboard[0]!.score_views,
+        relative: { key: 'relative', label: 'Relative Score', score: 2600 },
+      },
+    },
+    result.leaderboard[1]!,
+  ],
+};
+const expandedRelativePlotModel = benchmarkPlotModel(expandedRelativeScaleResult, 'storage_bytes', 'relative');
+assertEqual(
+  expandedRelativePlotModel.yDomain[1],
+  5500,
+  'relative plot y ceiling expands to twice the maximum rounded to a grid tick',
+);
+assertEqual(
+  expandedRelativePlotModel.yTicks.join(','),
+  '0,500,1000,1500,2000,2500,3000,3500,4000,4500,5000,5500',
+  'expanded relative plot y ticks',
 );
 assertEqual(
   sortedModelResults(result.leaderboard, 'storage_bytes', 'absolute', {
