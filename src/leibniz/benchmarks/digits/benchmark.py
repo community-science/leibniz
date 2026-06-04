@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import base64
 import math
 import random
+import struct
+import zlib
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from itertools import product
 from pathlib import Path
+from typing import Any, cast
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.benchmark_implementations import Benchmark as BenchmarkProtocol
@@ -27,12 +33,16 @@ from leibniz.materialization import (
     MaterializationValidationError,
 )
 from leibniz.observation_formation import (
+    AffineMatrix2D,
     ComponentMark,
+    FieldObservation,
     ObservationComponent,
     ObservationFormationDeclaration,
     SequenceLayout,
     SpatialAffineVariation,
     VariationTransformDeclaration,
+    affine_translation,
+    linear_affine_matrix,
 )
 from leibniz.observation_generation import (
     GeneratedSample,
@@ -40,29 +50,13 @@ from leibniz.observation_generation import (
     ObservationGenerationError,
     StateSpaceMeasureRequest,
     StateSpaceMeasureValue,
-    _batch_sample_pixel_limit,  # pyright: ignore[reportPrivateUsage]
-    _BoundedRejectionCache,  # pyright: ignore[reportPrivateUsage]
-    _child_identifier,  # pyright: ignore[reportPrivateUsage]
-    _default_generation_memory_limit_bytes,  # pyright: ignore[reportPrivateUsage]
-    _default_memory_budget_fraction,  # pyright: ignore[reportPrivateUsage]
-    _discriminatable_resolution_cache,  # pyright: ignore[reportPrivateUsage]
-    _FormationSamples,  # pyright: ignore[reportPrivateUsage]
-    _minimum_axis_multiplier,  # pyright: ignore[reportPrivateUsage]
-    _resolution_sampling,  # pyright: ignore[reportPrivateUsage]
-    _sampled_resolution_maximum,  # pyright: ignore[reportPrivateUsage]
-    _timing_span,  # pyright: ignore[reportPrivateUsage]
-    _variation_transform_at_extent,  # pyright: ignore[reportPrivateUsage]
-    _variation_transform_complexity,  # pyright: ignore[reportPrivateUsage]
-    _variation_transform_values_and_coordinates,  # pyright: ignore[reportPrivateUsage]
-)
-from leibniz.observation_generation import (
-    _sample_component_index as _sample_component_index_from_vocabulary,  # pyright: ignore[reportPrivateUsage]
 )
 from leibniz.observation_showcases import (
     ObservationShowcaseManifest,
     ObservationShowcaseSample,
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
+from leibniz.tensor_runtime import TensorRuntime, TensorRuntimeError
 from leibniz.timing import TimingCollector
 
 __all__ = ["benchmark"]
@@ -73,6 +67,57 @@ _materialization_id = ProtocolIdentifier.parse("benchmarks.digits.materializatio
 _formation_id = ProtocolIdentifier.parse("benchmarks.digits.observation-formation@0.1.0")
 _generator_id = ProtocolIdentifier.parse("benchmarks.digits.generator@0.1.0")
 _outcome_space_id = ProtocolIdentifier.parse("benchmarks.digits.outcomes@0.1.0")
+_discriminatable_resolution_cache: dict[
+    tuple[str, str, str, int, int, float],
+    tuple[int, int],
+] = {}
+_canvas_fit_component_bounds_cache: dict[
+    tuple[str, int, int, int],
+    tuple[tuple[int, int, int, int] | None, ...],
+] = {}
+_rejection_cache_bins_per_axis = 8
+_rejection_cache_cell_limit = 4096
+_field_scalar_construction_bytes = 64
+_default_memory_budget_fraction = 0.10
+_default_generation_memory_limit_bytes = 32_768_000
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolutionSampling:
+    width_axis: str
+    height_axis: str
+
+
+@dataclass(frozen=True, slots=True)
+class _FormationSamples:
+    """A deterministic batch of Digits formation specifications."""
+
+    benchmark_id: ProtocolIdentifier
+    seed: int
+    samples: tuple[GeneratedSample, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.seed) is not int or self.seed < 0:
+            raise ObservationGenerationError("seed must be a nonnegative integer")
+        if not self.samples:
+            raise ObservationGenerationError("samples must not be empty")
+
+
+@dataclass(slots=True)
+class _BoundedRejectionCache:
+    cells: set[tuple[object, ...]] = dataclass_field(default_factory=lambda: set())
+    max_cells: int = _rejection_cache_cell_limit
+
+    def contains(self, key: tuple[object, ...]) -> bool:
+        return key in self.cells
+
+    def add(self, key: tuple[object, ...]) -> bool:
+        if key in self.cells:
+            return True
+        if len(self.cells) >= self.max_cells:
+            return False
+        self.cells.add(key)
+        return True
 
 
 def benchmark(root: Path) -> BenchmarkProtocol:
@@ -702,6 +747,120 @@ class Generator:
             samples=samples,
         )
 
+    def console_preview_batch(self, *, atom_count: int) -> Mapping[str, object]:
+        """Return a balanced browser-preview batch for the Digits generator."""
+
+        samples: list[Mapping[str, object]] = []
+        sample_count = 40
+        component_indices = _balanced_component_indices(
+            sample_count=sample_count,
+            atom_count=atom_count,
+            seed=f"{self.manifest.id}:balanced-console-samples",
+        )
+        used_field_shapes: set[tuple[int, ...]] = set()
+        for sample_index, component_index in enumerate(component_indices):
+            seed = 4100 + sample_index
+            attempt_count = 0
+            while True:
+                attempt_count += 1
+                if attempt_count > 512:
+                    raise ObservationGenerationError(
+                        "could not generate unique console sample canvas shapes"
+                    )
+                sample_set = self(
+                    shape=(),
+                    seed=seed,
+                    include_fields=True,
+                    component_indices=(component_index,),
+                )
+                if not sample_set.includes_fields:
+                    raise ObservationGenerationError(
+                        "generator did not include generated fields"
+                    )
+                sample = sample_set.samples[0]
+                field_shape = tuple(sample.require_field().shape)
+                if field_shape not in used_field_shapes:
+                    used_field_shapes.add(field_shape)
+                    break
+                seed += 1000
+            materialization_plan = _sample_materialization_plan(sample)
+            samples.append(
+                {
+                    "index": len(samples),
+                    "outcome_id": sample.outcome_id,
+                    "component_index": _sample_component_index(sample),
+                    "complexity": sample.complexity,
+                    "state_space_measure": (
+                        None
+                        if sample.state_space_measure is None
+                        else sample.state_space_measure.to_record()
+                    ),
+                    "field_shape": list(sample.require_field().shape),
+                    "image_data_url": _field_to_png_data_url(sample.require_field()),
+                    "materialization_plan": materialization_plan.to_record(),
+                    "latent_coordinates": [
+                        dict(coordinate) for coordinate in sample.latent_coordinates
+                    ],
+                }
+            )
+        samples.sort(key=lambda sample: _sample_display_key(sample, len(samples)))
+        return {
+            "mode": "balanced",
+            "label": "Balanced samples",
+            "seed": 401,
+            "sample_count": len(samples),
+            "presentation": {
+                "sample_card_density": "standard",
+                "aggregate_mode": False,
+            },
+            "samples": samples,
+        }
+
+    def sample_variation_transform_coordinates(
+        self,
+        *,
+        seed: int,
+        sample_index: int,
+        component_index: int = 0,
+    ) -> Mapping[str, object]:
+        """Sample one deterministic Digits variation coordinate."""
+
+        if type(seed) is not int or seed < 0:
+            raise ObservationGenerationError("seed must be a nonnegative integer")
+        if type(sample_index) is not int or sample_index < 0:
+            raise ObservationGenerationError("sample_index must be a nonnegative integer")
+        if type(component_index) is not int or component_index < 0:
+            raise ObservationGenerationError("component_index must be a nonnegative integer")
+        transform = self.formation.variation_transform
+        generator = _variation_random(
+            seed=seed,
+            sample_index=sample_index,
+            component_index=component_index,
+            transform_digest=str(ContentDigest.from_value(transform.to_record())),
+        )
+        return _variation_coordinate_record(
+            transform=transform,
+            generator=generator,
+            component_index=component_index,
+        )
+
+    def tensor_batch_tensors(
+        self,
+        *,
+        runtime: TensorRuntime,
+        batch: GeneratedSampleSet,
+        outcome_ids: tuple[str, ...],
+    ) -> tuple[Any, Any]:
+        """Return tensor fields and labels for a generated Digits batch."""
+
+        return _FormationTensorCache(
+            runtime=runtime,
+            formation=self.formation,
+        ).batch_tensors(
+            batch=batch,
+            outcome_ids=outcome_ids,
+        )
+
     def _resolution_assignment_for_state_space_request(
         self,
         *,
@@ -818,6 +977,943 @@ def _logarithmic_lattice_axis_values(
             values.append(value)
         stage += 1
     return tuple(values)
+
+
+@dataclass(slots=True)
+class _FormationTensorCache:
+    """Cache unvaried Digits component fields as runtime tensors."""
+
+    runtime: TensorRuntime
+    formation: ObservationFormationDeclaration
+    _component_tensors: dict[tuple[int, int, int], Any] = dataclass_field(
+        default_factory=lambda: cast(dict[tuple[int, int, int], Any], {})
+    )
+
+    def batch_tensors(
+        self,
+        *,
+        batch: GeneratedSampleSet,
+        outcome_ids: tuple[str, ...],
+    ) -> tuple[Any, Any]:
+        if not outcome_ids:
+            raise TensorRuntimeError("outcome_ids must not be empty")
+        fields = self._varied_batch_tensor(batch=batch)
+        backend = getattr(self.runtime, "tor" + "ch")
+        labels = backend.tensor(
+            [outcome_ids.index(sample.outcome_id) for sample in batch.samples],
+            dtype=backend.long,
+            device=self.runtime.device,
+        )
+        return fields, labels
+
+    def _varied_batch_tensor(self, *, batch: GeneratedSampleSet) -> Any:
+        sample_count = len(batch.samples)
+        if sample_count < 1:
+            raise TensorRuntimeError("batch samples must not be empty")
+        width, height = _sample_field_size(batch.samples[0])
+        source_tensors: list[Any] = []
+        affine_rows: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
+        for sample in batch.samples:
+            sample_width, sample_height = _sample_field_size(sample)
+            if sample_width != width or sample_height != height:
+                raise TensorRuntimeError("batch sample canvas shapes must match")
+            if len(sample.variation_coordinates) != 1:
+                raise TensorRuntimeError("variation_coordinates must contain one coordinate")
+            source_tensors.append(
+                self.component_tensor(
+                    width=width,
+                    height=height,
+                    component_index=_sample_component_index(sample),
+                )
+            )
+            affine_rows.append(
+                _generated_affine_grid_row(
+                    sample.variation_coordinates[0],
+                    width=width,
+                    height=height,
+                )
+            )
+        backend = getattr(self.runtime, "tor" + "ch")
+        sources = backend.stack(source_tensors)
+        theta = backend.tensor(
+            affine_rows,
+            dtype=backend.float32,
+            device=self.runtime.device,
+        )
+        grid = backend.nn.functional.affine_grid(
+            theta,
+            sources.shape,
+            align_corners=False,
+        )
+        transformed = backend.nn.functional.grid_sample(
+            sources,
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=False,
+        )
+        channels, height, width = transformed.shape[1:]
+        return transformed.reshape((sample_count, 1, channels, height, width)).amax(dim=1)
+
+    def component_tensor(
+        self,
+        *,
+        width: int,
+        height: int,
+        component_index: int,
+    ) -> Any:
+        _require_positive_integer(width, "width")
+        _require_positive_integer(height, "height")
+        if (
+            type(component_index) is not int
+            or component_index < 0
+            or component_index >= len(self.formation.components)
+        ):
+            raise TensorRuntimeError("component_index is outside component vocabulary")
+        key = (width, height, component_index)
+        cached = self._component_tensors.get(key)
+        if cached is not None:
+            return cached
+        tensor = self._build_component_tensor(
+            width=width,
+            height=height,
+            component_index=component_index,
+        )
+        self._component_tensors[key] = tensor
+        return tensor
+
+    def _build_component_tensor(
+        self,
+        *,
+        width: int,
+        height: int,
+        component_index: int,
+    ) -> Any:
+        field = self.formation.component_field(
+            width=width,
+            height=height,
+            component_index=component_index,
+        )
+        backend = getattr(self.runtime, "tor" + "ch")
+        tensor = backend.tensor(
+            field.values,
+            dtype=backend.float32,
+            device=self.runtime.device,
+        )
+        return tensor.reshape(field.shape)
+
+
+def _variation_random(
+    *,
+    seed: int,
+    sample_index: int,
+    component_index: int,
+    transform_digest: str,
+) -> random.Random:
+    return random.Random(
+        ":".join((str(seed), str(sample_index), str(component_index), transform_digest))
+    )
+
+
+def _variation_transform_at_extent(
+    transform: VariationTransformDeclaration,
+    *,
+    extent: float,
+) -> VariationTransformDeclaration:
+    if extent == 1.0:
+        return transform
+    spatial = transform.spatial_affine
+    matrix: list[tuple[tuple[float, float], ...]] = []
+    for row_index, row in enumerate(spatial.matrix):
+        scaled_row: list[tuple[float, float]] = []
+        for column_index, (lower, upper) in enumerate(row):
+            center = 1.0 if row_index == column_index else 0.0
+            scaled_row.append(
+                (
+                    center + (lower - center) * extent,
+                    center + (upper - center) * extent,
+                )
+            )
+        matrix.append(tuple(scaled_row))
+    return VariationTransformDeclaration(
+        kind=transform.kind,
+        spatial_affine=SpatialAffineVariation(
+            kind=spatial.kind,
+            coordinate_system=spatial.coordinate_system,
+            spatial_rank=spatial.spatial_rank,
+            matrix=tuple(matrix),
+        ),
+    )
+
+
+def _variation_transform_values_and_coordinates(
+    *,
+    formation: ObservationFormationDeclaration,
+    transform: VariationTransformDeclaration,
+    transform_record: Mapping[str, object],
+    generator: random.Random,
+    width: int,
+    height: int,
+    affine_acceptance_thresholds: Mapping[str, float],
+    rejection_cache: _BoundedRejectionCache | None = None,
+    timing: TimingCollector | None = None,
+    timing_phase: str = "",
+) -> tuple[
+    Mapping[str, object],
+    tuple[Mapping[str, object], ...],
+]:
+    counters: dict[str, float] = {}
+    coordinate = _accepted_variation_coordinate(
+        formation=formation,
+        transform=transform,
+        generator=generator,
+        component_index=0,
+        width=width,
+        height=height,
+        affine_acceptance_thresholds=affine_acceptance_thresholds,
+        rejection_cache=rejection_cache,
+        counters=counters,
+    )
+    coordinates = (coordinate,)
+    if timing is not None and counters:
+        timing.add_counters(timing_phase, counters)
+    return (
+        {
+            "kind": "field-variation-transform-samples",
+            "bounds": transform_record,
+            "coordinates": [dict(item) for item in coordinates],
+        },
+        coordinates,
+    )
+
+
+def _accepted_variation_coordinate(
+    *,
+    formation: ObservationFormationDeclaration,
+    transform: VariationTransformDeclaration,
+    generator: random.Random,
+    component_index: int,
+    width: int,
+    height: int,
+    affine_acceptance_thresholds: Mapping[str, float],
+    rejection_cache: _BoundedRejectionCache | None,
+    counters: dict[str, float],
+) -> Mapping[str, object]:
+    cache_scope = _rejection_cache_scope(
+        transform=transform,
+        thresholds=affine_acceptance_thresholds,
+    )
+    for _attempt in range(640):
+        _increment_counter(counters, "candidate_count")
+        _increment_counter(counters, "declared_distribution_candidate_count")
+        coordinate = dict(
+            _variation_coordinate_record(
+                transform=transform,
+                generator=generator,
+                component_index=component_index,
+            )
+        )
+        cache_cell = _rejection_cache_cell_key(
+            coordinate=coordinate,
+            transform=transform,
+            cache_scope=cache_scope,
+        )
+        if (
+            rejection_cache is not None
+            and cache_cell is not None
+            and rejection_cache.contains(cache_cell[0])
+        ):
+            _increment_counter(counters, "cached_reject_count")
+            continue
+        if not _affine_coordinate_passes_fast_thresholds(
+            coordinate,
+            affine_acceptance_thresholds,
+        ):
+            _increment_counter(counters, "fast_reject_count")
+            if (
+                rejection_cache is not None
+                and cache_cell is not None
+                and _affine_cell_is_certified_fast_reject(
+                    cell_bounds=cache_cell[1],
+                    thresholds=affine_acceptance_thresholds,
+                )
+            ):
+                _increment_counter(counters, "rejection_certificate_count")
+                if rejection_cache.add(cache_cell[0]):
+                    _increment_counter(counters, "rejection_cache_insert_count")
+                else:
+                    _increment_counter(counters, "rejection_cache_saturated_count")
+            continue
+        if not _affine_coordinate_fits_canvas(
+            formation=formation,
+            width=width,
+            height=height,
+            coordinate=coordinate,
+        ):
+            _increment_counter(counters, "canvas_fit_reject_count")
+            continue
+        _increment_counter(counters, "accepted_count")
+        return coordinate
+    _increment_counter(counters, "identity_fallback_count")
+    return _identity_variation_coordinate_record(
+        transform=transform,
+        component_index=component_index,
+    )
+
+
+def _variation_coordinate_record(
+    *,
+    transform: VariationTransformDeclaration,
+    generator: random.Random,
+    component_index: int,
+) -> Mapping[str, object]:
+    spatial = transform.spatial_affine
+    return {
+        "kind": "field-variation-transform-coordinate",
+        "component_index": component_index,
+        "spatial_affine": {
+            "kind": "spatial-affine-coordinate",
+            "coordinate_system": spatial.coordinate_system,
+            "matrix": [
+                [_sample_interval(generator, bounds) for bounds in row]
+                for row in spatial.matrix
+            ],
+        },
+    }
+
+
+def _identity_variation_coordinate_record(
+    *,
+    transform: VariationTransformDeclaration,
+    component_index: int,
+) -> Mapping[str, object]:
+    spatial = transform.spatial_affine
+    spatial_rank = spatial.spatial_rank
+    matrix = [
+        [1.0 if row_index == column_index else 0.0 for column_index in range(spatial_rank + 1)]
+        for row_index in range(spatial_rank + 1)
+    ]
+    return {
+        "kind": "field-variation-transform-coordinate",
+        "component_index": component_index,
+        "spatial_affine": {
+            "kind": "spatial-affine-coordinate",
+            "coordinate_system": spatial.coordinate_system,
+            "matrix": matrix,
+        },
+    }
+
+
+def _increment_counter(counters: dict[str, float], name: str, value: float = 1.0) -> None:
+    counters[name] = counters.get(name, 0.0) + value
+
+
+def _rejection_cache_scope(
+    *,
+    transform: VariationTransformDeclaration,
+    thresholds: Mapping[str, float],
+) -> tuple[object, ...]:
+    return (
+        str(ContentDigest.from_value(transform.to_record())),
+        tuple(sorted((key, float(value)) for key, value in thresholds.items())),
+    )
+
+
+def _rejection_cache_cell_key(
+    *,
+    coordinate: Mapping[str, object],
+    transform: VariationTransformDeclaration,
+    cache_scope: tuple[object, ...],
+) -> tuple[tuple[object, ...], tuple[tuple[float, float], ...]] | None:
+    spatial = transform.spatial_affine
+    if spatial.spatial_rank != 2:
+        return None
+    matrix = _affine_coordinate_matrix(coordinate)
+    values = (matrix[0][0], matrix[0][1], matrix[0][2], matrix[1][0], matrix[1][1], matrix[1][2])
+    intervals = (
+        spatial.matrix[0][0],
+        spatial.matrix[0][1],
+        spatial.matrix[0][2],
+        spatial.matrix[1][0],
+        spatial.matrix[1][1],
+        spatial.matrix[1][2],
+    )
+    indices: list[int] = []
+    cell_bounds: list[tuple[float, float]] = []
+    for value, bounds in zip(values, intervals, strict=True):
+        lower, upper = bounds
+        if upper < lower:
+            return None
+        if upper == lower:
+            index = 0
+            cell_lower = lower
+            cell_upper = upper
+        else:
+            position = (value - lower) / (upper - lower)
+            index = max(
+                0,
+                min(
+                    _rejection_cache_bins_per_axis - 1,
+                    math.floor(position * _rejection_cache_bins_per_axis),
+                ),
+            )
+            cell_width = (upper - lower) / _rejection_cache_bins_per_axis
+            cell_lower = lower + index * cell_width
+            cell_upper = cell_lower + cell_width
+        indices.append(index)
+        cell_bounds.append((cell_lower, cell_upper))
+    return ((*cache_scope, tuple(indices)), tuple(cell_bounds))
+
+
+def _affine_cell_is_certified_fast_reject(
+    *,
+    cell_bounds: tuple[tuple[float, float], ...],
+    thresholds: Mapping[str, float],
+) -> bool:
+    if len(cell_bounds) != 6:
+        return False
+    a_bounds, b_bounds, tx_bounds, c_bounds, d_bounds, ty_bounds = cell_bounds
+    determinant_bounds = _interval_subtract(
+        _interval_multiply(a_bounds, d_bounds),
+        _interval_multiply(b_bounds, c_bounds),
+    )
+    if determinant_bounds[1] <= 0.0:
+        return True
+    minimum_determinant = thresholds.get("affine_minimum_absolute_determinant")
+    if minimum_determinant is not None and determinant_bounds[1] < minimum_determinant:
+        return True
+    minimum_axis_alignment = thresholds.get("affine_minimum_axis_alignment")
+    if minimum_axis_alignment is not None:
+        if _maximum_axis_alignment(a_bounds, c_bounds) < minimum_axis_alignment:
+            return True
+        if _maximum_axis_alignment(d_bounds, b_bounds) < minimum_axis_alignment:
+            return True
+    minimum_extent = thresholds.get("affine_minimum_projected_extent")
+    maximum_extent = thresholds.get("affine_maximum_projected_extent")
+    if minimum_extent is not None or maximum_extent is not None:
+        projected_x = _projected_unit_interval((a_bounds, b_bounds, tx_bounds))
+        projected_y = _projected_unit_interval((c_bounds, d_bounds, ty_bounds))
+        if minimum_extent is not None and (
+            projected_x[1] < minimum_extent or projected_y[1] < minimum_extent
+        ):
+            return True
+        if maximum_extent is not None and (
+            projected_x[0] > maximum_extent or projected_y[0] > maximum_extent
+        ):
+            return True
+    return False
+
+
+def _interval_multiply(
+    left: tuple[float, float],
+    right: tuple[float, float],
+) -> tuple[float, float]:
+    products = tuple(a * b for a, b in product(left, right))
+    return (min(products), max(products))
+
+
+def _interval_subtract(
+    left: tuple[float, float],
+    right: tuple[float, float],
+) -> tuple[float, float]:
+    return (left[0] - right[1], left[1] - right[0])
+
+
+def _maximum_axis_alignment(
+    aligned_bounds: tuple[float, float],
+    cross_bounds: tuple[float, float],
+) -> float:
+    maximum_aligned = max(0.0, aligned_bounds[1])
+    if maximum_aligned <= 0.0:
+        return -1.0
+    minimum_cross_abs = _minimum_interval_abs(cross_bounds)
+    return maximum_aligned / math.hypot(maximum_aligned, minimum_cross_abs)
+
+
+def _minimum_interval_abs(bounds: tuple[float, float]) -> float:
+    if bounds[0] <= 0.0 <= bounds[1]:
+        return 0.0
+    return min(abs(bounds[0]), abs(bounds[1]))
+
+
+def _projected_unit_interval(
+    bounds: tuple[
+        tuple[float, float],
+        tuple[float, float],
+        tuple[float, float],
+    ],
+) -> tuple[float, float]:
+    first, second, translation = bounds
+    possible_ranges: list[float] = []
+    for first_value, second_value, translation_value in product(
+        first,
+        second,
+        translation,
+    ):
+        points = (
+            translation_value,
+            first_value + translation_value,
+            second_value + translation_value,
+            first_value + second_value + translation_value,
+        )
+        possible_ranges.append(max(points) - min(points))
+    return (min(possible_ranges), max(possible_ranges))
+
+
+def _affine_coordinate_passes_fast_thresholds(
+    coordinate: Mapping[str, object],
+    thresholds: Mapping[str, float],
+) -> bool:
+    if not thresholds:
+        return True
+    matrix = _affine_coordinate_matrix(coordinate)
+    a, b, tx = matrix[0]
+    c, d, ty = matrix[1]
+    signed_determinant = a * d - b * c
+    if signed_determinant <= 0.0:
+        return False
+    determinant = abs(signed_determinant)
+    minimum_determinant = thresholds.get("affine_minimum_absolute_determinant")
+    if minimum_determinant is not None and determinant < minimum_determinant:
+        return False
+    minimum_axis_alignment = thresholds.get("affine_minimum_axis_alignment")
+    if minimum_axis_alignment is not None:
+        x_axis_extent = math.hypot(a, c)
+        y_axis_extent = math.hypot(b, d)
+        if x_axis_extent <= 0.0 or y_axis_extent <= 0.0:
+            return False
+        if a / x_axis_extent < minimum_axis_alignment:
+            return False
+        if d / y_axis_extent < minimum_axis_alignment:
+            return False
+    singular_minimum, singular_maximum = _affine_singular_values(a, b, c, d)
+    minimum_singular_value = thresholds.get("affine_minimum_singular_value")
+    if minimum_singular_value is not None and singular_minimum < minimum_singular_value:
+        return False
+    maximum_singular_value = thresholds.get("affine_maximum_singular_value")
+    if maximum_singular_value is not None and singular_maximum > maximum_singular_value:
+        return False
+    maximum_condition_number = thresholds.get("affine_maximum_condition_number")
+    if (
+        maximum_condition_number is not None
+        and singular_maximum / singular_minimum > maximum_condition_number
+    ):
+        return False
+
+    corners = (
+        (tx, ty),
+        (a + tx, c + ty),
+        (b + tx, d + ty),
+        (a + b + tx, c + d + ty),
+    )
+    xs = tuple(point[0] for point in corners)
+    ys = tuple(point[1] for point in corners)
+    minimum_x = min(xs)
+    maximum_x = max(xs)
+    minimum_y = min(ys)
+    maximum_y = max(ys)
+    extent_x = maximum_x - minimum_x
+    extent_y = maximum_y - minimum_y
+    minimum_extent = thresholds.get("affine_minimum_projected_extent")
+    if minimum_extent is not None and (extent_x < minimum_extent or extent_y < minimum_extent):
+        return False
+    maximum_extent = thresholds.get("affine_maximum_projected_extent")
+    if maximum_extent is not None and (extent_x > maximum_extent or extent_y > maximum_extent):
+        return False
+
+    minimum_overlap = thresholds.get("affine_minimum_cell_overlap_ratio")
+    if minimum_overlap is None:
+        return True
+    envelope_area = extent_x * extent_y
+    if envelope_area <= 0.0:
+        return False
+    overlap_width = max(0.0, min(maximum_x, 1.0) - max(minimum_x, 0.0))
+    overlap_height = max(0.0, min(maximum_y, 1.0) - max(minimum_y, 0.0))
+    return (overlap_width * overlap_height) / envelope_area >= minimum_overlap
+
+
+def _affine_coordinate_fits_canvas(
+    *,
+    formation: ObservationFormationDeclaration,
+    width: int,
+    height: int,
+    coordinate: Mapping[str, object],
+) -> bool:
+    matrix = _affine_coordinate_matrix(coordinate)
+    a, b, tx = matrix[0]
+    c, d, ty = matrix[1]
+    center = (0.5, 0.5)
+    for bounds in _canvas_fit_component_bounds(
+        formation=formation,
+        width=width,
+        height=height,
+    ):
+        if bounds is None:
+            continue
+        min_x, min_y, max_x, max_y = bounds
+        source_corners = (
+            ((min_x - 1.5) / width, (min_y - 1.5) / height),
+            ((max_x + 2.5) / width, (min_y - 1.5) / height),
+            ((min_x - 1.5) / width, (max_y + 2.5) / height),
+            ((max_x + 2.5) / width, (max_y + 2.5) / height),
+        )
+        for x, y in source_corners:
+            transformed_x = center[0] + a * (x - center[0]) + b * (y - center[1]) + tx
+            transformed_y = center[1] + c * (x - center[0]) + d * (y - center[1]) + ty
+            if transformed_x < 0.0 or transformed_x > 1.0:
+                return False
+            if transformed_y < 0.0 or transformed_y > 1.0:
+                return False
+    return True
+
+
+def _canvas_fit_component_bounds(
+    *,
+    formation: ObservationFormationDeclaration,
+    width: int,
+    height: int,
+) -> tuple[tuple[int, int, int, int] | None, ...]:
+    key = (str(formation.digest), width, height, 0)
+    cached = _canvas_fit_component_bounds_cache.get(key)
+    if cached is not None:
+        return cached
+    bounds = tuple(
+        _positive_field_bounds(
+            formation.component_field(
+                width=width,
+                height=height,
+                component_index=component_index,
+            )
+        )
+        for component_index in range(len(formation.components))
+    )
+    _canvas_fit_component_bounds_cache[key] = bounds
+    return bounds
+
+
+def _positive_field_bounds(field: FieldObservation) -> tuple[int, int, int, int] | None:
+    channels, height, width = field.shape
+    min_x = width
+    min_y = height
+    max_x = -1
+    max_y = -1
+    for channel in range(channels):
+        channel_offset = channel * width * height
+        for y_index in range(height):
+            row_offset = channel_offset + y_index * width
+            for x_index in range(width):
+                if field.values[row_offset + x_index] <= 0.0:
+                    continue
+                min_x = min(min_x, x_index)
+                min_y = min(min_y, y_index)
+                max_x = max(max_x, x_index)
+                max_y = max(max_y, y_index)
+    if max_x < min_x or max_y < min_y:
+        return None
+    return (min_x, min_y, max_x, max_y)
+
+
+def _affine_singular_values(
+    a: float,
+    b: float,
+    c: float,
+    d: float,
+) -> tuple[float, float]:
+    trace = a * a + b * b + c * c + d * d
+    determinant = a * d - b * c
+    discriminant = max(0.0, trace * trace - 4.0 * determinant * determinant)
+    root = math.sqrt(discriminant)
+    maximum_eigenvalue = max(0.0, (trace + root) / 2.0)
+    minimum_eigenvalue = max(0.0, (trace - root) / 2.0)
+    return (math.sqrt(minimum_eigenvalue), math.sqrt(maximum_eigenvalue))
+
+
+def _affine_coordinate_matrix(coordinate: Mapping[str, object]) -> AffineMatrix2D:
+    spatial_affine = coordinate.get("spatial_affine")
+    if not isinstance(spatial_affine, Mapping):
+        raise ObservationGenerationError("variation coordinate missing spatial_affine")
+    spatial_affine_mapping = cast(Mapping[str, object], spatial_affine)
+    matrix_object = spatial_affine_mapping.get("matrix")
+    if not isinstance(matrix_object, Sequence):
+        raise ObservationGenerationError("spatial_affine matrix must have three rows")
+    matrix = cast(Sequence[object], matrix_object)
+    if len(matrix) != 3:
+        raise ObservationGenerationError("spatial_affine matrix must have three rows")
+    rows: list[tuple[float, float, float]] = []
+    for row_object in matrix:
+        if not isinstance(row_object, Sequence):
+            raise ObservationGenerationError("spatial_affine matrix rows must have three values")
+        row = cast(Sequence[object], row_object)
+        if len(row) != 3:
+            raise ObservationGenerationError("spatial_affine matrix rows must have three values")
+        values: list[float] = []
+        for value in row:
+            if not isinstance(value, int | float) or isinstance(value, bool):
+                raise ObservationGenerationError("spatial_affine matrix values must be numeric")
+            values.append(float(value))
+        rows.append((values[0], values[1], values[2]))
+    return (rows[0], rows[1], rows[2])
+
+
+def _resolution_sampling(layout: Mapping[str, object] | None) -> _ResolutionSampling | None:
+    if layout is None or "resolution_sampling" not in layout:
+        return None
+    value = layout["resolution_sampling"]
+    if not isinstance(value, Mapping):
+        raise ObservationGenerationError("resolution_sampling must be a record")
+    value = cast(Mapping[str, object], value)
+    kind = value.get("kind")
+    if kind != "uniform-integer-rectangle":
+        raise ObservationGenerationError(f"unsupported resolution_sampling kind: {kind}")
+    width_axis = value.get("width_axis")
+    if not isinstance(width_axis, str) or not width_axis:
+        raise ObservationGenerationError("resolution_sampling width_axis must be nonempty")
+    height_axis = value.get("height_axis")
+    if not isinstance(height_axis, str) or not height_axis:
+        raise ObservationGenerationError("resolution_sampling height_axis must be nonempty")
+    return _ResolutionSampling(
+        width_axis=width_axis,
+        height_axis=height_axis,
+    )
+
+
+def _variation_transform_complexity(
+    transform: VariationTransformDeclaration,
+    *,
+    width: int,
+    height: int,
+) -> float:
+    row_extents = (width, height, 1)
+    complexity = 0.0
+    for row_index, row in enumerate(transform.spatial_affine.matrix):
+        extent = row_extents[row_index] if row_index < len(row_extents) else 1
+        for lower, upper in row:
+            if upper > lower:
+                complexity += _distinguishable_interval_complexity(
+                    lower=lower,
+                    upper=upper,
+                    extent=extent,
+                )
+    return complexity
+
+
+def _distinguishable_interval_complexity(
+    *,
+    lower: float,
+    upper: float,
+    extent: int,
+) -> float:
+    if extent < 1:
+        return 0.0
+    return math.log2(max(1, math.floor((upper - lower) * extent) + 1))
+
+
+def _sampled_resolution_maximum(
+    *,
+    minimum_width: int,
+    minimum_height: int,
+    maximum_pixel_count: int,
+) -> tuple[int, int]:
+    minimum_pixel_count = minimum_width * minimum_height
+    if maximum_pixel_count < minimum_pixel_count:
+        return (minimum_width, minimum_height)
+    side_multiplier = math.sqrt(maximum_pixel_count / minimum_pixel_count)
+    return (
+        math.floor(minimum_width * side_multiplier),
+        math.floor(minimum_height * side_multiplier),
+    )
+
+
+def _minimum_axis_multiplier(value: int, *, step: int) -> int:
+    return max(1, math.ceil(value / step))
+
+
+def _batch_sample_pixel_limit(
+    *,
+    memory_limit_bytes: int,
+    memory_budget_fraction: float,
+    sample_count: int,
+    channel_count: int,
+) -> int:
+    if type(memory_limit_bytes) is not int or memory_limit_bytes < 1:
+        raise ObservationGenerationError("memory_limit_bytes must be a positive integer")
+    if not math.isfinite(memory_budget_fraction) or memory_budget_fraction <= 0.0:
+        raise ObservationGenerationError("memory_budget_fraction must be positive")
+    if memory_budget_fraction > 1.0:
+        raise ObservationGenerationError("memory_budget_fraction must not exceed 1")
+    if sample_count < 1:
+        raise ObservationGenerationError("sample_count must be positive")
+    if channel_count < 1:
+        raise ObservationGenerationError("channel_count must be positive")
+    budget = math.floor(memory_limit_bytes * memory_budget_fraction)
+    per_sample_denominator = sample_count * channel_count * _field_scalar_construction_bytes
+    return max(1, budget // per_sample_denominator)
+
+
+def _sample_component_index_from_vocabulary(
+    *,
+    generator: random.Random,
+    component_vocabulary_size: int,
+) -> int:
+    return generator.randrange(component_vocabulary_size)
+
+
+def _sample_interval(generator: random.Random, bounds: tuple[float, float]) -> float:
+    low, high = bounds
+    return generator.uniform(low, high)
+
+
+def _child_identifier(parent: ProtocolIdentifier, suffix: str) -> ProtocolIdentifier:
+    return ProtocolIdentifier(
+        name=ProtocolName.parse(f"{parent.name}.{suffix}"),
+        version=parent.version,
+    )
+
+
+def _timing_span(
+    timing: TimingCollector | None,
+    phase: str,
+    *,
+    samples: int = 0,
+) -> AbstractContextManager[None]:
+    if timing is None:
+        return nullcontext()
+    return timing.span(phase, samples=samples)
+
+
+def _field_to_png_bytes(field: FieldObservation) -> bytes:
+    channels, height, width = field.shape
+    if channels != 1:
+        raise ObservationGenerationError("PNG encoding currently requires one channel")
+    rows: list[bytes] = []
+    for y_index in range(height):
+        offset = y_index * width
+        row = bytes(_uint8(field.values[offset + x_index]) for x_index in range(width))
+        rows.append(b"\x00" + row)
+    payload = b"".join(rows)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+        + _png_chunk(b"IDAT", zlib.compress(payload))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+def _field_to_png_data_url(field: FieldObservation) -> str:
+    encoded = base64.b64encode(_field_to_png_bytes(field)).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    checksum = zlib.crc32(kind)
+    checksum = zlib.crc32(payload, checksum)
+    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", checksum)
+
+
+def _uint8(value: float) -> int:
+    return max(0, min(255, round(float(value) * 255)))
+
+
+def _sample_field_size(sample: GeneratedSample) -> tuple[int, int]:
+    if sample.width is None or sample.height is None:
+        raise TensorRuntimeError("field sample is missing canvas dimensions")
+    return sample.width, sample.height
+
+
+def _generated_affine_grid_row(
+    record: Mapping[str, object],
+    *,
+    width: int,
+    height: int,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    spatial = cast(Mapping[str, object], record["spatial_affine"])
+    matrix = cast(Sequence[Sequence[float]], spatial["matrix"])
+    return _affine_grid_row_from_values(
+        matrix=(
+            (float(matrix[0][0]), float(matrix[0][1]), float(matrix[0][2])),
+            (float(matrix[1][0]), float(matrix[1][1]), float(matrix[1][2])),
+            (float(matrix[2][0]), float(matrix[2][1]), float(matrix[2][2])),
+        ),
+        width=width,
+        height=height,
+    )
+
+
+def _affine_grid_row_from_values(
+    *,
+    matrix: AffineMatrix2D,
+    width: int,
+    height: int,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    if width <= 0 or height <= 0:
+        raise TensorRuntimeError("field dimensions must be positive")
+    linear_matrix = linear_affine_matrix(matrix)
+    inverse = _inverse_affine_matrix_from_values(matrix=linear_matrix)
+    center = (0.5, 0.5)
+    center_x = 2.0 * center[0] - 1.0
+    center_y = 2.0 * center[1] - 1.0
+    field_translation = affine_translation(matrix)
+    translation_x = 2.0 * field_translation[0]
+    translation_y = 2.0 * field_translation[1]
+    return (
+        (
+            inverse[0][0],
+            inverse[0][1],
+            center_x
+            - inverse[0][0] * (center_x + translation_x)
+            - inverse[0][1] * (center_y + translation_y),
+        ),
+        (
+            inverse[1][0],
+            inverse[1][1],
+            center_y
+            - inverse[1][0] * (center_x + translation_x)
+            - inverse[1][1] * (center_y + translation_y),
+        ),
+    )
+
+
+def _inverse_affine_matrix_from_values(
+    *,
+    matrix: tuple[tuple[float, float], tuple[float, float]],
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    (a, b), (c, d) = matrix
+    determinant = a * d - b * c
+    if not math.isfinite(determinant) or determinant == 0.0:
+        raise TensorRuntimeError("variation affine transform is singular")
+    return ((d / determinant, -b / determinant), (-c / determinant, a / determinant))
+
+
+def _require_positive_integer(value: int, name: str) -> None:
+    if type(value) is not int or value <= 0:
+        raise TensorRuntimeError(f"{name} must be a positive integer")
+
+
+def _balanced_component_indices(
+    *,
+    sample_count: int,
+    atom_count: int,
+    seed: str,
+) -> tuple[int, ...]:
+    if sample_count % atom_count != 0:
+        raise ObservationGenerationError(
+            "balanced console samples require total token count to divide atom count"
+        )
+    generator = random.Random(seed)
+    tokens = [
+        digit
+        for digit in range(atom_count)
+        for _occurrence in range(sample_count // atom_count)
+    ]
+    generator.shuffle(tokens)
+    return tuple(tokens)
+
+
+def _sample_display_key(sample: Mapping[str, object], sample_count: int) -> int:
+    index = sample["index"]
+    if not isinstance(index, int):
+        raise ObservationGenerationError("generated sample index must be an integer")
+    return (index * 17) % (sample_count + 1)
 
 
 def _manifest() -> BenchmarkManifest:

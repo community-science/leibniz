@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from leibniz.benchmark_implementations import (
     Benchmark as BenchmarkProtocol,
@@ -30,6 +30,7 @@ from leibniz.observation_generation import (
     load_generator,
 )
 from leibniz.observation_showcases import ObservationShowcaseManifest
+from leibniz.tensor_runtime import TensorRuntime
 from leibniz.timing import TimingCollector
 
 
@@ -68,6 +69,24 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...
+
+    def tensor_batch_tensors(
+        self,
+        *,
+        runtime: TensorRuntime,
+        batch: GeneratedSampleSet,
+        outcome_ids: tuple[str, ...],
+    ) -> tuple[Any, Any]: ...
+
+    def sample_variation_transform_coordinates(
+        self,
+        *,
+        seed: int,
+        sample_index: int,
+        component_index: int = 0,
+    ) -> Mapping[str, object]: ...
+
+    def console_preview_batch(self, *, atom_count: int) -> Mapping[str, object]: ...
 
 
 class DigitsBenchmark(BenchmarkProtocol, Protocol):

@@ -17,7 +17,6 @@ from leibniz.observation_generation import (
     load_generator,
 )
 from leibniz.tensor_runtime import (
-    FormationTensorCache,
     TensorRuntime,
     TensorRuntimeDevice,
     TensorRuntimeError,
@@ -57,6 +56,14 @@ class _FieldTimingGenerator(BenchmarkGenerator, Protocol):
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...
+
+    def tensor_batch_tensors(
+        self,
+        *,
+        runtime: TensorRuntime,
+        batch: GeneratedSampleSet,
+        outcome_ids: tuple[str, ...],
+    ) -> tuple[object, object]: ...
 
 
 class FormationTimingError(ValueError):
@@ -154,7 +161,6 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
         tensor_runtime_available_memory_bytes(runtime),
         _initial_generation_memory_limit_bytes,
     )
-    cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
     outcome_ids = tuple(
         outcome.id for outcome in generator.manifest.resolve_outcome_space().outcomes
     )
@@ -179,7 +185,11 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
             timing=timing,
             timing_prefix="tensor.",
         )
-        cache.batch_tensors(batch=sample_set, outcome_ids=outcome_ids)
+        generator.tensor_batch_tensors(
+            runtime=runtime,
+            batch=sample_set,
+            outcome_ids=outcome_ids,
+        )
 
     for offset in range(plan.warmup_repeats):
         pure_once(plan.seed + offset)
