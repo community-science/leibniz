@@ -2,13 +2,12 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from benchmark_typing import DigitsGenerator, load_digits_generator
 
 from leibniz.architectures import ArchitectureManifest
-from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlanDocument
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
-from leibniz.observation_generation import load_generator
 from leibniz.tensor_runtime import (
     FormationTensorCache,
     TensorRuntimeError,
@@ -25,7 +24,7 @@ _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "
 _digits_fixture_root = _repository_root / "tests" / "fixtures" / "digits"
 
 
-def _formation_payload(generator: BenchmarkGenerator, *, sample_count: int, seed: int):
+def _formation_payload(generator: DigitsGenerator, *, sample_count: int, seed: int):
     sample_set = generator(
         shape=sample_count,
         seed=seed,
@@ -33,7 +32,7 @@ def _formation_payload(generator: BenchmarkGenerator, *, sample_count: int, seed
     return sample_set
 
 
-def _observation_payload(generator: BenchmarkGenerator, *, sample_count: int, seed: int):
+def _observation_payload(generator: DigitsGenerator, *, sample_count: int, seed: int):
     sample_set = generator(
         shape=sample_count,
         seed=seed,
@@ -151,7 +150,7 @@ def test_formation_tensor_cache_matches_unvaried_pure_digits_formation() -> None
 
 def test_formation_tensor_cache_batch_tensors_match_pure_observation_batch() -> None:
     runtime = resolve_tensor_runtime("cpu")
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
     observation_batch = _observation_payload(generator, sample_count=3, seed=515)
     formation_batch = _formation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
@@ -178,7 +177,7 @@ def test_formation_tensor_cache_batches_grid_sampling_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = resolve_tensor_runtime("cpu")
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
     formation_batch = _formation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
@@ -215,7 +214,7 @@ def test_formation_tensor_cache_batches_grid_sampling_once(
 
 def test_formation_tensor_cache_batch_tensors_use_generated_coordinate_values() -> None:
     runtime = resolve_tensor_runtime("cpu")
-    generator = load_generator(_digits_benchmark_root)
+    generator = load_digits_generator(_digits_benchmark_root)
     formation_batch = _formation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id

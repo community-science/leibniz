@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from benchmark_typing import load_digits_benchmark
 
 from leibniz.benchmark_implementations import (
     BenchmarkError,
@@ -29,7 +30,7 @@ def test_digits_benchmark_loads_python_implementation_entrypoint() -> None:
 
 
 def test_digits_python_implementation_matches_exported_declarations() -> None:
-    implementation = load_benchmark(_digits_benchmark_root)
+    implementation = load_digits_benchmark(_digits_benchmark_root)
 
     manifest = BenchmarkManifestDocument.from_bytes(
         (_digits_benchmark_root / "manifest.json").read_bytes()

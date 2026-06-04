@@ -52,6 +52,9 @@ __all__ = [
     "sample_variation_transform_coordinates",
 ]
 
+_core_state_space_measure_id = "log2_state_space_size"
+_core_state_space_measure_ids = frozenset({_core_state_space_measure_id})
+
 _discriminatable_resolution_cache: dict[
     tuple[str, str, str, int, int, float],
     tuple[int, int],
@@ -73,15 +76,17 @@ class ObservationGenerationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class StateSpaceMeasureRequest:
-    """A benchmark-declared state-space measure interval requested by a runner."""
+    """A core state-space measure interval requested by a runner."""
 
-    measure_id: str
     minimum: float
     maximum: float
+    measure_id: str = _core_state_space_measure_id
 
     def __post_init__(self) -> None:
         if not self.measure_id:
             raise ObservationGenerationError("state-space measure id must be nonempty")
+        if self.measure_id not in _core_state_space_measure_ids:
+            raise ObservationGenerationError("state-space measure id is not a core measure")
         if not math.isfinite(float(self.minimum)):
             raise ObservationGenerationError("state-space measure minimum must be finite")
         if not math.isfinite(float(self.maximum)):
@@ -112,14 +117,16 @@ class StateSpaceMeasureRequest:
 
 @dataclass(frozen=True, slots=True)
 class StateSpaceMeasureValue:
-    """A generated sample's value for a benchmark-declared state-space measure."""
+    """A generated sample's value for a core state-space measure."""
 
-    measure_id: str
     value: float
+    measure_id: str = _core_state_space_measure_id
 
     def __post_init__(self) -> None:
         if not self.measure_id:
             raise ObservationGenerationError("state-space measure id must be nonempty")
+        if self.measure_id not in _core_state_space_measure_ids:
+            raise ObservationGenerationError("state-space measure id is not a core measure")
         if not math.isfinite(float(self.value)):
             raise ObservationGenerationError("state-space measure value must be finite")
         if self.value < 0.0:
@@ -145,16 +152,16 @@ class GeneratedSample:
     """One generated sample from a benchmark data source."""
 
     index: int
-    materialization_plan: MaterializationPlan
-    width: int
-    height: int
-    component_index: int
-    variation_coordinates: tuple[Mapping[str, object], ...]
-    variation_values: Mapping[str, object]
     outcome_id: str
     complexity: float
     state_space_measure: StateSpaceMeasureValue | None = None
     latent_coordinates: tuple[Mapping[str, object], ...] = ()
+    materialization_plan: MaterializationPlan | None = None
+    width: int | None = None
+    height: int | None = None
+    component_index: int | None = None
+    variation_coordinates: tuple[Mapping[str, object], ...] = ()
+    variation_values: Mapping[str, object] | None = None
     field: FieldObservation | None = None
     _field_record: FormedObservation | None = dataclass_field(
         default=None,
@@ -181,16 +188,24 @@ class GeneratedSample:
 
         record: dict[str, object] = {
             "index": self.index,
-            "materialization_plan": self.materialization_plan.to_record(),
-            "width": self.width,
-            "height": self.height,
-            "component_index": self.component_index,
-            "variation_coordinates": [dict(item) for item in self.variation_coordinates],
-            "variation_values": dict(self.variation_values),
             "outcome_id": self.outcome_id,
             "complexity": self.complexity,
             "latent_coordinates": [dict(coordinate) for coordinate in self.latent_coordinates],
         }
+        if self.materialization_plan is not None:
+            record["materialization_plan"] = self.materialization_plan.to_record()
+        if self.width is not None:
+            record["width"] = self.width
+        if self.height is not None:
+            record["height"] = self.height
+        if self.component_index is not None:
+            record["component_index"] = self.component_index
+        if self.variation_coordinates:
+            record["variation_coordinates"] = [
+                dict(item) for item in self.variation_coordinates
+            ]
+        if self.variation_values is not None:
+            record["variation_values"] = dict(self.variation_values)
         if self.state_space_measure is not None:
             record["state_space_measure"] = self.state_space_measure.to_record()
         if self.field is not None and include_field:
@@ -222,17 +237,18 @@ class GeneratedSampleSet:
     generator_version: str
     seed: int
     shape: tuple[int, ...]
-    variation_extent: float
     samples: tuple[GeneratedSample, ...]
+    variation_extent: float | None = None
     state_space_request: StateSpaceMeasureRequest | None = None
 
     def __post_init__(self) -> None:
         if type(self.seed) is not int or self.seed < 0:
             raise ObservationGenerationError("seed must be a nonnegative integer")
-        if not math.isfinite(float(self.variation_extent)):
-            raise ObservationGenerationError("variation_extent must be finite")
-        if self.variation_extent < 0.0 or self.variation_extent > 1.0:
-            raise ObservationGenerationError("variation_extent must be between 0 and 1")
+        if self.variation_extent is not None:
+            if not math.isfinite(float(self.variation_extent)):
+                raise ObservationGenerationError("variation_extent must be finite")
+            if self.variation_extent < 0.0 or self.variation_extent > 1.0:
+                raise ObservationGenerationError("variation_extent must be between 0 and 1")
         if self.samples:
             if any(type(axis) is not int or axis < 1 for axis in self.shape):
                 raise ObservationGenerationError("sample shape axes must be positive integers")
@@ -245,7 +261,10 @@ class GeneratedSampleSet:
                 "empty sample sets require a state-space request"
             )
         for sample in self.samples:
-            if sample.materialization_plan.benchmark_id != self.benchmark_id:
+            if (
+                sample.materialization_plan is not None
+                and sample.materialization_plan.benchmark_id != self.benchmark_id
+            ):
                 raise ObservationGenerationError("sample benchmark_id does not match sample set")
             if self.state_space_request is not None:
                 if sample.state_space_measure is None:
@@ -289,13 +308,13 @@ class GeneratedSampleSet:
     def to_record(self, *, include_fields: bool = False) -> dict[str, object]:
         """Return a record for this generated sample set."""
 
-        return {
+        record: dict[str, object] = {
             "benchmark_id": str(self.benchmark_id),
             "generator_id": str(self.generator_id),
             "generator_version": self.generator_version,
             "seed": self.seed,
             "shape": list(self.shape),
-            "variation_extent": self.variation_extent,
+            "sample_count": len(self.samples),
             "state_space_request": (
                 None
                 if self.state_space_request is None
@@ -306,6 +325,9 @@ class GeneratedSampleSet:
                 sample.to_record(include_field=include_fields) for sample in self.samples
             ],
         }
+        if self.variation_extent is not None:
+            record["variation_extent"] = self.variation_extent
+        return record
 
 
 @dataclass(slots=True)

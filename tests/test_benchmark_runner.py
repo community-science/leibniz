@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from benchmark_typing import load_digits_generator
 
 import leibniz.benchmark_runner as benchmark_runner
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
@@ -311,10 +312,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert evaluation_curriculum["curriculum_variable"] == "state-space-measure"
     assert evaluation_curriculum["sampling_levers"] == ["state-space-measure"]
     state_space_measure = cast(dict[str, object], evaluation_curriculum["state_space_measure"])
-    assert state_space_measure == {
-        "measure_id": "log2_latent_state_set_size",
-        "scale": "log2",
-    }
+    assert state_space_measure["scale"] == "log2"
+    assert evaluation_curriculum["complexity_axis"] == state_space_measure["measure_id"]
     assert cast(dict[str, object], evaluation_curriculum["candidate_policy"])["kind"] == (
         "logarithmic"
     )
@@ -328,7 +327,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert {
         cast(str, rung["complexity_axis"])
         for rung in curriculum_rungs
-    } == {"log2_latent_state_set_size"}
+    } == {state_space_measure["measure_id"]}
     assert all("generation_memory_limit_bytes" not in rung for rung in curriculum_rungs)
     assert all("resolution_assignment" in rung for rung in curriculum_rungs)
     expected_rung_keys = {
@@ -344,12 +343,12 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     }
     assert all(set(rung) == expected_rung_keys for rung in curriculum_rungs)
     for rung in curriculum_rungs:
-        state_space_measure = cast(dict[str, object], rung["state_space_measure"])
+        rung_state_space_measure = cast(dict[str, object], rung["state_space_measure"])
         state_space_request = cast(dict[str, object], rung["state_space_request"])
-        assert state_space_measure["measure_id"] == "log2_latent_state_set_size"
-        assert state_space_request["measure_id"] == "log2_latent_state_set_size"
+        assert rung_state_space_measure["measure_id"] == state_space_measure["measure_id"]
+        assert state_space_request["measure_id"] == state_space_measure["measure_id"]
         assert math.isclose(
-            cast(float, state_space_measure["value"]),
+            cast(float, rung_state_space_measure["value"]),
             cast(float, rung["complexity"]),
         )
         assert math.isclose(
@@ -385,7 +384,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         == "approximately-uniform-within-complexity-class"
     )
     assert sampled_competence["complexity_axis"] is None
-    expected_complexity = load_generator(
+    expected_complexity = load_digits_generator(
         _digits_benchmark_root
     ).distinguishable_state_complexity(
         width=24,
@@ -1232,7 +1231,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     )
     assert math.isclose(cast(float, score_basis["chance_mass"]), 0.1)
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    expected_complexity = load_generator(
+    expected_complexity = load_digits_generator(
         _digits_benchmark_root
     ).distinguishable_state_complexity(
         width=24,

@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol, cast
 
-from leibniz.observation_generation import load_generator
+from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
+from leibniz.materialization import AxisAssignment
+from leibniz.observation_formation import ObservationFormationDeclaration
+from leibniz.observation_generation import (
+    GeneratedSampleSet,
+    StateSpaceMeasureRequest,
+    load_generator,
+)
 from leibniz.tensor_runtime import (
     FormationTensorCache,
     TensorRuntime,
@@ -29,6 +37,26 @@ __all__ = [
 ]
 
 _initial_generation_memory_limit_bytes = 1_024_000
+
+
+class _FieldTimingGenerator(BenchmarkGenerator, Protocol):
+    @property
+    def formation(self) -> ObservationFormationDeclaration: ...
+
+    def __call__(
+        self,
+        *,
+        seed: int,
+        shape: int | Sequence[int] | None = None,
+        include_fields: bool = False,
+        state_space_request: StateSpaceMeasureRequest | None = None,
+        component_indices: Iterable[int] | None = None,
+        memory_limit_bytes: int | None = None,
+        resolution_assignment: AxisAssignment | None = None,
+        variation_extent: float = 1.0,
+        timing: TimingCollector | None = None,
+        timing_prefix: str = "",
+    ) -> GeneratedSampleSet: ...
 
 
 class FormationTimingError(ValueError):
@@ -117,7 +145,7 @@ class FormationTimingSummary:
 def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
     """Measure pure observation formation and tensor batch construction."""
 
-    generator = load_generator(plan.benchmark_root)
+    generator = cast(_FieldTimingGenerator, load_generator(plan.benchmark_root))
     try:
         runtime = resolve_tensor_runtime(plan.tensor_device)
     except TensorRuntimeError as error:

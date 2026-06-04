@@ -7,10 +7,10 @@ import ast
 import hashlib
 import random
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_implementations import (
@@ -41,9 +41,15 @@ from leibniz.local_results import (
     load_console_result_view,
     materialize_benchmark_result_views,
 )
+from leibniz.materialization import AxisAssignment
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_operators import model_operator_vocabulary
-from leibniz.observation_generation import field_to_png_data_url, load_generator
+from leibniz.observation_generation import (
+    GeneratedSampleSet,
+    StateSpaceMeasureRequest,
+    field_to_png_data_url,
+    load_generator,
+)
 
 __all__ = [
     "ConsoleData",
@@ -66,6 +72,23 @@ _generated_batch_cache_path = (
     / ("generatedSampleSets" + _document_suffix)
 )
 _generated_batch_cache: dict[tuple[str, str, str], Mapping[str, object]] = {}
+
+
+class _BalancedPreviewGenerator(BenchmarkGenerator, Protocol):
+    def __call__(
+        self,
+        *,
+        seed: int,
+        shape: int | Sequence[int] | None = None,
+        include_fields: bool = False,
+        state_space_request: StateSpaceMeasureRequest | None = None,
+        component_indices: Iterable[int] | None = None,
+        memory_limit_bytes: int | None = None,
+        resolution_assignment: AxisAssignment | None = None,
+        variation_extent: float = 1.0,
+        timing: Any | None = None,
+        timing_prefix: str = "",
+    ) -> GeneratedSampleSet: ...
 
 
 class ConsoleDataValidationError(ValueError):
@@ -457,6 +480,7 @@ class ConsoleDataBuilder:
         atom_count: int,
         source_fingerprint: str,
     ) -> Mapping[str, object]:
+        preview_generator = cast(_BalancedPreviewGenerator, generator)
         cache_key = (
             str(generator.benchmark_manifest.id),
             "balanced-component-samples",
@@ -488,7 +512,7 @@ class ConsoleDataBuilder:
                     raise ConsoleDataValidationError(
                         "could not generate unique console sample canvas shapes"
                     )
-                sample_set = generator(
+                sample_set = preview_generator(
                     shape=(),
                     seed=seed,
                     include_fields=True,
@@ -505,6 +529,15 @@ class ConsoleDataBuilder:
                     used_field_shapes.add(field_shape)
                     break
                 seed += 1000
+            materialization_plan = sample.materialization_plan
+            if materialization_plan is None:
+                raise ConsoleDataValidationError(
+                    "generated preview sample did not include a materialization plan"
+                )
+            if sample.component_index is None:
+                raise ConsoleDataValidationError(
+                    "generated preview sample did not include a component index"
+                )
             samples.append(
                 {
                     "index": len(samples),
@@ -518,7 +551,7 @@ class ConsoleDataBuilder:
                     ),
                     "field_shape": list(sample.require_field().shape),
                     "image_data_url": field_to_png_data_url(sample.require_field()),
-                    "materialization_plan": sample.materialization_plan.to_record(),
+                    "materialization_plan": materialization_plan.to_record(),
                     "latent_coordinates": [
                         dict(coordinate) for coordinate in sample.latent_coordinates
                     ],

@@ -17,7 +17,7 @@ from leibniz.observation_formation import (
     affine_translation,
     linear_affine_matrix,
 )
-from leibniz.observation_generation import GeneratedSampleSet
+from leibniz.observation_generation import GeneratedSample, GeneratedSampleSet
 from leibniz.tensor_shapes import TensorShape
 
 __all__ = [
@@ -277,12 +277,12 @@ class FormationTensorCache:
         sample_count = len(batch.samples)
         if sample_count < 1:
             raise TensorRuntimeError("batch samples must not be empty")
-        width = batch.samples[0].width
-        height = batch.samples[0].height
+        width, height = _sample_field_size(batch.samples[0])
         source_tensors: list[Any] = []
         affine_rows: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
         for sample in batch.samples:
-            if sample.width != width or sample.height != height:
+            sample_width, sample_height = _sample_field_size(sample)
+            if sample_width != width or sample_height != height:
                 raise TensorRuntimeError("batch sample canvas shapes must match")
             if len(sample.variation_coordinates) != 1:
                 raise TensorRuntimeError("variation_coordinates must contain one coordinate")
@@ -290,7 +290,7 @@ class FormationTensorCache:
                 self.component_tensor(
                     width=width,
                     height=height,
-                    component_index=sample.component_index,
+                    component_index=_sample_component_index(sample),
                 )
             )
             affine_rows.append(
@@ -369,6 +369,18 @@ class FormationTensorCache:
             device=self.runtime.device,
         )
         return tensor.reshape(field.shape)
+
+
+def _sample_field_size(sample: GeneratedSample) -> tuple[int, int]:
+    if sample.width is None or sample.height is None:
+        raise TensorRuntimeError("field sample is missing canvas dimensions")
+    return sample.width, sample.height
+
+
+def _sample_component_index(sample: GeneratedSample) -> int:
+    if sample.component_index is None:
+        raise TensorRuntimeError("field sample is missing component index")
+    return sample.component_index
 
 
 def validate_tensor_runtime_device(value: str) -> TensorRuntimeDevice:
@@ -920,4 +932,3 @@ def _trusted_triple(value: object) -> tuple[float, float, float]:
 
 def _trusted_float(value: object) -> float:
     return float(cast(int | float, value))
-

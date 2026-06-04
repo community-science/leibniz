@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from leibniz.artifacts import ArtifactReference
@@ -16,7 +16,7 @@ from leibniz.latent_factors import (
     LatentFactorDeclaration,
     SampleLatentFactor,
 )
-from leibniz.materialization import AxisAssignment, MaterializationDeclaration
+from leibniz.materialization import AxisAssignment, MaterializationDeclaration, MaterializationPlan
 from leibniz.observation_formation import (
     ComponentMark,
     ObservationComponent,
@@ -45,7 +45,6 @@ _materialization_id = ProtocolIdentifier.parse("benchmarks.digits.materializatio
 _formation_id = ProtocolIdentifier.parse("benchmarks.digits.observation-formation@0.1.0")
 _generator_id = ProtocolIdentifier.parse("benchmarks.digits.generator@0.1.0")
 _outcome_space_id = ProtocolIdentifier.parse("benchmarks.digits.outcomes@0.1.0")
-_state_space_measure_id = "log2_latent_state_set_size"
 
 
 def benchmark(root: Path) -> BenchmarkProtocol:
@@ -172,8 +171,8 @@ class Generator(_ObservationGenerationEngine):
                             seed=seed,
                             index=sample.index,
                         ),
-                        plan=sample.materialization_plan,
-                        component_index=sample.component_index,
+                        plan=_sample_materialization_plan(sample),
+                        component_index=_sample_component_index(sample),
                         variation_coordinates=sample.variation_coordinates,
                     )
                     for sample in samples
@@ -181,10 +180,10 @@ class Generator(_ObservationGenerationEngine):
             with _timing_span(timing, f"{timing_prefix}latent_coordinates", samples=sample_count):
                 latent_coordinate_samples = tuple(
                     self._latent_coordinates(
-                        component_index=sample.component_index,
+                        component_index=_sample_component_index(sample),
                         scaled_factors=scaled_factors,
-                        plan=sample.materialization_plan,
-                        variation_values=sample.variation_values,
+                        plan=_sample_materialization_plan(sample),
+                        variation_values=_sample_variation_values(sample),
                     )
                     for sample in samples
                 )
@@ -227,10 +226,10 @@ class Generator(_ObservationGenerationEngine):
                         complexity=sample.complexity,
                         state_space_measure=_state_space_measure(sample.complexity),
                         latent_coordinates=self._latent_coordinates(
-                            component_index=sample.component_index,
+                            component_index=_sample_component_index(sample),
                             scaled_factors=scaled_factors,
-                            plan=sample.materialization_plan,
-                            variation_values=sample.variation_values,
+                            plan=_sample_materialization_plan(sample),
+                            variation_values=_sample_variation_values(sample),
                         ),
                     )
                     for sample in samples
@@ -252,8 +251,6 @@ class Generator(_ObservationGenerationEngine):
         request: StateSpaceMeasureRequest,
         variation_extent: float,
     ) -> AxisAssignment | None:
-        if request.measure_id != _state_space_measure_id:
-            return None
         minimum_assignment = self.minimum_discriminatable_resolution_assignment(
             minimum_assignment=self.materialization.minimum_resolution(),
         )
@@ -319,9 +316,26 @@ def _sample_count(shape: Sequence[int]) -> int:
     return count
 
 
+def _sample_materialization_plan(sample: GeneratedSample) -> MaterializationPlan:
+    if sample.materialization_plan is None:
+        raise ObservationGenerationError("Digits sample is missing materialization plan")
+    return sample.materialization_plan
+
+
+def _sample_component_index(sample: GeneratedSample) -> int:
+    if sample.component_index is None:
+        raise ObservationGenerationError("Digits sample is missing component index")
+    return sample.component_index
+
+
+def _sample_variation_values(sample: GeneratedSample) -> Mapping[str, object]:
+    if sample.variation_values is None:
+        raise ObservationGenerationError("Digits sample is missing variation values")
+    return sample.variation_values
+
+
 def _state_space_measure(complexity: float) -> StateSpaceMeasureValue:
     return StateSpaceMeasureValue(
-        measure_id=_state_space_measure_id,
         value=complexity,
     )
 
