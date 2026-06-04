@@ -20,7 +20,7 @@ from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
 from leibniz.authority_indexes import AuthorityIndexDocument
 from leibniz.benchmark_implementations import (
     discover_benchmark_roots,
-    load_benchmark_implementation,
+    load_benchmark,
 )
 from leibniz.benchmark_runner import (
     BenchmarkCompetitionPlan,
@@ -1199,7 +1199,7 @@ def _benchmark_roots_by_id(
     roots = explicit_roots or discover_benchmark_roots(packaged_root)
     by_id: dict[str, Path] = {}
     for root in roots:
-        manifest = load_benchmark_implementation(root).benchmark_manifest
+        manifest = load_benchmark(root).benchmark_manifest
         by_id[str(manifest.id)] = root
     return by_id
 

@@ -39,7 +39,7 @@ def test_console_data_reuses_persistent_generated_observation_batch_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cache_path = tmp_path / "generatedObservationBatches.leibniz.json"
+    cache_path = tmp_path / "generatedSampleSets.leibniz.json"
     monkeypatch.setattr("leibniz.console.data._generated_batch_cache_path", cache_path)
     cast(
         dict[tuple[str, str, str], Mapping[str, object]],
@@ -62,7 +62,7 @@ def test_console_data_reuses_persistent_generated_observation_batch_cache(
     cache_path.write_bytes(
         canonical_document_bytes(
             {
-                "format": "leibniz.console.generated-observation-batch-cache",
+                "format": "leibniz.console.generated-sample-set-cache",
                 "format_version": 1,
                 "batches": {
                     "\0".join(cache_key): cached_batch,
@@ -78,7 +78,7 @@ def test_console_data_reuses_persistent_generated_observation_batch_cache(
     )
     balanced_observation_batch = cast(
         Callable[..., Mapping[str, object]],
-        ConsoleDataBuilder(_repository_root)._balanced_observation_batch,  # type: ignore[reportPrivateUsage]
+        ConsoleDataBuilder(_repository_root)._balanced_sample_set,  # type: ignore[reportPrivateUsage]
     )
 
     batch = balanced_observation_batch(
@@ -176,6 +176,28 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert "observation_inspections" not in record
 
     assert "performance_views" not in record
+
+    benchmark_tasks = cast(list[dict[str, object]], record["benchmark_tasks"])
+    digits_task = next(
+        task
+        for task in benchmark_tasks
+        if task["benchmark_id"] == "benchmarks.digits@0.1.0"
+    )
+    code_surfaces = cast(list[dict[str, object]], digits_task["code_surfaces"])
+    assert [
+        (surface["label"], surface["symbol"])
+        for surface in code_surfaces
+    ] == [
+        ("Generator", "Generator.__call__"),
+    ]
+    for surface in code_surfaces:
+        source_path = _repository_root / cast(str, surface["source_path"])
+        start_line = cast(int, surface["start_line"])
+        end_line = cast(int, surface["end_line"])
+        expected_code = "\n".join(source_path.read_text(encoding="utf-8").splitlines()[
+            start_line - 1 : end_line
+        ])
+        assert surface["code"] == expected_code
 
     model_inspections = cast(list[dict[str, object]], record["model_inspections"])
     assert [
@@ -358,10 +380,10 @@ def test_console_benchmark_tasks_load_python_implementation_without_exported_jso
         "\n".join(
             [
                 "from pathlib import Path",
-                "from leibniz.benchmark_implementations import load_benchmark_implementation",
+                "from leibniz.benchmark_implementations import load_benchmark",
                 f"_source = Path({str(source_root)!r})",
                 "def benchmark(root: Path):",
-                "    return load_benchmark_implementation(_source)",
+                "    return load_benchmark(_source)",
                 "",
             ]
         ),
@@ -393,7 +415,7 @@ def test_console_benchmark_tasks_load_python_implementation_without_exported_jso
             "samples": [],
         }
 
-    monkeypatch.setattr(ConsoleDataBuilder, "_balanced_observation_batch", fake_batch)
+    monkeypatch.setattr(ConsoleDataBuilder, "_balanced_sample_set", fake_batch)
 
     data = ConsoleDataBuilder(tmp_path).discover(
         (PurePosixPath("architectures"), PurePosixPath("src/leibniz/benchmarks"))

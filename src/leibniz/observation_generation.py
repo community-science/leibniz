@@ -1,4 +1,4 @@
-"""Runtime generation of declaration-backed benchmark observations."""
+"""Runtime generation of benchmark samples."""
 
 from __future__ import annotations
 
@@ -9,13 +9,15 @@ import struct
 import zlib
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from itertools import product
 from pathlib import Path
 from typing import cast
 
 from leibniz.artifacts import ArtifactReference
-from leibniz.benchmark_implementations import load_benchmark_implementation
+from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
+from leibniz.benchmark_implementations import load_benchmark
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
@@ -39,15 +41,12 @@ from leibniz.observation_formation import (
 from leibniz.timing import TimingCollector
 
 __all__ = [
-    "GeneratedFormationBatch",
-    "GeneratedFormationSample",
-    "GeneratedObservationBatch",
-    "GeneratedObservationSample",
-    "ObservationGenerator",
+    "GeneratedSample",
+    "GeneratedSampleSet",
     "ObservationGenerationError",
     "field_to_png_bytes",
     "field_to_png_data_url",
-    "load_observation_generator",
+    "load_generator",
     "sample_variation_transform_coordinates",
 ]
 
@@ -77,66 +76,8 @@ class _ResolutionSampling:
 
 
 @dataclass(frozen=True, slots=True)
-class GeneratedObservationSample:
-    """One generated observation with its scientific coordinates."""
-
-    index: int
-    materialization_plan: MaterializationPlan
-    observation: FormedObservation
-    outcome_id: str
-    complexity: float
-    latent_coordinates: tuple[Mapping[str, object], ...]
-
-    @property
-    def field(self) -> FieldObservation:
-        """Return the generated channel-first field."""
-
-        return self.observation.field
-
-    def to_record(self, *, include_field: bool = False) -> dict[str, object]:
-        record: dict[str, object] = {
-            "index": self.index,
-            "materialization_plan": self.materialization_plan.to_record(),
-            "observation": self.observation.to_record(),
-            "component_sequence": list(self.observation.component_sequence),
-            "outcome_id": self.outcome_id,
-            "complexity": self.complexity,
-            "latent_coordinates": [dict(coordinate) for coordinate in self.latent_coordinates],
-        }
-        if include_field:
-            record["field"] = self.field.to_record()
-        return record
-
-
-@dataclass(frozen=True, slots=True)
-class GeneratedObservationBatch:
-    """A deterministic batch of generated observations."""
-
-    benchmark_id: ProtocolIdentifier
-    component_count: int
-    seed: int
-    samples: tuple[GeneratedObservationSample, ...]
-
-    def __post_init__(self) -> None:
-        if type(self.component_count) is not int or self.component_count < 1:
-            raise ObservationGenerationError("component_count must be a positive integer")
-        if type(self.seed) is not int or self.seed < 0:
-            raise ObservationGenerationError("seed must be a nonnegative integer")
-        if not self.samples:
-            raise ObservationGenerationError("samples must not be empty")
-
-    def to_record(self, *, include_fields: bool = False) -> dict[str, object]:
-        return {
-            "benchmark_id": str(self.benchmark_id),
-            "component_count": self.component_count,
-            "seed": self.seed,
-            "samples": [sample.to_record(include_field=include_fields) for sample in self.samples],
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class GeneratedFormationSample:
-    """One generated formation specification without materializing the field."""
+class GeneratedSample:
+    """One generated sample from a benchmark data source."""
 
     index: int
     materialization_plan: MaterializationPlan
@@ -147,16 +88,56 @@ class GeneratedFormationSample:
     variation_values: Mapping[str, object]
     outcome_id: str
     complexity: float
+    latent_coordinates: tuple[Mapping[str, object], ...] = ()
+    field: FieldObservation | None = None
+    _field_record: FormedObservation | None = dataclass_field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+
+    def require_field(self) -> FieldObservation:
+        """Return the generated field or fail with a domain error."""
+
+        if self.field is None:
+            raise ObservationGenerationError("sample does not include generated field data")
+        return self.field
+
+    def field_record(self) -> FormedObservation:
+        """Return the backing generated-field record for evidence plumbing."""
+
+        if self._field_record is None:
+            raise ObservationGenerationError("sample does not include generated field data")
+        return self._field_record
+
+    def to_record(self, *, include_field: bool = False) -> dict[str, object]:
+        """Return a record for this generated sample."""
+
+        record: dict[str, object] = {
+            "index": self.index,
+            "materialization_plan": self.materialization_plan.to_record(),
+            "width": self.width,
+            "height": self.height,
+            "component_sequence": list(self.component_sequence),
+            "variation_coordinates": [dict(item) for item in self.variation_coordinates],
+            "variation_values": dict(self.variation_values),
+            "outcome_id": self.outcome_id,
+            "complexity": self.complexity,
+            "latent_coordinates": [dict(coordinate) for coordinate in self.latent_coordinates],
+        }
+        if self.field is not None and include_field:
+            record["field"] = self.field.to_record()
+        return record
 
 
 @dataclass(frozen=True, slots=True)
-class GeneratedFormationBatch:
+class _FormationSamples:
     """A deterministic batch of formation specifications."""
 
     benchmark_id: ProtocolIdentifier
     component_count: int
     seed: int
-    samples: tuple[GeneratedFormationSample, ...]
+    samples: tuple[GeneratedSample, ...]
 
     def __post_init__(self) -> None:
         if type(self.component_count) is not int or self.component_count < 1:
@@ -167,9 +148,88 @@ class GeneratedFormationBatch:
             raise ObservationGenerationError("samples must not be empty")
 
 
+@dataclass(frozen=True, slots=True)
+class GeneratedSampleSet:
+    """Shape-aware samples returned by a reusable data generator."""
+
+    benchmark_id: ProtocolIdentifier
+    generator_id: ProtocolIdentifier
+    generator_version: str
+    seed: int
+    shape: tuple[int, ...]
+    component_count: int
+    variation_extent: float
+    samples: tuple[GeneratedSample, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.seed) is not int or self.seed < 0:
+            raise ObservationGenerationError("seed must be a nonnegative integer")
+        if type(self.component_count) is not int or self.component_count < 1:
+            raise ObservationGenerationError("component_count must be a positive integer")
+        if not math.isfinite(float(self.variation_extent)):
+            raise ObservationGenerationError("variation_extent must be finite")
+        if self.variation_extent < 0.0 or self.variation_extent > 1.0:
+            raise ObservationGenerationError("variation_extent must be between 0 and 1")
+        if any(type(axis) is not int or axis < 1 for axis in self.shape):
+            raise ObservationGenerationError("sample shape axes must be positive integers")
+        if len(self.samples) != self.sample_count:
+            raise ObservationGenerationError("sample count does not match sample shape")
+        if not self.samples:
+            raise ObservationGenerationError("samples must not be empty")
+        for sample in self.samples:
+            if sample.materialization_plan.benchmark_id != self.benchmark_id:
+                raise ObservationGenerationError("sample benchmark_id does not match sample set")
+
+    @property
+    def includes_fields(self) -> bool:
+        """Return whether all samples include generated field data."""
+
+        return all(sample.field is not None for sample in self.samples)
+
+    @property
+    def sample_count(self) -> int:
+        """Return the number of scalar samples represented by this set."""
+
+        if not self.shape:
+            return 1
+        count = 1
+        for axis in self.shape:
+            count *= axis
+        return count
+
+    @property
+    def outcomes(self) -> tuple[str, ...]:
+        """Return generated outcome identifiers."""
+
+        return tuple(sample.outcome_id for sample in self.samples)
+
+    @property
+    def complexities(self) -> tuple[float, ...]:
+        """Return generated sample complexities."""
+
+        return tuple(sample.complexity for sample in self.samples)
+
+    def to_record(self, *, include_fields: bool = False) -> dict[str, object]:
+        """Return a record for this generated sample set."""
+
+        return {
+            "benchmark_id": str(self.benchmark_id),
+            "generator_id": str(self.generator_id),
+            "generator_version": self.generator_version,
+            "seed": self.seed,
+            "shape": list(self.shape),
+            "component_count": self.component_count,
+            "variation_extent": self.variation_extent,
+            "includes_fields": self.includes_fields,
+            "samples": [
+                sample.to_record(include_field=include_fields) for sample in self.samples
+            ],
+        }
+
+
 @dataclass(slots=True)
 class _BoundedRejectionCache:
-    cells: set[tuple[object, ...]] = field(default_factory=lambda: set())
+    cells: set[tuple[object, ...]] = dataclass_field(default_factory=lambda: set())
     max_cells: int = _rejection_cache_cell_limit
 
     def contains(self, key: tuple[object, ...]) -> bool:
@@ -185,14 +245,14 @@ class _BoundedRejectionCache:
 
 
 @dataclass(frozen=True, slots=True)
-class ObservationGenerator:
-    """Generate observations from manifest, latent, materialization, and formation records."""
+class _ObservationGenerationEngine:  # pyright: ignore[reportUnusedClass]
+    """Generate samples from manifest, latent, materialization, and formation records."""
 
     benchmark_manifest: BenchmarkManifest
     latent_factors: LatentFactorDeclaration
     materialization: MaterializationDeclaration
     formation: ObservationFormationDeclaration
-    rejection_cache: _BoundedRejectionCache = field(
+    rejection_cache: _BoundedRejectionCache = dataclass_field(
         default_factory=_BoundedRejectionCache,
         compare=False,
         repr=False,
@@ -214,7 +274,7 @@ class ObservationGenerator:
         except ValueError as error:
             raise ObservationGenerationError(str(error)) from error
 
-    def sample_batch(
+    def _sample_formation_batch(
         self,
         *,
         component_count: int,
@@ -226,90 +286,7 @@ class ObservationGenerator:
         variation_extent: float = 1.0,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
-    ) -> GeneratedObservationBatch:
-        """Generate a deterministic batch with one internal component count."""
-
-        with _timing_span(timing, f"{timing_prefix}formation_batch", samples=sample_count):
-            formation_batch = self.sample_formation_batch(
-                component_count=component_count,
-                sample_count=sample_count,
-                seed=seed,
-                component_sequences=component_sequences,
-                memory_limit_bytes=memory_limit_bytes,
-                resolution_assignment=resolution_assignment,
-                variation_extent=variation_extent,
-                timing=timing,
-                timing_prefix=f"{timing_prefix}formation_batch.",
-            )
-        with _timing_span(timing, f"{timing_prefix}scaled_factors"):
-            scaled_factors = tuple(self.latent_factors.sample_factors)
-        samples: list[GeneratedObservationSample] = []
-        with _timing_span(
-            timing,
-            f"{timing_prefix}materialized_observation",
-            samples=sample_count,
-        ):
-            observations = tuple(
-                self.formation.form_observation(
-                    id=self._observation_id(
-                        component_count=component_count,
-                        seed=seed,
-                        index=spec.index,
-                    ),
-                    plan=spec.materialization_plan,
-                    component_sequence=spec.component_sequence,
-                    variation_coordinates=spec.variation_coordinates,
-                )
-                for spec in formation_batch.samples
-            )
-        with _timing_span(timing, f"{timing_prefix}latent_coordinates", samples=sample_count):
-            latent_coordinate_samples = tuple(
-                self._latent_coordinates(
-                    sequence=spec.component_sequence,
-                    scaled_factors=scaled_factors,
-                    plan=spec.materialization_plan,
-                    variation_values=spec.variation_values,
-                )
-                for spec in formation_batch.samples
-            )
-        with _timing_span(timing, f"{timing_prefix}sample_assembly", samples=sample_count):
-            for spec, observation, latent_coordinates in zip(
-                formation_batch.samples,
-                observations,
-                latent_coordinate_samples,
-                strict=True,
-            ):
-                samples.append(
-                    GeneratedObservationSample(
-                        index=spec.index,
-                        materialization_plan=spec.materialization_plan,
-                        observation=observation,
-                        outcome_id=spec.outcome_id,
-                        complexity=spec.complexity,
-                        latent_coordinates=latent_coordinates,
-                    )
-                )
-
-        return GeneratedObservationBatch(
-            benchmark_id=self.benchmark_manifest.id,
-            component_count=component_count,
-            seed=seed,
-            samples=tuple(samples),
-        )
-
-    def sample_formation_batch(
-        self,
-        *,
-        component_count: int,
-        sample_count: int,
-        seed: int,
-        component_sequences: Iterable[Sequence[int]] | None = None,
-        memory_limit_bytes: int | None = None,
-        resolution_assignment: AxisAssignment | None = None,
-        variation_extent: float = 1.0,
-        timing: TimingCollector | None = None,
-        timing_prefix: str = "",
-    ) -> GeneratedFormationBatch:
+    ) -> _FormationSamples:
         """Generate deterministic formation specs without materializing fields."""
 
         if type(sample_count) is not int or sample_count < 1:
@@ -328,7 +305,7 @@ class ObservationGenerator:
             raise ObservationGenerationError("variation_extent must be between 0 and 1")
         if component_count != 1:
             raise ObservationGenerationError(
-                "fixed-outcome component observations require one component"
+                "fixed-outcome component samples require one component"
             )
         with _timing_span(timing, f"{timing_prefix}component_sequences"):
             sequences = tuple(component_sequences) if component_sequences is not None else ()
@@ -413,7 +390,7 @@ class ObservationGenerator:
             )
         if any(len(sequence) != 1 for sequence in sequence_samples):
             raise ObservationGenerationError(
-                "fixed-outcome component observations require one component"
+                "fixed-outcome component samples require one component"
             )
         variation_samples: list[
             tuple[
@@ -440,7 +417,7 @@ class ObservationGenerator:
                         timing_phase=variation_timing_phase,
                     )
                 )
-        samples: list[GeneratedFormationSample] = []
+        samples: list[GeneratedSample] = []
         with _timing_span(timing, f"{timing_prefix}sample_assembly", samples=sample_count):
             for index, plan, sequence, variation_sample in zip(
                 range(sample_count),
@@ -451,7 +428,7 @@ class ObservationGenerator:
             ):
                 variation_values, variation_coordinates = variation_sample
                 samples.append(
-                    GeneratedFormationSample(
+                    GeneratedSample(
                         index=index,
                         materialization_plan=plan,
                         width=plan.resolution_assignment.require_axis(self.formation.width_axis),
@@ -464,7 +441,7 @@ class ObservationGenerator:
                     )
                 )
 
-        return GeneratedFormationBatch(
+        return _FormationSamples(
             benchmark_id=self.benchmark_manifest.id,
             component_count=component_count,
             seed=seed,
@@ -666,7 +643,7 @@ class ObservationGenerator:
     def _outcome_id(self, sequence: tuple[int, ...]) -> str:
         if len(sequence) != 1:
             raise ObservationGenerationError(
-                "fixed-outcome component observations require one component"
+                "fixed-outcome component samples require one component"
             )
         index = sequence[0]
         if index >= len(self.benchmark_manifest.outcome_space.outcomes):
@@ -725,14 +702,10 @@ class ObservationGenerator:
         )
 
 
-def load_observation_generator(benchmark_root: Path) -> ObservationGenerator:
-    """Load an observation generator from a benchmark package root."""
+def load_generator(benchmark_root: Path) -> BenchmarkGenerator:
+    """Load a first-class data generator from a benchmark package root."""
 
-    generator = load_benchmark_implementation(benchmark_root).observation_generator()
-    if not isinstance(generator, ObservationGenerator):
-        raise ObservationGenerationError(
-            "benchmark implementation observation_generator must return ObservationGenerator"
-        )
+    generator = load_benchmark(benchmark_root).generator
     return generator
 
 

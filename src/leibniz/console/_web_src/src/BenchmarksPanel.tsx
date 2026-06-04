@@ -1,6 +1,7 @@
 import {
   Boxes,
   ChevronDown,
+  Code2,
   Fingerprint,
   GitBranch,
   PackageCheck,
@@ -22,6 +23,7 @@ import {
 } from './benchmarkDashboardModel.ts';
 import type { ArtifactReferenceRecord } from './artifactReferences.ts';
 import type {
+  BenchmarkCodeSurfaceRecord,
   BenchmarkTaskRecord,
   GeneratedObservationBatchRecord,
   GeneratedObservationSampleRecord,
@@ -1048,6 +1050,7 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
 
   return (
     <div className="benchmark-task">
+      <BenchmarkCodeSurfaceInspector surfaces={task.code_surfaces} />
       {selectedSample === undefined ? null : (
         <BenchmarkSampleCoordinateInspector
           sample={selectedSample.sample}
@@ -1068,6 +1071,50 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
         ))}
       </section>
     </div>
+  );
+}
+
+function BenchmarkCodeSurfaceInspector({
+  surfaces,
+}: {
+  surfaces: BenchmarkCodeSurfaceRecord[];
+}) {
+  const [expanded, setExpanded] = usePersistentState(
+    'leibniz.console.benchmarks.codeInspector.expanded',
+    false,
+  );
+  const selected = surfaces[0];
+  if (selected === undefined) {
+    return null;
+  }
+  return (
+    <section className="benchmark-code-inspector" aria-label="Benchmark implementation code">
+      <div className="benchmark-code-inspector-header">
+        <button
+          aria-expanded={expanded}
+          className="benchmark-code-toggle"
+          onClick={() => setExpanded((value) => !value)}
+          type="button"
+        >
+          <ChevronDown aria-hidden="true" className={expanded ? 'expanded' : ''} size={16} />
+          <Code2 aria-hidden="true" size={16} />
+          <span>Implementation</span>
+        </button>
+        <div className="benchmark-code-source">
+          {selected.source_path}:{selected.start_line}-{selected.end_line}
+        </div>
+      </div>
+      <div className="benchmark-code-inspector-body" hidden={!expanded}>
+        <ol className="benchmark-code-call-path" aria-label="Implementation call path">
+          {selected.call_path.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+        <pre className="benchmark-code-excerpt">
+          <code>{selected.code}</code>
+        </pre>
+      </div>
+    </section>
   );
 }
 

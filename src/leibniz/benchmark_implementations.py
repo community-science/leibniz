@@ -3,44 +3,91 @@
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from types import ModuleType
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
+from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
-from leibniz.documents import document_filename_suffix
-from leibniz.latent_factors import (
-    LatentFactorDeclaration,
-    LatentFactorDeclarationDocument,
-)
-from leibniz.materialization import (
-    MaterializationDeclaration,
-    MaterializationDeclarationDocument,
-)
-from leibniz.observation_formation import (
-    ObservationFormationDeclaration,
-    ObservationFormationDeclarationDocument,
-)
+from leibniz.latent_factors import LatentFactorDeclaration
+from leibniz.materialization import AxisAssignment, MaterializationDeclaration
+from leibniz.observation_formation import ObservationFormationDeclaration
+from leibniz.timing import TimingCollector
+
+if TYPE_CHECKING:
+    from leibniz.observation_generation import GeneratedSampleSet
 
 __all__ = [
-    "BenchmarkImplementation",
-    "BenchmarkImplementationError",
-    "DeclarationBackedBenchmarkImplementation",
+    "Benchmark",
+    "BenchmarkError",
+    "Generator",
     "discover_benchmark_roots",
-    "load_benchmark_implementation",
+    "load_benchmark",
 ]
 
-_document_suffix = document_filename_suffix()
 _entrypoint_filename = "benchmark.py"
 _entrypoint_factory = "benchmark"
 
 
-class BenchmarkImplementationError(ValueError):
+class BenchmarkError(ValueError):
     """Raised when a benchmark implementation cannot be loaded."""
 
 
-class BenchmarkImplementation(Protocol):
+class Generator(Protocol):
+    """Callable benchmark data generator surface."""
+
+    @property
+    def id(self) -> object: ...
+
+    @property
+    def version(self) -> str: ...
+
+    @property
+    def benchmark_manifest(self) -> BenchmarkManifest: ...
+
+    @property
+    def latent_factors(self) -> LatentFactorDeclaration: ...
+
+    @property
+    def materialization(self) -> MaterializationDeclaration: ...
+
+    @property
+    def formation(self) -> ObservationFormationDeclaration: ...
+
+    def minimum_discriminatable_resolution_assignment(
+        self,
+        *,
+        component_count: int,
+        minimum_assignment: AxisAssignment,
+    ) -> AxisAssignment: ...
+
+    def distinguishable_state_complexity(
+        self,
+        *,
+        component_count: int,
+        width: int,
+        height: int,
+        variation_extent: float = 1.0,
+    ) -> float: ...
+
+    def __call__(
+        self,
+        *,
+        component_count: int,
+        seed: int,
+        shape: int | Sequence[int] | None = None,
+        include_fields: bool = False,
+        component_sequences: Iterable[Sequence[int]] | None = None,
+        memory_limit_bytes: int | None = None,
+        resolution_assignment: AxisAssignment | None = None,
+        variation_extent: float = 1.0,
+        timing: TimingCollector | None = None,
+        timing_prefix: str = "",
+    ) -> GeneratedSampleSet: ...
+
+
+class Benchmark(Protocol):
     """Benchmark-owned executable behavior used by generic Leibniz evaluators."""
 
     @property
@@ -58,84 +105,25 @@ class BenchmarkImplementation(Protocol):
     @property
     def formation(self) -> ObservationFormationDeclaration: ...
 
-    def observation_generator(self) -> object: ...
-
-
-class DeclarationBackedBenchmarkImplementation:
-    """Benchmark implementation backed by declaration documents in a benchmark root."""
-
-    def __init__(self, root: Path) -> None:
-        self._root = root
-        self._benchmark_manifest: BenchmarkManifest | None = None
-        self._latent_factors: LatentFactorDeclaration | None = None
-        self._materialization: MaterializationDeclaration | None = None
-        self._formation: ObservationFormationDeclaration | None = None
-
     @property
-    def root(self) -> Path:
-        return self._root
-
-    @property
-    def benchmark_manifest(self) -> BenchmarkManifest:
-        if self._benchmark_manifest is None:
-            self._benchmark_manifest = BenchmarkManifestDocument.from_bytes(
-                self._document_bytes("manifest")
-            ).manifest
-        return self._benchmark_manifest
-
-    @property
-    def latent_factors(self) -> LatentFactorDeclaration:
-        if self._latent_factors is None:
-            self._latent_factors = LatentFactorDeclarationDocument.from_bytes(
-                self._document_bytes("latent_factors")
-            ).declaration
-        return self._latent_factors
-
-    @property
-    def materialization(self) -> MaterializationDeclaration:
-        if self._materialization is None:
-            self._materialization = MaterializationDeclarationDocument.from_bytes(
-                self._document_bytes("materialization")
-            ).declaration
-        return self._materialization
-
-    @property
-    def formation(self) -> ObservationFormationDeclaration:
-        if self._formation is None:
-            self._formation = ObservationFormationDeclarationDocument.from_bytes(
-                self._document_bytes("observation_formation")
-            ).declaration
-        return self._formation
-
-    def observation_generator(self) -> object:
-        from leibniz.observation_generation import ObservationGenerator
-
-        return ObservationGenerator(
-            benchmark_manifest=self.benchmark_manifest,
-            latent_factors=self.latent_factors,
-            materialization=self.materialization,
-            formation=self.formation,
-        )
-
-    def _document_bytes(self, stem: str) -> bytes:
-        return (self.root / (stem + _document_suffix)).read_bytes()
+    def generator(self) -> Generator: ...
 
 
-def load_benchmark_implementation(benchmark_root: Path) -> BenchmarkImplementation:
+def load_benchmark(benchmark_root: Path) -> Benchmark:
     """Load a benchmark implementation from a benchmark package root."""
 
     entrypoint = benchmark_root / _entrypoint_filename
     if not entrypoint.is_file():
-        return DeclarationBackedBenchmarkImplementation(benchmark_root)
+        raise BenchmarkError(f"{benchmark_root}: missing {_entrypoint_filename}")
     module = _load_entrypoint_module(entrypoint)
     factory = getattr(module, _entrypoint_factory, None)
     if not callable(factory):
-        raise BenchmarkImplementationError(
+        raise BenchmarkError(
             f"{entrypoint}: expected callable {_entrypoint_factory}"
         )
     implementation = factory(benchmark_root)
     _validate_benchmark_implementation(implementation, entrypoint=entrypoint)
-    return cast(BenchmarkImplementation, implementation)
+    return cast(Benchmark, implementation)
 
 
 def discover_benchmark_roots(benchmark_parent: Path) -> tuple[Path, ...]:
@@ -151,9 +139,7 @@ def discover_benchmark_roots(benchmark_parent: Path) -> tuple[Path, ...]:
 
 
 def _is_benchmark_root(path: Path) -> bool:
-    return (path / _entrypoint_filename).is_file() or (
-        path / ("manifest" + _document_suffix)
-    ).is_file()
+    return (path / _entrypoint_filename).is_file()
 
 
 def _load_entrypoint_module(entrypoint: Path) -> ModuleType:
@@ -162,7 +148,7 @@ def _load_entrypoint_module(entrypoint: Path) -> ModuleType:
     ).hex
     spec = importlib.util.spec_from_file_location(module_name, entrypoint)
     if spec is None or spec.loader is None:
-        raise BenchmarkImplementationError(f"{entrypoint}: could not load module spec")
+        raise BenchmarkError(f"{entrypoint}: could not load module spec")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -183,11 +169,16 @@ def _validate_benchmark_implementation(
         try:
             getattr(value, name)
         except Exception as error:
-            raise BenchmarkImplementationError(
+            raise BenchmarkError(
                 f"{entrypoint}: benchmark implementation missing {name}"
             ) from error
-    method = getattr(value, "observation_generator", None)
-    if not callable(method):
-        raise BenchmarkImplementationError(
-            f"{entrypoint}: benchmark implementation missing observation_generator"
+    try:
+        _generator = cast(Any, value).generator
+    except Exception as error:
+        raise BenchmarkError(
+            f"{entrypoint}: benchmark implementation missing generator"
+        ) from error
+    if not callable(_generator):
+        raise BenchmarkError(
+            f"{entrypoint}: benchmark implementation generator must be callable"
         )
