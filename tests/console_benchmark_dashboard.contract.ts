@@ -26,17 +26,17 @@ const architectureDigest = 'sha256:abcdef1234567890';
 
 const standardAxes = benchmarkCostAxes(undefined);
 assertEqual(standardAxes.map((axis) => axis.key).join(','),
-  'parameter_count,storage_bytes,inference_compute,training_compute',
+  'storage_bytes,inference_compute,training_compute',
   'standard cost axes',
 );
 assertEqual(
   Object.keys(emptyFrontiersForCostAxes(standardAxes)).join(','),
-  'parameter_count,storage_bytes,inference_compute,training_compute',
+  'storage_bytes,inference_compute,training_compute',
   'empty frontier axes',
 );
 assertEqual(
   benchmarkCostAxis('missing_axis', standardAxes),
-  'parameter_count',
+  'storage_bytes',
   'missing cost axis fallback',
 );
 assertEqual(
@@ -52,13 +52,13 @@ assertEqual(
 
 const result: BenchmarkResultRecord = {
   benchmark_id: targetBenchmark,
-  cost_axes: [{ key: 'parameter_count', label: 'Parameters' }],
+  cost_axes: [{ key: 'storage_bytes', label: 'Model Size' }],
   score_axes: [
-    { key: 'absolute', label: 'Absolute' },
-    { key: 'relative', label: 'Relative' },
+    { key: 'absolute', label: 'Absolute Score' },
+    { key: 'relative', label: 'Relative Score' },
   ],
   frontiers: {
-    parameter_count: [
+    storage_bytes: [
       {
         architecture_digest: architectureDigest,
         benchmark_id: targetBenchmark,
@@ -66,7 +66,6 @@ const result: BenchmarkResultRecord = {
           component_count: 1,
           inference_compute: 20,
           storage_bytes: 40,
-          parameter_count: 10,
           training_compute: 360,
         },
         measurement_count: 2,
@@ -77,8 +76,8 @@ const result: BenchmarkResultRecord = {
         run_ids: ['run-a'],
         score: 0.75,
         score_views: {
-          absolute: { key: 'absolute', label: 'Absolute', score: 0.75 },
-          relative: { key: 'relative', label: 'Relative', score: 1200 },
+          absolute: { key: 'absolute', label: 'Absolute Score', score: 0.75 },
+          relative: { key: 'relative', label: 'Relative Score', score: 1200 },
         },
         source_kinds: ['local'],
       },
@@ -92,7 +91,6 @@ const result: BenchmarkResultRecord = {
         component_count: 1,
         inference_compute: 20,
         storage_bytes: 40,
-        parameter_count: 10,
         training_compute: 360,
       },
       measurement_count: 2,
@@ -103,8 +101,8 @@ const result: BenchmarkResultRecord = {
       run_ids: ['run-a'],
       score: 0.75,
       score_views: {
-        absolute: { key: 'absolute', label: 'Absolute', score: 0.75 },
-        relative: { key: 'relative', label: 'Relative', score: 1200 },
+        absolute: { key: 'absolute', label: 'Absolute Score', score: 0.75 },
+        relative: { key: 'relative', label: 'Relative Score', score: 1200 },
       },
       source_kinds: ['local'],
     },
@@ -115,7 +113,6 @@ const result: BenchmarkResultRecord = {
         component_count: 2,
         inference_compute: 80,
         storage_bytes: 160,
-        parameter_count: 40,
         training_compute: 1440,
       },
       measurement_count: 1,
@@ -126,8 +123,8 @@ const result: BenchmarkResultRecord = {
       run_ids: ['run-b'],
       score: 0.5,
       score_views: {
-        absolute: { key: 'absolute', label: 'Absolute', score: 0.5 },
-        relative: { key: 'relative', label: 'Relative', score: 900 },
+        absolute: { key: 'absolute', label: 'Absolute Score', score: 0.5 },
+        relative: { key: 'relative', label: 'Relative Score', score: 900 },
       },
       source_kinds: ['local'],
     },
@@ -140,7 +137,6 @@ const result: BenchmarkResultRecord = {
         component_count: 1,
         inference_compute: 20,
         storage_bytes: 40,
-        parameter_count: 10,
         training_compute: 360,
       },
       measurement_count: 2,
@@ -151,8 +147,8 @@ const result: BenchmarkResultRecord = {
       run_ids: ['run-a'],
       score: 0.75,
       score_views: {
-        absolute: { key: 'absolute', label: 'Absolute', score: 0.75 },
-        relative: { key: 'relative', label: 'Relative', score: 1200 },
+        absolute: { key: 'absolute', label: 'Absolute Score', score: 0.75 },
+        relative: { key: 'relative', label: 'Relative Score', score: 1200 },
       },
       source_kinds: ['local'],
     },
@@ -163,7 +159,6 @@ const result: BenchmarkResultRecord = {
         component_count: 2,
         inference_compute: 80,
         storage_bytes: 160,
-        parameter_count: 40,
         training_compute: 1440,
       },
       measurement_count: 1,
@@ -174,8 +169,8 @@ const result: BenchmarkResultRecord = {
       run_ids: ['run-b'],
       score: 0.5,
       score_views: {
-        absolute: { key: 'absolute', label: 'Absolute', score: 0.5 },
-        relative: { key: 'relative', label: 'Relative', score: 900 },
+        absolute: { key: 'absolute', label: 'Absolute Score', score: 0.5 },
+        relative: { key: 'relative', label: 'Relative Score', score: 900 },
       },
       source_kinds: ['local'],
     },
@@ -190,7 +185,6 @@ const result: BenchmarkResultRecord = {
         component_count: 1,
         inference_compute: 20,
         storage_bytes: 40,
-        parameter_count: 10,
         training_compute: 360,
       },
       measurement_count: 2,
@@ -258,7 +252,6 @@ const result: BenchmarkResultRecord = {
         component_count: 1,
         inference_compute: 20,
         storage_bytes: 40,
-        parameter_count: 10,
         training_compute: 360,
       },
       measurement_count: 2,
@@ -280,7 +273,6 @@ const result: BenchmarkResultRecord = {
         component_count: 2,
         inference_compute: 80,
         storage_bytes: 160,
-        parameter_count: 40,
         training_compute: 1440,
       },
       measurement_count: 1,
@@ -323,7 +315,6 @@ const inspections: ModelInspectionRecord[] = [
       inference_compute: 20,
       component_count: 1,
       storage_bytes: 40,
-      parameter_count: 10,
       unknown_compute_components: [],
       unknown_parameter_components: [],
     },
@@ -374,7 +365,6 @@ const inspections: ModelInspectionRecord[] = [
           kind: 'operator',
           operator_kind: 'identity',
           output_shape: [2],
-          parameter_count: 0,
           shape_law: 'fixture-shape',
           syntax_alias: 'operator',
         },
@@ -428,8 +418,8 @@ assertEqual(
   'inspection-a',
   'result-local model inspection match',
 );
-const plotModel = benchmarkPlotModel(result, 'parameter_count');
-const relativePlotModel = benchmarkPlotModel(result, 'parameter_count', 'relative');
+const plotModel = benchmarkPlotModel(result, 'storage_bytes');
+const relativePlotModel = benchmarkPlotModel(result, 'storage_bytes', 'relative');
 assertEqual(plotModel.points.length, 2, 'plot point count');
 assertEqual(benchmarkScoreAxes(result).map((axis) => axis.key).join(','), 'absolute,relative', 'result score axes');
 assertEqual(benchmarkScoreAxis('relative', benchmarkScoreAxes(result)), 'relative', 'relative score axis');
@@ -441,6 +431,9 @@ assertEqual(plotModel.xDomain[0], 0, 'plot default x minimum');
 assertEqual(plotModel.xDomain[1], 20, 'plot default x maximum');
 assertEqual(plotModel.xMajorTicks.includes(1), true, 'plot major x ticks');
 assertEqual(plotModel.xMinorTicks.includes(2), true, 'plot minor x ticks');
+const trainingComputePlotModel = benchmarkPlotModel(result, 'training_compute');
+assertEqual(trainingComputePlotModel.xMajorTicks.includes(10), true, 'training compute uses base-10 ticks');
+assertEqual(trainingComputePlotModel.xMajorTicks.includes(16), false, 'training compute omits base-2 ticks');
 assertEqual(plotModel.yDomain[0], 0, 'plot y starts at zero');
 assertEqual(plotModel.yDomain[1], 1.05, 'plot y ceiling follows score scale');
 assertEqual(plotModel.yTicks.join(','), '0,0.2,0.4,0.6,0.8,1', 'absolute plot y ticks');
@@ -456,12 +449,12 @@ const acceptedDominatedRelativeScaleResult: BenchmarkResultRecord = {
   ],
 };
 assertEqual(
-  benchmarkPlotModel(acceptedDominatedRelativeScaleResult, 'parameter_count', 'relative').yDomain[1],
+  benchmarkPlotModel(acceptedDominatedRelativeScaleResult, 'storage_bytes', 'relative').yDomain[1],
   1260,
   'plot y ceiling includes accepted frontier points as well as tentative runs',
 );
 assertEqual(
-  sortedModelResults(result.leaderboard, 'parameter_count', 'absolute', {
+  sortedModelResults(result.leaderboard, 'storage_bytes', 'absolute', {
     key: 'cost',
     direction: 'descending',
   })[0]?.model_key,
@@ -469,7 +462,7 @@ assertEqual(
   'model cost sort',
 );
 assertEqual(
-  sortedModelResults(result.leaderboard, 'parameter_count', 'relative', {
+  sortedModelResults(result.leaderboard, 'storage_bytes', 'relative', {
     key: 'score',
     direction: 'ascending',
   })[0]?.model_key,
@@ -492,7 +485,7 @@ const emptyPlotModel = benchmarkPlotModel(
     frontiers: {},
     leaderboard: [],
   },
-  'parameter_count',
+  'storage_bytes',
 );
 assertEqual(emptyPlotModel.points.length, 0, 'empty plot point count');
 assertEqual(emptyPlotModel.xTicks.length > 0, true, 'empty plot has x ticks');
@@ -506,7 +499,7 @@ const expandedPlotModel = benchmarkPlotModel(
         ...result.leaderboard[1]!,
         cost_summary: {
           ...result.leaderboard[1]!.cost_summary,
-          parameter_count: 2 ** 22,
+          storage_bytes: 2 ** 22,
         },
         model_key: 'model-c',
       },
@@ -517,7 +510,7 @@ const expandedPlotModel = benchmarkPlotModel(
         ...result.plot_runs[1]!,
         cost_summary: {
           ...result.plot_runs[1]!.cost_summary,
-          parameter_count: 2 ** 22,
+          storage_bytes: 2 ** 22,
         },
         model_key: 'model-c',
         run_id: 'run-c',
@@ -525,7 +518,7 @@ const expandedPlotModel = benchmarkPlotModel(
       },
     ],
   },
-  'parameter_count',
+  'storage_bytes',
 );
 assertEqual(expandedPlotModel.xDomain[1], 22, 'plot x maximum expands by log2 step');
 

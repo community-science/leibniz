@@ -346,8 +346,8 @@ def test_relative_score_view_exposes_batch_rating_evidence() -> None:
     assert basis["provisional"] is True
     assert cast(float, basis["rating_uncertainty"]) > 0.0
     confidence = cast(dict[str, object], basis["frontier_confidence"])
-    parameter_confidence = cast(dict[str, object], confidence["parameter_count"])
-    assert parameter_confidence["risk_threshold"] == 0.05
+    size_confidence = cast(dict[str, object], confidence["storage_bytes"])
+    assert size_confidence["risk_threshold"] == 0.05
 
 
 def test_relative_frontier_confidence_requests_uncertain_nearest_competition() -> None:
@@ -498,9 +498,10 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
         "Resources",
     ]
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
-    assert cost_summary["parameter_count"] == 50
+    assert "parameter_count" not in cost_summary
+    assert cost_summary["storage_bytes"] == 200
     frontiers = cast(dict[str, object], result["frontiers"])
-    assert len(cast(list[dict[str, object]], frontiers["parameter_count"])) == 1
+    assert len(cast(list[dict[str, object]], frontiers["storage_bytes"])) == 1
     history = cast(list[dict[str, object]], result["training_history"])
     assert history[0]["source_kind"] == "local-run"
     assert "training_diagnostics" not in history[0]
@@ -1031,7 +1032,7 @@ def _benchmark_run_record_for_competition(
         complexity=1.0,
         measurement_count=len(dataset.measurements),
         score=1.0,
-        cost_summary={"component_count": 1, "parameter_count": 1},
+        cost_summary={"component_count": 1, "storage_bytes": 1},
         architecture=architecture.to_record(),
         model_inspection={},
         model_inspection_digest=digest,

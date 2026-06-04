@@ -39,7 +39,6 @@ from leibniz.measurements import (
 )
 from leibniz.model_inspection import (
     ModelInspectionRecord,
-    ModelInspectionValidationError,
 )
 from leibniz.model_operators import summarize_architecture_operators
 from leibniz.observation_generation import load_observation_generator
@@ -75,10 +74,9 @@ _result_directories = (
     "views",
 )
 _benchmark_cost_axes: tuple[tuple[str, str], ...] = (
-    ("parameter_count", "Parameters"),
-    ("storage_bytes", "Storage"),
-    ("inference_compute", "Compute"),
-    ("training_compute", "Compute"),
+    ("storage_bytes", "Model Size"),
+    ("inference_compute", "Inference Compute"),
+    ("training_compute", "Training Compute"),
 )
 _benchmark_cost_axis_keys = tuple(axis for axis, _label in _benchmark_cost_axes)
 _component_count = 1
@@ -709,7 +707,7 @@ def _model_inspection_view_record(
     training_summary: Mapping[str, object] | None,
     artifact_references: tuple[Mapping[str, object], ...] | None,
 ) -> Mapping[str, object]:
-    record = dict(inspection)
+    record = cast(dict[str, object], _view_record_without_parameter_counts(inspection))
     record["source_path"] = source_path.as_posix()
     record["measurement_dataset"] = {
         "kind": "measurement-dataset",
@@ -725,6 +723,22 @@ def _model_inspection_view_record(
     if artifact_references is not None:
         record["artifacts"] = [dict(reference) for reference in artifact_references]
     return record
+
+
+def _view_record_without_parameter_counts(value: object) -> object:
+    if isinstance(value, Mapping):
+        record = cast(Mapping[object, object], value)
+        return {
+            str(key): _view_record_without_parameter_counts(item)
+            for key, item in record.items()
+            if key != "parameter_count"
+        }
+    if isinstance(value, list | tuple):
+        return [
+            _view_record_without_parameter_counts(item)
+            for item in cast(tuple[object, ...] | list[object], value)
+        ]
+    return value
 
 
 def _model_key_from_checkpoint_record(record: Mapping[str, object]) -> str:
@@ -743,6 +757,7 @@ def _evaluation_bundle_cost_summary(
     benchmark_root: Path | None = None,
 ) -> Mapping[str, object]:
     cost_summary = dict(bundle.model_inspection.cost_summary.to_record())
+    cost_summary.pop("parameter_count", None)
     cost_summary.pop("inference_compute", None)
     inference_compute = _evaluation_bundle_max_inference_compute(bundle)
     if inference_compute is None and benchmark_root is not None:
@@ -1272,12 +1287,12 @@ def _benchmark_cost_axis_records() -> list[dict[str, object]]:
 def _benchmark_score_axis_records(
     models: tuple[Mapping[str, object], ...],
 ) -> list[dict[str, object]]:
-    axes: list[dict[str, object]] = [{"key": "absolute", "label": "Absolute"}]
+    axes: list[dict[str, object]] = [{"key": "absolute", "label": "Absolute Score"}]
     if any(
         "relative" in _extract.mapping(model.get("score_views"), "score_views")
         for model in models
     ):
-        axes.append({"key": "relative", "label": "Relative"})
+        axes.append({"key": "relative", "label": "Relative Score"})
     return axes
 
 
@@ -1318,7 +1333,7 @@ def _model_result_records(
         )
         best_run = max(
             ordered_runs,
-            key=lambda run: (run.score, -_cost_value(run.cost_summary, "parameter_count")),
+            key=lambda run: (run.score, -_cost_value(run.cost_summary, "storage_bytes")),
         )
         best_runs[model_key] = best_run
         result_status = (
@@ -1346,7 +1361,7 @@ def _model_result_records(
             "score_views": {
                 "absolute": {
                     "key": "absolute",
-                    "label": "Absolute",
+                    "label": "Absolute Score",
                     "score": score,
                     "basis": score_basis,
                 }
@@ -1397,7 +1412,7 @@ def _add_relative_score_views(
         score_views = cast(dict[str, object], record["score_views"])
         score_views["relative"] = {
             "key": "relative",
-            "label": "Relative",
+            "label": "Relative Score",
             "score": rating.score,
             "basis": {
                 "kind": "model-competition-bradley-terry-batch-v1",
@@ -1930,6 +1945,7 @@ def _model_cost_summary(
     competition_inference_compute: float | None = None,
 ) -> dict[str, object]:
     cost_summary = _run_cost_summary(best_run)
+    cost_summary.pop("parameter_count", None)
     cost_summary.pop("inference_compute", None)
     inference_compute = _model_measured_inference_compute(
         runs,
@@ -2012,6 +2028,7 @@ def _run_training_compute_value(run: _BenchmarkRunRecord) -> float | None:
 
 def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
     cost_summary = dict(run.cost_summary)
+    cost_summary.pop("parameter_count", None)
     if run.source_kind == "local-run":
         inference_compute = _optional_cost_value(cost_summary, "inference_compute")
         if inference_compute is not None:
@@ -2121,8 +2138,7 @@ def _model_console_view_model(
         _console_detail_entries_section(
             title="Resources",
             entries=(
-                ("Parameters", _console_number_value(cost_summary.get("parameter_count"))),
-                ("Storage", _console_number_value(cost_summary.get("storage_bytes"))),
+                ("Model Size", _console_number_value(cost_summary.get("storage_bytes"))),
                 (
                     "Inference Compute",
                     _console_number_value(cost_summary.get("inference_compute")),
@@ -2348,7 +2364,7 @@ def _model_sort_key(record: Mapping[str, object]) -> tuple[float, float, str]:
     cost_summary = _extract.mapping(record["cost_summary"], "cost_summary")
     return (
         -_as_nonnegative_number(record["score"], "score"),
-        _cost_value(cost_summary, "parameter_count"),
+        _cost_value(cost_summary, "storage_bytes"),
         str(record["model_key"]),
     )
 
@@ -2726,12 +2742,28 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
     for index, inspection in enumerate(inspections):
         field = f"model_inspections.{index}"
         inspection_record = dict(_extract.mapping(inspection, field))
-        inspection_record.pop("source_path", None)
-        inspection_record.pop("artifacts", None)
         try:
-            ModelInspectionRecord.from_record(inspection_record)
-        except ModelInspectionValidationError as error:
-            raise LocalResultImportError(f"{field}: invalid model inspection: {error}") from error
+            _require_string_fields(
+                inspection_record,
+                field,
+                ("id", "source_path"),
+            )
+            _require_mapping_fields(
+                inspection_record,
+                field,
+                (
+                    "architecture",
+                    "architecture_graph",
+                    "architecture_summary",
+                    "architecture_trace",
+                    "cost_summary",
+                ),
+            )
+            _require_sequence_fields(inspection_record, field, ("components", "node_evidence"))
+        except LocalResultImportError as error:
+            raise LocalResultImportError(
+                f"{field}: invalid model inspection: {error}"
+            ) from error
 
 
 def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:

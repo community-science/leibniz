@@ -50,7 +50,6 @@ type PlotAxisSelectorAxis = {
 type PlotAxisSelectorGroup = {
   axes: PlotAxisSelectorAxis[];
   key: string;
-  label: string;
 };
 
 const plotWidth = 960;
@@ -93,7 +92,7 @@ export function BenchmarkResultDashboard({
   const stateKeyPrefix = `leibniz.console.benchmarks.${result.benchmark_id}.performance`;
   const [selectedCostAxis, setSelectedCostAxis] = usePersistentState(
     `${stateKeyPrefix}.costAxis`,
-    costAxes[0]?.key ?? 'parameter_count',
+    costAxes[0]?.key ?? 'storage_bytes',
   );
   const costAxis = benchmarkCostAxis(selectedCostAxis, costAxes);
   const costAxisLabel = costAxes.find((axis) => axis.key === costAxis)?.label ?? 'Cost';
@@ -244,7 +243,6 @@ function BenchmarkFrontierPlot({
     {
       axes: scoreAxes,
       key: 'score',
-      label: 'Score',
     },
   ];
 
@@ -315,7 +313,7 @@ function BenchmarkFrontierPlot({
               y={plotMargin.top}
             />
             {model.xMinorTicks.map((tick) => {
-              const logTick = Math.log2(tick);
+              const logTick = Math.log(tick) / Math.log(model.xLogBase);
               if (logTick < view.xDomain[0] || logTick > view.xDomain[1]) {
                 return null;
               }
@@ -332,7 +330,7 @@ function BenchmarkFrontierPlot({
               );
             })}
             {model.xMajorTicks.map((tick) => {
-              const logTick = Math.log2(tick);
+              const logTick = Math.log(tick) / Math.log(model.xLogBase);
               if (logTick < view.xDomain[0] || logTick > view.xDomain[1]) {
                 return null;
               }
@@ -501,7 +499,6 @@ function PlotAxisSelector({
           key={group.key}
           style={{ flexGrow: group.axes.length }}
         >
-          <span>{group.label}</span>
           <div>
             {group.axes.map((axis) => (
               <button

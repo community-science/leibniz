@@ -37,6 +37,7 @@ export type BenchmarkPlotModel = {
   points: BenchmarkPlotModelPoint[];
   frontierPoints: BenchmarkPlotModelPoint[];
   xDomain: [number, number];
+  xLogBase: number;
   yDomain: [number, number];
   xTicks: number[];
   xMajorTicks: number[];
@@ -47,7 +48,6 @@ export type BenchmarkPlotModel = {
 export type BenchmarkCostAxisGroup = {
   axes: CostAxisRecord[];
   key: string;
-  label: string;
 };
 
 const fallbackLogCostDomain: [number, number] = [0, 20];
@@ -55,27 +55,21 @@ const fallbackScoreDomain: [number, number] = [0, 1.05];
 const denseLogTickThreshold = 14;
 const targetScoreTickCount = 8;
 const standardScoreAxes: ScoreAxisRecord[] = [
-  { key: 'absolute', label: 'Absolute' },
-  { key: 'relative', label: 'Relative' },
+  { key: 'absolute', label: 'Absolute Score' },
+  { key: 'relative', label: 'Relative Score' },
 ];
 const standardCostAxisGroups: BenchmarkCostAxisGroup[] = [
   {
-    axes: [
-      { key: 'parameter_count', label: 'Parameters' },
-      { key: 'storage_bytes', label: 'Storage' },
-    ],
+    axes: [{ key: 'storage_bytes', label: 'Model Size' }],
     key: 'model',
-    label: 'Model',
   },
   {
-    axes: [{ key: 'inference_compute', label: 'Compute' }],
+    axes: [{ key: 'inference_compute', label: 'Inference Compute' }],
     key: 'inference',
-    label: 'Inference',
   },
   {
-    axes: [{ key: 'training_compute', label: 'Compute' }],
+    axes: [{ key: 'training_compute', label: 'Training Compute' }],
     key: 'training',
-    label: 'Training',
   },
 ];
 const standardCostAxes = standardCostAxisGroups.flatMap((group) => group.axes);
@@ -219,15 +213,17 @@ export function benchmarkPlotModel(
     .map((model) => plotPoint(model, costAxis, scoreAxis, true))
     .filter((point): point is BenchmarkPlotModelPoint => point !== null)
     .sort((left, right) => left.cost - right.cost || right.score - left.score);
+  const xLogBase = costAxisLogBase(costAxis);
   const costLogs = points.map((point) => point.logCost);
   const scores = [...points, ...frontierPoints].map((point) => point.score);
   const xDomain = logCostDomain(costLogs);
   const yDomain = scoreDomain(scores);
-  const xTicks = logCostTicks(xDomain);
+  const xTicks = logCostTicks(xDomain, xLogBase);
   return {
     points,
     frontierPoints,
     xDomain,
+    xLogBase,
     yDomain,
     xTicks: [...xTicks.major, ...xTicks.minor].sort((left, right) => left - right),
     xMajorTicks: xTicks.major,
@@ -390,7 +386,7 @@ function plotPoint(
     id: model.model_key,
     label: shortDigest(model.architecture_digest),
     cost,
-    logCost: Math.log2(cost),
+    logCost: logCost(cost, costAxis),
     score,
     frontier,
     resultStatus: 'accepted',
@@ -419,7 +415,7 @@ function plotRunPoint(
     id: runSelectionId(run),
     label: shortDigest(run.architecture_digest),
     cost,
-    logCost: Math.log2(cost),
+    logCost: logCost(cost, costAxis),
     score,
     frontier: run.result_status === 'accepted' && model !== undefined && frontierKeys.has(model.model_key),
     resultStatus: run.result_status,
@@ -462,6 +458,14 @@ function logCostDomain(values: number[]): [number, number] {
   const min = Math.min(fallbackLogCostDomain[0], Math.floor(Math.min(...finite)));
   const max = Math.max(fallbackLogCostDomain[1], Math.ceil(Math.max(...finite)));
   return [min, max];
+}
+
+function costAxisLogBase(costAxis: string): number {
+  return costAxis === 'training_compute' ? 10 : 2;
+}
+
+function logCost(cost: number, costAxis: string): number {
+  return Math.log(cost) / Math.log(costAxisLogBase(costAxis));
 }
 
 function scoreDomain(values: number[]): [number, number] {
@@ -510,14 +514,17 @@ function normalizedTick(value: number): number {
   return Number(value.toPrecision(12));
 }
 
-function logCostTicks([min, max]: [number, number]): { major: number[]; minor: number[] } {
+function logCostTicks(
+  [min, max]: [number, number],
+  logBase: number,
+): { major: number[]; minor: number[] } {
   const first = Math.ceil(min);
   const last = Math.floor(max);
-  const labelStep = last - first > denseLogTickThreshold ? 2 : 1;
+  const labelStep = logBase === 10 || last - first <= denseLogTickThreshold ? 1 : 2;
   const major: number[] = [];
   const minor: number[] = [];
   for (let exponent = first; exponent <= last; exponent += 1) {
-    const tick = 2 ** exponent;
+    const tick = logBase ** exponent;
     if ((exponent - first) % labelStep === 0) {
       major.push(tick);
     } else {

@@ -1374,7 +1374,7 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     progress_view = load_console_result_view(progress_view_summary.view_file.read_bytes())
     progress_result = cast(list[dict[str, object]], progress_view["benchmark_results"])[0]
     assert cast(list[dict[str, object]], progress_result["leaderboard"]) == []
-    assert cast(dict[str, object], progress_result["frontiers"])["parameter_count"] == []
+    assert cast(dict[str, object], progress_result["frontiers"])["storage_bytes"] == []
     progress_plot_runs = cast(list[dict[str, object]], progress_result["plot_runs"])
     assert len(progress_plot_runs) == 1
     assert progress_plot_runs[0]["result_status"] == "tentative"
