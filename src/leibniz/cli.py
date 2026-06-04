@@ -895,7 +895,7 @@ def _benchmark_views_present(
             results_root
             / "views"
             / _benchmark_atom(benchmark_id)
-            / "benchmark_results.json"
+            / ("benchmark_results" + document_filename_suffix())
         ).is_file()
         for benchmark_id in benchmark_ids
     )
