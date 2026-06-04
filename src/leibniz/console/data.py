@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
+from leibniz.benchmark_implementations import discover_benchmark_roots
 from leibniz.console.artifact_index import (
     ConsoleArtifactIndex,
     ConsoleArtifactIndexBuilder,
@@ -114,7 +115,7 @@ class ConsoleDataBuilder:
         details = tuple(self._detail_for_source(source) for source in artifact_index.entries)
         result_views = tuple(self._result_views(tuple(result_roots)))
         model_inspections = tuple(self._model_inspections(artifact_index.entries))
-        benchmark_tasks = tuple(self._benchmark_tasks(artifact_index.entries))
+        benchmark_tasks = tuple(self._benchmark_tasks(self._benchmark_roots(tuple(roots))))
         return ConsoleData(
             artifact_index=artifact_index,
             artifact_details=details,
@@ -300,29 +301,31 @@ class ConsoleDataBuilder:
             inspections.append(record)
         return tuple(inspections)
 
+    def _benchmark_roots(
+        self,
+        roots: tuple[PurePosixPath, ...],
+    ) -> tuple[Path, ...]:
+        benchmark_roots: list[Path] = []
+        seen_roots: set[Path] = set()
+        for root in roots:
+            root_path = self._repository_path(root, description="public root")
+            if not _is_packaged_benchmark_parent(root_path, repository_root=self._repository_root):
+                continue
+            for benchmark_root in discover_benchmark_roots(root_path):
+                resolved = benchmark_root.resolve()
+                if resolved not in seen_roots:
+                    benchmark_roots.append(benchmark_root)
+                    seen_roots.add(resolved)
+        return tuple(benchmark_roots)
+
     def _benchmark_tasks(
         self,
-        entries: tuple[ConsoleArtifactIndexEntry, ...],
+        benchmark_roots: tuple[Path, ...],
     ) -> tuple[Mapping[str, object], ...]:
         tasks: list[Mapping[str, object]] = []
-        for entry in entries:
-            if entry.kind != "benchmark-manifest":
-                continue
-            benchmark_root = self._repository_path(
-                entry.source_path,
-                description="benchmark manifest",
-            ).parent
-            required = (
-                "manifest",
-                "latent_factors",
-                "materialization",
-                "observation_formation",
-            )
-            if any(not (benchmark_root / (name + _document_suffix)).is_file() for name in required):
-                continue
+        for benchmark_root in benchmark_roots:
             source_fingerprint = self._benchmark_task_cache_fingerprint(
                 benchmark_root=benchmark_root,
-                required_documents=required,
             )
             generator = load_observation_generator(benchmark_root)
             manifest = generator.benchmark_manifest
@@ -335,7 +338,10 @@ class ConsoleDataBuilder:
                     "kind": "generated-observations",
                     "benchmark_id": str(manifest.id),
                     "label": _title_from_protocol_name(str(manifest.name)),
-                    "source_path": entry.source_path.as_posix(),
+                    "source_path": _repository_relative_path(
+                        benchmark_root,
+                        repository_root=self._repository_root,
+                    ),
                     "complexity_axis": None,
                     "outcome_atom_name": outcome_atom_name,
                     "outcome_atom_count": atom_count,
@@ -354,13 +360,20 @@ class ConsoleDataBuilder:
         self,
         *,
         benchmark_root: Path,
-        required_documents: tuple[str, ...],
     ) -> str:
         hasher = hashlib.sha256()
         hasher.update(b"balanced-observation-batch-v1\0")
-        for name in required_documents:
-            path = benchmark_root / (name + _document_suffix)
-            self._hash_file(hasher, path)
+        entrypoint = benchmark_root / "benchmark.py"
+        if entrypoint.is_file():
+            self._hash_file(hasher, entrypoint)
+        else:
+            for name in (
+                "manifest",
+                "latent_factors",
+                "materialization",
+                "observation_formation",
+            ):
+                self._hash_file(hasher, benchmark_root / (name + _document_suffix))
         self._hash_file(hasher, Path(__file__))
         for module_name in ("leibniz.observation_generation", "leibniz.observation_formation"):
             module = sys.modules.get(module_name)
@@ -645,6 +658,23 @@ def _balanced_component_sequences(
         )
         for component_count in component_counts
     }
+
+
+def _repository_relative_path(path: Path, *, repository_root: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(repository_root).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def _is_packaged_benchmark_parent(path: Path, *, repository_root: Path) -> bool:
+    try:
+        relative = path.resolve().relative_to(repository_root)
+    except ValueError:
+        return False
+    return relative.parts == ("src", "leibniz", "benchmarks")
+
 
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
