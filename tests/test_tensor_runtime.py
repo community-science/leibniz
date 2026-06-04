@@ -5,11 +5,12 @@ import pytest
 
 import leibniz.tensor_runtime as tensor_runtime
 from leibniz.architectures import ArchitectureManifest
+from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlanDocument
 from leibniz.observation_formation import ObservationFormationDeclarationDocument
 from leibniz.observation_generation import (
-    load_observation_generator,
+    load_generator,
     sample_variation_transform_coordinates,
 )
 from leibniz.tensor_runtime import (
@@ -26,6 +27,25 @@ from leibniz.tensor_runtime import (
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
 _digits_fixture_root = _repository_root / "tests" / "fixtures" / "digits"
+
+
+def _formation_payload(generator: BenchmarkGenerator, *, sample_count: int, seed: int):
+    sample_set = generator(
+        component_count=1,
+        shape=sample_count,
+        seed=seed,
+            )
+    return sample_set
+
+
+def _observation_payload(generator: BenchmarkGenerator, *, sample_count: int, seed: int):
+    sample_set = generator(
+        component_count=1,
+        shape=sample_count,
+        seed=seed,
+        include_fields=True,
+    )
+    return sample_set
 
 
 def test_validate_tensor_runtime_device_accepts_supported_names() -> None:
@@ -181,9 +201,9 @@ def test_formation_tensor_cache_matches_varied_pure_digits_formation() -> None:
 
 def test_formation_tensor_cache_batch_tensors_match_pure_observation_batch() -> None:
     runtime = resolve_tensor_runtime("cpu")
-    generator = load_observation_generator(_digits_benchmark_root)
-    observation_batch = generator.sample_batch(component_count=1, sample_count=3, seed=515)
-    formation_batch = generator.sample_formation_batch(component_count=1, sample_count=3, seed=515)
+    generator = load_generator(_digits_benchmark_root)
+    observation_batch = _observation_payload(generator, sample_count=3, seed=515)
+    formation_batch = _formation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
         for outcome in generator.benchmark_manifest.resolve_outcome_space().outcomes
@@ -193,10 +213,10 @@ def test_formation_tensor_cache_batch_tensors_match_pure_observation_batch() -> 
     fields, labels = cache.batch_tensors(batch=formation_batch, outcome_ids=outcome_ids)
 
     pure_fields = runtime.torch.tensor(
-        [list(sample.field.values) for sample in observation_batch.samples],
+        [list(sample.require_field().values) for sample in observation_batch.samples],
         dtype=runtime.torch.float32,
         device=runtime.device,
-    ).reshape((len(observation_batch.samples), *observation_batch.samples[0].field.shape))
+    ).reshape((len(observation_batch.samples), *observation_batch.samples[0].require_field().shape))
     assert fields.shape == pure_fields.shape
     assert runtime.torch.allclose(fields, pure_fields, atol=2e-5)
     assert labels.cpu().tolist() == [
@@ -208,8 +228,8 @@ def test_formation_tensor_cache_batches_grid_sampling_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = resolve_tensor_runtime("cpu")
-    generator = load_observation_generator(_digits_benchmark_root)
-    formation_batch = generator.sample_formation_batch(component_count=1, sample_count=3, seed=515)
+    generator = load_generator(_digits_benchmark_root)
+    formation_batch = _formation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
         for outcome in generator.benchmark_manifest.resolve_outcome_space().outcomes
@@ -247,8 +267,8 @@ def test_formation_tensor_cache_batch_tensors_use_generated_coordinate_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = resolve_tensor_runtime("cpu")
-    generator = load_observation_generator(_digits_benchmark_root)
-    formation_batch = generator.sample_formation_batch(component_count=1, sample_count=3, seed=515)
+    generator = load_generator(_digits_benchmark_root)
+    formation_batch = _formation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
         for outcome in generator.benchmark_manifest.resolve_outcome_space().outcomes

@@ -20,7 +20,7 @@ from leibniz.observation_formation import (
     sequence_center,
     sequence_relative_translation,
 )
-from leibniz.observation_generation import GeneratedFormationBatch
+from leibniz.observation_generation import GeneratedSampleSet
 from leibniz.tensor_shapes import TensorShape
 
 __all__ = [
@@ -352,7 +352,7 @@ class FormationTensorCache:
     def batch_tensors(
         self,
         *,
-        batch: GeneratedFormationBatch,
+        batch: GeneratedSampleSet,
         outcome_ids: tuple[str, ...],
     ) -> tuple[Any, Any]:
         """Return field and label tensors for a generated formation batch."""
@@ -367,7 +367,7 @@ class FormationTensorCache:
         )
         return fields, labels
 
-    def _varied_batch_tensor(self, *, batch: GeneratedFormationBatch) -> Any:
+    def _varied_batch_tensor(self, *, batch: GeneratedSampleSet) -> Any:
         sample_count = len(batch.samples)
         if sample_count < 1:
             raise TensorRuntimeError("batch samples must not be empty")

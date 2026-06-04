@@ -512,10 +512,10 @@ def test_cli_benchmark_selection_loads_python_implementation_without_manifest_fi
         "\n".join(
             [
                 "from pathlib import Path",
-                "from leibniz.benchmark_implementations import load_benchmark_implementation",
+                "from leibniz.benchmark_implementations import load_benchmark",
                 f"_source = Path({str(_digits_benchmark_root)!r})",
                 "def benchmark(root: Path):",
-                "    return load_benchmark_implementation(_source)",
+                "    return load_benchmark(_source)",
                 "",
             ]
         ),

@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from leibniz.observation_generation import load_observation_generator
+from leibniz.observation_generation import load_generator
 from leibniz.tensor_runtime import (
     FormationTensorCache,
     TensorRuntime,
@@ -122,7 +122,7 @@ class FormationTimingSummary:
 def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
     """Measure pure observation formation and tensor batch construction."""
 
-    generator = load_observation_generator(plan.benchmark_root)
+    generator = load_generator(plan.benchmark_root)
     try:
         runtime = resolve_tensor_runtime(plan.tensor_device)
     except TensorRuntimeError as error:
@@ -137,25 +137,28 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
     )
 
     def pure_once(seed: int, timing: TimingCollector | None = None) -> None:
-        generator.sample_batch(
+        sample_set = generator(
             component_count=plan.component_count,
-            sample_count=plan.sample_count,
+            shape=plan.sample_count,
             seed=seed,
+            include_fields=True,
             memory_limit_bytes=memory_limit_bytes,
             timing=timing,
             timing_prefix="pure.",
         )
+        if not sample_set.includes_fields:
+            raise FormationTimingError("generator did not include generated fields")
 
     def tensor_once(seed: int, timing: TimingCollector | None = None) -> None:
-        batch = generator.sample_formation_batch(
+        sample_set = generator(
             component_count=plan.component_count,
-            sample_count=plan.sample_count,
+            shape=plan.sample_count,
             seed=seed,
             memory_limit_bytes=memory_limit_bytes,
             timing=timing,
             timing_prefix="tensor.",
         )
-        cache.batch_tensors(batch=batch, outcome_ids=outcome_ids)
+        cache.batch_tensors(batch=sample_set, outcome_ids=outcome_ids)
 
     for offset in range(plan.warmup_repeats):
         pure_once(plan.seed + offset)

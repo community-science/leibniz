@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import random
 import sys
@@ -12,7 +13,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
-from leibniz.benchmark_implementations import discover_benchmark_roots
+from leibniz.benchmark_implementations import (
+    Generator as BenchmarkGenerator,
+)
+from leibniz.benchmark_implementations import (
+    discover_benchmark_roots,
+)
 from leibniz.console.artifact_index import (
     ConsoleArtifactIndex,
     ConsoleArtifactIndexBuilder,
@@ -37,11 +43,7 @@ from leibniz.local_results import (
 )
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_operators import model_operator_vocabulary
-from leibniz.observation_generation import (
-    ObservationGenerator,
-    field_to_png_data_url,
-    load_observation_generator,
-)
+from leibniz.observation_generation import field_to_png_data_url, load_generator
 
 __all__ = [
     "ConsoleData",
@@ -54,14 +56,14 @@ _protocol_format_versions = console_protocol_format_versions()
 _format = _protocol_formats.console_data
 _format_version = _protocol_format_versions.console_data
 _document_suffix = document_filename_suffix()
-_generated_batch_cache_format = "leibniz.console.generated-observation-batch-cache"
+_generated_batch_cache_format = "leibniz.console.generated-sample-set-cache"
 _generated_batch_cache_format_version = 1
 _generated_batch_cache_path = (
     Path(__file__).parent
     / "_web_src"
     / "src"
     / "generated"
-    / ("generatedObservationBatches" + _document_suffix)
+    / ("generatedSampleSets" + _document_suffix)
 )
 _generated_batch_cache: dict[tuple[str, str, str], Mapping[str, object]] = {}
 
@@ -327,7 +329,7 @@ class ConsoleDataBuilder:
             source_fingerprint = self._benchmark_task_cache_fingerprint(
                 benchmark_root=benchmark_root,
             )
-            generator = load_observation_generator(benchmark_root)
+            generator = load_generator(benchmark_root)
             manifest = generator.benchmark_manifest
             atom_count = len(manifest.outcome_space.outcomes)
             outcome_atom_name = _outcome_atom_name(
@@ -345,8 +347,9 @@ class ConsoleDataBuilder:
                     "complexity_axis": None,
                     "outcome_atom_name": outcome_atom_name,
                     "outcome_atom_count": atom_count,
+                    "code_surfaces": self._benchmark_code_surfaces(benchmark_root),
                     "batches": [
-                        self._balanced_observation_batch(
+                        self._balanced_sample_set(
                             generator=generator,
                             atom_count=atom_count,
                             source_fingerprint=source_fingerprint,
@@ -356,13 +359,67 @@ class ConsoleDataBuilder:
             )
         return tuple(tasks)
 
+    def _benchmark_code_surfaces(self, benchmark_root: Path) -> tuple[Mapping[str, object], ...]:
+        surfaces: list[Mapping[str, object]] = []
+        entrypoint = benchmark_root / "benchmark.py"
+        if entrypoint.is_file():
+            generator_symbol = (
+                _python_method_symbol(entrypoint.read_text(encoding="utf-8"), "__call__")
+                or "Generator.__call__"
+            )
+            surfaces.append(
+                self._code_surface(
+                    label="Generator",
+                    role="data-generator",
+                    path=entrypoint,
+                    symbol=generator_symbol,
+                    call_path=(
+                        "benchmark(root)",
+                        "benchmark.generator",
+                        "generator(...)",
+                    ),
+                )
+            )
+        return tuple(surfaces)
+
+    def _code_surface(
+        self,
+        *,
+        label: str,
+        role: str,
+        path: Path,
+        symbol: str,
+        call_path: tuple[str, ...],
+    ) -> Mapping[str, object]:
+        source = path.read_text(encoding="utf-8")
+        lines = source.splitlines()
+        line_span = _python_symbol_line_span(source, symbol)
+        if line_span is None:
+            start_line = 1
+            end_line = min(len(lines), 80)
+        else:
+            start_line, end_line = line_span
+        return {
+            "label": label,
+            "role": role,
+            "source_path": _repository_relative_path(
+                path,
+                repository_root=self._repository_root,
+            ),
+            "symbol": symbol,
+            "start_line": start_line,
+            "end_line": end_line,
+            "call_path": list(call_path),
+            "code": "\n".join(lines[start_line - 1 : end_line]),
+        }
+
     def _benchmark_task_cache_fingerprint(
         self,
         *,
         benchmark_root: Path,
     ) -> str:
         hasher = hashlib.sha256()
-        hasher.update(b"balanced-observation-batch-v1\0")
+        hasher.update(b"balanced-sample-set-v1\0")
         entrypoint = benchmark_root / "benchmark.py"
         if entrypoint.is_file():
             self._hash_file(hasher, entrypoint)
@@ -393,10 +450,10 @@ class ConsoleDataBuilder:
         hasher.update(resolved.read_bytes())
         hasher.update(b"\0")
 
-    def _balanced_observation_batch(
+    def _balanced_sample_set(
         self,
         *,
-        generator: ObservationGenerator,
+        generator: BenchmarkGenerator,
         atom_count: int,
         source_fingerprint: str,
     ) -> Mapping[str, object]:
@@ -434,14 +491,20 @@ class ConsoleDataBuilder:
                         raise ConsoleDataValidationError(
                             "could not generate unique console sample canvas shapes"
                         )
-                    batch = generator.sample_batch(
+                    sample_set = generator(
                         component_count=component_count,
-                        sample_count=1,
+                        shape=(),
                         seed=seed,
+                        include_fields=True,
                         component_sequences=(sequence,),
                     )
+                    if not sample_set.includes_fields:
+                        raise ConsoleDataValidationError(
+                            "generator did not include generated fields"
+                        )
+                    batch = sample_set
                     sample = batch.samples[0]
-                    field_shape = tuple(sample.field.shape)
+                    field_shape = tuple(sample.require_field().shape)
                     if field_shape not in used_field_shapes:
                         used_field_shapes.add(field_shape)
                         break
@@ -450,10 +513,12 @@ class ConsoleDataBuilder:
                     {
                         "index": len(samples),
                         "outcome_id": sample.outcome_id,
-                        "component_sequence": list(sample.observation.component_sequence),
+                        "component_sequence": list(
+                            sample.field_record().component_sequence
+                        ),
                         "complexity": sample.complexity,
-                        "field_shape": list(sample.field.shape),
-                        "image_data_url": field_to_png_data_url(sample.field),
+                        "field_shape": list(sample.require_field().shape),
+                        "image_data_url": field_to_png_data_url(sample.require_field()),
                         "materialization_plan": sample.materialization_plan.to_record(),
                         "latent_coordinates": [
                             dict(coordinate) for coordinate in sample.latent_coordinates
@@ -584,7 +649,7 @@ def _load_generated_batch_cache() -> dict[str, Mapping[str, object]]:
     try:
         record = load_object_document(
             _generated_batch_cache_path.read_bytes(),
-            description="generated observation batch cache",
+            description="generated sample set cache",
         )
     except ValueError:
         return {}
@@ -666,6 +731,55 @@ def _repository_relative_path(path: Path, *, repository_root: Path) -> str:
         return resolved.relative_to(repository_root).as_posix()
     except ValueError:
         return resolved.as_posix()
+
+
+def _python_symbol_line_span(source: str, symbol: str) -> tuple[int, int] | None:
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return None
+    parts = symbol.split(".")
+    if len(parts) == 1:
+        node = _find_ast_child(module.body, ast.FunctionDef, parts[0])
+    elif len(parts) == 2:
+        class_node = _find_ast_child(module.body, ast.ClassDef, parts[0])
+        node = None if class_node is None else _find_ast_child(
+            class_node.body,
+            ast.FunctionDef,
+            parts[1],
+        )
+    else:
+        return None
+    if node is None or node.end_lineno is None:
+        return None
+    decorators = getattr(node, "decorator_list", ())
+    start_line = min((decorator.lineno for decorator in decorators), default=node.lineno)
+    return (start_line, node.end_lineno)
+
+
+def _python_method_symbol(source: str, method_name: str) -> str | None:
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return None
+    for node in module.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        method = _find_ast_child(node.body, ast.FunctionDef, method_name)
+        if method is not None:
+            return f"{node.name}.{method.name}"
+    return None
+
+
+def _find_ast_child(
+    nodes: Iterable[ast.stmt],
+    node_type: type[ast.ClassDef] | type[ast.FunctionDef],
+    name: str,
+) -> ast.ClassDef | ast.FunctionDef | None:
+    for node in nodes:
+        if isinstance(node, node_type) and node.name == name:
+            return node
+    return None
 
 
 def _is_packaged_benchmark_parent(path: Path, *, repository_root: Path) -> bool:

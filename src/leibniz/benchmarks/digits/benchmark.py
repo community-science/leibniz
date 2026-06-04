@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from leibniz.artifacts import ArtifactReference
-from leibniz.benchmark_implementations import BenchmarkImplementation
+from leibniz.benchmark_implementations import Benchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.latent_factors import (
@@ -14,7 +15,7 @@ from leibniz.latent_factors import (
     LatentFactorDeclaration,
     SampleLatentFactor,
 )
-from leibniz.materialization import MaterializationDeclaration
+from leibniz.materialization import AxisAssignment, MaterializationDeclaration
 from leibniz.observation_formation import (
     ComponentMark,
     ObservationComponent,
@@ -23,7 +24,15 @@ from leibniz.observation_formation import (
     SpatialAffineVariation,
     VariationTransformDeclaration,
 )
+from leibniz.observation_generation import (
+    GeneratedSample,
+    GeneratedSampleSet,
+    ObservationGenerationError,
+    _ObservationGenerationEngine,  # pyright: ignore[reportPrivateUsage]
+    _timing_span,  # pyright: ignore[reportPrivateUsage]
+)
 from leibniz.outcomes import Outcome, OutcomeSpace
+from leibniz.timing import TimingCollector
 
 __all__ = ["benchmark"]
 
@@ -31,16 +40,17 @@ _benchmark_id = ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
 _latent_factor_id = ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0")
 _materialization_id = ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0")
 _formation_id = ProtocolIdentifier.parse("benchmarks.digits.observation-formation@0.1.0")
+_generator_id = ProtocolIdentifier.parse("benchmarks.digits.generator@0.1.0")
 _outcome_space_id = ProtocolIdentifier.parse("benchmarks.digits.outcomes@0.1.0")
 
 
-def benchmark(root: Path) -> BenchmarkImplementation:
+def benchmark(root: Path) -> BenchmarkProtocol:
     """Return the Digits benchmark implementation."""
 
-    return DigitsBenchmarkImplementation(root=root)
+    return Benchmark(root=root)
 
 
-class DigitsBenchmarkImplementation:
+class Benchmark:
     """Executable Digits benchmark declaration."""
 
     def __init__(self, *, root: Path) -> None:
@@ -49,6 +59,12 @@ class DigitsBenchmarkImplementation:
         self._benchmark_manifest = _benchmark_manifest()
         self._materialization = _materialization()
         self._formation = _formation()
+        self._generator = Generator(
+            benchmark_manifest=self._benchmark_manifest,
+            latent_factors=self._latent_factors,
+            materialization=self._materialization,
+            formation=self._formation,
+        )
 
     @property
     def root(self) -> Path:
@@ -70,15 +86,163 @@ class DigitsBenchmarkImplementation:
     def formation(self) -> ObservationFormationDeclaration:
         return self._formation
 
-    def observation_generator(self) -> object:
-        from leibniz.observation_generation import ObservationGenerator
+    @property
+    def generator(self) -> Generator:
+        return self._generator
 
-        return ObservationGenerator(
-            benchmark_manifest=self.benchmark_manifest,
-            latent_factors=self.latent_factors,
-            materialization=self.materialization,
-            formation=self.formation,
+
+class Generator(_ObservationGenerationEngine):
+    """Generate samples from the Digits scientific model."""
+
+    @property
+    def id(self) -> ProtocolIdentifier:
+        return _generator_id
+
+    @property
+    def version(self) -> str:
+        return "0.1.0"
+
+    def __call__(
+        self,
+        *,
+        component_count: int,
+        seed: int,
+        shape: int | Sequence[int] | None = None,
+        include_fields: bool = False,
+        component_sequences: Iterable[Sequence[int]] | None = None,
+        memory_limit_bytes: int | None = None,
+        resolution_assignment: AxisAssignment | None = None,
+        variation_extent: float = 1.0,
+        timing: TimingCollector | None = None,
+        timing_prefix: str = "",
+    ) -> GeneratedSampleSet:
+        """Generate a shape-aware Digits sample set."""
+
+        sample_shape = _sample_shape(shape)
+        sample_count = _sample_count(sample_shape)
+        formation_timing_prefix = (
+            f"{timing_prefix}formation_batch." if include_fields else timing_prefix
         )
+        formation_batch = self._sample_formation_batch(
+            component_count=component_count,
+            sample_count=sample_count,
+            seed=seed,
+            component_sequences=component_sequences,
+            memory_limit_bytes=memory_limit_bytes,
+            resolution_assignment=resolution_assignment,
+            variation_extent=variation_extent,
+            timing=timing,
+            timing_prefix=formation_timing_prefix,
+        )
+        samples = formation_batch.samples
+        if include_fields:
+            with _timing_span(timing, f"{timing_prefix}scaled_factors"):
+                scaled_factors = tuple(self.latent_factors.sample_factors)
+            with _timing_span(
+                timing,
+                f"{timing_prefix}field_generation",
+                samples=sample_count,
+            ):
+                field_records = tuple(
+                    self.formation.form_observation(
+                        id=self._observation_id(
+                            component_count=component_count,
+                            seed=seed,
+                            index=sample.index,
+                        ),
+                        plan=sample.materialization_plan,
+                        component_sequence=sample.component_sequence,
+                        variation_coordinates=sample.variation_coordinates,
+                    )
+                    for sample in samples
+                )
+            with _timing_span(timing, f"{timing_prefix}latent_coordinates", samples=sample_count):
+                latent_coordinate_samples = tuple(
+                    self._latent_coordinates(
+                        sequence=sample.component_sequence,
+                        scaled_factors=scaled_factors,
+                        plan=sample.materialization_plan,
+                        variation_values=sample.variation_values,
+                    )
+                    for sample in samples
+                )
+            samples = tuple(
+                GeneratedSample(
+                    index=sample.index,
+                    materialization_plan=sample.materialization_plan,
+                    width=sample.width,
+                    height=sample.height,
+                    component_sequence=sample.component_sequence,
+                    variation_coordinates=sample.variation_coordinates,
+                    variation_values=sample.variation_values,
+                    outcome_id=sample.outcome_id,
+                    complexity=sample.complexity,
+                    latent_coordinates=latent_coordinates,
+                    field=field_record.field,
+                    _field_record=field_record,
+                )
+                for sample, field_record, latent_coordinates in zip(
+                    samples,
+                    field_records,
+                    latent_coordinate_samples,
+                    strict=True,
+                )
+            )
+        else:
+            with _timing_span(timing, f"{timing_prefix}latent_coordinates", samples=sample_count):
+                scaled_factors = tuple(self.latent_factors.sample_factors)
+                samples = tuple(
+                    GeneratedSample(
+                        index=sample.index,
+                        materialization_plan=sample.materialization_plan,
+                        width=sample.width,
+                        height=sample.height,
+                        component_sequence=sample.component_sequence,
+                        variation_coordinates=sample.variation_coordinates,
+                        variation_values=sample.variation_values,
+                        outcome_id=sample.outcome_id,
+                        complexity=sample.complexity,
+                        latent_coordinates=self._latent_coordinates(
+                            sequence=sample.component_sequence,
+                            scaled_factors=scaled_factors,
+                            plan=sample.materialization_plan,
+                            variation_values=sample.variation_values,
+                        ),
+                    )
+                    for sample in samples
+                )
+        return GeneratedSampleSet(
+            benchmark_id=self.benchmark_manifest.id,
+            generator_id=self.id,
+            generator_version=self.version,
+            seed=seed,
+            shape=sample_shape,
+            component_count=component_count,
+            variation_extent=variation_extent,
+            samples=samples,
+        )
+
+
+def _sample_shape(shape: int | Sequence[int] | None) -> tuple[int, ...]:
+    if shape is None:
+        return ()
+    if isinstance(shape, int):
+        if shape < 1:
+            raise ObservationGenerationError("sample shape axes must be positive integers")
+        return (shape,)
+    normalized = tuple(shape)
+    if any(type(axis) is not int or axis < 1 for axis in normalized):
+        raise ObservationGenerationError("sample shape axes must be positive integers")
+    return normalized
+
+
+def _sample_count(shape: Sequence[int]) -> int:
+    if not shape:
+        return 1
+    count = 1
+    for axis in shape:
+        count *= axis
+    return count
 
 
 def _benchmark_manifest() -> BenchmarkManifest:

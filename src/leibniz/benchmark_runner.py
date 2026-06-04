@@ -22,6 +22,7 @@ from leibniz.benchmark_evaluation import (
     validation_competence,
     validation_competence_frontier_score,
 )
+from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.competition_bundles import BenchmarkCompetitionBundle
 from leibniz.content import ContentDigest
 from leibniz.documents import (
@@ -45,9 +46,8 @@ from leibniz.model_manifests import (
 )
 from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
 from leibniz.observation_generation import (
-    GeneratedObservationBatch,
-    ObservationGenerator,
-    load_observation_generator,
+    GeneratedSampleSet,
+    load_generator,
 )
 from leibniz.outcomes import OutcomeSpace
 from leibniz.records import RecordExtractor
@@ -175,7 +175,7 @@ class CheckpointModelPredictor:
 
     def predict_batch(
         self,
-        batch: GeneratedObservationBatch,
+        batch: GeneratedSampleSet,
     ) -> tuple[tuple[float, ...], ...]:
         self.module.eval()
         fields, _labels = _batch_tensors(
@@ -202,7 +202,7 @@ class _CurriculumRung:
     index: int
     resolution_assignment: AxisAssignment
     seed: int
-    batch: GeneratedObservationBatch
+    batch: GeneratedSampleSet
 
     @property
     def complexity(self) -> float:
@@ -559,7 +559,7 @@ def run_benchmark(
 ) -> BenchmarkRunSummary:
     """Run or dry-run a tiny local benchmark workflow."""
 
-    generator = load_observation_generator(plan.benchmark_root)
+    generator = load_generator(plan.benchmark_root)
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
@@ -848,7 +848,7 @@ def _training_progress_path(summary: BenchmarkRunSummary) -> Path:
 def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEvaluationSummary:
     """Generate benchmark evidence from a saved training checkpoint artifact."""
 
-    generator = load_observation_generator(plan.benchmark_root)
+    generator = load_generator(plan.benchmark_root)
     evaluation_input = _evaluation_input_from_plan(plan, generator=generator)
     outcome_space = generator.benchmark_manifest.resolve_outcome_space()
     architecture = evaluation_input.architecture
@@ -972,7 +972,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
 def _evaluation_input_from_plan(
     plan: BenchmarkEvaluationPlan,
     *,
-    generator: ObservationGenerator,
+    generator: BenchmarkGenerator,
 ) -> _EvaluationInput:
     checkpoint_record = _load_object_record(
         plan.checkpoint_artifact_path,
@@ -1044,7 +1044,7 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
         raise BenchmarkRunnerError(str(error)) from error
     left_evaluation = left_evaluation_bundle.to_record()
     right_evaluation = right_evaluation_bundle.to_record()
-    generator = load_observation_generator(plan.benchmark_root)
+    generator = load_generator(plan.benchmark_root)
     benchmark_id = generator.benchmark_manifest.id
     outcome_space = generator.benchmark_manifest.resolve_outcome_space()
     left_architecture = left_evaluation_bundle.architecture_manifest
@@ -1150,7 +1150,7 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
 def _evaluation_curriculum_rung(
     *,
     architecture: ArchitectureManifest,
-    generator: ObservationGenerator,
+    generator: BenchmarkGenerator,
     component_count: int,
     sample_count: int,
     seed: int,
@@ -1174,7 +1174,7 @@ def _evaluation_curriculum_rung(
 def _training_curriculum_rung(
     *,
     architecture: ArchitectureManifest,
-    generator: ObservationGenerator,
+    generator: BenchmarkGenerator,
     component_count: int,
     sample_count: int,
     seed: int,
@@ -1197,20 +1197,22 @@ def _training_curriculum_rung(
 
 def _competition_curriculum_rung(
     *,
-    generator: ObservationGenerator,
+    generator: BenchmarkGenerator,
     component_count: int,
     sample_count: int,
     seed: int,
     index: int,
     resolution_assignment: AxisAssignment,
 ) -> _CurriculumRung:
-    batch = generator.sample_batch(
+    sample_set = generator(
         component_count=component_count,
-        sample_count=sample_count,
+        shape=sample_count,
         seed=seed + 9_000_009 + 2_000_003 * index,
+        include_fields=True,
         resolution_assignment=resolution_assignment,
         variation_extent=_full_variation_extent,
     )
+    batch = sample_set
     return _CurriculumRung(
         index=index,
         resolution_assignment=resolution_assignment,
@@ -1222,7 +1224,7 @@ def _competition_curriculum_rung(
 def _curriculum_rung_from_candidates(
     *,
     architecture: ArchitectureManifest,
-    generator: ObservationGenerator,
+    generator: BenchmarkGenerator,
     component_count: int,
     sample_count: int,
     seed: int,
@@ -1233,16 +1235,18 @@ def _curriculum_rung_from_candidates(
         if candidate_index < index:
             continue
         rung_seed = seed if index == 0 else seed + 2_000_003 * index
-        batch = generator.sample_batch(
+        sample_set = generator(
             component_count=component_count,
-            sample_count=sample_count,
+            shape=sample_count,
             seed=rung_seed,
+            include_fields=True,
             resolution_assignment=candidate.resolution_assignment,
             variation_extent=_full_variation_extent,
         )
+        batch = sample_set
         input_reason = _input_shape_boundary_reason(
             architecture=architecture,
-            sample_shape=batch.samples[0].field.shape,
+            sample_shape=batch.samples[0].require_field().shape,
         )
         if input_reason is not None:
             if index == 0:
@@ -1268,7 +1272,7 @@ class _CurriculumCandidate:
 
 def _logarithmic_curriculum_candidates(
     *,
-    generator: ObservationGenerator,
+    generator: BenchmarkGenerator,
     component_count: int,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
@@ -1282,7 +1286,7 @@ def _logarithmic_curriculum_candidates(
 
 def _structured_training_curriculum_candidates(
     *,
-    generator: ObservationGenerator,
+    generator: BenchmarkGenerator,
     component_count: int,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
@@ -1295,7 +1299,7 @@ def _structured_training_curriculum_candidates(
 
 def _curriculum_candidate_grid(
     *,
-    generator: ObservationGenerator,
+    generator: BenchmarkGenerator,
     component_count: int,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
@@ -1418,10 +1422,10 @@ def _curriculum_record(
 def _validate_architecture_for_batch(
     *,
     architecture: ArchitectureManifest,
-    batch: GeneratedObservationBatch,
+    batch: GeneratedSampleSet,
     outcome_space: OutcomeSpace,
 ) -> None:
-    sample_shape = batch.samples[0].field.shape
+    sample_shape = batch.samples[0].require_field().shape
     input_reason = _input_shape_boundary_reason(
         architecture=architecture,
         sample_shape=sample_shape,
@@ -1482,7 +1486,7 @@ def _train_and_predict(
     *,
     architecture: ArchitectureManifest,
     initial_evaluation_rung: _CurriculumRung,
-    generator: ObservationGenerator,
+    generator: BenchmarkGenerator,
     outcome_space: OutcomeSpace,
     component_count: int,
     sample_count: int,
@@ -1547,7 +1551,7 @@ def _train_and_predict_on_device(
     *,
     architecture: ArchitectureManifest,
     initial_evaluation_rung: _CurriculumRung,
-    generator: ObservationGenerator,
+    generator: BenchmarkGenerator,
     outcome_space: OutcomeSpace,
     component_count: int,
     sample_count: int,
@@ -1614,15 +1618,16 @@ def _train_and_predict_on_device(
         resolution_assignment: AxisAssignment,
     ) -> tuple[Any, Any]:
         with phase_timings.span(generation_phase, samples=batch_sample_count):
-            generated = generator.sample_formation_batch(
+            sample_set = generator(
                 component_count=component_count,
-                sample_count=batch_sample_count,
+                shape=batch_sample_count,
                 seed=batch_seed,
                 resolution_assignment=resolution_assignment,
                 variation_extent=_full_variation_extent,
                 timing=phase_timings,
                 timing_prefix=f"{generation_phase}.",
             )
+            generated = sample_set
         with phase_timings.span(tensor_phase, samples=batch_sample_count):
             tensors = formation_cache.batch_tensors(batch=generated, outcome_ids=outcome_ids)
         return tensors
@@ -1812,7 +1817,7 @@ def _train_and_predict_on_device(
 def evaluate_model_checkpoint_artifact(
     *,
     architecture: ArchitectureManifest,
-    generator: ObservationGenerator,
+    generator: BenchmarkGenerator,
     outcome_space: OutcomeSpace,
     component_count: int,
     evaluation_sample_count: int,
@@ -1886,7 +1891,7 @@ def generate_model_checkpoint_competition_record(
     *,
     left_architecture: ArchitectureManifest,
     right_architecture: ArchitectureManifest,
-    generator: ObservationGenerator,
+    generator: BenchmarkGenerator,
     outcome_space: OutcomeSpace,
     component_count: int,
     sample_count: int,
@@ -1970,10 +1975,10 @@ def generate_model_checkpoint_competition_record(
 def _batch_max_inference_compute(
     *,
     architecture: ArchitectureManifest,
-    batch: GeneratedObservationBatch,
+    batch: GeneratedSampleSet,
 ) -> int | None:
     max_compute: int | None = None
-    for input_shape in sorted({sample.field.shape for sample in batch.samples}):
+    for input_shape in sorted({sample.require_field().shape for sample in batch.samples}):
         plan = summarize_architecture_operators(
             _architecture_with_input_shape(architecture, input_shape)
         )
@@ -3114,7 +3119,7 @@ def _make_scheduler(
 def _batch_tensors(
     *,
     runtime: TensorRuntime,
-    batch: GeneratedObservationBatch,
+    batch: GeneratedSampleSet,
     outcome_ids: tuple[str, ...],
     device: Any,
 ) -> tuple[Any, Any]:
@@ -3128,10 +3133,10 @@ def _batch_tensors(
     )
 
 
-def _batch_tensor(*, runtime: TensorRuntime, batch: GeneratedObservationBatch, device: Any) -> Any:
-    values = [list(sample.field.values) for sample in batch.samples]
+def _batch_tensor(*, runtime: TensorRuntime, batch: GeneratedSampleSet, device: Any) -> Any:
+    values = [list(sample.require_field().values) for sample in batch.samples]
     fields = make_float_tensor(runtime, values, device=device)
-    return fields.reshape((len(batch.samples), *batch.samples[0].field.shape))
+    return fields.reshape((len(batch.samples), *batch.samples[0].require_field().shape))
 
 
 def _renormalized_probabilities(probabilities: Sequence[float]) -> tuple[float, ...]:
@@ -3147,7 +3152,7 @@ def _renormalized_probabilities(probabilities: Sequence[float]) -> tuple[float, 
 
 def _mean_prediction_accepted_mass(
     *,
-    batch: GeneratedObservationBatch,
+    batch: GeneratedSampleSet,
     probabilities: tuple[tuple[float, ...], ...],
     outcome_ids: tuple[str, ...],
 ) -> float:
@@ -3161,7 +3166,7 @@ def _mean_prediction_accepted_mass(
 
 def _checkpoint_competition_record(
     *,
-    batch: GeneratedObservationBatch,
+    batch: GeneratedSampleSet,
     left_probabilities: tuple[tuple[float, ...], ...],
     right_probabilities: tuple[tuple[float, ...], ...],
     outcome_space: OutcomeSpace,
@@ -3200,7 +3205,7 @@ def _checkpoint_competition_record(
                     f"benchmarks.{_identifier_atom(benchmark_id)}.competition."
                     f"{competition_id}.sample-{sample.index}@0.1.0"
                 ),
-                "observation_id": str(sample.observation.id),
+                "observation_id": str(sample.field_record().id),
                 "accepted_outcome_id": sample.outcome_id,
                 "left_score": left_score,
                 "right_score": right_score,

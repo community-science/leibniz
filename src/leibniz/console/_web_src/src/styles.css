@@ -756,6 +756,96 @@ p {
   gap: var(--space-xl);
 }
 
+.benchmark-code-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  width: 100%;
+  border: var(--line-thin) solid var(--border-color);
+  background: var(--control-bg);
+  padding: var(--space-md) var(--space-lg);
+}
+
+.benchmark-code-inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+}
+
+.benchmark-code-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-body);
+  font-weight: 600;
+  padding: 0;
+}
+
+.benchmark-code-toggle svg:first-child {
+  color: var(--text-muted);
+  transition: transform 0.16s ease;
+}
+
+.benchmark-code-toggle svg:first-child.expanded {
+  transform: rotate(180deg);
+}
+
+.benchmark-code-source {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-status);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.benchmark-code-inspector-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.benchmark-code-inspector-body[hidden] {
+  display: none;
+}
+
+.benchmark-code-call-path {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.benchmark-code-call-path li {
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-status);
+  padding: var(--space-2xs) var(--space-xs);
+}
+
+.benchmark-code-excerpt {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  border: var(--line-thin) solid var(--border-color);
+  background: var(--preview-bg);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-status);
+  line-height: 1.45;
+  padding: var(--space-sm);
+  white-space: pre;
+}
+
 .benchmark-sample-grid {
   display: grid;
   gap: var(--space-md);

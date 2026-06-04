@@ -18,7 +18,7 @@ from leibniz.benchmark_evaluation import (
 )
 from leibniz.benchmark_implementations import (
     discover_benchmark_roots,
-    load_benchmark_implementation,
+    load_benchmark,
 )
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.competition_bundles import BenchmarkCompetitionBundleSummary
@@ -39,7 +39,7 @@ from leibniz.measurements import (
 from leibniz.model_inspection import (
     ModelInspectionRecord,
 )
-from leibniz.observation_generation import load_observation_generator
+from leibniz.observation_generation import load_generator
 from leibniz.records import RecordExtractor
 from leibniz.training_runs import TrainingRunRecord
 
@@ -546,7 +546,7 @@ def _known_benchmark_manifests(
     benchmark_root = repository_root / "src" / "leibniz" / "benchmarks"
     manifests: dict[ProtocolIdentifier, BenchmarkManifest] = {}
     for path in discover_benchmark_roots(benchmark_root):
-        manifest = load_benchmark_implementation(path).benchmark_manifest
+        manifest = load_benchmark(path).benchmark_manifest
         manifests[manifest.id] = manifest
     if not manifests:
         raise LocalResultImportError("no known benchmark manifests found")
@@ -2299,7 +2299,7 @@ def _benchmark_base_complexity(
     manifest: BenchmarkManifest,
     repository_root: Path,
 ) -> float:
-    generator = load_observation_generator(
+    generator = load_generator(
         repository_root / "src" / "leibniz" / "benchmarks" / _identifier_atom(manifest.id)
     )
     resolution = generator.minimum_discriminatable_resolution_assignment(

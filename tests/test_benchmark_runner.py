@@ -9,6 +9,7 @@ import pytest
 import leibniz.benchmark_runner as benchmark_runner
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_evaluation import ValidationCompetencePoint
+from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.benchmark_runner import (
     BenchmarkCompetitionPlan,
     BenchmarkEvaluationPlan,
@@ -24,7 +25,10 @@ from leibniz.cli import main
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
-from leibniz.observation_generation import load_observation_generator
+from leibniz.observation_generation import (
+    GeneratedSampleSet,
+    load_generator,
+)
 from leibniz.tensor_runtime import (
     TensorRuntime,
     TensorRuntimeDeviceKind,
@@ -40,6 +44,14 @@ _digits_architecture = (
 _digits_convnet_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_convnet.json"
 )
+
+
+def _observation_payload(
+    generator: BenchmarkGenerator,
+    **kwargs: object,
+) -> GeneratedSampleSet:
+    sample_set = generator(include_fields=True, **cast(Any, kwargs))
+    return sample_set
 
 
 def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) -> None:
@@ -103,14 +115,16 @@ def test_benchmark_run_plan_requires_positive_model_checkpoint_gate_interval(
 def test_digits_benchmark_runner_rejects_fixed_shape_architecture(
     tmp_path: Path,
 ) -> None:
-    sample = load_observation_generator(_digits_benchmark_root).sample_batch(
+    generator = load_generator(_digits_benchmark_root)
+    sample = _observation_payload(
+        generator,
         component_count=1,
-        sample_count=1,
+        shape=1,
         seed=101,
     ).samples[0]
     architecture = ArchitectureManifest.from_record(
         {
-            "input_shape": list(sample.field.shape),
+            "input_shape": list(sample.require_field().shape),
             "output_shape": [10],
             "layers": [
                 {"kind": "flatten"},
@@ -351,7 +365,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         == "approximately-uniform-within-complexity-class"
     )
     assert sampled_competence["complexity_axis"] is None
-    expected_complexity = load_observation_generator(
+    expected_complexity = load_generator(
         _digits_benchmark_root
     ).distinguishable_state_complexity(
         component_count=1,
@@ -457,7 +471,7 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    generator = load_observation_generator(_digits_benchmark_root)
+    generator = load_generator(_digits_benchmark_root)
     architecture = ArchitectureManifestDocument.from_bytes(
         _digits_architecture.read_bytes()
     ).manifest
@@ -879,7 +893,7 @@ def test_training_curriculum_can_advance_after_worse_loss_on_larger_rung() -> No
 
 
 def test_evaluation_curriculum_candidates_are_complexity_sorted() -> None:
-    generator = load_observation_generator(_digits_benchmark_root)
+    generator = load_generator(_digits_benchmark_root)
 
     candidates = cast(Any, benchmark_runner)._logarithmic_curriculum_candidates(
         generator=generator,
@@ -894,7 +908,7 @@ def test_evaluation_curriculum_candidates_are_complexity_sorted() -> None:
 
 
 def test_training_curriculum_candidates_increment_canvas_size_only() -> None:
-    generator = load_observation_generator(_digits_benchmark_root)
+    generator = load_generator(_digits_benchmark_root)
 
     candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
         generator=generator,
@@ -1202,7 +1216,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     )
     assert math.isclose(cast(float, score_basis["chance_mass"]), 0.1)
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    expected_complexity = load_observation_generator(
+    expected_complexity = load_generator(
         _digits_benchmark_root
     ).distinguishable_state_complexity(
         component_count=1,

@@ -151,8 +151,9 @@ def test_known_benchmark_manifests_loads_python_implementation_without_manifest_
                         path.read_bytes()
                     ).declaration
 
-                def observation_generator(self):
-                    return object()
+                @property
+                def generator(self):
+                    return lambda **kwargs: None
 
 
             def benchmark(root: Path):
