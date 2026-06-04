@@ -23,8 +23,8 @@
   --measured-accent-bg-strong: rgba(108, 180, 240, 0.16);
   --measured-accent-border: rgba(108, 180, 240, 0.24);
   --measured-accent-border-strong: rgba(108, 180, 240, 0.42);
-  --tentative-accent: rgba(238, 116, 166, 0.9);
-  --tentative-accent-border: rgba(238, 116, 166, 0.62);
+  --tentative-accent: rgba(92, 205, 150, 0.86);
+  --tentative-accent-border: rgba(92, 205, 150, 0.46);
   --control-bg-hover: rgba(255, 255, 255, 0.055);
   --text-primary: #ffffff;
   --text-muted: rgba(255, 255, 255, 0.56);
@@ -341,10 +341,9 @@ p {
 }
 
 .frontier-chart-point.tentative {
-  fill: transparent;
+  fill: var(--tentative-accent);
   stroke: var(--tentative-accent-border);
   stroke-width: var(--line-thin);
-  stroke-dasharray: 2 2;
 }
 
 .frontier-chart-point.hovered,
@@ -391,8 +390,7 @@ p {
 }
 
 .frontier-chart-legend i.tentative {
-  border: var(--line-thin) dashed var(--tentative-accent-border);
-  background: transparent;
+  background: var(--tentative-accent);
 }
 
 .frontier-chart-axis-selector {

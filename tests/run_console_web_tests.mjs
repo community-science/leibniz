@@ -228,6 +228,9 @@ function assertBenchmarkFrontierPlotStructure() {
   const requiredDashboardMarkers = [
     'frontier-chart-legend',
     'frontier-chart-tooltip-kicker',
+    'models={frontierModels}',
+    'const renderedPoints = [...visiblePoints].sort(comparePlotPointRenderOrder)',
+    'left.frontier ? 1 : -1',
   ];
   for (const marker of requiredDashboardMarkers) {
     if (!dashboard.includes(marker)) {
