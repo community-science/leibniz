@@ -553,7 +553,7 @@ def _local_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
             _BenchmarkRunRecord(
                 source_kind="local-run",
                 result_status="accepted",
-                source_path=path.resolve(),
+                source_path=_result_state_record_path(path, results_root=results_root),
                 run_id=bundle.run_slug,
                 run_slug=bundle.run_slug,
                 benchmark_id=bundle.benchmark_manifest.id,
@@ -566,13 +566,13 @@ def _local_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
                 architecture=bundle.model_inspection.architecture.to_record(),
                 model_inspection=_model_inspection_view_record(
                     inspection=bundle.model_inspection.to_record(),
-                    source_path=path.resolve(),
+                    source_path=_result_state_record_path(path, results_root=results_root),
                     measurement_dataset_digest=bundle.measurement_dataset.digest,
                     training_summary=None,
                     artifact_references=_evaluation_bundle_artifact_references(bundle),
                 ),
                 model_inspection_digest=bundle.model_inspection.digest,
-                model_inspection_path=path.resolve(),
+                model_inspection_path=_result_state_record_path(path, results_root=results_root),
                 measurement_dataset=bundle.measurement_dataset,
                 measurement_dataset_digest=bundle.measurement_dataset.digest,
                 sampled_competence=bundle.sampled_competence,
@@ -618,7 +618,7 @@ def _local_training_estimate_records(
             _BenchmarkRunRecord(
                 source_kind="local-training-estimate",
                 result_status="tentative",
-                source_path=path.resolve(),
+                source_path=_result_state_record_path(path, results_root=results_root),
                 run_id=run_slug,
                 run_slug=run_slug,
                 benchmark_id=_as_identifier(summary.get("benchmark_id"), "benchmark_id"),
@@ -634,7 +634,7 @@ def _local_training_estimate_records(
                 architecture=architecture.to_record(),
                 model_inspection=_model_inspection_view_record(
                     inspection=inspection.to_record(),
-                    source_path=path.resolve(),
+                    source_path=_result_state_record_path(path, results_root=results_root),
                     measurement_dataset_digest=empty_dataset.digest,
                     training_summary=summary,
                     artifact_references=None,
@@ -664,6 +664,14 @@ def _local_competition_records(results_root: Path) -> tuple[Mapping[str, object]
         _validate_competition_record(result, "competition")
         records.append(result)
     return tuple(records)
+
+
+def _result_state_record_path(path: Path, *, results_root: Path) -> Path:
+    resolved = path.resolve()
+    resolved_results_root = results_root.resolve()
+    if resolved.is_relative_to(resolved_results_root):
+        return Path(results_root.name) / resolved.relative_to(resolved_results_root)
+    return path
 
 
 def _sampled_competence_record_complexity(

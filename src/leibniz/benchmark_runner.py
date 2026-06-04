@@ -525,6 +525,7 @@ class BenchmarkRunSummary:
     training_summary_path: Path
     model_artifact_root: Path
     dry_run: bool
+    results_root: Path
 
     def to_record(self) -> dict[str, object]:
         """Return a canonical document-friendly summary record."""
@@ -534,10 +535,19 @@ class BenchmarkRunSummary:
             "format_version": 1,
             "run_slug": self.run_slug,
             "benchmark_id": str(self.benchmark_id),
-            "architecture_path": self.architecture_path.as_posix(),
+            "architecture_path": _portable_record_path(
+                self.architecture_path,
+                results_root=self.results_root,
+            ),
             "measurement_count": self.measurement_count,
-            "training_summary_path": self.training_summary_path.as_posix(),
-            "model_artifact_root": self.model_artifact_root.as_posix(),
+            "training_summary_path": _portable_record_path(
+                self.training_summary_path,
+                results_root=self.results_root,
+            ),
+            "model_artifact_root": _portable_record_path(
+                self.model_artifact_root,
+                results_root=self.results_root,
+            ),
             "dry_run": self.dry_run,
         }
 
@@ -608,6 +618,7 @@ def run_benchmark(
             evaluation_sample_count=plan.resolved_evaluation_sample_count,
             evaluation_rung_count=evaluation_rung_count,
             training_compute=training_compute,
+            results_root=plan.results_root,
         )
 
     def publish_progress(
@@ -811,7 +822,23 @@ def _run_summary(
         ),
         model_artifact_root=(plan.results_root / "models" / benchmark_atom / run_slug),
         dry_run=plan.dry_run,
+        results_root=plan.results_root,
     )
+
+
+def _portable_record_path(path: Path, *, results_root: Path) -> str:
+    if not path.is_absolute():
+        return path.as_posix()
+    resolved = path.resolve()
+    resolved_results_root = results_root.resolve()
+    if resolved.is_relative_to(resolved_results_root):
+        return (Path(results_root.name) / resolved.relative_to(resolved_results_root)).as_posix()
+    working_root = Path.cwd().resolve()
+    if not resolved.is_relative_to(working_root):
+        raise BenchmarkRunnerError(
+            f"record path must be relative, inside results root, or inside working tree: {path}"
+        )
+    return resolved.relative_to(working_root).as_posix()
 
 
 def _training_progress_path(summary: BenchmarkRunSummary) -> Path:
@@ -910,6 +937,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         evaluation_sample_count=evaluation_input.evaluation_sample_count,
         evaluation_rung_count=evaluation_input.evaluation_rung_count,
         training_compute=evaluation_input.training_compute,
+        results_root=plan.results_root,
     )
     bundle = BenchmarkEvaluationBundle(
         id=ProtocolIdentifier.parse(f"benchmark-evaluations.{identifier_stem}@0.1.0"),
@@ -1996,11 +2024,19 @@ def _model_checkpoint_artifact_record(
     evaluation_sample_count: int,
     evaluation_rung_count: int | None,
     training_compute: float | None,
+    results_root: Path | None = None,
 ) -> dict[str, object]:
     record = checkpoint.to_record()
-    record["record_path"] = checkpoint.path.with_suffix(
-        ".checkpoint" + _document_suffix
-    ).as_posix()
+    if results_root is not None:
+        record["path"] = _artifact_record_path(checkpoint.path, results_root=results_root)
+        record["manifest_path"] = _artifact_record_path(
+            checkpoint.manifest_path,
+            results_root=results_root,
+        )
+    record["record_path"] = _artifact_record_path(
+        checkpoint.path.with_suffix(".checkpoint" + _document_suffix),
+        results_root=results_root,
+    )
     record["benchmark_id"] = str(benchmark_id)
     record["run_slug"] = run_slug
     record["architecture_manifest"] = architecture.to_record()
@@ -2011,6 +2047,16 @@ def _model_checkpoint_artifact_record(
     if training_compute is not None:
         record["training_compute"] = training_compute
     return record
+
+
+def _artifact_record_path(path: Path, *, results_root: Path | None) -> str:
+    if results_root is None:
+        return path.as_posix()
+    resolved_results_root = results_root.resolve()
+    resolved_path = path.resolve()
+    if not resolved_path.is_relative_to(resolved_results_root):
+        raise BenchmarkRunnerError(f"artifact path must stay inside results root: {path}")
+    return (Path(results_root.name) / resolved_path.relative_to(resolved_results_root)).as_posix()
 
 
 def _resolve_artifact_record_path(value: str, *, results_root: Path) -> Path:

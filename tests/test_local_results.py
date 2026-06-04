@@ -727,6 +727,10 @@ def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
         (results_root / "evaluations" / "digits" / "competitions").glob("*.json")
     )
     assert len(competition_paths) == 2
+    for path in results_root.rglob("*.json"):
+        record = load_object_document(path.read_bytes(), description="result record")
+        for value in _string_values(record):
+            assert not Path(value).is_absolute()
 
 
 def test_materialize_benchmark_result_views_rejects_empty_results_root(tmp_path: Path) -> None:
@@ -1044,6 +1048,22 @@ def _competition_record(*, left_model_key: str, right_model_key: str) -> dict[st
             }
         ],
     }
+
+
+def _string_values(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, dict):
+        mapping = cast(dict[object, object], value)
+        return tuple(
+            string
+            for item in mapping.values()
+            for string in _string_values(item)
+        )
+    if isinstance(value, list | tuple):
+        sequence = cast(list[object] | tuple[object, ...], value)
+        return tuple(string for item in sequence for string in _string_values(item))
+    return ()
 
 
 def _git(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
