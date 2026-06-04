@@ -15,19 +15,17 @@ from pathlib import Path
 from typing import cast
 
 from leibniz.artifacts import ArtifactReference
-from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
+from leibniz.benchmark_implementations import load_benchmark_implementation
+from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
-from leibniz.documents import document_filename_suffix
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.latent_factors import (
     LatentFactorDeclaration,
-    LatentFactorDeclarationDocument,
     SampleLatentFactor,
 )
 from leibniz.materialization import (
     AxisAssignment,
     MaterializationDeclaration,
-    MaterializationDeclarationDocument,
     MaterializationPlan,
     MaterializationValidationError,
 )
@@ -35,7 +33,6 @@ from leibniz.observation_formation import (
     FieldObservation,
     FormedObservation,
     ObservationFormationDeclaration,
-    ObservationFormationDeclarationDocument,
     SpatialAffineVariation,
     VariationTransformDeclaration,
 )
@@ -54,7 +51,6 @@ __all__ = [
     "sample_variation_transform_coordinates",
 ]
 
-_document_suffix = document_filename_suffix()
 _discriminatable_resolution_cache: dict[
     tuple[str, int, str, str, int, int, float],
     tuple[int, int],
@@ -730,22 +726,14 @@ class ObservationGenerator:
 
 
 def load_observation_generator(benchmark_root: Path) -> ObservationGenerator:
-    """Load an observation generator from a benchmark declaration directory."""
+    """Load an observation generator from a benchmark package root."""
 
-    return ObservationGenerator(
-        benchmark_manifest=BenchmarkManifestDocument.from_bytes(
-            (benchmark_root / ("manifest" + _document_suffix)).read_bytes()
-        ).manifest,
-        latent_factors=LatentFactorDeclarationDocument.from_bytes(
-            (benchmark_root / ("latent_factors" + _document_suffix)).read_bytes()
-        ).declaration,
-        materialization=MaterializationDeclarationDocument.from_bytes(
-            (benchmark_root / ("materialization" + _document_suffix)).read_bytes()
-        ).declaration,
-        formation=ObservationFormationDeclarationDocument.from_bytes(
-            (benchmark_root / ("observation_formation" + _document_suffix)).read_bytes()
-        ).declaration,
-    )
+    generator = load_benchmark_implementation(benchmark_root).observation_generator()
+    if not isinstance(generator, ObservationGenerator):
+        raise ObservationGenerationError(
+            "benchmark implementation observation_generator must return ObservationGenerator"
+        )
+    return generator
 
 
 def sample_variation_transform_coordinates(

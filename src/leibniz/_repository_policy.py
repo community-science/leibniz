@@ -27,6 +27,7 @@ _forbidden_names = frozenset(
 _forbidden_suffixes = (".pyc", ".pyo")
 _forbidden_env_files = frozenset({".env"})
 _benchmark_artifact_root = PurePosixPath("src/leibniz/benchmarks")
+_benchmark_implementation_filename = "benchmark.py"
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +126,9 @@ def _has_forbidden_name(path: PurePosixPath) -> bool:
 def _is_benchmark_interpreter_file(path: PurePosixPath) -> bool:
     if path.suffix != ".py":
         return False
-    return path.is_relative_to(_benchmark_artifact_root)
+    if not path.is_relative_to(_benchmark_artifact_root):
+        return False
+    return path.name != _benchmark_implementation_filename
 
 
 if __name__ == "__main__":
