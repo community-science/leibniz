@@ -42,16 +42,16 @@ class Benchmark:
 
     def __init__(self, *, root: Path) -> None:
         self._root = root
-        self._benchmark_manifest = _benchmark_manifest()
-        self._generator = Generator(benchmark_manifest=self._benchmark_manifest)
+        self._manifest = _manifest()
+        self._generator = Generator(manifest=self._manifest)
 
     @property
     def root(self) -> Path:
         return self._root
 
     @property
-    def benchmark_manifest(self) -> BenchmarkManifest:
-        return self._benchmark_manifest
+    def manifest(self) -> BenchmarkManifest:
+        return self._manifest
 
     @property
     def generator(self) -> Generator:
@@ -62,7 +62,7 @@ class Benchmark:
 class Generator:
     """Generate Chess positions from the fixture-backed scientific surface."""
 
-    benchmark_manifest: BenchmarkManifest
+    manifest: BenchmarkManifest
 
     @property
     def id(self) -> ProtocolIdentifier:
@@ -91,7 +91,7 @@ class Generator:
         measure = _state_space_measure()
         if state_space_request is not None and not state_space_request.contains(measure):
             return GeneratedSampleSet(
-                benchmark_id=self.benchmark_manifest.id,
+                benchmark_id=self.manifest.id,
                 generator_id=self.id,
                 generator_version=self.version,
                 seed=seed,
@@ -110,7 +110,7 @@ class Generator:
             for index in range(_sample_count(sample_shape))
         )
         return GeneratedSampleSet(
-            benchmark_id=self.benchmark_manifest.id,
+            benchmark_id=self.manifest.id,
             generator_id=self.id,
             generator_version=self.version,
             seed=seed,
@@ -120,7 +120,7 @@ class Generator:
         )
 
 
-def _benchmark_manifest() -> BenchmarkManifest:
+def _manifest() -> BenchmarkManifest:
     return BenchmarkManifest(
         id=_benchmark_id,
         name=_benchmark_id.name,

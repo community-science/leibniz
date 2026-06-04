@@ -2,13 +2,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from benchmark_typing import load_digits_benchmark
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment, MaterializationPlan, MaterializationPlanDocument
 from leibniz.observation_formation import (
     ObservationFormationDeclaration,
-    ObservationFormationDeclarationDocument,
 )
 from leibniz.observation_inspection import (
     FieldPreview,
@@ -183,9 +183,7 @@ def test_observation_inspection_rejects_invalid_preview_run_length() -> None:
 
 
 def _digits_declaration() -> ObservationFormationDeclaration:
-    return ObservationFormationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "observation_formation.json").read_bytes()
-    ).declaration
+    return load_digits_benchmark(_digits_benchmark_root).formation
 
 
 def _digits_observation():

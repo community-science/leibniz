@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from benchmark_typing import load_digits_benchmark
 
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
@@ -101,16 +102,14 @@ def test_resolution_requirement_rejects_infeasible_canvas_size() -> None:
     )
 
 
-def test_latent_factor_declaration_document_loads_digits_source_artifact() -> None:
-    document = LatentFactorDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "latent_factors.json").read_bytes()
-    )
+def test_digits_latent_factor_declaration_is_python_owned() -> None:
+    declaration = load_digits_benchmark(_digits_benchmark_root).latent_factors
 
-    assert document.declaration.id == ProtocolIdentifier.parse(
+    assert declaration.id == ProtocolIdentifier.parse(
         "benchmarks.digits.latent-factors@0.1.0"
     )
-    assert document.declaration.complexity_projections == ()
-    assert document.digest == ContentDigest.from_value(document.declaration.to_record())
+    assert declaration.complexity_projections == ()
+    assert ContentDigest.from_value(declaration.to_record()) == declaration.digest
 
 
 def test_latent_factor_declaration_digest_is_stable() -> None:

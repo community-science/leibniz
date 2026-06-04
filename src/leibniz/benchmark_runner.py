@@ -644,7 +644,7 @@ def run_benchmark(
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
-    outcome_space = generator.benchmark_manifest.resolve_outcome_space()
+    outcome_space = generator.manifest.resolve_outcome_space()
     initial_evaluation_rung = _evaluation_curriculum_rung(
         architecture=architecture,
         generator=generator,
@@ -661,12 +661,12 @@ def run_benchmark(
 
     summary = _run_summary(
         plan=plan,
-        benchmark_id=generator.benchmark_manifest.id,
+        benchmark_id=generator.manifest.id,
         architecture_digest=architecture.digest,
     )
     model_inspection = ModelInspectionRecord.from_architecture(
         id=ProtocolIdentifier.parse(
-            f"model-inspections.{_identifier_atom(generator.benchmark_manifest.id)}."
+            f"model-inspections.{_identifier_atom(generator.manifest.id)}."
             f"{summary.run_slug}@0.1.0"
         ),
         architecture_manifest=architecture,
@@ -677,7 +677,7 @@ def run_benchmark(
     progress_path = _training_progress_path(summary)
     model_interface = ModelInterface.from_outcome_space(
         id=ProtocolIdentifier.parse(
-            f"model-interfaces.{_identifier_atom(generator.benchmark_manifest.id)}."
+            f"model-interfaces.{_identifier_atom(generator.manifest.id)}."
             f"{summary.run_slug}@0.1.0"
         ),
         outcome_space=outcome_space,
@@ -808,7 +808,7 @@ def run_benchmark(
         raise BenchmarkRunnerError("training did not produce any model checkpoints")
     model_inspection = ModelInspectionRecord.from_model_manifest(
         id=ProtocolIdentifier.parse(
-            f"model-inspections.{_identifier_atom(generator.benchmark_manifest.id)}."
+            f"model-inspections.{_identifier_atom(generator.manifest.id)}."
             f"{summary.run_slug}@0.1.0"
         ),
         model_manifest=selected_checkpoint.manifest,
@@ -928,7 +928,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
 
     generator = _require_field_generator(load_generator(plan.benchmark_root))
     evaluation_input = _evaluation_input_from_plan(plan, generator=generator)
-    outcome_space = generator.benchmark_manifest.resolve_outcome_space()
+    outcome_space = generator.manifest.resolve_outcome_space()
     architecture = evaluation_input.architecture
     selected_checkpoint = evaluation_input.checkpoint
     run_slug = evaluation_input.run_slug
@@ -972,7 +972,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         for measurement in group
     )
     dataset = MeasurementDataset(measurements=measurements)
-    dataset.validate_manifest(generator.benchmark_manifest)
+    dataset.validate_manifest(generator.manifest)
     model_inspection = ModelInspectionRecord.from_model_manifest(
         id=ProtocolIdentifier.parse(
             f"model-inspections.{benchmark_atom}.{run_slug}@0.1.0"
@@ -1019,7 +1019,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
     bundle = BenchmarkEvaluationBundle(
         id=ProtocolIdentifier.parse(f"benchmark-evaluations.{identifier_stem}@0.1.0"),
         run_slug=run_slug,
-        benchmark_manifest=generator.benchmark_manifest,
+        benchmark_manifest=generator.manifest,
         architecture_manifest=architecture,
         model_manifest=selected_checkpoint.manifest,
         model_checkpoint=checkpoint_record,
@@ -1070,7 +1070,7 @@ def _evaluation_input_from_plan(
         )
     except ValueError as error:
         raise BenchmarkRunnerError(str(error)) from error
-    if checkpoint_benchmark_id != generator.benchmark_manifest.id:
+    if checkpoint_benchmark_id != generator.manifest.id:
         raise BenchmarkRunnerError(
             "checkpoint_artifact.benchmark_id does not match benchmark root"
         )
@@ -1122,8 +1122,8 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
     left_evaluation = left_evaluation_bundle.to_record()
     right_evaluation = right_evaluation_bundle.to_record()
     generator = _require_field_generator(load_generator(plan.benchmark_root))
-    benchmark_id = generator.benchmark_manifest.id
-    outcome_space = generator.benchmark_manifest.resolve_outcome_space()
+    benchmark_id = generator.manifest.id
+    outcome_space = generator.manifest.resolve_outcome_space()
     left_architecture = left_evaluation_bundle.architecture_manifest
     right_architecture = right_evaluation_bundle.architecture_manifest
     left_checkpoint = load_model_checkpoint_artifact(
@@ -1197,7 +1197,7 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
     competition_record["throughput"] = dict(throughput)
     competition_bundle = BenchmarkCompetitionBundle(
         id=ProtocolIdentifier.parse(f"benchmark-competitions.{competition_id}@0.1.0"),
-        benchmark_manifest=generator.benchmark_manifest,
+        benchmark_manifest=generator.manifest,
         left_evaluation_bundle=left_evaluation_bundle,
         right_evaluation_bundle=right_evaluation_bundle,
         competition_result=competition_record,

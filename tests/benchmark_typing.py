@@ -29,6 +29,7 @@ from leibniz.observation_generation import (
     StateSpaceMeasureRequest,
     load_generator,
 )
+from leibniz.observation_showcases import ObservationShowcaseManifest
 from leibniz.timing import TimingCollector
 
 
@@ -78,6 +79,9 @@ class DigitsBenchmark(BenchmarkProtocol, Protocol):
 
     @property
     def formation(self) -> ObservationFormationDeclaration: ...
+
+    @property
+    def showcase(self) -> ObservationShowcaseManifest: ...
 
     @property
     def generator(self) -> DigitsGenerator: ...

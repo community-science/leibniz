@@ -1197,7 +1197,7 @@ def _benchmark_roots_by_id(
     roots = explicit_roots or discover_benchmark_roots(packaged_root)
     by_id: dict[str, Path] = {}
     for root in roots:
-        manifest = load_benchmark(root).benchmark_manifest
+        manifest = load_benchmark(root).manifest
         by_id[str(manifest.id)] = root
     return by_id
 

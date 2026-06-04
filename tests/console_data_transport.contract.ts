@@ -23,8 +23,8 @@ assertEqual(parsed.format, 'leibniz.console-data', 'format');
 assertEqual(parsed.format_version, 1, 'format version');
 assertEqual(parsed.artifact_index.format, 'leibniz.console.artifact-index', 'artifact index format');
 assertEqual(parsed.artifact_index.format_version, 1, 'artifact index format version');
-assertEqual(parsed.artifact_index.artifacts.length, 13, 'artifact index count');
-assertEqual(parsed.artifact_details.length, 13, 'artifact detail count');
+assertEqual(parsed.artifact_index.artifacts.length, 7, 'artifact index count');
+assertEqual(parsed.artifact_details.length, 7, 'artifact detail count');
 assertEqual(
   parsed.artifact_details.map((detail) => `${detail.kind}:${detail.source_path}`).join('|'),
   parsed.artifact_index.artifacts.map((artifact) => `${artifact.kind}:${artifact.source_path}`).join('|'),

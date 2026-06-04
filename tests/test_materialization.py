@@ -2,6 +2,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from benchmark_typing import load_digits_benchmark
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.content import ContentDigest
@@ -80,11 +81,8 @@ def test_linear_resolution_requirement_derives_minimum_resolution() -> None:
     ) == "N=95 is below minimum 96 for L=3"
 
 
-def test_digits_materialization_declaration_loads_source_artifact() -> None:
-    document = MaterializationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "materialization.json").read_bytes()
-    )
-    declaration = document.declaration
+def test_digits_materialization_declaration_is_python_owned() -> None:
+    declaration = _digits_materialization()
 
     assert declaration.id == ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0")
     assert declaration.benchmark_id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
@@ -95,13 +93,11 @@ def test_digits_materialization_declaration_loads_source_artifact() -> None:
     assert declaration.requirements == ()
     assert declaration.minimum_resolution() == AxisAssignment(values={"W": 24, "H": 24})
     assert declaration.resolution_lattice_steps() == {"W": 24, "H": 24}
-    assert document.digest == ContentDigest.from_value(declaration.to_record())
+    assert declaration.digest == ContentDigest.from_value(declaration.to_record())
 
 
 def test_materialization_declaration_uses_strongest_requirement_per_resolution_axis() -> None:
-    declaration = MaterializationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "materialization.json").read_bytes()
-    ).declaration
+    declaration = _digits_materialization()
     stronger = LinearResolutionRequirement(
         name=ProtocolName.parse("benchmarks.digits.resolution.extra-margin"),
         source_axis="L",
@@ -123,9 +119,7 @@ def test_materialization_declaration_uses_strongest_requirement_per_resolution_a
 
 
 def test_materialization_plan_resolves_from_declaration_deterministically() -> None:
-    declaration = MaterializationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "materialization.json").read_bytes()
-    ).declaration
+    declaration = _digits_materialization()
 
     left = MaterializationPlan.resolve(
         id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.l3.seed101@0.1.0"),
@@ -171,9 +165,7 @@ def test_materialization_plan_preserves_source_assignment_for_requirement_valida
 
 
 def test_materialization_plan_documents_validate_digits_fixtures() -> None:
-    declaration = MaterializationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "materialization.json").read_bytes()
-    ).declaration
+    declaration = _digits_materialization()
     l1 = MaterializationPlanDocument.from_bytes(
         (_digits_fixture_root / "materialization_plan_l1.json").read_bytes()
     )
@@ -190,9 +182,7 @@ def test_materialization_plan_documents_validate_digits_fixtures() -> None:
 
 
 def test_materialization_plan_rejects_off_lattice_resolution() -> None:
-    declaration = MaterializationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "materialization.json").read_bytes()
-    ).declaration
+    declaration = _digits_materialization()
     plan = MaterializationPlan(
         id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.bad@0.1.0"),
         benchmark_id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
@@ -215,9 +205,7 @@ def test_materialization_plan_rejects_off_lattice_resolution() -> None:
 
 
 def test_materialization_plan_rejects_under_resolved_request() -> None:
-    declaration = MaterializationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "materialization.json").read_bytes()
-    ).declaration
+    declaration = _digits_materialization()
     plan = MaterializationPlan(
         id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.bad@0.1.0"),
         benchmark_id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
@@ -247,6 +235,10 @@ def test_materialization_documents_reject_invalid_bytes() -> None:
     assert str(
         capture_materialization_error(lambda: MaterializationPlanDocument.from_bytes(b"[]"))
     ) == "materialization plan must contain an object"
+
+
+def _digits_materialization() -> MaterializationDeclaration:
+    return load_digits_benchmark(_digits_benchmark_root).materialization
 
 
 def capture_materialization_error(

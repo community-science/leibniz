@@ -13,26 +13,10 @@ from leibniz.protocol_authority import (
 )
 
 
-def test_protocol_authority_discovers_committed_benchmark_declarations() -> None:
+def test_protocol_authority_finds_no_committed_benchmark_declarations() -> None:
     artifacts = discover_protocol_artifacts()
 
-    paths = {artifact.path for artifact in artifacts}
-
-    assert paths == {
-        "digits/inspection_showcase.json",
-        "digits/latent_factors.json",
-        "digits/manifest.json",
-        "digits/materialization.json",
-        "digits/observation_formation.json",
-    }
-    assert {artifact.validation_status for artifact in artifacts} == {"valid"}
-    assert {artifact.kind for artifact in artifacts} == {
-        "benchmark-manifest",
-        "latent-factor-declaration",
-        "materialization-declaration",
-        "observation-formation-declaration",
-        "observation-showcase",
-    }
+    assert artifacts == ()
 
 
 def test_protocol_authority_routes_and_hashes_manifest_record(tmp_path: Path) -> None:
@@ -59,41 +43,11 @@ def test_protocol_authority_routes_and_hashes_manifest_record(tmp_path: Path) ->
     assert len(artifact.source_sha256) == 64
 
 
-def test_protocol_authority_derives_resolved_reference_edges() -> None:
+def test_protocol_authority_derives_empty_index_for_python_owned_benchmarks() -> None:
     index = discover_protocol_authority_index(strict=True)
 
-    references = {
-        (
-            dependency.source_kind,
-            dependency.source_field,
-            dependency.target_kind,
-            dependency.target_protocol_id,
-            dependency.status,
-        )
-        for dependency in index.dependencies
-    }
-
-    assert (
-        "benchmark-manifest",
-        "latent_factor_declaration",
-        "latent-factor-declaration",
-        "benchmarks.digits.latent-factors@0.1.0",
-        "resolved",
-    ) in references
-    assert (
-        "materialization-declaration",
-        "latent_factor_declaration",
-        "latent-factor-declaration",
-        "benchmarks.digits.latent-factors@0.1.0",
-        "resolved",
-    ) in references
-    assert (
-        "observation-showcase",
-        "formation_declaration",
-        "observation-formation-declaration",
-        "benchmarks.digits.observation-formation@0.1.0",
-        "resolved",
-    ) in references
+    assert index.artifacts == ()
+    assert index.dependencies == ()
     assert index.dangling_dependencies == ()
     assert index.to_record()["dangling_dependency_count"] == 0
 
