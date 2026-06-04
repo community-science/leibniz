@@ -649,6 +649,20 @@ def test_cli_benchmark_train_discovers_uncompleted_architecture_manifests(
     assert (completed_root / completed_architecture.name).is_file()
     assert (completed_root / uncompleted_architecture.name).is_file()
     assert len(tuple((results_root / "training" / "digits").glob("*.json"))) == 2
+    for summary_path in (results_root / "training" / "digits").glob("*.json"):
+        record = load_object_document(
+            summary_path.read_bytes(),
+            description=summary_path.as_posix(),
+        )
+        architecture_path = Path(cast(str, record["architecture_path"]))
+        if architecture_path.is_absolute():
+            resolved_architecture_path = architecture_path
+        elif architecture_path.parts[:1] == (results_root.name,):
+            resolved_architecture_path = results_root.parent / architecture_path
+        else:
+            resolved_architecture_path = _repository_root / architecture_path
+        assert resolved_architecture_path.is_file()
+        assert architecture_path.parts[-3:-1] == ("digits", "completed")
 
     assert (
         main(
