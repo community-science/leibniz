@@ -1054,6 +1054,7 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
         benchmark_id=benchmark_id,
         left_model_key=left_model_key,
         right_model_key=right_model_key,
+        competition_seed=competition_seed,
     )
     resolution_assignment = _competition_resolution_assignment_from_evaluations(
         left_evaluation,
@@ -2063,14 +2064,16 @@ def _competition_id(
     benchmark_id: ProtocolIdentifier,
     left_model_key: str,
     right_model_key: str,
+    competition_seed: int,
 ) -> str:
     digest = ContentDigest.from_value(
         {
             "kind": "benchmark-model-competition",
-            "version": 1,
+            "version": 2,
             "benchmark_id": str(benchmark_id),
             "left_model_key": left_model_key,
             "right_model_key": right_model_key,
+            "competition_seed": competition_seed,
         }
     )
     return f"models-{digest.hex[:16]}"

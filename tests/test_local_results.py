@@ -198,7 +198,10 @@ def test_relative_competition_scores_rank_undefeated_model_first() -> None:
         ),
     )
 
-    ratings = cast(Any, local_results)._relative_model_ratings(best_runs, outcomes=outcomes)
+    ratings = cast(Any, local_results)._relative_rating_fit(
+        best_runs,
+        outcomes=outcomes,
+    ).ratings
 
     assert ratings["model-a"].score > ratings["model-b"].score
     assert ratings["model-b"].score > ratings["model-c"].score
@@ -216,7 +219,7 @@ def test_relative_competition_batch_fit_aggregates_reversed_pairs() -> None:
         ),
     }
     outcome_type = cast(Any, local_results)._ModelCompetitionOutcome
-    ratings = cast(Any, local_results)._relative_model_ratings(
+    ratings = cast(Any, local_results)._relative_rating_fit(
         best_runs,
         outcomes=(
             outcome_type(
@@ -234,7 +237,7 @@ def test_relative_competition_batch_fit_aggregates_reversed_pairs() -> None:
                 sample_count=24,
             ),
         ),
-    )
+    ).ratings
 
     assert ratings["model-a"].score > ratings["model-b"].score
     assert ratings["model-a"].sample_count == 64
@@ -260,7 +263,7 @@ def test_relative_competition_batch_fit_uses_transitive_evidence() -> None:
         ),
     }
     outcome_type = cast(Any, local_results)._ModelCompetitionOutcome
-    ratings = cast(Any, local_results)._relative_model_ratings(
+    ratings = cast(Any, local_results)._relative_rating_fit(
         best_runs,
         outcomes=(
             outcome_type(
@@ -285,7 +288,7 @@ def test_relative_competition_batch_fit_uses_transitive_evidence() -> None:
                 sample_count=128,
             ),
         ),
-    )
+    ).ratings
 
     assert ratings["model-a"].score > ratings["model-b"].score
     assert ratings["model-b"].score > ratings["model-c"].score
@@ -305,14 +308,23 @@ def test_relative_score_view_exposes_batch_rating_evidence() -> None:
             run_id="run-b",
         ),
     }
+    cost_summary = {
+        "component_count": 1,
+        "parameter_count": 1,
+        "storage_bytes": 1,
+        "inference_compute": 1,
+        "training_compute": 1,
+    }
     records: list[dict[str, object]] = [
         {
             "model_key": "model-a",
             "score_views": {},
+            "cost_summary": cost_summary,
         },
         {
             "model_key": "model-b",
             "score_views": {},
+            "cost_summary": cost_summary,
         },
     ]
 
@@ -333,6 +345,38 @@ def test_relative_score_view_exposes_batch_rating_evidence() -> None:
     assert basis["opponent_count"] == 1
     assert basis["provisional"] is True
     assert cast(float, basis["rating_uncertainty"]) > 0.0
+    confidence = cast(dict[str, object], basis["frontier_confidence"])
+    parameter_confidence = cast(dict[str, object], confidence["parameter_count"])
+    assert parameter_confidence["risk_threshold"] == 0.05
+
+
+def test_relative_frontier_confidence_requests_uncertain_nearest_competition() -> None:
+    best_runs = {
+        "model-a": _benchmark_run_record_for_competition(
+            model_key="model-a",
+            run_id="run-a",
+        ),
+        "model-b": _benchmark_run_record_for_competition(
+            model_key="model-b",
+            run_id="run-b",
+        ),
+    }
+    outcome_type = cast(Any, local_results)._ModelCompetitionOutcome
+
+    requests = cast(Any, local_results)._relative_frontier_competition_requests(
+        best_runs,
+        outcomes=(
+            outcome_type(
+                left_model_key="model-a",
+                right_model_key="model-b",
+                left_score=0.55,
+                right_score=0.45,
+                sample_count=8,
+            ),
+        ),
+    )
+
+    assert requests == (("model-a", "model-b"),)
 
 
 def test_console_result_view_validates_model_detail_tables(tmp_path: Path) -> None:
@@ -677,12 +721,12 @@ def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
     ) == 0
     rerun = capsys.readouterr()
     assert "no unevaluated benchmark checkpoints found" in rerun.out
-    assert "skipped 1 existing benchmark relative evaluation(s)" in rerun.out
+    assert "completed benchmark relative evaluation" in rerun.out
     assert "materialized 1 benchmark result view(s)" in rerun.out
     competition_paths = tuple(
         (results_root / "evaluations" / "digits" / "competitions").glob("*.json")
     )
-    assert len(competition_paths) == 1
+    assert len(competition_paths) == 2
 
 
 def test_materialize_benchmark_result_views_rejects_empty_results_root(tmp_path: Path) -> None:

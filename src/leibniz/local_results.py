@@ -56,6 +56,7 @@ __all__ = [
     "materialize_benchmark_result_views",
     "publish_local_benchmark_results",
     "push_result_checkout",
+    "relative_frontier_competition_requests",
 ]
 
 _protocol_formats = console_protocol_formats()
@@ -377,6 +378,51 @@ def load_console_result_view(data: bytes) -> Mapping[str, object]:
     raise LocalResultImportError("console result view has unsupported format")
 
 
+def relative_frontier_competition_requests(
+    *,
+    results_root: Path = _default_results_root,
+    benchmark_selectors: tuple[str, ...] = (),
+) -> tuple[tuple[str, str], ...]:
+    """Return model pairs that need more evidence to certify relative frontiers."""
+
+    competitions = _local_competition_records(results_root)
+    requests: set[tuple[str, str]] = set()
+    runs_by_benchmark: dict[str, dict[str, _BenchmarkRunRecord]] = {}
+    for run in _local_run_records(results_root):
+        benchmark_id = str(run.benchmark_id)
+        if not _benchmark_selected_for_relative_requests(benchmark_id, benchmark_selectors):
+            continue
+        best_runs = runs_by_benchmark.setdefault(benchmark_id, {})
+        current = best_runs.get(run.model_key)
+        if current is None or run.score > current.score:
+            best_runs[run.model_key] = run
+    for benchmark_id, best_runs in runs_by_benchmark.items():
+        benchmark_competitions = tuple(
+            competition
+            for competition in competitions
+            if competition.get("benchmark_id") == benchmark_id
+        )
+        outcomes = _pairwise_competition_outcomes(best_runs, benchmark_competitions)
+        requests.update(
+            _relative_frontier_competition_requests(best_runs, outcomes=outcomes)
+        )
+    return tuple(sorted(requests))
+
+
+def _benchmark_selected_for_relative_requests(
+    benchmark_id: str,
+    selectors: tuple[str, ...],
+) -> bool:
+    if not selectors:
+        return True
+    benchmark_name = benchmark_id.split("@", maxsplit=1)[0]
+    benchmark_atom = benchmark_name.rsplit(".", maxsplit=1)[-1]
+    return any(
+        selector in {benchmark_id, benchmark_name, benchmark_atom}
+        for selector in selectors
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _BenchmarkRunRecord:
     source_kind: str
@@ -459,6 +505,24 @@ class _RelativeModelRating:
     competition_count: int
     uncertainty: float
     provisional: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _RelativeRatingFit:
+    ratings: Mapping[str, _RelativeModelRating]
+    model_index: Mapping[str, int]
+    covariance: tuple[tuple[float, ...], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RelativeFrontierConfidence:
+    model_key: str
+    competitor_model_key: str | None
+    cost_axis: str
+    false_frontier_risk: float
+    rating_margin: float | None
+    margin_uncertainty: float | None
+    certified: bool
 
 
 def _known_benchmark_manifests(
@@ -1191,10 +1255,16 @@ def _add_relative_score_views(
     competition_outcomes = _pairwise_competition_outcomes(best_runs, competitions)
     if not competition_outcomes:
         return
-    relative_ratings = _relative_model_ratings(best_runs, outcomes=competition_outcomes)
+    rating_fit = _relative_rating_fit(best_runs, outcomes=competition_outcomes)
+    relative_ratings = rating_fit.ratings
+    frontier_confidence = _relative_frontier_confidence_by_model(
+        records,
+        rating_fit=rating_fit,
+    )
     for record in records:
         model_key = str(record["model_key"])
         rating = relative_ratings.get(model_key, _baseline_relative_model_rating())
+        confidence_records = frontier_confidence.get(model_key, {})
         score_views = cast(dict[str, object], record["score_views"])
         score_views["relative"] = {
             "key": "relative",
@@ -1214,6 +1284,7 @@ def _add_relative_score_views(
                 "opponent_count": rating.opponent_count,
                 "rating_uncertainty": rating.uncertainty,
                 "provisional": rating.provisional,
+                "frontier_confidence": confidence_records,
             },
         }
 
@@ -1225,6 +1296,7 @@ _relative_score_fit_iterations = 64
 _relative_score_fit_tolerance = 1e-10
 _relative_score_provisional_min_opponents = 2
 _relative_score_provisional_min_samples = 64
+_relative_frontier_false_risk_threshold = 0.05
 
 
 def _baseline_relative_model_rating() -> _RelativeModelRating:
@@ -1239,15 +1311,25 @@ def _baseline_relative_model_rating() -> _RelativeModelRating:
     )
 
 
-def _relative_model_ratings(
+def _relative_rating_fit(
     best_runs: Mapping[str, _BenchmarkRunRecord],
     *,
     outcomes: tuple[_ModelCompetitionOutcome, ...],
-) -> dict[str, _RelativeModelRating]:
+) -> _RelativeRatingFit:
     model_keys = tuple(sorted(best_runs))
     pairs = _aggregated_competition_pairs(outcomes)
     if not pairs:
-        return {model_key: _baseline_relative_model_rating() for model_key in model_keys}
+        return _RelativeRatingFit(
+            ratings={model_key: _baseline_relative_model_rating() for model_key in model_keys},
+            model_index={model_key: index for index, model_key in enumerate(model_keys)},
+            covariance=tuple(
+                tuple(
+                    (1.0 / _relative_score_prior_sample_weight) if row == column else 0.0
+                    for column in range(len(model_keys))
+                )
+                for row in range(len(model_keys))
+            ),
+        )
     model_index = {model_key: index for index, model_key in enumerate(model_keys)}
     logits = _fit_bradley_terry_logits(
         model_count=len(model_keys),
@@ -1278,7 +1360,126 @@ def _relative_model_ratings(
                 or sample_count < _relative_score_provisional_min_samples
             ),
         )
-    return ratings
+    return _RelativeRatingFit(
+        ratings=ratings,
+        model_index=model_index,
+        covariance=tuple(tuple(row) for row in covariance),
+    )
+
+
+def _relative_frontier_confidence_by_model(
+    records: list[dict[str, object]],
+    *,
+    rating_fit: _RelativeRatingFit,
+) -> dict[str, dict[str, object]]:
+    confidence_by_model: dict[str, dict[str, object]] = {}
+    for confidence in _relative_frontier_confidence_records(
+        records,
+        rating_fit=rating_fit,
+    ):
+        model_record = confidence_by_model.setdefault(confidence.model_key, {})
+        record: dict[str, object] = {
+            "certified": confidence.certified,
+            "false_frontier_risk": confidence.false_frontier_risk,
+            "risk_threshold": _relative_frontier_false_risk_threshold,
+        }
+        if confidence.competitor_model_key is not None:
+            record["competitor_model_key"] = confidence.competitor_model_key
+        if confidence.rating_margin is not None:
+            record["rating_margin"] = confidence.rating_margin
+        if confidence.margin_uncertainty is not None:
+            record["margin_uncertainty"] = confidence.margin_uncertainty
+        model_record[confidence.cost_axis] = record
+    return confidence_by_model
+
+
+def _relative_frontier_confidence_records(
+    records: list[dict[str, object]],
+    *,
+    rating_fit: _RelativeRatingFit,
+) -> tuple[_RelativeFrontierConfidence, ...]:
+    confidence: list[_RelativeFrontierConfidence] = []
+    for cost_axis in _benchmark_cost_axis_keys:
+        try:
+            frontier_records = _relative_frontier_model_records(
+                records,
+                cost_axis=cost_axis,
+                rating_fit=rating_fit,
+            )
+        except LocalResultImportError:
+            continue
+        for record in frontier_records:
+            try:
+                competitor = _nearest_relative_frontier_competitor(
+                    records,
+                    frontier_record=record,
+                    cost_axis=cost_axis,
+                    rating_fit=rating_fit,
+                )
+            except LocalResultImportError:
+                continue
+            model_key = str(record["model_key"])
+            if competitor is None:
+                confidence.append(
+                    _RelativeFrontierConfidence(
+                        model_key=model_key,
+                        competitor_model_key=None,
+                        cost_axis=cost_axis,
+                        false_frontier_risk=0.0,
+                        rating_margin=None,
+                        margin_uncertainty=None,
+                        certified=True,
+                    )
+                )
+                continue
+            competitor_key = str(competitor["model_key"])
+            margin = rating_fit.ratings[model_key].score - rating_fit.ratings[competitor_key].score
+            uncertainty = _relative_rating_margin_uncertainty(
+                rating_fit=rating_fit,
+                left_model_key=model_key,
+                right_model_key=competitor_key,
+            )
+            risk = _normal_cdf(-margin / uncertainty) if uncertainty > 0.0 else 0.0
+            confidence.append(
+                _RelativeFrontierConfidence(
+                    model_key=model_key,
+                    competitor_model_key=competitor_key,
+                    cost_axis=cost_axis,
+                    false_frontier_risk=risk,
+                    rating_margin=margin,
+                    margin_uncertainty=uncertainty,
+                    certified=risk <= _relative_frontier_false_risk_threshold,
+                )
+            )
+    return tuple(confidence)
+
+
+def _relative_frontier_competition_requests(
+    best_runs: Mapping[str, _BenchmarkRunRecord],
+    *,
+    outcomes: tuple[_ModelCompetitionOutcome, ...],
+) -> tuple[tuple[str, str], ...]:
+    if len(best_runs) < 2:
+        return ()
+    records: list[dict[str, object]] = [
+        {
+            "model_key": model_key,
+            "score_views": {},
+            "cost_summary": _run_cost_summary(run),
+        }
+        for model_key, run in best_runs.items()
+    ]
+    rating_fit = _relative_rating_fit(best_runs, outcomes=outcomes)
+    requested: set[tuple[str, str]] = set()
+    for confidence in _relative_frontier_confidence_records(
+        records,
+        rating_fit=rating_fit,
+    ):
+        if confidence.certified or confidence.competitor_model_key is None:
+            continue
+        lower, upper = sorted((confidence.model_key, confidence.competitor_model_key))
+        requested.add((lower, upper))
+    return tuple(sorted(requested))
 
 
 def _aggregated_competition_pairs(
@@ -1410,6 +1611,85 @@ def _relative_score_points_per_logit() -> float:
     return _relative_score_scale / math.log(10.0)
 
 
+def _relative_frontier_model_records(
+    records: list[dict[str, object]],
+    *,
+    cost_axis: str,
+    rating_fit: _RelativeRatingFit,
+) -> tuple[dict[str, object], ...]:
+    ordered = sorted(
+        (
+            record
+            for record in records
+            if str(record["model_key"]) in rating_fit.ratings
+        ),
+        key=lambda record: (
+            _cost_value(_extract.mapping(record["cost_summary"], "cost_summary"), cost_axis),
+            -rating_fit.ratings[str(record["model_key"])].score,
+            str(record["model_key"]),
+        ),
+    )
+    frontier: list[dict[str, object]] = []
+    best_score = -math.inf
+    for record in ordered:
+        score = rating_fit.ratings[str(record["model_key"])].score
+        if score > best_score:
+            frontier.append(record)
+            best_score = score
+    return tuple(frontier)
+
+
+def _nearest_relative_frontier_competitor(
+    records: list[dict[str, object]],
+    *,
+    frontier_record: dict[str, object],
+    cost_axis: str,
+    rating_fit: _RelativeRatingFit,
+) -> dict[str, object] | None:
+    frontier_key = str(frontier_record["model_key"])
+    frontier_cost = _cost_value(
+        _extract.mapping(frontier_record["cost_summary"], "cost_summary"),
+        cost_axis,
+    )
+    candidates = [
+        record
+        for record in records
+        if str(record["model_key"]) != frontier_key
+        and str(record["model_key"]) in rating_fit.ratings
+        and _cost_value(_extract.mapping(record["cost_summary"], "cost_summary"), cost_axis)
+        <= frontier_cost
+    ]
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda record: (
+            rating_fit.ratings[str(record["model_key"])].score,
+            -abs(
+                frontier_cost
+                - _cost_value(_extract.mapping(record["cost_summary"], "cost_summary"), cost_axis)
+            ),
+            str(record["model_key"]),
+        ),
+    )
+
+def _relative_rating_margin_uncertainty(
+    *,
+    rating_fit: _RelativeRatingFit,
+    left_model_key: str,
+    right_model_key: str,
+) -> float:
+    left_index = rating_fit.model_index[left_model_key]
+    right_index = rating_fit.model_index[right_model_key]
+    covariance = rating_fit.covariance
+    variance = (
+        covariance[left_index][left_index]
+        + covariance[right_index][right_index]
+        - 2.0 * covariance[left_index][right_index]
+    )
+    return _relative_score_points_per_logit() * math.sqrt(max(variance, 0.0))
+
+
 def _pairwise_competition_outcomes(
     best_runs: Mapping[str, _BenchmarkRunRecord],
     competitions: tuple[Mapping[str, object], ...],
@@ -1461,6 +1741,10 @@ def _logistic(value: float) -> float:
         return 1.0 / (1.0 + factor)
     factor = math.exp(value)
     return factor / (1.0 + factor)
+
+
+def _normal_cdf(value: float) -> float:
+    return 0.5 * math.erfc(-value / math.sqrt(2.0))
 
 
 def _solve_linear_system(matrix: list[list[float]], vector: list[float]) -> list[float]:
