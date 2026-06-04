@@ -328,7 +328,7 @@ def materialize_benchmark_result_views(
 
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     results_root = _resolve_output_root(repository_root, results_root)
-    manifests = _known_benchmark_manifests(repository_root)
+    manifests = _known_manifests(repository_root)
     local_runs = _local_run_records(results_root)
     local_training_estimates = _local_training_estimate_records(
         results_root,
@@ -567,13 +567,13 @@ class _RelativeFrontierConfidence:
     certified: bool
 
 
-def _known_benchmark_manifests(
+def _known_manifests(
     repository_root: Path,
 ) -> dict[ProtocolIdentifier, BenchmarkManifest]:
     benchmark_root = repository_root / "src" / "leibniz" / "benchmarks"
     manifests: dict[ProtocolIdentifier, BenchmarkManifest] = {}
     for path in discover_benchmark_roots(benchmark_root):
-        manifest = load_benchmark(path).benchmark_manifest
+        manifest = load_benchmark(path).manifest
         manifests[manifest.id] = manifest
     if not manifests:
         raise LocalResultImportError("no known benchmark manifests found")

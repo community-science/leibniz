@@ -2,12 +2,11 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from benchmark_typing import DigitsGenerator, load_digits_generator
+from benchmark_typing import DigitsGenerator, load_digits_benchmark, load_digits_generator
 
 from leibniz.architectures import ArchitectureManifest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlanDocument
-from leibniz.observation_formation import ObservationFormationDeclarationDocument
 from leibniz.tensor_runtime import (
     FormationTensorCache,
     TensorRuntimeError,
@@ -122,9 +121,7 @@ def test_runtime_roofline_record_calibrates_cpu_ceiling() -> None:
 
 def test_formation_tensor_cache_matches_unvaried_pure_digits_formation() -> None:
     runtime = resolve_tensor_runtime("cpu")
-    declaration = ObservationFormationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "observation_formation.json").read_bytes()
-    ).declaration
+    declaration = load_digits_benchmark(_digits_benchmark_root).formation
     plan = MaterializationPlanDocument.from_bytes(
         (_digits_fixture_root / "materialization_plan_l3.json").read_bytes()
     ).plan
@@ -155,7 +152,7 @@ def test_formation_tensor_cache_batch_tensors_match_pure_observation_batch() -> 
     formation_batch = _formation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
-        for outcome in generator.benchmark_manifest.resolve_outcome_space().outcomes
+        for outcome in generator.manifest.resolve_outcome_space().outcomes
     )
     cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
 
@@ -181,7 +178,7 @@ def test_formation_tensor_cache_batches_grid_sampling_once(
     formation_batch = _formation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
-        for outcome in generator.benchmark_manifest.resolve_outcome_space().outcomes
+        for outcome in generator.manifest.resolve_outcome_space().outcomes
     )
     cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
     calls = {"affine_grid": 0, "grid_sample": 0}
@@ -218,7 +215,7 @@ def test_formation_tensor_cache_batch_tensors_use_generated_coordinate_values() 
     formation_batch = _formation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
-        for outcome in generator.benchmark_manifest.resolve_outcome_space().outcomes
+        for outcome in generator.manifest.resolve_outcome_space().outcomes
     )
     cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
 
@@ -232,9 +229,7 @@ def test_formation_tensor_cache_batch_tensors_use_generated_coordinate_values() 
 
 def test_formation_tensor_cache_reuses_component_tensors() -> None:
     runtime = resolve_tensor_runtime("cpu")
-    declaration = ObservationFormationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "observation_formation.json").read_bytes()
-    ).declaration
+    declaration = load_digits_benchmark(_digits_benchmark_root).formation
     cache = FormationTensorCache(runtime=runtime, formation=declaration)
 
     left = cache.component_tensor(
@@ -253,9 +248,7 @@ def test_formation_tensor_cache_reuses_component_tensors() -> None:
 
 def test_formation_tensor_cache_rejects_invalid_component_requests() -> None:
     runtime = resolve_tensor_runtime("cpu")
-    declaration = ObservationFormationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "observation_formation.json").read_bytes()
-    ).declaration
+    declaration = load_digits_benchmark(_digits_benchmark_root).formation
     cache = FormationTensorCache(runtime=runtime, formation=declaration)
 
     with pytest.raises(TensorRuntimeError, match="component_index is outside"):

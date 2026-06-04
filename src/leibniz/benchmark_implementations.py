@@ -45,7 +45,7 @@ class Generator(Protocol):
     def version(self) -> str: ...
 
     @property
-    def benchmark_manifest(self) -> BenchmarkManifest: ...
+    def manifest(self) -> BenchmarkManifest: ...
 
     def __call__(
         self,
@@ -66,7 +66,7 @@ class Benchmark(Protocol):
     def root(self) -> Path: ...
 
     @property
-    def benchmark_manifest(self) -> BenchmarkManifest: ...
+    def manifest(self) -> BenchmarkManifest: ...
 
     @property
     def generator(self) -> Generator: ...
@@ -123,7 +123,7 @@ def _validate_benchmark_implementation(
     *,
     entrypoint: Path,
 ) -> None:
-    for name in ("root", "benchmark_manifest"):
+    for name in ("root", "manifest"):
         try:
             getattr(value, name)
         except Exception as error:

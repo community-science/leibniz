@@ -5,6 +5,7 @@ from textwrap import dedent
 from typing import Any, cast
 
 import pytest
+from benchmark_typing import load_digits_benchmark
 
 import leibniz.local_results as local_results
 from leibniz.architectures import ArchitectureManifestDocument
@@ -14,7 +15,6 @@ from leibniz.benchmark_runner import (
     evaluate_benchmark_checkpoint,
     run_benchmark,
 )
-from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes, load_object_document
@@ -106,15 +106,12 @@ def test_known_benchmark_manifests_loads_python_implementation_without_manifest_
     (benchmark_root.parent / "__pycache__").mkdir()
     (benchmark_root / "benchmark.py").write_text(
         dedent(
-            f"""
+            """
             from pathlib import Path
 
-            from leibniz.benchmarks import BenchmarkManifestDocument
-            from leibniz.latent_factors import LatentFactorDeclarationDocument
-            from leibniz.materialization import MaterializationDeclarationDocument
-            from leibniz.observation_formation import ObservationFormationDeclarationDocument
-
-            _source = Path({str(_digits_benchmark_root)!r})
+            from leibniz.benchmarks import BenchmarkManifest
+            from leibniz.identifiers import ProtocolIdentifier, ProtocolName
+            from leibniz.outcomes import Outcome, OutcomeSpace
 
 
             class Impl:
@@ -126,30 +123,15 @@ def test_known_benchmark_manifests_loads_python_implementation_without_manifest_
                     return self._root
 
                 @property
-                def benchmark_manifest(self):
-                    path = _source / "manifest.json"
-                    return BenchmarkManifestDocument.from_bytes(path.read_bytes()).manifest
-
-                @property
-                def latent_factors(self):
-                    path = _source / "latent_factors.json"
-                    return LatentFactorDeclarationDocument.from_bytes(
-                        path.read_bytes()
-                    ).declaration
-
-                @property
-                def materialization(self):
-                    path = _source / "materialization.json"
-                    return MaterializationDeclarationDocument.from_bytes(
-                        path.read_bytes()
-                    ).declaration
-
-                @property
-                def formation(self):
-                    path = _source / "observation_formation.json"
-                    return ObservationFormationDeclarationDocument.from_bytes(
-                        path.read_bytes()
-                    ).declaration
+                def manifest(self):
+                    return BenchmarkManifest(
+                        id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
+                        name=ProtocolName.parse("benchmarks.digits"),
+                        outcome_space=OutcomeSpace(
+                            id=ProtocolIdentifier.parse("benchmarks.digits.outcomes@0.1.0"),
+                            outcomes=tuple(Outcome(id=f"digit-{index}") for index in range(10)),
+                        ),
+                    )
 
                 @property
                 def generator(self):
@@ -163,7 +145,7 @@ def test_known_benchmark_manifests_loads_python_implementation_without_manifest_
         encoding="utf-8",
     )
 
-    manifests = cast(Any, local_results)._known_benchmark_manifests(tmp_path)
+    manifests = cast(Any, local_results)._known_manifests(tmp_path)
 
     assert ProtocolIdentifier.parse("benchmarks.digits@0.1.0") in manifests
 
@@ -1298,7 +1280,7 @@ def _digits_measurement():
 
 
 def _digits_measurement_record() -> dict[str, object]:
-    outcome_space = _digits_benchmark().manifest.resolve_outcome_space()
+    outcome_space = _digits_benchmark().resolve_outcome_space()
     return {
         "benchmark_id": "benchmarks.digits@0.1.0",
         "outcome_space": outcome_space.to_record(),
@@ -1327,11 +1309,8 @@ def _digits_measurement_record() -> dict[str, object]:
     }
 
 
-def _digits_benchmark() -> BenchmarkManifestDocument:
-    manifest_path = _repository_root / "src" / "leibniz" / "benchmarks" / "digits" / "manifest.json"
-    return BenchmarkManifestDocument.from_bytes(
-        manifest_path.read_bytes()
-    )
+def _digits_benchmark():
+    return load_digits_benchmark(_digits_benchmark_root).manifest
 
 
 def _architecture() -> ArchitectureManifestDocument:

@@ -72,7 +72,7 @@ def test_console_data_reuses_persistent_generated_observation_batch_cache(
         + b"\n"
     )
     fake_generator = SimpleNamespace(
-        benchmark_manifest=SimpleNamespace(
+        manifest=SimpleNamespace(
             id=ProtocolIdentifier.parse("benchmarks.fake@0.1.0"),
         )
     )
@@ -135,20 +135,11 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
             "tests/fixtures/architecture/digits_convnet.json",
         ),
         ("architecture-manifest", "tests/fixtures/architecture/digits_pool.json"),
-        ("benchmark-manifest", "src/leibniz/benchmarks/digits/manifest.json"),
-        ("benchmark-manifest", "tests/fixtures/chess/mate_in_one/manifest.json"),
         ("benchmark-manifest", "tests/fixtures/finite_outcome/manifest.json"),
-        ("latent-factor-declaration", "src/leibniz/benchmarks/digits/latent_factors.json"),
-        ("materialization-declaration", "src/leibniz/benchmarks/digits/materialization.json"),
         ("materialization-plan", "tests/fixtures/digits/materialization_plan_l1.json"),
         ("materialization-plan", "tests/fixtures/digits/materialization_plan_l3.json"),
         ("measurement", "tests/fixtures/chess/mate_in_one/measurement.json"),
         ("measurement", "tests/fixtures/finite_outcome/measurement.json"),
-        (
-            "observation-formation-declaration",
-            "src/leibniz/benchmarks/digits/observation_formation.json",
-        ),
-        ("observation-showcase", "src/leibniz/benchmarks/digits/inspection_showcase.json"),
     ]
     assert [(detail["kind"], detail["source_path"]) for detail in details] == [
         (artifact["kind"], artifact["source_path"]) for artifact in artifacts

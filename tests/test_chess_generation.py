@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 from leibniz.benchmark_implementations import discover_benchmark_roots, load_benchmark
-from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.observation_generation import (
     ObservationGenerationError,
     StateSpaceMeasureRequest,
@@ -23,19 +22,19 @@ def test_chess_generator_loads_through_benchmark_entrypoint() -> None:
     benchmark = load_benchmark(_chess_benchmark_root)
     generator = benchmark.generator
 
-    assert str(benchmark.benchmark_manifest.id) == "benchmarks.chess@0.1.0"
+    assert str(benchmark.manifest.id) == "benchmarks.chess@0.1.0"
     assert str(generator.id) == "benchmarks.chess.generator@0.1.0"
     assert not hasattr(benchmark, "materialization")
     assert not hasattr(generator, "formation")
 
 
-def test_chess_generator_manifest_matches_fixture_document() -> None:
+def test_chess_generator_exposes_python_manifest() -> None:
     generator = load_generator(_chess_benchmark_root)
-    fixture_manifest = BenchmarkManifestDocument.from_bytes(
-        (_chess_benchmark_root / "manifest.json").read_bytes()
-    ).manifest
 
-    assert generator.benchmark_manifest.to_record() == fixture_manifest.to_record()
+    assert str(generator.manifest.id) == "benchmarks.chess@0.1.0"
+    assert generator.manifest.observation_ids == frozenset(
+        {"fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"}
+    )
 
 
 def test_chess_generator_returns_state_space_measured_samples_without_fields() -> None:

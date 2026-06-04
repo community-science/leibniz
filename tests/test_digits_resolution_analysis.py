@@ -30,7 +30,7 @@ def test_digits_resolution_analysis_preserves_digit_discriminability() -> None:
     report = generator.formation.component_discriminability_report(
         width=20,
         height=20,
-        minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
+        minimum_pairwise_l1=generator.manifest.resolution_discriminability_margin(),
     )
 
     assert report.passed
@@ -45,12 +45,12 @@ def test_digits_resolution_analysis_finds_minimum_live_resolution() -> None:
     assert generator.formation.minimum_discriminatable_resolution(
         minimum_width=1,
         minimum_height=1,
-        minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
+        minimum_pairwise_l1=generator.manifest.resolution_discriminability_margin(),
     ) == (13, 24)
     assert generator.formation.minimum_discriminatable_resolution(
         minimum_width=3,
         minimum_height=1,
-        minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
+        minimum_pairwise_l1=generator.manifest.resolution_discriminability_margin(),
     ) == (13, 24)
 
 
@@ -74,14 +74,14 @@ def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> 
             width=width,
             height=height,
             variation_coordinates=(coordinate,),
-            minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
+            minimum_pairwise_l1=generator.manifest.resolution_discriminability_margin(),
         )
         assert report.passed
         assert generator.formation.component_discriminability_passes(
             width=width,
             height=height,
             variation_coordinates=(coordinate,),
-            minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
+            minimum_pairwise_l1=generator.manifest.resolution_discriminability_margin(),
         )
 
 
@@ -106,7 +106,7 @@ def test_digits_resolution_analysis_certifies_sampled_training_affines() -> None
                 height=height,
                 variation_coordinates=(coordinate,),
                 minimum_pairwise_l1=(
-                    generator.benchmark_manifest.resolution_discriminability_margin()
+                    generator.manifest.resolution_discriminability_margin()
                 ),
             )
 
@@ -117,7 +117,7 @@ def test_digits_resolution_analysis_detects_destroyed_discriminability() -> None
     report = generator.formation.component_discriminability_report(
         width=4,
         height=4,
-        minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
+        minimum_pairwise_l1=generator.manifest.resolution_discriminability_margin(),
     )
 
     assert not report.passed

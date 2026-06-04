@@ -8,10 +8,6 @@ from leibniz.benchmark_implementations import (
     discover_benchmark_roots,
     load_benchmark,
 )
-from leibniz.benchmarks import BenchmarkManifestDocument
-from leibniz.latent_factors import LatentFactorDeclarationDocument
-from leibniz.materialization import MaterializationDeclarationDocument
-from leibniz.observation_formation import ObservationFormationDeclarationDocument
 from leibniz.observation_generation import (
     load_generator,
 )
@@ -24,37 +20,31 @@ def test_digits_benchmark_loads_python_implementation_entrypoint() -> None:
     implementation = load_benchmark(_digits_benchmark_root)
 
     assert implementation.root == _digits_benchmark_root
-    assert str(implementation.benchmark_manifest.id) == "benchmarks.digits@0.1.0"
+    assert str(implementation.manifest.id) == "benchmarks.digits@0.1.0"
     assert callable(implementation.generator)
     assert implementation.generator.__class__.__name__ == "Generator"
 
 
-def test_digits_python_implementation_matches_exported_declarations() -> None:
+def test_digits_python_implementation_owns_declarations() -> None:
     implementation = load_digits_benchmark(_digits_benchmark_root)
 
-    manifest = BenchmarkManifestDocument.from_bytes(
-        (_digits_benchmark_root / "manifest.json").read_bytes()
-    ).manifest
-    latent_factors = LatentFactorDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "latent_factors.json").read_bytes()
-    ).declaration
-    materialization = MaterializationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "materialization.json").read_bytes()
-    ).declaration
-    formation = ObservationFormationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "observation_formation.json").read_bytes()
-    ).declaration
-
-    assert implementation.benchmark_manifest == manifest
-    assert implementation.latent_factors == latent_factors
-    assert implementation.materialization == materialization
-    assert implementation.formation == formation
+    implementation.manifest.validate_latent_factor_declaration(
+        implementation.latent_factors
+    )
+    assert implementation.materialization.benchmark_id == implementation.manifest.id
+    assert implementation.formation.benchmark_id == implementation.manifest.id
+    assert implementation.materialization.latent_factor_declaration is not None
+    assert (
+        implementation.materialization.latent_factor_declaration.protocol_id
+        == implementation.latent_factors.id
+    )
+    assert implementation.showcase.benchmark_id == implementation.manifest.id
 
 
 def test_generator_loads_through_benchmark_implementation() -> None:
     generator = load_generator(_digits_benchmark_root)
 
-    assert str(generator.benchmark_manifest.id) == "benchmarks.digits@0.1.0"
+    assert str(generator.manifest.id) == "benchmarks.digits@0.1.0"
     sample_set = generator(shape=1, seed=101)
     assert str(sample_set.generator_id) == "benchmarks.digits.generator@0.1.0"
     assert sample_set.shape == (1,)
@@ -65,15 +55,7 @@ def test_generator_loads_through_benchmark_implementation() -> None:
 def test_benchmark_loader_requires_python_entrypoint(tmp_path: Path) -> None:
     benchmark_root = tmp_path / "digits"
     benchmark_root.mkdir()
-    for name in (
-        "manifest",
-        "latent_factors",
-        "materialization",
-        "observation_formation",
-    ):
-        source = _digits_benchmark_root / (name + ".json")
-        target = benchmark_root / source.name
-        target.write_bytes(source.read_bytes())
+    (benchmark_root / "manifest.json").write_text("{}", encoding="utf-8")
 
     with pytest.raises(BenchmarkError, match="missing benchmark.py"):
         load_benchmark(benchmark_root)

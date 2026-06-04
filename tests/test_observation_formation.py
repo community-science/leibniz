@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from benchmark_typing import load_digits_benchmark
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.identifiers import ProtocolIdentifier
@@ -28,10 +29,7 @@ _AffineMatrix2D = tuple[
 
 
 def test_digits_observation_formation_declaration_loads_source_artifact() -> None:
-    document = ObservationFormationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "observation_formation.json").read_bytes()
-    )
-    declaration = document.declaration
+    declaration = load_digits_benchmark(_digits_benchmark_root).formation
 
     assert declaration.id == ProtocolIdentifier.parse(
         "benchmarks.digits.observation-formation@0.1.0"
@@ -381,9 +379,7 @@ def test_observation_formation_documents_reject_invalid_bytes() -> None:
 
 
 def _digits_declaration() -> ObservationFormationDeclaration:
-    return ObservationFormationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "observation_formation.json").read_bytes()
-    ).declaration
+    return load_digits_benchmark(_digits_benchmark_root).formation
 
 
 def _variation_transform_record() -> dict[str, object]:

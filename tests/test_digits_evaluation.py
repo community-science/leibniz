@@ -1,12 +1,13 @@
 import math
 from pathlib import Path
 
+from benchmark_typing import load_digits_benchmark
+
 from leibniz.artifacts import ArtifactReference
-from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
+from leibniz.benchmarks import BenchmarkManifest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlanDocument
 from leibniz.measurements import MeasurementRecord
-from leibniz.observation_formation import ObservationFormationDeclarationDocument
 from leibniz.outcomes import (
     AcceptedEvent,
     FiniteProbabilityMeasure,
@@ -74,9 +75,7 @@ def _measurement_for_sequence(
     measure_kind: str,
 ) -> MeasurementRecord:
     manifest = _digits_manifest()
-    declaration = ObservationFormationDeclarationDocument.from_bytes(
-        (_digits_benchmark_root / "observation_formation.json").read_bytes()
-    ).declaration
+    declaration = load_digits_benchmark(_digits_benchmark_root).formation
     plan = MaterializationPlanDocument.from_bytes(
         (_digits_fixture_root / plan_name).read_bytes()
     ).plan
@@ -158,6 +157,4 @@ def _probabilities(
 
 
 def _digits_manifest() -> BenchmarkManifest:
-    return BenchmarkManifestDocument.from_bytes(
-        (_digits_benchmark_root / "manifest.json").read_bytes()
-    ).manifest
+    return load_digits_benchmark(_digits_benchmark_root).manifest

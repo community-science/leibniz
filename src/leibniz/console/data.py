@@ -353,7 +353,7 @@ class ConsoleDataBuilder:
                 benchmark_root=benchmark_root,
             )
             generator = load_generator(benchmark_root)
-            manifest = generator.benchmark_manifest
+            manifest = generator.manifest
             atom_count = len(manifest.outcome_space.outcomes)
             outcome_atom_name = _outcome_atom_name(
                 tuple(outcome.id for outcome in manifest.outcome_space.outcomes)
@@ -482,7 +482,7 @@ class ConsoleDataBuilder:
     ) -> Mapping[str, object]:
         preview_generator = cast(_BalancedPreviewGenerator, generator)
         cache_key = (
-            str(generator.benchmark_manifest.id),
+            str(generator.manifest.id),
             "balanced-component-samples",
             source_fingerprint,
         )
@@ -500,7 +500,7 @@ class ConsoleDataBuilder:
         component_indices = _balanced_component_indices(
             sample_count=sample_count,
             atom_count=atom_count,
-            seed=f"{generator.benchmark_manifest.id}:balanced-console-samples",
+            seed=f"{generator.manifest.id}:balanced-console-samples",
         )
         used_field_shapes: set[tuple[int, ...]] = set()
         for sample_index, component_index in enumerate(component_indices):

@@ -156,7 +156,7 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
     )
     cache = FormationTensorCache(runtime=runtime, formation=generator.formation)
     outcome_ids = tuple(
-        outcome.id for outcome in generator.benchmark_manifest.resolve_outcome_space().outcomes
+        outcome.id for outcome in generator.manifest.resolve_outcome_space().outcomes
     )
 
     def pure_once(seed: int, timing: TimingCollector | None = None) -> None:
@@ -205,7 +205,7 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
         runtime=runtime,
     )
     return FormationTimingSummary(
-        benchmark_id=str(generator.benchmark_manifest.id),
+        benchmark_id=str(generator.manifest.id),
         sample_count=plan.sample_count,
         repeats=plan.repeats,
         seed=plan.seed,

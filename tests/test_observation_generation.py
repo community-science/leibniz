@@ -107,7 +107,7 @@ def test_digits_generator_is_deterministic() -> None:
             width=first_plan.resolution_assignment.require_axis("W"),
             height=first_plan.resolution_assignment.require_axis("H"),
             variation_coordinates=(coordinate,),
-            minimum_pairwise_l1=generator.benchmark_manifest.resolution_discriminability_margin(),
+            minimum_pairwise_l1=generator.manifest.resolution_discriminability_margin(),
         )
         assert report.passed
 

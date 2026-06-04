@@ -1,10 +1,10 @@
 from pathlib import Path
 
 import pytest
+from benchmark_typing import load_digits_benchmark
 
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.observation_showcases import (
-    ObservationShowcaseDocument,
     ObservationShowcaseManifest,
     ObservationShowcaseValidationError,
 )
@@ -14,10 +14,7 @@ _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "
 
 
 def test_digits_observation_showcase_loads_benchmark_owned_samples() -> None:
-    document = ObservationShowcaseDocument.from_bytes(
-        (_digits_benchmark_root / "inspection_showcase.json").read_bytes()
-    )
-    manifest = document.manifest
+    manifest = load_digits_benchmark(_digits_benchmark_root).showcase
 
     assert manifest.id == ProtocolIdentifier.parse(
         "benchmarks.digits.inspection-showcase@0.1.0"
@@ -34,20 +31,16 @@ def test_digits_observation_showcase_loads_benchmark_owned_samples() -> None:
 
 
 def test_observation_showcase_round_trips_canonically() -> None:
-    document = ObservationShowcaseDocument.from_bytes(
-        (_digits_benchmark_root / "inspection_showcase.json").read_bytes()
-    )
+    manifest = load_digits_benchmark(_digits_benchmark_root).showcase
 
-    assert ObservationShowcaseManifest.from_record(
-        document.manifest.to_record()
-    ) == document.manifest
-    assert document.digest == document.manifest.digest
+    assert ObservationShowcaseManifest.from_record(manifest.to_record()) == manifest
+    assert manifest.digest == ObservationShowcaseManifest.from_record(
+        manifest.to_record()
+    ).digest
 
 
 def test_observation_showcase_rejects_wrong_reference_kind() -> None:
-    record = ObservationShowcaseDocument.from_bytes(
-        (_digits_benchmark_root / "inspection_showcase.json").read_bytes()
-    ).manifest.to_record()
+    record = load_digits_benchmark(_digits_benchmark_root).showcase.to_record()
     formation = record["formation_declaration"]
     assert isinstance(formation, dict)
     formation["kind"] = "benchmark-manifest"
@@ -60,9 +53,7 @@ def test_observation_showcase_rejects_wrong_reference_kind() -> None:
 
 
 def test_observation_showcase_rejects_duplicate_sample_ids() -> None:
-    record = ObservationShowcaseDocument.from_bytes(
-        (_digits_benchmark_root / "inspection_showcase.json").read_bytes()
-    ).manifest.to_record()
+    record = load_digits_benchmark(_digits_benchmark_root).showcase.to_record()
     samples = record["samples"]
     assert isinstance(samples, list)
     assert isinstance(samples[0], dict)

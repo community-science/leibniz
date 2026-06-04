@@ -2,6 +2,8 @@ import math
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from benchmark_typing import load_digits_benchmark
+
 from leibniz.benchmarks import (
     BenchmarkManifest,
     BenchmarkManifestDocument,
@@ -10,17 +12,11 @@ from leibniz.benchmarks import (
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.latent_factors import LatentFactorDeclarationDocument
 from leibniz.measurements import MeasurementRecord, MeasurementRecordValidationError
 from leibniz.outcomes import OutcomeSpace
 
 _repository_root = Path(__file__).parents[1]
-_digits_manifest_path = (
-    _repository_root / "src" / "leibniz" / "benchmarks" / "digits" / "manifest.json"
-)
-_digits_latent_factors_path = (
-    _repository_root / "src" / "leibniz" / "benchmarks" / "digits" / "latent_factors.json"
-)
+_digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
 
 
 def test_benchmark_manifest_parses_finite_outcome_contract() -> None:
@@ -248,9 +244,8 @@ def test_benchmark_manifest_document_digest_is_stable() -> None:
     assert left.digest == right.digest
 
 
-def test_digits_benchmark_manifest_loads_source_artifact() -> None:
-    document = BenchmarkManifestDocument.from_bytes(_digits_manifest_path.read_bytes())
-    manifest = document.manifest
+def test_digits_benchmark_manifest_is_python_owned() -> None:
+    manifest = load_digits_benchmark(_digits_benchmark_root).manifest
 
     assert manifest.id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
     assert [outcome.id for outcome in manifest.outcome_space.outcomes] == [
@@ -288,16 +283,15 @@ def test_digits_benchmark_manifest_loads_source_artifact() -> None:
         "affine_minimum_projected_extent": 0.65,
         "affine_maximum_projected_extent": 1.35,
     }
-    assert document.digest == ContentDigest.from_value(manifest.to_record())
+    assert ContentDigest.from_value(manifest.to_record()) == ContentDigest.from_value(
+        BenchmarkManifest.from_record(manifest.to_record()).to_record()
+    )
 
 
 def test_digits_benchmark_manifest_validates_complexity_declaration() -> None:
-    manifest = BenchmarkManifestDocument.from_bytes(_digits_manifest_path.read_bytes()).manifest
-    declaration = LatentFactorDeclarationDocument.from_bytes(
-        _digits_latent_factors_path.read_bytes()
-    ).declaration
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
 
-    manifest.validate_latent_factor_declaration(declaration)
+    benchmark.manifest.validate_latent_factor_declaration(benchmark.latent_factors)
 
 
 def test_benchmark_manifest_rejects_wrong_latent_factor_reference_kind() -> None:

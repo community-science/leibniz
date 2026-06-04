@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from benchmark_typing import load_digits_generator
+from benchmark_typing import load_digits_benchmark, load_digits_generator
 
 import leibniz.benchmark_runner as benchmark_runner
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
@@ -21,7 +21,6 @@ from leibniz.benchmark_runner import (
     evaluate_benchmark_checkpoint,
     run_benchmark,
 )
-from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
@@ -216,9 +215,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     evaluation_bundle = BenchmarkEvaluationBundleDocument.from_bytes(
         evaluation_summary.evaluation_bundle_path.read_bytes()
     ).bundle
-    manifest = BenchmarkManifestDocument.from_bytes(
-        (_digits_benchmark_root / "manifest.json").read_bytes()
-    ).manifest
+    manifest = load_digits_benchmark(_digits_benchmark_root).manifest
 
     evaluation_bundle.measurement_dataset.validate_manifest(manifest)
     assert evaluation_summary.measurement_count == 3
