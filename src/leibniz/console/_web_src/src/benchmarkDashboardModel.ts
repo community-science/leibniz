@@ -407,9 +407,11 @@ function plotRunPoint(
     models.byModelKey.get(run.model_key) ??
     models.byArchitecture.get(normalizedDigest(run.architecture_digest));
   const cost = costValue(run.cost_summary, costAxis);
-  const score = run.result_status === 'tentative' && scoreAxis === 'absolute'
-    ? run.score
-    : model === undefined ? Number.NaN : scoreValue(model, scoreAxis);
+  const score = model === undefined
+    ? run.result_status === 'tentative' && scoreAxis === 'absolute'
+      ? run.score
+      : Number.NaN
+    : scoreValue(model, scoreAxis);
   if (!Number.isFinite(cost) || cost <= 0 || !Number.isFinite(score)) {
     return null;
   }

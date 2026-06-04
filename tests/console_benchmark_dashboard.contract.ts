@@ -426,6 +426,36 @@ assertEqual(benchmarkScoreAxis('relative', benchmarkScoreAxes(result)), 'relativ
 assertEqual(plotModel.frontierPoints.length, 1, 'plot frontier count');
 assertEqual(relativePlotModel.points[0]?.score, 1200, 'relative plot score');
 assertEqual(plotModel.staircase.length, 1, 'plot staircase point count');
+const tentativeScalePlotModel = benchmarkPlotModel(
+  {
+    ...result,
+    leaderboard: [
+      result.leaderboard[0]!,
+      {
+        ...result.leaderboard[1]!,
+        score: 6,
+        score_views: {
+          ...result.leaderboard[1]!.score_views,
+          absolute: { key: 'absolute', label: 'Absolute Score', score: 6 },
+        },
+      },
+    ],
+    plot_runs: [
+      result.plot_runs[0]!,
+      {
+        ...result.plot_runs[1]!,
+        result_status: 'tentative',
+        score: 0.5,
+      },
+    ],
+  },
+  'storage_bytes',
+);
+assertEqual(
+  tentativeScalePlotModel.points.find((point) => point.resultStatus === 'tentative')?.score,
+  6,
+  'tentative plot points use score-axis scale',
+);
 assertEqual(plotModel.xTicks.includes(10), true, 'plot log ticks');
 assertEqual(plotModel.xDomain[0], 0, 'plot default x minimum');
 assertEqual(plotModel.xDomain[1], 10, 'plot default x maximum');
