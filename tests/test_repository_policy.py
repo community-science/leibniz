@@ -17,6 +17,7 @@ def test_repository_policy_accepts_source_and_configuration_paths() -> None:
             "README.md",
             "pyproject.toml",
             "src/leibniz/__init__.py",
+            "src/leibniz/benchmarks/digits/benchmark.py",
             "src/leibniz/py.typed",
             "tests/test_repository_policy.py",
         ]
@@ -40,6 +41,7 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
             "docs/latent-factor-complexity.md",
             "dist/leibniz-0.0.0.tar.gz",
             "src/leibniz/benchmarks/digits/__init__.py",
+            "src/leibniz/benchmarks/digits/other.py",
             "src/leibniz/__pycache__/__init__.cpython-311.pyc",
             "src/leibniz/module.pyc",
             ".env.local",
@@ -96,6 +98,10 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
             message="tracked interpreter file under benchmark artifact tree",
         ),
         PolicyViolation(
+            path=PurePosixPath("src/leibniz/benchmarks/digits/other.py"),
+            message="tracked interpreter file under benchmark artifact tree",
+        ),
+        PolicyViolation(
             path=PurePosixPath("src/leibniz/__pycache__/__init__.cpython-311.pyc"),
             message="tracked local, cache, or generated directory",
         ),
@@ -147,14 +153,23 @@ def test_tracked_repository_id_examples_use_neutral_owners() -> None:
     assert offenders == []
 
 
-def test_benchmark_artifact_tree_contains_only_data_files() -> None:
+def test_benchmark_artifact_tree_contains_only_data_files_and_implementation_entrypoints() -> None:
     benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks"
 
-    tracked_files = tuple(path for path in benchmark_root.rglob("*") if path.is_file())
+    tracked_files = tuple(
+        path
+        for path in benchmark_root.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    )
+    implementation_paths = tuple(
+        path for path in tracked_files if path.name == "benchmark.py"
+    )
+    data_paths = tuple(path for path in tracked_files if path.name != "benchmark.py")
 
     assert tracked_files
-    assert all(path.suffix == ".json" for path in tracked_files)
-    assert not any(path.suffix == ".py" for path in tracked_files)
+    assert implementation_paths
+    assert all(path.suffix == ".json" for path in data_paths)
+    assert all(path.name == "benchmark.py" for path in implementation_paths)
 
 
 def test_benchmark_artifacts_do_not_declare_architecture_search_space() -> None:
