@@ -18,6 +18,10 @@ from leibniz.architectures import (
 )
 from leibniz.artifacts import ArtifactIndexDocument, ArtifactReferenceDocument
 from leibniz.authority_indexes import AuthorityIndexDocument
+from leibniz.benchmark_implementations import (
+    discover_benchmark_roots,
+    load_benchmark_implementation,
+)
 from leibniz.benchmark_runner import (
     BenchmarkCompetitionPlan,
     BenchmarkCompetitionSummary,
@@ -68,7 +72,6 @@ from leibniz.view_manifests import ViewManifestDocument
 
 __all__ = ["main"]
 
-_manifest_filename = "manifest" + document_filename_suffix()
 _relative_evaluation_sample_count = 512
 
 
@@ -1193,13 +1196,10 @@ def _benchmark_roots_by_id(
     explicit_roots: tuple[Path, ...],
 ) -> dict[str, Path]:
     packaged_root = repository_root / "src" / "leibniz" / "benchmarks"
-    roots = explicit_roots or tuple(sorted(packaged_root.glob("*")))
+    roots = explicit_roots or discover_benchmark_roots(packaged_root)
     by_id: dict[str, Path] = {}
     for root in roots:
-        manifest_path = root / _manifest_filename
-        if not manifest_path.is_file():
-            continue
-        manifest = BenchmarkManifestDocument.from_bytes(manifest_path.read_bytes()).manifest
+        manifest = load_benchmark_implementation(root).benchmark_manifest
         by_id[str(manifest.id)] = root
     return by_id
 

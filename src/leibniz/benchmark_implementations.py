@@ -27,6 +27,7 @@ __all__ = [
     "BenchmarkImplementation",
     "BenchmarkImplementationError",
     "DeclarationBackedBenchmarkImplementation",
+    "discover_benchmark_roots",
     "load_benchmark_implementation",
 ]
 
@@ -135,6 +136,24 @@ def load_benchmark_implementation(benchmark_root: Path) -> BenchmarkImplementati
     implementation = factory(benchmark_root)
     _validate_benchmark_implementation(implementation, entrypoint=entrypoint)
     return cast(BenchmarkImplementation, implementation)
+
+
+def discover_benchmark_roots(benchmark_parent: Path) -> tuple[Path, ...]:
+    """Return benchmark roots beneath a benchmark package parent."""
+
+    if not benchmark_parent.is_dir():
+        return ()
+    return tuple(
+        path
+        for path in sorted(benchmark_parent.iterdir())
+        if path.is_dir() and _is_benchmark_root(path)
+    )
+
+
+def _is_benchmark_root(path: Path) -> bool:
+    return (path / _entrypoint_filename).is_file() or (
+        path / ("manifest" + _document_suffix)
+    ).is_file()
 
 
 def _load_entrypoint_module(entrypoint: Path) -> ModuleType:

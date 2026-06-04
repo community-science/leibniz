@@ -2,6 +2,7 @@ from pathlib import Path
 
 from leibniz.benchmark_implementations import (
     DeclarationBackedBenchmarkImplementation,
+    discover_benchmark_roots,
     load_benchmark_implementation,
 )
 from leibniz.benchmarks import BenchmarkManifestDocument
@@ -69,3 +70,20 @@ def test_benchmark_loader_keeps_declaration_backed_transition_path(tmp_path: Pat
 
     assert isinstance(implementation, DeclarationBackedBenchmarkImplementation)
     assert str(implementation.benchmark_manifest.id) == "benchmarks.digits@0.1.0"
+
+
+def test_discover_benchmark_roots_uses_entrypoint_or_transitional_manifest(
+    tmp_path: Path,
+) -> None:
+    python_root = tmp_path / "python-benchmark"
+    declaration_root = tmp_path / "declaration-benchmark"
+    ignored_root = tmp_path / "__pycache__"
+    python_root.mkdir()
+    declaration_root.mkdir()
+    ignored_root.mkdir()
+    (python_root / "benchmark.py").write_text("", encoding="utf-8")
+    (declaration_root / "manifest.json").write_text("{}", encoding="utf-8")
+
+    roots = discover_benchmark_roots(tmp_path)
+
+    assert roots == (declaration_root, python_root)
