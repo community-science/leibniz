@@ -58,7 +58,7 @@ const plotMargin = {
   bottom: 78,
   left: 92,
   right: 26,
-  top: 26,
+  top: 36,
 };
 const plotBodyWidth = plotWidth - plotMargin.left - plotMargin.right;
 const plotBodyHeight = plotHeight - plotMargin.top - plotMargin.bottom;
