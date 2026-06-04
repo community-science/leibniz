@@ -198,10 +198,185 @@ def test_relative_competition_scores_rank_undefeated_model_first() -> None:
         ),
     )
 
-    scores = cast(Any, local_results)._relative_model_scores(best_runs, outcomes=outcomes)
+    ratings = cast(Any, local_results)._relative_rating_fit(
+        best_runs,
+        outcomes=outcomes,
+    ).ratings
 
-    assert scores["model-a"] > scores["model-b"]
-    assert scores["model-b"] > scores["model-c"]
+    assert ratings["model-a"].score > ratings["model-b"].score
+    assert ratings["model-b"].score > ratings["model-c"].score
+
+
+def test_relative_competition_batch_fit_aggregates_reversed_pairs() -> None:
+    best_runs = {
+        "model-a": _benchmark_run_record_for_competition(
+            model_key="model-a",
+            run_id="run-a",
+        ),
+        "model-b": _benchmark_run_record_for_competition(
+            model_key="model-b",
+            run_id="run-b",
+        ),
+    }
+    outcome_type = cast(Any, local_results)._ModelCompetitionOutcome
+    ratings = cast(Any, local_results)._relative_rating_fit(
+        best_runs,
+        outcomes=(
+            outcome_type(
+                left_model_key="model-a",
+                right_model_key="model-b",
+                left_score=0.75,
+                right_score=0.25,
+                sample_count=40,
+            ),
+            outcome_type(
+                left_model_key="model-b",
+                right_model_key="model-a",
+                left_score=0.25,
+                right_score=0.75,
+                sample_count=24,
+            ),
+        ),
+    ).ratings
+
+    assert ratings["model-a"].score > ratings["model-b"].score
+    assert ratings["model-a"].sample_count == 64
+    assert ratings["model-a"].opponent_count == 1
+    assert ratings["model-a"].competition_count == 2
+    assert ratings["model-a"].provisional
+    assert ratings["model-a"].uncertainty > 0.0
+
+
+def test_relative_competition_batch_fit_uses_transitive_evidence() -> None:
+    best_runs = {
+        "model-a": _benchmark_run_record_for_competition(
+            model_key="model-a",
+            run_id="run-a",
+        ),
+        "model-b": _benchmark_run_record_for_competition(
+            model_key="model-b",
+            run_id="run-b",
+        ),
+        "model-c": _benchmark_run_record_for_competition(
+            model_key="model-c",
+            run_id="run-c",
+        ),
+    }
+    outcome_type = cast(Any, local_results)._ModelCompetitionOutcome
+    ratings = cast(Any, local_results)._relative_rating_fit(
+        best_runs,
+        outcomes=(
+            outcome_type(
+                left_model_key="model-a",
+                right_model_key="model-b",
+                left_score=0.60,
+                right_score=0.40,
+                sample_count=128,
+            ),
+            outcome_type(
+                left_model_key="model-b",
+                right_model_key="model-c",
+                left_score=0.60,
+                right_score=0.40,
+                sample_count=128,
+            ),
+            outcome_type(
+                left_model_key="model-a",
+                right_model_key="model-c",
+                left_score=0.70,
+                right_score=0.30,
+                sample_count=128,
+            ),
+        ),
+    ).ratings
+
+    assert ratings["model-a"].score > ratings["model-b"].score
+    assert ratings["model-b"].score > ratings["model-c"].score
+    assert not ratings["model-a"].provisional
+    assert not ratings["model-b"].provisional
+    assert not ratings["model-c"].provisional
+
+
+def test_relative_score_view_exposes_batch_rating_evidence() -> None:
+    best_runs = {
+        "model-a": _benchmark_run_record_for_competition(
+            model_key="model-a",
+            run_id="run-a",
+        ),
+        "model-b": _benchmark_run_record_for_competition(
+            model_key="model-b",
+            run_id="run-b",
+        ),
+    }
+    cost_summary = {
+        "component_count": 1,
+        "parameter_count": 1,
+        "storage_bytes": 1,
+        "inference_compute": 1,
+        "training_compute": 1,
+    }
+    records: list[dict[str, object]] = [
+        {
+            "model_key": "model-a",
+            "score_views": {},
+            "cost_summary": cost_summary,
+        },
+        {
+            "model_key": "model-b",
+            "score_views": {},
+            "cost_summary": cost_summary,
+        },
+    ]
+
+    cast(Any, local_results)._add_relative_score_views(
+        records,
+        best_runs=best_runs,
+        competitions=(
+            _competition_record(left_model_key="model-a", right_model_key="model-b"),
+        ),
+    )
+
+    score_views = cast(dict[str, object], records[0]["score_views"])
+    relative = cast(dict[str, object], score_views["relative"])
+    basis = cast(dict[str, object], relative["basis"])
+    assert basis["kind"] == "model-competition-bradley-terry-batch-v1"
+    assert basis["competition_count"] == 1
+    assert basis["sample_count"] == 1
+    assert basis["opponent_count"] == 1
+    assert basis["provisional"] is True
+    assert cast(float, basis["rating_uncertainty"]) > 0.0
+    confidence = cast(dict[str, object], basis["frontier_confidence"])
+    size_confidence = cast(dict[str, object], confidence["storage_bytes"])
+    assert size_confidence["risk_threshold"] == 0.05
+
+
+def test_relative_frontier_confidence_requests_uncertain_nearest_competition() -> None:
+    best_runs = {
+        "model-a": _benchmark_run_record_for_competition(
+            model_key="model-a",
+            run_id="run-a",
+        ),
+        "model-b": _benchmark_run_record_for_competition(
+            model_key="model-b",
+            run_id="run-b",
+        ),
+    }
+    outcome_type = cast(Any, local_results)._ModelCompetitionOutcome
+
+    requests = cast(Any, local_results)._relative_frontier_competition_requests(
+        best_runs,
+        outcomes=(
+            outcome_type(
+                left_model_key="model-a",
+                right_model_key="model-b",
+                left_score=0.55,
+                right_score=0.45,
+                sample_count=8,
+            ),
+        ),
+    )
+
+    assert requests == (("model-a", "model-b"),)
 
 
 def test_console_result_view_validates_model_detail_tables(tmp_path: Path) -> None:
@@ -278,11 +453,21 @@ def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: 
 def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     tmp_path: Path,
 ) -> None:
-    _run_and_evaluate_digits_benchmark(tmp_path / "results")
+    results_root = tmp_path / "results"
+    _run_and_evaluate_digits_benchmark(results_root)
+    for path in results_root.rglob("*.json"):
+        record = dict(load_object_document(path.read_bytes(), description="result record"))
+        if record.get("format") != "leibniz.benchmark-evaluation":
+            continue
+        throughput = cast(dict[str, object], record["throughput"])
+        for key in ("checkpoint_evaluation", "evaluation"):
+            phase = cast(dict[str, object], throughput[key])
+            phase.pop("max_inference_compute", None)
+        path.write_bytes(canonical_document_bytes(record) + b"\n")
 
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
-        results_root=tmp_path / "results",
+        results_root=results_root,
     )
 
     assert summary.benchmark_count == 1
@@ -300,6 +485,10 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert result["benchmark_id"] == "benchmarks.digits@0.1.0"
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     assert leaderboard[0]["measurement_count"] == 1
+    cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
+    assert isinstance(cost_summary["inference_compute"], int | float)
+    frontiers = cast(dict[str, object], result["frontiers"])
+    assert len(cast(list[object], frontiers["inference_compute"])) == 1
     model_view = cast(dict[str, object], leaderboard[0]["console_view_model"])
     model_sections = cast(list[dict[str, object]], model_view["detail_sections"])
     assert [section["title"] for section in model_sections] == [
@@ -309,9 +498,10 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
         "Resources",
     ]
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
-    assert cost_summary["parameter_count"] == 50
+    assert "parameter_count" not in cost_summary
+    assert cost_summary["storage_bytes"] == 200
     frontiers = cast(dict[str, object], result["frontiers"])
-    assert len(cast(list[dict[str, object]], frontiers["parameter_count"])) == 1
+    assert len(cast(list[dict[str, object]], frontiers["storage_bytes"])) == 1
     history = cast(list[dict[str, object]], result["training_history"])
     assert history[0]["source_kind"] == "local-run"
     assert "training_diagnostics" not in history[0]
@@ -485,7 +675,18 @@ def test_cli_benchmark_train_discovers_uncompleted_architecture_manifests(
 def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import leibniz.cli as cli
+
+    def no_confidence_requests(
+        *,
+        results_root: Path,
+        benchmark_selectors: tuple[str, ...],
+    ) -> tuple[tuple[str, str], ...]:
+        return ()
+
+    monkeypatch.setattr(cli, "relative_frontier_competition_requests", no_confidence_requests)
     results_root = tmp_path / "results"
     for seed in (101, 202):
         run_benchmark(
@@ -510,8 +711,6 @@ def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
             str(_digits_benchmark_root),
             "--results-root",
             str(results_root),
-            "--sample-count",
-            "1",
             "--device",
             "cpu",
         ]
@@ -538,20 +737,22 @@ def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
             str(_digits_benchmark_root),
             "--results-root",
             str(results_root),
-            "--sample-count",
-            "1",
             "--device",
             "cpu",
         ]
     ) == 0
     rerun = capsys.readouterr()
     assert "no unevaluated benchmark checkpoints found" in rerun.out
-    assert "skipped 1 existing benchmark relative evaluation(s)" in rerun.out
+    assert "no missing benchmark relative evaluations found" in rerun.out
     assert "materialized 1 benchmark result view(s)" in rerun.out
     competition_paths = tuple(
         (results_root / "evaluations" / "digits" / "competitions").glob("*.json")
     )
     assert len(competition_paths) == 1
+    for path in results_root.rglob("*.json"):
+        record = load_object_document(path.read_bytes(), description="result record")
+        for value in _string_values(record):
+            assert not Path(value).is_absolute()
 
 
 def test_materialize_benchmark_result_views_rejects_empty_results_root(tmp_path: Path) -> None:
@@ -831,7 +1032,7 @@ def _benchmark_run_record_for_competition(
         complexity=1.0,
         measurement_count=len(dataset.measurements),
         score=1.0,
-        cost_summary={"component_count": 1, "parameter_count": 1},
+        cost_summary={"component_count": 1, "storage_bytes": 1},
         architecture=architecture.to_record(),
         model_inspection={},
         model_inspection_digest=digest,
@@ -869,6 +1070,22 @@ def _competition_record(*, left_model_key: str, right_model_key: str) -> dict[st
             }
         ],
     }
+
+
+def _string_values(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, dict):
+        mapping = cast(dict[object, object], value)
+        return tuple(
+            string
+            for item in mapping.values()
+            for string in _string_values(item)
+        )
+    if isinstance(value, list | tuple):
+        sequence = cast(list[object] | tuple[object, ...], value)
+        return tuple(string for item in sequence for string in _string_values(item))
+    return ()
 
 
 def _git(path: Path, *args: str) -> subprocess.CompletedProcess[str]:

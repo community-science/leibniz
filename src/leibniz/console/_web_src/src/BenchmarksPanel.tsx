@@ -268,7 +268,7 @@ function BenchmarkModelsPane({
   result: BenchmarkResultRecord | undefined;
   selectedModelKey: string;
 }) {
-  const costAxis = benchmarkCostAxes(result)[0]?.key ?? 'parameter_count';
+  const costAxis = benchmarkCostAxes(result)[0]?.key ?? 'storage_bytes';
   const selectedRow =
     rows.find(({ model }) => model.model_key === selectedModelKey) ?? rows[0];
 
@@ -754,11 +754,7 @@ function ModelCostDetail({
           <dd>{optionalNumberLabel(inspection?.architecture_summary.output_count)}</dd>
         </div>
         <div>
-          <dt>Parameters</dt>
-          <dd>{optionalNumberLabel(summary.parameter_count)}</dd>
-        </div>
-        <div>
-          <dt>Bytes</dt>
+          <dt>Model Size</dt>
           <dd>{optionalNumberLabel(summary.storage_bytes)}</dd>
         </div>
         <div>
@@ -827,10 +823,6 @@ function ModelGraphOperations({
                 <div>
                   <dt>Output</dt>
                   <dd>{shapeLabel(stage.output_shape)}</dd>
-                </div>
-                <div>
-                  <dt>Parameters</dt>
-                  <dd>{optionalNumberLabel(stage.parameter_count)}</dd>
                 </div>
                 <div>
                   <dt>Inference Compute</dt>

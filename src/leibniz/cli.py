@@ -7,6 +7,7 @@ import itertools
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -42,6 +43,7 @@ from leibniz.local_results import (
     initialize_result_checkout,
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
+    relative_frontier_competition_requests,
 )
 from leibniz.measurements import (
     MeasurementDataset,
@@ -64,6 +66,14 @@ from leibniz.view_manifests import ViewManifestDocument
 __all__ = ["main"]
 
 _manifest_filename = "manifest" + document_filename_suffix()
+_relative_evaluation_sample_count = 512
+
+
+@dataclass(frozen=True, slots=True)
+class _CompetitionEvaluationPair:
+    left_path: Path
+    right_path: Path
+    repeat_existing: bool
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -387,12 +397,6 @@ def _parser() -> argparse.ArgumentParser:
         choices=("auto", "cpu", "cuda", "mps"),
         help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
     )
-    evaluate.add_argument(
-        "--sample-count",
-        default=512,
-        type=int,
-        help="sample count for relative pairwise evaluation",
-    )
     profile = benchmark_subcommands.add_parser(
         "profile",
         description="profile local benchmark observation formation paths",
@@ -577,7 +581,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                     right_evaluation=args.right_evaluation,
                     benchmark_roots=benchmark_roots,
                     benchmark_selectors=benchmark_selectors,
-                    sample_count=args.sample_count,
+                    sample_count=_relative_evaluation_sample_count,
                     tensor_device=args.device,
                 )
                 _print_competition_summaries(
@@ -876,48 +880,60 @@ def _run_benchmark_competitions(
 ) -> tuple[list[BenchmarkCompetitionSummary], int]:
     competition_summaries: list[BenchmarkCompetitionSummary] = []
     skipped = 0
-    for left_path, right_path in _competition_evaluation_pairs(
-        results_root=results_root,
-        left_evaluation=left_evaluation,
-        right_evaluation=right_evaluation,
-        benchmark_selectors=benchmark_selectors,
-    ):
-        left_record = _load_evaluation_bundle_record(left_path)
-        right_record = _load_evaluation_bundle_record(right_path)
-        benchmark_root = _benchmark_root_for_record(
-            left_record,
-            benchmark_roots=benchmark_roots,
-            description="left_evaluation",
+    while True:
+        pairs = _competition_evaluation_pairs(
+            results_root=results_root,
+            left_evaluation=left_evaluation,
+            right_evaluation=right_evaluation,
+            benchmark_selectors=benchmark_selectors,
         )
-        right_benchmark_root = _benchmark_root_for_record(
-            right_record,
-            benchmark_roots=benchmark_roots,
-            description="right_evaluation",
-        )
-        if right_benchmark_root != benchmark_root:
-            raise ValueError("benchmark relative evaluation requires matching benchmark roots")
-        if (
-            left_evaluation is None
-            and _competition_pair_exists(
-                results_root=results_root,
-                left_evaluation=left_record,
-                right_evaluation=right_record,
+        if not pairs:
+            break
+        completed_this_round = 0
+        for pair in pairs:
+            left_path = pair.left_path
+            right_path = pair.right_path
+            left_record = _load_evaluation_bundle_record(left_path)
+            right_record = _load_evaluation_bundle_record(right_path)
+            benchmark_root = _benchmark_root_for_record(
+                left_record,
+                benchmark_roots=benchmark_roots,
+                description="left_evaluation",
             )
-        ):
-            skipped += 1
-            continue
-        competition_summaries.append(
-            compete_benchmark_checkpoints(
-                BenchmarkCompetitionPlan(
-                    left_evaluation_path=left_path,
-                    right_evaluation_path=right_path,
-                    benchmark_root=benchmark_root,
+            right_benchmark_root = _benchmark_root_for_record(
+                right_record,
+                benchmark_roots=benchmark_roots,
+                description="right_evaluation",
+            )
+            if right_benchmark_root != benchmark_root:
+                raise ValueError("benchmark relative evaluation requires matching benchmark roots")
+            if (
+                not pair.repeat_existing
+                and _competition_pair_exists(
                     results_root=results_root,
-                    sample_count=sample_count,
-                    tensor_device=tensor_device,
+                    left_evaluation=left_record,
+                    right_evaluation=right_record,
+                )
+            ):
+                skipped += 1
+                continue
+            competition_summaries.append(
+                compete_benchmark_checkpoints(
+                    BenchmarkCompetitionPlan(
+                        left_evaluation_path=left_path,
+                        right_evaluation_path=right_path,
+                        benchmark_root=benchmark_root,
+                        results_root=results_root,
+                        sample_count=sample_count,
+                        tensor_device=tensor_device,
+                    )
                 )
             )
-        )
+            completed_this_round += 1
+        if left_evaluation is not None or right_evaluation is not None:
+            break
+        if completed_this_round == 0:
+            break
     return competition_summaries, skipped
 
 
@@ -944,11 +960,17 @@ def _competition_evaluation_pairs(
     left_evaluation: Path | None,
     right_evaluation: Path | None,
     benchmark_selectors: tuple[str, ...],
-) -> tuple[tuple[Path, Path], ...]:
+) -> tuple[_CompetitionEvaluationPair, ...]:
     if left_evaluation is not None or right_evaluation is not None:
         if left_evaluation is None or right_evaluation is None:
             raise ValueError("left-evaluation and right-evaluation must be provided together")
-        return ((left_evaluation, right_evaluation),)
+        return (
+            _CompetitionEvaluationPair(
+                left_path=left_evaluation,
+                right_path=right_evaluation,
+                repeat_existing=True,
+            ),
+        )
     evaluations = _evaluation_bundle_paths(
         results_root=results_root,
         benchmark_selectors=benchmark_selectors,
@@ -958,10 +980,44 @@ def _competition_evaluation_pairs(
         record = _load_evaluation_bundle_record(path)
         benchmark_id = _benchmark_id_from_record(record, description="evaluation")
         by_benchmark.setdefault(benchmark_id, []).append(path)
-    pairs: list[tuple[Path, Path]] = []
+    missing_pairs: list[_CompetitionEvaluationPair] = []
+    evaluation_paths_by_model_key: dict[str, Path] = {}
     for paths in by_benchmark.values():
-        pairs.extend(itertools.combinations(paths, 2))
-    return tuple(pairs)
+        for path in paths:
+            model_key = _model_key_from_evaluation(_load_evaluation_bundle_record(path))
+            evaluation_paths_by_model_key[model_key] = path
+        for left_path, right_path in itertools.combinations(paths, 2):
+            if not _competition_pair_exists(
+                results_root=results_root,
+                left_evaluation=_load_evaluation_bundle_record(left_path),
+                right_evaluation=_load_evaluation_bundle_record(right_path),
+            ):
+                missing_pairs.append(
+                    _CompetitionEvaluationPair(
+                        left_path=left_path,
+                        right_path=right_path,
+                        repeat_existing=False,
+                    )
+                )
+    if missing_pairs:
+        return tuple(missing_pairs)
+    confidence_pairs: list[_CompetitionEvaluationPair] = []
+    for left_key, right_key in relative_frontier_competition_requests(
+        results_root=results_root,
+        benchmark_selectors=benchmark_selectors,
+    ):
+        left_path = evaluation_paths_by_model_key.get(left_key)
+        right_path = evaluation_paths_by_model_key.get(right_key)
+        if left_path is None or right_path is None:
+            continue
+        confidence_pairs.append(
+            _CompetitionEvaluationPair(
+                left_path=left_path,
+                right_path=right_path,
+                repeat_existing=True,
+            )
+        )
+    return tuple(confidence_pairs)
 
 
 def _evaluation_bundle_paths(

@@ -247,6 +247,12 @@ function assertBenchmarkFrontierPlotStructure() {
       throw new Error(`BenchmarkResultDashboard must expose plot control marker: ${marker}`);
     }
   }
+  if (dashboard.includes('2<tspan')) {
+    throw new Error('BenchmarkResultDashboard must render x-axis tick labels from the plot log base');
+  }
+  if (!dashboard.includes('{model.xLogBase}<tspan')) {
+    throw new Error('BenchmarkResultDashboard must display the plot model x log base');
+  }
   if (panel.includes('Reset Zoom') || panel.includes('resetToken')) {
     throw new Error('BenchmarksPanel must not route frontier controls through section actions');
   }

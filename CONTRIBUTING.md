@@ -7,6 +7,7 @@ protocol with clear artifacts and rigorous design boundaries.
 
 - Every change enters by pull request.
 - Do not push directly to `main`.
+- Make changes on a topic branch that is used to open the pull request.
 - Keep each pull request modular: one coherent component, policy, or artifact
   boundary at a time.
 - Documentation-only pull requests do not need tests.

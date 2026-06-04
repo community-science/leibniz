@@ -367,7 +367,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
     {
       "benchmark_id": "benchmarks.digits@0.1.0",
       "complexity_axis": "C",
-      "cost_axes": [{"key": "parameter_count", "label": "Parameters"}],
+      "cost_axes": [{"key": "storage_bytes", "label": "Model Size"}],
           "leaderboard": [
             {
               "model_key": "sha256:model",
@@ -379,7 +379,6 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
           "points": [{"complexity": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
           "cost_summary": {
             "component_count": 1,
-            "parameter_count": 10,
             "storage_bytes": 40,
             "inference_compute": 20,
             "training_compute": 60,
@@ -391,7 +390,6 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
         }
       ],
       "frontiers": {
-        "parameter_count": [],
         "storage_bytes": [],
         "inference_compute": [],
         "training_compute": []
@@ -411,7 +409,6 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
           "score": 1.0,
           "cost_summary": {
             "component_count": 1,
-            "parameter_count": 10,
             "storage_bytes": 40,
             "inference_compute": 20,
             "training_compute": 60,
@@ -432,7 +429,6 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
               "points": [{"complexity": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
               "cost_summary": {
                 "component_count": 1,
-                "parameter_count": 10,
                 "storage_bytes": 40,
                 "inference_compute": 20,
                 "training_compute": 60,
@@ -458,7 +454,6 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
               "score": 1.0,
               "cost_summary": {
                 "component_count": 1,
-                "parameter_count": 10,
                 "storage_bytes": 40,
                 "inference_compute": 20,
                 "training_compute": 60,
@@ -502,11 +497,10 @@ def test_console_data_discovers_materialized_result_root_views(tmp_path: Path) -
   "benchmark_results": [
     {
       "benchmark_id": "benchmarks.digits@0.1.0",
-      "cost_axes": [{"key": "parameter_count", "label": "Parameters"}],
+      "cost_axes": [{"key": "storage_bytes", "label": "Model Size"}],
       "leaderboard": [],
       "model_candidates": [],
       "frontiers": {
-        "parameter_count": [],
         "storage_bytes": [],
         "inference_compute": [],
         "training_compute": []

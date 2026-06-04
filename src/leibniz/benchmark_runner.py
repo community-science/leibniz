@@ -43,7 +43,7 @@ from leibniz.model_manifests import (
     ModelArtifactManifestDocument,
     ModelExecutionFamily,
 )
-from leibniz.model_operators import ExecutableModelOperator
+from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
 from leibniz.observation_generation import (
     GeneratedObservationBatch,
     ObservationGenerator,
@@ -525,6 +525,7 @@ class BenchmarkRunSummary:
     training_summary_path: Path
     model_artifact_root: Path
     dry_run: bool
+    results_root: Path
 
     def to_record(self) -> dict[str, object]:
         """Return a canonical document-friendly summary record."""
@@ -534,10 +535,19 @@ class BenchmarkRunSummary:
             "format_version": 1,
             "run_slug": self.run_slug,
             "benchmark_id": str(self.benchmark_id),
-            "architecture_path": self.architecture_path.as_posix(),
+            "architecture_path": _portable_record_path(
+                self.architecture_path,
+                results_root=self.results_root,
+            ),
             "measurement_count": self.measurement_count,
-            "training_summary_path": self.training_summary_path.as_posix(),
-            "model_artifact_root": self.model_artifact_root.as_posix(),
+            "training_summary_path": _portable_record_path(
+                self.training_summary_path,
+                results_root=self.results_root,
+            ),
+            "model_artifact_root": _portable_record_path(
+                self.model_artifact_root,
+                results_root=self.results_root,
+            ),
             "dry_run": self.dry_run,
         }
 
@@ -608,6 +618,7 @@ def run_benchmark(
             evaluation_sample_count=plan.resolved_evaluation_sample_count,
             evaluation_rung_count=evaluation_rung_count,
             training_compute=training_compute,
+            results_root=plan.results_root,
         )
 
     def publish_progress(
@@ -811,7 +822,23 @@ def _run_summary(
         ),
         model_artifact_root=(plan.results_root / "models" / benchmark_atom / run_slug),
         dry_run=plan.dry_run,
+        results_root=plan.results_root,
     )
+
+
+def _portable_record_path(path: Path, *, results_root: Path) -> str:
+    if not path.is_absolute():
+        return path.as_posix()
+    resolved = path.resolve()
+    resolved_results_root = results_root.resolve()
+    if resolved.is_relative_to(resolved_results_root):
+        return (Path(results_root.name) / resolved.relative_to(resolved_results_root)).as_posix()
+    working_root = Path.cwd().resolve()
+    if not resolved.is_relative_to(working_root):
+        raise BenchmarkRunnerError(
+            f"record path must be relative, inside results root, or inside working tree: {path}"
+        )
+    return resolved.relative_to(working_root).as_posix()
 
 
 def _training_progress_path(summary: BenchmarkRunSummary) -> Path:
@@ -910,6 +937,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         evaluation_sample_count=evaluation_input.evaluation_sample_count,
         evaluation_rung_count=evaluation_input.evaluation_rung_count,
         training_compute=evaluation_input.training_compute,
+        results_root=plan.results_root,
     )
     bundle = BenchmarkEvaluationBundle(
         id=ProtocolIdentifier.parse(f"benchmark-evaluations.{identifier_stem}@0.1.0"),
@@ -1054,6 +1082,7 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
         benchmark_id=benchmark_id,
         left_model_key=left_model_key,
         right_model_key=right_model_key,
+        competition_seed=competition_seed,
     )
     resolution_assignment = _competition_resolution_assignment_from_evaluations(
         left_evaluation,
@@ -1804,6 +1833,7 @@ def evaluate_model_checkpoint_artifact(
         tensor_device=tensor_device,
     )
     evaluation_counter = _ThroughputCounter()
+    max_inference_compute: int | None = None
     results: list[tuple[_CurriculumRung, tuple[tuple[float, ...], ...]]] = []
     for index in range(training_rung_count):
         rung = _evaluation_curriculum_rung(
@@ -1820,6 +1850,10 @@ def evaluate_model_checkpoint_artifact(
             seconds=time.perf_counter() - evaluation_started,
             samples=len(rung.batch.samples),
         )
+        max_inference_compute = _max_optional_int(
+            max_inference_compute,
+            _batch_max_inference_compute(architecture=architecture, batch=rung.batch),
+        )
         results.append((rung, predictions))
         if _mean_prediction_accepted_mass(
             batch=rung.batch,
@@ -1832,6 +1866,8 @@ def evaluate_model_checkpoint_artifact(
     throughput = evaluation_counter.to_record(kind="checkpoint-evaluation-throughput")
     throughput["tensor_runtime"] = "pytorch"
     throughput["tensor_device"] = predictor.runtime.device_kind
+    if max_inference_compute is not None:
+        throughput["max_inference_compute"] = max_inference_compute
     return tuple(results), throughput
 
 
@@ -1887,6 +1923,18 @@ def generate_model_checkpoint_competition_record(
     throughput = competition_counter.to_record(kind="checkpoint-competition-throughput")
     throughput["tensor_runtime"] = "pytorch"
     throughput["tensor_device"] = left_predictor.runtime.device_kind
+    left_max_inference_compute = _batch_max_inference_compute(
+        architecture=left_architecture,
+        batch=rung.batch,
+    )
+    right_max_inference_compute = _batch_max_inference_compute(
+        architecture=right_architecture,
+        batch=rung.batch,
+    )
+    if left_max_inference_compute is not None:
+        throughput["left_max_inference_compute"] = left_max_inference_compute
+    if right_max_inference_compute is not None:
+        throughput["right_max_inference_compute"] = right_max_inference_compute
     return (
         _checkpoint_competition_record(
             batch=rung.batch,
@@ -1900,6 +1948,41 @@ def generate_model_checkpoint_competition_record(
         ),
         throughput,
     )
+
+
+def _batch_max_inference_compute(
+    *,
+    architecture: ArchitectureManifest,
+    batch: GeneratedObservationBatch,
+) -> int | None:
+    max_compute: int | None = None
+    for input_shape in sorted({sample.field.shape for sample in batch.samples}):
+        plan = summarize_architecture_operators(
+            _architecture_with_input_shape(architecture, input_shape)
+        )
+        if plan.inference_compute is None:
+            return None
+        max_compute = _max_optional_int(max_compute, plan.inference_compute)
+    return max_compute
+
+
+def _architecture_with_input_shape(
+    architecture: ArchitectureManifest,
+    input_shape: tuple[int, ...],
+) -> ArchitectureManifest:
+    record = architecture.to_record()
+    record["input_shape"] = list(input_shape)
+    record.pop("id", None)
+    record.pop("model_scale_contract", None)
+    return ArchitectureManifest.from_record(record)
+
+
+def _max_optional_int(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
 
 
 def load_model_checkpoint_predictor(
@@ -1995,11 +2078,19 @@ def _model_checkpoint_artifact_record(
     evaluation_sample_count: int,
     evaluation_rung_count: int | None,
     training_compute: float | None,
+    results_root: Path | None = None,
 ) -> dict[str, object]:
     record = checkpoint.to_record()
-    record["record_path"] = checkpoint.path.with_suffix(
-        ".checkpoint" + _document_suffix
-    ).as_posix()
+    if results_root is not None:
+        record["path"] = _artifact_record_path(checkpoint.path, results_root=results_root)
+        record["manifest_path"] = _artifact_record_path(
+            checkpoint.manifest_path,
+            results_root=results_root,
+        )
+    record["record_path"] = _artifact_record_path(
+        checkpoint.path.with_suffix(".checkpoint" + _document_suffix),
+        results_root=results_root,
+    )
     record["benchmark_id"] = str(benchmark_id)
     record["run_slug"] = run_slug
     record["architecture_manifest"] = architecture.to_record()
@@ -2010,6 +2101,16 @@ def _model_checkpoint_artifact_record(
     if training_compute is not None:
         record["training_compute"] = training_compute
     return record
+
+
+def _artifact_record_path(path: Path, *, results_root: Path | None) -> str:
+    if results_root is None:
+        return path.as_posix()
+    resolved_results_root = results_root.resolve()
+    resolved_path = path.resolve()
+    if not resolved_path.is_relative_to(resolved_results_root):
+        raise BenchmarkRunnerError(f"artifact path must stay inside results root: {path}")
+    return (Path(results_root.name) / resolved_path.relative_to(resolved_results_root)).as_posix()
 
 
 def _resolve_artifact_record_path(value: str, *, results_root: Path) -> Path:
@@ -2063,14 +2164,16 @@ def _competition_id(
     benchmark_id: ProtocolIdentifier,
     left_model_key: str,
     right_model_key: str,
+    competition_seed: int,
 ) -> str:
     digest = ContentDigest.from_value(
         {
             "kind": "benchmark-model-competition",
-            "version": 1,
+            "version": 2,
             "benchmark_id": str(benchmark_id),
             "left_model_key": left_model_key,
             "right_model_key": right_model_key,
+            "competition_seed": competition_seed,
         }
     )
     return f"models-{digest.hex[:16]}"
