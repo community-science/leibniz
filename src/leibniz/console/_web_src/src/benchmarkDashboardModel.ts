@@ -50,7 +50,7 @@ export type BenchmarkCostAxisGroup = {
   key: string;
 };
 
-const fallbackLogCostDomain: [number, number] = [0, 20];
+const fallbackLogCostDomain: [number, number] = [0, 10];
 const fallbackScoreDomain: [number, number] = [0, 1.05];
 const denseLogTickThreshold = 14;
 const targetScoreTickCount = 8;

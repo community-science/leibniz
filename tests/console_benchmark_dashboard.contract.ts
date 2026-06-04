@@ -428,7 +428,7 @@ assertEqual(relativePlotModel.points[0]?.score, 1200, 'relative plot score');
 assertEqual(plotModel.staircase.length, 1, 'plot staircase point count');
 assertEqual(plotModel.xTicks.includes(10), true, 'plot log ticks');
 assertEqual(plotModel.xDomain[0], 0, 'plot default x minimum');
-assertEqual(plotModel.xDomain[1], 20, 'plot default x maximum');
+assertEqual(plotModel.xDomain[1], 10, 'plot default x maximum');
 assertEqual(plotModel.xMajorTicks.includes(1), true, 'plot major x ticks');
 assertEqual(plotModel.xMajorTicks.includes(10), true, 'model size uses base-10 ticks');
 assertEqual(plotModel.xMajorTicks.includes(16), false, 'model size omits base-2 ticks');
