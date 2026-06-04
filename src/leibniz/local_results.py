@@ -441,6 +441,26 @@ class _ModelCompetitionOutcome:
     sample_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class _AggregatedCompetitionPair:
+    lower_model_key: str
+    upper_model_key: str
+    lower_score_samples: float
+    upper_score_samples: float
+    sample_count: int
+    competition_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _RelativeModelRating:
+    score: float
+    sample_count: int
+    opponent_count: int
+    competition_count: int
+    uncertainty: float
+    provisional: bool
+
+
 def _known_benchmark_manifests(
     repository_root: Path,
 ) -> dict[ProtocolIdentifier, BenchmarkManifest]:
@@ -1171,55 +1191,223 @@ def _add_relative_score_views(
     competition_outcomes = _pairwise_competition_outcomes(best_runs, competitions)
     if not competition_outcomes:
         return
-    relative_scores = _relative_model_scores(best_runs, outcomes=competition_outcomes)
+    relative_ratings = _relative_model_ratings(best_runs, outcomes=competition_outcomes)
     for record in records:
         model_key = str(record["model_key"])
+        rating = relative_ratings.get(model_key, _baseline_relative_model_rating())
         score_views = cast(dict[str, object], record["score_views"])
         score_views["relative"] = {
             "key": "relative",
             "label": "Relative",
-            "score": relative_scores.get(model_key, _relative_score_baseline),
+            "score": rating.score,
             "basis": {
-                "kind": "model-competition-elo-like-v1",
+                "kind": "model-competition-bradley-terry-batch-v1",
                 "score_unit": "rating-points",
                 "baseline": _relative_score_baseline,
-                "rating_update": "repeated-fractional-elo",
+                "rating_projection": "regularized-batch-bradley-terry",
                 "competition_mechanic": "paired-prediction-accepted-mass",
-                "pair_outcome": "higher-score-wins",
+                "pair_outcome": "sample-weighted-normalized-score-share",
                 "tie_value": 0.5,
+                "prior_sample_weight": _relative_score_prior_sample_weight,
+                "competition_count": rating.competition_count,
+                "sample_count": rating.sample_count,
+                "opponent_count": rating.opponent_count,
+                "rating_uncertainty": rating.uncertainty,
+                "provisional": rating.provisional,
             },
         }
 
 
 _relative_score_baseline = 1000.0
 _relative_score_scale = 400.0
-_relative_score_k_factor = 32.0
-_relative_score_update_epochs = 64
+_relative_score_prior_sample_weight = 2.0
+_relative_score_fit_iterations = 64
+_relative_score_fit_tolerance = 1e-10
+_relative_score_provisional_min_opponents = 2
+_relative_score_provisional_min_samples = 64
 
 
-def _relative_model_scores(
+def _baseline_relative_model_rating() -> _RelativeModelRating:
+    return _RelativeModelRating(
+        score=_relative_score_baseline,
+        sample_count=0,
+        opponent_count=0,
+        competition_count=0,
+        uncertainty=_relative_score_points_per_logit()
+        / math.sqrt(_relative_score_prior_sample_weight),
+        provisional=True,
+    )
+
+
+def _relative_model_ratings(
     best_runs: Mapping[str, _BenchmarkRunRecord],
     *,
     outcomes: tuple[_ModelCompetitionOutcome, ...],
-) -> dict[str, float]:
-    ratings = dict.fromkeys(best_runs, _relative_score_baseline)
-    ordered_outcomes = tuple(
-        sorted(
-            outcomes,
-            key=lambda outcome: (outcome.left_model_key, outcome.right_model_key),
-        )
+) -> dict[str, _RelativeModelRating]:
+    model_keys = tuple(sorted(best_runs))
+    pairs = _aggregated_competition_pairs(outcomes)
+    if not pairs:
+        return {model_key: _baseline_relative_model_rating() for model_key in model_keys}
+    model_index = {model_key: index for index, model_key in enumerate(model_keys)}
+    logits = _fit_bradley_terry_logits(
+        model_count=len(model_keys),
+        model_index=model_index,
+        pairs=pairs,
     )
-    for _epoch in range(_relative_score_update_epochs):
-        for outcome in ordered_outcomes:
-            left_actual = _normalized_pair_score(outcome.left_score, outcome.right_score)
-            left_expected = _elo_expected_score(
-                ratings[outcome.left_model_key],
-                ratings[outcome.right_model_key],
-            )
-            delta = _relative_score_k_factor * (left_actual - left_expected)
-            ratings[outcome.left_model_key] += delta
-            ratings[outcome.right_model_key] -= delta
-    return {model_key: ratings[model_key] for model_key in sorted(best_runs)}
+    information = _bradley_terry_information_matrix(
+        logits=logits,
+        model_index=model_index,
+        pairs=pairs,
+    )
+    covariance = _invert_positive_definite_matrix(information)
+    evidence = _relative_rating_evidence(model_keys=model_keys, pairs=pairs)
+    points_per_logit = _relative_score_points_per_logit()
+    ratings: dict[str, _RelativeModelRating] = {}
+    for model_key in model_keys:
+        index = model_index[model_key]
+        sample_count, opponent_count, competition_count = evidence[model_key]
+        uncertainty = points_per_logit * math.sqrt(max(covariance[index][index], 0.0))
+        ratings[model_key] = _RelativeModelRating(
+            score=_relative_score_baseline + points_per_logit * logits[index],
+            sample_count=sample_count,
+            opponent_count=opponent_count,
+            competition_count=competition_count,
+            uncertainty=uncertainty,
+            provisional=(
+                opponent_count < _relative_score_provisional_min_opponents
+                or sample_count < _relative_score_provisional_min_samples
+            ),
+        )
+    return ratings
+
+
+def _aggregated_competition_pairs(
+    outcomes: tuple[_ModelCompetitionOutcome, ...],
+) -> tuple[_AggregatedCompetitionPair, ...]:
+    aggregates: dict[tuple[str, str], list[float]] = {}
+    for outcome in sorted(
+        outcomes,
+        key=lambda item: (item.left_model_key, item.right_model_key),
+    ):
+        if outcome.left_model_key == outcome.right_model_key:
+            continue
+        lower, upper = sorted((outcome.left_model_key, outcome.right_model_key))
+        lower_share = (
+            _normalized_pair_score(outcome.left_score, outcome.right_score)
+            if outcome.left_model_key == lower
+            else _normalized_pair_score(outcome.right_score, outcome.left_score)
+        )
+        values = aggregates.setdefault((lower, upper), [0.0, 0.0, 0.0])
+        values[0] += lower_share * outcome.sample_count
+        values[1] += (1.0 - lower_share) * outcome.sample_count
+        values[2] += 1.0
+    return tuple(
+        _AggregatedCompetitionPair(
+            lower_model_key=lower,
+            upper_model_key=upper,
+            lower_score_samples=values[0],
+            upper_score_samples=values[1],
+            sample_count=int(round(values[0] + values[1])),
+            competition_count=int(values[2]),
+        )
+        for (lower, upper), values in sorted(aggregates.items())
+    )
+
+
+def _fit_bradley_terry_logits(
+    *,
+    model_count: int,
+    model_index: Mapping[str, int],
+    pairs: tuple[_AggregatedCompetitionPair, ...],
+) -> list[float]:
+    logits = [0.0] * model_count
+    for _iteration in range(_relative_score_fit_iterations):
+        gradient, information = _bradley_terry_gradient_and_information(
+            logits=logits,
+            model_index=model_index,
+            pairs=pairs,
+        )
+        step = _solve_linear_system(information, gradient)
+        max_step = max((abs(value) for value in step), default=0.0)
+        logits = [logit + value for logit, value in zip(logits, step, strict=True)]
+        mean_logit = sum(logits) / len(logits)
+        logits = [logit - mean_logit for logit in logits]
+        if max_step < _relative_score_fit_tolerance:
+            break
+    return logits
+
+
+def _bradley_terry_information_matrix(
+    *,
+    logits: list[float],
+    model_index: Mapping[str, int],
+    pairs: tuple[_AggregatedCompetitionPair, ...],
+) -> list[list[float]]:
+    _gradient, information = _bradley_terry_gradient_and_information(
+        logits=logits,
+        model_index=model_index,
+        pairs=pairs,
+    )
+    return information
+
+
+def _bradley_terry_gradient_and_information(
+    *,
+    logits: list[float],
+    model_index: Mapping[str, int],
+    pairs: tuple[_AggregatedCompetitionPair, ...],
+) -> tuple[list[float], list[list[float]]]:
+    model_count = len(logits)
+    gradient = [-_relative_score_prior_sample_weight * logit for logit in logits]
+    information = [
+        [0.0 for _column in range(model_count)]
+        for _row in range(model_count)
+    ]
+    for index in range(model_count):
+        information[index][index] = _relative_score_prior_sample_weight
+    for pair in pairs:
+        lower_index = model_index[pair.lower_model_key]
+        upper_index = model_index[pair.upper_model_key]
+        total = pair.lower_score_samples + pair.upper_score_samples
+        expected = _logistic(logits[lower_index] - logits[upper_index])
+        residual = pair.lower_score_samples - total * expected
+        gradient[lower_index] += residual
+        gradient[upper_index] -= residual
+        weight = total * expected * (1.0 - expected)
+        information[lower_index][lower_index] += weight
+        information[upper_index][upper_index] += weight
+        information[lower_index][upper_index] -= weight
+        information[upper_index][lower_index] -= weight
+    return gradient, information
+
+
+def _relative_rating_evidence(
+    *,
+    model_keys: tuple[str, ...],
+    pairs: tuple[_AggregatedCompetitionPair, ...],
+) -> dict[str, tuple[int, int, int]]:
+    samples = dict.fromkeys(model_keys, 0)
+    competitions = dict.fromkeys(model_keys, 0)
+    opponents = {model_key: set[str]() for model_key in model_keys}
+    for pair in pairs:
+        samples[pair.lower_model_key] += pair.sample_count
+        samples[pair.upper_model_key] += pair.sample_count
+        competitions[pair.lower_model_key] += pair.competition_count
+        competitions[pair.upper_model_key] += pair.competition_count
+        opponents[pair.lower_model_key].add(pair.upper_model_key)
+        opponents[pair.upper_model_key].add(pair.lower_model_key)
+    return {
+        model_key: (
+            samples[model_key],
+            len(opponents[model_key]),
+            competitions[model_key],
+        )
+        for model_key in model_keys
+    }
+
+
+def _relative_score_points_per_logit() -> float:
+    return _relative_score_scale / math.log(10.0)
 
 
 def _pairwise_competition_outcomes(
@@ -1267,9 +1455,49 @@ def _normalized_pair_score(left_score: float, right_score: float) -> float:
     return left_score / total
 
 
-def _elo_expected_score(left_rating: float, right_rating: float) -> float:
-    return 1.0 / (1.0 + 10.0 ** ((right_rating - left_rating) / _relative_score_scale))
+def _logistic(value: float) -> float:
+    if value >= 0.0:
+        factor = math.exp(-value)
+        return 1.0 / (1.0 + factor)
+    factor = math.exp(value)
+    return factor / (1.0 + factor)
 
+
+def _solve_linear_system(matrix: list[list[float]], vector: list[float]) -> list[float]:
+    size = len(vector)
+    augmented = [row.copy() + [value] for row, value in zip(matrix, vector, strict=True)]
+    for column in range(size):
+        pivot_row = max(range(column, size), key=lambda row: abs(augmented[row][column]))
+        pivot = augmented[pivot_row][column]
+        if abs(pivot) <= 0.0:
+            raise LocalResultImportError("relative rating fit has singular information matrix")
+        if pivot_row != column:
+            augmented[column], augmented[pivot_row] = augmented[pivot_row], augmented[column]
+        inverse_pivot = 1.0 / augmented[column][column]
+        for index in range(column, size + 1):
+            augmented[column][index] *= inverse_pivot
+        for row in range(size):
+            if row == column:
+                continue
+            factor = augmented[row][column]
+            if factor == 0.0:
+                continue
+            for index in range(column, size + 1):
+                augmented[row][index] -= factor * augmented[column][index]
+    return [augmented[row][size] for row in range(size)]
+
+
+def _invert_positive_definite_matrix(matrix: list[list[float]]) -> list[list[float]]:
+    size = len(matrix)
+    columns: list[list[float]] = []
+    for column in range(size):
+        unit = [0.0] * size
+        unit[column] = 1.0
+        columns.append(_solve_linear_system(matrix, unit))
+    return [
+        [columns[column][row] for column in range(size)]
+        for row in range(size)
+    ]
 
 def _model_cost_summary(
     runs: tuple[_BenchmarkRunRecord, ...],

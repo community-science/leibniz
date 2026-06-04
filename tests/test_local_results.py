@@ -198,10 +198,141 @@ def test_relative_competition_scores_rank_undefeated_model_first() -> None:
         ),
     )
 
-    scores = cast(Any, local_results)._relative_model_scores(best_runs, outcomes=outcomes)
+    ratings = cast(Any, local_results)._relative_model_ratings(best_runs, outcomes=outcomes)
 
-    assert scores["model-a"] > scores["model-b"]
-    assert scores["model-b"] > scores["model-c"]
+    assert ratings["model-a"].score > ratings["model-b"].score
+    assert ratings["model-b"].score > ratings["model-c"].score
+
+
+def test_relative_competition_batch_fit_aggregates_reversed_pairs() -> None:
+    best_runs = {
+        "model-a": _benchmark_run_record_for_competition(
+            model_key="model-a",
+            run_id="run-a",
+        ),
+        "model-b": _benchmark_run_record_for_competition(
+            model_key="model-b",
+            run_id="run-b",
+        ),
+    }
+    outcome_type = cast(Any, local_results)._ModelCompetitionOutcome
+    ratings = cast(Any, local_results)._relative_model_ratings(
+        best_runs,
+        outcomes=(
+            outcome_type(
+                left_model_key="model-a",
+                right_model_key="model-b",
+                left_score=0.75,
+                right_score=0.25,
+                sample_count=40,
+            ),
+            outcome_type(
+                left_model_key="model-b",
+                right_model_key="model-a",
+                left_score=0.25,
+                right_score=0.75,
+                sample_count=24,
+            ),
+        ),
+    )
+
+    assert ratings["model-a"].score > ratings["model-b"].score
+    assert ratings["model-a"].sample_count == 64
+    assert ratings["model-a"].opponent_count == 1
+    assert ratings["model-a"].competition_count == 2
+    assert ratings["model-a"].provisional
+    assert ratings["model-a"].uncertainty > 0.0
+
+
+def test_relative_competition_batch_fit_uses_transitive_evidence() -> None:
+    best_runs = {
+        "model-a": _benchmark_run_record_for_competition(
+            model_key="model-a",
+            run_id="run-a",
+        ),
+        "model-b": _benchmark_run_record_for_competition(
+            model_key="model-b",
+            run_id="run-b",
+        ),
+        "model-c": _benchmark_run_record_for_competition(
+            model_key="model-c",
+            run_id="run-c",
+        ),
+    }
+    outcome_type = cast(Any, local_results)._ModelCompetitionOutcome
+    ratings = cast(Any, local_results)._relative_model_ratings(
+        best_runs,
+        outcomes=(
+            outcome_type(
+                left_model_key="model-a",
+                right_model_key="model-b",
+                left_score=0.60,
+                right_score=0.40,
+                sample_count=128,
+            ),
+            outcome_type(
+                left_model_key="model-b",
+                right_model_key="model-c",
+                left_score=0.60,
+                right_score=0.40,
+                sample_count=128,
+            ),
+            outcome_type(
+                left_model_key="model-a",
+                right_model_key="model-c",
+                left_score=0.70,
+                right_score=0.30,
+                sample_count=128,
+            ),
+        ),
+    )
+
+    assert ratings["model-a"].score > ratings["model-b"].score
+    assert ratings["model-b"].score > ratings["model-c"].score
+    assert not ratings["model-a"].provisional
+    assert not ratings["model-b"].provisional
+    assert not ratings["model-c"].provisional
+
+
+def test_relative_score_view_exposes_batch_rating_evidence() -> None:
+    best_runs = {
+        "model-a": _benchmark_run_record_for_competition(
+            model_key="model-a",
+            run_id="run-a",
+        ),
+        "model-b": _benchmark_run_record_for_competition(
+            model_key="model-b",
+            run_id="run-b",
+        ),
+    }
+    records: list[dict[str, object]] = [
+        {
+            "model_key": "model-a",
+            "score_views": {},
+        },
+        {
+            "model_key": "model-b",
+            "score_views": {},
+        },
+    ]
+
+    cast(Any, local_results)._add_relative_score_views(
+        records,
+        best_runs=best_runs,
+        competitions=(
+            _competition_record(left_model_key="model-a", right_model_key="model-b"),
+        ),
+    )
+
+    score_views = cast(dict[str, object], records[0]["score_views"])
+    relative = cast(dict[str, object], score_views["relative"])
+    basis = cast(dict[str, object], relative["basis"])
+    assert basis["kind"] == "model-competition-bradley-terry-batch-v1"
+    assert basis["competition_count"] == 1
+    assert basis["sample_count"] == 1
+    assert basis["opponent_count"] == 1
+    assert basis["provisional"] is True
+    assert cast(float, basis["rating_uncertainty"]) > 0.0
 
 
 def test_console_result_view_validates_model_detail_tables(tmp_path: Path) -> None:
