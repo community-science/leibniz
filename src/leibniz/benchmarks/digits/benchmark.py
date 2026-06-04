@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from itertools import product
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeAlias, cast
 
 from leibniz.artifacts import ArtifactReference
 from leibniz.benchmark_implementations import Benchmark as BenchmarkProtocol
@@ -36,6 +36,7 @@ from leibniz.observation_formation import (
     AffineMatrix2D,
     ComponentMark,
     FieldObservation,
+    FormedObservation,
     ObservationComponent,
     ObservationFormationDeclaration,
     SequenceLayout,
@@ -81,26 +82,74 @@ _field_scalar_construction_bytes = 64
 _default_memory_budget_fraction = 0.10
 _default_generation_memory_limit_bytes = 32_768_000
 
+_CurvePoints: TypeAlias = tuple[tuple[float, float], ...]
+
+_digit_strokes: tuple[tuple[_CurvePoints, ...], ...] = (
+    (
+        ((0.5, 0.2768), (0.3056, 0.2912), (0.2984, 0.5)),
+        ((0.2984, 0.5), (0.3056, 0.7088), (0.5, 0.7232)),
+        ((0.5, 0.7232), (0.6944, 0.7088), (0.7016, 0.5)),
+        ((0.7016, 0.5), (0.6944, 0.2912), (0.5, 0.2768)),
+    ),
+    (
+        ((0.4208, 0.3704), (0.5072, 0.2912), (0.5648, 0.2768)),
+        ((0.5648, 0.2768), (0.5576, 0.7016)),
+        ((0.4424, 0.7088), (0.6512, 0.7088)),
+    ),
+    (
+        ((0.3272, 0.3488), (0.428, 0.2552), (0.5792, 0.2912)),
+        ((0.5792, 0.2912), (0.7448, 0.3416), (0.6224, 0.4712)),
+        ((0.6224, 0.4712), (0.5144, 0.572), (0.3488, 0.6872)),
+        ((0.3488, 0.6872), (0.68, 0.6944)),
+    ),
+    (
+        ((0.3344, 0.32), (0.5432, 0.2408), (0.6584, 0.3704)),
+        ((0.6584, 0.3704), (0.716, 0.4784), (0.5144, 0.4928)),
+        ((0.5144, 0.4928), (0.7304, 0.5432), (0.6512, 0.6584)),
+        ((0.6512, 0.6584), (0.5072, 0.7808), (0.32, 0.6728)),
+    ),
+    (
+        ((0.6224, 0.284), (0.3488, 0.5288)),
+        ((0.3488, 0.5288), (0.6656, 0.5288)),
+        ((0.6224, 0.284), (0.6224, 0.7088)),
+    ),
+    (
+        ((0.6584, 0.2912), (0.3632, 0.2912)),
+        ((0.3632, 0.2912), (0.32, 0.4352), (0.4064, 0.4928)),
+        ((0.4064, 0.4928), (0.6584, 0.4352), (0.6728, 0.6152)),
+        ((0.6728, 0.6152), (0.5792, 0.7592), (0.3416, 0.68)),
+    ),
+    (
+        ((0.6368, 0.3056), (0.3776, 0.32), (0.3272, 0.5648)),
+        ((0.3272, 0.5648), (0.356, 0.752), (0.5288, 0.7232)),
+        ((0.5288, 0.7232), (0.7088, 0.68), (0.6512, 0.536)),
+        ((0.6512, 0.536), (0.5288, 0.428), (0.356, 0.5216)),
+    ),
+    (
+        ((0.3344, 0.2912), (0.68, 0.2912)),
+        ((0.68, 0.2912), (0.5432, 0.4928), (0.4712, 0.7088)),
+    ),
+    (
+        ((0.5, 0.4928), (0.3416, 0.4352), (0.3848, 0.3272)),
+        ((0.3848, 0.3272), (0.5072, 0.2264), (0.6296, 0.3272)),
+        ((0.6296, 0.3272), (0.6728, 0.4424), (0.5, 0.4928)),
+        ((0.5, 0.4928), (0.3056, 0.5576), (0.3632, 0.6728)),
+        ((0.3632, 0.6728), (0.5, 0.7808), (0.644, 0.6728)),
+        ((0.644, 0.6728), (0.7016, 0.5576), (0.5, 0.4928)),
+    ),
+    (
+        ((0.644, 0.4712), (0.5288, 0.572), (0.3632, 0.4928)),
+        ((0.3632, 0.4928), (0.3128, 0.3272), (0.4856, 0.2768)),
+        ((0.4856, 0.2768), (0.6728, 0.2912), (0.68, 0.4784)),
+        ((0.68, 0.4784), (0.6512, 0.6584), (0.4208, 0.7088)),
+    ),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class _ResolutionSampling:
     width_axis: str
     height_axis: str
-
-
-@dataclass(frozen=True, slots=True)
-class _FormationSamples:
-    """A deterministic batch of Digits formation specifications."""
-
-    benchmark_id: ProtocolIdentifier
-    seed: int
-    samples: tuple[GeneratedSample, ...]
-
-    def __post_init__(self) -> None:
-        if type(self.seed) is not int or self.seed < 0:
-            raise ObservationGenerationError("seed must be a nonnegative integer")
-        if not self.samples:
-            raise ObservationGenerationError("samples must not be empty")
 
 
 @dataclass(slots=True)
@@ -202,19 +251,21 @@ class Generator:
         except ValueError as error:
             raise ObservationGenerationError(str(error)) from error
 
-    def _sample_formation_batch(
+    def _generate_samples(
         self,
         *,
         sample_count: int,
         seed: int,
+        include_fields: bool,
         component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
-    ) -> _FormationSamples:
-        """Generate deterministic formation specs without materializing fields."""
+        output_timing_prefix: str = "",
+    ) -> tuple[GeneratedSample, ...]:
+        """Generate Digits samples by choosing digit, canvas, and affine variation."""
 
         if type(sample_count) is not int or sample_count < 1:
             raise ObservationGenerationError("sample_count must be a positive integer")
@@ -228,43 +279,28 @@ class Generator:
             raise ObservationGenerationError("variation_extent must be finite")
         if variation_extent_value < 0.0 or variation_extent_value > 1.0:
             raise ObservationGenerationError("variation_extent must be between 0 and 1")
-        with _timing_span(timing, f"{timing_prefix}component_indices"):
-            indices = tuple(component_indices) if component_indices is not None else ()
-        if indices and len(indices) != sample_count:
-            raise ObservationGenerationError("component_indices length must match sample_count")
-        requested_resolution_assignment = resolution_assignment
-        resolved_resolution_assignment = self.materialization.minimum_resolution()
-        resolved_resolution_assignment = self._minimum_discriminatable_resolution_assignment(
-            minimum_assignment=resolved_resolution_assignment,
+        component_index_samples = self._sample_component_indices(
+            sample_count=sample_count,
+            seed=seed,
+            component_indices=component_indices,
+            timing=timing,
+            timing_prefix=timing_prefix,
         )
-        if requested_resolution_assignment is None:
-            resolved_resolution_assignment = self._sample_resolution_assignment(
-                sample_count=sample_count,
-                seed=seed,
-                minimum_assignment=resolved_resolution_assignment,
-                memory_limit_bytes=memory_limit_bytes,
-            )
-        else:
-            resolved_resolution_assignment = self._requested_resolution_assignment(
-                minimum_assignment=resolved_resolution_assignment,
-                requested_assignment=requested_resolution_assignment,
-            )
-        try:
-            self.materialization.require_resolution(
-                resolution_assignment=resolved_resolution_assignment,
-            )
-        except MaterializationValidationError as error:
-            raise ObservationGenerationError(str(error)) from error
-        resolution_assignment = resolved_resolution_assignment
-        width = resolution_assignment.require_axis(self.formation.width_axis)
-        height = resolution_assignment.require_axis(self.formation.height_axis)
+        resolved_resolution_assignment = self._generation_resolution_assignment(
+            sample_count=sample_count,
+            seed=seed,
+            requested_assignment=resolution_assignment,
+            memory_limit_bytes=memory_limit_bytes,
+        )
+        width = resolved_resolution_assignment.require_axis(self.formation.width_axis)
+        height = resolved_resolution_assignment.require_axis(self.formation.height_axis)
         transform = _variation_transform_at_extent(
             self.formation.variation_transform,
             extent=variation_extent_value,
         )
         transform_record = transform.to_record()
         with _timing_span(timing, f"{timing_prefix}complexity"):
-            complexity = self._distinguishable_state_complexity(
+            complexity = self.distinguishable_state_complexity(
                 width=width,
                 height=height,
                 variation_extent=variation_extent_value,
@@ -275,7 +311,6 @@ class Generator:
             record_digest=self.materialization.digest,
         )
         variation_transform_digest = str(ContentDigest.from_value(transform_record))
-        component_generator = random.Random(f"{seed}:component-sequence")
         variation_generator = random.Random(f"{seed}:variation:{variation_transform_digest}")
 
         with _timing_span(
@@ -287,55 +322,60 @@ class Generator:
                 self._materialization_plan(
                     seed=seed,
                     index=index,
-                    resolution_assignment=resolution_assignment,
+                    resolution_assignment=resolved_resolution_assignment,
                     materialization_declaration=materialization_declaration,
                 )
                 for index in range(sample_count)
             )
-        with _timing_span(timing, f"{timing_prefix}component_index", samples=sample_count):
-            component_index_samples = tuple(
-                (
-                    indices[index]
-                    if indices
-                    else _sample_component_index_from_vocabulary(
-                        generator=component_generator,
-                        component_vocabulary_size=len(self.formation.components),
-                    )
-                )
-                for index in range(sample_count)
-            )
-        if any(
-            index < 0 or index >= len(self.formation.components)
-            for index in component_index_samples
-        ):
-            raise ObservationGenerationError("component index is outside component vocabulary")
-        variation_samples: list[
-            tuple[
-                Mapping[str, object],
-                tuple[Mapping[str, object], ...],
-            ]
-        ] = []
         variation_timing_phase = f"{timing_prefix}variation_coordinates"
-        with _timing_span(timing, variation_timing_phase, samples=sample_count):
-            for plan in plans:
-                variation_samples.append(
-                    _variation_transform_values_and_coordinates(
-                        formation=self.formation,
-                        transform=transform,
-                        transform_record=transform_record,
-                        generator=variation_generator,
-                        width=plan.resolution_assignment.require_axis(self.formation.width_axis),
-                        height=plan.resolution_assignment.require_axis(self.formation.height_axis),
-                        affine_acceptance_thresholds=(
-                            self.manifest.affine_acceptance_thresholds()
-                        ),
-                        rejection_cache=self.rejection_cache,
-                        timing=timing,
-                        timing_phase=variation_timing_phase,
+        variation_samples = self._sample_variation_coordinates(
+            plans=plans,
+            transform=transform,
+            transform_record=transform_record,
+            generator=variation_generator,
+            timing=timing,
+            timing_phase=variation_timing_phase,
+        )
+
+        with _timing_span(timing, f"{output_timing_prefix}scaled_factors"):
+            scaled_factors = tuple(self.latent_factors.sample_factors)
+
+        field_records: tuple[FormedObservation, ...]
+        if include_fields:
+            with _timing_span(
+                timing,
+                f"{output_timing_prefix}field_generation",
+                samples=sample_count,
+            ):
+                field_records = tuple(
+                    self.formation.form_observation(
+                        id=self._observation_id(seed=seed, index=index),
+                        plan=plan,
+                        component_index=component_index,
+                        variation_coordinates=variation_coordinates,
+                    )
+                    for (
+                        index,
+                        plan,
+                        component_index,
+                        (_variation_values, variation_coordinates),
+                    ) in zip(
+                        range(sample_count),
+                        plans,
+                        component_index_samples,
+                        variation_samples,
+                        strict=True,
                     )
                 )
+        else:
+            field_records = ()
+
         samples: list[GeneratedSample] = []
-        with _timing_span(timing, f"{timing_prefix}sample_assembly", samples=sample_count):
+        with _timing_span(
+            timing,
+            f"{output_timing_prefix}sample_assembly",
+            samples=sample_count,
+        ):
             for index, plan, component_index, variation_sample in zip(
                 range(sample_count),
                 plans,
@@ -344,6 +384,7 @@ class Generator:
                 strict=True,
             ):
                 variation_values, variation_coordinates = variation_sample
+                field_record = field_records[index] if include_fields else None
                 samples.append(
                     GeneratedSample(
                         index=index,
@@ -355,27 +396,129 @@ class Generator:
                         variation_values=variation_values,
                         outcome_id=self._outcome_id(component_index),
                         complexity=complexity,
+                        state_space_measure=_state_space_measure(complexity),
+                        latent_coordinates=self._latent_coordinates(
+                            component_index=component_index,
+                            scaled_factors=scaled_factors,
+                            plan=plan,
+                            variation_values=variation_values,
+                        ),
+                        field=None if field_record is None else field_record.field,
+                        _field_record=field_record,
                     )
                 )
+        return tuple(samples)
 
-        return _FormationSamples(
-            benchmark_id=self.manifest.id,
-            seed=seed,
-            samples=tuple(samples),
-        )
-
-    def _distinguishable_state_complexity(
+    def _generation_resolution_assignment(
         self,
         *,
-        width: int,
-        height: int,
-        variation_extent: float = 1.0,
-    ) -> float:
-        return self.distinguishable_state_complexity(
-            width=width,
-            height=height,
-            variation_extent=variation_extent,
+        sample_count: int,
+        seed: int,
+        requested_assignment: AxisAssignment | None,
+        memory_limit_bytes: int | None,
+    ) -> AxisAssignment:
+        minimum_assignment = self.minimum_discriminatable_resolution_assignment(
+            minimum_assignment=self.materialization.minimum_resolution(),
         )
+        if requested_assignment is None:
+            resolution_assignment = self._sample_resolution_assignment(
+                sample_count=sample_count,
+                seed=seed,
+                minimum_assignment=minimum_assignment,
+                memory_limit_bytes=memory_limit_bytes,
+            )
+        else:
+            resolution_assignment = self._requested_resolution_assignment(
+                minimum_assignment=minimum_assignment,
+                requested_assignment=requested_assignment,
+            )
+        try:
+            self.materialization.require_resolution(
+                resolution_assignment=resolution_assignment,
+            )
+        except MaterializationValidationError as error:
+            raise ObservationGenerationError(str(error)) from error
+        return resolution_assignment
+
+    def _sample_component_indices(
+        self,
+        *,
+        sample_count: int,
+        seed: int,
+        component_indices: Iterable[int] | None,
+        timing: TimingCollector | None,
+        timing_prefix: str,
+    ) -> tuple[int, ...]:
+        with _timing_span(timing, f"{timing_prefix}component_indices"):
+            requested_indices = (
+                tuple(component_indices) if component_indices is not None else ()
+            )
+        if requested_indices and len(requested_indices) != sample_count:
+            raise ObservationGenerationError("component_indices length must match sample_count")
+        generator = random.Random(f"{seed}:component-sequence")
+        with _timing_span(timing, f"{timing_prefix}component_index", samples=sample_count):
+            indices = tuple(
+                requested_indices[index]
+                if requested_indices
+                else generator.randrange(len(self.formation.components))
+                for index in range(sample_count)
+            )
+        if any(index < 0 or index >= len(self.formation.components) for index in indices):
+            raise ObservationGenerationError("component index is outside component vocabulary")
+        return indices
+
+    def _sample_variation_coordinates(
+        self,
+        *,
+        plans: tuple[MaterializationPlan, ...],
+        transform: VariationTransformDeclaration,
+        transform_record: Mapping[str, object],
+        generator: random.Random,
+        timing: TimingCollector | None,
+        timing_phase: str,
+    ) -> tuple[
+        tuple[
+            Mapping[str, object],
+            tuple[Mapping[str, object], ...],
+        ],
+        ...,
+    ]:
+        samples: list[
+            tuple[
+                Mapping[str, object],
+                tuple[Mapping[str, object], ...],
+            ]
+        ] = []
+        with _timing_span(timing, timing_phase, samples=len(plans)):
+            for plan in plans:
+                counters: dict[str, float] = {}
+                coordinate = _accepted_variation_coordinate(
+                    formation=self.formation,
+                    transform=transform,
+                    generator=generator,
+                    component_index=0,
+                    width=plan.resolution_assignment.require_axis(self.formation.width_axis),
+                    height=plan.resolution_assignment.require_axis(self.formation.height_axis),
+                    affine_acceptance_thresholds=(
+                        self.manifest.affine_acceptance_thresholds()
+                    ),
+                    rejection_cache=self.rejection_cache,
+                    counters=counters,
+                )
+                coordinates = (coordinate,)
+                if timing is not None and counters:
+                    timing.add_counters(timing_phase, counters)
+                samples.append(
+                    (
+                        {
+                            "kind": "field-variation-transform-samples",
+                            "bounds": transform_record,
+                            "coordinates": [dict(item) for item in coordinates],
+                        },
+                        coordinates,
+                    )
+                )
+        return tuple(samples)
 
     def distinguishable_state_complexity(
         self,
@@ -500,15 +643,6 @@ class Generator:
                 )
             values[axis] = requested_value
         return AxisAssignment(values=values)
-
-    def _minimum_discriminatable_resolution_assignment(
-        self,
-        *,
-        minimum_assignment: AxisAssignment,
-    ) -> AxisAssignment:
-        return self.minimum_discriminatable_resolution_assignment(
-            minimum_assignment=minimum_assignment,
-        )
 
     def minimum_discriminatable_resolution_assignment(
         self,
@@ -645,97 +779,20 @@ class Generator:
                     state_space_request=state_space_request,
                     samples=(),
                 )
-        formation_timing_prefix = (
-            f"{timing_prefix}formation_batch." if include_fields else timing_prefix
-        )
-        formation_batch = self._sample_formation_batch(
+        samples = self._generate_samples(
             sample_count=sample_count,
             seed=seed,
+            include_fields=include_fields,
             component_indices=component_indices,
             memory_limit_bytes=memory_limit_bytes,
             resolution_assignment=resolution_assignment,
             variation_extent=variation_extent,
             timing=timing,
-            timing_prefix=formation_timing_prefix,
+            timing_prefix=(
+                f"{timing_prefix}formation_batch." if include_fields else timing_prefix
+            ),
+            output_timing_prefix=timing_prefix,
         )
-        samples = formation_batch.samples
-        if include_fields:
-            with _timing_span(timing, f"{timing_prefix}scaled_factors"):
-                scaled_factors = tuple(self.latent_factors.sample_factors)
-            with _timing_span(
-                timing,
-                f"{timing_prefix}field_generation",
-                samples=sample_count,
-            ):
-                field_records = tuple(
-                    self.formation.form_observation(
-                        id=self._observation_id(
-                            seed=seed,
-                            index=sample.index,
-                        ),
-                        plan=_sample_materialization_plan(sample),
-                        component_index=_sample_component_index(sample),
-                        variation_coordinates=sample.variation_coordinates,
-                    )
-                    for sample in samples
-                )
-            with _timing_span(timing, f"{timing_prefix}latent_coordinates", samples=sample_count):
-                latent_coordinate_samples = tuple(
-                    self._latent_coordinates(
-                        component_index=_sample_component_index(sample),
-                        scaled_factors=scaled_factors,
-                        plan=_sample_materialization_plan(sample),
-                        variation_values=_sample_variation_values(sample),
-                    )
-                    for sample in samples
-                )
-            samples = tuple(
-                GeneratedSample(
-                    index=sample.index,
-                    materialization_plan=sample.materialization_plan,
-                    width=sample.width,
-                    height=sample.height,
-                    component_index=sample.component_index,
-                    variation_coordinates=sample.variation_coordinates,
-                    variation_values=sample.variation_values,
-                    outcome_id=sample.outcome_id,
-                    complexity=sample.complexity,
-                    state_space_measure=_state_space_measure(sample.complexity),
-                    latent_coordinates=latent_coordinates,
-                    field=field_record.field,
-                    _field_record=field_record,
-                )
-                for sample, field_record, latent_coordinates in zip(
-                    samples,
-                    field_records,
-                    latent_coordinate_samples,
-                    strict=True,
-                )
-            )
-        else:
-            with _timing_span(timing, f"{timing_prefix}latent_coordinates", samples=sample_count):
-                scaled_factors = tuple(self.latent_factors.sample_factors)
-                samples = tuple(
-                    GeneratedSample(
-                        index=sample.index,
-                        materialization_plan=sample.materialization_plan,
-                        width=sample.width,
-                        height=sample.height,
-                        component_index=sample.component_index,
-                        variation_coordinates=sample.variation_coordinates,
-                        variation_values=sample.variation_values,
-                        outcome_id=sample.outcome_id,
-                        complexity=sample.complexity,
-                        state_space_measure=_state_space_measure(sample.complexity),
-                        latent_coordinates=self._latent_coordinates(
-                            component_index=_sample_component_index(sample),
-                            scaled_factors=scaled_factors,
-                            plan=_sample_materialization_plan(sample),
-                            variation_values=_sample_variation_values(sample),
-                        ),
-                    )
-                    for sample in samples
-                )
         return GeneratedSampleSet(
             benchmark_id=self.manifest.id,
             generator_id=self.id,
@@ -783,12 +840,13 @@ class Generator:
                     used_field_shapes.add(field_shape)
                     break
                 seed += 1000
-            materialization_plan = _sample_materialization_plan(sample)
+            if sample.materialization_plan is None or sample.component_index is None:
+                raise ObservationGenerationError("Digits preview sample is incomplete")
             samples.append(
                 {
                     "index": len(samples),
                     "outcome_id": sample.outcome_id,
-                    "component_index": _sample_component_index(sample),
+                    "component_index": sample.component_index,
                     "complexity": sample.complexity,
                     "state_space_measure": (
                         None
@@ -797,7 +855,7 @@ class Generator:
                     ),
                     "field_shape": list(sample.require_field().shape),
                     "image_data_url": _field_to_png_data_url(sample.require_field()),
-                    "materialization_plan": materialization_plan.to_record(),
+                    "materialization_plan": sample.materialization_plan.to_record(),
                     "latent_coordinates": [
                         dict(coordinate) for coordinate in sample.latent_coordinates
                     ],
@@ -932,22 +990,10 @@ def _sample_count(shape: Sequence[int]) -> int:
     return count
 
 
-def _sample_materialization_plan(sample: GeneratedSample) -> MaterializationPlan:
-    if sample.materialization_plan is None:
-        raise ObservationGenerationError("Digits sample is missing materialization plan")
-    return sample.materialization_plan
-
-
 def _sample_component_index(sample: GeneratedSample) -> int:
     if sample.component_index is None:
         raise ObservationGenerationError("Digits sample is missing component index")
     return sample.component_index
-
-
-def _sample_variation_values(sample: GeneratedSample) -> Mapping[str, object]:
-    if sample.variation_values is None:
-        raise ObservationGenerationError("Digits sample is missing variation values")
-    return sample.variation_values
 
 
 def _state_space_measure(complexity: float) -> StateSpaceMeasureValue:
@@ -1143,47 +1189,6 @@ def _variation_transform_at_extent(
             spatial_rank=spatial.spatial_rank,
             matrix=tuple(matrix),
         ),
-    )
-
-
-def _variation_transform_values_and_coordinates(
-    *,
-    formation: ObservationFormationDeclaration,
-    transform: VariationTransformDeclaration,
-    transform_record: Mapping[str, object],
-    generator: random.Random,
-    width: int,
-    height: int,
-    affine_acceptance_thresholds: Mapping[str, float],
-    rejection_cache: _BoundedRejectionCache | None = None,
-    timing: TimingCollector | None = None,
-    timing_phase: str = "",
-) -> tuple[
-    Mapping[str, object],
-    tuple[Mapping[str, object], ...],
-]:
-    counters: dict[str, float] = {}
-    coordinate = _accepted_variation_coordinate(
-        formation=formation,
-        transform=transform,
-        generator=generator,
-        component_index=0,
-        width=width,
-        height=height,
-        affine_acceptance_thresholds=affine_acceptance_thresholds,
-        rejection_cache=rejection_cache,
-        counters=counters,
-    )
-    coordinates = (coordinate,)
-    if timing is not None and counters:
-        timing.add_counters(timing_phase, counters)
-    return (
-        {
-            "kind": "field-variation-transform-samples",
-            "bounds": transform_record,
-            "coordinates": [dict(item) for item in coordinates],
-        },
-        coordinates,
     )
 
 
@@ -1750,14 +1755,6 @@ def _batch_sample_pixel_limit(
     return max(1, budget // per_sample_denominator)
 
 
-def _sample_component_index_from_vocabulary(
-    *,
-    generator: random.Random,
-    component_vocabulary_size: int,
-) -> int:
-    return generator.randrange(component_vocabulary_size)
-
-
 def _sample_interval(generator: random.Random, bounds: tuple[float, float]) -> float:
     low, high = bounds
     return generator.uniform(low, high)
@@ -2038,96 +2035,7 @@ def _formation() -> ObservationFormationDeclaration:
                 ),
             ),
         ),
-        components=(
-            _component(
-                "digit-0",
-                (
-                    _curve(((0.5, 0.2768), (0.3056, 0.2912), (0.2984, 0.5))),
-                    _curve(((0.2984, 0.5), (0.3056, 0.7088), (0.5, 0.7232))),
-                    _curve(((0.5, 0.7232), (0.6944, 0.7088), (0.7016, 0.5))),
-                    _curve(((0.7016, 0.5), (0.6944, 0.2912), (0.5, 0.2768))),
-                ),
-            ),
-            _component(
-                "digit-1",
-                (
-                    _curve(((0.4208, 0.3704), (0.5072, 0.2912), (0.5648, 0.2768))),
-                    _curve(((0.5648, 0.2768), (0.5576, 0.7016))),
-                    _curve(((0.4424, 0.7088), (0.6512, 0.7088))),
-                ),
-            ),
-            _component(
-                "digit-2",
-                (
-                    _curve(((0.3272, 0.3488), (0.428, 0.2552), (0.5792, 0.2912))),
-                    _curve(((0.5792, 0.2912), (0.7448, 0.3416), (0.6224, 0.4712))),
-                    _curve(((0.6224, 0.4712), (0.5144, 0.572), (0.3488, 0.6872))),
-                    _curve(((0.3488, 0.6872), (0.68, 0.6944))),
-                ),
-            ),
-            _component(
-                "digit-3",
-                (
-                    _curve(((0.3344, 0.32), (0.5432, 0.2408), (0.6584, 0.3704))),
-                    _curve(((0.6584, 0.3704), (0.716, 0.4784), (0.5144, 0.4928))),
-                    _curve(((0.5144, 0.4928), (0.7304, 0.5432), (0.6512, 0.6584))),
-                    _curve(((0.6512, 0.6584), (0.5072, 0.7808), (0.32, 0.6728))),
-                ),
-            ),
-            _component(
-                "digit-4",
-                (
-                    _curve(((0.6224, 0.284), (0.3488, 0.5288))),
-                    _curve(((0.3488, 0.5288), (0.6656, 0.5288))),
-                    _curve(((0.6224, 0.284), (0.6224, 0.7088))),
-                ),
-            ),
-            _component(
-                "digit-5",
-                (
-                    _curve(((0.6584, 0.2912), (0.3632, 0.2912))),
-                    _curve(((0.3632, 0.2912), (0.32, 0.4352), (0.4064, 0.4928))),
-                    _curve(((0.4064, 0.4928), (0.6584, 0.4352), (0.6728, 0.6152))),
-                    _curve(((0.6728, 0.6152), (0.5792, 0.7592), (0.3416, 0.68))),
-                ),
-            ),
-            _component(
-                "digit-6",
-                (
-                    _curve(((0.6368, 0.3056), (0.3776, 0.32), (0.3272, 0.5648))),
-                    _curve(((0.3272, 0.5648), (0.356, 0.752), (0.5288, 0.7232))),
-                    _curve(((0.5288, 0.7232), (0.7088, 0.68), (0.6512, 0.536))),
-                    _curve(((0.6512, 0.536), (0.5288, 0.428), (0.356, 0.5216))),
-                ),
-            ),
-            _component(
-                "digit-7",
-                (
-                    _curve(((0.3344, 0.2912), (0.68, 0.2912))),
-                    _curve(((0.68, 0.2912), (0.5432, 0.4928), (0.4712, 0.7088))),
-                ),
-            ),
-            _component(
-                "digit-8",
-                (
-                    _curve(((0.5, 0.4928), (0.3416, 0.4352), (0.3848, 0.3272))),
-                    _curve(((0.3848, 0.3272), (0.5072, 0.2264), (0.6296, 0.3272))),
-                    _curve(((0.6296, 0.3272), (0.6728, 0.4424), (0.5, 0.4928))),
-                    _curve(((0.5, 0.4928), (0.3056, 0.5576), (0.3632, 0.6728))),
-                    _curve(((0.3632, 0.6728), (0.5, 0.7808), (0.644, 0.6728))),
-                    _curve(((0.644, 0.6728), (0.7016, 0.5576), (0.5, 0.4928))),
-                ),
-            ),
-            _component(
-                "digit-9",
-                (
-                    _curve(((0.644, 0.4712), (0.5288, 0.572), (0.3632, 0.4928))),
-                    _curve(((0.3632, 0.4928), (0.3128, 0.3272), (0.4856, 0.2768))),
-                    _curve(((0.4856, 0.2768), (0.6728, 0.2912), (0.68, 0.4784))),
-                    _curve(((0.68, 0.4784), (0.6512, 0.6584), (0.4208, 0.7088))),
-                ),
-            ),
-        ),
+        components=_digit_components(),
     )
 
 
@@ -2175,11 +2083,17 @@ def _latent_factor_reference() -> ArtifactReference:
     )
 
 
-def _component(id: str, marks: tuple[ComponentMark, ...]) -> ObservationComponent:
-    return ObservationComponent(id=id, marks=marks)
+def _digit_components() -> tuple[ObservationComponent, ...]:
+    return tuple(
+        ObservationComponent(
+            id=f"digit-{digit}",
+            marks=tuple(_curve(points) for points in curves),
+        )
+        for digit, curves in enumerate(_digit_strokes)
+    )
 
 
-def _curve(points: tuple[tuple[float, float], ...]) -> ComponentMark:
+def _curve(points: _CurvePoints) -> ComponentMark:
     return ComponentMark(
         kind="bezier-curve",
         channel=0,
