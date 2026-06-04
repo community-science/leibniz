@@ -66,6 +66,7 @@ from leibniz.view_manifests import ViewManifestDocument
 __all__ = ["main"]
 
 _manifest_filename = "manifest" + document_filename_suffix()
+_relative_evaluation_sample_count = 512
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,12 +397,6 @@ def _parser() -> argparse.ArgumentParser:
         choices=("auto", "cpu", "cuda", "mps"),
         help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
     )
-    evaluate.add_argument(
-        "--sample-count",
-        default=512,
-        type=int,
-        help="sample count for relative pairwise evaluation",
-    )
     profile = benchmark_subcommands.add_parser(
         "profile",
         description="profile local benchmark observation formation paths",
@@ -586,7 +581,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                     right_evaluation=args.right_evaluation,
                     benchmark_roots=benchmark_roots,
                     benchmark_selectors=benchmark_selectors,
-                    sample_count=args.sample_count,
+                    sample_count=_relative_evaluation_sample_count,
                     tensor_device=args.device,
                 )
                 _print_competition_summaries(
@@ -885,50 +880,60 @@ def _run_benchmark_competitions(
 ) -> tuple[list[BenchmarkCompetitionSummary], int]:
     competition_summaries: list[BenchmarkCompetitionSummary] = []
     skipped = 0
-    for pair in _competition_evaluation_pairs(
-        results_root=results_root,
-        left_evaluation=left_evaluation,
-        right_evaluation=right_evaluation,
-        benchmark_selectors=benchmark_selectors,
-    ):
-        left_path = pair.left_path
-        right_path = pair.right_path
-        left_record = _load_evaluation_bundle_record(left_path)
-        right_record = _load_evaluation_bundle_record(right_path)
-        benchmark_root = _benchmark_root_for_record(
-            left_record,
-            benchmark_roots=benchmark_roots,
-            description="left_evaluation",
+    while True:
+        pairs = _competition_evaluation_pairs(
+            results_root=results_root,
+            left_evaluation=left_evaluation,
+            right_evaluation=right_evaluation,
+            benchmark_selectors=benchmark_selectors,
         )
-        right_benchmark_root = _benchmark_root_for_record(
-            right_record,
-            benchmark_roots=benchmark_roots,
-            description="right_evaluation",
-        )
-        if right_benchmark_root != benchmark_root:
-            raise ValueError("benchmark relative evaluation requires matching benchmark roots")
-        if (
-            not pair.repeat_existing
-            and _competition_pair_exists(
-                results_root=results_root,
-                left_evaluation=left_record,
-                right_evaluation=right_record,
+        if not pairs:
+            break
+        completed_this_round = 0
+        for pair in pairs:
+            left_path = pair.left_path
+            right_path = pair.right_path
+            left_record = _load_evaluation_bundle_record(left_path)
+            right_record = _load_evaluation_bundle_record(right_path)
+            benchmark_root = _benchmark_root_for_record(
+                left_record,
+                benchmark_roots=benchmark_roots,
+                description="left_evaluation",
             )
-        ):
-            skipped += 1
-            continue
-        competition_summaries.append(
-            compete_benchmark_checkpoints(
-                BenchmarkCompetitionPlan(
-                    left_evaluation_path=left_path,
-                    right_evaluation_path=right_path,
-                    benchmark_root=benchmark_root,
+            right_benchmark_root = _benchmark_root_for_record(
+                right_record,
+                benchmark_roots=benchmark_roots,
+                description="right_evaluation",
+            )
+            if right_benchmark_root != benchmark_root:
+                raise ValueError("benchmark relative evaluation requires matching benchmark roots")
+            if (
+                not pair.repeat_existing
+                and _competition_pair_exists(
                     results_root=results_root,
-                    sample_count=sample_count,
-                    tensor_device=tensor_device,
+                    left_evaluation=left_record,
+                    right_evaluation=right_record,
+                )
+            ):
+                skipped += 1
+                continue
+            competition_summaries.append(
+                compete_benchmark_checkpoints(
+                    BenchmarkCompetitionPlan(
+                        left_evaluation_path=left_path,
+                        right_evaluation_path=right_path,
+                        benchmark_root=benchmark_root,
+                        results_root=results_root,
+                        sample_count=sample_count,
+                        tensor_device=tensor_device,
+                    )
                 )
             )
-        )
+            completed_this_round += 1
+        if left_evaluation is not None or right_evaluation is not None:
+            break
+        if completed_this_round == 0:
+            break
     return competition_summaries, skipped
 
 

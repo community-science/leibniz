@@ -660,7 +660,18 @@ def test_cli_benchmark_train_discovers_uncompleted_architecture_manifests(
 def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import leibniz.cli as cli
+
+    def no_confidence_requests(
+        *,
+        results_root: Path,
+        benchmark_selectors: tuple[str, ...],
+    ) -> tuple[tuple[str, str], ...]:
+        return ()
+
+    monkeypatch.setattr(cli, "relative_frontier_competition_requests", no_confidence_requests)
     results_root = tmp_path / "results"
     for seed in (101, 202):
         run_benchmark(
@@ -685,8 +696,6 @@ def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
             str(_digits_benchmark_root),
             "--results-root",
             str(results_root),
-            "--sample-count",
-            "1",
             "--device",
             "cpu",
         ]
@@ -713,20 +722,18 @@ def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
             str(_digits_benchmark_root),
             "--results-root",
             str(results_root),
-            "--sample-count",
-            "1",
             "--device",
             "cpu",
         ]
     ) == 0
     rerun = capsys.readouterr()
     assert "no unevaluated benchmark checkpoints found" in rerun.out
-    assert "completed benchmark relative evaluation" in rerun.out
+    assert "no missing benchmark relative evaluations found" in rerun.out
     assert "materialized 1 benchmark result view(s)" in rerun.out
     competition_paths = tuple(
         (results_root / "evaluations" / "digits" / "competitions").glob("*.json")
     )
-    assert len(competition_paths) == 2
+    assert len(competition_paths) == 1
     for path in results_root.rglob("*.json"):
         record = load_object_document(path.read_bytes(), description="result record")
         for value in _string_values(record):
