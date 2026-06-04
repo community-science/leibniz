@@ -33,6 +33,7 @@ from leibniz.evaluation_bundles import (
     BenchmarkEvaluationBundleDocument,
 )
 from leibniz.identifiers import ProtocolIdentifier
+from leibniz.materialization import AxisAssignment
 from leibniz.measurements import (
     MeasurementDataset,
 )
@@ -40,6 +41,7 @@ from leibniz.model_inspection import (
     ModelInspectionRecord,
     ModelInspectionValidationError,
 )
+from leibniz.model_operators import summarize_architecture_operators
 from leibniz.observation_generation import load_observation_generator
 from leibniz.records import RecordExtractor
 from leibniz.training_runs import TrainingRunRecord
@@ -79,6 +81,7 @@ _benchmark_cost_axes: tuple[tuple[str, str], ...] = (
     ("training_compute", "Compute"),
 )
 _benchmark_cost_axis_keys = tuple(axis for axis, _label in _benchmark_cost_axes)
+_component_count = 1
 
 
 class _SummaryRecordMixin:
@@ -268,7 +271,7 @@ def publish_local_benchmark_results(
     results_root = _resolve_output_root(repository_root, results_root)
     if push and not commit:
         raise LocalResultImportError("push requires committing the result checkout")
-    runs = _local_run_records(results_root)
+    runs = _local_run_records(results_root, repository_root=repository_root)
     if not runs:
         raise LocalResultImportError("no local benchmark result records found")
     measurement_count = sum(run.measurement_count for run in runs)
@@ -304,7 +307,7 @@ def materialize_benchmark_result_views(
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     results_root = _resolve_output_root(repository_root, results_root)
     manifests = _known_benchmark_manifests(repository_root)
-    local_runs = _local_run_records(results_root)
+    local_runs = _local_run_records(results_root, repository_root=repository_root)
     local_training_estimates = _local_training_estimate_records(
         results_root,
         repository_root=repository_root,
@@ -388,7 +391,7 @@ def relative_frontier_competition_requests(
     competitions = _local_competition_records(results_root)
     requests: set[tuple[str, str]] = set()
     runs_by_benchmark: dict[str, dict[str, _BenchmarkRunRecord]] = {}
-    for run in _local_run_records(results_root):
+    for run in _local_run_records(results_root, repository_root=Path.cwd().resolve()):
         benchmark_id = str(run.benchmark_id)
         if not _benchmark_selected_for_relative_requests(benchmark_id, benchmark_selectors):
             continue
@@ -538,7 +541,11 @@ def _known_benchmark_manifests(
     return manifests
 
 
-def _local_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
+def _local_run_records(
+    results_root: Path,
+    *,
+    repository_root: Path | None = None,
+) -> tuple[_BenchmarkRunRecord, ...]:
     evaluation_root = results_root / "evaluations"
     if not evaluation_root.is_dir():
         return ()
@@ -562,7 +569,18 @@ def _local_run_records(results_root: Path) -> tuple[_BenchmarkRunRecord, ...]:
                 complexity=_sampled_competence_record_complexity(bundle.sampled_competence),
                 measurement_count=len(bundle.measurement_dataset.measurements),
                 score=_mean_accepted_mass(bundle.measurement_dataset),
-                cost_summary=_evaluation_bundle_cost_summary(bundle),
+                cost_summary=_evaluation_bundle_cost_summary(
+                    bundle,
+                    benchmark_root=(
+                        None
+                        if repository_root is None
+                        else repository_root
+                        / "src"
+                        / "leibniz"
+                        / "benchmarks"
+                        / _identifier_atom(bundle.benchmark_manifest.id)
+                    ),
+                ),
                 architecture=bundle.model_inspection.architecture.to_record(),
                 model_inspection=_model_inspection_view_record(
                     inspection=bundle.model_inspection.to_record(),
@@ -661,6 +679,7 @@ def _local_competition_records(results_root: Path) -> tuple[Mapping[str, object]
             continue
         bundle = BenchmarkCompetitionBundleDocument.from_bytes(path.read_bytes()).bundle
         result = dict(bundle.competition_result)
+        result["throughput"] = dict(bundle.throughput)
         _validate_competition_record(result, "competition")
         records.append(result)
     return tuple(records)
@@ -720,8 +739,19 @@ def _model_key_from_checkpoint_record(record: Mapping[str, object]) -> str:
 
 def _evaluation_bundle_cost_summary(
     bundle: BenchmarkEvaluationBundle,
+    *,
+    benchmark_root: Path | None = None,
 ) -> Mapping[str, object]:
     cost_summary = dict(bundle.model_inspection.cost_summary.to_record())
+    cost_summary.pop("inference_compute", None)
+    inference_compute = _evaluation_bundle_max_inference_compute(bundle)
+    if inference_compute is None and benchmark_root is not None:
+        inference_compute = _recorded_evaluation_batch_max_inference_compute(
+            bundle,
+            benchmark_root=benchmark_root,
+        )
+    if inference_compute is not None:
+        cost_summary["inference_compute"] = inference_compute
     training_compute = bundle.evaluation_protocol.get("training_compute")
     if training_compute is not None:
         cost_summary["training_compute"] = _as_nonnegative_number(
@@ -729,6 +759,92 @@ def _evaluation_bundle_cost_summary(
             "evaluation_protocol.training_compute",
         )
     return cost_summary
+
+
+def _evaluation_bundle_max_inference_compute(
+    bundle: BenchmarkEvaluationBundle,
+) -> float | None:
+    checkpoint_value = _throughput_max_inference_compute(
+        bundle.throughput.get("checkpoint_evaluation"),
+        "evaluation_bundle.throughput.checkpoint_evaluation",
+    )
+    if checkpoint_value is not None:
+        return checkpoint_value
+    return _throughput_max_inference_compute(
+        bundle.throughput.get("evaluation"),
+        "evaluation_bundle.throughput.evaluation",
+    )
+
+
+def _recorded_evaluation_batch_max_inference_compute(
+    bundle: BenchmarkEvaluationBundle,
+    *,
+    benchmark_root: Path,
+) -> float | None:
+    generator = load_observation_generator(benchmark_root)
+    max_compute: int | None = None
+    for index, rung_value in enumerate(
+        _as_sequence(
+            bundle.evaluation_curriculum.get("rungs", ()),
+            "evaluation_curriculum.rungs",
+        )
+    ):
+        rung = _extract.mapping(rung_value, f"evaluation_curriculum.rungs.{index}")
+        batch = generator.sample_batch(
+            component_count=_component_count,
+            sample_count=_as_positive_int(
+                rung.get("sample_count"),
+                f"evaluation_curriculum.rungs.{index}.sample_count",
+            ),
+            seed=_extract.integer(
+                rung.get("seed"),
+                f"evaluation_curriculum.rungs.{index}.seed",
+            ),
+            resolution_assignment=AxisAssignment.from_record(
+                _extract.mapping(
+                    rung.get("resolution_assignment"),
+                    f"evaluation_curriculum.rungs.{index}.resolution_assignment",
+                )
+            ),
+        )
+        batch_compute = _batch_max_inference_compute(
+            architecture=bundle.architecture_manifest,
+            batch_shapes=tuple({sample.field.shape for sample in batch.samples}),
+        )
+        if batch_compute is None:
+            return None
+        max_compute = batch_compute if max_compute is None else max(max_compute, batch_compute)
+    return None if max_compute is None else float(max_compute)
+
+
+def _batch_max_inference_compute(
+    *,
+    architecture: ArchitectureManifest,
+    batch_shapes: tuple[tuple[int, ...], ...],
+) -> int | None:
+    max_compute: int | None = None
+    for input_shape in sorted(batch_shapes):
+        plan = summarize_architecture_operators(
+            _architecture_with_input_shape(architecture, input_shape)
+        )
+        if plan.inference_compute is None:
+            return None
+        max_compute = plan.inference_compute if max_compute is None else max(
+            max_compute,
+            plan.inference_compute,
+        )
+    return max_compute
+
+
+def _architecture_with_input_shape(
+    architecture: ArchitectureManifest,
+    input_shape: tuple[int, ...],
+) -> ArchitectureManifest:
+    record = architecture.to_record()
+    record["input_shape"] = list(input_shape)
+    record.pop("id", None)
+    record.pop("model_scale_contract", None)
+    return ArchitectureManifest.from_record(record)
 
 
 def _evaluation_bundle_artifact_references(
@@ -1185,6 +1301,7 @@ def _model_result_records(
     for run in runs:
         grouped.setdefault(run.model_key, []).append(run)
 
+    competition_inference_compute = _competition_inference_compute_by_model(competitions)
     reference_baseline_complexity = _benchmark_base_complexity(
         manifest=manifest,
         repository_root=repository_root,
@@ -1236,7 +1353,11 @@ def _model_result_records(
             },
             "observed_complexities": [point["complexity"] for point in points],
             "points": list(points),
-            "cost_summary": _model_cost_summary(ordered_runs, best_run=best_run),
+            "cost_summary": _model_cost_summary(
+                ordered_runs,
+                best_run=best_run,
+                competition_inference_compute=competition_inference_compute.get(model_key),
+            ),
             "run_ids": [run.run_id for run in ordered_runs],
             "measurement_count": sum(run.measurement_count for run in ordered_runs),
             "source_kinds": sorted({run.source_kind for run in ordered_runs}),
@@ -1630,6 +1751,11 @@ def _relative_frontier_model_records(
             record
             for record in records
             if str(record["model_key"]) in rating_fit.ratings
+            and _optional_cost_value(
+                _extract.mapping(record["cost_summary"], "cost_summary"),
+                cost_axis,
+            )
+            is not None
         ),
         key=lambda record: (
             _cost_value(_extract.mapping(record["cost_summary"], "cost_summary"), cost_axis),
@@ -1664,8 +1790,14 @@ def _nearest_relative_frontier_competitor(
         for record in records
         if str(record["model_key"]) != frontier_key
         and str(record["model_key"]) in rating_fit.ratings
-        and _cost_value(_extract.mapping(record["cost_summary"], "cost_summary"), cost_axis)
-        <= frontier_cost
+        and (
+            cost := _optional_cost_value(
+                _extract.mapping(record["cost_summary"], "cost_summary"),
+                cost_axis,
+            )
+        )
+        is not None
+        and cost <= frontier_cost
     ]
     if not candidates:
         return None
@@ -1795,8 +1927,16 @@ def _model_cost_summary(
     runs: tuple[_BenchmarkRunRecord, ...],
     *,
     best_run: _BenchmarkRunRecord,
+    competition_inference_compute: float | None = None,
 ) -> dict[str, object]:
     cost_summary = _run_cost_summary(best_run)
+    cost_summary.pop("inference_compute", None)
+    inference_compute = _model_measured_inference_compute(
+        runs,
+        competition_inference_compute=competition_inference_compute,
+    )
+    if inference_compute is not None:
+        cost_summary["inference_compute"] = inference_compute
     training_values = tuple(_run_training_compute_value(run) for run in runs)
     if any(value is None for value in training_values):
         raise LocalResultImportError(
@@ -1804,6 +1944,63 @@ def _model_cost_summary(
         )
     cost_summary["training_compute"] = sum(cast(float, value) for value in training_values)
     return cost_summary
+
+
+def _model_measured_inference_compute(
+    runs: tuple[_BenchmarkRunRecord, ...],
+    *,
+    competition_inference_compute: float | None,
+) -> float | None:
+    values = [
+        value
+        for run in runs
+        if (value := _optional_cost_value(run.cost_summary, "inference_compute")) is not None
+    ]
+    if competition_inference_compute is not None:
+        values.append(competition_inference_compute)
+    if not values:
+        return None
+    return max(values)
+
+
+def _throughput_max_inference_compute(
+    value: object,
+    field_path: str,
+    *,
+    field: str = "max_inference_compute",
+) -> float | None:
+    if not isinstance(value, Mapping):
+        return None
+    record = cast(Mapping[str, object], value)
+    if field not in record:
+        return None
+    return _as_nonnegative_number(record[field], field_path)
+
+
+def _competition_inference_compute_by_model(
+    competitions: tuple[Mapping[str, object], ...],
+) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for competition in competitions:
+        throughput = competition.get("throughput")
+        if not isinstance(throughput, Mapping):
+            continue
+        throughput_record = cast(Mapping[str, object], throughput)
+        for model_field, compute_field in (
+            ("left_model_key", "left_max_inference_compute"),
+            ("right_model_key", "right_max_inference_compute"),
+        ):
+            model_key = competition.get(model_field)
+            if not isinstance(model_key, str) or not model_key:
+                continue
+            compute = _throughput_max_inference_compute(
+                throughput_record,
+                f"competition.throughput.{compute_field}",
+                field=compute_field,
+            )
+            if compute is not None:
+                values[model_key] = max(values.get(model_key, compute), compute)
+    return values
 
 
 def _run_training_compute_value(run: _BenchmarkRunRecord) -> float | None:
@@ -1815,9 +2012,12 @@ def _run_training_compute_value(run: _BenchmarkRunRecord) -> float | None:
 
 def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
     cost_summary = dict(run.cost_summary)
-    inference_compute = _optional_cost_value(cost_summary, "inference_compute")
-    if inference_compute is not None:
-        cost_summary["inference_compute"] = inference_compute
+    if run.source_kind == "local-run":
+        inference_compute = _optional_cost_value(cost_summary, "inference_compute")
+        if inference_compute is not None:
+            cost_summary["inference_compute"] = inference_compute
+    else:
+        cost_summary.pop("inference_compute", None)
     training_compute = _run_training_compute(run)
     if training_compute is not None:
         cost_summary["training_compute"] = training_compute
@@ -2086,7 +2286,15 @@ def _frontier_records(
     cost_axis: str,
 ) -> list[dict[str, object]]:
     ordered = sorted(
-        models,
+        (
+            model
+            for model in models
+            if _optional_cost_value(
+                _extract.mapping(model["cost_summary"], "cost_summary"),
+                cost_axis,
+            )
+            is not None
+        ),
         key=lambda model: (
             _cost_value(_extract.mapping(model["cost_summary"], "cost_summary"), cost_axis),
             -_as_nonnegative_number(model["score"], "score"),

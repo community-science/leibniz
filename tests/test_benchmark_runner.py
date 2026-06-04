@@ -214,6 +214,12 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     )
     assert evaluation_bundle.model_inspection.cost_summary.parameter_count == 50
     assert evaluation_bundle.model_inspection.cost_summary.inference_compute == 656
+    evaluation_throughput = cast(
+        dict[str, object],
+        evaluation_bundle.throughput["checkpoint_evaluation"],
+    )
+    assert isinstance(evaluation_throughput["max_inference_compute"], int)
+    assert evaluation_throughput["max_inference_compute"] >= 0
     assert (
         evaluation_bundle.model_checkpoint["manifest_digest"]
         == str(evaluation_bundle.model_manifest.digest)
@@ -580,7 +586,10 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     checkpoints = cast(list[dict[str, object]], training_summary["model_checkpoints"])
     checkpoint_checks = [checkpoint["validation_check"] for checkpoint in checkpoints]
     assert checkpoint_checks == [0, 2]
-    assert all(Path(cast(str, checkpoint["path"])).is_file() for checkpoint in checkpoints)
+    assert all(
+        (tmp_path / cast(str, checkpoint["path"])).is_file()
+        for checkpoint in checkpoints
+    )
 
 
 def test_windowed_plateau_ignores_tiny_recent_best_loss_resets() -> None:
@@ -1299,6 +1308,9 @@ def test_benchmark_competition_uses_evaluation_bundles_as_handoff_contract(
         competition_result["left_model_key"],
         competition_result["right_model_key"],
     } == expected_keys
+    competition_throughput = cast(dict[str, object], competition_record["throughput"])
+    assert isinstance(competition_throughput["left_max_inference_compute"], int)
+    assert isinstance(competition_throughput["right_max_inference_compute"], int)
 
     view_summary = materialize_benchmark_result_views(
         repository_root=_repository_root,

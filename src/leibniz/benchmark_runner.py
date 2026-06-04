@@ -43,7 +43,7 @@ from leibniz.model_manifests import (
     ModelArtifactManifestDocument,
     ModelExecutionFamily,
 )
-from leibniz.model_operators import ExecutableModelOperator
+from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
 from leibniz.observation_generation import (
     GeneratedObservationBatch,
     ObservationGenerator,
@@ -1833,6 +1833,7 @@ def evaluate_model_checkpoint_artifact(
         tensor_device=tensor_device,
     )
     evaluation_counter = _ThroughputCounter()
+    max_inference_compute: int | None = None
     results: list[tuple[_CurriculumRung, tuple[tuple[float, ...], ...]]] = []
     for index in range(training_rung_count):
         rung = _evaluation_curriculum_rung(
@@ -1849,6 +1850,10 @@ def evaluate_model_checkpoint_artifact(
             seconds=time.perf_counter() - evaluation_started,
             samples=len(rung.batch.samples),
         )
+        max_inference_compute = _max_optional_int(
+            max_inference_compute,
+            _batch_max_inference_compute(architecture=architecture, batch=rung.batch),
+        )
         results.append((rung, predictions))
         if _mean_prediction_accepted_mass(
             batch=rung.batch,
@@ -1861,6 +1866,8 @@ def evaluate_model_checkpoint_artifact(
     throughput = evaluation_counter.to_record(kind="checkpoint-evaluation-throughput")
     throughput["tensor_runtime"] = "pytorch"
     throughput["tensor_device"] = predictor.runtime.device_kind
+    if max_inference_compute is not None:
+        throughput["max_inference_compute"] = max_inference_compute
     return tuple(results), throughput
 
 
@@ -1916,6 +1923,18 @@ def generate_model_checkpoint_competition_record(
     throughput = competition_counter.to_record(kind="checkpoint-competition-throughput")
     throughput["tensor_runtime"] = "pytorch"
     throughput["tensor_device"] = left_predictor.runtime.device_kind
+    left_max_inference_compute = _batch_max_inference_compute(
+        architecture=left_architecture,
+        batch=rung.batch,
+    )
+    right_max_inference_compute = _batch_max_inference_compute(
+        architecture=right_architecture,
+        batch=rung.batch,
+    )
+    if left_max_inference_compute is not None:
+        throughput["left_max_inference_compute"] = left_max_inference_compute
+    if right_max_inference_compute is not None:
+        throughput["right_max_inference_compute"] = right_max_inference_compute
     return (
         _checkpoint_competition_record(
             batch=rung.batch,
@@ -1929,6 +1948,41 @@ def generate_model_checkpoint_competition_record(
         ),
         throughput,
     )
+
+
+def _batch_max_inference_compute(
+    *,
+    architecture: ArchitectureManifest,
+    batch: GeneratedObservationBatch,
+) -> int | None:
+    max_compute: int | None = None
+    for input_shape in sorted({sample.field.shape for sample in batch.samples}):
+        plan = summarize_architecture_operators(
+            _architecture_with_input_shape(architecture, input_shape)
+        )
+        if plan.inference_compute is None:
+            return None
+        max_compute = _max_optional_int(max_compute, plan.inference_compute)
+    return max_compute
+
+
+def _architecture_with_input_shape(
+    architecture: ArchitectureManifest,
+    input_shape: tuple[int, ...],
+) -> ArchitectureManifest:
+    record = architecture.to_record()
+    record["input_shape"] = list(input_shape)
+    record.pop("id", None)
+    record.pop("model_scale_contract", None)
+    return ArchitectureManifest.from_record(record)
+
+
+def _max_optional_int(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
 
 
 def load_model_checkpoint_predictor(

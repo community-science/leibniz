@@ -453,11 +453,21 @@ def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: 
 def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     tmp_path: Path,
 ) -> None:
-    _run_and_evaluate_digits_benchmark(tmp_path / "results")
+    results_root = tmp_path / "results"
+    _run_and_evaluate_digits_benchmark(results_root)
+    for path in results_root.rglob("*.json"):
+        record = dict(load_object_document(path.read_bytes(), description="result record"))
+        if record.get("format") != "leibniz.benchmark-evaluation":
+            continue
+        throughput = cast(dict[str, object], record["throughput"])
+        for key in ("checkpoint_evaluation", "evaluation"):
+            phase = cast(dict[str, object], throughput[key])
+            phase.pop("max_inference_compute", None)
+        path.write_bytes(canonical_document_bytes(record) + b"\n")
 
     summary = materialize_benchmark_result_views(
         repository_root=_repository_root,
-        results_root=tmp_path / "results",
+        results_root=results_root,
     )
 
     assert summary.benchmark_count == 1
@@ -475,6 +485,10 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert result["benchmark_id"] == "benchmarks.digits@0.1.0"
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     assert leaderboard[0]["measurement_count"] == 1
+    cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
+    assert isinstance(cost_summary["inference_compute"], int | float)
+    frontiers = cast(dict[str, object], result["frontiers"])
+    assert len(cast(list[object], frontiers["inference_compute"])) == 1
     model_view = cast(dict[str, object], leaderboard[0]["console_view_model"])
     model_sections = cast(list[dict[str, object]], model_view["detail_sections"])
     assert [section["title"] for section in model_sections] == [
