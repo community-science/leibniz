@@ -357,7 +357,7 @@ function BenchmarkFrontierPlot({
                     x={tickX}
                     y={plotMargin.top + plotBodyHeight + plotTickOffset}
                   >
-                    2<tspan dy="-5" fontSize="0.72em">{Math.round(logTick)}</tspan><tspan dy="5"> </tspan>
+                    {model.xLogBase}<tspan dy="-5" fontSize="0.72em">{Math.round(logTick)}</tspan><tspan dy="5"> </tspan>
                   </text>
                 </g>
               );
