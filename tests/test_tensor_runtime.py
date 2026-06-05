@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from benchmark_typing import DigitsGenerator, load_digits_generator
+from benchmark_typing import load_digits_generator
 
 from leibniz.architectures import ArchitectureManifest
 from leibniz.observation_generation import ObservationGenerationError
@@ -18,23 +18,6 @@ from leibniz.tensor_runtime import (
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
-
-
-def _formation_payload(generator: DigitsGenerator, *, sample_count: int, seed: int):
-    sample_set = generator(
-        shape=sample_count,
-        seed=seed,
-    )
-    return sample_set
-
-
-def _observation_payload(generator: DigitsGenerator, *, sample_count: int, seed: int):
-    sample_set = generator(
-        shape=sample_count,
-        seed=seed,
-        include_fields=True,
-    )
-    return sample_set
 
 
 def test_validate_tensor_runtime_device_accepts_supported_names() -> None:
@@ -116,39 +99,52 @@ def test_runtime_roofline_record_calibrates_cpu_ceiling() -> None:
     assert record["method"] == "dense-matmul-and-copy-calibration"
 
 
-def test_digits_generator_call_tensors_match_pure_observation_batch() -> None:
+def test_digits_generator_call_tensors_are_deterministic_and_tensor_native() -> None:
     runtime = resolve_tensor_runtime("cpu")
     generator = load_digits_generator(_digits_benchmark_root)
-    observation_batch = _observation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
         for outcome in generator.manifest.resolve_outcome_space().outcomes
     )
 
-    generated = generator(
+    left = generator(
         shape=3,
         seed=515,
         include_metadata=False,
         runtime=runtime,
         outcome_ids=outcome_ids,
     )
-    fields, labels = generated.require_tensors()
+    right = generator(
+        shape=3,
+        seed=515,
+        include_metadata=False,
+        runtime=runtime,
+        outcome_ids=outcome_ids,
+    )
+    other = generator(
+        shape=3,
+        seed=516,
+        include_metadata=False,
+        runtime=runtime,
+        outcome_ids=outcome_ids,
+    )
+    fields, labels = left.require_tensors()
+    right_fields, right_labels = right.require_tensors()
+    other_fields, other_labels = other.require_tensors()
 
-    assert generated.samples == ()
-    pure_fields = runtime.torch.tensor(
-        [list(sample.require_field().values) for sample in observation_batch.samples],
-        dtype=runtime.torch.float32,
-        device=runtime.device,
-    ).reshape((len(observation_batch.samples), *observation_batch.samples[0].require_field().shape))
-    assert fields.shape == pure_fields.shape
-    assert runtime.torch.allclose(fields, pure_fields, atol=2e-5)
-    assert labels.cpu().tolist() == [
-        [
-            1.0 if outcome_id == sample.outcome_id else 0.0
-            for outcome_id in outcome_ids
-        ]
-        for sample in observation_batch.samples
-    ]
+    assert left.samples == ()
+    assert tuple(fields.shape[:2]) == (3, 1)
+    assert fields.ndim == 4
+    assert labels.shape == (3, len(outcome_ids))
+    assert runtime.torch.allclose(fields, right_fields)
+    assert runtime.torch.equal(labels, right_labels)
+    assert (
+        fields.shape != other_fields.shape
+        or not runtime.torch.allclose(fields, other_fields)
+        or not runtime.torch.equal(labels, other_labels)
+    )
+    assert labels.sum(dim=1).cpu().tolist() == [1.0, 1.0, 1.0]
+    assert set(labels.cpu().flatten().tolist()) <= {0.0, 1.0}
 
 
 def test_digits_generator_call_tensors_do_not_post_warp_rasters(
@@ -194,31 +190,46 @@ def test_digits_generator_call_tensors_do_not_post_warp_rasters(
     assert calls == {"affine_grid": 0, "grid_sample": 0}
 
 
-def test_digits_generator_call_tensors_use_generated_coordinate_values() -> None:
+def test_digits_generator_call_tensors_match_pinned_canonical_metadata_batch() -> None:
     runtime = resolve_tensor_runtime("cpu")
     generator = load_digits_generator(_digits_benchmark_root)
-    formation_batch = _formation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
         for outcome in generator.manifest.resolve_outcome_space().outcomes
+    )
+    component_indices = (2, 5, 7)
+    observation_batch = generator(
+        shape=3,
+        seed=515,
+        include_fields=True,
+        component_indices=component_indices,
+        variation_extent=0.0,
     )
 
     generated = generator(
         shape=3,
         seed=515,
         include_metadata=False,
+        component_indices=component_indices,
+        variation_extent=0.0,
         runtime=runtime,
         outcome_ids=outcome_ids,
     )
     fields, labels = generated.require_tensors()
+    pure_fields = runtime.torch.tensor(
+        [list(sample.require_field().values) for sample in observation_batch.samples],
+        dtype=runtime.torch.float32,
+        device=runtime.device,
+    ).reshape((len(observation_batch.samples), *observation_batch.samples[0].require_field().shape))
 
-    assert fields.shape[0] == len(formation_batch.samples)
+    assert fields.shape == pure_fields.shape
+    assert runtime.torch.allclose(fields, pure_fields, atol=2e-5)
     assert labels.cpu().tolist() == [
         [
             1.0 if outcome_id == sample.outcome_id else 0.0
             for outcome_id in outcome_ids
         ]
-        for sample in formation_batch.samples
+        for sample in observation_batch.samples
     ]
 
 
