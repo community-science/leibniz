@@ -306,20 +306,24 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         (batch["mode"], batch["sample_count"])
         for batch in batches
     ] == [
-        ("state-space-window", 9),
-        ("state-space-window", 49),
-        ("state-space-window", 1350),
+        ("state-space-window", 10),
+        ("state-space-window", 50),
+        ("state-space-window", 50),
     ]
-    assert [batch["label"] for batch in batches] == ["[1, 2]", "[2, 4]", "[4, 8]"]
+    assert [batch["label"] for batch in batches] == [
+        "[3, 4]",
+        "[5, 6]",
+        "[8, 9]",
+    ]
     presentation = cast(dict[str, object], batches[0]["presentation"])
     assert presentation == {
         "sample_card_density": "standard",
         "aggregate_mode": False,
     }
-    assert cast(dict[str, object], batches[2]["presentation"])["sample_card_density"] == "compact"
+    assert cast(dict[str, object], batches[2]["presentation"])["sample_card_density"] == "standard"
     samples = cast(list[dict[str, object]], batches[0]["samples"])
     component_indices = {cast(int, sample["component_index"]) for sample in samples}
-    assert component_indices == {0, 1, 2, 3}
+    assert component_indices == set(range(10))
     field_shapes = [tuple(cast(list[int], sample["field_shape"])) for sample in samples]
     assert set(field_shapes) == {(1, 16, 16)}
     materialization_plans = [

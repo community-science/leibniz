@@ -1030,58 +1030,70 @@ function referenceLabel(reference: ArtifactReferenceRecord): string {
 }
 
 function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
+  const defaultBatch = task.batches.find((batch) => batch.sample_count > 0) ?? task.batches[0];
+  const defaultBatchKey = defaultBatch === undefined ? null : batchKey(defaultBatch);
+  const [selectedBatchKey, setSelectedBatchKey] = usePersistentState<string | null>(
+    `leibniz.console.benchmarks.${task.benchmark_id}.selectedBatch`,
+    defaultBatchKey,
+  );
   const [selectedSampleKey, setSelectedSampleKey] = usePersistentState<string | null>(
     `leibniz.console.benchmarks.${task.benchmark_id}.selectedSample`,
     null,
   );
-  const visibleSamples = task.batches.flatMap((batch) =>
-    batch.samples.map((sample) => ({ batch, sample })),
-  );
-  const selectedSample =
-    visibleSamples.find(({ batch, sample }) => sampleKey(batch, sample) === selectedSampleKey) ??
-    visibleSamples[0];
-  const selectedKey =
-    selectedSample === undefined
-      ? null
-      : sampleKey(selectedSample.batch, selectedSample.sample);
 
   if (task.batches.length === 0) {
     return <p className="artifact-detail-note">No generated samples are available.</p>;
   }
 
+  const selectedBatch =
+    task.batches.find((batch) => batchKey(batch) === selectedBatchKey) ??
+    task.batches.find((batch) => batch.sample_count > 0) ??
+    task.batches[0];
+  const visibleSamples = selectedBatch.samples.map((sample) => ({
+    batch: selectedBatch,
+    sample,
+  }));
+  const selectedSample =
+    visibleSamples.find(
+      ({ batch, sample }) => sampleKey(batch, sample) === selectedSampleKey,
+    ) ?? visibleSamples[0];
+  const selectedKey =
+    selectedSample === undefined
+      ? null
+      : sampleKey(selectedSample.batch, selectedSample.sample);
+
   return (
     <div className="benchmark-task">
       <BenchmarkCodeSurfaceInspector surfaces={task.code_surfaces} />
-      {selectedSample === undefined ? null : (
-        <BenchmarkSampleCoordinateInspector
-          sample={selectedSample.sample}
-        />
-      )}
-      <div className="benchmark-sample-window-stack">
-        {task.batches.map((batch) => (
-          <section
-            aria-label={`Generated benchmark samples ${batch.label}`}
-            className="benchmark-sample-window"
-            key={batchKey(batch)}
-          >
-            <div className="benchmark-sample-window-header">
-              <div className="benchmark-sample-window-label">{batch.label}</div>
-              <div className="benchmark-sample-window-count">{batch.sample_count}</div>
-            </div>
-            <div className={`benchmark-sample-grid ${batch.presentation.sample_card_density}`}>
-              {batch.samples.map((sample) => (
-                <BenchmarkSampleCard
-                  density={batch.presentation.sample_card_density}
-                  key={sampleKey(batch, sample)}
-                  onSelect={() => setSelectedSampleKey(sampleKey(batch, sample))}
-                  sample={sample}
-                  selected={sampleKey(batch, sample) === selectedKey}
-                />
-              ))}
-            </div>
-          </section>
-        ))}
-      </div>
+      <BenchmarkSampleCoordinateInspector
+        batches={task.batches}
+        onBatchChange={(key) => {
+          setSelectedBatchKey(key);
+          setSelectedSampleKey(null);
+        }}
+        sample={selectedSample?.sample}
+        selectedBatch={selectedBatch}
+      />
+      <section
+        aria-label={`Generated benchmark samples ${selectedBatch.label}`}
+        className="benchmark-sample-window"
+      >
+        {selectedBatch.samples.length === 0 ? (
+          <p className="artifact-detail-note">No generated samples in this range.</p>
+        ) : (
+          <div className={`benchmark-sample-grid ${selectedBatch.presentation.sample_card_density}`}>
+            {selectedBatch.samples.map((sample) => (
+              <BenchmarkSampleCard
+                density={selectedBatch.presentation.sample_card_density}
+                key={sampleKey(selectedBatch, sample)}
+                onSelect={() => setSelectedSampleKey(sampleKey(selectedBatch, sample))}
+                sample={sample}
+                selected={sampleKey(selectedBatch, sample) === selectedKey}
+              />
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -1157,29 +1169,46 @@ function BenchmarkSampleCard({
 }
 
 function BenchmarkSampleCoordinateInspector({
+  batches,
+  onBatchChange,
   sample,
+  selectedBatch,
 }: {
-  sample: GeneratedObservationSampleRecord;
+  batches: GeneratedObservationBatchRecord[];
+  onBatchChange: (key: string) => void;
+  sample: GeneratedObservationSampleRecord | undefined;
+  selectedBatch: GeneratedObservationBatchRecord;
 }) {
+  const stateSpaceSizes = realizedStateSpaceSizes(selectedBatch);
   const entries: [string, string][] = [
-    ['Component', String(sample.component_index)],
-    ['Complexity', String(sample.complexity)],
-    ...(sample.state_space_measure
+    ['State Spaces', stateSpaceSizes.length === 0 ? 'null set' : stateSpaceSizes.join(', ')],
+    ...(sample
       ? [
-          [
-            'State Space',
-            `${sample.state_space_measure.measure_id}: ${sample.state_space_measure.value}`,
-          ] as [string, string],
+          ['Component', String(sample.component_index)] as [string, string],
+          ['Field', sample.field_shape.join(' x ')] as [string, string],
         ]
       : []),
-    ['Field', sample.field_shape.join(' x ')],
   ];
   return (
     <section
       className="benchmark-sample-coordinate-inspector"
       aria-label="Selected sample coordinates"
     >
-      <div className="benchmark-sample-coordinate-title">Selected Coordinates</div>
+      <div className="benchmark-sample-coordinate-range">
+        <label htmlFor="benchmark-state-space-range">State Space Range</label>
+        <select
+          className="benchmark-sample-window-select"
+          id="benchmark-state-space-range"
+          onChange={(event) => onBatchChange(event.target.value)}
+          value={batchKey(selectedBatch)}
+        >
+          {batches.map((batch) => (
+            <option key={batchKey(batch)} value={batchKey(batch)}>
+              {batch.label} ({batch.sample_count})
+            </option>
+          ))}
+        </select>
+      </div>
       <dl>
         {entries.map(([label, value]) => (
           <div key={label}>
@@ -1190,6 +1219,20 @@ function BenchmarkSampleCoordinateInspector({
       </dl>
     </section>
   );
+}
+
+function realizedStateSpaceSizes(batch: GeneratedObservationBatchRecord): string[] {
+  if (batch.state_space_sizes !== undefined) {
+    return batch.state_space_sizes.map((size) => String(size));
+  }
+  const sizes = new Set<number>();
+  batch.samples.forEach((sample) => {
+    if (sample.state_space_measure === undefined || sample.state_space_measure === null) {
+      return;
+    }
+    sizes.add(Math.round(2 ** sample.state_space_measure.value));
+  });
+  return [...sizes].sort((left, right) => left - right).map((size) => String(size));
 }
 
 function sampleKey(

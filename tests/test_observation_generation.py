@@ -116,7 +116,7 @@ def test_digits_generator_is_deterministic() -> None:
         "rotation",
         "x_shear",
     }
-    assert set(constructed_indices) == set(constructed_parameters)
+    assert set(constructed_indices) == {"preset"}
     assert _within_transform_bounds(
         coordinates[0],
         bounds=generator.formation.variation_transform.to_record(),
@@ -349,8 +349,8 @@ def test_digits_generator_accepts_state_space_measure_requests() -> None:
         (1, 16, 16),
         (1, 16, 16),
     ]
-    assert [sample.outcome_id for sample in batch.samples] == ["digit-1", "digit-0"]
-    assert [sample.component_index for sample in batch.samples] == [1, 0]
+    assert [sample.outcome_id for sample in batch.samples] == ["digit-8", "digit-7"]
+    assert [sample.component_index for sample in batch.samples] == [8, 7]
     assert {
         sample.state_space_measure
         for sample in batch.samples
@@ -374,13 +374,13 @@ def test_digits_generator_materializes_target_state_space_band() -> None:
     )
 
     assert state_space is not None
-    assert state_space.cardinality == 20
-    assert math.isclose(state_space.complexity, math.log2(20))
+    assert state_space.cardinality == 80
+    assert math.isclose(state_space.complexity, math.log2(80))
     assert state_space.resolution_assignment is not None
-    assert state_space.metadata["affine_transform_count"] == 2
+    assert state_space.metadata["affine_transform_count"] == 8
     assert state_space.metadata["digit_count"] == 10
-    assert state_space.metadata["requested_state_count"] == 20
-    assert state_space.metadata["realized_state_count"] == 20
+    assert state_space.metadata["requested_state_count"] == 80
+    assert state_space.metadata["realized_state_count"] == 80
     assert state_space.metadata["construction"] == (
         "symmetric-digits-over-finite-affine-product-grid"
     )
@@ -406,7 +406,7 @@ def test_state_space_candidates_can_declare_exact_integer_cardinality() -> None:
     assert candidate.to_record()["cardinality"] == 17
 
 
-def test_digits_generator_accepts_exact_power_of_two_state_space_request() -> None:
+def test_digits_generator_returns_empty_set_below_canonical_digit_space() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
     state_space_request = StateSpaceMeasureRequest(
@@ -419,8 +419,8 @@ def test_digits_generator_accepts_exact_power_of_two_state_space_request() -> No
         state_space_request=state_space_request,
     )
 
-    assert batch.shape == (3,)
-    assert len(batch.samples) == 3
+    assert batch.shape == (0,)
+    assert len(batch.samples) == 0
     assert batch.state_space_request is not None
     assert batch.state_space_request.measure_id == state_space_request.measure_id
 
@@ -592,7 +592,7 @@ def test_digits_console_preview_png_encoding_is_deterministic() -> None:
 
     left = generator.console_preview_batches(atom_count=10)
     right = generator.console_preview_batches(atom_count=10)
-    sample = cast(dict[str, object], cast(list[object], left[0]["samples"])[0])
+    sample = cast(dict[str, object], cast(list[object], left[2]["samples"])[0])
     data_url = cast(str, sample["image_data_url"])
 
     assert left == right
@@ -600,9 +600,9 @@ def test_digits_console_preview_png_encoding_is_deterministic() -> None:
         (batch["label"], batch["sample_count"])
         for batch in left
     ] == [
-        ("[1, 2]", 9),
-        ("[2, 4]", 49),
-        ("[4, 8]", 1350),
+        ("[3, 4]", 10),
+        ("[5, 6]", 50),
+        ("[8, 9]", 50),
     ]
     assert data_url.startswith("data:image/png;base64,")
 

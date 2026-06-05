@@ -9,15 +9,12 @@ import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
     sampled_competence_frontier_score,
-)
-from leibniz.benchmark_implementations import (
-    Generator as BenchmarkGenerator,
 )
 from leibniz.benchmark_implementations import (
     discover_benchmark_roots,
@@ -36,15 +33,12 @@ from leibniz.documents import (
     load_object_document,
 )
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import MaterializationDeclaration
 from leibniz.measurements import (
     MeasurementDataset,
 )
 from leibniz.model_inspection import (
     ModelInspectionRecord,
 )
-from leibniz.observation_formation import ObservationFormationDeclaration
-from leibniz.observation_generation import load_generator
 from leibniz.records import RecordExtractor
 from leibniz.training_runs import TrainingRunRecord
 
@@ -82,6 +76,7 @@ _benchmark_cost_axes: tuple[tuple[str, str], ...] = (
 )
 _benchmark_cost_axis_keys = tuple(axis for axis, _label in _benchmark_cost_axes)
 _component_count = 1
+_reference_baseline_complexity = 1.0
 
 
 class _SummaryRecordMixin:
@@ -94,22 +89,6 @@ class LocalResultImportError(ValueError):
 
 
 _extract = RecordExtractor(error_type=LocalResultImportError)
-
-
-class _FieldComplexityGenerator(BenchmarkGenerator, Protocol):
-    @property
-    def materialization(self) -> MaterializationDeclaration: ...
-
-    @property
-    def formation(self) -> ObservationFormationDeclaration: ...
-
-    def distinguishable_state_complexity(
-        self,
-        *,
-        width: int,
-        height: int,
-        variation_extent: float = 1.0,
-    ) -> float: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -1365,10 +1344,7 @@ def _model_result_records(
         grouped.setdefault(run.model_key, []).append(run)
 
     competition_inference_compute = _competition_inference_compute_by_model(competitions)
-    reference_baseline_complexity = _benchmark_base_complexity(
-        manifest=manifest,
-        repository_root=repository_root,
-    )
+    reference_baseline_complexity = _reference_baseline_complexity
     chance_mass = _chance_mass(manifest)
     records: list[dict[str, object]] = []
     best_runs: dict[str, _BenchmarkRunRecord] = {}
@@ -2313,20 +2289,6 @@ def competent_complexity_score(
         ),
         chance_mass=chance_mass,
     )
-
-
-def _benchmark_base_complexity(
-    *,
-    manifest: BenchmarkManifest,
-    repository_root: Path,
-) -> float:
-    generator = cast(
-        _FieldComplexityGenerator,
-        load_generator(
-            repository_root / "src" / "leibniz" / "benchmarks" / _identifier_atom(manifest.id)
-        ),
-    )
-    return generator.minimum_state_space_measure().value
 
 
 def _chance_mass(manifest: BenchmarkManifest) -> float:

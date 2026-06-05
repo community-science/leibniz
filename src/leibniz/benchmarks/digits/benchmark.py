@@ -74,6 +74,8 @@ _state_space_canvas_side_step = 4
 _state_space_canvas_density = 1.0
 _maximum_state_space_candidates_per_request = 64
 _default_constructed_affine_transform_count = 2
+_canonical_digits_state_count = _state_space_digit_count
+_constructed_affine_preset_max_count = 8
 _constructed_affine_translation_bounds = (-0.15, 0.15)
 _constructed_affine_effective_radius_fraction = 0.25
 _constructed_affine_axis_density = 0.25
@@ -88,10 +90,11 @@ _constructed_affine_axis_names = (
     "x_shear",
 )
 _console_preview_state_space_windows = (
-    (1.0, 2.0),
-    (2.0, 4.0),
-    (4.0, 8.0),
+    (3.0, 4.0),
+    (5.0, 6.0),
+    (8.0, 9.0),
 )
+_console_preview_sample_limit = 50
 
 _CurvePoints: TypeAlias = tuple[tuple[float, float], ...]
 
@@ -108,6 +111,7 @@ class _ConstructedAffineGrid:
     scale_bounds: tuple[float, float]
     rotation_bounds: tuple[float, float]
     x_shear_bounds: tuple[float, float]
+    preset_count: int | None = None
 
     @property
     def counts(self) -> tuple[int, int, int, int, int]:
@@ -121,13 +125,20 @@ class _ConstructedAffineGrid:
 
     @property
     def transform_count(self) -> int:
+        if self.preset_count is not None:
+            return self.preset_count
         count = 1
         for axis_count in self.counts:
             count *= axis_count
         return count
 
     def to_record(self) -> dict[str, int]:
-        return dict(zip(_constructed_affine_axis_names, self.counts, strict=True))
+        record: dict[str, int] = dict(
+            zip(_constructed_affine_axis_names, self.counts, strict=True)
+        )
+        if self.preset_count is not None:
+            record["preset_count"] = self.preset_count
+        return record
 
     def bounds_record(self) -> dict[str, list[float]]:
         return {
@@ -630,7 +641,7 @@ class Generator:
     def minimum_state_space_measure(self) -> StateSpaceMeasureValue:
         """Return the smallest score-bearing Digits state-space measure."""
 
-        return _state_space_measure(1.0)
+        return _state_space_measure(math.log2(_canonical_digits_state_count))
 
     def state_space_for_request(
         self,
@@ -706,8 +717,7 @@ class Generator:
             requested_state_count,
             "requested_state_count",
         )
-        active_digit_count = min(_state_space_digit_count, requested_state_count)
-        digit_variant_counts = tuple(1 for _index in range(active_digit_count))
+        digit_variant_counts = tuple(1 for _index in range(_state_space_digit_count))
         digit_state_count = sum(digit_variant_counts)
         if affine_transform_count is None:
             affine_transform_count = max(
@@ -737,19 +747,6 @@ class Generator:
         if maximum_cardinality < minimum_cardinality:
             return ()
         state_spaces: list[_DigitsStateSpace] = []
-        for digit_count in range(2, _state_space_digit_count):
-            if minimum_cardinality <= digit_count <= maximum_cardinality:
-                state_spaces.append(
-                    _DigitsStateSpace(
-                        digit_variant_counts=tuple(1 for _index in range(digit_count)),
-                        affine_grid=_constructed_affine_grid(
-                            1,
-                            resolution_assignment=resolution_assignment,
-                        ),
-                        requested_state_count=digit_count,
-                        resolution_assignment=resolution_assignment,
-                    )
-                )
         minimum_transform_count = max(
             1,
             math.ceil(minimum_cardinality / _state_space_digit_count),
@@ -1073,65 +1070,67 @@ class Generator:
         transform = self.formation.variation_transform
         transform_record = transform.to_record()
         scaled_factors = tuple(self.latent_factors.sample_factors)
+        state_spaces = tuple(self._state_space_for_candidate(candidate) for candidate in candidates)
 
-        for candidate_index, candidate in enumerate(candidates):
-            state_space = self._state_space_for_candidate(candidate)
+        for candidate_index, component_index, transform_index in _preview_sample_coordinates(
+            state_spaces,
+            limit=_console_preview_sample_limit,
+        ):
+            state_space = state_spaces[candidate_index]
             if state_space.resolution_assignment is None:
                 raise ObservationGenerationError(
                     "Digits state-space candidate is missing a resolution assignment"
                 )
-            for component_index in range(state_space.digit_count):
-                for transform_index in range(state_space.affine_transform_count):
-                    sample_index = len(samples)
-                    plan = self._materialization_plan(
-                        seed=seed,
-                        index=sample_index,
-                        resolution_assignment=state_space.resolution_assignment,
-                        materialization_declaration=materialization_declaration,
-                    )
-                    variation_coordinate = _constructed_variation_coordinate_record(
-                        transform=transform,
-                        component_index=component_index,
-                        transform_index=transform_index,
-                        grid=state_space.affine_grid,
-                    )
-                    variation_values: Mapping[str, object] = {
-                        "kind": "constructed-field-variation-transform-samples",
-                        "bounds": transform_record,
-                        "state_space": state_space.metadata(),
-                        "candidate_index": candidate_index,
-                        "transform_index": transform_index,
-                        "transform_count": state_space.affine_transform_count,
-                        "coordinates": [dict(variation_coordinate)],
-                    }
-                    field_record = self.formation.form_observation(
-                        id=self._observation_id(seed=seed, index=sample_index),
-                        plan=plan,
-                        component_index=component_index,
-                        variation_coordinates=(variation_coordinate,),
-                    )
-                    samples.append(
-                        {
-                            "index": sample_index,
-                            "outcome_id": self._outcome_id(component_index),
-                            "component_index": component_index,
-                            "complexity": state_space.complexity,
-                            "state_space_measure": state_space.measure().to_record(),
-                            "field_shape": list(field_record.field.shape),
-                            "image_data_url": _field_to_png_data_url(field_record.field),
-                            "materialization_plan": plan.to_record(),
-                            "latent_coordinates": [
-                                dict(coordinate)
-                                for coordinate in self._latent_coordinates(
-                                    component_index=component_index,
-                                    digit_variant_index=0,
-                                    scaled_factors=scaled_factors,
-                                    plan=plan,
-                                    variation_values=variation_values,
-                                )
-                            ],
-                        }
-                    )
+            sample_index = len(samples)
+            plan = self._materialization_plan(
+                seed=seed,
+                index=sample_index,
+                resolution_assignment=state_space.resolution_assignment,
+                materialization_declaration=materialization_declaration,
+            )
+            variation_coordinate = _constructed_variation_coordinate_record(
+                transform=transform,
+                component_index=component_index,
+                transform_index=transform_index,
+                grid=state_space.affine_grid,
+            )
+            variation_values: Mapping[str, object] = {
+                "kind": "constructed-field-variation-transform-samples",
+                "bounds": transform_record,
+                "state_space": state_space.metadata(),
+                "candidate_index": candidate_index,
+                "transform_index": transform_index,
+                "transform_count": state_space.affine_transform_count,
+                "coordinates": [dict(variation_coordinate)],
+            }
+            field_record = self.formation.form_observation(
+                id=self._observation_id(seed=seed, index=sample_index),
+                plan=plan,
+                component_index=component_index,
+                variation_coordinates=(variation_coordinate,),
+            )
+            samples.append(
+                {
+                    "index": sample_index,
+                    "outcome_id": self._outcome_id(component_index),
+                    "component_index": component_index,
+                    "complexity": state_space.complexity,
+                    "state_space_measure": state_space.measure().to_record(),
+                    "field_shape": list(field_record.field.shape),
+                    "image_data_url": _field_to_png_data_url(field_record.field),
+                    "materialization_plan": plan.to_record(),
+                    "latent_coordinates": [
+                        dict(coordinate)
+                        for coordinate in self._latent_coordinates(
+                            component_index=component_index,
+                            digit_variant_index=0,
+                            scaled_factors=scaled_factors,
+                            plan=plan,
+                            variation_values=variation_values,
+                        )
+                    ],
+                }
+            )
         samples.sort(key=lambda sample: _sample_display_key(sample, len(samples)))
         return {
             "mode": "state-space-window",
@@ -1143,6 +1142,11 @@ class Generator:
                 "minimum": minimum,
                 "maximum": maximum,
             },
+            "state_space_sizes": [
+                candidate.cardinality
+                for candidate in candidates
+                if candidate.cardinality is not None
+            ],
             "presentation": {
                 "sample_card_density": "compact" if len(samples) > 80 else "standard",
                 "aggregate_mode": False,
@@ -1379,6 +1383,54 @@ def _state_space_affine_transform_count(candidate: StateSpaceCandidate) -> int:
     return value
 
 
+def _preview_index_selection(count: int, *, limit: int) -> tuple[int, ...]:
+    if count <= 0 or limit <= 0:
+        return ()
+    if count <= limit:
+        return tuple(range(count))
+    if limit == 1:
+        return (0,)
+    indices = {
+        round(index * (count - 1) / (limit - 1))
+        for index in range(limit)
+    }
+    return tuple(sorted(indices))
+
+
+def _preview_sample_coordinates(
+    state_spaces: tuple[_DigitsStateSpace, ...],
+    *,
+    limit: int,
+) -> tuple[tuple[int, int, int], ...]:
+    full_count = sum(
+        state_space.digit_count * state_space.affine_transform_count
+        for state_space in state_spaces
+    )
+    if full_count <= limit:
+        return tuple(
+            (state_space_index, component_index, transform_index)
+            for state_space_index, state_space in enumerate(state_spaces)
+            for component_index in range(state_space.digit_count)
+            for transform_index in range(state_space.affine_transform_count)
+        )
+    coordinates: list[tuple[int, int, int]] = []
+    offset = 0
+    selected_offsets = set(_preview_index_selection(full_count, limit=limit))
+    for state_space_index, state_space in enumerate(state_spaces):
+        state_space_count = state_space.digit_count * state_space.affine_transform_count
+        for selected_offset in sorted(
+            value
+            for value in selected_offsets
+            if offset <= value < offset + state_space_count
+        ):
+            local_offset = selected_offset - offset
+            component_index = local_offset // state_space.affine_transform_count
+            transform_index = local_offset % state_space.affine_transform_count
+            coordinates.append((state_space_index, component_index, transform_index))
+        offset += state_space_count
+    return tuple(coordinates)
+
+
 def _target_distribution_row(
     distribution: Mapping[str, float],
     *,
@@ -1398,6 +1450,20 @@ def _constructed_affine_grid(
     _require_generation_positive_integer(transform_count, "transform_count")
     side = _state_space_canvas_side_from_assignment(resolution_assignment)
     bounds = _constructed_affine_bounds_for_canvas_side(side)
+    if transform_count <= _constructed_affine_preset_max_count:
+        return _ConstructedAffineGrid(
+            x_translation=1,
+            y_translation=1,
+            scale=1,
+            rotation=1,
+            x_shear=1,
+            x_translation_bounds=bounds["x_translation"],
+            y_translation_bounds=bounds["y_translation"],
+            scale_bounds=bounds["scale"],
+            rotation_bounds=bounds["rotation"],
+            x_shear_bounds=bounds["x_shear"],
+            preset_count=transform_count,
+        )
     capacities = _constructed_affine_axis_capacities(bounds=bounds, side=side)
     counts = _constructed_affine_counts_for_transform_count(
         transform_count=transform_count,
@@ -1438,9 +1504,32 @@ def _constructed_affine_grids_in_transform_count_range(
     capacities = _constructed_affine_axis_capacities(bounds=bounds, side=side)
     grids: list[_ConstructedAffineGrid] = []
     seen_products: set[int] = set()
+    for preset_count in range(
+        minimum_transform_count,
+        min(maximum_transform_count, _constructed_affine_preset_max_count) + 1,
+    ):
+        grids.append(
+            _ConstructedAffineGrid(
+                x_translation=1,
+                y_translation=1,
+                scale=1,
+                rotation=1,
+                x_shear=1,
+                x_translation_bounds=bounds["x_translation"],
+                y_translation_bounds=bounds["y_translation"],
+                scale_bounds=bounds["scale"],
+                rotation_bounds=bounds["rotation"],
+                x_shear_bounds=bounds["x_shear"],
+                preset_count=preset_count,
+            )
+        )
+        seen_products.add(preset_count)
     for counts in _constructed_affine_count_products(
         capacities=capacities,
-        minimum_product=minimum_transform_count,
+        minimum_product=max(
+            minimum_transform_count,
+            _constructed_affine_preset_max_count + 1,
+        ),
         maximum_product=maximum_transform_count,
     ):
         transform_count = _sample_count(counts)
@@ -1545,6 +1634,8 @@ def _constructed_affine_indices(
         raise ObservationGenerationError("transform_index must be a nonnegative integer")
     if transform_index >= grid.transform_count:
         raise ObservationGenerationError("transform_index must be below transform_count")
+    if grid.preset_count is not None:
+        return {"preset": transform_index}
     remainder = transform_index
     indices: list[int] = []
     for axis_count in grid.counts:
@@ -1608,6 +1699,15 @@ def _constructed_affine_parameters(
     grid: _ConstructedAffineGrid,
     indices: Mapping[str, int],
 ) -> dict[str, float]:
+    if grid.preset_count is not None:
+        preset_index = indices.get("preset")
+        if type(preset_index) is not int:
+            raise ObservationGenerationError("affine preset index is missing")
+        return _constructed_affine_preset_parameters(
+            spatial=spatial,
+            grid=grid,
+            preset_index=preset_index,
+        )
     return {
         "x_translation": _grid_value(
             _bounded_interval(
@@ -1657,6 +1757,86 @@ def _constructed_affine_parameters(
     }
 
 
+def _constructed_affine_preset_parameters(
+    *,
+    spatial: SpatialAffineVariation,
+    grid: _ConstructedAffineGrid,
+    preset_index: int,
+) -> dict[str, float]:
+    if grid.preset_count is None:
+        raise ObservationGenerationError("affine preset count is missing")
+    if preset_index < 0 or preset_index >= grid.preset_count:
+        raise ObservationGenerationError("affine preset index is out of range")
+    coordinates = _constructed_affine_preset_unit_coordinates(
+        preset_index=preset_index,
+        preset_count=grid.preset_count,
+    )
+    return {
+        "x_translation": _preset_grid_value(
+            _bounded_interval(
+                grid.x_translation_bounds,
+                lower_bound=spatial.matrix[0][2][0],
+                upper_bound=spatial.matrix[0][2][1],
+            ),
+            fraction=coordinates[0],
+        ),
+        "y_translation": _preset_grid_value(
+            _bounded_interval(
+                grid.y_translation_bounds,
+                lower_bound=spatial.matrix[1][2][0],
+                upper_bound=spatial.matrix[1][2][1],
+            ),
+            fraction=coordinates[1],
+        ),
+        "scale": _preset_grid_value(
+            _bounded_interval(
+                grid.scale_bounds,
+                lower_bound=max(spatial.matrix[0][0][0], spatial.matrix[1][1][0]),
+                upper_bound=min(spatial.matrix[0][0][1], spatial.matrix[1][1][1]),
+            ),
+            fraction=coordinates[2],
+        ),
+        "rotation": _preset_grid_value(
+            _bounded_interval(
+                grid.rotation_bounds,
+                lower_bound=spatial.matrix[1][0][0],
+                upper_bound=spatial.matrix[1][0][1],
+            ),
+            fraction=coordinates[3],
+        ),
+        "x_shear": _preset_grid_value(
+            _bounded_interval(
+                grid.x_shear_bounds,
+                lower_bound=spatial.matrix[0][1][0],
+                upper_bound=spatial.matrix[0][1][1],
+            ),
+            fraction=coordinates[4],
+        ),
+    }
+
+
+def _constructed_affine_preset_unit_coordinates(
+    *,
+    preset_index: int,
+    preset_count: int,
+) -> tuple[float, float, float, float, float]:
+    if preset_count == 1:
+        return (0.5, 0.5, 0.5, 0.5, 0.5)
+    presets = (
+        (0.0, 0.0, 0.0, 0.0, 0.0),
+        (1.0, 1.0, 1.0, 1.0, 1.0),
+        (0.5, 0.5, 0.5, 0.5, 0.5),
+        (0.0, 1.0, 1.0, 0.0, 1.0),
+        (1.0, 0.0, 0.0, 1.0, 0.0),
+        (0.25, 0.75, 0.25, 0.75, 0.25),
+        (0.75, 0.25, 0.75, 0.25, 0.75),
+        (0.5, 0.0, 0.5, 1.0, 0.0),
+    )
+    if preset_count > len(presets):
+        raise ObservationGenerationError("affine preset count exceeds preset table")
+    return presets[preset_index]
+
+
 def _bounded_interval(
     requested: tuple[float, float],
     *,
@@ -1669,6 +1849,11 @@ def _bounded_interval(
         center = (lower_bound + upper_bound) / 2.0
         return (center, center)
     return (lower, upper)
+
+
+def _preset_grid_value(bounds: tuple[float, float], *, fraction: float) -> float:
+    lower, upper = bounds
+    return lower + (upper - lower) * fraction
 
 
 def _grid_value(bounds: tuple[float, float], *, index: int, count: int) -> float:

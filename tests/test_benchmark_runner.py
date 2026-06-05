@@ -382,16 +382,13 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         == "approximately-uniform-within-complexity-class"
     )
     assert sampled_competence["complexity_axis"] is None
-    expected_complexity = load_digits_generator(
-        _digits_benchmark_root
-    ).minimum_state_space_measure().value
-    assert math.isclose(cast(float, sampled_competence["complexity"]), expected_complexity)
+    assert math.isclose(cast(float, sampled_competence["complexity"]), math.log2(70))
     assert sampled_competence["sample_count"] == 3
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
     assert len(points) == 1
     assert [point["sample_count"] for point in points] == [3]
-    assert math.isclose(cast(float, points[0]["complexity"]), expected_complexity)
+    assert math.isclose(cast(float, points[0]["complexity"]), math.log2(70))
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
     )
@@ -917,15 +914,15 @@ def test_evaluation_curriculum_uses_benchmark_owned_target_state_spaces() -> Non
     assert candidates[0].state_space.resolution_assignment is not None
     assert candidates[0].state_space.resolution_assignment.values == {"W": 16, "H": 16}
     assert [candidate.state_space.cardinality for candidate in candidates[:9]] == [
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        8,
-        9,
         10,
+        20,
+        30,
+        40,
+        50,
+        60,
+        70,
+        80,
+        90,
     ]
 
 
@@ -938,15 +935,15 @@ def test_training_curriculum_uses_benchmark_owned_target_state_spaces() -> None:
     )
 
     assert [candidate.state_space.cardinality for candidate in candidates[:9]] == [
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        8,
-        9,
         10,
+        20,
+        30,
+        40,
+        50,
+        60,
+        70,
+        80,
+        90,
     ]
 
 
@@ -962,18 +959,18 @@ def test_digits_state_space_for_request_materializes_constructed_affine_grid() -
     )
 
     assert state_space is not None
-    assert state_space.cardinality == 80
-    assert math.isclose(state_space.complexity, math.log2(80))
-    assert state_space.metadata["affine_transform_count"] == 8
-    assert state_space.metadata["requested_state_count"] == 80
-    assert state_space.metadata["realized_state_count"] == 80
+    assert state_space.cardinality == 320
+    assert math.isclose(state_space.complexity, math.log2(320))
+    assert state_space.metadata["affine_transform_count"] == 32
+    assert state_space.metadata["requested_state_count"] == 320
+    assert state_space.metadata["realized_state_count"] == 320
     assert state_space.metadata["construction"] == (
         "symmetric-digits-over-finite-affine-product-grid"
     )
     assert state_space.metadata["affine_grid"] == {
         "x_translation": 4,
-        "y_translation": 2,
-        "scale": 1,
+        "y_translation": 4,
+        "scale": 2,
         "rotation": 1,
         "x_shear": 1,
     }
@@ -986,8 +983,8 @@ def test_digits_state_space_for_request_materializes_constructed_affine_grid() -
     }
     assert state_space.resolution_assignment is not None
     assert state_space.resolution_assignment.values == {
-        "W": 16,
-        "H": 16,
+        "W": 28,
+        "H": 28,
     }
 
 
@@ -1266,10 +1263,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     )
     assert math.isclose(cast(float, score_basis["chance_mass"]), 0.1)
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    expected_complexity = load_digits_generator(
-        _digits_benchmark_root
-    ).minimum_state_space_measure().value
-    assert math.isclose(observed_complexities[0], expected_complexity)
+    assert math.isclose(observed_complexities[0], math.log2(70))
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
     assert points[0]["sample_count"] == 2
