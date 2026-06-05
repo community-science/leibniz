@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import {
   consoleDataPayloadPath,
   consoleBasePath,
+  consoleResultWatchIgnoredPaths,
   consoleResultRoots,
   consoleResultWatchPaths,
   consoleResultWatchRoots,
@@ -426,11 +427,17 @@ function assertConsoleResultRootPolicy() {
     );
     const defaultRoot = resolve(tempRoot, 'results');
     mkdirSync(defaultRoot, { recursive: true });
+    mkdirSync(resolve(defaultRoot, 'views'), { recursive: true });
     assertEqual(consoleResultRoots({}, tempRoot)[0], defaultRoot, 'default result root');
     assertEqual(
       consoleResultWatchPaths({}, tempRoot).join('|'),
-      [tempRoot, defaultRoot].join('|'),
-      'default result root watches parent and root',
+      [tempRoot, defaultRoot, resolve(defaultRoot, 'views')].join('|'),
+      'default result root watches parent, root, and materialized views',
+    );
+    assertEqual(
+      consoleResultWatchIgnoredPaths({}, tempRoot).join('|'),
+      `${defaultRoot.replaceAll('\\', '/')}/models/**`,
+      'default result root ignores raw model artifacts',
     );
     assertEqual(consoleBasePath({}), '/', 'default console base path');
     assertEqual(
