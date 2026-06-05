@@ -133,25 +133,20 @@ class _FieldBenchmarkGenerator(BenchmarkGenerator, Protocol):
         request: StateSpaceMeasureRequest,
     ) -> Sequence[StateSpaceCandidate]: ...
 
-    def tensor_batch_tensors(
-        self,
-        *,
-        runtime: TensorRuntime,
-        batch: GeneratedSampleSet,
-        outcome_ids: tuple[str, ...],
-    ) -> tuple[Any, Any]: ...
-
     def __call__(
         self,
         *,
         seed: int,
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
+        include_metadata: bool = True,
         state_space_request: StateSpaceMeasureRequest | None = None,
         component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
+        runtime: TensorRuntime | None = None,
+        outcome_ids: tuple[str, ...] | None = None,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...
@@ -239,7 +234,6 @@ def _require_field_generator(generator: BenchmarkGenerator) -> _FieldBenchmarkGe
             "materialization",
             "formation",
             "distinguishable_state_complexity",
-            "tensor_batch_tensors",
         )
         if not hasattr(generator, name)
     )
@@ -1642,26 +1636,23 @@ def _train_and_predict_on_device(
         state_space_request: StateSpaceMeasureRequest,
     ) -> tuple[Any, Any]:
         with phase_timings.span(generation_phase, samples=batch_sample_count):
-            sample_set = generator(
+            generated = generator(
                 shape=batch_sample_count,
                 seed=batch_seed,
+                include_metadata=False,
                 state_space_request=state_space_request,
                 variation_extent=_full_variation_extent,
+                runtime=runtime,
+                outcome_ids=outcome_ids,
                 timing=phase_timings,
                 timing_prefix=f"{generation_phase}.",
             )
-            generated = sample_set
-            if not generated.samples:
+            if generated.sample_count == 0:
                 raise BenchmarkRunnerError(
                     "generator returned no samples for selected state-space measure"
                 )
-        with phase_timings.span(tensor_phase, samples=batch_sample_count):
-            tensors = generator.tensor_batch_tensors(
-                runtime=runtime,
-                batch=generated,
-                outcome_ids=outcome_ids,
-            )
-        return tensors
+            with phase_timings.span(tensor_phase, samples=batch_sample_count):
+                return generated.require_tensors()
 
     training_rungs: list[_CurriculumRung] = [
         _training_curriculum_rung(

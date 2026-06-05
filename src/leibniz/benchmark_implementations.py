@@ -20,6 +20,7 @@ if TYPE_CHECKING:
         StateSpaceMeasureRequest,
         StateSpaceMeasureValue,
     )
+    from leibniz.tensor_runtime import TensorRuntime
 
 __all__ = [
     "Benchmark",
@@ -55,7 +56,10 @@ class Generator(Protocol):
         seed: int,
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
+        include_metadata: bool = True,
         state_space_request: StateSpaceMeasureRequest | None = None,
+        runtime: TensorRuntime | None = None,
+        outcome_ids: tuple[str, ...] | None = None,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...

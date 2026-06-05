@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
+from typing import Any
 
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.benchmark_implementations import load_benchmark
@@ -257,14 +258,16 @@ class GeneratedSample:
 
 @dataclass(frozen=True, slots=True)
 class GeneratedSampleSet:
-    """Shape-aware samples returned by a reusable data generator."""
+    """Tensor-first shaped samples returned by a reusable data generator."""
 
     benchmark_id: ProtocolIdentifier
     generator_id: ProtocolIdentifier
     generator_version: str
     seed: int
     shape: tuple[int, ...]
-    samples: tuple[GeneratedSample, ...]
+    samples: tuple[GeneratedSample, ...] = ()
+    fields: Any | None = None
+    targets: Any | None = None
     variation_extent: float | None = None
     state_space_request: StateSpaceMeasureRequest | None = None
 
@@ -276,14 +279,17 @@ class GeneratedSampleSet:
                 raise ObservationGenerationError("variation_extent must be finite")
             if self.variation_extent < 0.0 or self.variation_extent > 1.0:
                 raise ObservationGenerationError("variation_extent must be between 0 and 1")
-        if self.samples:
+        has_tensors = self.fields is not None or self.targets is not None
+        if self.fields is None and self.targets is not None:
+            raise ObservationGenerationError("generated targets require generated fields")
+        if self.samples or has_tensors:
             if any(type(axis) is not int or axis < 1 for axis in self.shape):
                 raise ObservationGenerationError("sample shape axes must be positive integers")
         elif self.shape != (0,):
             raise ObservationGenerationError("empty sample sets must have shape [0]")
-        if len(self.samples) != self.sample_count:
+        if self.samples and len(self.samples) != self.sample_count:
             raise ObservationGenerationError("sample count does not match sample shape")
-        if not self.samples and self.state_space_request is None:
+        if not self.samples and not has_tensors and self.state_space_request is None:
             raise ObservationGenerationError(
                 "empty sample sets require a state-space request"
             )
@@ -307,6 +313,8 @@ class GeneratedSampleSet:
     def includes_fields(self) -> bool:
         """Return whether all samples include generated field data."""
 
+        if self.fields is not None:
+            return True
         return bool(self.samples) and all(sample.field is not None for sample in self.samples)
 
     @property
@@ -332,6 +340,13 @@ class GeneratedSampleSet:
 
         return tuple(sample.complexity for sample in self.samples)
 
+    def require_tensors(self) -> tuple[Any, Any]:
+        """Return generated field and target tensors or fail with a domain error."""
+
+        if self.fields is None or self.targets is None:
+            raise ObservationGenerationError("generated sample does not include tensors")
+        return self.fields, self.targets
+
     def to_record(self, *, include_fields: bool = False) -> dict[str, object]:
         """Return a record for this generated sample set."""
 
@@ -341,13 +356,14 @@ class GeneratedSampleSet:
             "generator_version": self.generator_version,
             "seed": self.seed,
             "shape": list(self.shape),
-            "sample_count": len(self.samples),
+            "sample_count": self.sample_count,
             "state_space_request": (
                 None
                 if self.state_space_request is None
                 else self.state_space_request.to_record()
             ),
             "includes_fields": self.includes_fields,
+            "includes_tensors": self.fields is not None,
             "samples": [
                 sample.to_record(include_field=include_fields) for sample in self.samples
             ],
