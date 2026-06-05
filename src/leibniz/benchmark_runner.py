@@ -20,7 +20,7 @@ from leibniz.benchmark_evaluation import (
     sampled_competence_curriculum_record,
     sampled_competence_record,
     validation_competence,
-    validation_competence_frontier_score,
+    validation_competence_frontier_advances,
 )
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.competition_bundles import BenchmarkCompetitionBundle
@@ -126,6 +126,12 @@ class _FieldBenchmarkGenerator(BenchmarkGenerator, Protocol):
         *,
         request: StateSpaceMeasureRequest,
     ) -> StateSpaceCandidate | None: ...
+
+    def state_spaces_for_request(
+        self,
+        *,
+        request: StateSpaceMeasureRequest,
+    ) -> Sequence[StateSpaceCandidate]: ...
 
     def tensor_batch_tensors(
         self,
@@ -1382,18 +1388,14 @@ def _benchmark_state_space_candidates(
     seen_complexities: set[float] = set()
     for target_index in range(stage_count):
         target = minimum + target_index
-        state_space = generator.state_space_for_request(
-            request=StateSpaceMeasureRequest(
-                minimum=target,
-                maximum=target + 1.0,
-            ),
+        state_spaces = generator.state_spaces_for_request(
+            request=StateSpaceMeasureRequest(minimum=target, maximum=target + 1.0)
         )
-        if state_space is None:
-            continue
-        if state_space.complexity in seen_complexities:
-            continue
-        seen_complexities.add(state_space.complexity)
-        candidates.append(_CurriculumCandidate(state_space=state_space))
+        for state_space in state_spaces:
+            if state_space.complexity in seen_complexities:
+                continue
+            seen_complexities.add(state_space.complexity)
+            candidates.append(_CurriculumCandidate(state_space=state_space))
     return tuple(candidates)
 
 
@@ -2463,17 +2465,11 @@ def _frontier_plateau_advances(
     previous_frontier_points: tuple[ValidationCompetencePoint, ...],
     chance_mass: float,
 ) -> bool:
-    previous_score = validation_competence_frontier_score(
-        previous_frontier_points,
+    return validation_competence_frontier_advances(
+        frontier_point=frontier_point,
+        previous_frontier_points=previous_frontier_points,
         chance_mass=chance_mass,
     )
-    next_score = validation_competence_frontier_score(
-        (*previous_frontier_points, frontier_point),
-        chance_mass=chance_mass,
-    )
-    if next_score <= 0.0:
-        return False
-    return next_score > previous_score
 
 
 def _evaluation_result_frontier_index(

@@ -1,7 +1,6 @@
 import base64
 import struct
-from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, cast
@@ -42,30 +41,34 @@ def test_console_data_reuses_persistent_generated_observation_batch_cache(
     cache_path = tmp_path / "generatedSampleSets.leibniz.json"
     monkeypatch.setattr("leibniz.console.data._generated_batch_cache_path", cache_path)
     cast(
-        dict[tuple[str, str, str], Mapping[str, object]],
+        dict[tuple[str, str, str], tuple[Mapping[str, object], ...]],
         console_data._generated_batch_cache,  # type: ignore[reportPrivateUsage]
     ).clear()
     cache_key = (
         "benchmarks.fake@0.1.0",
-        "balanced-component-samples",
+        "state-space-window-samples",
         "source-fingerprint",
     )
-    cached_batch: Mapping[str, object] = {
-        "mode": "balanced",
+    cached_batches: tuple[Mapping[str, object], ...] = ({
+        "mode": "state-space-window",
         "label": "Cached samples",
-        "component_count": 1,
         "seed": 401,
         "sample_count": 0,
+        "state_space_window": {
+            "measure_id": "log2_state_space_size",
+            "minimum": 1,
+            "maximum": 2,
+        },
         "presentation": {"sample_card_density": "standard", "aggregate_mode": False},
         "samples": [],
-    }
+    },)
     cache_path.write_bytes(
         canonical_document_bytes(
             {
                 "format": "leibniz.console.generated-sample-set-cache",
                 "format_version": 1,
                 "batches": {
-                    "\0".join(cache_key): cached_batch,
+                    "\0".join(cache_key): list(cached_batches),
                 },
             }
         )
@@ -76,18 +79,13 @@ def test_console_data_reuses_persistent_generated_observation_batch_cache(
             id=ProtocolIdentifier.parse("benchmarks.fake@0.1.0"),
         )
     )
-    balanced_observation_batch = cast(
-        Callable[..., Mapping[str, object]],
-        ConsoleDataBuilder(_repository_root)._balanced_sample_set,  # type: ignore[reportPrivateUsage]
-    )
-
-    batch = balanced_observation_batch(
+    batches = ConsoleDataBuilder(_repository_root)._sample_sets(  # type: ignore[reportPrivateUsage]
         generator=cast(Any, fake_generator),
         atom_count=10,
         source_fingerprint="source-fingerprint",
     )
 
-    assert batch == cached_batch
+    assert batches == cached_batches
 
 
 def test_console_data_discovery_does_not_swallow_loader_bugs(
@@ -301,36 +299,42 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     task = benchmark_tasks[0]
     assert task["kind"] == "generated-observations"
     assert task["benchmark_id"] == "benchmarks.digits@0.1.0"
-    assert task["complexity_axis"] is None
+    assert task["complexity_axis"] == "log2_state_space_size"
     assert task["outcome_atom_count"] == 10
     batches = cast(list[dict[str, object]], task["batches"])
     assert [
         (batch["mode"], batch["sample_count"])
         for batch in batches
     ] == [
-        ("balanced", 40),
+        ("state-space-window", 10),
+        ("state-space-window", 50),
+        ("state-space-window", 50),
     ]
-    batch = batches[0]
-    presentation = cast(dict[str, object], batch["presentation"])
+    assert [batch["label"] for batch in batches] == [
+        "[3, 4]",
+        "[5, 6]",
+        "[8, 9]",
+    ]
+    presentation = cast(dict[str, object], batches[0]["presentation"])
     assert presentation == {
         "sample_card_density": "standard",
         "aggregate_mode": False,
     }
-    samples = cast(list[dict[str, object]], batch["samples"])
-    component_indices = [cast(int, sample["component_index"]) for sample in samples]
-    digit_counts = Counter(component_indices)
-    assert digit_counts == dict.fromkeys(range(10), 4)
+    assert cast(dict[str, object], batches[2]["presentation"])["sample_card_density"] == "standard"
+    samples = cast(list[dict[str, object]], batches[0]["samples"])
+    component_indices = {cast(int, sample["component_index"]) for sample in samples}
+    assert component_indices == set(range(10))
     field_shapes = [tuple(cast(list[int], sample["field_shape"])) for sample in samples]
-    assert len(set(field_shapes)) == len(field_shapes)
+    assert set(field_shapes) == {(1, 16, 16)}
     materialization_plans = [
         cast(dict[str, object], sample["materialization_plan"]) for sample in samples
     ]
-    assert all(".sample-0@" in str(plan["id"]) for plan in materialization_plans)
-    assert len({plan["seed"] for plan in materialization_plans}) == len(materialization_plans)
+    assert all(".sample-" in str(plan["id"]) for plan in materialization_plans)
+    assert {plan["seed"] for plan in materialization_plans} == {401}
     assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
-    assert samples[0]["field_shape"] == [1, 90, 98]
-    assert _png_dimensions(str(samples[0]["image_data_url"])) == (98, 90)
-    assert _png_dimensions(str(samples[1]["image_data_url"])) == (212, 160)
+    assert samples[0]["field_shape"] == [1, 16, 16]
+    assert _png_dimensions(str(samples[0]["image_data_url"])) == (16, 16)
+    assert _png_dimensions(str(samples[1]["image_data_url"])) == (16, 16)
     assert "preview_crop" not in samples[0]
     assert "preview_crop" not in samples[1]
     latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])
@@ -339,7 +343,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     )
     variation_values = cast(dict[str, object], variation["values"])
     assert variation_values["kind"] == "constructed-field-variation-transform-samples"
-    assert variation_values["transform_count"] == 2
+    assert variation_values["transform_count"] == 1
     variation_bounds = cast(dict[str, object], variation_values["bounds"])
     assert variation_bounds["kind"] == "field-variation-transform"
     variation_coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
@@ -385,26 +389,25 @@ def test_console_benchmark_tasks_load_python_implementation_without_exported_jso
     )
     (architecture_root / "digits_pool.json").write_bytes(architecture_source.read_bytes())
 
-    def fake_batch(
+    def fake_batches(
         self: ConsoleDataBuilder,
         *,
         generator: object,
         atom_count: int,
         source_fingerprint: str,
-    ) -> Mapping[str, object]:
+    ) -> tuple[Mapping[str, object], ...]:
         assert atom_count == 10
         assert source_fingerprint
-        return {
-            "mode": "balanced",
+        return ({
+            "mode": "state-space-window",
             "label": "Fake samples",
-            "component_count": 1,
             "seed": 401,
             "sample_count": 0,
             "presentation": {"sample_card_density": "standard", "aggregate_mode": False},
             "samples": [],
-        }
+        },)
 
-    monkeypatch.setattr(ConsoleDataBuilder, "_balanced_sample_set", fake_batch)
+    monkeypatch.setattr(ConsoleDataBuilder, "_sample_sets", fake_batches)
 
     data = ConsoleDataBuilder(tmp_path).discover(
         (PurePosixPath("architectures"), PurePosixPath("src/leibniz/benchmarks"))

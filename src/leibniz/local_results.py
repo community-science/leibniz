@@ -9,15 +9,12 @@ import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
     sampled_competence_frontier_score,
-)
-from leibniz.benchmark_implementations import (
-    Generator as BenchmarkGenerator,
 )
 from leibniz.benchmark_implementations import (
     discover_benchmark_roots,
@@ -36,15 +33,12 @@ from leibniz.documents import (
     load_object_document,
 )
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import MaterializationDeclaration
 from leibniz.measurements import (
     MeasurementDataset,
 )
 from leibniz.model_inspection import (
     ModelInspectionRecord,
 )
-from leibniz.observation_formation import ObservationFormationDeclaration
-from leibniz.observation_generation import load_generator
 from leibniz.records import RecordExtractor
 from leibniz.training_runs import TrainingRunRecord
 
@@ -82,6 +76,7 @@ _benchmark_cost_axes: tuple[tuple[str, str], ...] = (
 )
 _benchmark_cost_axis_keys = tuple(axis for axis, _label in _benchmark_cost_axes)
 _component_count = 1
+_reference_baseline_complexity = 1.0
 
 
 class _SummaryRecordMixin:
@@ -94,22 +89,6 @@ class LocalResultImportError(ValueError):
 
 
 _extract = RecordExtractor(error_type=LocalResultImportError)
-
-
-class _FieldComplexityGenerator(BenchmarkGenerator, Protocol):
-    @property
-    def materialization(self) -> MaterializationDeclaration: ...
-
-    @property
-    def formation(self) -> ObservationFormationDeclaration: ...
-
-    def distinguishable_state_complexity(
-        self,
-        *,
-        width: int,
-        height: int,
-        variation_extent: float = 1.0,
-    ) -> float: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -582,6 +561,7 @@ def _local_run_records(
     evaluation_root = results_root / "evaluations"
     if not evaluation_root.is_dir():
         return ()
+    training_summaries = _training_summary_records_by_run_slug(results_root)
     records: list[_BenchmarkRunRecord] = []
     for path in sorted(evaluation_root.rglob("*" + _document_suffix)):
         record = load_object_document(path.read_bytes(), description="benchmark evaluation")
@@ -613,12 +593,16 @@ def _local_run_records(
             )
         except LocalResultImportError as error:
             raise LocalResultImportError(f"{source_path}: {error}") from error
+        training_summary_entry = training_summaries.get(summary.run_slug)
+        training_summary = (
+            None if training_summary_entry is None else training_summary_entry[0]
+        )
         if include_model_details:
             model_inspection = _model_inspection_view_record(
                 inspection=summary.model_inspection,
                 source_path=source_path,
                 measurement_dataset_digest=measurement_dataset_digest,
-                training_summary=None,
+                training_summary=training_summary,
                 artifact_references=_evaluation_summary_artifact_references(summary),
             )
             model_inspection_path = source_path
@@ -655,9 +639,29 @@ def _local_run_records(
                 measurement_dataset=MeasurementDataset(measurements=()),
                 measurement_dataset_digest=measurement_dataset_digest,
                 sampled_competence=summary.sampled_competence,
+                training_summary=training_summary,
             )
         )
     return tuple(records)
+
+
+def _training_summary_records_by_run_slug(
+    results_root: Path,
+) -> dict[str, tuple[Mapping[str, object], Path]]:
+    training_root = results_root / "training"
+    if not training_root.is_dir():
+        return {}
+    records: dict[str, tuple[Mapping[str, object], Path]] = {}
+    for path in sorted(training_root.rglob("*" + _document_suffix)):
+        summary = load_object_document(path.read_bytes(), description="training record")
+        if summary.get("format") not in {
+            "leibniz.benchmark-run",
+            "leibniz.benchmark-training-progress",
+        }:
+            continue
+        run_slug = _extract.non_empty_string(summary.get("run_slug"), "run_slug")
+        records[run_slug] = (summary, path)
+    return records
 
 
 def _local_training_estimate_records(
@@ -669,15 +673,10 @@ def _local_training_estimate_records(
     training_root = results_root / "training"
     if not training_root.is_dir():
         return ()
+    training_summaries = _training_summary_records_by_run_slug(results_root)
     records: list[_BenchmarkRunRecord] = []
     empty_dataset = MeasurementDataset(measurements=())
-    for path in sorted(training_root.rglob("*" + _document_suffix)):
-        summary = load_object_document(path.read_bytes(), description="training record")
-        if summary.get("format") not in {
-            "leibniz.benchmark-run",
-            "leibniz.benchmark-training-progress",
-        }:
-            continue
+    for summary, path in training_summaries.values():
         run_slug = _extract.non_empty_string(summary.get("run_slug"), "run_slug")
         if run_slug in accepted_run_slugs:
             continue
@@ -1365,10 +1364,7 @@ def _model_result_records(
         grouped.setdefault(run.model_key, []).append(run)
 
     competition_inference_compute = _competition_inference_compute_by_model(competitions)
-    reference_baseline_complexity = _benchmark_base_complexity(
-        manifest=manifest,
-        repository_root=repository_root,
-    )
+    reference_baseline_complexity = _reference_baseline_complexity
     chance_mass = _chance_mass(manifest)
     records: list[dict[str, object]] = []
     best_runs: dict[str, _BenchmarkRunRecord] = {}
@@ -1397,7 +1393,7 @@ def _model_result_records(
             "chance_mass": chance_mass,
             "point_score": "accepted-mass",
             "local_competence": "above-chance-accepted-mass",
-            "integration": "trapezoid-over-observed-complexity",
+            "integration": "free-competence-to-first-observed-then-trapezoid",
         }
         record: dict[str, object] = {
             "model_key": model_key,
@@ -2313,20 +2309,6 @@ def competent_complexity_score(
         ),
         chance_mass=chance_mass,
     )
-
-
-def _benchmark_base_complexity(
-    *,
-    manifest: BenchmarkManifest,
-    repository_root: Path,
-) -> float:
-    generator = cast(
-        _FieldComplexityGenerator,
-        load_generator(
-            repository_root / "src" / "leibniz" / "benchmarks" / _identifier_atom(manifest.id)
-        ),
-    )
-    return generator.minimum_state_space_measure().value
 
 
 def _chance_mass(manifest: BenchmarkManifest) -> float:

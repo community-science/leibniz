@@ -9,6 +9,7 @@ import {
   consoleResultRoots,
   consoleResultWatchPaths,
   consoleResultWatchRoots,
+  isModelArtifactEvent,
   isMaterializedResultViewEvent,
   resultRootArguments,
 } from '../src/leibniz/console/_web_src/vite.config.mjs';
@@ -379,6 +380,9 @@ function assertConsoleResultRootPolicy() {
   if (!viteConfig.includes('refreshConsoleDataPayload()')) {
     throw new Error('Console result polling must refresh the prepared console data payload');
   }
+  if (!viteConfig.includes('refreshConsoleDataPayloadAsync()')) {
+    throw new Error('Console result polling must refresh asynchronously during development');
+  }
   if (
     !viteConfig.includes('consoleDataPayloadMaxBuffer') ||
     !viteConfig.includes('maxBuffer: consoleDataPayloadMaxBuffer')
@@ -482,6 +486,21 @@ function assertConsoleResultRootPolicy() {
       ),
       false,
       'explicit views root still refreshes on view events',
+    );
+    assertEqual(
+      isModelArtifactEvent(
+        resolve(defaultRoot, 'models', 'digits', 'run', 'gate0001-step00000032.pt'),
+        [defaultRoot],
+      ),
+      true,
+      'default result root ignores raw model checkpoint events',
+    );
+    assertEqual(
+      isModelArtifactEvent(resolve(defaultRoot, 'training', 'digits', 'run.json'), [
+        defaultRoot,
+      ]),
+      false,
+      'training summaries still refresh console data',
     );
     assertEqual(
       consoleDataPayloadPath().endsWith('src/leibniz/console/_web_src/src/generated/consoleDataPayload.json'),

@@ -382,16 +382,13 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         == "approximately-uniform-within-complexity-class"
     )
     assert sampled_competence["complexity_axis"] is None
-    expected_complexity = load_digits_generator(
-        _digits_benchmark_root
-    ).minimum_state_space_measure().value
-    assert math.isclose(cast(float, sampled_competence["complexity"]), expected_complexity)
+    assert math.isclose(cast(float, sampled_competence["complexity"]), math.log2(10))
     assert sampled_competence["sample_count"] == 3
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
     assert len(points) == 1
     assert [point["sample_count"] for point in points] == [3]
-    assert math.isclose(cast(float, points[0]["complexity"]), expected_complexity)
+    assert math.isclose(cast(float, points[0]["complexity"]), math.log2(10))
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
     )
@@ -849,7 +846,7 @@ def test_training_curriculum_only_advances_on_improved_frontier_competence() -> 
 def test_training_curriculum_gate_delegates_frontier_scoring_to_benchmark_api() -> None:
     source = inspect.getsource(cast(Any, benchmark_runner)._frontier_plateau_advances)
 
-    assert "validation_competence_frontier_score" in source
+    assert "validation_competence_frontier_advances" in source
     for leaked_scoring_detail in (
         "accepted_mass",
         "complexity",
@@ -915,12 +912,17 @@ def test_evaluation_curriculum_uses_benchmark_owned_target_state_spaces() -> Non
         candidate.complexity for candidate in candidates
     )
     assert candidates[0].state_space.resolution_assignment is not None
-    assert candidates[0].state_space.resolution_assignment.values == {"W": 2, "H": 1}
-    assert [candidate.state_space.cardinality for candidate in candidates[:4]] == [
-        2,
-        4,
-        8,
-        16,
+    assert candidates[0].state_space.resolution_assignment.values == {"W": 16, "H": 16}
+    assert [candidate.state_space.cardinality for candidate in candidates[:9]] == [
+        10,
+        20,
+        30,
+        40,
+        50,
+        60,
+        70,
+        80,
+        90,
     ]
 
 
@@ -932,11 +934,16 @@ def test_training_curriculum_uses_benchmark_owned_target_state_spaces() -> None:
         start_index=0,
     )
 
-    assert [candidate.state_space.cardinality for candidate in candidates[:4]] == [
-        2,
-        4,
-        8,
-        16,
+    assert [candidate.state_space.cardinality for candidate in candidates[:9]] == [
+        10,
+        20,
+        30,
+        40,
+        50,
+        60,
+        70,
+        80,
+        90,
     ]
 
 
@@ -952,23 +959,32 @@ def test_digits_state_space_for_request_materializes_constructed_affine_grid() -
     )
 
     assert state_space is not None
-    assert state_space.cardinality == 64
-    assert state_space.metadata["affine_transform_count"] == 7
-    assert state_space.metadata["requested_state_count"] == 64
+    assert state_space.cardinality == 320
+    assert math.isclose(state_space.complexity, math.log2(320))
+    assert state_space.metadata["affine_transform_count"] == 32
+    assert state_space.metadata["requested_state_count"] == 320
+    assert state_space.metadata["realized_state_count"] == 320
     assert state_space.metadata["construction"] == (
-        "requested-cardinality-over-finite-affine-product-grid"
+        "symmetric-digits-over-finite-affine-product-grid"
     )
     assert state_space.metadata["affine_grid"] == {
-        "x_translation": 7,
-        "y_translation": 1,
-        "scale": 1,
+        "x_translation": 4,
+        "y_translation": 4,
+        "scale": 2,
         "rotation": 1,
         "x_shear": 1,
     }
+    assert state_space.metadata["affine_bounds"] == {
+        "x_translation": [-0.15, 0.15],
+        "y_translation": [-0.15, 0.15],
+        "scale": [0.92, 1.08],
+        "rotation": [-0.03, 0.03],
+        "x_shear": [-0.03, 0.03],
+    }
     assert state_space.resolution_assignment is not None
     assert state_space.resolution_assignment.values == {
-        "W": 8,
-        "H": 8,
+        "W": 28,
+        "H": 28,
     }
 
 
@@ -1216,7 +1232,10 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert "model_inspection_digest" in history[0]
     assert "model_inspection_path" in history[0]
     assert "sampled_competence" in history[0]
-    assert "training_diagnostics" not in history[0]
+    diagnostics = cast(dict[str, object], history[0]["training_diagnostics"])
+    assert isinstance(diagnostics["status"], str)
+    validation_history = cast(list[dict[str, object]], diagnostics["validation_history"])
+    assert validation_history
     cost_summary = cast(dict[str, object], history[0]["cost_summary"])
     assert cost_summary["training_compute"] == 2784.0
     assert cost_summary["training_compute_per_sample"] == 1392
@@ -1224,6 +1243,10 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     detail_sections = cast(list[dict[str, object]], console_view_model["detail_sections"])
     assert [section["title"] for section in detail_sections] == [
         "Sampled Competence",
+        "Training Protocol",
+        "Training Outcome",
+        "Throughput",
+        "Validation History",
     ]
     inspections = cast(list[dict[str, object]], result["model_inspections"])
     artifact_kinds = {
@@ -1247,10 +1270,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     )
     assert math.isclose(cast(float, score_basis["chance_mass"]), 0.1)
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    expected_complexity = load_digits_generator(
-        _digits_benchmark_root
-    ).minimum_state_space_measure().value
-    assert math.isclose(observed_complexities[0], expected_complexity)
+    assert math.isclose(observed_complexities[0], math.log2(10))
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
     assert points[0]["sample_count"] == 2

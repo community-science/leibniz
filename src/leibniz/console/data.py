@@ -64,7 +64,7 @@ _generated_batch_cache_path = (
     / "generated"
     / ("generatedSampleSets" + _document_suffix)
 )
-_generated_batch_cache: dict[tuple[str, str, str], Mapping[str, object]] = {}
+_generated_batch_cache: dict[tuple[str, str, str], tuple[Mapping[str, object], ...]] = {}
 
 
 class ConsoleDataValidationError(ValueError):
@@ -343,17 +343,17 @@ class ConsoleDataBuilder:
                         benchmark_root,
                         repository_root=self._repository_root,
                     ),
-                    "complexity_axis": None,
+                    "complexity_axis": "log2_state_space_size",
                     "outcome_atom_name": outcome_atom_name,
                     "outcome_atom_count": atom_count,
                     "code_surfaces": self._benchmark_code_surfaces(benchmark_root),
-                    "batches": [
-                        self._balanced_sample_set(
+                    "batches": list(
+                        self._sample_sets(
                             generator=generator,
                             atom_count=atom_count,
                             source_fingerprint=source_fingerprint,
                         )
-                    ],
+                    ),
                 }
             )
         return tuple(tasks)
@@ -418,7 +418,7 @@ class ConsoleDataBuilder:
         benchmark_root: Path,
     ) -> str:
         hasher = hashlib.sha256()
-        hasher.update(b"balanced-sample-set-v1\0")
+        hasher.update(b"state-space-window-sample-sets-v1\0")
         entrypoint = benchmark_root / "benchmark.py"
         if entrypoint.is_file():
             self._hash_file(hasher, entrypoint)
@@ -449,16 +449,16 @@ class ConsoleDataBuilder:
         hasher.update(resolved.read_bytes())
         hasher.update(b"\0")
 
-    def _balanced_sample_set(
+    def _sample_sets(
         self,
         *,
         generator: BenchmarkGenerator,
         atom_count: int,
         source_fingerprint: str,
-    ) -> Mapping[str, object]:
+    ) -> tuple[Mapping[str, object], ...]:
         cache_key = (
             str(generator.manifest.id),
-            "balanced-component-samples",
+            "state-space-window-samples",
             source_fingerprint,
         )
         cached = _generated_batch_cache.get(cache_key)
@@ -470,19 +470,21 @@ class ConsoleDataBuilder:
         if cached is not None:
             _generated_batch_cache[cache_key] = cached
             return cached
-        preview_batch = getattr(generator, "console_preview_batch", None)
-        if not callable(preview_batch):
+        preview_batches = getattr(generator, "console_preview_batches", None)
+        if not callable(preview_batches):
             raise ConsoleDataValidationError(
-                "benchmark generator does not expose a console preview batch"
+                "benchmark generator does not expose state-space-window preview batches"
             )
         try:
-            record = cast(Mapping[str, object], preview_batch(atom_count=atom_count))
+            records = tuple(
+                cast(Iterable[Mapping[str, object]], preview_batches(atom_count=atom_count))
+            )
         except ValueError as error:
             raise ConsoleDataValidationError(str(error)) from error
-        _generated_batch_cache[cache_key] = record
-        persistent_cache[persistent_key] = record
+        _generated_batch_cache[cache_key] = records
+        persistent_cache[persistent_key] = records
         _store_generated_batch_cache(persistent_cache)
-        return record
+        return records
 
     def _required_mapping(self, value: object, description: str) -> Mapping[str, object]:
         if not isinstance(value, Mapping):
@@ -576,7 +578,7 @@ def _generated_batch_cache_key(cache_key: tuple[str, str, str]) -> str:
     return "\0".join(cache_key)
 
 
-def _load_generated_batch_cache() -> dict[str, Mapping[str, object]]:
+def _load_generated_batch_cache() -> dict[str, tuple[Mapping[str, object], ...]]:
     if not _generated_batch_cache_path.is_file():
         return {}
     try:
@@ -594,14 +596,24 @@ def _load_generated_batch_cache() -> dict[str, Mapping[str, object]]:
     if not isinstance(batches, Mapping):
         return {}
     typed_batches = cast(Mapping[object, object], batches)
-    return {
-        str(key): cast(Mapping[str, object], value)
-        for key, value in typed_batches.items()
-        if isinstance(value, Mapping)
-    }
+    cache: dict[str, tuple[Mapping[str, object], ...]] = {}
+    for key, value in typed_batches.items():
+        if not isinstance(value, list):
+            continue
+        raw_entries = cast(list[object], value)
+        entries = tuple(
+            cast(Mapping[str, object], entry)
+            for entry in raw_entries
+            if isinstance(entry, Mapping)
+        )
+        if entries:
+            cache[str(key)] = entries
+    return cache
 
 
-def _store_generated_batch_cache(cache: Mapping[str, Mapping[str, object]]) -> None:
+def _store_generated_batch_cache(
+    cache: Mapping[str, tuple[Mapping[str, object], ...]],
+) -> None:
     try:
         _generated_batch_cache_path.parent.mkdir(parents=True, exist_ok=True)
         _generated_batch_cache_path.write_bytes(
@@ -609,7 +621,10 @@ def _store_generated_batch_cache(cache: Mapping[str, Mapping[str, object]]) -> N
                 {
                     "format": _generated_batch_cache_format,
                     "format_version": _generated_batch_cache_format_version,
-                    "batches": dict(cache),
+                    "batches": {
+                        key: list(value)
+                        for key, value in cache.items()
+                    },
                 }
             )
             + b"\n"

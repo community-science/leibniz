@@ -846,6 +846,26 @@ p {
   white-space: pre;
 }
 
+.benchmark-sample-window {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+  min-width: 0;
+}
+
+.benchmark-sample-window-select {
+  min-width: 180px;
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-xs);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-status);
+  padding: var(--space-xs) var(--space-sm);
+}
+
 .benchmark-sample-grid {
   display: grid;
   gap: var(--space-md);
@@ -951,16 +971,28 @@ p {
 }
 
 .benchmark-sample-coordinate-inspector {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-xl);
   width: 100%;
   border: var(--line-thin) solid var(--border-color);
   background: var(--control-bg);
-  padding: var(--space-md) var(--space-lg);
+  padding: var(--space-sm) var(--space-lg);
 }
 
-.benchmark-sample-coordinate-title {
-  margin-bottom: var(--space-sm);
+.benchmark-sample-coordinate-range {
+  display: flex;
+  align-items: baseline;
+  flex: 1 1 260px;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.benchmark-sample-coordinate-range label {
+  flex: 0 0 auto;
   color: var(--text-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--font-label);
   font-weight: 800;
   letter-spacing: var(--tracking-label);
@@ -968,18 +1000,24 @@ p {
 }
 
 .benchmark-sample-coordinate-inspector dl {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(var(--metric-min), 1fr));
-  gap: var(--space-sm) var(--space-lg);
+  display: flex;
+  align-items: center;
+  flex: 2 1 420px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-xs) var(--space-xl);
   margin: 0;
 }
 
 .benchmark-sample-coordinate-inspector div {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
   min-width: 0;
 }
 
 .benchmark-sample-coordinate-inspector dt {
-  margin-bottom: var(--space-3xs);
+  margin: 0;
   color: var(--text-muted);
   font-size: var(--font-label);
   font-weight: 800;

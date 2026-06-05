@@ -149,22 +149,22 @@ if (benchmarkTask === undefined) {
   throw new Error('expected benchmark task');
 }
 assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind');
-assertEqual(benchmarkTask?.batches.length, 1, 'benchmark batch count');
+assertEqual(benchmarkTask?.batches.length, 3, 'benchmark batch count');
 assertEqual(
   benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.sample_count}`).join('|'),
-  'balanced:40',
+  'state-space-window:10|state-space-window:50|state-space-window:50',
   'generated benchmark batches',
 );
 const generatedSamples = benchmarkTask?.batches[0]?.samples ?? [];
 assertEqual(
   digitCounts(generatedSamples).join(','),
-  '4,4,4,4,4,4,4,4,4,4',
-  'balanced digit counts',
+  '1,1,1,1,1,1,1,1,1,1',
+  'canonical digit counts',
 );
 assertEqual(
   new Set(generatedSamples.map((sample) => sample.field_shape.join('x'))).size,
-  generatedSamples.length,
-  'independent sample canvas shapes',
+  1,
+  'canonical sample canvas shape',
 );
 assertEqual(
   benchmarkTask?.batches[0]?.presentation.sample_card_density,
@@ -176,12 +176,12 @@ assertEqual(
   false,
   'sample presentation aggregate mode',
 );
-const generatedSample = benchmarkTask?.batches[0]?.samples[0];
+const generatedSample = benchmarkTask?.batches[1]?.samples[0];
 if (generatedSample === undefined) {
   throw new Error('expected generated sample');
 }
 assertEqual(generatedSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
-assertEqual(generatedSample.field_shape.join('x'), '1x90x98', 'sample field shape');
+assertEqual(generatedSample.field_shape.join('x'), '1x16x16', 'sample field shape');
 assertEqual(
   Object.hasOwn(generatedSample, 'preview_crop'),
   false,
@@ -242,7 +242,7 @@ assertEqual(
 const materializationPlan = generatedSample.materialization_plan as Record<string, unknown>;
 assertEqual(
   assignmentLabel(materializationPlan.resolution_assignment),
-  'H=90,W=98',
+  'H=16,W=16',
   'sample resolution assignment',
 );
 assertDataError(
@@ -264,11 +264,13 @@ assertDataError(
       benchmark_tasks: [
         {
           ...benchmarkTask,
-          batches: [{ ...benchmarkTask.batches[0], samples: [] }],
+          batches: benchmarkTask.batches.map((batch, index) =>
+            index === 2 ? { ...batch, samples: [] } : batch,
+          ),
         },
       ],
     }),
-  'benchmark tasks.0.batches.0.sample_count: expected sample length',
+  'benchmark tasks.0.batches.2.sample_count: expected sample length',
 );
 
 function assertEqual(actual: unknown, expected: unknown, label: string) {

@@ -1,6 +1,6 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { delimiter, relative } from 'node:path';
 import { dirname, resolve } from 'node:path';
@@ -12,6 +12,7 @@ const consoleDataUpdateEvent = 'leibniz-console-data:update';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const defaultResultRoot = 'results';
 const consoleDataPayloadMaxBuffer = 64 * 1024 * 1024;
+const consoleDataRefreshDebounceMs = 250;
 const consoleDataCachePath = resolve(
   repositoryRoot,
   'src/leibniz/console/_web_src/src/generated/consoleDataPayload.json',
@@ -57,12 +58,50 @@ function leibnizConsoleData() {
       if (watchRoots.length === 0) {
         return;
       }
+      let refreshTimer = undefined;
+      let refreshInFlight = false;
+      let refreshPending = false;
+      const runRefresh = () => {
+        if (refreshInFlight || !refreshPending) {
+          return;
+        }
+        refreshPending = false;
+        refreshInFlight = true;
+        refreshConsoleDataPayloadAsync()
+          .then((payload) => {
+            server.ws.send({
+              type: 'custom',
+              event: consoleDataUpdateEvent,
+              data: JSON.parse(payload),
+            });
+          })
+          .catch((error) => {
+            server.config.logger.error(`failed to refresh Leibniz console data: ${error}`);
+          })
+          .finally(() => {
+            refreshInFlight = false;
+            if (refreshPending) {
+              runRefresh();
+            }
+          });
+      };
+      const scheduleRefresh = () => {
+        refreshPending = true;
+        if (refreshTimer !== undefined) {
+          clearTimeout(refreshTimer);
+        }
+        refreshTimer = setTimeout(() => {
+          refreshTimer = undefined;
+          runRefresh();
+        }, consoleDataRefreshDebounceMs);
+      };
       server.watcher.add(watchRoots);
       server.watcher.on('all', (_event, path) => {
         server.watcher.add(existingDirectories(resultRoots));
         if (
           !isInsideAnyRoot(path, resultRoots) ||
-          isMaterializedResultViewEvent(path, resultRoots)
+          isMaterializedResultViewEvent(path, resultRoots) ||
+          isModelArtifactEvent(path, resultRoots)
         ) {
           return;
         }
@@ -70,16 +109,7 @@ function leibnizConsoleData() {
         if (module !== undefined) {
           server.moduleGraph.invalidateModule(module);
         }
-        try {
-          const payload = refreshConsoleDataPayload();
-          server.ws.send({
-            type: 'custom',
-            event: consoleDataUpdateEvent,
-            data: JSON.parse(payload),
-          });
-        } catch (error) {
-          server.config.logger.error(`failed to refresh Leibniz console data: ${error}`);
-        }
+        scheduleRefresh();
       });
     },
   };
@@ -97,6 +127,14 @@ export function refreshConsoleDataPayload() {
   mkdirSync(dirname(consoleDataCachePath), { recursive: true });
   writeFileSync(consoleDataCachePath, payload);
   return payload;
+}
+
+export function refreshConsoleDataPayloadAsync() {
+  return loadConsoleDataPayloadAsync().then((payload) => {
+    mkdirSync(dirname(consoleDataCachePath), { recursive: true });
+    writeFileSync(consoleDataCachePath, payload);
+    return payload;
+  });
 }
 
 export function loadConsoleDataPayload() {
@@ -117,6 +155,35 @@ export function loadConsoleDataPayload() {
       maxBuffer: consoleDataPayloadMaxBuffer,
     },
   );
+}
+
+export function loadConsoleDataPayloadAsync() {
+  const roots = consoleResultRoots();
+  const resultRootArgs = resultRootArguments(roots);
+  return new Promise((resolvePayload, reject) => {
+    execFile(
+      'python',
+      [
+        '-m',
+        'leibniz.console.data',
+        ...resultRootArgs,
+        'tests/fixtures',
+        'src/leibniz/benchmarks',
+      ],
+      {
+        cwd: repositoryRoot,
+        encoding: 'utf8',
+        maxBuffer: consoleDataPayloadMaxBuffer,
+      },
+      (error, stdout) => {
+        if (error !== null) {
+          reject(error);
+          return;
+        }
+        resolvePayload(stdout);
+      },
+    );
+  });
 }
 
 export function consoleDataPayloadPath() {
@@ -182,5 +249,14 @@ export function isMaterializedResultViewEvent(path, roots) {
     const relativePath = relative(root, resolvedPath);
     const parts = relativePath.split(/[\\/]+/);
     return parts[0] === 'views' && parts.length > 1;
+  });
+}
+
+export function isModelArtifactEvent(path, roots) {
+  const resolvedPath = resolve(path);
+  return roots.some((root) => {
+    const relativePath = relative(root, resolvedPath);
+    const parts = relativePath.split(/[\\/]+/);
+    return parts[0] === 'models' && parts.length > 1;
   });
 }

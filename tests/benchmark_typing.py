@@ -65,6 +65,12 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         request: StateSpaceMeasureRequest,
     ) -> StateSpaceCandidate | None: ...
 
+    def state_spaces_for_request(
+        self,
+        *,
+        request: StateSpaceMeasureRequest,
+    ) -> Sequence[StateSpaceCandidate]: ...
+
     def __call__(
         self,
         *,
@@ -97,7 +103,7 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         affine_transform_count: int = 2,
     ) -> Mapping[str, object]: ...
 
-    def console_preview_batch(self, *, atom_count: int) -> Mapping[str, object]: ...
+    def console_preview_batches(self, *, atom_count: int) -> Sequence[Mapping[str, object]]: ...
 
 
 class DigitsBenchmark(BenchmarkProtocol, Protocol):
