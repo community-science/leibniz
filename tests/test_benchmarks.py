@@ -274,16 +274,17 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
         "state_space_measure": {
             "kind": "constructed-finite-state-space",
             "measure_id": "log2_state_space_size",
-            "formula": "log2(requested_state_count)",
+            "formula": "log2(realized_state_count)",
             "digit_count": 10,
             "affine_transform_family": "constructed-finite-affine-product-grid",
-            "target_policy": "smallest-realized-cardinality-inside-request-band",
+            "target_policy": "symmetric-realized-cardinalities-inside-request-band",
             "description": (
                 "Score-bearing Digits state spaces are requested finite "
                 "single-digit slices. Requests smaller than the full digit "
                 "vocabulary activate only a prefix of digit classes; after "
-                "all digit classes are active, finite affine choices expand "
-                "the requested state space."
+                "all digit classes are active, each digit receives the same "
+                "finite affine choices. The benchmark reports the realized "
+                "cardinality instead of forcing exact powers of two."
             ),
         },
     }

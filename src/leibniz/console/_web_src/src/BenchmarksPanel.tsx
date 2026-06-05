@@ -1034,8 +1034,9 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
     `leibniz.console.benchmarks.${task.benchmark_id}.selectedSample`,
     null,
   );
-  const selected = task.batches[0];
-  const visibleSamples = selected?.samples.map((sample) => ({ batch: selected, sample })) ?? [];
+  const visibleSamples = task.batches.flatMap((batch) =>
+    batch.samples.map((sample) => ({ batch, sample })),
+  );
   const selectedSample =
     visibleSamples.find(({ batch, sample }) => sampleKey(batch, sample) === selectedSampleKey) ??
     visibleSamples[0];
@@ -1044,7 +1045,7 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
       ? null
       : sampleKey(selectedSample.batch, selectedSample.sample);
 
-  if (selected === undefined) {
+  if (task.batches.length === 0) {
     return <p className="artifact-detail-note">No generated samples are available.</p>;
   }
 
@@ -1056,20 +1057,31 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
           sample={selectedSample.sample}
         />
       )}
-      <section
-        className={`benchmark-sample-grid ${selected.presentation.sample_card_density}`}
-        aria-label="Generated benchmark samples"
-      >
-        {visibleSamples.map(({ batch, sample }) => (
-          <BenchmarkSampleCard
-            density={batch.presentation.sample_card_density}
-            key={`${batch.mode}-${sample.index}-${sample.outcome_id}`}
-            onSelect={() => setSelectedSampleKey(sampleKey(batch, sample))}
-            sample={sample}
-            selected={sampleKey(batch, sample) === selectedKey}
-          />
+      <div className="benchmark-sample-window-stack">
+        {task.batches.map((batch) => (
+          <section
+            aria-label={`Generated benchmark samples ${batch.label}`}
+            className="benchmark-sample-window"
+            key={batchKey(batch)}
+          >
+            <div className="benchmark-sample-window-header">
+              <div className="benchmark-sample-window-label">{batch.label}</div>
+              <div className="benchmark-sample-window-count">{batch.sample_count}</div>
+            </div>
+            <div className={`benchmark-sample-grid ${batch.presentation.sample_card_density}`}>
+              {batch.samples.map((sample) => (
+                <BenchmarkSampleCard
+                  density={batch.presentation.sample_card_density}
+                  key={sampleKey(batch, sample)}
+                  onSelect={() => setSelectedSampleKey(sampleKey(batch, sample))}
+                  sample={sample}
+                  selected={sampleKey(batch, sample) === selectedKey}
+                />
+              ))}
+            </div>
+          </section>
         ))}
-      </section>
+      </div>
     </div>
   );
 }
@@ -1184,5 +1196,9 @@ function sampleKey(
   batch: GeneratedObservationBatchRecord,
   sample: GeneratedObservationSampleRecord,
 ): string {
-  return `${batch.mode}:${batch.seed}:${batch.sample_count}:${sample.index}:${sample.outcome_id}`;
+  return `${batchKey(batch)}:${sample.index}:${sample.outcome_id}`;
+}
+
+function batchKey(batch: GeneratedObservationBatchRecord): string {
+  return `${batch.mode}:${batch.label}:${batch.seed}:${batch.sample_count}`;
 }

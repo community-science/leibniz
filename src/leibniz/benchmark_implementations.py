@@ -68,6 +68,12 @@ class Generator(Protocol):
         request: StateSpaceMeasureRequest,
     ) -> StateSpaceCandidate | None: ...
 
+    def state_spaces_for_request(
+        self,
+        *,
+        request: StateSpaceMeasureRequest,
+    ) -> Sequence[StateSpaceCandidate]: ...
+
 
 class Benchmark(Protocol):
     """Benchmark-owned executable behavior used by generic Leibniz evaluators."""

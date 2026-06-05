@@ -147,6 +147,18 @@ class Generator:
             },
         )
 
+    def state_spaces_for_request(
+        self,
+        *,
+        request: StateSpaceMeasureRequest,
+    ) -> tuple[StateSpaceCandidate, ...]:
+        """Return all exact legal-move-cardinality candidates in a request band."""
+
+        state_space = self.state_space_for_request(request=request)
+        if state_space is None:
+            return ()
+        return (state_space,)
+
 
 def _manifest() -> BenchmarkManifest:
     return BenchmarkManifest(

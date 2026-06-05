@@ -69,7 +69,13 @@ _field_scalar_construction_bytes = 64
 _default_memory_budget_fraction = 0.10
 _default_generation_memory_limit_bytes = 32_768_000
 _state_space_digit_count = 10
+_state_space_canvas_minimum_side = 16
+_state_space_canvas_side_step = 4
+_state_space_canvas_density = 1.0
+_maximum_state_space_candidates_per_request = 64
 _default_constructed_affine_transform_count = 2
+_constructed_affine_translation_bounds = (-0.15, 0.15)
+_constructed_affine_effective_radius_fraction = 0.25
 _constructed_affine_axis_density = 0.25
 _constructed_affine_scale_bounds = (0.92, 1.08)
 _constructed_affine_rotation_bounds = (-0.03, 0.03)
@@ -80,6 +86,11 @@ _constructed_affine_axis_names = (
     "scale",
     "rotation",
     "x_shear",
+)
+_console_preview_state_space_windows = (
+    (1.0, 2.0),
+    (2.0, 4.0),
+    (4.0, 8.0),
 )
 
 _CurvePoints: TypeAlias = tuple[tuple[float, float], ...]
@@ -92,6 +103,11 @@ class _ConstructedAffineGrid:
     scale: int
     rotation: int
     x_shear: int
+    x_translation_bounds: tuple[float, float]
+    y_translation_bounds: tuple[float, float]
+    scale_bounds: tuple[float, float]
+    rotation_bounds: tuple[float, float]
+    x_shear_bounds: tuple[float, float]
 
     @property
     def counts(self) -> tuple[int, int, int, int, int]:
@@ -112,6 +128,15 @@ class _ConstructedAffineGrid:
 
     def to_record(self) -> dict[str, int]:
         return dict(zip(_constructed_affine_axis_names, self.counts, strict=True))
+
+    def bounds_record(self) -> dict[str, list[float]]:
+        return {
+            "x_translation": list(self.x_translation_bounds),
+            "y_translation": list(self.y_translation_bounds),
+            "scale": list(self.scale_bounds),
+            "rotation": list(self.rotation_bounds),
+            "x_shear": list(self.x_shear_bounds),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +160,7 @@ class _DigitsStateSpace:
 
     @property
     def cardinality(self) -> int:
-        return self.requested_state_count
+        return self.digit_state_count * self.affine_transform_count
 
     @property
     def complexity(self) -> float:
@@ -151,10 +176,12 @@ class _DigitsStateSpace:
             "digit_variant_counts": list(self.digit_variant_counts),
             "digit_state_count": self.digit_state_count,
             "affine_transform_count": self.affine_transform_count,
-            "latent_state_count": self.digit_state_count * self.affine_transform_count,
+            "latent_state_count": self.cardinality,
             "requested_state_count": self.requested_state_count,
-            "construction": "requested-cardinality-over-finite-affine-product-grid",
+            "realized_state_count": self.cardinality,
+            "construction": "symmetric-digits-over-finite-affine-product-grid",
             "affine_grid": self.affine_grid.to_record(),
+            "affine_bounds": self.affine_grid.bounds_record(),
             "affine_parameters": list(_constructed_affine_axis_names),
         }
 
@@ -610,25 +637,43 @@ class Generator:
         *,
         request: StateSpaceMeasureRequest,
     ) -> StateSpaceCandidate | None:
-        """Return the smallest constructed finite state space inside a request band."""
+        """Return the smallest symmetric finite state space inside a request band."""
+
+        candidates = self.state_spaces_for_request(request=request)
+        if not candidates:
+            return None
+        return candidates[0]
+
+    def state_spaces_for_request(
+        self,
+        *,
+        request: StateSpaceMeasureRequest,
+    ) -> tuple[StateSpaceCandidate, ...]:
+        """Return symmetric Digits state-space candidates inside a request band."""
 
         minimum_complexity = self.minimum_state_space_measure().value
         if request.maximum < minimum_complexity:
-            return None
-        target_minimum = max(request.minimum, minimum_complexity)
-        requested_state_count = max(1, math.ceil(2.0**target_minimum))
-        state_space = self._state_space_for_requested_state_count(
-            requested_state_count=requested_state_count,
+            return ()
+        minimum_cardinality = max(
+            2,
+            math.ceil(2.0 ** max(request.minimum, minimum_complexity)),
         )
-        if not request.contains(state_space.measure()):
-            return None
-        return self._state_space_for_requested_state_count(
-            requested_state_count=state_space.requested_state_count,
-            affine_transform_count=state_space.affine_transform_count,
-            resolution_assignment=self._resolution_assignment_for_requested_state_count(
-                state_space.requested_state_count
-            ),
-        ).candidate()
+        maximum_cardinality = max(2, math.floor(2.0**request.maximum))
+        if maximum_cardinality < minimum_cardinality:
+            return ()
+        resolution_assignment = self._resolution_assignment_for_state_space_request(
+            request
+        )
+        candidates: list[StateSpaceCandidate] = []
+        for state_space in self._symmetric_state_spaces_in_cardinality_range(
+            minimum_cardinality=minimum_cardinality,
+            maximum_cardinality=maximum_cardinality,
+            resolution_assignment=resolution_assignment,
+        ):
+            measure = state_space.measure()
+            if request.contains(measure):
+                candidates.append(state_space.candidate())
+        return tuple(candidates)
 
     def _default_state_space(self, *, canonical_variation: bool = False) -> _DigitsStateSpace:
         return self._state_space_for_affine_transform_count(
@@ -661,7 +706,7 @@ class Generator:
             requested_state_count,
             "requested_state_count",
         )
-        active_digit_count = min(len(self.formation.components), requested_state_count)
+        active_digit_count = min(_state_space_digit_count, requested_state_count)
         digit_variant_counts = tuple(1 for _index in range(active_digit_count))
         digit_state_count = sum(digit_variant_counts)
         if affine_transform_count is None:
@@ -669,11 +714,78 @@ class Generator:
                 1,
                 math.ceil(requested_state_count / digit_state_count),
             )
+        requested_state_count = digit_state_count * affine_transform_count
         return _DigitsStateSpace(
             digit_variant_counts=digit_variant_counts,
-            affine_grid=_constructed_affine_grid(affine_transform_count),
+            affine_grid=_constructed_affine_grid(
+                affine_transform_count,
+                resolution_assignment=resolution_assignment,
+            ),
             requested_state_count=requested_state_count,
             resolution_assignment=resolution_assignment,
+        )
+
+    def _symmetric_state_spaces_in_cardinality_range(
+        self,
+        *,
+        minimum_cardinality: int,
+        maximum_cardinality: int,
+        resolution_assignment: AxisAssignment,
+    ) -> tuple[_DigitsStateSpace, ...]:
+        _require_generation_positive_integer(minimum_cardinality, "minimum_cardinality")
+        _require_generation_positive_integer(maximum_cardinality, "maximum_cardinality")
+        if maximum_cardinality < minimum_cardinality:
+            return ()
+        state_spaces: list[_DigitsStateSpace] = []
+        for digit_count in range(2, _state_space_digit_count):
+            if minimum_cardinality <= digit_count <= maximum_cardinality:
+                state_spaces.append(
+                    _DigitsStateSpace(
+                        digit_variant_counts=tuple(1 for _index in range(digit_count)),
+                        affine_grid=_constructed_affine_grid(
+                            1,
+                            resolution_assignment=resolution_assignment,
+                        ),
+                        requested_state_count=digit_count,
+                        resolution_assignment=resolution_assignment,
+                    )
+                )
+        minimum_transform_count = max(
+            1,
+            math.ceil(minimum_cardinality / _state_space_digit_count),
+        )
+        maximum_transform_count = max(
+            1,
+            maximum_cardinality // _state_space_digit_count,
+        )
+        for affine_grid in _constructed_affine_grids_in_transform_count_range(
+            minimum_transform_count=minimum_transform_count,
+            maximum_transform_count=maximum_transform_count,
+            resolution_assignment=resolution_assignment,
+        ):
+            if len(state_spaces) >= _maximum_state_space_candidates_per_request:
+                break
+            state_spaces.append(
+                _DigitsStateSpace(
+                    digit_variant_counts=tuple(
+                        1 for _index in range(_state_space_digit_count)
+                    ),
+                    affine_grid=affine_grid,
+                    requested_state_count=(
+                        _state_space_digit_count * affine_grid.transform_count
+                    ),
+                    resolution_assignment=resolution_assignment,
+                )
+            )
+        return tuple(
+            sorted(
+                state_spaces,
+                key=lambda state_space: (
+                    state_space.cardinality,
+                    state_space.digit_count,
+                    state_space.affine_transform_count,
+                ),
+            )
         )
 
     def _materialization_plan(
@@ -927,75 +1039,134 @@ class Generator:
             samples=samples,
         )
 
-    def console_preview_batch(self, *, atom_count: int) -> Mapping[str, object]:
-        """Return a balanced browser-preview batch for the Digits generator."""
+    def console_preview_batches(self, *, atom_count: int) -> tuple[Mapping[str, object], ...]:
+        """Return browser-preview batches for declared state-space windows."""
 
-        samples: list[Mapping[str, object]] = []
-        sample_count = 40
-        component_indices = _balanced_component_indices(
-            sample_count=sample_count,
-            atom_count=atom_count,
-            seed=f"{self.manifest.id}:balanced-console-samples",
-        )
-        used_field_shapes: set[tuple[int, ...]] = set()
-        for sample_index, component_index in enumerate(component_indices):
-            seed = 4100 + sample_index
-            attempt_count = 0
-            while True:
-                attempt_count += 1
-                if attempt_count > 512:
-                    raise ObservationGenerationError(
-                        "could not generate unique console sample canvas shapes"
-                    )
-                sample_set = self(
-                    shape=(),
-                    seed=seed,
-                    include_fields=True,
-                    component_indices=(component_index,),
-                )
-                if not sample_set.includes_fields:
-                    raise ObservationGenerationError(
-                        "generator did not include generated fields"
-                    )
-                sample = sample_set.samples[0]
-                field_shape = tuple(sample.require_field().shape)
-                if field_shape not in used_field_shapes:
-                    used_field_shapes.add(field_shape)
-                    break
-                seed += 1000
-            if sample.materialization_plan is None or sample.component_index is None:
-                raise ObservationGenerationError("Digits preview sample is incomplete")
-            samples.append(
-                {
-                    "index": len(samples),
-                    "outcome_id": sample.outcome_id,
-                    "component_index": sample.component_index,
-                    "complexity": sample.complexity,
-                    "state_space_measure": (
-                        None
-                        if sample.state_space_measure is None
-                        else sample.state_space_measure.to_record()
-                    ),
-                    "field_shape": list(sample.require_field().shape),
-                    "image_data_url": _field_to_png_data_url(sample.require_field()),
-                    "materialization_plan": sample.materialization_plan.to_record(),
-                    "latent_coordinates": [
-                        dict(coordinate) for coordinate in sample.latent_coordinates
-                    ],
-                }
+        if atom_count != len(self.manifest.outcome_space.outcomes):
+            raise ObservationGenerationError("atom_count does not match outcome space")
+        return tuple(
+            self._console_preview_state_space_window(
+                minimum=minimum,
+                maximum=maximum,
+                seed=401 + index,
             )
+            for index, (minimum, maximum) in enumerate(
+                _console_preview_state_space_windows
+            )
+        )
+
+    def _console_preview_state_space_window(
+        self,
+        *,
+        minimum: float,
+        maximum: float,
+        seed: int,
+    ) -> Mapping[str, object]:
+        request = StateSpaceMeasureRequest(minimum=minimum, maximum=maximum)
+        candidates = self.state_spaces_for_request(request=request)
+        samples: list[Mapping[str, object]] = []
+        materialization_declaration = ArtifactReference(
+            kind="materialization-declaration",
+            protocol_id=self.materialization.id,
+            record_digest=self.materialization.digest,
+        )
+        transform = self.formation.variation_transform
+        transform_record = transform.to_record()
+        scaled_factors = tuple(self.latent_factors.sample_factors)
+
+        for candidate_index, candidate in enumerate(candidates):
+            state_space = self._state_space_for_candidate(candidate)
+            if state_space.resolution_assignment is None:
+                raise ObservationGenerationError(
+                    "Digits state-space candidate is missing a resolution assignment"
+                )
+            for component_index in range(state_space.digit_count):
+                for transform_index in range(state_space.affine_transform_count):
+                    sample_index = len(samples)
+                    plan = self._materialization_plan(
+                        seed=seed,
+                        index=sample_index,
+                        resolution_assignment=state_space.resolution_assignment,
+                        materialization_declaration=materialization_declaration,
+                    )
+                    variation_coordinate = _constructed_variation_coordinate_record(
+                        transform=transform,
+                        component_index=component_index,
+                        transform_index=transform_index,
+                        grid=state_space.affine_grid,
+                    )
+                    variation_values: Mapping[str, object] = {
+                        "kind": "constructed-field-variation-transform-samples",
+                        "bounds": transform_record,
+                        "state_space": state_space.metadata(),
+                        "candidate_index": candidate_index,
+                        "transform_index": transform_index,
+                        "transform_count": state_space.affine_transform_count,
+                        "coordinates": [dict(variation_coordinate)],
+                    }
+                    field_record = self.formation.form_observation(
+                        id=self._observation_id(seed=seed, index=sample_index),
+                        plan=plan,
+                        component_index=component_index,
+                        variation_coordinates=(variation_coordinate,),
+                    )
+                    samples.append(
+                        {
+                            "index": sample_index,
+                            "outcome_id": self._outcome_id(component_index),
+                            "component_index": component_index,
+                            "complexity": state_space.complexity,
+                            "state_space_measure": state_space.measure().to_record(),
+                            "field_shape": list(field_record.field.shape),
+                            "image_data_url": _field_to_png_data_url(field_record.field),
+                            "materialization_plan": plan.to_record(),
+                            "latent_coordinates": [
+                                dict(coordinate)
+                                for coordinate in self._latent_coordinates(
+                                    component_index=component_index,
+                                    digit_variant_index=0,
+                                    scaled_factors=scaled_factors,
+                                    plan=plan,
+                                    variation_values=variation_values,
+                                )
+                            ],
+                        }
+                    )
         samples.sort(key=lambda sample: _sample_display_key(sample, len(samples)))
         return {
-            "mode": "balanced",
-            "label": "Balanced samples",
-            "seed": 401,
+            "mode": "state-space-window",
+            "label": f"[{minimum:g}, {maximum:g}]",
+            "seed": seed,
             "sample_count": len(samples),
+            "state_space_window": {
+                "measure_id": "log2_state_space_size",
+                "minimum": minimum,
+                "maximum": maximum,
+            },
             "presentation": {
-                "sample_card_density": "standard",
+                "sample_card_density": "compact" if len(samples) > 80 else "standard",
                 "aggregate_mode": False,
             },
             "samples": samples,
         }
+
+    def _state_space_for_candidate(
+        self,
+        candidate: StateSpaceCandidate,
+    ) -> _DigitsStateSpace:
+        if candidate.cardinality is None:
+            raise ObservationGenerationError(
+                "Digits state-space candidate is missing cardinality"
+            )
+        if candidate.resolution_assignment is None:
+            raise ObservationGenerationError(
+                "Digits state-space candidate is missing a resolution assignment"
+            )
+        return self._state_space_for_requested_state_count(
+            requested_state_count=candidate.cardinality,
+            affine_transform_count=_state_space_affine_transform_count(candidate),
+            resolution_assignment=candidate.resolution_assignment,
+        )
 
     def sample_variation_transform_coordinates(
         self,
@@ -1025,7 +1196,12 @@ class Generator:
             transform=transform,
             component_index=component_index,
             transform_index=transform_index,
-            grid=_constructed_affine_grid(affine_transform_count),
+            grid=_constructed_affine_grid(
+                affine_transform_count,
+                resolution_assignment=self._resolution_assignment_for_requested_state_count(
+                    _state_space_digit_count * affine_transform_count,
+                ),
+            ),
         )
 
     def tensor_batch_tensors(
@@ -1045,6 +1221,23 @@ class Generator:
             outcome_ids=outcome_ids,
         )
 
+    def _resolution_assignment_for_state_space_request(
+        self,
+        request: StateSpaceMeasureRequest,
+    ) -> AxisAssignment:
+        side = _state_space_canvas_side_for_complexity(request.maximum)
+        minimum_assignment = self.materialization.minimum_resolution()
+        values = dict(minimum_assignment.values)
+        values[self.formation.width_axis] = max(
+            values.get(self.formation.width_axis, 1),
+            side,
+        )
+        values[self.formation.height_axis] = max(
+            values.get(self.formation.height_axis, 1),
+            side,
+        )
+        return AxisAssignment(values=values)
+
     def _resolution_assignment_for_requested_state_count(
         self,
         requested_state_count: int,
@@ -1056,11 +1249,10 @@ class Generator:
         minimum_assignment = self.materialization.minimum_resolution()
         width_axis = self.formation.width_axis
         height_axis = self.formation.height_axis
-        width = max(1, math.ceil(math.sqrt(requested_state_count)))
-        height = max(1, math.ceil(requested_state_count / width))
+        side = _state_space_canvas_side_for_complexity(math.log2(requested_state_count))
         values = dict(minimum_assignment.values)
-        values[width_axis] = max(values.get(width_axis, 1), width)
-        values[height_axis] = max(values.get(height_axis, 1), height)
+        values[width_axis] = max(values.get(width_axis, 1), side)
+        values[height_axis] = max(values.get(height_axis, 1), side)
         return AxisAssignment(values=values)
 
 
@@ -1098,6 +1290,74 @@ def _state_space_measure(complexity: float) -> StateSpaceMeasureValue:
     )
 
 
+def _state_space_canvas_side_for_complexity(complexity: float) -> int:
+    if not math.isfinite(float(complexity)):
+        raise ObservationGenerationError("state-space complexity must be finite")
+    if complexity < 1.0:
+        raise ObservationGenerationError("state-space complexity must be at least 1")
+    frontier_area = (2.0**complexity) / _state_space_canvas_density
+    side = max(_state_space_canvas_minimum_side, math.ceil(math.sqrt(frontier_area)))
+    return _state_space_canvas_side_step * math.ceil(
+        side / _state_space_canvas_side_step
+    )
+
+
+def _state_space_canvas_side_from_assignment(
+    resolution_assignment: AxisAssignment | None,
+) -> int:
+    if resolution_assignment is None:
+        return _state_space_canvas_minimum_side
+    values = tuple(resolution_assignment.values.values())
+    if not values:
+        return _state_space_canvas_minimum_side
+    return max(_state_space_canvas_minimum_side, max(values))
+
+
+def _constructed_affine_bounds_for_canvas_side(
+    side: int,
+) -> dict[str, tuple[float, float]]:
+    _require_generation_positive_integer(side, "side")
+    return {
+        "x_translation": _constructed_affine_translation_bounds,
+        "y_translation": _constructed_affine_translation_bounds,
+        "scale": _constructed_affine_scale_bounds,
+        "rotation": _constructed_affine_rotation_bounds,
+        "x_shear": _constructed_affine_shear_bounds,
+    }
+
+
+def _constructed_affine_axis_capacities(
+    *,
+    bounds: Mapping[str, tuple[float, float]],
+    side: int,
+) -> tuple[int, int, int, int, int]:
+    _require_generation_positive_integer(side, "side")
+    radius_pixels = max(1.0, side * _constructed_affine_effective_radius_fraction)
+    translation_step = 1.0 / side
+    radius_step = 1.0 / radius_pixels
+    return (
+        _grid_capacity(bounds["x_translation"], minimum_step=translation_step),
+        _grid_capacity(bounds["y_translation"], minimum_step=translation_step),
+        _grid_capacity(bounds["scale"], minimum_step=radius_step),
+        _grid_capacity(bounds["rotation"], minimum_step=radius_step),
+        _grid_capacity(bounds["x_shear"], minimum_step=radius_step),
+    )
+
+
+def _grid_capacity(bounds: tuple[float, float], *, minimum_step: float) -> int:
+    lower, upper = bounds
+    if not math.isfinite(lower) or not math.isfinite(upper):
+        raise ObservationGenerationError("grid bounds must be finite")
+    if upper < lower:
+        raise ObservationGenerationError("grid upper bound must not be below lower bound")
+    if not math.isfinite(minimum_step) or minimum_step <= 0.0:
+        raise ObservationGenerationError("grid minimum step must be positive")
+    width = upper - lower
+    if width <= 0.0:
+        return 1
+    return max(1, math.floor(width / minimum_step) + 1)
+
+
 def _variation_extent_value(variation_extent: float) -> float:
     try:
         value = float(variation_extent)
@@ -1130,34 +1390,150 @@ def _target_distribution_row(
     return [float(distribution.get(outcome_id, 0.0)) for outcome_id in outcome_ids]
 
 
-def _constructed_affine_grid(transform_count: int) -> _ConstructedAffineGrid:
+def _constructed_affine_grid(
+    transform_count: int,
+    *,
+    resolution_assignment: AxisAssignment | None = None,
+) -> _ConstructedAffineGrid:
     _require_generation_positive_integer(transform_count, "transform_count")
-    counts = [1, 1, 1, 1, 1]
-    for factor in _prime_factors(transform_count):
-        axis_index = min(range(len(counts)), key=lambda index: (counts[index], index))
-        counts[axis_index] *= factor
+    side = _state_space_canvas_side_from_assignment(resolution_assignment)
+    bounds = _constructed_affine_bounds_for_canvas_side(side)
+    capacities = _constructed_affine_axis_capacities(bounds=bounds, side=side)
+    counts = _constructed_affine_counts_for_transform_count(
+        transform_count=transform_count,
+        capacities=capacities,
+    )
     return _ConstructedAffineGrid(
         x_translation=counts[0],
         y_translation=counts[1],
         scale=counts[2],
         rotation=counts[3],
         x_shear=counts[4],
+        x_translation_bounds=bounds["x_translation"],
+        y_translation_bounds=bounds["y_translation"],
+        scale_bounds=bounds["scale"],
+        rotation_bounds=bounds["rotation"],
+        x_shear_bounds=bounds["x_shear"],
     )
 
 
-def _prime_factors(value: int) -> tuple[int, ...]:
-    _require_generation_positive_integer(value, "value")
-    factors: list[int] = []
-    candidate = 2
-    remaining = value
-    while candidate * candidate <= remaining:
-        while remaining % candidate == 0:
-            factors.append(candidate)
-            remaining //= candidate
-        candidate += 1 if candidate == 2 else 2
-    if remaining > 1:
-        factors.append(remaining)
-    return tuple(factors)
+def _constructed_affine_grids_in_transform_count_range(
+    *,
+    minimum_transform_count: int,
+    maximum_transform_count: int,
+    resolution_assignment: AxisAssignment,
+) -> tuple[_ConstructedAffineGrid, ...]:
+    _require_generation_positive_integer(
+        minimum_transform_count,
+        "minimum_transform_count",
+    )
+    _require_generation_positive_integer(
+        maximum_transform_count,
+        "maximum_transform_count",
+    )
+    if maximum_transform_count < minimum_transform_count:
+        return ()
+    side = _state_space_canvas_side_from_assignment(resolution_assignment)
+    bounds = _constructed_affine_bounds_for_canvas_side(side)
+    capacities = _constructed_affine_axis_capacities(bounds=bounds, side=side)
+    grids: list[_ConstructedAffineGrid] = []
+    seen_products: set[int] = set()
+    for counts in _constructed_affine_count_products(
+        capacities=capacities,
+        minimum_product=minimum_transform_count,
+        maximum_product=maximum_transform_count,
+    ):
+        transform_count = _sample_count(counts)
+        if transform_count in seen_products:
+            continue
+        seen_products.add(transform_count)
+        grids.append(
+            _ConstructedAffineGrid(
+                x_translation=counts[0],
+                y_translation=counts[1],
+                scale=counts[2],
+                rotation=counts[3],
+                x_shear=counts[4],
+                x_translation_bounds=bounds["x_translation"],
+                y_translation_bounds=bounds["y_translation"],
+                scale_bounds=bounds["scale"],
+                rotation_bounds=bounds["rotation"],
+                x_shear_bounds=bounds["x_shear"],
+            )
+        )
+        if len(grids) >= _maximum_state_space_candidates_per_request:
+            break
+    return tuple(sorted(grids, key=lambda grid: (grid.transform_count, grid.counts)))
+
+
+def _constructed_affine_counts_for_transform_count(
+    *,
+    transform_count: int,
+    capacities: tuple[int, int, int, int, int],
+) -> tuple[int, int, int, int, int]:
+    products = _constructed_affine_count_products(
+        capacities=capacities,
+        minimum_product=transform_count,
+        maximum_product=transform_count,
+    )
+    if products:
+        return products[0]
+    raise ObservationGenerationError(
+        "requested affine transform count exceeds resolution-aware grid capacity"
+    )
+
+
+def _constructed_affine_count_products(
+    *,
+    capacities: tuple[int, int, int, int, int],
+    minimum_product: int,
+    maximum_product: int,
+) -> tuple[tuple[int, int, int, int, int], ...]:
+    products: list[tuple[int, int, int, int, int]] = []
+    for x_translation in range(1, capacities[0] + 1):
+        partial_x = x_translation
+        if partial_x > maximum_product:
+            break
+        for y_translation in range(1, capacities[1] + 1):
+            partial_y = partial_x * y_translation
+            if partial_y > maximum_product:
+                break
+            for scale in range(1, capacities[2] + 1):
+                partial_scale = partial_y * scale
+                if partial_scale > maximum_product:
+                    break
+                for rotation in range(1, capacities[3] + 1):
+                    partial_rotation = partial_scale * rotation
+                    if partial_rotation > maximum_product:
+                        break
+                    for x_shear in range(1, capacities[4] + 1):
+                        product = partial_rotation * x_shear
+                        if product > maximum_product:
+                            break
+                        if product >= minimum_product:
+                            products.append(
+                                (
+                                    x_translation,
+                                    y_translation,
+                                    scale,
+                                    rotation,
+                                    x_shear,
+                                )
+                            )
+    return tuple(
+        sorted(
+            products,
+            key=lambda counts: (
+                _sample_count(counts),
+                max(counts),
+                counts[4],
+                counts[3],
+                counts[2],
+                counts[1],
+                counts[0],
+            ),
+        )
+    )
 
 
 def _constructed_affine_indices(
@@ -1234,18 +1610,26 @@ def _constructed_affine_parameters(
 ) -> dict[str, float]:
     return {
         "x_translation": _grid_value(
-            spatial.matrix[0][2],
+            _bounded_interval(
+                grid.x_translation_bounds,
+                lower_bound=spatial.matrix[0][2][0],
+                upper_bound=spatial.matrix[0][2][1],
+            ),
             index=indices["x_translation"],
             count=grid.x_translation,
         ),
         "y_translation": _grid_value(
-            spatial.matrix[1][2],
+            _bounded_interval(
+                grid.y_translation_bounds,
+                lower_bound=spatial.matrix[1][2][0],
+                upper_bound=spatial.matrix[1][2][1],
+            ),
             index=indices["y_translation"],
             count=grid.y_translation,
         ),
         "scale": _grid_value(
             _bounded_interval(
-                _constructed_affine_scale_bounds,
+                grid.scale_bounds,
                 lower_bound=max(spatial.matrix[0][0][0], spatial.matrix[1][1][0]),
                 upper_bound=min(spatial.matrix[0][0][1], spatial.matrix[1][1][1]),
             ),
@@ -1254,7 +1638,7 @@ def _constructed_affine_parameters(
         ),
         "rotation": _grid_value(
             _bounded_interval(
-                _constructed_affine_rotation_bounds,
+                grid.rotation_bounds,
                 lower_bound=spatial.matrix[1][0][0],
                 upper_bound=spatial.matrix[1][0][1],
             ),
@@ -1263,7 +1647,7 @@ def _constructed_affine_parameters(
         ),
         "x_shear": _grid_value(
             _bounded_interval(
-                _constructed_affine_shear_bounds,
+                grid.x_shear_bounds,
                 lower_bound=spatial.matrix[0][1][0],
                 upper_bound=spatial.matrix[0][1][1],
             ),
@@ -1560,26 +1944,6 @@ def _require_positive_integer(value: int, name: str) -> None:
         raise TensorRuntimeError(f"{name} must be a positive integer")
 
 
-def _balanced_component_indices(
-    *,
-    sample_count: int,
-    atom_count: int,
-    seed: str,
-) -> tuple[int, ...]:
-    if sample_count % atom_count != 0:
-        raise ObservationGenerationError(
-            "balanced console samples require total token count to divide atom count"
-        )
-    generator = random.Random(seed)
-    tokens = [
-        digit
-        for digit in range(atom_count)
-        for _occurrence in range(sample_count // atom_count)
-    ]
-    generator.shuffle(tokens)
-    return tuple(tokens)
-
-
 def _sample_display_key(sample: Mapping[str, object], sample_count: int) -> int:
     index = sample["index"]
     if not isinstance(index, int):
@@ -1610,16 +1974,17 @@ def _manifest() -> BenchmarkManifest:
             "state_space_measure": {
                 "kind": "constructed-finite-state-space",
                 "measure_id": "log2_state_space_size",
-                "formula": "log2(requested_state_count)",
+                "formula": "log2(realized_state_count)",
                 "digit_count": _state_space_digit_count,
                 "affine_transform_family": "constructed-finite-affine-product-grid",
-                "target_policy": "smallest-realized-cardinality-inside-request-band",
+                "target_policy": "symmetric-realized-cardinalities-inside-request-band",
                 "description": (
                     "Score-bearing Digits state spaces are requested finite "
                     "single-digit slices. Requests smaller than the full digit "
                     "vocabulary activate only a prefix of digit classes; after "
-                    "all digit classes are active, finite affine choices expand "
-                    "the requested state space."
+                    "all digit classes are active, each digit receives the same "
+                    "finite affine choices. The benchmark reports the realized "
+                    "cardinality instead of forcing exact powers of two."
                 ),
             },
             "description": (

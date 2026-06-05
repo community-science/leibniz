@@ -915,12 +915,17 @@ def test_evaluation_curriculum_uses_benchmark_owned_target_state_spaces() -> Non
         candidate.complexity for candidate in candidates
     )
     assert candidates[0].state_space.resolution_assignment is not None
-    assert candidates[0].state_space.resolution_assignment.values == {"W": 2, "H": 1}
-    assert [candidate.state_space.cardinality for candidate in candidates[:4]] == [
+    assert candidates[0].state_space.resolution_assignment.values == {"W": 16, "H": 16}
+    assert [candidate.state_space.cardinality for candidate in candidates[:9]] == [
         2,
+        3,
         4,
+        5,
+        6,
+        7,
         8,
-        16,
+        9,
+        10,
     ]
 
 
@@ -932,11 +937,16 @@ def test_training_curriculum_uses_benchmark_owned_target_state_spaces() -> None:
         start_index=0,
     )
 
-    assert [candidate.state_space.cardinality for candidate in candidates[:4]] == [
+    assert [candidate.state_space.cardinality for candidate in candidates[:9]] == [
         2,
+        3,
         4,
+        5,
+        6,
+        7,
         8,
-        16,
+        9,
+        10,
     ]
 
 
@@ -952,23 +962,32 @@ def test_digits_state_space_for_request_materializes_constructed_affine_grid() -
     )
 
     assert state_space is not None
-    assert state_space.cardinality == 64
-    assert state_space.metadata["affine_transform_count"] == 7
-    assert state_space.metadata["requested_state_count"] == 64
+    assert state_space.cardinality == 80
+    assert math.isclose(state_space.complexity, math.log2(80))
+    assert state_space.metadata["affine_transform_count"] == 8
+    assert state_space.metadata["requested_state_count"] == 80
+    assert state_space.metadata["realized_state_count"] == 80
     assert state_space.metadata["construction"] == (
-        "requested-cardinality-over-finite-affine-product-grid"
+        "symmetric-digits-over-finite-affine-product-grid"
     )
     assert state_space.metadata["affine_grid"] == {
-        "x_translation": 7,
-        "y_translation": 1,
+        "x_translation": 4,
+        "y_translation": 2,
         "scale": 1,
         "rotation": 1,
         "x_shear": 1,
     }
+    assert state_space.metadata["affine_bounds"] == {
+        "x_translation": [-0.15, 0.15],
+        "y_translation": [-0.15, 0.15],
+        "scale": [0.92, 1.08],
+        "rotation": [-0.03, 0.03],
+        "x_shear": [-0.03, 0.03],
+    }
     assert state_space.resolution_assignment is not None
     assert state_space.resolution_assignment.values == {
-        "W": 8,
-        "H": 8,
+        "W": 16,
+        "H": 16,
     }
 
 

@@ -846,6 +846,43 @@ p {
   white-space: pre;
 }
 
+.benchmark-sample-window-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+  width: 100%;
+  min-width: 0;
+}
+
+.benchmark-sample-window {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+  min-width: 0;
+}
+
+.benchmark-sample-window-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-md);
+  width: 100%;
+}
+
+.benchmark-sample-window-label {
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-status);
+  font-weight: 700;
+}
+
+.benchmark-sample-window-count {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-status);
+}
+
 .benchmark-sample-grid {
   display: grid;
   gap: var(--space-md);

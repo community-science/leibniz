@@ -28,8 +28,15 @@ export type GeneratedObservationBatchRecord = {
   label: string;
   seed: number;
   sample_count: number;
+  state_space_window?: GeneratedStateSpaceWindowRecord;
   presentation: GeneratedObservationBatchPresentationRecord;
   samples: GeneratedObservationSampleRecord[];
+};
+
+export type GeneratedStateSpaceWindowRecord = {
+  measure_id: string;
+  minimum: number;
+  maximum: number;
 };
 
 export type GeneratedObservationBatchPresentationRecord = {
@@ -92,9 +99,20 @@ function validateBatch(value: unknown, path: string): void {
   const record = requireRecord(value, path, error);
   const sampleCount = requireNumber(record.sample_count, `${path}.sample_count`, error);
   const samples = requireArray(record.samples, `${path}.samples`, error);
+  const stateSpaceWindow = record.state_space_window;
+  if (stateSpaceWindow !== undefined) {
+    validateStateSpaceWindow(stateSpaceWindow, `${path}.state_space_window`);
+  }
   if (!Number.isInteger(sampleCount) || sampleCount !== samples.length) {
     throw error(`${path}.sample_count: expected sample length`);
   }
+}
+
+function validateStateSpaceWindow(value: unknown, path: string): void {
+  const record = requireRecord(value, path, error);
+  requireString(record.measure_id, `${path}.measure_id`, error);
+  requireNumber(record.minimum, `${path}.minimum`, error);
+  requireNumber(record.maximum, `${path}.maximum`, error);
 }
 
 function validateCodeSurface(value: unknown, path: string): void {

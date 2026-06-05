@@ -346,8 +346,8 @@ def test_digits_generator_accepts_state_space_measure_requests() -> None:
     assert batch.state_space_request is not None
     assert "component_count" not in batch.to_record()
     assert [sample.require_field().shape for sample in batch.samples] == [
-        (1, 1, 2),
-        (1, 1, 2),
+        (1, 16, 16),
+        (1, 16, 16),
     ]
     assert [sample.outcome_id for sample in batch.samples] == ["digit-1", "digit-0"]
     assert [sample.component_index for sample in batch.samples] == [1, 0]
@@ -374,12 +374,16 @@ def test_digits_generator_materializes_target_state_space_band() -> None:
     )
 
     assert state_space is not None
-    assert state_space.cardinality == 16
-    assert math.isclose(state_space.complexity, math.log2(16))
+    assert state_space.cardinality == 20
+    assert math.isclose(state_space.complexity, math.log2(20))
     assert state_space.resolution_assignment is not None
     assert state_space.metadata["affine_transform_count"] == 2
     assert state_space.metadata["digit_count"] == 10
-    assert state_space.metadata["requested_state_count"] == 16
+    assert state_space.metadata["requested_state_count"] == 20
+    assert state_space.metadata["realized_state_count"] == 20
+    assert state_space.metadata["construction"] == (
+        "symmetric-digits-over-finite-affine-product-grid"
+    )
     assert state_space.metadata["affine_parameters"] == [
         "x_translation",
         "y_translation",
@@ -542,25 +546,25 @@ def test_variation_transform_sampling_is_deterministic_and_declaration_driven() 
         seed=707,
         sample_index=2,
         component_index=1,
-        affine_transform_count=32,
+        affine_transform_count=30,
     )
     right = generator.sample_variation_transform_coordinates(
         seed=707,
         sample_index=2,
         component_index=1,
-        affine_transform_count=32,
+        affine_transform_count=30,
     )
     other = generator.sample_variation_transform_coordinates(
         seed=707,
         sample_index=3,
         component_index=1,
-        affine_transform_count=32,
+        affine_transform_count=30,
     )
     other_component = generator.sample_variation_transform_coordinates(
         seed=707,
         sample_index=2,
         component_index=2,
-        affine_transform_count=32,
+        affine_transform_count=30,
     )
 
     assert left == right
@@ -586,12 +590,20 @@ def test_variation_transform_sampling_is_deterministic_and_declaration_driven() 
 def test_digits_console_preview_png_encoding_is_deterministic() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
-    left = generator.console_preview_batch(atom_count=10)
-    right = generator.console_preview_batch(atom_count=10)
-    sample = cast(dict[str, object], cast(list[object], left["samples"])[0])
+    left = generator.console_preview_batches(atom_count=10)
+    right = generator.console_preview_batches(atom_count=10)
+    sample = cast(dict[str, object], cast(list[object], left[0]["samples"])[0])
     data_url = cast(str, sample["image_data_url"])
 
     assert left == right
+    assert [
+        (batch["label"], batch["sample_count"])
+        for batch in left
+    ] == [
+        ("[1, 2]", 9),
+        ("[2, 4]", 49),
+        ("[4, 8]", 1350),
+    ]
     assert data_url.startswith("data:image/png;base64,")
 
 

@@ -127,6 +127,12 @@ class _FieldBenchmarkGenerator(BenchmarkGenerator, Protocol):
         request: StateSpaceMeasureRequest,
     ) -> StateSpaceCandidate | None: ...
 
+    def state_spaces_for_request(
+        self,
+        *,
+        request: StateSpaceMeasureRequest,
+    ) -> Sequence[StateSpaceCandidate]: ...
+
     def tensor_batch_tensors(
         self,
         *,
@@ -1382,18 +1388,14 @@ def _benchmark_state_space_candidates(
     seen_complexities: set[float] = set()
     for target_index in range(stage_count):
         target = minimum + target_index
-        state_space = generator.state_space_for_request(
-            request=StateSpaceMeasureRequest(
-                minimum=target,
-                maximum=target + 1.0,
-            ),
+        state_spaces = generator.state_spaces_for_request(
+            request=StateSpaceMeasureRequest(minimum=target, maximum=target + 1.0)
         )
-        if state_space is None:
-            continue
-        if state_space.complexity in seen_complexities:
-            continue
-        seen_complexities.add(state_space.complexity)
-        candidates.append(_CurriculumCandidate(state_space=state_space))
+        for state_space in state_spaces:
+            if state_space.complexity in seen_complexities:
+                continue
+            seen_complexities.add(state_space.complexity)
+            candidates.append(_CurriculumCandidate(state_space=state_space))
     return tuple(candidates)
 
 
