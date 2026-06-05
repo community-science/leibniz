@@ -734,7 +734,7 @@ function ModelCostDetail({
   inspection: ModelInspectionRecord | undefined;
   model: BenchmarkModelCandidate;
 }) {
-  const summary = inspection?.cost_summary ?? model.cost_summary;
+  const summary = model.cost_summary;
   return (
     <section className="benchmark-model-detail-section">
       <h4>Cost Summary</h4>
@@ -764,8 +764,8 @@ function ModelCostDetail({
           <dd>{optionalNumberLabel(summary.inference_compute)}</dd>
         </div>
         <div>
-          <dt>Training Compute / Sample</dt>
-          <dd>{optionalNumberLabel(summary.training_compute_per_sample)}</dd>
+          <dt>Training Compute</dt>
+          <dd>{optionalNumberLabel(summary.training_compute)}</dd>
         </div>
         <div>
           <dt>Unknown Parameter Components</dt>

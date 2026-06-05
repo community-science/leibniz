@@ -8,6 +8,8 @@ def test_miniforge_environment_declares_development_toolchain() -> None:
     lines = (_root / "environment.yml").read_text(encoding="utf-8").splitlines()
 
     assert "name: leibniz-dev" in lines
+    assert "  - pytorch" in lines
+    assert "  - nvidia" in lines
     assert "  - conda-forge" in lines
     assert "  - python=3.12" in lines
     assert "  - nodejs=24" in lines
@@ -24,7 +26,10 @@ def test_environment_scripts_use_repo_local_miniforge() -> None:
     assert "MINIFORGE_ROOT=\"${LEIBNIZ_MINIFORGE_ROOT:-$LEIBNIZ_ROOT/.miniforge}\"" in setup_script
     assert "ENV_NAME=\"${LEIBNIZ_ENV_NAME:-leibniz-dev}\"" in setup_script
     assert "conda-forge/miniforge/releases/latest/download" in setup_script
-    assert "env create -n \"$ENV_NAME\" -f environment.yml" in setup_script
+    assert "--environment-specifier cep-24" in setup_script
+    assert "-n \"$ENV_NAME\"" in setup_script
+    assert "-f environment.yml" in setup_script
+    assert "--prune" in setup_script
     assert "CONSOLE_WEB_ROOT=\"$LEIBNIZ_ROOT/src/leibniz/console/_web_src\"" in setup_script
     assert "Syncing console npm dependencies" in setup_script
     assert "\"$CONDA_BIN\" run -n \"$ENV_NAME\" npm ci" in setup_script
@@ -52,6 +57,12 @@ def test_ci_uses_miniforge_environment_file() -> None:
     assert "npm test" in workflow
     assert "python -m build --no-isolation" in workflow
     assert "actions/setup-python" not in workflow
+
+
+def test_miniforge_environment_declares_linux_cuda_pytorch_selector() -> None:
+    lines = (_root / "environment.yml").read_text(encoding="utf-8").splitlines()
+
+    assert "  - sel(linux): pytorch-cuda=12.4" in lines
 
 
 def test_main_branch_triggers_pages_rebuild() -> None:

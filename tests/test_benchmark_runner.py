@@ -820,8 +820,21 @@ def test_training_stage_records_current_validation_loss_without_global_best(
             accepted_mass=1.0,
         )
 
+    def fake_batch_max_compute(**_kwargs: object) -> int:
+        return 10
+
     monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
     monkeypatch.setattr(benchmark_runner, "apply_softmax_predictions", fake_predictions)
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_inference_compute",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_training_compute_per_sample",
+        fake_batch_max_compute,
+    )
     monkeypatch.setattr(
         benchmark_runner,
         "_training_gate_score_estimate",
@@ -842,12 +855,14 @@ def test_training_stage_records_current_validation_loss_without_global_best(
         gate_check_interval=1,
         patience=1,
         min_delta=0.0,
-        min_steps=0,
-        batch_size=1,
-        gate_sample_count=1,
-        training_compute_per_sample=10.0,
-        training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
-        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
+            min_steps=0,
+            batch_size=1,
+            gate_sample_count=1,
+            architecture=ArchitectureManifestDocument.from_bytes(
+                _digits_architecture.read_bytes()
+            ).manifest,
+            training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+            training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
         validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         phase_timings=benchmark_runner.TimingCollector(),
         start_step=100,
@@ -1275,8 +1290,8 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     validation_history = cast(list[dict[str, object]], diagnostics["validation_history"])
     assert validation_history
     cost_summary = cast(dict[str, object], history[0]["cost_summary"])
-    assert cost_summary["training_compute"] == 2784.0
-    assert cost_summary["training_compute_per_sample"] == 1392
+    assert cost_summary["training_compute"] == 1504.0
+    assert "training_compute_per_sample" not in cost_summary
     console_view_model = cast(dict[str, object], history[0]["console_view_model"])
     detail_sections = cast(list[dict[str, object]], console_view_model["detail_sections"])
     assert [section["title"] for section in detail_sections] == [
@@ -1477,7 +1492,10 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     assert len(progress_plot_runs) == 1
     assert progress_plot_runs[0]["result_status"] == "tentative"
     assert progress_plot_runs[0]["source_kind"] == "local-training-estimate"
+    progress_cost = cast(dict[str, object], progress_plot_runs[0]["cost_summary"])
+    assert isinstance(progress_cost["inference_compute"], int | float)
     training_estimate = cast(dict[str, object], progress_records[0]["training_estimate"])
+    assert isinstance(training_estimate["max_inference_compute"], int)
     sampled_competence = cast(dict[str, object], training_estimate["sampled_competence"])
     sampled_points = cast(list[dict[str, object]], sampled_competence["points"])
     assert training_estimate["seed"] == sampled_points[0]["seed"]
@@ -1613,6 +1631,9 @@ def _score_estimate(
         "score": score,
         "validation_check": check,
         "step": step,
+        "max_inference_compute": 10,
+        "running_max_inference_compute": 10,
+        "training_compute_per_sample": 10,
         "chance_mass": 0.1,
         "sampled_competence": sampled_competence,
     }

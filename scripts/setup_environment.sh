@@ -33,16 +33,23 @@ else
 fi
 
 if "$CONDA_BIN" env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
-    echo "Updating conda environment $ENV_NAME"
+    echo "Updating conda environment $ENV_NAME from environment.yml"
     (
         cd "$LEIBNIZ_ROOT"
-        "$CONDA_BIN" env update -n "$ENV_NAME" -f environment.yml --prune
+        "$CONDA_BIN" env update \
+            --environment-specifier cep-24 \
+            -n "$ENV_NAME" \
+            -f environment.yml \
+            --prune
     )
 else
-    echo "Creating conda environment $ENV_NAME"
+    echo "Creating conda environment $ENV_NAME from environment.yml"
     (
         cd "$LEIBNIZ_ROOT"
-        "$CONDA_BIN" env create -n "$ENV_NAME" -f environment.yml
+        "$CONDA_BIN" env create \
+            --environment-specifier cep-24 \
+            -n "$ENV_NAME" \
+            -f environment.yml
     )
 fi
 

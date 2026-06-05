@@ -1,10 +1,13 @@
 name: leibniz-dev
 channels:
+  - pytorch
+  - nvidia
   - conda-forge
 dependencies:
   - python=3.12
   - nodejs=24
   - pip>=24
   - pytorch>=2
+  - sel(linux): pytorch-cuda=12.4
   - pip:
       - "-e .[dev]"
