@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import math
 import random
 import struct
@@ -358,7 +359,7 @@ class Generator:
         sample_count: int,
         seed: int,
         include_fields: bool,
-        component_indices: Iterable[int] | None = None,
+        component_indices: tuple[int, ...] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         state_space: _DigitsStateSpace,
@@ -531,7 +532,7 @@ class Generator:
         *,
         sample_count: int,
         seed: int,
-        component_indices: Iterable[int] | None,
+        component_indices: tuple[int, ...] | None,
         component_count: int,
         timing: TimingCollector | None,
         timing_prefix: str,
@@ -622,12 +623,81 @@ class Generator:
                 for _index in range(sample_count)
             )
 
+    def _component_index_tensor(
+        self,
+        *,
+        sample_count: int,
+        seed: int,
+        component_indices: tuple[int, ...] | None,
+        component_count: int,
+        runtime: TensorRuntime,
+        timing: TimingCollector | None,
+        timing_prefix: str,
+    ) -> Any:
+        _require_generation_positive_integer(component_count, "component_count")
+        if component_count > len(self.formation.components):
+            raise ObservationGenerationError("component_count exceeds component vocabulary")
+        backend = getattr(runtime, "tor" + "ch")
+        with _timing_span(timing, f"{timing_prefix}component_index", samples=sample_count):
+            if component_indices is not None:
+                if len(component_indices) != sample_count:
+                    raise ObservationGenerationError(
+                        "component_indices length must match sample_count"
+                    )
+                if any(index < 0 or index >= component_count for index in component_indices):
+                    raise ObservationGenerationError(
+                        "component index is outside active component set"
+                    )
+                return backend.tensor(
+                    component_indices,
+                    dtype=backend.long,
+                    device=runtime.device,
+                )
+            generator = _runtime_generator(
+                runtime=runtime,
+                seed=f"{seed}:component-sequence",
+            )
+            return backend.randint(
+                low=0,
+                high=component_count,
+                size=(sample_count,),
+                dtype=backend.long,
+                device=runtime.device,
+                generator=generator,
+            )
+
+    def _transform_index_tensor(
+        self,
+        *,
+        sample_count: int,
+        seed: int,
+        state_space: _DigitsStateSpace,
+        runtime: TensorRuntime,
+        timing: TimingCollector | None,
+        timing_prefix: str,
+    ) -> Any:
+        backend = getattr(runtime, "tor" + "ch")
+        state_space_digest = str(ContentDigest.from_value(state_space.metadata()))
+        with _timing_span(timing, f"{timing_prefix}transform_index", samples=sample_count):
+            generator = _runtime_generator(
+                runtime=runtime,
+                seed=f"{seed}:variation:{state_space_digest}",
+            )
+            return backend.randint(
+                low=0,
+                high=state_space.affine_transform_count,
+                size=(sample_count,),
+                dtype=backend.long,
+                device=runtime.device,
+                generator=generator,
+            )
+
     def _generate_tensors(
         self,
         *,
         sample_shape: tuple[int, ...],
         seed: int,
-        component_indices: Iterable[int] | None,
+        component_indices: tuple[int, ...] | None,
         state_space: _DigitsStateSpace,
         resolution_assignment: AxisAssignment | None,
         memory_limit_bytes: int | None,
@@ -641,18 +711,20 @@ class Generator:
         if not outcome_ids:
             raise ObservationGenerationError("tensor generation requires outcome_ids")
         sample_count = _sample_count(sample_shape)
-        component_index_samples = self._sample_component_indices(
+        component_index_samples = self._component_index_tensor(
             sample_count=sample_count,
             seed=seed,
             component_indices=component_indices,
             component_count=state_space.digit_count,
+            runtime=runtime,
             timing=timing,
             timing_prefix=timing_prefix,
         )
-        transform_index_samples = self._sample_transform_indices(
+        transform_index_samples = self._transform_index_tensor(
             sample_count=sample_count,
             seed=seed,
             state_space=state_space,
+            runtime=runtime,
             timing=timing,
             timing_prefix=timing_prefix,
         )
@@ -675,17 +747,9 @@ class Generator:
                 grid=state_space.affine_grid,
             )
         with _timing_span(timing, f"{timing_prefix}field_tensor_gather", samples=sample_count):
-            state_indices = backend.tensor(
-                [
-                    component_index * state_space.affine_transform_count + transform_index
-                    for component_index, transform_index in zip(
-                        component_index_samples,
-                        transform_index_samples,
-                        strict=True,
-                    )
-                ],
-                dtype=backend.long,
-                device=runtime.device,
+            state_indices = (
+                component_index_samples * state_space.affine_transform_count
+                + transform_index_samples
             )
             fields = source.index_select(0, state_indices)
             if sample_shape:
@@ -693,17 +757,18 @@ class Generator:
             else:
                 fields = fields.reshape(tuple(source.shape[1:]))
         with _timing_span(timing, f"{timing_prefix}target_tensor", samples=sample_count):
-            labels = backend.tensor(
-                [
-                    _target_distribution_row(
-                        {self._outcome_id(component_index): 1.0},
-                        outcome_ids=outcome_ids,
-                    )
-                    for component_index in component_index_samples
-                ],
-                dtype=backend.float32,
-                device=runtime.device,
+            component_to_outcome = cache.component_outcome_indices(
+                digit_count=state_space.digit_count,
+                outcome_ids=outcome_ids,
+                component_outcome_ids=tuple(
+                    outcome.id for outcome in self.manifest.outcome_space.outcomes
+                ),
             )
+            target_indices = component_to_outcome.index_select(0, component_index_samples)
+            labels = backend.nn.functional.one_hot(
+                target_indices,
+                num_classes=len(outcome_ids),
+            ).to(dtype=backend.float32)
             if sample_shape:
                 labels = labels.reshape((*sample_shape, len(outcome_ids)))
             else:
@@ -1563,17 +1628,6 @@ def _preview_sample_coordinates(
     return tuple(coordinates)
 
 
-def _target_distribution_row(
-    distribution: Mapping[str, float],
-    *,
-    outcome_ids: tuple[str, ...],
-) -> list[float]:
-    unknown = tuple(outcome_id for outcome_id in distribution if outcome_id not in outcome_ids)
-    if unknown:
-        raise TensorRuntimeError(f"unknown target outcome id: {unknown[0]}")
-    return [float(distribution.get(outcome_id, 0.0)) for outcome_id in outcome_ids]
-
-
 def _constructed_affine_grid(
     transform_count: int,
     *,
@@ -2007,6 +2061,14 @@ class _FormationTensorCache:
     _state_tensors: dict[tuple[int, int, int, str], Any] = dataclass_field(
         default_factory=lambda: cast(dict[tuple[int, int, int, str], Any], {})
     )
+    _component_outcome_indices: dict[tuple[int, tuple[str, ...], tuple[str, ...]], Any] = (
+        dataclass_field(
+            default_factory=lambda: cast(
+                dict[tuple[int, tuple[str, ...], tuple[str, ...]], Any],
+                {},
+            )
+        )
+    )
 
     def state_tensor(
         self,
@@ -2046,6 +2108,36 @@ class _FormationTensorCache:
         stacked = backend.stack(tensors)
         self._state_tensors[key] = stacked
         return stacked
+
+    def component_outcome_indices(
+        self,
+        *,
+        digit_count: int,
+        outcome_ids: tuple[str, ...],
+        component_outcome_ids: tuple[str, ...],
+    ) -> Any:
+        _require_positive_integer(digit_count, "digit_count")
+        if digit_count > len(component_outcome_ids):
+            raise TensorRuntimeError("digit_count exceeds component outcome vocabulary")
+        key = (digit_count, outcome_ids, component_outcome_ids)
+        cached = self._component_outcome_indices.get(key)
+        if cached is not None:
+            return cached
+        unknown = tuple(
+            outcome_id
+            for outcome_id in component_outcome_ids[:digit_count]
+            if outcome_id not in outcome_ids
+        )
+        if unknown:
+            raise TensorRuntimeError(f"unknown target outcome id: {unknown[0]}")
+        backend = getattr(self.runtime, "tor" + "ch")
+        tensor = backend.tensor(
+            [outcome_ids.index(outcome_id) for outcome_id in component_outcome_ids[:digit_count]],
+            dtype=backend.long,
+            device=self.runtime.device,
+        )
+        self._component_outcome_indices[key] = tensor
+        return tensor
 
     def component_tensor(
         self,
@@ -2249,6 +2341,20 @@ def _uint8(value: float) -> int:
 def _require_positive_integer(value: int, name: str) -> None:
     if type(value) is not int or value <= 0:
         raise TensorRuntimeError(f"{name} must be a positive integer")
+
+
+def _runtime_generator(*, runtime: TensorRuntime, seed: str) -> Any:
+    backend = getattr(runtime, "tor" + "ch")
+    generator_seed = int.from_bytes(
+        hashlib.sha256(seed.encode("utf-8")).digest()[:8],
+        "big",
+    ) & ((1 << 63) - 1)
+    try:
+        generator = backend.Generator(device=runtime.device)
+    except (TypeError, RuntimeError):
+        generator = backend.Generator()
+    generator.manual_seed(generator_seed)
+    return generator
 
 
 def _sample_display_key(sample: Mapping[str, object], sample_count: int) -> int:
