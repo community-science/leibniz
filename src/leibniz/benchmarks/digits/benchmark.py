@@ -153,18 +153,13 @@ class _ConstructedAffineGrid:
 
 @dataclass(frozen=True, slots=True)
 class _DigitsStateSpace:
-    digit_variant_counts: tuple[int, ...]
     affine_grid: _ConstructedAffineGrid
     requested_state_count: int
     resolution_assignment: AxisAssignment | None = None
 
     @property
     def digit_count(self) -> int:
-        return len(self.digit_variant_counts)
-
-    @property
-    def digit_state_count(self) -> int:
-        return sum(self.digit_variant_counts)
+        return _state_space_digit_count
 
     @property
     def affine_transform_count(self) -> int:
@@ -172,7 +167,7 @@ class _DigitsStateSpace:
 
     @property
     def cardinality(self) -> int:
-        return self.digit_state_count * self.affine_transform_count
+        return self.digit_count * self.affine_transform_count
 
     @property
     def complexity(self) -> float:
@@ -185,8 +180,6 @@ class _DigitsStateSpace:
         return {
             "kind": "digits-requested-finite-state-space",
             "digit_count": self.digit_count,
-            "digit_variant_counts": list(self.digit_variant_counts),
-            "digit_state_count": self.digit_state_count,
             "affine_transform_count": self.affine_transform_count,
             "latent_state_count": self.cardinality,
             "requested_state_count": self.requested_state_count,
@@ -699,9 +692,8 @@ class Generator:
         affine_transform_count: int,
         resolution_assignment: AxisAssignment | None = None,
     ) -> _DigitsStateSpace:
-        digit_variant_counts = tuple(1 for _component in self.formation.components)
         return self._state_space_for_requested_state_count(
-            requested_state_count=sum(digit_variant_counts) * affine_transform_count,
+            requested_state_count=_state_space_digit_count * affine_transform_count,
             affine_transform_count=affine_transform_count,
             resolution_assignment=resolution_assignment,
         )
@@ -717,16 +709,13 @@ class Generator:
             requested_state_count,
             "requested_state_count",
         )
-        digit_variant_counts = tuple(1 for _index in range(_state_space_digit_count))
-        digit_state_count = sum(digit_variant_counts)
         if affine_transform_count is None:
             affine_transform_count = max(
                 1,
-                math.ceil(requested_state_count / digit_state_count),
+                math.ceil(requested_state_count / _state_space_digit_count),
             )
-        requested_state_count = digit_state_count * affine_transform_count
+        requested_state_count = _state_space_digit_count * affine_transform_count
         return _DigitsStateSpace(
-            digit_variant_counts=digit_variant_counts,
             affine_grid=_constructed_affine_grid(
                 affine_transform_count,
                 resolution_assignment=resolution_assignment,
@@ -764,9 +753,6 @@ class Generator:
                 break
             state_spaces.append(
                 _DigitsStateSpace(
-                    digit_variant_counts=tuple(
-                        1 for _index in range(_state_space_digit_count)
-                    ),
                     affine_grid=affine_grid,
                     requested_state_count=(
                         _state_space_digit_count * affine_grid.transform_count
@@ -2183,11 +2169,11 @@ def _manifest() -> BenchmarkManifest:
                 "target_policy": "symmetric-realized-cardinalities-inside-request-band",
                 "description": (
                     "Score-bearing Digits state spaces are requested finite "
-                    "single-digit slices. Requests smaller than the full digit "
-                    "vocabulary activate only a prefix of digit classes; after "
-                    "all digit classes are active, each digit receives the same "
-                    "finite affine choices. The benchmark reports the realized "
-                    "cardinality instead of forcing exact powers of two."
+                    "single-digit slices. The minimum non-null request is the "
+                    "canonical 10-way digit classification problem. Larger "
+                    "requests add symmetric finite affine choices for every "
+                    "digit, and the benchmark reports the realized cardinality "
+                    "instead of forcing exact powers of two."
                 ),
             },
             "description": (

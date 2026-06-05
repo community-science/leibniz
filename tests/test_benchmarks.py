@@ -280,11 +280,11 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
             "target_policy": "symmetric-realized-cardinalities-inside-request-band",
             "description": (
                 "Score-bearing Digits state spaces are requested finite "
-                "single-digit slices. Requests smaller than the full digit "
-                "vocabulary activate only a prefix of digit classes; after "
-                "all digit classes are active, each digit receives the same "
-                "finite affine choices. The benchmark reports the realized "
-                "cardinality instead of forcing exact powers of two."
+                "single-digit slices. The minimum non-null request is the "
+                "canonical 10-way digit classification problem. Larger "
+                "requests add symmetric finite affine choices for every "
+                "digit, and the benchmark reports the realized cardinality "
+                "instead of forcing exact powers of two."
             ),
         },
     }
