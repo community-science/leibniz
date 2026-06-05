@@ -561,6 +561,7 @@ def _local_run_records(
     evaluation_root = results_root / "evaluations"
     if not evaluation_root.is_dir():
         return ()
+    training_summaries = _training_summary_records_by_run_slug(results_root)
     records: list[_BenchmarkRunRecord] = []
     for path in sorted(evaluation_root.rglob("*" + _document_suffix)):
         record = load_object_document(path.read_bytes(), description="benchmark evaluation")
@@ -592,12 +593,16 @@ def _local_run_records(
             )
         except LocalResultImportError as error:
             raise LocalResultImportError(f"{source_path}: {error}") from error
+        training_summary_entry = training_summaries.get(summary.run_slug)
+        training_summary = (
+            None if training_summary_entry is None else training_summary_entry[0]
+        )
         if include_model_details:
             model_inspection = _model_inspection_view_record(
                 inspection=summary.model_inspection,
                 source_path=source_path,
                 measurement_dataset_digest=measurement_dataset_digest,
-                training_summary=None,
+                training_summary=training_summary,
                 artifact_references=_evaluation_summary_artifact_references(summary),
             )
             model_inspection_path = source_path
@@ -634,9 +639,29 @@ def _local_run_records(
                 measurement_dataset=MeasurementDataset(measurements=()),
                 measurement_dataset_digest=measurement_dataset_digest,
                 sampled_competence=summary.sampled_competence,
+                training_summary=training_summary,
             )
         )
     return tuple(records)
+
+
+def _training_summary_records_by_run_slug(
+    results_root: Path,
+) -> dict[str, tuple[Mapping[str, object], Path]]:
+    training_root = results_root / "training"
+    if not training_root.is_dir():
+        return {}
+    records: dict[str, tuple[Mapping[str, object], Path]] = {}
+    for path in sorted(training_root.rglob("*" + _document_suffix)):
+        summary = load_object_document(path.read_bytes(), description="training record")
+        if summary.get("format") not in {
+            "leibniz.benchmark-run",
+            "leibniz.benchmark-training-progress",
+        }:
+            continue
+        run_slug = _extract.non_empty_string(summary.get("run_slug"), "run_slug")
+        records[run_slug] = (summary, path)
+    return records
 
 
 def _local_training_estimate_records(
@@ -648,15 +673,10 @@ def _local_training_estimate_records(
     training_root = results_root / "training"
     if not training_root.is_dir():
         return ()
+    training_summaries = _training_summary_records_by_run_slug(results_root)
     records: list[_BenchmarkRunRecord] = []
     empty_dataset = MeasurementDataset(measurements=())
-    for path in sorted(training_root.rglob("*" + _document_suffix)):
-        summary = load_object_document(path.read_bytes(), description="training record")
-        if summary.get("format") not in {
-            "leibniz.benchmark-run",
-            "leibniz.benchmark-training-progress",
-        }:
-            continue
+    for summary, path in training_summaries.values():
         run_slug = _extract.non_empty_string(summary.get("run_slug"), "run_slug")
         if run_slug in accepted_run_slugs:
             continue

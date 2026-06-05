@@ -73,6 +73,7 @@ _state_space_canvas_minimum_side = 16
 _state_space_canvas_side_step = 4
 _state_space_canvas_density = 1.0
 _maximum_state_space_candidates_per_request = 64
+_state_space_cardinality_relative_tolerance = 1e-12
 _default_constructed_affine_transform_count = 2
 _canonical_digits_state_count = _state_space_digit_count
 _constructed_affine_preset_max_count = 8
@@ -665,11 +666,10 @@ class Generator:
         minimum_complexity = self.minimum_state_space_measure().value
         if request.maximum < minimum_complexity:
             return ()
-        minimum_cardinality = max(
-            2,
-            math.ceil(2.0 ** max(request.minimum, minimum_complexity)),
+        minimum_cardinality = _ceil_state_space_cardinality(
+            max(request.minimum, minimum_complexity)
         )
-        maximum_cardinality = max(2, math.floor(2.0**request.maximum))
+        maximum_cardinality = _floor_state_space_cardinality(request.maximum)
         if maximum_cardinality < minimum_cardinality:
             return ()
         resolution_assignment = self._resolution_assignment_for_state_space_request(
@@ -1304,6 +1304,24 @@ def _state_space_canvas_side_for_complexity(complexity: float) -> int:
     return _state_space_canvas_side_step * math.ceil(
         side / _state_space_canvas_side_step
     )
+
+
+def _ceil_state_space_cardinality(complexity: float) -> int:
+    value = _state_space_cardinality_float(complexity)
+    tolerance = max(1.0, abs(value)) * _state_space_cardinality_relative_tolerance
+    return max(2, math.ceil(value - tolerance))
+
+
+def _floor_state_space_cardinality(complexity: float) -> int:
+    value = _state_space_cardinality_float(complexity)
+    tolerance = max(1.0, abs(value)) * _state_space_cardinality_relative_tolerance
+    return max(2, math.floor(value + tolerance))
+
+
+def _state_space_cardinality_float(complexity: float) -> float:
+    if not math.isfinite(float(complexity)):
+        raise ObservationGenerationError("state-space complexity must be finite")
+    return 2.0**complexity
 
 
 def _state_space_canvas_side_from_assignment(

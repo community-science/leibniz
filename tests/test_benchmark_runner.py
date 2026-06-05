@@ -382,13 +382,13 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         == "approximately-uniform-within-complexity-class"
     )
     assert sampled_competence["complexity_axis"] is None
-    assert math.isclose(cast(float, sampled_competence["complexity"]), math.log2(70))
+    assert math.isclose(cast(float, sampled_competence["complexity"]), math.log2(10))
     assert sampled_competence["sample_count"] == 3
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
     assert len(points) == 1
     assert [point["sample_count"] for point in points] == [3]
-    assert math.isclose(cast(float, points[0]["complexity"]), math.log2(70))
+    assert math.isclose(cast(float, points[0]["complexity"]), math.log2(10))
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
     )
@@ -1232,7 +1232,10 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert "model_inspection_digest" in history[0]
     assert "model_inspection_path" in history[0]
     assert "sampled_competence" in history[0]
-    assert "training_diagnostics" not in history[0]
+    diagnostics = cast(dict[str, object], history[0]["training_diagnostics"])
+    assert isinstance(diagnostics["status"], str)
+    validation_history = cast(list[dict[str, object]], diagnostics["validation_history"])
+    assert validation_history
     cost_summary = cast(dict[str, object], history[0]["cost_summary"])
     assert cost_summary["training_compute"] == 2784.0
     assert cost_summary["training_compute_per_sample"] == 1392
@@ -1240,6 +1243,10 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     detail_sections = cast(list[dict[str, object]], console_view_model["detail_sections"])
     assert [section["title"] for section in detail_sections] == [
         "Sampled Competence",
+        "Training Protocol",
+        "Training Outcome",
+        "Throughput",
+        "Validation History",
     ]
     inspections = cast(list[dict[str, object]], result["model_inspections"])
     artifact_kinds = {
@@ -1263,7 +1270,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     )
     assert math.isclose(cast(float, score_basis["chance_mass"]), 0.1)
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    assert math.isclose(observed_complexities[0], math.log2(70))
+    assert math.isclose(observed_complexities[0], math.log2(10))
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
     assert points[0]["sample_count"] == 2
