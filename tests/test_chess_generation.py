@@ -49,8 +49,8 @@ def test_chess_generator_returns_state_space_measured_samples_without_fields() -
     sample = sample_set.samples[0]
     assert sample.state_space_measure is not None
     assert sample.state_space_measure.measure_id == StateSpaceMeasureRequest(
-        minimum=0.0,
-        maximum=0.0,
+        minimum=1.0,
+        maximum=1.0,
     ).measure_id
     assert sample.state_space_measure.value == math.log2(3)
     assert sample.latent_coordinates[0]["values"] == (
@@ -67,7 +67,7 @@ def test_chess_sample_record_does_not_invent_image_surface_fields() -> None:
 
     assert record["outcome_id"] == "g7f8"
     assert record["state_space_measure"] == {
-        "measure_id": StateSpaceMeasureRequest(minimum=0.0, maximum=0.0).measure_id,
+        "measure_id": StateSpaceMeasureRequest(minimum=1.0, maximum=1.0).measure_id,
         "value": math.log2(3),
     }
     assert "materialization_plan" not in record

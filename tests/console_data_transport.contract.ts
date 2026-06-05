@@ -181,7 +181,7 @@ if (generatedSample === undefined) {
   throw new Error('expected generated sample');
 }
 assertEqual(generatedSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
-assertEqual(generatedSample.field_shape.join('x'), '1x168x216', 'sample field shape');
+assertEqual(generatedSample.field_shape.join('x'), '1x90x98', 'sample field shape');
 assertEqual(
   Object.hasOwn(generatedSample, 'preview_crop'),
   false,
@@ -203,7 +203,7 @@ const variationCoordinate = generatedSample.latent_coordinates.find(
 const variationValues = variationCoordinate?.values as Record<string, unknown> | undefined;
 assertEqual(
   variationValues?.kind,
-  'field-variation-transform-samples',
+  'constructed-field-variation-transform-samples',
   'sample variation values kind',
 );
 assertEqual(
@@ -216,10 +216,33 @@ assertEqual(
   1,
   'sample variation coordinate count',
 );
+const generatedVariationCoordinate = Array.isArray(variationValues?.coordinates)
+  ? variationValues.coordinates[0] as Record<string, unknown>
+  : undefined;
+assertEqual(
+  Object.hasOwn(generatedVariationCoordinate ?? {}, 'constructed_affine_indices'),
+  true,
+  'sample variation constructed affine indices',
+);
+assertEqual(
+  Object.hasOwn(generatedVariationCoordinate ?? {}, 'constructed_affine_parameters'),
+  true,
+  'sample variation constructed affine parameters',
+);
+assertEqual(
+  Object.hasOwn(variationValues ?? {}, 'observable_state_id'),
+  false,
+  'sample omits observable state id',
+);
+assertEqual(
+  Object.hasOwn(variationValues ?? {}, 'target_distribution'),
+  false,
+  'sample omits target distribution',
+);
 const materializationPlan = generatedSample.materialization_plan as Record<string, unknown>;
 assertEqual(
   assignmentLabel(materializationPlan.resolution_assignment),
-  'H=168,W=216',
+  'H=90,W=98',
   'sample resolution assignment',
 );
 assertDataError(

@@ -11,7 +11,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from itertools import product
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
@@ -33,7 +32,6 @@ from leibniz.materialization import (
     MaterializationValidationError,
 )
 from leibniz.observation_formation import (
-    AffineMatrix2D,
     ComponentMark,
     FieldObservation,
     FormedObservation,
@@ -42,13 +40,12 @@ from leibniz.observation_formation import (
     SequenceLayout,
     SpatialAffineVariation,
     VariationTransformDeclaration,
-    affine_translation,
-    linear_affine_matrix,
 )
 from leibniz.observation_generation import (
     GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
+    StateSpaceCandidate,
     StateSpaceMeasureRequest,
     StateSpaceMeasureValue,
 )
@@ -68,21 +65,109 @@ _materialization_id = ProtocolIdentifier.parse("benchmarks.digits.materializatio
 _formation_id = ProtocolIdentifier.parse("benchmarks.digits.observation-formation@0.1.0")
 _generator_id = ProtocolIdentifier.parse("benchmarks.digits.generator@0.1.0")
 _outcome_space_id = ProtocolIdentifier.parse("benchmarks.digits.outcomes@0.1.0")
-_discriminatable_resolution_cache: dict[
-    tuple[str, str, str, int, int, float],
-    tuple[int, int],
-] = {}
-_canvas_fit_component_bounds_cache: dict[
-    tuple[str, int, int, int],
-    tuple[tuple[int, int, int, int] | None, ...],
-] = {}
-_rejection_cache_bins_per_axis = 8
-_rejection_cache_cell_limit = 4096
 _field_scalar_construction_bytes = 64
 _default_memory_budget_fraction = 0.10
 _default_generation_memory_limit_bytes = 32_768_000
+_state_space_digit_count = 10
+_default_constructed_affine_transform_count = 2
+_constructed_affine_axis_density = 0.25
+_constructed_affine_scale_bounds = (0.92, 1.08)
+_constructed_affine_rotation_bounds = (-0.03, 0.03)
+_constructed_affine_shear_bounds = (-0.03, 0.03)
+_constructed_affine_axis_names = (
+    "x_translation",
+    "y_translation",
+    "scale",
+    "rotation",
+    "x_shear",
+)
 
 _CurvePoints: TypeAlias = tuple[tuple[float, float], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ConstructedAffineGrid:
+    x_translation: int
+    y_translation: int
+    scale: int
+    rotation: int
+    x_shear: int
+
+    @property
+    def counts(self) -> tuple[int, int, int, int, int]:
+        return (
+            self.x_translation,
+            self.y_translation,
+            self.scale,
+            self.rotation,
+            self.x_shear,
+        )
+
+    @property
+    def transform_count(self) -> int:
+        count = 1
+        for axis_count in self.counts:
+            count *= axis_count
+        return count
+
+    def to_record(self) -> dict[str, int]:
+        return dict(zip(_constructed_affine_axis_names, self.counts, strict=True))
+
+
+@dataclass(frozen=True, slots=True)
+class _DigitsStateSpace:
+    digit_variant_counts: tuple[int, ...]
+    affine_grid: _ConstructedAffineGrid
+    requested_state_count: int
+    resolution_assignment: AxisAssignment | None = None
+
+    @property
+    def digit_count(self) -> int:
+        return len(self.digit_variant_counts)
+
+    @property
+    def digit_state_count(self) -> int:
+        return sum(self.digit_variant_counts)
+
+    @property
+    def affine_transform_count(self) -> int:
+        return self.affine_grid.transform_count
+
+    @property
+    def cardinality(self) -> int:
+        return self.requested_state_count
+
+    @property
+    def complexity(self) -> float:
+        return math.log2(self.cardinality)
+
+    def measure(self) -> StateSpaceMeasureValue:
+        return _state_space_measure(self.complexity)
+
+    def metadata(self) -> dict[str, object]:
+        return {
+            "kind": "digits-requested-finite-state-space",
+            "digit_count": self.digit_count,
+            "digit_variant_counts": list(self.digit_variant_counts),
+            "digit_state_count": self.digit_state_count,
+            "affine_transform_count": self.affine_transform_count,
+            "latent_state_count": self.digit_state_count * self.affine_transform_count,
+            "requested_state_count": self.requested_state_count,
+            "construction": "requested-cardinality-over-finite-affine-product-grid",
+            "affine_grid": self.affine_grid.to_record(),
+            "affine_parameters": list(_constructed_affine_axis_names),
+        }
+
+    def candidate(self) -> StateSpaceCandidate:
+        return StateSpaceCandidate(
+            request=StateSpaceMeasureRequest(
+                minimum=self.complexity,
+                maximum=self.complexity,
+            ),
+            cardinality=self.cardinality,
+            resolution_assignment=self.resolution_assignment,
+            metadata=self.metadata(),
+        )
 
 _digit_strokes: tuple[tuple[_CurvePoints, ...], ...] = (
     (
@@ -152,23 +237,6 @@ class _ResolutionSampling:
     height_axis: str
 
 
-@dataclass(slots=True)
-class _BoundedRejectionCache:
-    cells: set[tuple[object, ...]] = dataclass_field(default_factory=lambda: set())
-    max_cells: int = _rejection_cache_cell_limit
-
-    def contains(self, key: tuple[object, ...]) -> bool:
-        return key in self.cells
-
-    def add(self, key: tuple[object, ...]) -> bool:
-        if key in self.cells:
-            return True
-        if len(self.cells) >= self.max_cells:
-            return False
-        self.cells.add(key)
-        return True
-
-
 def benchmark(root: Path) -> BenchmarkProtocol:
     """Return the Digits benchmark implementation."""
 
@@ -229,11 +297,6 @@ class Generator:
     latent_factors: LatentFactorDeclaration
     materialization: MaterializationDeclaration
     formation: ObservationFormationDeclaration
-    rejection_cache: _BoundedRejectionCache = dataclass_field(
-        default_factory=_BoundedRejectionCache,
-        compare=False,
-        repr=False,
-    )
 
     def __post_init__(self) -> None:
         if self.materialization.benchmark_id != self.manifest.id:
@@ -260,7 +323,7 @@ class Generator:
         component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
-        variation_extent: float = 1.0,
+        state_space: _DigitsStateSpace,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
         output_timing_prefix: str = "",
@@ -271,18 +334,11 @@ class Generator:
             raise ObservationGenerationError("sample_count must be a positive integer")
         if type(seed) is not int or seed < 0:
             raise ObservationGenerationError("seed must be a nonnegative integer")
-        try:
-            variation_extent_value = float(variation_extent)
-        except (TypeError, ValueError) as error:
-            raise ObservationGenerationError("variation_extent must be finite") from error
-        if not math.isfinite(variation_extent_value):
-            raise ObservationGenerationError("variation_extent must be finite")
-        if variation_extent_value < 0.0 or variation_extent_value > 1.0:
-            raise ObservationGenerationError("variation_extent must be between 0 and 1")
         component_index_samples = self._sample_component_indices(
             sample_count=sample_count,
             seed=seed,
             component_indices=component_indices,
+            component_count=state_space.digit_count,
             timing=timing,
             timing_prefix=timing_prefix,
         )
@@ -292,26 +348,17 @@ class Generator:
             requested_assignment=resolution_assignment,
             memory_limit_bytes=memory_limit_bytes,
         )
-        width = resolved_resolution_assignment.require_axis(self.formation.width_axis)
-        height = resolved_resolution_assignment.require_axis(self.formation.height_axis)
-        transform = _variation_transform_at_extent(
-            self.formation.variation_transform,
-            extent=variation_extent_value,
-        )
+        transform = self.formation.variation_transform
         transform_record = transform.to_record()
         with _timing_span(timing, f"{timing_prefix}complexity"):
-            complexity = self.distinguishable_state_complexity(
-                width=width,
-                height=height,
-                variation_extent=variation_extent_value,
-            )
+            complexity = state_space.complexity
         materialization_declaration = ArtifactReference(
             kind="materialization-declaration",
             protocol_id=self.materialization.id,
             record_digest=self.materialization.digest,
         )
-        variation_transform_digest = str(ContentDigest.from_value(transform_record))
-        variation_generator = random.Random(f"{seed}:variation:{variation_transform_digest}")
+        state_space_digest = str(ContentDigest.from_value(state_space.metadata()))
+        variation_generator = random.Random(f"{seed}:variation:{state_space_digest}")
 
         with _timing_span(
             timing,
@@ -333,6 +380,7 @@ class Generator:
             transform=transform,
             transform_record=transform_record,
             generator=variation_generator,
+            state_space=state_space,
             timing=timing,
             timing_phase=variation_timing_phase,
         )
@@ -385,6 +433,7 @@ class Generator:
             ):
                 variation_values, variation_coordinates = variation_sample
                 field_record = field_records[index] if include_fields else None
+                digit_variant_index = 0
                 samples.append(
                     GeneratedSample(
                         index=index,
@@ -399,6 +448,7 @@ class Generator:
                         state_space_measure=_state_space_measure(complexity),
                         latent_coordinates=self._latent_coordinates(
                             component_index=component_index,
+                            digit_variant_index=digit_variant_index,
                             scaled_factors=scaled_factors,
                             plan=plan,
                             variation_values=variation_values,
@@ -417,9 +467,7 @@ class Generator:
         requested_assignment: AxisAssignment | None,
         memory_limit_bytes: int | None,
     ) -> AxisAssignment:
-        minimum_assignment = self.minimum_discriminatable_resolution_assignment(
-            minimum_assignment=self.materialization.minimum_resolution(),
-        )
+        minimum_assignment = self.materialization.minimum_resolution()
         if requested_assignment is None:
             resolution_assignment = self._sample_resolution_assignment(
                 sample_count=sample_count,
@@ -446,9 +494,13 @@ class Generator:
         sample_count: int,
         seed: int,
         component_indices: Iterable[int] | None,
+        component_count: int,
         timing: TimingCollector | None,
         timing_prefix: str,
     ) -> tuple[int, ...]:
+        _require_generation_positive_integer(component_count, "component_count")
+        if component_count > len(self.formation.components):
+            raise ObservationGenerationError("component_count exceeds component vocabulary")
         with _timing_span(timing, f"{timing_prefix}component_indices"):
             requested_indices = (
                 tuple(component_indices) if component_indices is not None else ()
@@ -460,11 +512,11 @@ class Generator:
             indices = tuple(
                 requested_indices[index]
                 if requested_indices
-                else generator.randrange(len(self.formation.components))
+                else generator.randrange(component_count)
                 for index in range(sample_count)
             )
-        if any(index < 0 or index >= len(self.formation.components) for index in indices):
-            raise ObservationGenerationError("component index is outside component vocabulary")
+        if any(index < 0 or index >= component_count for index in indices):
+            raise ObservationGenerationError("component index is outside active component set")
         return indices
 
     def _sample_variation_coordinates(
@@ -474,6 +526,7 @@ class Generator:
         transform: VariationTransformDeclaration,
         transform_record: Mapping[str, object],
         generator: random.Random,
+        state_space: _DigitsStateSpace,
         timing: TimingCollector | None,
         timing_phase: str,
     ) -> tuple[
@@ -490,29 +543,23 @@ class Generator:
             ]
         ] = []
         with _timing_span(timing, timing_phase, samples=len(plans)):
-            for plan in plans:
-                counters: dict[str, float] = {}
-                coordinate = _accepted_variation_coordinate(
-                    formation=self.formation,
+            for _plan in plans:
+                transform_index = generator.randrange(state_space.affine_transform_count)
+                coordinate = _constructed_variation_coordinate_record(
                     transform=transform,
-                    generator=generator,
                     component_index=0,
-                    width=plan.resolution_assignment.require_axis(self.formation.width_axis),
-                    height=plan.resolution_assignment.require_axis(self.formation.height_axis),
-                    affine_acceptance_thresholds=(
-                        self.manifest.affine_acceptance_thresholds()
-                    ),
-                    rejection_cache=self.rejection_cache,
-                    counters=counters,
+                    transform_index=transform_index,
+                    grid=state_space.affine_grid,
                 )
                 coordinates = (coordinate,)
-                if timing is not None and counters:
-                    timing.add_counters(timing_phase, counters)
                 samples.append(
                     (
                         {
-                            "kind": "field-variation-transform-samples",
+                            "kind": "constructed-field-variation-transform-samples",
                             "bounds": transform_record,
+                            "state_space": state_space.metadata(),
+                            "transform_index": transform_index,
+                            "transform_count": state_space.affine_transform_count,
                             "coordinates": [dict(item) for item in coordinates],
                         },
                         coordinates,
@@ -527,16 +574,107 @@ class Generator:
         height: int,
         variation_extent: float = 1.0,
     ) -> float:
-        component_complexity = math.log2(len(self.formation.components))
-        variation_complexity = _variation_transform_complexity(
-            _variation_transform_at_extent(
-                self.formation.variation_transform,
-                extent=variation_extent,
-            ),
-            width=width,
-            height=height,
+        _require_generation_positive_integer(width, "width")
+        _require_generation_positive_integer(height, "height")
+        try:
+            variation_extent_value = float(variation_extent)
+        except (TypeError, ValueError) as error:
+            raise ObservationGenerationError("variation_extent must be finite") from error
+        if not math.isfinite(variation_extent_value):
+            raise ObservationGenerationError("variation_extent must be finite")
+        if variation_extent_value < 0.0 or variation_extent_value > 1.0:
+            raise ObservationGenerationError("variation_extent must be between 0 and 1")
+        return self._default_state_space(
+            canonical_variation=variation_extent_value == 0.0,
+        ).complexity
+
+    def constructed_state_space_complexity(
+        self,
+        *,
+        affine_transform_count: int,
+    ) -> float:
+        """Return the exact log2 count of constructed single-digit states."""
+
+        return self._state_space_for_requested_state_count(
+            requested_state_count=_state_space_digit_count * affine_transform_count,
+            affine_transform_count=affine_transform_count,
+        ).complexity
+
+    def minimum_state_space_measure(self) -> StateSpaceMeasureValue:
+        """Return the smallest score-bearing Digits state-space measure."""
+
+        return _state_space_measure(1.0)
+
+    def state_space_for_request(
+        self,
+        *,
+        request: StateSpaceMeasureRequest,
+    ) -> StateSpaceCandidate | None:
+        """Return the smallest constructed finite state space inside a request band."""
+
+        minimum_complexity = self.minimum_state_space_measure().value
+        if request.maximum < minimum_complexity:
+            return None
+        target_minimum = max(request.minimum, minimum_complexity)
+        requested_state_count = max(1, math.ceil(2.0**target_minimum))
+        state_space = self._state_space_for_requested_state_count(
+            requested_state_count=requested_state_count,
         )
-        return component_complexity + variation_complexity
+        if not request.contains(state_space.measure()):
+            return None
+        return self._state_space_for_requested_state_count(
+            requested_state_count=state_space.requested_state_count,
+            affine_transform_count=state_space.affine_transform_count,
+            resolution_assignment=self._resolution_assignment_for_requested_state_count(
+                state_space.requested_state_count
+            ),
+        ).candidate()
+
+    def _default_state_space(self, *, canonical_variation: bool = False) -> _DigitsStateSpace:
+        return self._state_space_for_affine_transform_count(
+            affine_transform_count=(
+                1 if canonical_variation else _default_constructed_affine_transform_count
+            ),
+        )
+
+    def _state_space_for_affine_transform_count(
+        self,
+        *,
+        affine_transform_count: int,
+        resolution_assignment: AxisAssignment | None = None,
+    ) -> _DigitsStateSpace:
+        digit_variant_counts = tuple(1 for _component in self.formation.components)
+        return self._state_space_for_requested_state_count(
+            requested_state_count=sum(digit_variant_counts) * affine_transform_count,
+            affine_transform_count=affine_transform_count,
+            resolution_assignment=resolution_assignment,
+        )
+
+    def _state_space_for_requested_state_count(
+        self,
+        *,
+        requested_state_count: int,
+        affine_transform_count: int | None = None,
+        resolution_assignment: AxisAssignment | None = None,
+    ) -> _DigitsStateSpace:
+        _require_generation_positive_integer(
+            requested_state_count,
+            "requested_state_count",
+        )
+        active_digit_count = min(len(self.formation.components), requested_state_count)
+        digit_variant_counts = tuple(1 for _index in range(active_digit_count))
+        digit_state_count = sum(digit_variant_counts)
+        if affine_transform_count is None:
+            affine_transform_count = max(
+                1,
+                math.ceil(requested_state_count / digit_state_count),
+            )
+        return _DigitsStateSpace(
+            digit_variant_counts=digit_variant_counts,
+            affine_grid=_constructed_affine_grid(affine_transform_count),
+            requested_state_count=requested_state_count,
+            resolution_assignment=resolution_assignment,
+        )
 
     def _materialization_plan(
         self,
@@ -644,41 +782,6 @@ class Generator:
             values[axis] = requested_value
         return AxisAssignment(values=values)
 
-    def minimum_discriminatable_resolution_assignment(
-        self,
-        *,
-        minimum_assignment: AxisAssignment,
-    ) -> AxisAssignment:
-        sampling = _resolution_sampling(self.materialization.layout)
-        if sampling is None:
-            return minimum_assignment
-        minimum_width = minimum_assignment.require_axis(sampling.width_axis)
-        minimum_height = minimum_assignment.require_axis(sampling.height_axis)
-        margin = self.manifest.resolution_discriminability_margin()
-        cache_key = (
-            str(self.formation.digest),
-            sampling.width_axis,
-            sampling.height_axis,
-            minimum_width,
-            minimum_height,
-            margin,
-        )
-        cached = _discriminatable_resolution_cache.get(cache_key)
-        if cached is None:
-            cached = self.formation.minimum_discriminatable_resolution(
-                minimum_width=minimum_width,
-                minimum_height=minimum_height,
-                maximum_width=max(minimum_width * 64, 64),
-                maximum_height=max(minimum_height * 64, 64),
-                minimum_pairwise_l1=margin,
-            )
-            _discriminatable_resolution_cache[cache_key] = cached
-        width, height = cached
-        values = dict(minimum_assignment.values)
-        values[sampling.width_axis] = max(values.get(sampling.width_axis, 0), width)
-        values[sampling.height_axis] = max(values.get(sampling.height_axis, 0), height)
-        return AxisAssignment(values=values)
-
     def _outcome_id(self, component_index: int) -> str:
         if component_index >= len(self.manifest.outcome_space.outcomes):
             raise ObservationGenerationError("component index is outside outcome space")
@@ -688,6 +791,7 @@ class Generator:
         self,
         *,
         component_index: int,
+        digit_variant_index: int,
         scaled_factors: tuple[SampleLatentFactor, ...],
         plan: MaterializationPlan,
         variation_values: Mapping[str, object],
@@ -695,11 +799,15 @@ class Generator:
         records: list[Mapping[str, object]] = []
         for factor in scaled_factors:
             if factor.role == "content":
-                values: object = component_index
+                values: object = {
+                    "digit_index": component_index,
+                    "digit_variant_index": digit_variant_index,
+                    "outcome_id": self._outcome_id(component_index),
+                }
             elif factor.role == "materialization":
                 values = dict(plan.resolution_assignment.values)
             else:
-                values = variation_values
+                values = dict(variation_values)
             records.append(
                 {
                     "name": str(factor.name),
@@ -759,16 +867,17 @@ class Generator:
 
         sample_shape = _sample_shape(shape)
         sample_count = _sample_count(sample_shape)
+        variation_extent_value = _variation_extent_value(variation_extent)
+        state_space = self._default_state_space(
+            canonical_variation=variation_extent_value == 0.0,
+        )
         if state_space_request is not None:
             if resolution_assignment is not None:
                 raise ObservationGenerationError(
                     "state-space request cannot be combined with resolution_assignment"
                 )
-            resolution_assignment = self._resolution_assignment_for_state_space_request(
-                request=state_space_request,
-                variation_extent=variation_extent,
-            )
-            if resolution_assignment is None:
+            candidate = self.state_space_for_request(request=state_space_request)
+            if candidate is None:
                 return GeneratedSampleSet(
                     benchmark_id=self.manifest.id,
                     generator_id=self.id,
@@ -779,6 +888,20 @@ class Generator:
                     state_space_request=state_space_request,
                     samples=(),
                 )
+            resolution_assignment = candidate.resolution_assignment
+            if resolution_assignment is None:
+                raise ObservationGenerationError(
+                    "Digits state-space candidate is missing a resolution assignment"
+                )
+            if candidate.cardinality is None:
+                raise ObservationGenerationError(
+                    "Digits state-space candidate is missing cardinality"
+                )
+            state_space = self._state_space_for_requested_state_count(
+                requested_state_count=candidate.cardinality,
+                affine_transform_count=_state_space_affine_transform_count(candidate),
+                resolution_assignment=resolution_assignment,
+            )
         samples = self._generate_samples(
             sample_count=sample_count,
             seed=seed,
@@ -786,7 +909,7 @@ class Generator:
             component_indices=component_indices,
             memory_limit_bytes=memory_limit_bytes,
             resolution_assignment=resolution_assignment,
-            variation_extent=variation_extent,
+            state_space=state_space,
             timing=timing,
             timing_prefix=(
                 f"{timing_prefix}formation_batch." if include_fields else timing_prefix
@@ -880,6 +1003,7 @@ class Generator:
         seed: int,
         sample_index: int,
         component_index: int = 0,
+        affine_transform_count: int = _default_constructed_affine_transform_count,
     ) -> Mapping[str, object]:
         """Sample one deterministic Digits variation coordinate."""
 
@@ -889,17 +1013,19 @@ class Generator:
             raise ObservationGenerationError("sample_index must be a nonnegative integer")
         if type(component_index) is not int or component_index < 0:
             raise ObservationGenerationError("component_index must be a nonnegative integer")
-        transform = self.formation.variation_transform
-        generator = _variation_random(
-            seed=seed,
-            sample_index=sample_index,
-            component_index=component_index,
-            transform_digest=str(ContentDigest.from_value(transform.to_record())),
+        _require_generation_positive_integer(
+            affine_transform_count,
+            "affine_transform_count",
         )
-        return _variation_coordinate_record(
+        transform = self.formation.variation_transform
+        transform_index = (
+            seed + sample_index * 9973 + component_index * 101
+        ) % affine_transform_count
+        return _constructed_variation_coordinate_record(
             transform=transform,
-            generator=generator,
             component_index=component_index,
+            transform_index=transform_index,
+            grid=_constructed_affine_grid(affine_transform_count),
         )
 
     def tensor_batch_tensors(
@@ -919,53 +1045,23 @@ class Generator:
             outcome_ids=outcome_ids,
         )
 
-    def _resolution_assignment_for_state_space_request(
+    def _resolution_assignment_for_requested_state_count(
         self,
-        *,
-        request: StateSpaceMeasureRequest,
-        variation_extent: float,
-    ) -> AxisAssignment | None:
-        minimum_assignment = self.minimum_discriminatable_resolution_assignment(
-            minimum_assignment=self.materialization.minimum_resolution(),
+        requested_state_count: int,
+    ) -> AxisAssignment:
+        _require_generation_positive_integer(
+            requested_state_count,
+            "requested_state_count",
         )
+        minimum_assignment = self.materialization.minimum_resolution()
         width_axis = self.formation.width_axis
         height_axis = self.formation.height_axis
-        minimum_width = minimum_assignment.require_axis(width_axis)
-        minimum_height = minimum_assignment.require_axis(height_axis)
-        lattice_steps = self.materialization.resolution_lattice_steps()
-        width_step = lattice_steps.get(width_axis, 1)
-        height_step = lattice_steps.get(height_axis, 1)
-        widths = _logarithmic_lattice_axis_values(
-            minimum=minimum_width,
-            step=width_step,
-            count=32,
-        )
-        heights = _logarithmic_lattice_axis_values(
-            minimum=minimum_height,
-            step=height_step,
-            count=32,
-        )
-        selected: tuple[float, AxisAssignment] | None = None
-        for width in widths:
-            for height in heights:
-                complexity = self.distinguishable_state_complexity(
-                    width=width,
-                    height=height,
-                    variation_extent=variation_extent,
-                )
-                value = _state_space_measure(complexity)
-                if not request.contains(value):
-                    continue
-                assignment = AxisAssignment(
-                    values={
-                        **minimum_assignment.values,
-                        width_axis: width,
-                        height_axis: height,
-                    }
-                )
-                if selected is None or value.value < selected[0]:
-                    selected = (value.value, assignment)
-        return None if selected is None else selected[1]
+        width = max(1, math.ceil(math.sqrt(requested_state_count)))
+        height = max(1, math.ceil(requested_state_count / width))
+        values = dict(minimum_assignment.values)
+        values[width_axis] = max(values.get(width_axis, 1), width)
+        values[height_axis] = max(values.get(height_axis, 1), height)
+        return AxisAssignment(values=values)
 
 
 def _sample_shape(shape: int | Sequence[int] | None) -> tuple[int, ...]:
@@ -1002,27 +1098,200 @@ def _state_space_measure(complexity: float) -> StateSpaceMeasureValue:
     )
 
 
-def _logarithmic_lattice_axis_values(
-    *,
-    minimum: int,
-    step: int,
-    count: int,
-) -> tuple[int, ...]:
-    values: list[int] = []
-    seen: set[int] = set()
-    stage = 0
-    minimum_multiplier = max(1, math.ceil(minimum / step))
-    while len(values) < count:
-        multiplier = max(
-            minimum_multiplier,
-            math.ceil(minimum_multiplier * (math.sqrt(2.0) ** stage)),
+def _variation_extent_value(variation_extent: float) -> float:
+    try:
+        value = float(variation_extent)
+    except (TypeError, ValueError) as error:
+        raise ObservationGenerationError("variation_extent must be finite") from error
+    if not math.isfinite(value):
+        raise ObservationGenerationError("variation_extent must be finite")
+    if value < 0.0 or value > 1.0:
+        raise ObservationGenerationError("variation_extent must be between 0 and 1")
+    return value
+
+
+def _state_space_affine_transform_count(candidate: StateSpaceCandidate) -> int:
+    value = candidate.metadata.get("affine_transform_count")
+    if type(value) is not int or value <= 0:
+        raise ObservationGenerationError(
+            "Digits state-space candidate metadata is missing affine_transform_count"
         )
-        value = multiplier * step
-        if value not in seen:
-            seen.add(value)
-            values.append(value)
-        stage += 1
-    return tuple(values)
+    return value
+
+
+def _target_distribution_row(
+    distribution: Mapping[str, float],
+    *,
+    outcome_ids: tuple[str, ...],
+) -> list[float]:
+    unknown = tuple(outcome_id for outcome_id in distribution if outcome_id not in outcome_ids)
+    if unknown:
+        raise TensorRuntimeError(f"unknown target outcome id: {unknown[0]}")
+    return [float(distribution.get(outcome_id, 0.0)) for outcome_id in outcome_ids]
+
+
+def _constructed_affine_grid(transform_count: int) -> _ConstructedAffineGrid:
+    _require_generation_positive_integer(transform_count, "transform_count")
+    counts = [1, 1, 1, 1, 1]
+    for factor in _prime_factors(transform_count):
+        axis_index = min(range(len(counts)), key=lambda index: (counts[index], index))
+        counts[axis_index] *= factor
+    return _ConstructedAffineGrid(
+        x_translation=counts[0],
+        y_translation=counts[1],
+        scale=counts[2],
+        rotation=counts[3],
+        x_shear=counts[4],
+    )
+
+
+def _prime_factors(value: int) -> tuple[int, ...]:
+    _require_generation_positive_integer(value, "value")
+    factors: list[int] = []
+    candidate = 2
+    remaining = value
+    while candidate * candidate <= remaining:
+        while remaining % candidate == 0:
+            factors.append(candidate)
+            remaining //= candidate
+        candidate += 1 if candidate == 2 else 2
+    if remaining > 1:
+        factors.append(remaining)
+    return tuple(factors)
+
+
+def _constructed_affine_indices(
+    *,
+    transform_index: int,
+    grid: _ConstructedAffineGrid,
+) -> dict[str, int]:
+    if type(transform_index) is not int or transform_index < 0:
+        raise ObservationGenerationError("transform_index must be a nonnegative integer")
+    if transform_index >= grid.transform_count:
+        raise ObservationGenerationError("transform_index must be below transform_count")
+    remainder = transform_index
+    indices: list[int] = []
+    for axis_count in grid.counts:
+        indices.append(remainder % axis_count)
+        remainder //= axis_count
+    return dict(zip(_constructed_affine_axis_names, indices, strict=True))
+
+
+def _constructed_variation_coordinate_record(
+    *,
+    transform: VariationTransformDeclaration,
+    component_index: int,
+    transform_index: int,
+    grid: _ConstructedAffineGrid,
+) -> Mapping[str, object]:
+    if type(transform_index) is not int or transform_index < 0:
+        raise ObservationGenerationError("transform_index must be a nonnegative integer")
+    if transform_index >= grid.transform_count:
+        raise ObservationGenerationError("transform_index must be below transform_count")
+    if grid.transform_count == 1:
+        return _identity_variation_coordinate_record(
+            transform=transform,
+            component_index=component_index,
+        )
+    spatial = transform.spatial_affine
+    indices = _constructed_affine_indices(
+        transform_index=transform_index,
+        grid=grid,
+    )
+    parameters = _constructed_affine_parameters(
+        spatial=spatial,
+        grid=grid,
+        indices=indices,
+    )
+    scale = parameters["scale"]
+    rotation = parameters["rotation"]
+    shear = parameters["x_shear"]
+    cosine = math.cos(rotation)
+    sine = math.sin(rotation)
+    matrix = [
+        [scale * cosine, shear - scale * sine, parameters["x_translation"]],
+        [scale * sine, scale * cosine, parameters["y_translation"]],
+        [0.0, 0.0, 1.0],
+    ]
+    return {
+        "kind": "field-variation-transform-coordinate",
+        "component_index": component_index,
+        "spatial_affine": {
+            "kind": "spatial-affine-coordinate",
+            "coordinate_system": spatial.coordinate_system,
+            "matrix": matrix,
+        },
+        "constructed_affine_indices": indices,
+        "constructed_affine_parameters": parameters,
+    }
+
+
+def _constructed_affine_parameters(
+    *,
+    spatial: SpatialAffineVariation,
+    grid: _ConstructedAffineGrid,
+    indices: Mapping[str, int],
+) -> dict[str, float]:
+    return {
+        "x_translation": _grid_value(
+            spatial.matrix[0][2],
+            index=indices["x_translation"],
+            count=grid.x_translation,
+        ),
+        "y_translation": _grid_value(
+            spatial.matrix[1][2],
+            index=indices["y_translation"],
+            count=grid.y_translation,
+        ),
+        "scale": _grid_value(
+            _bounded_interval(
+                _constructed_affine_scale_bounds,
+                lower_bound=max(spatial.matrix[0][0][0], spatial.matrix[1][1][0]),
+                upper_bound=min(spatial.matrix[0][0][1], spatial.matrix[1][1][1]),
+            ),
+            index=indices["scale"],
+            count=grid.scale,
+        ),
+        "rotation": _grid_value(
+            _bounded_interval(
+                _constructed_affine_rotation_bounds,
+                lower_bound=spatial.matrix[1][0][0],
+                upper_bound=spatial.matrix[1][0][1],
+            ),
+            index=indices["rotation"],
+            count=grid.rotation,
+        ),
+        "x_shear": _grid_value(
+            _bounded_interval(
+                _constructed_affine_shear_bounds,
+                lower_bound=spatial.matrix[0][1][0],
+                upper_bound=spatial.matrix[0][1][1],
+            ),
+            index=indices["x_shear"],
+            count=grid.x_shear,
+        ),
+    }
+
+
+def _bounded_interval(
+    requested: tuple[float, float],
+    *,
+    lower_bound: float,
+    upper_bound: float,
+) -> tuple[float, float]:
+    lower = max(requested[0], lower_bound)
+    upper = min(requested[1], upper_bound)
+    if upper < lower:
+        center = (lower_bound + upper_bound) / 2.0
+        return (center, center)
+    return (lower, upper)
+
+
+def _grid_value(bounds: tuple[float, float], *, index: int, count: int) -> float:
+    lower, upper = bounds
+    if count <= 1:
+        return (lower + upper) / 2.0
+    return lower + (upper - lower) * (index / (count - 1))
 
 
 @dataclass(slots=True)
@@ -1031,8 +1300,8 @@ class _FormationTensorCache:
 
     runtime: TensorRuntime
     formation: ObservationFormationDeclaration
-    _component_tensors: dict[tuple[int, int, int], Any] = dataclass_field(
-        default_factory=lambda: cast(dict[tuple[int, int, int], Any], {})
+    _component_tensors: dict[tuple[int, int, int, str], Any] = dataclass_field(
+        default_factory=lambda: cast(dict[tuple[int, int, int, str], Any], {})
     )
 
     def batch_tensors(
@@ -1046,8 +1315,14 @@ class _FormationTensorCache:
         fields = self._varied_batch_tensor(batch=batch)
         backend = getattr(self.runtime, "tor" + "ch")
         labels = backend.tensor(
-            [outcome_ids.index(sample.outcome_id) for sample in batch.samples],
-            dtype=backend.long,
+            [
+                _target_distribution_row(
+                    sample.target_distribution_or_one_hot(),
+                    outcome_ids=outcome_ids,
+                )
+                for sample in batch.samples
+            ],
+            dtype=backend.float32,
             device=self.runtime.device,
         )
         return fields, labels
@@ -1058,7 +1333,6 @@ class _FormationTensorCache:
             raise TensorRuntimeError("batch samples must not be empty")
         width, height = _sample_field_size(batch.samples[0])
         source_tensors: list[Any] = []
-        affine_rows: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
         for sample in batch.samples:
             sample_width, sample_height = _sample_field_size(sample)
             if sample_width != width or sample_height != height:
@@ -1070,36 +1344,11 @@ class _FormationTensorCache:
                     width=width,
                     height=height,
                     component_index=_sample_component_index(sample),
-                )
-            )
-            affine_rows.append(
-                _generated_affine_grid_row(
-                    sample.variation_coordinates[0],
-                    width=width,
-                    height=height,
+                    variation_coordinate=sample.variation_coordinates[0],
                 )
             )
         backend = getattr(self.runtime, "tor" + "ch")
-        sources = backend.stack(source_tensors)
-        theta = backend.tensor(
-            affine_rows,
-            dtype=backend.float32,
-            device=self.runtime.device,
-        )
-        grid = backend.nn.functional.affine_grid(
-            theta,
-            sources.shape,
-            align_corners=False,
-        )
-        transformed = backend.nn.functional.grid_sample(
-            sources,
-            grid,
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=False,
-        )
-        channels, height, width = transformed.shape[1:]
-        return transformed.reshape((sample_count, 1, channels, height, width)).amax(dim=1)
+        return backend.stack(source_tensors)
 
     def component_tensor(
         self,
@@ -1107,6 +1356,7 @@ class _FormationTensorCache:
         width: int,
         height: int,
         component_index: int,
+        variation_coordinate: Mapping[str, object] | None = None,
     ) -> Any:
         _require_positive_integer(width, "width")
         _require_positive_integer(height, "height")
@@ -1116,7 +1366,12 @@ class _FormationTensorCache:
             or component_index >= len(self.formation.components)
         ):
             raise TensorRuntimeError("component_index is outside component vocabulary")
-        key = (width, height, component_index)
+        coordinate_digest = (
+            ""
+            if variation_coordinate is None
+            else str(ContentDigest.from_value(variation_coordinate))
+        )
+        key = (width, height, component_index, coordinate_digest)
         cached = self._component_tensors.get(key)
         if cached is not None:
             return cached
@@ -1124,6 +1379,7 @@ class _FormationTensorCache:
             width=width,
             height=height,
             component_index=component_index,
+            variation_coordinate=variation_coordinate,
         )
         self._component_tensors[key] = tensor
         return tensor
@@ -1134,11 +1390,13 @@ class _FormationTensorCache:
         width: int,
         height: int,
         component_index: int,
+        variation_coordinate: Mapping[str, object] | None,
     ) -> Any:
         field = self.formation.component_field(
             width=width,
             height=height,
             component_index=component_index,
+            variation_coordinate=variation_coordinate,
         )
         backend = getattr(self.runtime, "tor" + "ch")
         tensor = backend.tensor(
@@ -1147,144 +1405,6 @@ class _FormationTensorCache:
             device=self.runtime.device,
         )
         return tensor.reshape(field.shape)
-
-
-def _variation_random(
-    *,
-    seed: int,
-    sample_index: int,
-    component_index: int,
-    transform_digest: str,
-) -> random.Random:
-    return random.Random(
-        ":".join((str(seed), str(sample_index), str(component_index), transform_digest))
-    )
-
-
-def _variation_transform_at_extent(
-    transform: VariationTransformDeclaration,
-    *,
-    extent: float,
-) -> VariationTransformDeclaration:
-    if extent == 1.0:
-        return transform
-    spatial = transform.spatial_affine
-    matrix: list[tuple[tuple[float, float], ...]] = []
-    for row_index, row in enumerate(spatial.matrix):
-        scaled_row: list[tuple[float, float]] = []
-        for column_index, (lower, upper) in enumerate(row):
-            center = 1.0 if row_index == column_index else 0.0
-            scaled_row.append(
-                (
-                    center + (lower - center) * extent,
-                    center + (upper - center) * extent,
-                )
-            )
-        matrix.append(tuple(scaled_row))
-    return VariationTransformDeclaration(
-        kind=transform.kind,
-        spatial_affine=SpatialAffineVariation(
-            kind=spatial.kind,
-            coordinate_system=spatial.coordinate_system,
-            spatial_rank=spatial.spatial_rank,
-            matrix=tuple(matrix),
-        ),
-    )
-
-
-def _accepted_variation_coordinate(
-    *,
-    formation: ObservationFormationDeclaration,
-    transform: VariationTransformDeclaration,
-    generator: random.Random,
-    component_index: int,
-    width: int,
-    height: int,
-    affine_acceptance_thresholds: Mapping[str, float],
-    rejection_cache: _BoundedRejectionCache | None,
-    counters: dict[str, float],
-) -> Mapping[str, object]:
-    cache_scope = _rejection_cache_scope(
-        transform=transform,
-        thresholds=affine_acceptance_thresholds,
-    )
-    for _attempt in range(640):
-        _increment_counter(counters, "candidate_count")
-        _increment_counter(counters, "declared_distribution_candidate_count")
-        coordinate = dict(
-            _variation_coordinate_record(
-                transform=transform,
-                generator=generator,
-                component_index=component_index,
-            )
-        )
-        cache_cell = _rejection_cache_cell_key(
-            coordinate=coordinate,
-            transform=transform,
-            cache_scope=cache_scope,
-        )
-        if (
-            rejection_cache is not None
-            and cache_cell is not None
-            and rejection_cache.contains(cache_cell[0])
-        ):
-            _increment_counter(counters, "cached_reject_count")
-            continue
-        if not _affine_coordinate_passes_fast_thresholds(
-            coordinate,
-            affine_acceptance_thresholds,
-        ):
-            _increment_counter(counters, "fast_reject_count")
-            if (
-                rejection_cache is not None
-                and cache_cell is not None
-                and _affine_cell_is_certified_fast_reject(
-                    cell_bounds=cache_cell[1],
-                    thresholds=affine_acceptance_thresholds,
-                )
-            ):
-                _increment_counter(counters, "rejection_certificate_count")
-                if rejection_cache.add(cache_cell[0]):
-                    _increment_counter(counters, "rejection_cache_insert_count")
-                else:
-                    _increment_counter(counters, "rejection_cache_saturated_count")
-            continue
-        if not _affine_coordinate_fits_canvas(
-            formation=formation,
-            width=width,
-            height=height,
-            coordinate=coordinate,
-        ):
-            _increment_counter(counters, "canvas_fit_reject_count")
-            continue
-        _increment_counter(counters, "accepted_count")
-        return coordinate
-    _increment_counter(counters, "identity_fallback_count")
-    return _identity_variation_coordinate_record(
-        transform=transform,
-        component_index=component_index,
-    )
-
-
-def _variation_coordinate_record(
-    *,
-    transform: VariationTransformDeclaration,
-    generator: random.Random,
-    component_index: int,
-) -> Mapping[str, object]:
-    spatial = transform.spatial_affine
-    return {
-        "kind": "field-variation-transform-coordinate",
-        "component_index": component_index,
-        "spatial_affine": {
-            "kind": "spatial-affine-coordinate",
-            "coordinate_system": spatial.coordinate_system,
-            "matrix": [
-                [_sample_interval(generator, bounds) for bounds in row]
-                for row in spatial.matrix
-            ],
-        },
-    }
 
 
 def _identity_variation_coordinate_record(
@@ -1309,357 +1429,6 @@ def _identity_variation_coordinate_record(
     }
 
 
-def _increment_counter(counters: dict[str, float], name: str, value: float = 1.0) -> None:
-    counters[name] = counters.get(name, 0.0) + value
-
-
-def _rejection_cache_scope(
-    *,
-    transform: VariationTransformDeclaration,
-    thresholds: Mapping[str, float],
-) -> tuple[object, ...]:
-    return (
-        str(ContentDigest.from_value(transform.to_record())),
-        tuple(sorted((key, float(value)) for key, value in thresholds.items())),
-    )
-
-
-def _rejection_cache_cell_key(
-    *,
-    coordinate: Mapping[str, object],
-    transform: VariationTransformDeclaration,
-    cache_scope: tuple[object, ...],
-) -> tuple[tuple[object, ...], tuple[tuple[float, float], ...]] | None:
-    spatial = transform.spatial_affine
-    if spatial.spatial_rank != 2:
-        return None
-    matrix = _affine_coordinate_matrix(coordinate)
-    values = (matrix[0][0], matrix[0][1], matrix[0][2], matrix[1][0], matrix[1][1], matrix[1][2])
-    intervals = (
-        spatial.matrix[0][0],
-        spatial.matrix[0][1],
-        spatial.matrix[0][2],
-        spatial.matrix[1][0],
-        spatial.matrix[1][1],
-        spatial.matrix[1][2],
-    )
-    indices: list[int] = []
-    cell_bounds: list[tuple[float, float]] = []
-    for value, bounds in zip(values, intervals, strict=True):
-        lower, upper = bounds
-        if upper < lower:
-            return None
-        if upper == lower:
-            index = 0
-            cell_lower = lower
-            cell_upper = upper
-        else:
-            position = (value - lower) / (upper - lower)
-            index = max(
-                0,
-                min(
-                    _rejection_cache_bins_per_axis - 1,
-                    math.floor(position * _rejection_cache_bins_per_axis),
-                ),
-            )
-            cell_width = (upper - lower) / _rejection_cache_bins_per_axis
-            cell_lower = lower + index * cell_width
-            cell_upper = cell_lower + cell_width
-        indices.append(index)
-        cell_bounds.append((cell_lower, cell_upper))
-    return ((*cache_scope, tuple(indices)), tuple(cell_bounds))
-
-
-def _affine_cell_is_certified_fast_reject(
-    *,
-    cell_bounds: tuple[tuple[float, float], ...],
-    thresholds: Mapping[str, float],
-) -> bool:
-    if len(cell_bounds) != 6:
-        return False
-    a_bounds, b_bounds, tx_bounds, c_bounds, d_bounds, ty_bounds = cell_bounds
-    determinant_bounds = _interval_subtract(
-        _interval_multiply(a_bounds, d_bounds),
-        _interval_multiply(b_bounds, c_bounds),
-    )
-    if determinant_bounds[1] <= 0.0:
-        return True
-    minimum_determinant = thresholds.get("affine_minimum_absolute_determinant")
-    if minimum_determinant is not None and determinant_bounds[1] < minimum_determinant:
-        return True
-    minimum_axis_alignment = thresholds.get("affine_minimum_axis_alignment")
-    if minimum_axis_alignment is not None:
-        if _maximum_axis_alignment(a_bounds, c_bounds) < minimum_axis_alignment:
-            return True
-        if _maximum_axis_alignment(d_bounds, b_bounds) < minimum_axis_alignment:
-            return True
-    minimum_extent = thresholds.get("affine_minimum_projected_extent")
-    maximum_extent = thresholds.get("affine_maximum_projected_extent")
-    if minimum_extent is not None or maximum_extent is not None:
-        projected_x = _projected_unit_interval((a_bounds, b_bounds, tx_bounds))
-        projected_y = _projected_unit_interval((c_bounds, d_bounds, ty_bounds))
-        if minimum_extent is not None and (
-            projected_x[1] < minimum_extent or projected_y[1] < minimum_extent
-        ):
-            return True
-        if maximum_extent is not None and (
-            projected_x[0] > maximum_extent or projected_y[0] > maximum_extent
-        ):
-            return True
-    return False
-
-
-def _interval_multiply(
-    left: tuple[float, float],
-    right: tuple[float, float],
-) -> tuple[float, float]:
-    products = tuple(a * b for a, b in product(left, right))
-    return (min(products), max(products))
-
-
-def _interval_subtract(
-    left: tuple[float, float],
-    right: tuple[float, float],
-) -> tuple[float, float]:
-    return (left[0] - right[1], left[1] - right[0])
-
-
-def _maximum_axis_alignment(
-    aligned_bounds: tuple[float, float],
-    cross_bounds: tuple[float, float],
-) -> float:
-    maximum_aligned = max(0.0, aligned_bounds[1])
-    if maximum_aligned <= 0.0:
-        return -1.0
-    minimum_cross_abs = _minimum_interval_abs(cross_bounds)
-    return maximum_aligned / math.hypot(maximum_aligned, minimum_cross_abs)
-
-
-def _minimum_interval_abs(bounds: tuple[float, float]) -> float:
-    if bounds[0] <= 0.0 <= bounds[1]:
-        return 0.0
-    return min(abs(bounds[0]), abs(bounds[1]))
-
-
-def _projected_unit_interval(
-    bounds: tuple[
-        tuple[float, float],
-        tuple[float, float],
-        tuple[float, float],
-    ],
-) -> tuple[float, float]:
-    first, second, translation = bounds
-    possible_ranges: list[float] = []
-    for first_value, second_value, translation_value in product(
-        first,
-        second,
-        translation,
-    ):
-        points = (
-            translation_value,
-            first_value + translation_value,
-            second_value + translation_value,
-            first_value + second_value + translation_value,
-        )
-        possible_ranges.append(max(points) - min(points))
-    return (min(possible_ranges), max(possible_ranges))
-
-
-def _affine_coordinate_passes_fast_thresholds(
-    coordinate: Mapping[str, object],
-    thresholds: Mapping[str, float],
-) -> bool:
-    if not thresholds:
-        return True
-    matrix = _affine_coordinate_matrix(coordinate)
-    a, b, tx = matrix[0]
-    c, d, ty = matrix[1]
-    signed_determinant = a * d - b * c
-    if signed_determinant <= 0.0:
-        return False
-    determinant = abs(signed_determinant)
-    minimum_determinant = thresholds.get("affine_minimum_absolute_determinant")
-    if minimum_determinant is not None and determinant < minimum_determinant:
-        return False
-    minimum_axis_alignment = thresholds.get("affine_minimum_axis_alignment")
-    if minimum_axis_alignment is not None:
-        x_axis_extent = math.hypot(a, c)
-        y_axis_extent = math.hypot(b, d)
-        if x_axis_extent <= 0.0 or y_axis_extent <= 0.0:
-            return False
-        if a / x_axis_extent < minimum_axis_alignment:
-            return False
-        if d / y_axis_extent < minimum_axis_alignment:
-            return False
-    singular_minimum, singular_maximum = _affine_singular_values(a, b, c, d)
-    minimum_singular_value = thresholds.get("affine_minimum_singular_value")
-    if minimum_singular_value is not None and singular_minimum < minimum_singular_value:
-        return False
-    maximum_singular_value = thresholds.get("affine_maximum_singular_value")
-    if maximum_singular_value is not None and singular_maximum > maximum_singular_value:
-        return False
-    maximum_condition_number = thresholds.get("affine_maximum_condition_number")
-    if (
-        maximum_condition_number is not None
-        and singular_maximum / singular_minimum > maximum_condition_number
-    ):
-        return False
-
-    corners = (
-        (tx, ty),
-        (a + tx, c + ty),
-        (b + tx, d + ty),
-        (a + b + tx, c + d + ty),
-    )
-    xs = tuple(point[0] for point in corners)
-    ys = tuple(point[1] for point in corners)
-    minimum_x = min(xs)
-    maximum_x = max(xs)
-    minimum_y = min(ys)
-    maximum_y = max(ys)
-    extent_x = maximum_x - minimum_x
-    extent_y = maximum_y - minimum_y
-    minimum_extent = thresholds.get("affine_minimum_projected_extent")
-    if minimum_extent is not None and (extent_x < minimum_extent or extent_y < minimum_extent):
-        return False
-    maximum_extent = thresholds.get("affine_maximum_projected_extent")
-    if maximum_extent is not None and (extent_x > maximum_extent or extent_y > maximum_extent):
-        return False
-
-    minimum_overlap = thresholds.get("affine_minimum_cell_overlap_ratio")
-    if minimum_overlap is None:
-        return True
-    envelope_area = extent_x * extent_y
-    if envelope_area <= 0.0:
-        return False
-    overlap_width = max(0.0, min(maximum_x, 1.0) - max(minimum_x, 0.0))
-    overlap_height = max(0.0, min(maximum_y, 1.0) - max(minimum_y, 0.0))
-    return (overlap_width * overlap_height) / envelope_area >= minimum_overlap
-
-
-def _affine_coordinate_fits_canvas(
-    *,
-    formation: ObservationFormationDeclaration,
-    width: int,
-    height: int,
-    coordinate: Mapping[str, object],
-) -> bool:
-    matrix = _affine_coordinate_matrix(coordinate)
-    a, b, tx = matrix[0]
-    c, d, ty = matrix[1]
-    center = (0.5, 0.5)
-    for bounds in _canvas_fit_component_bounds(
-        formation=formation,
-        width=width,
-        height=height,
-    ):
-        if bounds is None:
-            continue
-        min_x, min_y, max_x, max_y = bounds
-        source_corners = (
-            ((min_x - 1.5) / width, (min_y - 1.5) / height),
-            ((max_x + 2.5) / width, (min_y - 1.5) / height),
-            ((min_x - 1.5) / width, (max_y + 2.5) / height),
-            ((max_x + 2.5) / width, (max_y + 2.5) / height),
-        )
-        for x, y in source_corners:
-            transformed_x = center[0] + a * (x - center[0]) + b * (y - center[1]) + tx
-            transformed_y = center[1] + c * (x - center[0]) + d * (y - center[1]) + ty
-            if transformed_x < 0.0 or transformed_x > 1.0:
-                return False
-            if transformed_y < 0.0 or transformed_y > 1.0:
-                return False
-    return True
-
-
-def _canvas_fit_component_bounds(
-    *,
-    formation: ObservationFormationDeclaration,
-    width: int,
-    height: int,
-) -> tuple[tuple[int, int, int, int] | None, ...]:
-    key = (str(formation.digest), width, height, 0)
-    cached = _canvas_fit_component_bounds_cache.get(key)
-    if cached is not None:
-        return cached
-    bounds = tuple(
-        _positive_field_bounds(
-            formation.component_field(
-                width=width,
-                height=height,
-                component_index=component_index,
-            )
-        )
-        for component_index in range(len(formation.components))
-    )
-    _canvas_fit_component_bounds_cache[key] = bounds
-    return bounds
-
-
-def _positive_field_bounds(field: FieldObservation) -> tuple[int, int, int, int] | None:
-    channels, height, width = field.shape
-    min_x = width
-    min_y = height
-    max_x = -1
-    max_y = -1
-    for channel in range(channels):
-        channel_offset = channel * width * height
-        for y_index in range(height):
-            row_offset = channel_offset + y_index * width
-            for x_index in range(width):
-                if field.values[row_offset + x_index] <= 0.0:
-                    continue
-                min_x = min(min_x, x_index)
-                min_y = min(min_y, y_index)
-                max_x = max(max_x, x_index)
-                max_y = max(max_y, y_index)
-    if max_x < min_x or max_y < min_y:
-        return None
-    return (min_x, min_y, max_x, max_y)
-
-
-def _affine_singular_values(
-    a: float,
-    b: float,
-    c: float,
-    d: float,
-) -> tuple[float, float]:
-    trace = a * a + b * b + c * c + d * d
-    determinant = a * d - b * c
-    discriminant = max(0.0, trace * trace - 4.0 * determinant * determinant)
-    root = math.sqrt(discriminant)
-    maximum_eigenvalue = max(0.0, (trace + root) / 2.0)
-    minimum_eigenvalue = max(0.0, (trace - root) / 2.0)
-    return (math.sqrt(minimum_eigenvalue), math.sqrt(maximum_eigenvalue))
-
-
-def _affine_coordinate_matrix(coordinate: Mapping[str, object]) -> AffineMatrix2D:
-    spatial_affine = coordinate.get("spatial_affine")
-    if not isinstance(spatial_affine, Mapping):
-        raise ObservationGenerationError("variation coordinate missing spatial_affine")
-    spatial_affine_mapping = cast(Mapping[str, object], spatial_affine)
-    matrix_object = spatial_affine_mapping.get("matrix")
-    if not isinstance(matrix_object, Sequence):
-        raise ObservationGenerationError("spatial_affine matrix must have three rows")
-    matrix = cast(Sequence[object], matrix_object)
-    if len(matrix) != 3:
-        raise ObservationGenerationError("spatial_affine matrix must have three rows")
-    rows: list[tuple[float, float, float]] = []
-    for row_object in matrix:
-        if not isinstance(row_object, Sequence):
-            raise ObservationGenerationError("spatial_affine matrix rows must have three values")
-        row = cast(Sequence[object], row_object)
-        if len(row) != 3:
-            raise ObservationGenerationError("spatial_affine matrix rows must have three values")
-        values: list[float] = []
-        for value in row:
-            if not isinstance(value, int | float) or isinstance(value, bool):
-                raise ObservationGenerationError("spatial_affine matrix values must be numeric")
-            values.append(float(value))
-        rows.append((values[0], values[1], values[2]))
-    return (rows[0], rows[1], rows[2])
-
-
 def _resolution_sampling(layout: Mapping[str, object] | None) -> _ResolutionSampling | None:
     if layout is None or "resolution_sampling" not in layout:
         return None
@@ -1682,35 +1451,9 @@ def _resolution_sampling(layout: Mapping[str, object] | None) -> _ResolutionSamp
     )
 
 
-def _variation_transform_complexity(
-    transform: VariationTransformDeclaration,
-    *,
-    width: int,
-    height: int,
-) -> float:
-    row_extents = (width, height, 1)
-    complexity = 0.0
-    for row_index, row in enumerate(transform.spatial_affine.matrix):
-        extent = row_extents[row_index] if row_index < len(row_extents) else 1
-        for lower, upper in row:
-            if upper > lower:
-                complexity += _distinguishable_interval_complexity(
-                    lower=lower,
-                    upper=upper,
-                    extent=extent,
-                )
-    return complexity
-
-
-def _distinguishable_interval_complexity(
-    *,
-    lower: float,
-    upper: float,
-    extent: int,
-) -> float:
-    if extent < 1:
-        return 0.0
-    return math.log2(max(1, math.floor((upper - lower) * extent) + 1))
+def _require_generation_positive_integer(value: int, name: str) -> None:
+    if type(value) is not int or value <= 0:
+        raise ObservationGenerationError(f"{name} must be a positive integer")
 
 
 def _sampled_resolution_maximum(
@@ -1753,11 +1496,6 @@ def _batch_sample_pixel_limit(
     budget = math.floor(memory_limit_bytes * memory_budget_fraction)
     per_sample_denominator = sample_count * channel_count * _field_scalar_construction_bytes
     return max(1, budget // per_sample_denominator)
-
-
-def _sample_interval(generator: random.Random, bounds: tuple[float, float]) -> float:
-    low, high = bounds
-    return generator.uniform(low, high)
 
 
 def _child_identifier(parent: ProtocolIdentifier, suffix: str) -> ProtocolIdentifier:
@@ -1817,70 +1555,6 @@ def _sample_field_size(sample: GeneratedSample) -> tuple[int, int]:
     return sample.width, sample.height
 
 
-def _generated_affine_grid_row(
-    record: Mapping[str, object],
-    *,
-    width: int,
-    height: int,
-) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    spatial = cast(Mapping[str, object], record["spatial_affine"])
-    matrix = cast(Sequence[Sequence[float]], spatial["matrix"])
-    return _affine_grid_row_from_values(
-        matrix=(
-            (float(matrix[0][0]), float(matrix[0][1]), float(matrix[0][2])),
-            (float(matrix[1][0]), float(matrix[1][1]), float(matrix[1][2])),
-            (float(matrix[2][0]), float(matrix[2][1]), float(matrix[2][2])),
-        ),
-        width=width,
-        height=height,
-    )
-
-
-def _affine_grid_row_from_values(
-    *,
-    matrix: AffineMatrix2D,
-    width: int,
-    height: int,
-) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    if width <= 0 or height <= 0:
-        raise TensorRuntimeError("field dimensions must be positive")
-    linear_matrix = linear_affine_matrix(matrix)
-    inverse = _inverse_affine_matrix_from_values(matrix=linear_matrix)
-    center = (0.5, 0.5)
-    center_x = 2.0 * center[0] - 1.0
-    center_y = 2.0 * center[1] - 1.0
-    field_translation = affine_translation(matrix)
-    translation_x = 2.0 * field_translation[0]
-    translation_y = 2.0 * field_translation[1]
-    return (
-        (
-            inverse[0][0],
-            inverse[0][1],
-            center_x
-            - inverse[0][0] * (center_x + translation_x)
-            - inverse[0][1] * (center_y + translation_y),
-        ),
-        (
-            inverse[1][0],
-            inverse[1][1],
-            center_y
-            - inverse[1][0] * (center_x + translation_x)
-            - inverse[1][1] * (center_y + translation_y),
-        ),
-    )
-
-
-def _inverse_affine_matrix_from_values(
-    *,
-    matrix: tuple[tuple[float, float], tuple[float, float]],
-) -> tuple[tuple[float, float], tuple[float, float]]:
-    (a, b), (c, d) = matrix
-    determinant = a * d - b * c
-    if not math.isfinite(determinant) or determinant == 0.0:
-        raise TensorRuntimeError("variation affine transform is singular")
-    return ((d / determinant, -b / determinant), (-c / determinant, a / determinant))
-
-
 def _require_positive_integer(value: int, name: str) -> None:
     if type(value) is not int or value <= 0:
         raise TensorRuntimeError(f"{name} must be a positive integer")
@@ -1933,6 +1607,21 @@ def _manifest() -> BenchmarkManifest:
             "affine_maximum_condition_number": 1.6,
             "affine_minimum_projected_extent": 0.65,
             "affine_maximum_projected_extent": 1.35,
+            "state_space_measure": {
+                "kind": "constructed-finite-state-space",
+                "measure_id": "log2_state_space_size",
+                "formula": "log2(requested_state_count)",
+                "digit_count": _state_space_digit_count,
+                "affine_transform_family": "constructed-finite-affine-product-grid",
+                "target_policy": "smallest-realized-cardinality-inside-request-band",
+                "description": (
+                    "Score-bearing Digits state spaces are requested finite "
+                    "single-digit slices. Requests smaller than the full digit "
+                    "vocabulary activate only a prefix of digit classes; after "
+                    "all digit classes are active, finite affine choices expand "
+                    "the requested state space."
+                ),
+            },
             "description": (
                 "Minimum rendered component separation required when choosing live "
                 "observation resolution."
@@ -1985,15 +1674,6 @@ def _materialization() -> MaterializationDeclaration:
             "sequence_axis": "L",
             "width_axis": "W",
             "height_axis": "H",
-            "resolution_floor": {"W": 24, "H": 24},
-            "resolution_lattice": {
-                "kind": "axis-multiple",
-                "steps": {"W": 24, "H": 24},
-                "description": (
-                    "Score-bearing sampled canvases lie on independent "
-                    "base-resolution multiples for each spatial axis."
-                ),
-            },
             "sequence_spacing": "left-to-right",
             "placement_axis": "x",
             "resolution_sampling": {

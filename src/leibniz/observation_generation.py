@@ -12,6 +12,7 @@ from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.benchmark_implementations import load_benchmark
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import (
+    AxisAssignment,
     MaterializationPlan,
 )
 from leibniz.observation_formation import (
@@ -23,6 +24,7 @@ __all__ = [
     "GeneratedSample",
     "GeneratedSampleSet",
     "ObservationGenerationError",
+    "StateSpaceCandidate",
     "StateSpaceMeasureRequest",
     "StateSpaceMeasureValue",
     "load_generator",
@@ -30,6 +32,12 @@ __all__ = [
 
 _core_state_space_measure_id = "log2_state_space_size"
 _core_state_space_measure_ids = frozenset({_core_state_space_measure_id})
+_minimum_state_space_measure_value = 1.0
+
+
+def _empty_metadata() -> Mapping[str, object]:
+    return {}
+
 
 class ObservationGenerationError(ValueError):
     """Raised when observation generation cannot satisfy benchmark declarations."""
@@ -52,8 +60,10 @@ class StateSpaceMeasureRequest:
             raise ObservationGenerationError("state-space measure minimum must be finite")
         if not math.isfinite(float(self.maximum)):
             raise ObservationGenerationError("state-space measure maximum must be finite")
-        if self.minimum < 0.0:
-            raise ObservationGenerationError("state-space measure minimum must be nonnegative")
+        if self.minimum < _minimum_state_space_measure_value:
+            raise ObservationGenerationError(
+                "state-space measure minimum must be at least 1"
+            )
         if self.maximum < self.minimum:
             raise ObservationGenerationError(
                 "state-space measure maximum must be at least the minimum"
@@ -90,8 +100,10 @@ class StateSpaceMeasureValue:
             raise ObservationGenerationError("state-space measure id is not a core measure")
         if not math.isfinite(float(self.value)):
             raise ObservationGenerationError("state-space measure value must be finite")
-        if self.value < 0.0:
-            raise ObservationGenerationError("state-space measure value must be nonnegative")
+        if self.value < _minimum_state_space_measure_value:
+            raise ObservationGenerationError(
+                "state-space measure value must be at least 1"
+            )
 
     def to_record(self) -> dict[str, object]:
         """Return a record for this measured value."""
@@ -103,6 +115,57 @@ class StateSpaceMeasureValue:
 
 
 @dataclass(frozen=True, slots=True)
+class StateSpaceCandidate:
+    """A benchmark-owned concrete state space offered for curriculum sampling."""
+
+    request: StateSpaceMeasureRequest
+    cardinality: int | None = None
+    resolution_assignment: AxisAssignment | None = None
+    metadata: Mapping[str, object] = dataclass_field(default_factory=_empty_metadata)
+
+    def __post_init__(self) -> None:
+        if self.request.minimum != self.request.maximum:
+            raise ObservationGenerationError(
+                "state-space candidate request must name one realized cardinality"
+            )
+        if self.cardinality is not None:
+            if type(self.cardinality) is not int or self.cardinality < 1:
+                raise ObservationGenerationError(
+                    "state-space candidate cardinality must be a positive integer"
+                )
+            if not math.isclose(
+                math.log2(self.cardinality),
+                self.complexity,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                raise ObservationGenerationError(
+                    "state-space candidate cardinality must match its log2 measure"
+                )
+
+    @property
+    def complexity(self) -> float:
+        """Return the candidate's realized log2 cardinality."""
+
+        return self.request.minimum
+
+    def to_record(self) -> dict[str, object]:
+        """Return a record for this benchmark-owned candidate."""
+
+        record: dict[str, object] = {
+            "request": self.request.to_record(),
+            "complexity": self.complexity,
+        }
+        if self.cardinality is not None:
+            record["cardinality"] = self.cardinality
+        if self.resolution_assignment is not None:
+            record["resolution_assignment"] = self.resolution_assignment.to_record()
+        if self.metadata:
+            record["metadata"] = dict(self.metadata)
+        return record
+
+
+@dataclass(frozen=True, slots=True)
 class GeneratedSample:
     """One generated sample from a benchmark data source."""
 
@@ -110,6 +173,8 @@ class GeneratedSample:
     outcome_id: str
     complexity: float
     state_space_measure: StateSpaceMeasureValue | None = None
+    observable_state_id: str | None = None
+    target_distribution: Mapping[str, float] | None = None
     latent_coordinates: tuple[Mapping[str, object], ...] = ()
     materialization_plan: MaterializationPlan | None = None
     width: int | None = None
@@ -124,12 +189,27 @@ class GeneratedSample:
         repr=False,
     )
 
+    def __post_init__(self) -> None:
+        if not self.outcome_id:
+            raise ObservationGenerationError("sample outcome_id must be nonempty")
+        if self.observable_state_id is not None and not self.observable_state_id:
+            raise ObservationGenerationError("sample observable_state_id must be nonempty")
+        if self.target_distribution is not None:
+            _validate_target_distribution(self.target_distribution)
+
     def require_field(self) -> FieldObservation:
         """Return the generated field or fail with a domain error."""
 
         if self.field is None:
             raise ObservationGenerationError("sample does not include generated field data")
         return self.field
+
+    def target_distribution_or_one_hot(self) -> Mapping[str, float]:
+        """Return the sample target distribution, defaulting to its accepted outcome."""
+
+        if self.target_distribution is not None:
+            return self.target_distribution
+        return {self.outcome_id: 1.0}
 
     def field_record(self) -> FormedObservation:
         """Return the backing generated-field record for evidence plumbing."""
@@ -155,6 +235,13 @@ class GeneratedSample:
             record["height"] = self.height
         if self.component_index is not None:
             record["component_index"] = self.component_index
+        if self.observable_state_id is not None:
+            record["observable_state_id"] = self.observable_state_id
+        if self.target_distribution is not None:
+            record["target_distribution"] = [
+                {"outcome_id": outcome_id, "probability": probability}
+                for outcome_id, probability in self.target_distribution.items()
+            ]
         if self.variation_coordinates:
             record["variation_coordinates"] = [
                 dict(item) for item in self.variation_coordinates
@@ -275,3 +362,25 @@ def load_generator(benchmark_root: Path) -> BenchmarkGenerator:
 
     generator = load_benchmark(benchmark_root).generator
     return generator
+
+
+def _validate_target_distribution(distribution: Mapping[str, float]) -> None:
+    if not distribution:
+        raise ObservationGenerationError("target_distribution must not be empty")
+    total = 0.0
+    for outcome_id, probability in distribution.items():
+        if not outcome_id:
+            raise ObservationGenerationError(
+                "target_distribution outcome ids must be nonempty"
+            )
+        if not math.isfinite(float(probability)):
+            raise ObservationGenerationError(
+                "target_distribution probabilities must be finite"
+            )
+        if probability < 0.0:
+            raise ObservationGenerationError(
+                "target_distribution probabilities must be nonnegative"
+            )
+        total += float(probability)
+    if not math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-9):
+        raise ObservationGenerationError("target_distribution probabilities must sum to 1")

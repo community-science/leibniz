@@ -328,9 +328,9 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert all(".sample-0@" in str(plan["id"]) for plan in materialization_plans)
     assert len({plan["seed"] for plan in materialization_plans}) == len(materialization_plans)
     assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
-    assert samples[0]["field_shape"] == [1, 168, 216]
-    assert _png_dimensions(str(samples[0]["image_data_url"])) == (216, 168)
-    assert _png_dimensions(str(samples[1]["image_data_url"])) == (96, 72)
+    assert samples[0]["field_shape"] == [1, 90, 98]
+    assert _png_dimensions(str(samples[0]["image_data_url"])) == (98, 90)
+    assert _png_dimensions(str(samples[1]["image_data_url"])) == (212, 160)
     assert "preview_crop" not in samples[0]
     assert "preview_crop" not in samples[1]
     latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])
@@ -338,7 +338,8 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         coordinate for coordinate in latent_coordinates if coordinate["role"] == "variation"
     )
     variation_values = cast(dict[str, object], variation["values"])
-    assert variation_values["kind"] == "field-variation-transform-samples"
+    assert variation_values["kind"] == "constructed-field-variation-transform-samples"
+    assert variation_values["transform_count"] == 2
     variation_bounds = cast(dict[str, object], variation_values["bounds"])
     assert variation_bounds["kind"] == "field-variation-transform"
     variation_coordinates = cast(list[dict[str, object]], variation_values["coordinates"])

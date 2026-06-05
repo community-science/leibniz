@@ -30,7 +30,7 @@
       }
     ],
     "scale_domain": {
-      "minimum": 24
+      "minimum": 1
     }
   },
   "output_shape": [

@@ -8,6 +8,7 @@ from benchmark_typing import (
     sample_width,
 )
 
+from leibniz.materialization import AxisAssignment
 from leibniz.observation_generation import (
     GeneratedSampleSet,
 )
@@ -62,6 +63,7 @@ def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> 
         shape=1,
         seed=4703,
         component_indices=(1,),
+        resolution_assignment=AxisAssignment(values={"W": 24, "H": 24}),
     )
     sample = batch.samples[0]
 
@@ -93,6 +95,7 @@ def test_digits_resolution_analysis_certifies_sampled_training_affines() -> None
         shape=64,
         seed=123,
         memory_limit_bytes=100_000_000,
+        resolution_assignment=AxisAssignment(values={"W": 24, "H": 24}),
     )
 
     for sample in batch.samples:

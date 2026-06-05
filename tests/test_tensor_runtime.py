@@ -139,11 +139,15 @@ def test_digits_generator_tensor_batch_tensors_match_pure_observation_batch() ->
     assert fields.shape == pure_fields.shape
     assert runtime.torch.allclose(fields, pure_fields, atol=2e-5)
     assert labels.cpu().tolist() == [
-        outcome_ids.index(sample.outcome_id) for sample in observation_batch.samples
+        [
+            1.0 if outcome_id == sample.outcome_id else 0.0
+            for outcome_id in outcome_ids
+        ]
+        for sample in observation_batch.samples
     ]
 
 
-def test_digits_generator_tensor_batch_tensors_grid_sample_once(
+def test_digits_generator_tensor_batch_tensors_do_not_post_warp_rasters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = resolve_tensor_runtime("cpu")
@@ -182,7 +186,7 @@ def test_digits_generator_tensor_batch_tensors_grid_sample_once(
         outcome_ids=outcome_ids,
     )
 
-    assert calls == {"affine_grid": 1, "grid_sample": 1}
+    assert calls == {"affine_grid": 0, "grid_sample": 0}
 
 
 def test_digits_generator_tensor_batch_tensors_use_generated_coordinate_values() -> None:
@@ -202,7 +206,11 @@ def test_digits_generator_tensor_batch_tensors_use_generated_coordinate_values()
 
     assert fields.shape[0] == len(formation_batch.samples)
     assert labels.cpu().tolist() == [
-        outcome_ids.index(sample.outcome_id) for sample in formation_batch.samples
+        [
+            1.0 if outcome_id == sample.outcome_id else 0.0
+            for outcome_id in outcome_ids
+        ]
+        for sample in formation_batch.samples
     ]
 
 

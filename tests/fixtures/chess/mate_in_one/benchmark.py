@@ -14,6 +14,7 @@ from leibniz.observation_generation import (
     GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
+    StateSpaceCandidate,
     StateSpaceMeasureRequest,
     StateSpaceMeasureValue,
 )
@@ -117,6 +118,33 @@ class Generator:
             shape=sample_shape,
             state_space_request=state_space_request,
             samples=samples,
+        )
+
+    def minimum_state_space_measure(self) -> StateSpaceMeasureValue:
+        """Return the smallest exact Chess fixture state-space measure."""
+
+        return _state_space_measure()
+
+    def state_space_for_request(
+        self,
+        *,
+        request: StateSpaceMeasureRequest,
+    ) -> StateSpaceCandidate | None:
+        """Return the exact legal-move-cardinality state space for this fixture."""
+
+        measure = _state_space_measure()
+        if not request.contains(measure):
+            return None
+        return StateSpaceCandidate(
+            request=StateSpaceMeasureRequest(
+                minimum=measure.value,
+                maximum=measure.value,
+            ),
+            cardinality=len(_valid_moves),
+            metadata={
+                "kind": "chess-legal-move-cardinality",
+                "fen": _fen,
+            },
         )
 
 

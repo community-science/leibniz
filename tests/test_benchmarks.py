@@ -271,6 +271,21 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
         "affine_maximum_condition_number": 1.6,
         "affine_minimum_projected_extent": 0.65,
         "affine_maximum_projected_extent": 1.35,
+        "state_space_measure": {
+            "kind": "constructed-finite-state-space",
+            "measure_id": "log2_state_space_size",
+            "formula": "log2(requested_state_count)",
+            "digit_count": 10,
+            "affine_transform_family": "constructed-finite-affine-product-grid",
+            "target_policy": "smallest-realized-cardinality-inside-request-band",
+            "description": (
+                "Score-bearing Digits state spaces are requested finite "
+                "single-digit slices. Requests smaller than the full digit "
+                "vocabulary activate only a prefix of digit classes; after "
+                "all digit classes are active, finite affine choices expand "
+                "the requested state space."
+            ),
+        },
     }
     assert manifest.resolution_discriminability_margin() == 20.0
     assert manifest.affine_acceptance_thresholds() == {
