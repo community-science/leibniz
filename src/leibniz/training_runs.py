@@ -59,6 +59,7 @@ _history_point_record = RecordSpec(
             item=FieldSpec(kind="number"),
             required=False,
         ),
+        "score_estimate": FieldSpec(kind="record", required=False),
     }
 )
 _training_run_record = RecordSpec(
@@ -225,6 +226,7 @@ class TrainingHistoryPoint:
     validation_loss: float
     stale_checks: int
     learning_rates: tuple[float, ...] = ()
+    score_estimate: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         _require_nonnegative_int(self.step, "step")
@@ -250,6 +252,10 @@ class TrainingHistoryPoint:
                 _extract.finite_float(rate, "learning_rates")
                 for rate in _extract.sequence(validated.get("learning_rates", ()), "learning_rates")
             ),
+            score_estimate=_extract.optional_mapping(
+                validated.get("score_estimate"),
+                "score_estimate",
+            ),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -261,6 +267,8 @@ class TrainingHistoryPoint:
         }
         if self.learning_rates:
             record["learning_rates"] = list(self.learning_rates)
+        if self.score_estimate is not None:
+            record["score_estimate"] = dict(self.score_estimate)
         return record
 
 
