@@ -79,15 +79,27 @@ class Generator:
         seed: int,
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
+        include_metadata: bool = True,
         state_space_request: StateSpaceMeasureRequest | None = None,
+        runtime: object | None = None,
+        outcome_ids: tuple[str, ...] | None = None,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet:
         """Generate a shape-aware Chess sample set."""
 
         _ = include_fields
+        _ = outcome_ids
         _ = timing
         _ = timing_prefix
+        if runtime is not None:
+            raise ObservationGenerationError(
+                "Chess fixture does not define tensor generation"
+            )
+        if not include_metadata:
+            raise ObservationGenerationError(
+                "Chess fixture metadata-free generation requires a tensor runtime"
+            )
         sample_shape = _sample_shape(shape)
         measure = _state_space_measure()
         if state_space_request is not None and not state_space_request.contains(measure):
@@ -100,15 +112,19 @@ class Generator:
                 state_space_request=state_space_request,
                 samples=(),
             )
-        samples = tuple(
-            GeneratedSample(
-                index=index,
-                outcome_id=_accepted_move,
-                complexity=measure.value,
-                state_space_measure=measure,
-                latent_coordinates=_latent_coordinates(),
+        samples = (
+            tuple(
+                GeneratedSample(
+                    index=index,
+                    outcome_id=_accepted_move,
+                    complexity=measure.value,
+                    state_space_measure=measure,
+                    latent_coordinates=_latent_coordinates(),
+                )
+                for index in range(_sample_count(sample_shape))
             )
-            for index in range(_sample_count(sample_shape))
+            if include_metadata
+            else ()
         )
         return GeneratedSampleSet(
             benchmark_id=self.manifest.id,

@@ -5,6 +5,7 @@ import pytest
 from benchmark_typing import DigitsGenerator, load_digits_generator
 
 from leibniz.architectures import ArchitectureManifest
+from leibniz.observation_generation import ObservationGenerationError
 from leibniz.tensor_runtime import (
     TensorRuntimeError,
     architecture_supported_by_tensor_runtime,
@@ -115,22 +116,25 @@ def test_runtime_roofline_record_calibrates_cpu_ceiling() -> None:
     assert record["method"] == "dense-matmul-and-copy-calibration"
 
 
-def test_digits_generator_tensor_batch_tensors_match_pure_observation_batch() -> None:
+def test_digits_generator_call_tensors_match_pure_observation_batch() -> None:
     runtime = resolve_tensor_runtime("cpu")
     generator = load_digits_generator(_digits_benchmark_root)
     observation_batch = _observation_payload(generator, sample_count=3, seed=515)
-    formation_batch = _formation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
         for outcome in generator.manifest.resolve_outcome_space().outcomes
     )
 
-    fields, labels = generator.tensor_batch_tensors(
+    generated = generator(
+        shape=3,
+        seed=515,
+        include_metadata=False,
         runtime=runtime,
-        batch=formation_batch,
         outcome_ids=outcome_ids,
     )
+    fields, labels = generated.require_tensors()
 
+    assert generated.samples == ()
     pure_fields = runtime.torch.tensor(
         [list(sample.require_field().values) for sample in observation_batch.samples],
         dtype=runtime.torch.float32,
@@ -147,12 +151,11 @@ def test_digits_generator_tensor_batch_tensors_match_pure_observation_batch() ->
     ]
 
 
-def test_digits_generator_tensor_batch_tensors_do_not_post_warp_rasters(
+def test_digits_generator_call_tensors_do_not_post_warp_rasters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = resolve_tensor_runtime("cpu")
     generator = load_digits_generator(_digits_benchmark_root)
-    formation_batch = _formation_payload(generator, sample_count=3, seed=515)
     outcome_ids = tuple(
         outcome.id
         for outcome in generator.manifest.resolve_outcome_space().outcomes
@@ -180,16 +183,18 @@ def test_digits_generator_tensor_batch_tensors_do_not_post_warp_rasters(
         cast(Any, count_grid_sample),
     )
 
-    generator.tensor_batch_tensors(
+    generator(
+        shape=3,
+        seed=515,
+        include_metadata=False,
         runtime=runtime,
-        batch=formation_batch,
         outcome_ids=outcome_ids,
-    )
+    ).require_tensors()
 
     assert calls == {"affine_grid": 0, "grid_sample": 0}
 
 
-def test_digits_generator_tensor_batch_tensors_use_generated_coordinate_values() -> None:
+def test_digits_generator_call_tensors_use_generated_coordinate_values() -> None:
     runtime = resolve_tensor_runtime("cpu")
     generator = load_digits_generator(_digits_benchmark_root)
     formation_batch = _formation_payload(generator, sample_count=3, seed=515)
@@ -198,11 +203,14 @@ def test_digits_generator_tensor_batch_tensors_use_generated_coordinate_values()
         for outcome in generator.manifest.resolve_outcome_space().outcomes
     )
 
-    fields, labels = generator.tensor_batch_tensors(
+    generated = generator(
+        shape=3,
+        seed=515,
+        include_metadata=False,
         runtime=runtime,
-        batch=formation_batch,
         outcome_ids=outcome_ids,
     )
+    fields, labels = generated.require_tensors()
 
     assert fields.shape[0] == len(formation_batch.samples)
     assert labels.cpu().tolist() == [
@@ -214,43 +222,20 @@ def test_digits_generator_tensor_batch_tensors_use_generated_coordinate_values()
     ]
 
 
-def test_digits_generator_tensor_batch_tensors_reject_invalid_component_requests() -> None:
+def test_digits_generator_call_tensors_reject_invalid_component_requests() -> None:
     runtime = resolve_tensor_runtime("cpu")
     generator = load_digits_generator(_digits_benchmark_root)
-    batch = _formation_payload(generator, sample_count=1, seed=515)
-    invalid_sample = batch.samples[0]
-    invalid_batch = type(batch)(
-        benchmark_id=batch.benchmark_id,
-        generator_id=batch.generator_id,
-        generator_version=batch.generator_version,
-        seed=batch.seed,
-        shape=batch.shape,
-        variation_extent=batch.variation_extent,
-        state_space_request=batch.state_space_request,
-        samples=(
-            type(invalid_sample)(
-                index=invalid_sample.index,
-                outcome_id=invalid_sample.outcome_id,
-                complexity=invalid_sample.complexity,
-                state_space_measure=invalid_sample.state_space_measure,
-                latent_coordinates=invalid_sample.latent_coordinates,
-                materialization_plan=invalid_sample.materialization_plan,
-                width=invalid_sample.width,
-                height=invalid_sample.height,
-                component_index=len(generator.formation.components),
-                variation_coordinates=invalid_sample.variation_coordinates,
-                variation_values=invalid_sample.variation_values,
-            ),
-        ),
-    )
     outcome_ids = tuple(
         outcome.id
         for outcome in generator.manifest.resolve_outcome_space().outcomes
     )
 
-    with pytest.raises(TensorRuntimeError, match="component_index is outside"):
-        generator.tensor_batch_tensors(
+    with pytest.raises(ObservationGenerationError, match="component index is outside"):
+        generator(
+            shape=1,
+            seed=515,
+            include_metadata=False,
+            component_indices=(len(generator.formation.components),),
             runtime=runtime,
-            batch=invalid_batch,
             outcome_ids=outcome_ids,
         )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Protocol, cast
 
 from leibniz.benchmark_implementations import (
     Benchmark as BenchmarkProtocol,
@@ -77,22 +77,17 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         seed: int,
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
+        include_metadata: bool = True,
         state_space_request: StateSpaceMeasureRequest | None = None,
         component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
+        runtime: TensorRuntime | None = None,
+        outcome_ids: tuple[str, ...] | None = None,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...
-
-    def tensor_batch_tensors(
-        self,
-        *,
-        runtime: TensorRuntime,
-        batch: GeneratedSampleSet,
-        outcome_ids: tuple[str, ...],
-    ) -> tuple[Any, Any]: ...
 
     def sample_variation_transform_coordinates(
         self,

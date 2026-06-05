@@ -266,13 +266,17 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     timing_phases = cast(dict[str, object], phase_timing["phases"])
     tensor_batch_timing = cast(dict[str, object], timing_phases["training_tensor_batch"])
     forward_timing = cast(dict[str, object], timing_phases["training_forward_loss"])
-    materialization_timing = cast(
+    component_timing = cast(
         dict[str, object],
-        timing_phases["training_formation_generation.materialization_plan"],
+        timing_phases["training_formation_generation.component_index"],
     )
-    variation_timing = cast(
+    transform_timing = cast(
         dict[str, object],
-        timing_phases["training_formation_generation.variation_coordinates"],
+        timing_phases["training_formation_generation.transform_index"],
+    )
+    state_tensor_timing = cast(
+        dict[str, object],
+        timing_phases["training_formation_generation.state_tensor_cache"],
     )
     roofline = cast(dict[str, object], throughput["roofline"])
     roofline_comparison = cast(dict[str, object], throughput["roofline_comparison"])
@@ -283,8 +287,9 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert phase_timing["kind"] == "benchmark-phase-timing"
     assert tensor_batch_timing["sample_count"] == 2
     assert cast(float, tensor_batch_timing["seconds"]) > 0
-    assert materialization_timing["sample_count"] == 2
-    assert variation_timing["sample_count"] == 2
+    assert component_timing["sample_count"] == 2
+    assert transform_timing["sample_count"] == 2
+    assert cast(float, state_tensor_timing["seconds"]) >= 0
     assert forward_timing["sample_count"] == 2
     assert cast(float, forward_timing["seconds"]) > 0
     assert cast(float, roofline["peak_bytes_per_second"]) > 0

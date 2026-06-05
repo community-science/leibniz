@@ -48,22 +48,17 @@ class _FieldTimingGenerator(BenchmarkGenerator, Protocol):
         seed: int,
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
+        include_metadata: bool = True,
         state_space_request: StateSpaceMeasureRequest | None = None,
         component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
+        runtime: TensorRuntime | None = None,
+        outcome_ids: tuple[str, ...] | None = None,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...
-
-    def tensor_batch_tensors(
-        self,
-        *,
-        runtime: TensorRuntime,
-        batch: GeneratedSampleSet,
-        outcome_ids: tuple[str, ...],
-    ) -> tuple[object, object]: ...
 
 
 class FormationTimingError(ValueError):
@@ -181,15 +176,14 @@ def time_formation_paths(plan: FormationTimingPlan) -> FormationTimingSummary:
         sample_set = generator(
             shape=plan.sample_count,
             seed=seed,
+            include_metadata=False,
             memory_limit_bytes=memory_limit_bytes,
+            runtime=runtime,
+            outcome_ids=outcome_ids,
             timing=timing,
             timing_prefix="tensor.",
         )
-        generator.tensor_batch_tensors(
-            runtime=runtime,
-            batch=sample_set,
-            outcome_ids=outcome_ids,
-        )
+        sample_set.require_tensors()
 
     for offset in range(plan.warmup_repeats):
         pure_once(plan.seed + offset)

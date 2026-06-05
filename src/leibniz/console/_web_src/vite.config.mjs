@@ -21,6 +21,11 @@ const consoleDataCachePath = resolve(
 export default defineConfig({
   base: consoleBasePath(),
   plugins: [leibnizConsoleData(), react()],
+  server: {
+    watch: {
+      ignored: consoleResultWatchIgnoredPaths(),
+    },
+  },
 });
 
 function leibnizConsoleData() {
@@ -220,7 +225,23 @@ export function consoleResultWatchPaths(
   root = repositoryRoot,
   roots = consoleResultWatchRoots(env, root),
 ) {
-  return uniquePaths(existingDirectories(roots.flatMap((path) => [dirname(path), path])));
+  return uniquePaths(
+    existingDirectories(
+      roots.flatMap((path) => [
+        dirname(path),
+        path,
+        materializedResultViewPath(path),
+      ]),
+    ),
+  );
+}
+
+export function consoleResultWatchIgnoredPaths(
+  env = process.env,
+  root = repositoryRoot,
+  roots = consoleResultWatchRoots(env, root),
+) {
+  return roots.map((path) => `${path.replaceAll('\\', '/')}/models/**`);
 }
 
 export function consoleBasePath(env = process.env) {
@@ -246,6 +267,9 @@ function isInsideAnyRoot(path, roots) {
 export function isMaterializedResultViewEvent(path, roots) {
   const resolvedPath = resolve(path);
   return roots.some((root) => {
+    if (root.name === 'views') {
+      return false;
+    }
     const relativePath = relative(root, resolvedPath);
     const parts = relativePath.split(/[\\/]+/);
     return parts[0] === 'views' && parts.length > 1;
@@ -259,4 +283,8 @@ export function isModelArtifactEvent(path, roots) {
     const parts = relativePath.split(/[\\/]+/);
     return parts[0] === 'models' && parts.length > 1;
   });
+}
+
+function materializedResultViewPath(root) {
+  return root.name === 'views' ? root : resolve(root, 'views');
 }
