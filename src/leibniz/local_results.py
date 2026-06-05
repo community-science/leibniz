@@ -1393,7 +1393,7 @@ def _model_result_records(
             "chance_mass": chance_mass,
             "point_score": "accepted-mass",
             "local_competence": "above-chance-accepted-mass",
-            "integration": "trapezoid-over-observed-complexity",
+            "integration": "free-competence-to-first-observed-then-trapezoid",
         }
         record: dict[str, object] = {
             "model_key": model_key,

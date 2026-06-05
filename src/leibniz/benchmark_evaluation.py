@@ -22,6 +22,7 @@ __all__ = [
     "sampled_competence_frontier_score",
     "ValidationCompetencePoint",
     "validation_competence",
+    "validation_competence_frontier_advances",
     "validation_competence_frontier_score",
 ]
 
@@ -203,7 +204,7 @@ def sampled_competence_frontier_score(
     *,
     chance_mass: float,
 ) -> float:
-    """Return bits above chance integrated over observed complexity."""
+    """Return competence bits over the full frontier from zero complexity."""
 
     if not points:
         return 0.0
@@ -212,11 +213,7 @@ def sampled_competence_frontier_score(
         ordered[0].complexity,
         field="competence_frontier.complexity",
     )
-    first_competence = _above_chance_competence(
-        ordered[0].accepted_mass,
-        chance_mass=chance_mass,
-    )
-    area = first_complexity * first_competence
+    area = first_complexity
     for left, right in zip(ordered, ordered[1:], strict=False):
         left_complexity = _finite_nonnegative_number(
             left.complexity,
@@ -249,6 +246,29 @@ def validation_competence_frontier_score(
     """Return the benchmark frontier score for validation-derived points."""
 
     return sampled_competence_frontier_score(points, chance_mass=chance_mass)
+
+
+def validation_competence_frontier_advances(
+    *,
+    frontier_point: ValidationCompetencePoint,
+    previous_frontier_points: Sequence[ValidationCompetencePoint],
+    chance_mass: float,
+) -> bool:
+    """Return whether a measured frontier point advances the benchmark ladder."""
+
+    if frontier_point.accepted_mass <= chance_mass + 1e-12:
+        return False
+    previous_score = validation_competence_frontier_score(
+        previous_frontier_points,
+        chance_mass=chance_mass,
+    )
+    next_score = validation_competence_frontier_score(
+        (*previous_frontier_points, frontier_point),
+        chance_mass=chance_mass,
+    )
+    if next_score <= 0.0:
+        return False
+    return next_score > previous_score
 
 
 def _above_chance_competence(score: float, *, chance_mass: float) -> float:

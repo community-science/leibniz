@@ -82,14 +82,24 @@ def test_competent_complexity_score_integrates_bits_above_chance() -> None:
             ({"complexity": complexity, "score": 0.55},),
             chance_mass=chance_mass,
         ),
-        10.0,
+        20.0,
     )
     assert math.isclose(
         local_results.competent_complexity_score(
             ({"complexity": complexity * 4.0, "score": chance_mass},),
             chance_mass=chance_mass,
         ),
-        0.0,
+        80.0,
+    )
+    assert math.isclose(
+        local_results.competent_complexity_score(
+            (
+                {"complexity": complexity, "score": chance_mass},
+                {"complexity": complexity * 2.0, "score": 1.0},
+            ),
+            chance_mass=chance_mass,
+        ),
+        30.0,
     )
 
 
@@ -632,7 +642,8 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert len(cast(list[dict[str, object]], frontiers["storage_bytes"])) == 1
     history = cast(list[dict[str, object]], result["training_history"])
     assert history[0]["source_kind"] == "local-run"
-    assert "training_diagnostics" not in history[0]
+    diagnostics = cast(dict[str, object], history[0]["training_diagnostics"])
+    assert cast(list[dict[str, object]], diagnostics["validation_history"])
     inspections = cast(list[dict[str, object]], result["model_inspections"])
     assert len(inspections) == 1
     assert inspections[0]["source_path"] == history[0]["source_path"]

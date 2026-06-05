@@ -846,7 +846,7 @@ def test_training_curriculum_only_advances_on_improved_frontier_competence() -> 
 def test_training_curriculum_gate_delegates_frontier_scoring_to_benchmark_api() -> None:
     source = inspect.getsource(cast(Any, benchmark_runner)._frontier_plateau_advances)
 
-    assert "validation_competence_frontier_score" in source
+    assert "validation_competence_frontier_advances" in source
     for leaked_scoring_detail in (
         "accepted_mass",
         "complexity",

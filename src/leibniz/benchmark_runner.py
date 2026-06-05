@@ -20,7 +20,7 @@ from leibniz.benchmark_evaluation import (
     sampled_competence_curriculum_record,
     sampled_competence_record,
     validation_competence,
-    validation_competence_frontier_score,
+    validation_competence_frontier_advances,
 )
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.competition_bundles import BenchmarkCompetitionBundle
@@ -2465,17 +2465,11 @@ def _frontier_plateau_advances(
     previous_frontier_points: tuple[ValidationCompetencePoint, ...],
     chance_mass: float,
 ) -> bool:
-    previous_score = validation_competence_frontier_score(
-        previous_frontier_points,
+    return validation_competence_frontier_advances(
+        frontier_point=frontier_point,
+        previous_frontier_points=previous_frontier_points,
         chance_mass=chance_mass,
     )
-    next_score = validation_competence_frontier_score(
-        (*previous_frontier_points, frontier_point),
-        chance_mass=chance_mass,
-    )
-    if next_score <= 0.0:
-        return False
-    return next_score > previous_score
 
 
 def _evaluation_result_frontier_index(
