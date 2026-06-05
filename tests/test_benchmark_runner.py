@@ -9,7 +9,10 @@ from benchmark_typing import load_digits_benchmark, load_digits_generator
 
 import leibniz.benchmark_runner as benchmark_runner
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
-from leibniz.benchmark_evaluation import ValidationCompetencePoint
+from leibniz.benchmark_evaluation import (
+    ValidationCompetencePoint,
+    finite_measurements_for_predictions,
+)
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.benchmark_runner import (
     BenchmarkCompetitionPlan,
@@ -53,6 +56,45 @@ def _observation_payload(
 ) -> GeneratedSampleSet:
     sample_set = generator(include_fields=True, **cast(Any, kwargs))
     return sample_set
+
+
+def test_fieldless_tensor_samples_can_score_predictions() -> None:
+    generator = load_generator(_digits_benchmark_root)
+    runtime = resolve_tensor_runtime("cpu")
+    outcome_space = generator.manifest.resolve_outcome_space()
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    batch = generator(
+        seed=101,
+        shape=2,
+        include_fields=False,
+        runtime=runtime,
+        outcome_ids=outcome_ids,
+    )
+
+    assert batch.fields is not None
+    assert batch.targets is not None
+    assert batch.samples
+    assert all(sample.field is None for sample in batch.samples)
+
+    probabilities = tuple(
+        tuple(1.0 if outcome_id == sample.outcome_id else 0.0 for outcome_id in outcome_ids)
+        for sample in batch.samples
+    )
+    measurements = finite_measurements_for_predictions(
+        batch=batch,
+        outcome_space=outcome_space,
+        probabilities=probabilities,
+        run_slug="fieldless-tensor-test",
+    )
+
+    assert len(measurements) == batch.sample_count
+    assert all(not measurement.evidence_artifacts for measurement in measurements)
+    assert all(
+        measurement.raw_scoring_evidence.observation_id.startswith(
+            f"{batch.generator_id}.seed-{batch.seed}.sample-"
+        )
+        for measurement in measurements
+    )
 
 
 def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) -> None:

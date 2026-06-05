@@ -1664,9 +1664,11 @@ def _train_and_predict_on_device(
             generated = generator(
                 shape=batch_sample_count,
                 seed=batch_seed,
-                include_fields=True,
+                include_fields=False,
                 state_space_request=state_space_request,
                 variation_extent=_full_variation_extent,
+                runtime=runtime,
+                outcome_ids=outcome_ids,
                 timing=phase_timings,
                 timing_prefix=f"{generation_phase}.",
             )
@@ -2022,6 +2024,12 @@ def _batch_max_inference_compute(
     architecture: ArchitectureManifest,
     batch: GeneratedSampleSet,
 ) -> int | None:
+    tensor_input_shape = _tensor_input_shape(batch.fields)
+    if tensor_input_shape is not None:
+        plan = summarize_architecture_operators(
+            _architecture_with_input_shape(architecture, tensor_input_shape)
+        )
+        return plan.inference_compute
     max_compute: int | None = None
     for input_shape in sorted({sample.require_field().shape for sample in batch.samples}):
         plan = summarize_architecture_operators(
@@ -2971,6 +2979,8 @@ def _training_cost_summary(
     )
     if max_inference_compute is not None:
         cost_summary["inference_compute"] = max_inference_compute
+    if training_run.training_compute is not None:
+        cost_summary["training_compute"] = training_run.training_compute
     return cost_summary
 
 

@@ -6,7 +6,6 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from leibniz.artifacts import ArtifactReference
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementRecord
 from leibniz.observation_generation import GeneratedSample, GeneratedSampleSet
@@ -52,17 +51,29 @@ def finite_measurements_for_predictions(
     prediction_space = FiniteOutcomeSpace.from_outcome_space(outcome_space)
     measurements: list[MeasurementRecord] = []
     for sample, sample_probabilities in zip(batch.samples, probabilities, strict=True):
-        field_record = sample.field_record()
+        observation_id = _sample_observation_id(batch=batch, sample=sample)
         accepted_event = AcceptedEvent.from_record(
             {
-                "id": str(_sample_identifier("events", run_slug, sample)),
+                "id": str(
+                    _sample_identifier(
+                        "events",
+                        run_slug,
+                        sample,
+                        benchmark_id=batch.benchmark_id,
+                    )
+                ),
                 "outcome_space_id": str(outcome_space.id),
                 "outcomes": [sample.outcome_id],
             },
             outcome_space=outcome_space,
         )
         prediction = DirectFiniteProbabilityPrediction.from_probabilities(
-            id=_sample_identifier("measures", run_slug, sample),
+            id=_sample_identifier(
+                "measures",
+                run_slug,
+                sample,
+                benchmark_id=batch.benchmark_id,
+            ),
             prediction_space=prediction_space,
             probabilities=sample_probabilities,
         )
@@ -71,24 +82,20 @@ def finite_measurements_for_predictions(
         )
         measurements.append(
             MeasurementRecord(
-                benchmark_id=field_record.benchmark_id,
+                benchmark_id=batch.benchmark_id,
                 outcome_space=outcome_space,
                 accepted_event=accepted_event,
                 probability_measure=probability_measure,
                 raw_scoring_evidence=RawScoringEvidence.from_event_and_measure(
-                    id=_sample_identifier("evidence", run_slug, sample),
-                    observation_id=str(field_record.id),
+                    id=_sample_identifier(
+                        "evidence",
+                        run_slug,
+                        sample,
+                        benchmark_id=batch.benchmark_id,
+                    ),
+                    observation_id=observation_id,
                     event=accepted_event,
                     measure=probability_measure,
-                ),
-                evidence_artifacts=(
-                    field_record.formation_declaration,
-                    field_record.materialization_plan,
-                    ArtifactReference(
-                        kind="formed-observation",
-                        protocol_id=field_record.id,
-                        record_digest=field_record.digest,
-                    ),
                 ),
             )
         )
@@ -133,7 +140,8 @@ def sampled_competence_record(
         "mean_accepted_mass": math.fsum(accepted_mass) / len(accepted_mass),
         "mean_negative_log_score": mean_negative_log_score,
         "observation_ids": [
-            str(sample.field_record().id) for sample in batch.samples
+            measurement.raw_scoring_evidence.observation_id
+            for measurement in measurements
         ],
         "measurement_ids": [
             str(measurement.raw_scoring_evidence.id) for measurement in measurements
@@ -307,12 +315,21 @@ def _sample_identifier(
     family: str,
     run_slug: str,
     sample: GeneratedSample,
+    *,
+    benchmark_id: ProtocolIdentifier,
 ) -> ProtocolIdentifier:
-    field_record = sample.field_record()
     return _child_identifier(
-        field_record.benchmark_id,
+        benchmark_id,
         f"{family}.{run_slug}.sample-{sample.index}",
     )
+
+
+def _sample_observation_id(
+    *,
+    batch: GeneratedSampleSet,
+    sample: GeneratedSample,
+) -> str:
+    return f"{batch.generator_id}.seed-{batch.seed}.sample-{sample.index}"
 
 
 def _child_identifier(parent: ProtocolIdentifier, suffix: str) -> ProtocolIdentifier:
