@@ -2539,7 +2539,8 @@ def _training_gate_score_estimate(
             ),
         )
     )
-    point_records = _training_score_estimate_points(sampled_competence)
+    compact_sampled_competence = _compact_training_sampled_competence(sampled_competence)
+    point_records = _training_score_estimate_points(compact_sampled_competence)
     chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
     score = sampled_competence_frontier_score(
         tuple(
@@ -2566,11 +2567,37 @@ def _training_gate_score_estimate(
         "max_inference_compute": max_inference_compute,
         "running_max_inference_compute": running_max_inference_compute,
         "chance_mass": chance_mass,
-        "sampled_competence": sampled_competence,
+        "sampled_competence": compact_sampled_competence,
     }
     if training_compute_per_sample is not None:
         record["training_compute_per_sample"] = training_compute_per_sample
     return record
+
+
+def _compact_training_sampled_competence(
+    sampled_competence: Mapping[str, object],
+) -> dict[str, object]:
+    compact = {
+        key: value
+        for key, value in sampled_competence.items()
+        if key not in {"measurement_ids", "observation_ids", "points"}
+    }
+    points = sampled_competence.get("points")
+    if isinstance(points, Sequence) and not isinstance(points, str | bytes):
+        compact_points: list[dict[str, object]] = []
+        for raw_point in cast(Sequence[object], points):
+            if not isinstance(raw_point, Mapping):
+                continue
+            point = cast(Mapping[str, object], raw_point)
+            compact_points.append(
+                {
+                    key: value
+                    for key, value in point.items()
+                    if key not in {"measurement_ids", "observation_ids"}
+                }
+            )
+        compact["points"] = compact_points
+    return compact
 
 
 def _training_score_estimate_points(
@@ -3369,6 +3396,8 @@ def _batch_tensors(
     outcome_ids: tuple[str, ...],
     device: Any,
 ) -> tuple[Any, Any]:
+    if batch.fields is not None and batch.targets is not None:
+        return batch.fields, batch.targets
     return (
         _batch_tensor(runtime=runtime, batch=batch, device=device),
         _batch_target_tensor(

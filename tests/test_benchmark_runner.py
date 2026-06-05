@@ -1499,6 +1499,8 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     sampled_competence = cast(dict[str, object], training_estimate["sampled_competence"])
     sampled_points = cast(list[dict[str, object]], sampled_competence["points"])
     assert training_estimate["seed"] == sampled_points[0]["seed"]
+    assert "measurement_ids" not in sampled_points[0]
+    assert "observation_ids" not in sampled_points[0]
     final_record = load_object_document(
         summary.training_summary_path.read_bytes(),
         description="training summary",

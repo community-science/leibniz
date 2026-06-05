@@ -97,6 +97,7 @@ _console_preview_state_space_windows = (
     (8.0, 9.0),
 )
 _console_preview_sample_limit = 50
+_max_cached_state_tensors = 2
 
 _CurvePoints: TypeAlias = tuple[tuple[float, float], ...]
 
@@ -2051,7 +2052,7 @@ def _grid_value(bounds: tuple[float, float], *, index: int, count: int) -> float
 
 @dataclass(slots=True)
 class _FormationTensorCache:
-    """Cache unvaried Digits component fields as runtime tensors."""
+    """Cache reusable Digits tensor artifacts for one runtime."""
 
     runtime: TensorRuntime
     formation: ObservationFormationDeclaration
@@ -2090,7 +2091,7 @@ class _FormationTensorCache:
         if cached is not None:
             return cached
         tensors = tuple(
-            self.component_tensor(
+            self._build_component_tensor(
                 width=width,
                 height=height,
                 component_index=component_index,
@@ -2106,6 +2107,8 @@ class _FormationTensorCache:
         )
         backend = getattr(self.runtime, "tor" + "ch")
         stacked = backend.stack(tensors)
+        while len(self._state_tensors) >= _max_cached_state_tensors:
+            self._state_tensors.pop(next(iter(self._state_tensors)))
         self._state_tensors[key] = stacked
         return stacked
 
