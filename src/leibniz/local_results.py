@@ -36,7 +36,7 @@ from leibniz.documents import (
     load_object_document,
 )
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import AxisAssignment, MaterializationDeclaration
+from leibniz.materialization import MaterializationDeclaration
 from leibniz.measurements import (
     MeasurementDataset,
 )
@@ -102,12 +102,6 @@ class _FieldComplexityGenerator(BenchmarkGenerator, Protocol):
 
     @property
     def formation(self) -> ObservationFormationDeclaration: ...
-
-    def minimum_discriminatable_resolution_assignment(
-        self,
-        *,
-        minimum_assignment: AxisAssignment,
-    ) -> AxisAssignment: ...
 
     def distinguishable_state_complexity(
         self,
@@ -2332,16 +2326,7 @@ def _benchmark_base_complexity(
             repository_root / "src" / "leibniz" / "benchmarks" / _identifier_atom(manifest.id)
         ),
     )
-    resolution = generator.minimum_discriminatable_resolution_assignment(
-        minimum_assignment=generator.materialization.minimum_resolution(),
-    )
-    width = resolution.require_axis(generator.formation.width_axis)
-    height = resolution.require_axis(generator.formation.height_axis)
-    return generator.distinguishable_state_complexity(
-        width=width,
-        height=height,
-        variation_extent=0.0,
-    )
+    return generator.minimum_state_space_measure().value
 
 
 def _chance_mass(manifest: BenchmarkManifest) -> float:

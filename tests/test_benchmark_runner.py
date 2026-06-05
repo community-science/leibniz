@@ -27,6 +27,7 @@ from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
 from leibniz.observation_generation import (
     GeneratedSampleSet,
+    StateSpaceMeasureRequest,
     load_generator,
 )
 from leibniz.tensor_runtime import (
@@ -69,7 +70,7 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     assert summary.dry_run is True
     assert summary.measurement_count == 2
     assert summary.run_slug.startswith(
-        "digits-arch-4a2277aa9fd5-seed101-samples2-steps1-train-"
+        "digits-arch-186021388794-seed101-samples2-steps1-train-"
     )
     assert not (tmp_path / "results").exists()
 
@@ -311,9 +312,9 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     state_space_measure = cast(dict[str, object], evaluation_curriculum["state_space_measure"])
     assert state_space_measure["scale"] == "log2"
     assert evaluation_curriculum["complexity_axis"] == state_space_measure["measure_id"]
-    assert cast(dict[str, object], evaluation_curriculum["candidate_policy"])["kind"] == (
-        "logarithmic"
-    )
+    candidate_policy = cast(dict[str, object], evaluation_curriculum["candidate_policy"])
+    assert candidate_policy["kind"] == "benchmark-owned-target-state-space"
+    assert candidate_policy["target_spacing"] == 1.0
     assert evaluation_curriculum["rung_policy"] == "unbounded-competence-frontier"
     assert (
         evaluation_curriculum["gating_metric"]
@@ -383,11 +384,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert sampled_competence["complexity_axis"] is None
     expected_complexity = load_digits_generator(
         _digits_benchmark_root
-    ).distinguishable_state_complexity(
-        width=24,
-        height=24,
-        variation_extent=1.0,
-    )
+    ).minimum_state_space_measure().value
     assert math.isclose(cast(float, sampled_competence["complexity"]), expected_complexity)
     assert sampled_competence["sample_count"] == 3
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
@@ -906,10 +903,10 @@ def test_training_curriculum_can_advance_after_worse_loss_on_larger_rung() -> No
     )
 
 
-def test_evaluation_curriculum_candidates_are_complexity_sorted() -> None:
+def test_evaluation_curriculum_uses_benchmark_owned_target_state_spaces() -> None:
     generator = load_generator(_digits_benchmark_root)
 
-    candidates = cast(Any, benchmark_runner)._logarithmic_curriculum_candidates(
+    candidates = cast(Any, benchmark_runner)._benchmark_state_space_curriculum_candidates(
         generator=generator,
         start_index=0,
     )
@@ -917,40 +914,62 @@ def test_evaluation_curriculum_candidates_are_complexity_sorted() -> None:
     assert [candidate.complexity for candidate in candidates] == sorted(
         candidate.complexity for candidate in candidates
     )
-    assert candidates[0].resolution_assignment.values == {"W": 24, "H": 24}
+    assert candidates[0].state_space.resolution_assignment is not None
+    assert candidates[0].state_space.resolution_assignment.values == {"W": 2, "H": 1}
+    assert [candidate.state_space.cardinality for candidate in candidates[:4]] == [
+        2,
+        4,
+        8,
+        16,
+    ]
 
 
-def test_training_curriculum_candidates_increment_canvas_size_only() -> None:
-    generator = load_generator(_digits_benchmark_root)
+def test_training_curriculum_uses_benchmark_owned_target_state_spaces() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
 
     candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
         generator=generator,
         start_index=0,
     )
-    first_assignments = [
-        candidate.resolution_assignment.values
-        for candidate in candidates[:12]
+
+    assert [candidate.state_space.cardinality for candidate in candidates[:4]] == [
+        2,
+        4,
+        8,
+        16,
     ]
 
-    assert first_assignments == [
-        {"W": 24, "H": 24},
-        {"W": 24, "H": 48},
-        {"W": 48, "H": 24},
-        {"W": 48, "H": 48},
-        {"W": 24, "H": 72},
-        {"W": 48, "H": 72},
-        {"W": 72, "H": 24},
-        {"W": 72, "H": 48},
-        {"W": 72, "H": 72},
-        {"W": 24, "H": 120},
-        {"W": 48, "H": 120},
-        {"W": 72, "H": 120},
-    ]
-    assert all(
-        candidate.resolution_assignment.values["W"] % 24 == 0
-        and candidate.resolution_assignment.values["H"] % 24 == 0
-        for candidate in candidates[:12]
+
+def test_digits_state_space_for_request_materializes_constructed_affine_grid() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    minimum = generator.minimum_state_space_measure().value
+
+    state_space = generator.state_space_for_request(
+        request=StateSpaceMeasureRequest(
+            minimum=minimum + 5.0,
+            maximum=minimum + 6.0,
+        )
     )
+
+    assert state_space is not None
+    assert state_space.cardinality == 64
+    assert state_space.metadata["affine_transform_count"] == 7
+    assert state_space.metadata["requested_state_count"] == 64
+    assert state_space.metadata["construction"] == (
+        "requested-cardinality-over-finite-affine-product-grid"
+    )
+    assert state_space.metadata["affine_grid"] == {
+        "x_translation": 7,
+        "y_translation": 1,
+        "scale": 1,
+        "rotation": 1,
+        "x_shear": 1,
+    }
+    assert state_space.resolution_assignment is not None
+    assert state_space.resolution_assignment.values == {
+        "W": 8,
+        "H": 8,
+    }
 
 
 def test_training_curriculum_does_not_restart_step_counter() -> None:
@@ -1224,17 +1243,13 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert score_basis["complexity_axis"] == "log2-distinguishable-states"
     assert math.isclose(
         cast(float, score_basis["reference_baseline_complexity"]),
-        math.log2(10),
+        1.0,
     )
     assert math.isclose(cast(float, score_basis["chance_mass"]), 0.1)
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
     expected_complexity = load_digits_generator(
         _digits_benchmark_root
-    ).distinguishable_state_complexity(
-        width=24,
-        height=24,
-        variation_extent=1.0,
-    )
+    ).minimum_state_space_measure().value
     assert math.isclose(observed_complexities[0], expected_complexity)
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
@@ -1468,7 +1483,7 @@ def test_cli_runs_digits_benchmark_dry_run(
     assert captured.err == ""
     assert captured.out.startswith(
         "planned benchmark training run "
-        "digits-arch-4a2277aa9fd5-seed101-samples2-stepsconverge-train-"
+        "digits-arch-186021388794-seed101-samples2-stepsconverge-train-"
     )
     assert not (tmp_path / "results").exists()
 

@@ -35,7 +35,7 @@ from leibniz.evaluation_bundles import (
     BenchmarkEvaluationBundleDocument,
 )
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import AxisAssignment, MaterializationDeclaration
+from leibniz.materialization import AxisAssignment
 from leibniz.measurements import MeasurementDataset
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_interfaces import ModelInterface
@@ -45,10 +45,11 @@ from leibniz.model_manifests import (
     ModelExecutionFamily,
 )
 from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
-from leibniz.observation_formation import ObservationFormationDeclaration
 from leibniz.observation_generation import (
     GeneratedSampleSet,
+    StateSpaceCandidate,
     StateSpaceMeasureRequest,
+    StateSpaceMeasureValue,
     load_generator,
 )
 from leibniz.outcomes import OutcomeSpace
@@ -113,31 +114,18 @@ _default_convergence_min_steps = 500
 _converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
 _minimum_plateau_lr_reductions = 3
 _full_variation_extent = 1.0
-_canvas_logarithmic_growth_factor = math.sqrt(2.0)
 
 
 class _FieldBenchmarkGenerator(BenchmarkGenerator, Protocol):
     """Internal contract for tensor-backed benchmark training."""
 
-    @property
-    def materialization(self) -> MaterializationDeclaration: ...
+    def minimum_state_space_measure(self) -> StateSpaceMeasureValue: ...
 
-    @property
-    def formation(self) -> ObservationFormationDeclaration: ...
-
-    def minimum_discriminatable_resolution_assignment(
+    def state_space_for_request(
         self,
         *,
-        minimum_assignment: AxisAssignment,
-    ) -> AxisAssignment: ...
-
-    def distinguishable_state_complexity(
-        self,
-        *,
-        width: int,
-        height: int,
-        variation_extent: float = 1.0,
-    ) -> float: ...
+        request: StateSpaceMeasureRequest,
+    ) -> StateSpaceCandidate | None: ...
 
     def tensor_batch_tensors(
         self,
@@ -244,7 +232,6 @@ def _require_field_generator(generator: BenchmarkGenerator) -> _FieldBenchmarkGe
         for name in (
             "materialization",
             "formation",
-            "minimum_discriminatable_resolution_assignment",
             "distinguishable_state_complexity",
             "tensor_batch_tensors",
         )
@@ -306,7 +293,7 @@ def _rung_state_space_request(rung: _CurriculumRung) -> StateSpaceMeasureRequest
 
 
 def _core_state_space_measure_id() -> str:
-    return StateSpaceMeasureRequest(minimum=0.0, maximum=0.0).measure_id
+    return StateSpaceMeasureRequest(minimum=1.0, maximum=1.0).measure_id
 
 
 @dataclass(slots=True)
@@ -956,7 +943,11 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         tensor_device=plan.tensor_device,
         checkpoint=selected_checkpoint,
     )
-    final_evaluation_result = evaluation_results[-1]
+    evaluation_frontier_index = _evaluation_result_frontier_index(
+        evaluation_results=evaluation_results,
+        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
+    )
+    final_evaluation_result = evaluation_results[evaluation_frontier_index]
     measurement_groups = (
         finite_measurements_for_predictions(
             batch=final_evaluation_result[0].batch,
@@ -991,7 +982,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
     evaluation_curriculum = _curriculum_record(
         kind="checkpoint-benchmark-evaluation-curriculum",
         rungs=tuple(rung for rung, _probabilities in evaluation_results),
-        frontier_index=len(evaluation_results) - 1,
+        frontier_index=evaluation_frontier_index,
     )
     throughput = {
         "kind": "benchmark-evaluation-throughput",
@@ -1245,7 +1236,7 @@ def _evaluation_curriculum_rung(
         sample_count=sample_count,
         seed=seed,
         index=index,
-        candidates=_logarithmic_curriculum_candidates(
+        candidates=_benchmark_state_space_curriculum_candidates(
             generator=generator,
             start_index=index,
         ),
@@ -1347,27 +1338,26 @@ def _curriculum_rung_from_candidates(
 
 @dataclass(frozen=True, slots=True)
 class _CurriculumCandidate:
-    resolution_assignment: AxisAssignment
-    complexity: float
+    state_space: StateSpaceCandidate
 
     @property
     def state_space_request(self) -> StateSpaceMeasureRequest:
-        return StateSpaceMeasureRequest(
-            minimum=self.complexity,
-            maximum=self.complexity,
-        )
+        return self.state_space.request
+
+    @property
+    def complexity(self) -> float:
+        return self.state_space.complexity
 
 
-def _logarithmic_curriculum_candidates(
+def _benchmark_state_space_curriculum_candidates(
     *,
     generator: _FieldBenchmarkGenerator,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
-    candidates = _curriculum_candidate_grid(
+    return _benchmark_state_space_candidates(
         generator=generator,
         start_index=start_index,
     )
-    return tuple(sorted(candidates, key=lambda candidate: candidate.complexity))
 
 
 def _structured_training_curriculum_candidates(
@@ -1375,85 +1365,36 @@ def _structured_training_curriculum_candidates(
     generator: _FieldBenchmarkGenerator,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
-    return _curriculum_candidate_grid(
+    return _benchmark_state_space_candidates(
         generator=generator,
         start_index=start_index,
     )
 
 
-def _curriculum_candidate_grid(
+def _benchmark_state_space_candidates(
     *,
     generator: _FieldBenchmarkGenerator,
     start_index: int,
 ) -> Sequence[_CurriculumCandidate]:
-    minimum_assignment = generator.minimum_discriminatable_resolution_assignment(
-        minimum_assignment=generator.materialization.minimum_resolution(),
-    )
-    width_axis = generator.formation.width_axis
-    height_axis = generator.formation.height_axis
-    minimum_width = minimum_assignment.require_axis(width_axis)
-    minimum_height = minimum_assignment.require_axis(height_axis)
-    lattice_steps = generator.materialization.resolution_lattice_steps()
-    width_step = lattice_steps.get(width_axis, 1)
-    height_step = lattice_steps.get(height_axis, 1)
     stage_count = max(8, start_index + 8)
-    widths = _logarithmic_lattice_axis_values(
-        minimum=minimum_width,
-        step=width_step,
-        count=stage_count,
-    )
-    heights = _logarithmic_lattice_axis_values(
-        minimum=minimum_height,
-        step=height_step,
-        count=stage_count,
-    )
+    minimum = generator.minimum_state_space_measure().value
     candidates: list[_CurriculumCandidate] = []
-    for stage in range(stage_count):
-        for width_index, width in enumerate(widths[: stage + 1]):
-            for height_index, height in enumerate(heights[: stage + 1]):
-                if max(width_index, height_index) != stage:
-                    continue
-                complexity = generator.distinguishable_state_complexity(
-                    width=width,
-                    height=height,
-                    variation_extent=_full_variation_extent,
-                )
-                candidates.append(
-                    _CurriculumCandidate(
-                        resolution_assignment=AxisAssignment(
-                            values={
-                                **minimum_assignment.values,
-                                width_axis: width,
-                                height_axis: height,
-                            }
-                        ),
-                        complexity=complexity,
-                    )
-                )
-    return tuple(candidates)
-
-
-def _logarithmic_lattice_axis_values(
-    *,
-    minimum: int,
-    step: int,
-    count: int,
-) -> tuple[int, ...]:
-    values: list[int] = []
-    seen: set[int] = set()
-    stage = 0
-    minimum_multiplier = max(1, math.ceil(minimum / step))
-    while len(values) < count:
-        multiplier = max(
-            minimum_multiplier,
-            math.ceil(minimum_multiplier * (_canvas_logarithmic_growth_factor ** stage)),
+    seen_complexities: set[float] = set()
+    for target_index in range(stage_count):
+        target = minimum + target_index
+        state_space = generator.state_space_for_request(
+            request=StateSpaceMeasureRequest(
+                minimum=target,
+                maximum=target + 1.0,
+            ),
         )
-        value = multiplier * step
-        if value not in seen:
-            values.append(value)
-            seen.add(value)
-        stage += 1
-    return tuple(values)
+        if state_space is None:
+            continue
+        if state_space.complexity in seen_complexities:
+            continue
+        seen_complexities.add(state_space.complexity)
+        candidates.append(_CurriculumCandidate(state_space=state_space))
+    return tuple(candidates)
 
 
 def _curriculum_record(
@@ -1475,8 +1416,8 @@ def _curriculum_record(
             "scale": "log2",
         },
         "candidate_policy": {
-            "kind": "logarithmic",
-            "factor": _canvas_logarithmic_growth_factor,
+            "kind": "benchmark-owned-target-state-space",
+            "target_spacing": 1.0,
         },
         "gating_metric": "monotone-frontier-validation-competence",
         "rung_policy": "unbounded-competence-frontier",
@@ -1952,12 +1893,6 @@ def evaluate_model_checkpoint_artifact(
             batch_max_inference_compute,
         )
         results.append((rung, predictions))
-        if _mean_prediction_accepted_mass(
-            batch=rung.batch,
-            probabilities=predictions,
-            outcome_ids=predictor.outcome_ids,
-        ) <= _chance_accepted_mass(predictor.outcome_ids) + 1e-12:
-            break
     if not results:
         raise BenchmarkRunnerError("checkpoint evaluation did not produce any results")
     throughput = evaluation_counter.to_record(kind="checkpoint-evaluation-throughput")
@@ -2539,6 +2474,28 @@ def _frontier_plateau_advances(
     if next_score <= 0.0:
         return False
     return next_score > previous_score
+
+
+def _evaluation_result_frontier_index(
+    *,
+    evaluation_results: Sequence[
+        tuple[_CurriculumRung, tuple[tuple[float, ...], ...]]
+    ],
+    outcome_ids: tuple[str, ...],
+) -> int:
+    if not evaluation_results:
+        raise BenchmarkRunnerError("evaluation did not produce any rungs")
+    chance_mass = _chance_accepted_mass(outcome_ids)
+    frontier_index = 0
+    for index, (rung, probabilities) in enumerate(evaluation_results):
+        accepted_mass = _mean_prediction_accepted_mass(
+            batch=rung.batch,
+            probabilities=probabilities,
+            outcome_ids=outcome_ids,
+        )
+        if accepted_mass > chance_mass + 1e-12:
+            frontier_index = index
+    return frontier_index
 
 
 def has_windowed_validation_plateau(
@@ -3204,9 +3161,10 @@ def _batch_tensors(
 ) -> tuple[Any, Any]:
     return (
         _batch_tensor(runtime=runtime, batch=batch, device=device),
-        make_long_tensor(
-            runtime,
-            [outcome_ids.index(sample.outcome_id) for sample in batch.samples],
+        _batch_target_tensor(
+            runtime=runtime,
+            batch=batch,
+            outcome_ids=outcome_ids,
             device=device,
         ),
     )
@@ -3216,6 +3174,45 @@ def _batch_tensor(*, runtime: TensorRuntime, batch: GeneratedSampleSet, device: 
     values = [list(sample.require_field().values) for sample in batch.samples]
     fields = make_float_tensor(runtime, values, device=device)
     return fields.reshape((len(batch.samples), *batch.samples[0].require_field().shape))
+
+
+def _batch_target_tensor(
+    *,
+    runtime: TensorRuntime,
+    batch: GeneratedSampleSet,
+    outcome_ids: tuple[str, ...],
+    device: Any,
+) -> Any:
+    if any(sample.target_distribution is not None for sample in batch.samples):
+        return make_float_tensor(
+            runtime,
+            [
+                _target_distribution_row(
+                    sample.target_distribution_or_one_hot(),
+                    outcome_ids=outcome_ids,
+                )
+                for sample in batch.samples
+            ],
+            device=device,
+        )
+    return make_long_tensor(
+        runtime,
+        [outcome_ids.index(sample.outcome_id) for sample in batch.samples],
+        device=device,
+    )
+
+
+def _target_distribution_row(
+    distribution: Mapping[str, float],
+    *,
+    outcome_ids: tuple[str, ...],
+) -> list[float]:
+    unknown = tuple(outcome_id for outcome_id in distribution if outcome_id not in outcome_ids)
+    if unknown:
+        raise BenchmarkRunnerError(
+            f"target_distribution contains unknown outcome id: {unknown[0]}"
+        )
+    return [float(distribution.get(outcome_id, 0.0)) for outcome_id in outcome_ids]
 
 
 def _renormalized_probabilities(probabilities: Sequence[float]) -> tuple[float, ...]:
@@ -3235,12 +3232,28 @@ def _mean_prediction_accepted_mass(
     probabilities: tuple[tuple[float, ...], ...],
     outcome_ids: tuple[str, ...],
 ) -> float:
-    outcome_indexes = {outcome_id: index for index, outcome_id in enumerate(outcome_ids)}
     accepted_mass = tuple(
-        row[outcome_indexes[sample.outcome_id]]
+        _prediction_target_mass(
+            row,
+            target_distribution=sample.target_distribution_or_one_hot(),
+            outcome_ids=outcome_ids,
+        )
         for sample, row in zip(batch.samples, probabilities, strict=True)
     )
     return math.fsum(accepted_mass) / len(accepted_mass)
+
+
+def _prediction_target_mass(
+    probabilities: Sequence[float],
+    *,
+    target_distribution: Mapping[str, float],
+    outcome_ids: tuple[str, ...],
+) -> float:
+    outcome_indexes = {outcome_id: index for index, outcome_id in enumerate(outcome_ids)}
+    return math.fsum(
+        float(target_probability) * float(probabilities[outcome_indexes[outcome_id]])
+        for outcome_id, target_probability in target_distribution.items()
+    )
 
 
 def _checkpoint_competition_record(
@@ -3255,7 +3268,6 @@ def _checkpoint_competition_record(
     competition_id: str,
 ) -> dict[str, object]:
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    outcome_indexes = {outcome_id: index for index, outcome_id in enumerate(outcome_ids)}
     entries: list[dict[str, object]] = []
     left_wins = 0
     right_wins = 0
@@ -3266,9 +3278,17 @@ def _checkpoint_competition_record(
         right_probabilities,
         strict=True,
     ):
-        accepted_index = outcome_indexes[sample.outcome_id]
-        left_score = left_row[accepted_index]
-        right_score = right_row[accepted_index]
+        target_distribution = sample.target_distribution_or_one_hot()
+        left_score = _prediction_target_mass(
+            left_row,
+            target_distribution=target_distribution,
+            outcome_ids=outcome_ids,
+        )
+        right_score = _prediction_target_mass(
+            right_row,
+            target_distribution=target_distribution,
+            outcome_ids=outcome_ids,
+        )
         if left_score > right_score:
             winner = "left"
             left_wins += 1
@@ -3286,6 +3306,10 @@ def _checkpoint_competition_record(
                 ),
                 "observation_id": str(sample.field_record().id),
                 "accepted_outcome_id": sample.outcome_id,
+                "target_distribution": [
+                    {"outcome_id": outcome_id, "probability": probability}
+                    for outcome_id, probability in target_distribution.items()
+                ],
                 "left_score": left_score,
                 "right_score": right_score,
                 "winner": winner,

@@ -16,7 +16,9 @@ from leibniz.timing import TimingCollector
 if TYPE_CHECKING:
     from leibniz.observation_generation import (
         GeneratedSampleSet,
+        StateSpaceCandidate,
         StateSpaceMeasureRequest,
+        StateSpaceMeasureValue,
     )
 
 __all__ = [
@@ -57,6 +59,14 @@ class Generator(Protocol):
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...
+
+    def minimum_state_space_measure(self) -> StateSpaceMeasureValue: ...
+
+    def state_space_for_request(
+        self,
+        *,
+        request: StateSpaceMeasureRequest,
+    ) -> StateSpaceCandidate | None: ...
 
 
 class Benchmark(Protocol):

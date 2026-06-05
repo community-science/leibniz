@@ -91,8 +91,8 @@ def test_digits_materialization_declaration_is_python_owned() -> None:
         protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
     )
     assert declaration.requirements == ()
-    assert declaration.minimum_resolution() == AxisAssignment(values={"W": 24, "H": 24})
-    assert declaration.resolution_lattice_steps() == {"W": 24, "H": 24}
+    assert declaration.minimum_resolution() == AxisAssignment(values={"W": 1, "H": 1})
+    assert declaration.resolution_lattice_steps() == {}
     assert declaration.digest == ContentDigest.from_value(declaration.to_record())
 
 
@@ -114,7 +114,7 @@ def test_materialization_declaration_uses_strongest_requirement_per_resolution_a
     )
 
     assert declaration.minimum_resolution(AxisAssignment(values={"L": 3})) == AxisAssignment(
-        values={"W": 120, "H": 24}
+        values={"W": 120, "H": 1}
     )
 
 
@@ -133,7 +133,7 @@ def test_materialization_plan_resolves_from_declaration_deterministically() -> N
     )
 
     assert left == right
-    assert left.resolution_assignment == AxisAssignment(values={"W": 24, "H": 24})
+    assert left.resolution_assignment == AxisAssignment(values={"W": 1, "H": 1})
     left.validate_declaration(declaration)
 
 
@@ -181,7 +181,7 @@ def test_materialization_plan_documents_validate_digits_fixtures() -> None:
     assert l3.digest == ContentDigest.from_value(l3.plan.to_record())
 
 
-def test_materialization_plan_rejects_off_lattice_resolution() -> None:
+def test_materialization_plan_accepts_arbitrary_positive_resolution() -> None:
     declaration = _digits_materialization()
     plan = MaterializationPlan(
         id=ProtocolIdentifier.parse("benchmarks.digits.materialization-plan.bad@0.1.0"),
@@ -199,9 +199,7 @@ def test_materialization_plan_rejects_off_lattice_resolution() -> None:
         seed=101,
     )
 
-    assert str(capture_materialization_error(lambda: plan.validate_declaration(declaration))) == (
-        "H=28 is not an integer multiple of layout lattice step 24"
-    )
+    plan.validate_declaration(declaration)
 
 
 def test_materialization_plan_rejects_under_resolved_request() -> None:
@@ -222,7 +220,7 @@ def test_materialization_plan_rejects_under_resolved_request() -> None:
     )
 
     assert str(capture_materialization_error(lambda: plan.validate_declaration(declaration))) == (
-        "W=0 is below layout minimum 24"
+        "W=0 is below layout minimum 1"
     )
 
 

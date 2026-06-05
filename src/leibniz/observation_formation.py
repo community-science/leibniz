@@ -632,8 +632,9 @@ class ObservationFormationDeclaration:
         width: int,
         height: int,
         component_index: int,
+        variation_coordinate: Mapping[str, object] | VariationCoordinate | None = None,
     ) -> FieldObservation:
-        """Form one unvaried component in the output field."""
+        """Form one component in the output field."""
 
         if width < 1:
             raise ObservationFormationValidationError("width must be positive")
@@ -643,6 +644,18 @@ class ObservationFormationDeclaration:
             raise ObservationFormationValidationError(
                 "component_index is outside component vocabulary"
             )
+        parsed_coordinate = (
+            None
+            if variation_coordinate is None
+            else (
+                variation_coordinate
+                if isinstance(variation_coordinate, VariationCoordinate)
+                else _parse_variation_coordinate(
+                    variation_coordinate,
+                    field="variation_coordinates",
+                )
+            )
+        )
         values = [0.0] * (self.channel_count * width * height)
         component = self.components[component_index]
         for mark in component.marks:
@@ -651,7 +664,11 @@ class ObservationFormationDeclaration:
                 channel_count=self.channel_count,
                 width=width,
                 height=height,
-                mark=mark,
+                mark=(
+                    mark
+                    if parsed_coordinate is None
+                    else _transform_mark(mark, parsed_coordinate)
+                ),
             )
         return FieldObservation(
             shape=(self.channel_count, height, width),
@@ -929,28 +946,11 @@ class ObservationFormationDeclaration:
                 height=height,
                 component_index=component_index,
             )
-        values = [0.0] * (self.channel_count * width * height)
-        source_values = list(
-            self._cached_component_analysis_field(
-                width=width,
-                height=height,
-                component_index=component_index,
-            ).values
-        )
-        _merge_transformed_component(
-            values=values,
-            source_values=source_values,
-            channel_count=self.channel_count,
+        return self.component_field(
             width=width,
             height=height,
-            coordinate=_parse_variation_coordinate(
-                variation_coordinate,
-                field="variation_coordinates",
-            ),
-        )
-        return FieldObservation(
-            shape=(self.channel_count, height, width),
-            values=tuple(values),
+            component_index=component_index,
+            variation_coordinate=variation_coordinate,
         )
 
     def _cached_component_analysis_field(
@@ -1020,38 +1020,13 @@ class ObservationFormationDeclaration:
             raise ObservationFormationValidationError("width must be positive")
         if height < 1:
             raise ObservationFormationValidationError("height must be positive")
-        values = [0.0] * (self.channel_count * width * height)
-        target_values = values
-        if variation_coordinates is not None:
-            target_values = list(
-                self._cached_component_analysis_field(
-                    width=width,
-                    height=height,
-                    component_index=component_index,
-                ).values
-            )
-        else:
-            component = self.components[component_index]
-            for mark in component.marks:
-                _draw_mark(
-                    values=target_values,
-                    channel_count=self.channel_count,
-                    width=width,
-                    height=height,
-                    mark=mark,
-                )
-        if variation_coordinates is not None:
-            _merge_transformed_component(
-                values=values,
-                source_values=target_values,
-                channel_count=self.channel_count,
-                width=width,
-                height=height,
-                coordinate=variation_coordinates[0],
-            )
-        return FieldObservation(
-            shape=(self.channel_count, height, width),
-            values=tuple(values),
+        return self.component_field(
+            width=width,
+            height=height,
+            component_index=component_index,
+            variation_coordinate=(
+                None if variation_coordinates is None else variation_coordinates[0]
+            ),
         )
 
 
@@ -1108,143 +1083,34 @@ def _draw_mark(
                 values[value_index] = max(values[value_index], mark.value)
 
 
-def _merge_transformed_component(
-    *,
-    values: list[float],
-    source_values: list[float],
-    channel_count: int,
-    width: int,
-    height: int,
-    coordinate: VariationCoordinate,
-) -> None:
-    if _is_identity_variation_coordinate(coordinate):
-        for index, value in enumerate(source_values):
-            if value > values[index]:
-                values[index] = value
-        return
-    center = (0.5, 0.5)
+def _transform_mark(mark: ComponentMark, coordinate: VariationCoordinate) -> ComponentMark:
     linear_matrix = linear_affine_matrix(coordinate.matrix)
-    inverse = _inverse_affine_matrix(linear_matrix)
     translation = affine_translation(coordinate.matrix)
-    target_x_range, target_y_range = _transformed_source_pixel_ranges(
-        source_values=source_values,
-        channel_count=channel_count,
-        width=width,
-        height=height,
-        matrix=linear_matrix,
-        center=center,
-        translation=translation,
+    center = (0.5, 0.5)
+    return ComponentMark(
+        kind=mark.kind,
+        channel=mark.channel,
+        degree=mark.degree,
+        control_points=tuple(
+            _transform_point(
+                point,
+                center=center,
+                translation=translation,
+                matrix=linear_matrix,
+            )
+            for point in mark.control_points
+        ),
+        width=mark.width * _affine_width_scale(linear_matrix),
+        value=mark.value,
     )
-    if not target_x_range or not target_y_range:
-        return
-    for channel in range(channel_count):
-        channel_offset = channel * width * height
-        for y_index in target_y_range:
-            y = (y_index + 0.5) / height
-            for x_index in target_x_range:
-                x = (x_index + 0.5) / width
-                source_x, source_y = _inverse_transform_point(
-                    (x, y),
-                    center=center,
-                    translation=translation,
-                    inverse_matrix=inverse,
-                )
-                value = _bilinear_sample(
-                    source_values,
-                    channel_offset=channel_offset,
-                    width=width,
-                    height=height,
-                    x=source_x,
-                    y=source_y,
-                )
-                if value <= 0.0:
-                    continue
-                target_index = channel_offset + y_index * width + x_index
-                values[target_index] = max(values[target_index], value)
 
 
-def _transformed_source_pixel_ranges(
-    *,
-    source_values: Sequence[float],
-    channel_count: int,
-    width: int,
-    height: int,
+def _affine_width_scale(
     matrix: tuple[tuple[float, float], tuple[float, float]],
-    center: tuple[float, float],
-    translation: tuple[float, float],
-) -> tuple[range, range]:
-    source_bounds = _positive_source_bounds(
-        source_values=source_values,
-        channel_count=channel_count,
-        width=width,
-        height=height,
-    )
-    if source_bounds is None:
-        return range(0), range(0)
-    min_x, min_y, max_x, max_y = source_bounds
-    # Bilinear interpolation can read a positive pixel from one pixel outside the
-    # source bounding box, so expand before projecting the target loop bounds.
-    source_box = (
-        ((min_x - 1.5) / width, (min_y - 1.5) / height),
-        ((max_x + 2.5) / width, (min_y - 1.5) / height),
-        ((min_x - 1.5) / width, (max_y + 2.5) / height),
-        ((max_x + 2.5) / width, (max_y + 2.5) / height),
-    )
-    transformed = tuple(
-        _transform_point(point, center=center, translation=translation, matrix=matrix)
-        for point in source_box
-    )
-    x_values = tuple(point[0] for point in transformed)
-    y_values = tuple(point[1] for point in transformed)
-    return (
-        _normalized_pixel_range(min(x_values), max(x_values), size=width),
-        _normalized_pixel_range(min(y_values), max(y_values), size=height),
-    )
-
-
-def _positive_source_bounds(
-    *,
-    source_values: Sequence[float],
-    channel_count: int,
-    width: int,
-    height: int,
-) -> tuple[int, int, int, int] | None:
-    min_x = width
-    min_y = height
-    max_x = -1
-    max_y = -1
-    for channel in range(channel_count):
-        channel_offset = channel * width * height
-        for y_index in range(height):
-            row_offset = channel_offset + y_index * width
-            for x_index in range(width):
-                if source_values[row_offset + x_index] <= 0.0:
-                    continue
-                min_x = min(min_x, x_index)
-                min_y = min(min_y, y_index)
-                max_x = max(max_x, x_index)
-                max_y = max(max_y, y_index)
-    if max_x < min_x or max_y < min_y:
-        return None
-    return (min_x, min_y, max_x, max_y)
-
-
-def _is_identity_variation_coordinate(coordinate: VariationCoordinate) -> bool:
-    return coordinate.matrix == (
-        (1.0, 0.0, 0.0),
-        (0.0, 1.0, 0.0),
-        (0.0, 0.0, 1.0),
-    )
-
-
-def _inverse_affine_matrix(
-    matrix: tuple[tuple[float, float], tuple[float, float]],
-) -> tuple[tuple[float, float], tuple[float, float]]:
-    (a, b), (c, d) = matrix
-    determinant = a * d - b * c
-    if not math.isfinite(determinant) or determinant == 0.0:
-        raise ObservationFormationValidationError("variation affine transform is singular")
-    return ((d / determinant, -b / determinant), (-c / determinant, a / determinant))
+) -> float:
+    first_column = math.hypot(matrix[0][0], matrix[1][0])
+    second_column = math.hypot(matrix[0][1], matrix[1][1])
+    return max(first_column, second_column)
 
 
 def linear_affine_matrix(
@@ -1257,21 +1123,6 @@ def affine_translation(
     matrix: AffineMatrix2D,
 ) -> tuple[float, float]:
     return (matrix[0][2], matrix[1][2])
-
-
-def _inverse_transform_point(
-    point: tuple[float, float],
-    *,
-    center: tuple[float, float],
-    translation: tuple[float, float],
-    inverse_matrix: tuple[tuple[float, float], tuple[float, float]],
-) -> tuple[float, float]:
-    dx = point[0] - center[0] - translation[0]
-    dy = point[1] - center[1] - translation[1]
-    return (
-        center[0] + inverse_matrix[0][0] * dx + inverse_matrix[0][1] * dy,
-        center[1] + inverse_matrix[1][0] * dx + inverse_matrix[1][1] * dy,
-    )
 
 
 def _transform_point(
@@ -1289,43 +1140,9 @@ def _transform_point(
     )
 
 
-def _bilinear_sample(
-    values: Sequence[float],
-    *,
-    channel_offset: int,
-    width: int,
-    height: int,
-    x: float,
-    y: float,
-) -> float:
-    pixel_x = x * width - 0.5
-    pixel_y = y * height - 0.5
-    if pixel_x < 0 or pixel_y < 0 or pixel_x > width - 1 or pixel_y > height - 1:
-        return 0.0
-    left = math.floor(pixel_x)
-    top = math.floor(pixel_y)
-    right = min(width - 1, left + 1)
-    bottom = min(height - 1, top + 1)
-    x_weight = pixel_x - left
-    y_weight = pixel_y - top
-    top_left = values[channel_offset + top * width + left]
-    top_right = values[channel_offset + top * width + right]
-    bottom_left = values[channel_offset + bottom * width + left]
-    bottom_right = values[channel_offset + bottom * width + right]
-    top_value = (1.0 - x_weight) * top_left + x_weight * top_right
-    bottom_value = (1.0 - x_weight) * bottom_left + x_weight * bottom_right
-    return (1.0 - y_weight) * top_value + y_weight * bottom_value
-
-
 def _pixel_index_range(lower: float, upper: float, *, size: int) -> range:
     start = max(0, math.floor(lower))
     stop = min(size, math.ceil(upper))
-    return range(start, stop)
-
-
-def _normalized_pixel_range(lower: float, upper: float, *, size: int) -> range:
-    start = max(0, math.floor(lower * size - 0.5))
-    stop = min(size, math.ceil(upper * size + 0.5))
     return range(start, stop)
 
 

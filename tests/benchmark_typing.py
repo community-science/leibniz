@@ -26,7 +26,9 @@ from leibniz.observation_generation import (
     GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
+    StateSpaceCandidate,
     StateSpaceMeasureRequest,
+    StateSpaceMeasureValue,
     load_generator,
 )
 from leibniz.observation_showcases import ObservationShowcaseManifest
@@ -41,12 +43,6 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
     @property
     def formation(self) -> ObservationFormationDeclaration: ...
 
-    def minimum_discriminatable_resolution_assignment(
-        self,
-        *,
-        minimum_assignment: AxisAssignment,
-    ) -> AxisAssignment: ...
-
     def distinguishable_state_complexity(
         self,
         *,
@@ -54,6 +50,20 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         height: int,
         variation_extent: float = 1.0,
     ) -> float: ...
+
+    def constructed_state_space_complexity(
+        self,
+        *,
+        affine_transform_count: int,
+    ) -> float: ...
+
+    def minimum_state_space_measure(self) -> StateSpaceMeasureValue: ...
+
+    def state_space_for_request(
+        self,
+        *,
+        request: StateSpaceMeasureRequest,
+    ) -> StateSpaceCandidate | None: ...
 
     def __call__(
         self,
@@ -84,6 +94,7 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         seed: int,
         sample_index: int,
         component_index: int = 0,
+        affine_transform_count: int = 2,
     ) -> Mapping[str, object]: ...
 
     def console_preview_batch(self, *, atom_count: int) -> Mapping[str, object]: ...
