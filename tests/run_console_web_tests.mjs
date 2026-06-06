@@ -315,6 +315,9 @@ function assertBenchmarkModelWorkbenchStructure() {
   if (panel.includes("label: 'Artifacts'")) {
     throw new Error('BenchmarksPanel must label provenance by the records it actually renders');
   }
+  if (panel.includes('run.architecture_digest === model.architecture_digest')) {
+    throw new Error('BenchmarksPanel must not group repeated training runs by architecture digest');
+  }
 
   const requiredStyleMarkers = [
     '--measured-accent-bg',

@@ -314,13 +314,9 @@ function normalizedDigest(value: string): string {
 }
 
 function modelLookup(models: ModelResultRecord[]): {
-  byArchitecture: Map<string, ModelResultRecord>;
   byModelKey: Map<string, ModelResultRecord>;
 } {
   return {
-    byArchitecture: new Map(
-      models.map((model) => [normalizedDigest(model.architecture_digest), model]),
-    ),
     byModelKey: new Map(models.map((model) => [model.model_key, model])),
   };
 }
@@ -405,12 +401,8 @@ function plotRunPoint(
   scoreAxis: string,
   frontierKeys: Set<string>,
 ): BenchmarkPlotModelPoint | null {
-  const leaderboardModel =
-    leaderboardModels.byModelKey.get(run.model_key) ??
-    leaderboardModels.byArchitecture.get(normalizedDigest(run.architecture_digest));
-  const candidateModel =
-    candidateModels.byModelKey.get(run.model_key) ??
-    candidateModels.byArchitecture.get(normalizedDigest(run.architecture_digest));
+  const leaderboardModel = leaderboardModels.byModelKey.get(run.model_key);
+  const candidateModel = candidateModels.byModelKey.get(run.model_key);
   const model = run.result_status === 'tentative'
     ? candidateModel ?? leaderboardModel
     : leaderboardModel;

@@ -41,6 +41,7 @@ _protocol_record = RecordSpec(
         "gate_check_interval": FieldSpec(kind="integer"),
         "gate_sample_count": FieldSpec(kind="integer"),
         "gate_decision_rule": FieldSpec(kind="string"),
+        "rung_competence_threshold": FieldSpec(kind="number", required=False),
         "min_delta": FieldSpec(kind="number"),
         "patience": FieldSpec(kind="integer"),
         "min_steps": FieldSpec(kind="integer", required=False),
@@ -108,6 +109,7 @@ class TrainingProtocol:
     patience: int
     validation_source: str
     min_steps: int = 0
+    rung_competence_threshold: float = 0.01
     tensor_runtime: str = "pytorch"
     tensor_device: str = tensor_runtime_default_device()
     runtime_memory_budget_fraction: float | None = None
@@ -131,6 +133,14 @@ class TrainingProtocol:
         _require_positive_int(self.gate_sample_count, "gate_sample_count")
         if not self.gate_decision_rule:
             raise TrainingRunValidationError("gate_decision_rule must be nonempty")
+        if (
+            not math.isfinite(float(self.rung_competence_threshold))
+            or self.rung_competence_threshold < 0.0
+            or self.rung_competence_threshold > 1.0
+        ):
+            raise TrainingRunValidationError(
+                "rung_competence_threshold must be in [0, 1]"
+            )
         _require_nonnegative_finite(self.min_delta, "min_delta")
         _require_nonnegative_int(self.patience, "patience")
         _require_nonnegative_int(self.min_steps, "min_steps")
@@ -186,6 +196,10 @@ class TrainingProtocol:
                 validated["gate_decision_rule"],
                 "gate_decision_rule",
             ),
+            rung_competence_threshold=_extract.finite_float(
+                validated.get("rung_competence_threshold", 0.01),
+                "rung_competence_threshold",
+            ),
             min_delta=_extract.finite_float(validated["min_delta"], "min_delta"),
             patience=_extract.integer(validated["patience"], "patience"),
             validation_source=_extract.non_empty_string(
@@ -223,6 +237,7 @@ class TrainingProtocol:
             "gate_check_interval": self.gate_check_interval,
             "gate_sample_count": self.gate_sample_count,
             "gate_decision_rule": self.gate_decision_rule,
+            "rung_competence_threshold": self.rung_competence_threshold,
             "min_delta": self.min_delta,
             "patience": self.patience,
             "tensor_runtime": self.tensor_runtime,

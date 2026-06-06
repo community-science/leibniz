@@ -122,6 +122,7 @@ _default_model_checkpoint_gate_interval = 1
 _default_convergence_patience = 6
 _default_convergence_min_delta = 1e-3
 _default_convergence_min_steps = 500
+_default_rung_competence_threshold = 0.01
 _converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
 _legal_uncapped_training_stage_stop_reasons = frozenset(
     {"validation-plateau", "capacity-limited"}
@@ -505,6 +506,7 @@ class BenchmarkRunPlan:
     model_checkpoint_gate_interval: int = _default_model_checkpoint_gate_interval
     gate_sample_count: int | None = None
     gate_decision_rule: str = "score-estimate-plateau"
+    rung_competence_threshold: float = _default_rung_competence_threshold
     convergence_patience: int = _default_convergence_patience
     convergence_min_delta: float = _default_convergence_min_delta
     convergence_min_steps: int = _default_convergence_min_steps
@@ -555,6 +557,12 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError(
                 f"unsupported gate_decision_rule: {self.gate_decision_rule}"
             )
+        if (
+            not math.isfinite(float(self.rung_competence_threshold))
+            or self.rung_competence_threshold < 0.0
+            or self.rung_competence_threshold > 1.0
+        ):
+            raise BenchmarkRunnerError("rung_competence_threshold must be in [0, 1]")
         if type(self.convergence_patience) is not int or self.convergence_patience < 0:
             raise BenchmarkRunnerError("convergence_patience must be nonnegative")
         if self.convergence_min_delta < 0:
@@ -590,6 +598,7 @@ class BenchmarkRunPlan:
             "model_checkpoint_gate_interval": self.model_checkpoint_gate_interval,
             "gate_sample_count": self.resolved_gate_sample_count,
             "gate_decision_rule": self.gate_decision_rule,
+            "rung_competence_threshold": float(self.rung_competence_threshold),
             "convergence_patience": self.convergence_patience,
             "convergence_min_delta": float(self.convergence_min_delta),
             "convergence_min_steps": self.convergence_min_steps,
@@ -817,6 +826,7 @@ def run_benchmark(
         schedule_name=plan.schedule,
         gate_check_interval=plan.gate_check_interval,
         gate_decision_rule=plan.gate_decision_rule,
+        rung_competence_threshold=plan.rung_competence_threshold,
         convergence_patience=plan.convergence_patience,
         convergence_min_delta=float(plan.convergence_min_delta),
         convergence_min_steps=plan.convergence_min_steps,
@@ -865,6 +875,7 @@ def run_benchmark(
                 source="structured-training-curriculum",
                 frontier_sampling_weight=0.7,
                 replay_sampling_weight=0.3,
+                rung_competence_threshold=plan.rung_competence_threshold,
                 rungs=training_result.training_rungs,
                 frontier_index=training_result.training_frontier_index,
             ),
@@ -1496,6 +1507,7 @@ def _curriculum_record(
     source: str | None = None,
     frontier_sampling_weight: float | None = None,
     replay_sampling_weight: float | None = None,
+    rung_competence_threshold: float | None = None,
 ) -> dict[str, object]:
     record: dict[str, object] = {
         "kind": kind,
@@ -1533,6 +1545,8 @@ def _curriculum_record(
         record["frontier_sampling_weight"] = frontier_sampling_weight
     if replay_sampling_weight is not None:
         record["replay_sampling_weight"] = replay_sampling_weight
+    if rung_competence_threshold is not None:
+        record["rung_competence_threshold"] = rung_competence_threshold
     return record
 
 
@@ -1614,6 +1628,7 @@ def _train_and_predict(
     schedule_name: str,
     gate_check_interval: int,
     gate_decision_rule: str,
+    rung_competence_threshold: float,
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
@@ -1647,6 +1662,7 @@ def _train_and_predict(
                 schedule_name=schedule_name,
                 gate_check_interval=gate_check_interval,
                 gate_decision_rule=gate_decision_rule,
+                rung_competence_threshold=rung_competence_threshold,
                 convergence_patience=convergence_patience,
                 convergence_min_delta=convergence_min_delta,
                 convergence_min_steps=convergence_min_steps,
@@ -1679,6 +1695,7 @@ def _train_and_predict_on_device(
     schedule_name: str,
     gate_check_interval: int,
     gate_decision_rule: str,
+    rung_competence_threshold: float,
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
@@ -1884,6 +1901,7 @@ def _train_and_predict_on_device(
         patience=convergence_patience,
         min_delta=convergence_min_delta,
         min_steps=convergence_min_steps,
+        rung_competence_threshold=rung_competence_threshold,
         batch_size=sample_count,
         gate_sample_count=gate_sample_count,
         architecture=architecture,
@@ -1904,6 +1922,7 @@ def _train_and_predict_on_device(
                     gate_check_interval=gate_check_interval,
                     gate_sample_count=gate_sample_count,
                     gate_decision_rule=gate_decision_rule,
+                    rung_competence_threshold=rung_competence_threshold,
                     convergence_patience=convergence_patience,
                     convergence_min_delta=convergence_min_delta,
                     convergence_min_steps=convergence_min_steps,
@@ -1941,6 +1960,7 @@ def _train_and_predict_on_device(
                     source="structured-training-curriculum",
                     frontier_sampling_weight=0.7,
                     replay_sampling_weight=0.3,
+                    rung_competence_threshold=rung_competence_threshold,
                     rungs=tuple(training_rungs),
                     frontier_index=training_frontier_index,
                 ),
@@ -1966,6 +1986,7 @@ def _train_and_predict_on_device(
         gate_check_interval=gate_check_interval,
         gate_sample_count=gate_sample_count,
         gate_decision_rule=gate_decision_rule,
+        rung_competence_threshold=rung_competence_threshold,
         convergence_patience=convergence_patience,
         convergence_min_delta=convergence_min_delta,
         convergence_min_steps=convergence_min_steps,
@@ -2584,6 +2605,7 @@ def _train_until_convergence(
     patience: int,
     min_delta: float,
     min_steps: int,
+    rung_competence_threshold: float,
     batch_size: int,
     gate_sample_count: int,
     architecture: ArchitectureManifest,
@@ -2796,6 +2818,15 @@ def _train_until_convergence(
                 )
             )
         if should_stop_for_plateau:
+            chance_mass = _chance_accepted_mass(outcome_ids)
+            with phase_timings.span("validation_rung_competence_threshold"):
+                best_rung_competence = _training_history_best_competence_fraction(
+                    validation_history[plateau_window_start_index:],
+                    chance_mass=chance_mass,
+                )
+            if best_rung_competence < rung_competence_threshold:
+                stop_reason = "validation-plateau"
+                break
             with phase_timings.span("validation_plateau_handler"):
                 advanced_frontier = (
                     on_plateau is not None and on_plateau(tuple(validation_history))
@@ -2983,6 +3014,34 @@ def _training_history_frontier_point(point: TrainingHistoryPoint) -> ValidationC
     )
 
 
+def _training_history_best_competence_fraction(
+    validation_history: Sequence[TrainingHistoryPoint],
+    *,
+    chance_mass: float,
+) -> float:
+    best = 0.0
+    for point in validation_history:
+        if point.score_estimate is None:
+            continue
+        for record in _training_score_estimate_points(point.score_estimate):
+            competence = _competence_fraction(
+                accepted_mass=_required_float(
+                    record.get("mean_accepted_mass"),
+                    "score_estimate.mean_accepted_mass",
+                ),
+                chance_mass=chance_mass,
+            )
+            best = max(best, competence)
+    return best
+
+
+def _competence_fraction(*, accepted_mass: float, chance_mass: float) -> float:
+    if chance_mass >= 1.0:
+        return 1.0 if accepted_mass >= 1.0 else 0.0
+    competence = (accepted_mass - chance_mass) / (1.0 - chance_mass)
+    return min(1.0, max(0.0, competence))
+
+
 def _tensor_batch_size(fields: Any, *, fallback: int) -> int:
     shape = getattr(fields, "shape", None)
     if shape is None or len(shape) < 1:
@@ -3052,6 +3111,7 @@ def _training_run_record(
     gate_check_interval: int,
     gate_sample_count: int,
     gate_decision_rule: str,
+    rung_competence_threshold: float,
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
@@ -3088,6 +3148,7 @@ def _training_run_record(
             gate_check_interval=gate_check_interval,
             gate_sample_count=gate_sample_count,
             gate_decision_rule=gate_decision_rule,
+            rung_competence_threshold=rung_competence_threshold,
             min_delta=convergence_min_delta,
             patience=convergence_patience,
             validation_source="generator-resample",
@@ -3111,6 +3172,7 @@ def _running_training_run_record(
     gate_check_interval: int,
     gate_sample_count: int,
     gate_decision_rule: str,
+    rung_competence_threshold: float,
     convergence_patience: int,
     convergence_min_delta: float,
     convergence_min_steps: int,
@@ -3137,6 +3199,7 @@ def _running_training_run_record(
             gate_check_interval=gate_check_interval,
             gate_sample_count=gate_sample_count,
             gate_decision_rule=gate_decision_rule,
+            rung_competence_threshold=rung_competence_threshold,
             min_delta=convergence_min_delta,
             patience=convergence_patience,
             validation_source="generator-resample",

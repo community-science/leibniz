@@ -365,6 +365,7 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--model-checkpoint-gate-interval", default=1, type=int)
     train.add_argument("--gate-sample-count", default=None, type=int)
     train.add_argument("--gate-decision-rule", default="score-estimate-plateau")
+    train.add_argument("--rung-competence-threshold", default=0.01, type=float)
     train.add_argument("--convergence-patience", default=6, type=int)
     train.add_argument("--convergence-min-delta", default=1e-3, type=float)
     train.add_argument("--convergence-min-steps", default=500, type=int)
@@ -691,6 +692,7 @@ def _benchmark_run_plan(
         model_checkpoint_gate_interval=args.model_checkpoint_gate_interval,
         gate_sample_count=args.gate_sample_count,
         gate_decision_rule=args.gate_decision_rule,
+        rung_competence_threshold=args.rung_competence_threshold,
         convergence_patience=args.convergence_patience,
         convergence_min_delta=args.convergence_min_delta,
         convergence_min_steps=args.convergence_min_steps,

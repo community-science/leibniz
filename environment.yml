@@ -7,6 +7,7 @@ dependencies:
   - python=3.12
   - nodejs=24
   - pip>=24
+  - numpy
   - pytorch>=2
   - sel(linux): pytorch-cuda=12.4
   - pip:
