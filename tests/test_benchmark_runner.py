@@ -110,17 +110,17 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            sample_count=2,
             train_steps=1,
             dry_run=True,
         )
     )
 
     assert summary.dry_run is True
-    assert summary.measurement_count == 2
+    assert summary.measurement_count == 512
     assert summary.run_slug.startswith(
-        "digits-arch-186021388794-seed101-samples2-steps1-train-"
+        "digits-arch-186021388794-seed101-steps1-train-"
     )
+    assert "-samples" not in summary.run_slug
     assert not (tmp_path / "results").exists()
 
 
@@ -164,7 +164,6 @@ def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
             shape=(0,),
             state_space_request=request,
         ),
-        sample_count=512,
     )
     timings = benchmark_runner.TimingCollector()
 
@@ -192,13 +191,12 @@ def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
 def test_capacity_limited_training_run_is_budget_exhausted() -> None:
     training_run = cast(Any, benchmark_runner)._training_run_record(
         seed=101,
-        batch_size=512,
+        training_evidence_count=512,
         max_steps=None,
         learning_rate=0.01,
         optimizer_name="adam",
         schedule_name="reduce-on-plateau",
         gate_check_interval=32,
-        gate_sample_count=512,
         gate_decision_rule="score-estimate-plateau",
         rung_competence_threshold=0.01,
         convergence_patience=6,
@@ -248,7 +246,6 @@ def test_digits_benchmark_runner_dry_run_does_not_discover_runtime(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            sample_count=2,
             train_steps=1,
             dry_run=True,
         )
@@ -300,7 +297,6 @@ def test_digits_benchmark_runner_rejects_fixed_shape_architecture(
                 architecture_path=architecture_path,
                 benchmark_root=_digits_benchmark_root,
                 results_root=tmp_path / "results",
-                sample_count=2,
                 train_steps=1,
                 dry_run=True,
             )
@@ -330,7 +326,6 @@ def test_digits_benchmark_runner_rejects_adaptive_pool_without_scale_contract(
                 architecture_path=architecture_path,
                 benchmark_root=_digits_benchmark_root,
                 results_root=tmp_path / "results",
-                sample_count=2,
                 train_steps=1,
                 dry_run=True,
             )
@@ -348,14 +343,36 @@ def test_digits_scale_contract_accepts_rectangular_generated_shapes() -> None:
     ) is None
 
 
-def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -> None:
+def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def runtime_memory_budget_bytes(_runtime: TensorRuntime) -> int:
+        return (
+            2
+            * (1 * 16 * 16 + 10)
+            * cast(Any, benchmark_runner)._float32_bytes
+            * cast(Any, benchmark_runner)._runtime_batch_memory_safety_factor
+        )
+
+    def runtime_used_memory_bytes(_runtime: TensorRuntime) -> int:
+        return 0
+
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_runtime_memory_budget_bytes",
+        runtime_memory_budget_bytes,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_runtime_used_memory_bytes",
+        runtime_used_memory_bytes,
+    )
     summary = run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            sample_count=2,
-            evaluation_sample_count=3,
             seed=101,
             train_steps=1,
             tensor_device="cpu",
@@ -378,8 +395,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     manifest = load_digits_benchmark(_digits_benchmark_root).manifest
 
     evaluation_bundle.measurement_dataset.validate_manifest(manifest)
-    assert evaluation_summary.measurement_count == 3
-    assert len(evaluation_bundle.measurement_dataset.measurements) == 3
+    assert evaluation_summary.measurement_count == 512
+    assert len(evaluation_bundle.measurement_dataset.measurements) == 512
     assert evaluation_bundle.measurement_score_view.source_dataset_digest == (
         evaluation_bundle.measurement_dataset.digest
     )
@@ -388,6 +405,27 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     evaluation_throughput = cast(
         dict[str, object],
         evaluation_bundle.throughput["checkpoint_evaluation"],
+    )
+    phase_timing = cast(dict[str, object], evaluation_throughput["phase_timing"])
+    phases = cast(dict[str, object], phase_timing["phases"])
+    score_generation = cast(
+        dict[str, object],
+        phases["checkpoint_evaluation_score_generation"],
+    )
+    score_prediction = cast(
+        dict[str, object],
+        phases["checkpoint_evaluation_score_prediction"],
+    )
+    dynamic_batch = cast(
+        dict[str, object],
+        phases["checkpoint_evaluation_score.dynamic_batch"],
+    )
+    dynamic_counters = cast(dict[str, object], dynamic_batch["counters"])
+    assert cast(int, score_generation["calls"]) > 1
+    assert cast(int, score_prediction["calls"]) > 1
+    assert cast(float, dynamic_counters["requested_sample_count"]) > cast(
+        float,
+        dynamic_counters["physical_sample_count"],
     )
     assert isinstance(evaluation_throughput["max_inference_compute"], int)
     assert evaluation_throughput["max_inference_compute"] >= 0
@@ -415,7 +453,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_run.protocol.tensor_runtime == "pytorch"
     assert training_run.protocol.tensor_device == "cpu"
     assert training_run.protocol.max_steps == 1
-    assert training_run.protocol.gate_sample_count == 2
+    assert training_run.protocol.gate_evidence_count == 512
     assert training_run.protocol.rung_competence_threshold == 0.01
     assert training_summary["tensor_runtime"] == "pytorch"
     assert training_summary["tensor_device"] == "cpu"
@@ -520,7 +558,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         assert request_minimum <= rung_complexity
         assert rung_complexity <= request_maximum
         assert math.isclose(request_maximum - request_minimum, 1.0)
-    assert [rung["sample_count"] for rung in curriculum_rungs] == [3]
+    assert [rung["sample_count"] for rung in curriculum_rungs] == [512]
     assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
         cast(float, rung["complexity"]) for rung in curriculum_rungs
     )
@@ -547,11 +585,11 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     )
     assert sampled_competence["complexity_axis"] is None
     assert math.isclose(cast(float, sampled_competence["complexity"]), math.log2(10))
-    assert sampled_competence["sample_count"] == 3
+    assert sampled_competence["sample_count"] == 512
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
     assert len(points) == 1
-    assert [point["sample_count"] for point in points] == [3]
+    assert [point["sample_count"] for point in points] == [512]
     assert math.isclose(cast(float, points[0]["complexity"]), math.log2(10))
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
@@ -566,8 +604,6 @@ def test_benchmark_evaluation_rejects_checkpoint_artifact_for_wrong_benchmark(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            sample_count=1,
-            evaluation_sample_count=1,
             seed=101,
             train_steps=0,
             tensor_device="cpu",
@@ -602,8 +638,6 @@ def test_digits_benchmark_runner_accepts_convnet_architecture(
             architecture_path=_digits_convnet_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            sample_count=2,
-            evaluation_sample_count=2,
             seed=101,
             train_steps=1,
             tensor_device="cpu",
@@ -624,7 +658,7 @@ def test_digits_benchmark_runner_accepts_convnet_architecture(
         evaluation_summary.evaluation_bundle_path.read_bytes()
     ).bundle.model_inspection
 
-    assert evaluation_summary.measurement_count == 2
+    assert evaluation_summary.measurement_count == 512
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
         "fixed-support-affine",
         "local-affine",
@@ -651,7 +685,6 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
     final_rung = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
         architecture=architecture,
         generator=generator,
-        sample_count=2,
         seed=101,
         index=1,
     )
@@ -660,13 +693,12 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
         progress_callback = cast(Any, kwargs["progress_callback"])
         training_run = cast(Any, benchmark_runner)._training_run_record(
             seed=101,
-            batch_size=2,
+            training_evidence_count=2,
             max_steps=1,
             learning_rate=0.01,
             optimizer_name="adam",
             schedule_name="reduce-on-plateau",
             gate_check_interval=32,
-            gate_sample_count=2,
             gate_decision_rule="score-estimate-plateau",
             rung_competence_threshold=0.01,
             convergence_patience=6,
@@ -714,8 +746,6 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            evaluation_sample_count=2,
-            sample_count=2,
             train_steps=1,
             tensor_device="cpu",
         )
@@ -725,7 +755,7 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
         description="training summary",
     )
 
-    assert summary.measurement_count == 2
+    assert summary.measurement_count == 512
     assert "sampled_competence" not in training_summary
     assert "evaluation_curriculum" not in training_summary
     assert "measurement_dataset_digest" not in training_summary
@@ -742,7 +772,6 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            sample_count=2,
             seed=101,
             train_steps=3,
             learning_rate=0.005,
@@ -750,7 +779,6 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
             schedule="cosine",
             gate_check_interval=1,
             model_checkpoint_gate_interval=2,
-            gate_sample_count=3,
             convergence_patience=2,
             convergence_min_delta=0.001,
             tensor_device="cpu",
@@ -769,7 +797,7 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert training_run.protocol.schedule == "cosine"
     assert training_run.protocol.learning_rate == 0.005
     assert training_run.protocol.gate_check_interval == 1
-    assert training_run.protocol.gate_sample_count == 3
+    assert training_run.protocol.gate_evidence_count == 512
     assert training_run.protocol.gate_decision_rule == "score-estimate-plateau"
     assert training_run.protocol.patience == 2
     assert training_run.protocol.min_delta == 0.001
@@ -1023,8 +1051,7 @@ def test_training_stage_records_current_validation_loss_without_global_best(
         min_delta=0.0,
         rung_competence_threshold=0.9,
         min_steps=0,
-        batch_size=1,
-        gate_sample_count=1,
+        training_evidence_count=1,
         architecture=ArchitectureManifestDocument.from_bytes(
             _digits_architecture.read_bytes()
         ).manifest,
@@ -1223,8 +1250,7 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
         min_delta=0.001,
         min_steps=0,
         rung_competence_threshold=0.9,
-        batch_size=1,
-        gate_sample_count=1,
+        training_evidence_count=1,
         architecture=ArchitectureManifestDocument.from_bytes(
             _digits_architecture.read_bytes()
         ).manifest,
@@ -1428,7 +1454,6 @@ def test_digits_benchmark_runner_auto_falls_back_after_runtime_compile_error(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            sample_count=2,
             train_steps=1,
             tensor_device="auto",
         )
@@ -1519,7 +1544,6 @@ def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_dev
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            sample_count=2,
             train_steps=1,
             tensor_device="auto",
         )
@@ -1552,7 +1576,6 @@ def test_digits_benchmark_runner_run_slug_includes_training_controls() -> None:
     base_plan = BenchmarkRunPlan(
         architecture_path=_digits_architecture,
         benchmark_root=_digits_benchmark_root,
-        sample_count=4,
         seed=401,
         train_steps=10,
         optimizer="sgd",
@@ -1560,14 +1583,15 @@ def test_digits_benchmark_runner_run_slug_includes_training_controls() -> None:
     alternate_plan = BenchmarkRunPlan(
         architecture_path=_digits_architecture,
         benchmark_root=_digits_benchmark_root,
-        sample_count=4,
         seed=401,
         train_steps=10,
         optimizer="adam",
     )
 
-    assert base_plan.run_slug.startswith("seed401-samples4-steps10-train-")
-    assert alternate_plan.run_slug.startswith("seed401-samples4-steps10-train-")
+    assert base_plan.run_slug.startswith("seed401-steps10-train-")
+    assert alternate_plan.run_slug.startswith("seed401-steps10-train-")
+    assert "samples" not in base_plan.run_slug
+    assert "samples" not in alternate_plan.run_slug
     assert base_plan.run_slug != alternate_plan.run_slug
 
 
@@ -1577,7 +1601,6 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            sample_count=2,
             seed=101,
             train_steps=1,
             tensor_device="cpu",
@@ -1614,7 +1637,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     validation_history = cast(list[dict[str, object]], diagnostics["validation_history"])
     assert validation_history
     cost_summary = cast(dict[str, object], history[0]["cost_summary"])
-    assert cost_summary["training_compute"] == 1504.0
+    assert cost_summary["training_compute"] == 385024.0
     assert "training_compute_per_sample" not in cost_summary
     console_view_model = cast(dict[str, object], history[0]["console_view_model"])
     detail_sections = cast(list[dict[str, object]], console_view_model["detail_sections"])
@@ -1650,7 +1673,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert math.isclose(observed_complexities[0], math.log2(10))
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
-    assert points[0]["sample_count"] == 2
+    assert points[0]["sample_count"] == 512
     assert len(inspections) == 1
     assert inspections[0]["source_path"] == history[0]["model_inspection_path"]
     assert "measurement_dataset" in inspections[0]
@@ -1665,8 +1688,6 @@ def test_benchmark_competition_uses_evaluation_bundles_as_handoff_contract(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=results_root,
-            sample_count=1,
-            evaluation_sample_count=1,
             seed=101,
             train_steps=0,
             tensor_device="cpu",
@@ -1677,8 +1698,6 @@ def test_benchmark_competition_uses_evaluation_bundles_as_handoff_contract(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=results_root,
-            sample_count=1,
-            evaluation_sample_count=1,
             seed=202,
             train_steps=0,
             tensor_device="cpu",
@@ -1719,7 +1738,6 @@ def test_benchmark_competition_uses_evaluation_bundles_as_handoff_contract(
             right_evaluation_path=second_evaluation.evaluation_bundle_path,
             benchmark_root=_digits_benchmark_root,
             results_root=results_root,
-            sample_count=1,
             tensor_device="cpu",
         )
     )
@@ -1787,8 +1805,6 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            sample_count=2,
-            evaluation_sample_count=2,
             seed=101,
             train_steps=2,
             gate_check_interval=1,
@@ -1851,7 +1867,6 @@ def test_digits_benchmark_runner_omits_legacy_component_count(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=tmp_path / "results",
-            sample_count=2,
             train_steps=0,
             tensor_device="cpu",
         )
@@ -1878,8 +1893,6 @@ def test_cli_runs_digits_benchmark_dry_run(
             str(_digits_benchmark_root),
             "--results-root",
             str(tmp_path / "results"),
-            "--sample-count",
-            "2",
             "--dry-run",
         ]
     )
@@ -1889,8 +1902,9 @@ def test_cli_runs_digits_benchmark_dry_run(
     assert captured.err == ""
     assert captured.out.startswith(
         "planned benchmark training run "
-        "digits-arch-186021388794-seed101-samples2-stepsconverge-train-"
+        "digits-arch-186021388794-seed101-stepsconverge-train-"
     )
+    assert "-samples" not in captured.out
     assert not (tmp_path / "results").exists()
 
 

@@ -42,7 +42,6 @@ def _run_and_evaluate_digits_benchmark(results_root: Path, *, sample_count: int 
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=results_root,
-            sample_count=sample_count,
             train_steps=0,
             tensor_device="cpu",
         )
@@ -548,7 +547,6 @@ def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: 
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=results_root,
-            sample_count=1,
             train_steps=0,
             tensor_device="cpu",
         )
@@ -622,7 +620,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     result = results[0]
     assert result["benchmark_id"] == "benchmarks.digits@0.1.0"
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
-    assert leaderboard[0]["measurement_count"] == 1
+    assert leaderboard[0]["measurement_count"] == 512
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     assert isinstance(cost_summary["inference_compute"], int | float)
     frontiers = cast(dict[str, object], result["frontiers"])
@@ -673,8 +671,6 @@ def test_cli_benchmark_evaluate_discovers_training_checkpoints(
             architecture_path=_digits_architecture,
             benchmark_root=_digits_benchmark_root,
             results_root=results_root,
-            sample_count=1,
-            evaluation_sample_count=1,
             train_steps=0,
             tensor_device="cpu",
         )
@@ -748,8 +744,6 @@ def test_cli_benchmark_train_discovers_uncompleted_architecture_manifests(
                 str(completed_architecture),
                 "--results-root",
                 str(results_root),
-                "--sample-count",
-                "1",
                 "--train-steps",
                 "0",
                 "--device",
@@ -767,8 +761,6 @@ def test_cli_benchmark_train_discovers_uncompleted_architecture_manifests(
             "digits",
             "--results-root",
             str(results_root),
-            "--sample-count",
-            "1",
             "--train-steps",
             "0",
             "--device",
@@ -811,8 +803,6 @@ def test_cli_benchmark_train_discovers_uncompleted_architecture_manifests(
                 "digits",
                 "--results-root",
                 str(results_root),
-                "--sample-count",
-                "1",
                 "--train-steps",
                 "0",
                 "--device",
@@ -847,8 +837,6 @@ def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
                 architecture_path=_digits_architecture,
                 benchmark_root=_digits_benchmark_root,
                 results_root=results_root,
-                sample_count=1,
-                evaluation_sample_count=1,
                 seed=seed,
                 train_steps=0,
                 tensor_device="cpu",
@@ -939,7 +927,7 @@ def test_cli_publishes_local_benchmark_results(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert "published 1 measurement(s)" in captured.out
+    assert "published 512 measurement(s)" in captured.out
     assert "commit: " in captured.out
     assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 1
     assert _git(results_root, "status", "--porcelain").stdout == ""

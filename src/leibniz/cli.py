@@ -72,7 +72,7 @@ from leibniz.view_manifests import ViewManifestDocument
 
 __all__ = ["main"]
 
-_relative_evaluation_sample_count = 512
+_relative_evaluation_evidence_count = 512
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,8 +350,6 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="local result checkout; defaults to results",
     )
-    train.add_argument("--sample-count", default=512, type=int)
-    train.add_argument("--evaluation-sample-count", default=None, type=int)
     train.add_argument("--seed", default=101, type=int)
     train.add_argument("--train-steps", default=None, type=int)
     train.add_argument("--learning-rate", default=0.01, type=float)
@@ -363,7 +361,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     train.add_argument("--gate-check-interval", default=32, type=int)
     train.add_argument("--model-checkpoint-gate-interval", default=1, type=int)
-    train.add_argument("--gate-sample-count", default=None, type=int)
     train.add_argument("--gate-decision-rule", default="score-estimate-plateau")
     train.add_argument("--rung-competence-threshold", default=0.01, type=float)
     train.add_argument("--convergence-patience", default=6, type=int)
@@ -417,7 +414,7 @@ def _parser() -> argparse.ArgumentParser:
         help="profile benchmark formation paths",
     )
     profile.add_argument("--benchmark-root", type=Path, required=True)
-    profile.add_argument("--sample-count", default=64, type=int)
+    profile.add_argument("--evidence-count", default=64, type=int)
     profile.add_argument("--seed", default=101, type=int)
     profile.add_argument("--repeats", default=3, type=int)
     profile.add_argument("--warmup-repeats", default=1, type=int)
@@ -595,7 +592,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                     right_evaluation=args.right_evaluation,
                     benchmark_roots=benchmark_roots,
                     benchmark_selectors=benchmark_selectors,
-                    sample_count=_relative_evaluation_sample_count,
+                    sample_count=_relative_evaluation_evidence_count,
                     tensor_device=args.device,
                 )
                 _print_competition_summaries(
@@ -616,7 +613,7 @@ def _benchmark(args: argparse.Namespace) -> int:
             summary = time_formation_paths(
                 FormationTimingPlan(
                     benchmark_root=args.benchmark_root,
-                    sample_count=args.sample_count,
+                    sample_count=args.evidence_count,
                     seed=args.seed,
                     repeats=args.repeats,
                     warmup_repeats=args.warmup_repeats,
@@ -681,8 +678,6 @@ def _benchmark_run_plan(
         architecture_path=architecture_path,
         results_root=args.results_root,
         benchmark_root=benchmark_root,
-        sample_count=args.sample_count,
-        evaluation_sample_count=args.evaluation_sample_count,
         seed=args.seed,
         train_steps=args.train_steps,
         learning_rate=args.learning_rate,
@@ -690,7 +685,6 @@ def _benchmark_run_plan(
         schedule=args.schedule,
         gate_check_interval=args.gate_check_interval,
         model_checkpoint_gate_interval=args.model_checkpoint_gate_interval,
-        gate_sample_count=args.gate_sample_count,
         gate_decision_rule=args.gate_decision_rule,
         rung_competence_threshold=args.rung_competence_threshold,
         convergence_patience=args.convergence_patience,
@@ -778,8 +772,6 @@ def _benchmark_training_completed(plan: BenchmarkRunPlan) -> bool:
             architecture_path=plan.architecture_path,
             benchmark_root=plan.benchmark_root,
             results_root=plan.results_root,
-            sample_count=plan.sample_count,
-            evaluation_sample_count=plan.evaluation_sample_count,
             seed=plan.seed,
             train_steps=plan.train_steps,
             learning_rate=plan.learning_rate,
@@ -787,7 +779,6 @@ def _benchmark_training_completed(plan: BenchmarkRunPlan) -> bool:
             schedule=plan.schedule,
             gate_check_interval=plan.gate_check_interval,
             model_checkpoint_gate_interval=plan.model_checkpoint_gate_interval,
-            gate_sample_count=plan.gate_sample_count,
             gate_decision_rule=plan.gate_decision_rule,
             convergence_patience=plan.convergence_patience,
             convergence_min_delta=plan.convergence_min_delta,
@@ -997,7 +988,7 @@ def _run_benchmark_competitions(
                         right_evaluation_path=right_path,
                         benchmark_root=benchmark_root,
                         results_root=results_root,
-                        sample_count=sample_count,
+                        evidence_count=sample_count,
                         tensor_device=tensor_device,
                     )
                 )
