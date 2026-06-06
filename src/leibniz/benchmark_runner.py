@@ -7,6 +7,7 @@ import math
 import secrets
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from itertools import count
 from pathlib import Path
@@ -115,6 +116,7 @@ _default_convergence_min_delta = 1e-3
 _default_convergence_min_steps = 500
 _converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
 _minimum_plateau_lr_reductions = 3
+_state_space_target_spacing = 1.0
 _full_variation_extent = 1.0
 
 
@@ -685,6 +687,7 @@ def run_benchmark(
         outcome_space=outcome_space,
     )
     checkpoint_artifacts: list[ModelCheckpointArtifact] = []
+    progress_timings = TimingCollector()
 
     def checkpoint_record(
         checkpoint: ModelCheckpointArtifact,
@@ -709,36 +712,59 @@ def run_benchmark(
         training_curriculum: Mapping[str, object],
         module: Any,
     ) -> None:
-        if _should_write_model_checkpoint(
-            training_run=training_run,
-            gate_interval=plan.model_checkpoint_gate_interval,
-        ):
-            checkpoint_artifacts.append(
-                _write_model_checkpoint_artifact(
-                    summary=summary,
-                    architecture=architecture,
-                    model_interface=model_interface,
-                    training_run=training_run,
-                    module=module,
-                    runtime="pytorch",
+        with progress_timings.span("training_progress.checkpoint_decision"):
+            should_write_checkpoint = _should_write_model_checkpoint(
+                training_run=training_run,
+                gate_interval=plan.model_checkpoint_gate_interval,
+                checkpoint_artifacts=tuple(checkpoint_artifacts),
+            )
+        if should_write_checkpoint:
+            with progress_timings.span("training_progress.checkpoint_write"):
+                checkpoint_artifacts.append(
+                    _write_model_checkpoint_artifact(
+                        summary=summary,
+                        architecture=architecture,
+                        model_interface=model_interface,
+                        training_run=training_run,
+                        module=module,
+                        runtime="pytorch",
+                    )
+                )
+        with progress_timings.span("training_progress.checkpoint_selection"):
+            selected_checkpoint = _selected_model_checkpoint(tuple(checkpoint_artifacts))
+        with progress_timings.span("training_progress.inspection"):
+            progress_inspection = (
+                ModelInspectionRecord.from_model_manifest(
+                    id=ProtocolIdentifier.parse(
+                        f"model-inspections.{_identifier_atom(summary.benchmark_id)}."
+                        f"{summary.run_slug}.progress@0.1.0"
+                    ),
+                    model_manifest=selected_checkpoint.manifest,
+                    architecture_manifest=architecture,
+                )
+                if selected_checkpoint is not None
+                else model_inspection
+            )
+        with progress_timings.span("training_progress.checkpoint_records"):
+            progress_checkpoint_records = tuple(
+                checkpoint_record(
+                    checkpoint,
+                    evaluation_rung_count=1,
+                    training_compute=training_run.training_compute,
+                )
+                for checkpoint in checkpoint_artifacts
+            )
+            selected_checkpoint_record = (
+                None
+                if selected_checkpoint is None
+                else checkpoint_record(
+                    selected_checkpoint,
+                    evaluation_rung_count=1,
+                    training_compute=training_run.training_compute,
                 )
             )
-        selected_checkpoint = _selected_model_checkpoint(tuple(checkpoint_artifacts))
-        progress_inspection = (
-            ModelInspectionRecord.from_model_manifest(
-                id=ProtocolIdentifier.parse(
-                    f"model-inspections.{_identifier_atom(summary.benchmark_id)}."
-                    f"{summary.run_slug}.progress@0.1.0"
-                ),
-                model_manifest=selected_checkpoint.manifest,
-                architecture_manifest=architecture,
-            )
-            if selected_checkpoint is not None
-            else model_inspection
-        )
-        _write_document_atomic(
-            progress_path,
-            _training_progress_record(
+        with progress_timings.span("training_progress.record"):
+            progress_record = _training_progress_record(
                 plan=plan,
                 summary=summary,
                 architecture=architecture,
@@ -750,26 +776,15 @@ def run_benchmark(
                 ),
                 training_curriculum=training_curriculum,
                 training_run=training_run,
-                throughput=throughput,
-                model_checkpoints=tuple(
-                    checkpoint_record(
-                        checkpoint,
-                        evaluation_rung_count=1,
-                        training_compute=training_run.training_compute,
-                    )
-                    for checkpoint in checkpoint_artifacts
+                throughput=_throughput_with_progress_timings(
+                    throughput=throughput,
+                    progress_timings=progress_timings,
                 ),
-                selected_model_checkpoint=(
-                    None
-                    if selected_checkpoint is None
-                    else checkpoint_record(
-                        selected_checkpoint,
-                        evaluation_rung_count=1,
-                        training_compute=training_run.training_compute,
-                    )
-                ),
-            ),
-        )
+                model_checkpoints=progress_checkpoint_records,
+                selected_model_checkpoint=selected_checkpoint_record,
+            )
+        with progress_timings.span("training_progress.write"):
+            _write_document_atomic(progress_path, progress_record)
         if progress_callback is not None:
             progress_callback(summary)
 
@@ -1248,48 +1263,58 @@ def _training_curriculum_rung(
     sample_count: int,
     seed: int,
     index: int,
+    phase_timings: TimingCollector | None = None,
 ) -> _CurriculumRung:
     del architecture
-    candidates = _structured_training_curriculum_candidates(
-        generator=generator,
-        start_index=index,
-    )
+    with _optional_timing_span(
+        phase_timings,
+        "training_frontier.rung_candidate_generation",
+    ):
+        candidates = _structured_training_curriculum_candidates(
+            generator=generator,
+            start_index=index,
+            phase_timings=phase_timings,
+        )
     for candidate_index, candidate in enumerate(candidates):
         if candidate_index < index:
             continue
         resolution_assignment = candidate.state_space.resolution_assignment
         if resolution_assignment is None:
             continue
-        rung_seed = seed if index == 0 else seed + 2_000_003 * index
-        outcome_space = generator.manifest.resolve_outcome_space()
-        if not outcome_space.outcomes:
-            raise BenchmarkRunnerError("benchmark outcome space is empty")
-        sample = GeneratedSample(
-            index=0,
-            outcome_id=outcome_space.outcomes[0].id,
-            complexity=candidate.complexity,
-            state_space_measure=StateSpaceMeasureValue(
-                measure_id=_core_state_space_measure_id(),
-                value=candidate.complexity,
-            ),
-        )
-        batch = GeneratedSampleSet(
-            benchmark_id=generator.manifest.id,
-            generator_id=cast(ProtocolIdentifier, generator.id),
-            generator_version=generator.version,
-            seed=rung_seed,
-            shape=(1,),
-            variation_extent=_full_variation_extent,
-            state_space_request=candidate.state_space_request,
-            samples=(sample,),
-        )
-        return _CurriculumRung(
-            index=index,
-            resolution_assignment=resolution_assignment,
-            seed=rung_seed,
-            batch=batch,
-            sample_count=sample_count,
-        )
+        with _optional_timing_span(
+            phase_timings,
+            "training_frontier.rung_record_construction",
+        ):
+            rung_seed = seed if index == 0 else seed + 2_000_003 * index
+            outcome_space = generator.manifest.resolve_outcome_space()
+            if not outcome_space.outcomes:
+                raise BenchmarkRunnerError("benchmark outcome space is empty")
+            sample = GeneratedSample(
+                index=0,
+                outcome_id=outcome_space.outcomes[0].id,
+                complexity=candidate.complexity,
+                state_space_measure=StateSpaceMeasureValue(
+                    measure_id=_core_state_space_measure_id(),
+                    value=candidate.complexity,
+                ),
+            )
+            batch = GeneratedSampleSet(
+                benchmark_id=generator.manifest.id,
+                generator_id=cast(ProtocolIdentifier, generator.id),
+                generator_version=generator.version,
+                seed=rung_seed,
+                shape=(1,),
+                variation_extent=_full_variation_extent,
+                state_space_request=candidate.state_space_request,
+                samples=(sample,),
+            )
+            return _CurriculumRung(
+                index=index,
+                resolution_assignment=resolution_assignment,
+                seed=rung_seed,
+                batch=batch,
+                sample_count=sample_count,
+            )
     raise BenchmarkRunnerError("training curriculum did not produce any rungs")
 
 
@@ -1370,9 +1395,12 @@ def _curriculum_rung_from_candidates(
 @dataclass(frozen=True, slots=True)
 class _CurriculumCandidate:
     state_space: StateSpaceCandidate
+    source_request: StateSpaceMeasureRequest | None = None
 
     @property
     def state_space_request(self) -> StateSpaceMeasureRequest:
+        if self.source_request is not None:
+            return self.source_request
         return self.state_space.request
 
     @property
@@ -1380,14 +1408,22 @@ class _CurriculumCandidate:
         return self.state_space.complexity
 
 
+def _optional_timing_span(timing: TimingCollector | None, phase: str) -> Any:
+    if timing is None:
+        return nullcontext()
+    return timing.span(phase)
+
+
 def _benchmark_state_space_curriculum_candidates(
     *,
     generator: _FieldBenchmarkGenerator,
     start_index: int,
+    phase_timings: TimingCollector | None = None,
 ) -> Sequence[_CurriculumCandidate]:
     return _benchmark_state_space_candidates(
         generator=generator,
         start_index=start_index,
+        phase_timings=phase_timings,
     )
 
 
@@ -1395,10 +1431,12 @@ def _structured_training_curriculum_candidates(
     *,
     generator: _FieldBenchmarkGenerator,
     start_index: int,
+    phase_timings: TimingCollector | None = None,
 ) -> Sequence[_CurriculumCandidate]:
     return _benchmark_state_space_candidates(
         generator=generator,
         start_index=start_index,
+        phase_timings=phase_timings,
     )
 
 
@@ -1406,21 +1444,32 @@ def _benchmark_state_space_candidates(
     *,
     generator: _FieldBenchmarkGenerator,
     start_index: int,
+    phase_timings: TimingCollector | None = None,
 ) -> Sequence[_CurriculumCandidate]:
     stage_count = max(8, start_index + 8)
     minimum = generator.minimum_state_space_measure().value
     candidates: list[_CurriculumCandidate] = []
     seen_complexities: set[float] = set()
     for target_index in range(stage_count):
-        target = minimum + target_index
-        state_spaces = generator.state_spaces_for_request(
-            request=StateSpaceMeasureRequest(minimum=target, maximum=target + 1.0)
+        target = minimum + target_index * _state_space_target_spacing
+        request = StateSpaceMeasureRequest(
+            minimum=target,
+            maximum=target + _state_space_target_spacing,
         )
-        for state_space in state_spaces:
-            if state_space.complexity in seen_complexities:
-                continue
-            seen_complexities.add(state_space.complexity)
-            candidates.append(_CurriculumCandidate(state_space=state_space))
+        with _optional_timing_span(
+            phase_timings,
+            "training_frontier.state_space_request",
+        ):
+            state_space = generator.state_space_for_request(request=request)
+        if state_space is None or state_space.complexity in seen_complexities:
+            continue
+        seen_complexities.add(state_space.complexity)
+        candidates.append(
+            _CurriculumCandidate(
+                state_space=state_space,
+                source_request=request,
+            )
+        )
     return tuple(candidates)
 
 
@@ -1444,7 +1493,7 @@ def _curriculum_record(
         },
         "candidate_policy": {
             "kind": "benchmark-owned-target-state-space",
-            "target_spacing": 1.0,
+            "target_spacing": _state_space_target_spacing,
         },
         "gating_metric": "monotone-frontier-validation-competence",
         "rung_policy": "unbounded-competence-frontier",
@@ -1722,6 +1771,7 @@ def _train_and_predict_on_device(
             sample_count=sample_count,
             seed=seed,
             index=0,
+            phase_timings=phase_timings,
         )
     ]
     training_frontier_index = 0
@@ -1745,26 +1795,32 @@ def _train_and_predict_on_device(
         latest = history[-1]
         chance_mass = _chance_accepted_mass(outcome_ids)
         frontier_point = _training_history_frontier_point(latest)
-        if not _frontier_plateau_advances(
-            frontier_point=frontier_point,
-            previous_frontier_points=tuple(frontier_plateau_points),
-            chance_mass=chance_mass,
-        ):
+        with phase_timings.span("training_frontier.advance_decision"):
+            should_advance = _frontier_plateau_advances(
+                frontier_point=frontier_point,
+                previous_frontier_points=tuple(frontier_plateau_points),
+                chance_mass=chance_mass,
+            )
+        if not should_advance:
             return False
         next_index = training_frontier_index + 1
-        training_rungs.append(
-            _training_curriculum_rung(
-                architecture=architecture,
-                generator=generator,
-                sample_count=sample_count,
-                seed=seed,
-                index=next_index,
+        with phase_timings.span("training_frontier.rung_append"):
+            training_rungs.append(
+                _training_curriculum_rung(
+                    architecture=architecture,
+                    generator=generator,
+                    sample_count=sample_count,
+                    seed=seed,
+                    index=next_index,
+                    phase_timings=phase_timings,
+                )
             )
-        )
-        frontier_plateau_points.append(frontier_point)
-        training_frontier_index += 1
+        with phase_timings.span("training_frontier.bookkeeping"):
+            frontier_plateau_points.append(frontier_point)
+            training_frontier_index += 1
         if scheduler is not None:
-            scheduler.reset_for_curriculum_expansion()
+            with phase_timings.span("training_frontier.scheduler_reset"):
+                scheduler.reset_for_curriculum_expansion()
         return True
 
     training_result = _train_until_convergence(
@@ -2398,6 +2454,7 @@ def _train_until_convergence(
     on_plateau: Callable[[tuple[TrainingHistoryPoint, ...]], bool] | None = None,
     on_gate_check: Callable[[tuple[TrainingHistoryPoint, ...], Any], None] | None = None,
 ) -> _TrainingStageResult:
+    stage_started = time.perf_counter()
     validation_history: list[TrainingHistoryPoint] = []
     best_score = -float("inf")
     stale_checks = 0
@@ -2411,10 +2468,11 @@ def _train_until_convergence(
         nonlocal best_score, max_validation_inference_compute, stale_checks
         validation_started = time.perf_counter()
         batch = validation_batch(check)
-        batch_max_inference_compute = _batch_max_inference_compute(
-            architecture=architecture,
-            batch=batch,
-        )
+        with phase_timings.span("validation_max_inference_compute"):
+            batch_max_inference_compute = _batch_max_inference_compute(
+                architecture=architecture,
+                batch=batch,
+            )
         if batch_max_inference_compute is None:
             raise BenchmarkRunnerError(
                 "training gate could not measure max_inference_compute"
@@ -2446,46 +2504,59 @@ def _train_until_convergence(
                 )
             if was_training:
                 module.train()
-        score_estimate = _training_gate_score_estimate(
-            batch=batch,
-            outcome_space=outcome_space,
-            probabilities=probabilities,
-            validation_check=check,
-            step=step,
-            max_inference_compute=batch_max_inference_compute,
-            running_max_inference_compute=max_validation_inference_compute,
-            training_compute_per_sample=latest_training_compute_per_sample,
-        )
+        with phase_timings.span("validation_score_estimate", samples=batch.sample_count):
+            score_estimate = _training_gate_score_estimate(
+                batch=batch,
+                outcome_space=outcome_space,
+                probabilities=probabilities,
+                validation_check=check,
+                step=step,
+                max_inference_compute=batch_max_inference_compute,
+                running_max_inference_compute=max_validation_inference_compute,
+                training_compute_per_sample=latest_training_compute_per_sample,
+            )
         score = _training_score_estimate_score(score_estimate)
         if score > best_score + min_delta:
             best_score = score
             stale_checks = 0
         else:
             stale_checks += 1
-        if scheduler is not None:
-            scheduler.step_after_validation(-score)
-            learning_rates = scheduler.learning_rates()
-        else:
-            learning_rates = tuple(float(group["lr"]) for group in optimizer.param_groups)
+        with phase_timings.span("validation_scheduler_step"):
+            if scheduler is not None:
+                scheduler.step_after_validation(-score)
+                learning_rates = scheduler.learning_rates()
+            else:
+                learning_rates = tuple(float(group["lr"]) for group in optimizer.param_groups)
         validation_counter.add(
             seconds=time.perf_counter() - validation_started,
             samples=actual_gate_sample_count,
         )
-        validation_history.append(
-            TrainingHistoryPoint(
-                step=step,
-                validation_check=check,
-                validation_loss=validation_loss,
-                stale_checks=stale_checks,
-                learning_rates=learning_rates,
-                score_estimate=score_estimate,
+        with phase_timings.span("validation_history_append"):
+            validation_history.append(
+                TrainingHistoryPoint(
+                    step=step,
+                    validation_check=check,
+                    validation_loss=validation_loss,
+                    stale_checks=stale_checks,
+                    learning_rates=learning_rates,
+                    score_estimate=score_estimate,
+                )
             )
-        )
         if on_gate_check is not None:
-            on_gate_check(tuple(validation_history), module)
+            with phase_timings.span("validation_gate_callback"):
+                on_gate_check(tuple(validation_history), module)
+        phase_timings.add(
+            "validation_gate_total",
+            seconds=time.perf_counter() - validation_started,
+            samples=actual_gate_sample_count,
+        )
 
     append_validation(step=start_step, check=start_check)
     if max_steps == start_step:
+        phase_timings.add(
+            "training_stage_total",
+            seconds=time.perf_counter() - stage_started,
+        )
         return _TrainingStageResult(
             validation_history=tuple(validation_history),
             stop_reason="no-training-steps" if start_step == 0 else "max-steps",
@@ -2496,10 +2567,11 @@ def _train_until_convergence(
         training_started = time.perf_counter()
         fields, labels = train_batch(step)
         actual_batch_size = _tensor_batch_size(fields, fallback=batch_size)
-        batch_training_compute_per_sample = _batch_max_training_compute_per_sample(
-            architecture=architecture,
-            fields=fields,
-        )
+        with phase_timings.span("training_max_training_compute"):
+            batch_training_compute_per_sample = _batch_max_training_compute_per_sample(
+                architecture=architecture,
+                fields=fields,
+            )
         latest_training_compute_per_sample = batch_training_compute_per_sample
         module.train()
         with phase_timings.span("training_zero_grad"):
@@ -2513,8 +2585,14 @@ def _train_until_convergence(
         if scheduler is not None:
             with phase_timings.span("training_scheduler_step"):
                 scheduler.step_after_optimizer()
+        training_elapsed = time.perf_counter() - training_started
         training_counter.add(
-            seconds=time.perf_counter() - training_started,
+            seconds=training_elapsed,
+            samples=actual_batch_size,
+        )
+        phase_timings.add(
+            "training_step_total",
+            seconds=training_elapsed,
             samples=actual_batch_size,
         )
         training_compute_counter.add(
@@ -2526,20 +2604,26 @@ def _train_until_convergence(
             continue
         append_validation(step=step, check=validation_check)
         validation_check += 1
-        if (
-            patience > 0
-            and step - plateau_window_start_step >= min_steps
-            and has_windowed_validation_plateau(
-                validation_history[plateau_window_start_index:],
-                window_checks=patience,
-                min_delta=min_delta,
+        with phase_timings.span("validation_plateau_check"):
+            should_stop_for_plateau = (
+                patience > 0
+                and step - plateau_window_start_step >= min_steps
+                and has_windowed_validation_plateau(
+                    validation_history[plateau_window_start_index:],
+                    window_checks=patience,
+                    min_delta=min_delta,
+                )
+                and (
+                    scheduler is None
+                    or scheduler.has_exhausted_plateau_response()
+                )
             )
-            and (
-                scheduler is None
-                or scheduler.has_exhausted_plateau_response()
-            )
-        ):
-            if on_plateau is not None and on_plateau(tuple(validation_history)):
+        if should_stop_for_plateau:
+            with phase_timings.span("validation_plateau_handler"):
+                advanced_frontier = (
+                    on_plateau is not None and on_plateau(tuple(validation_history))
+                )
+            if advanced_frontier:
                 plateau_window_start_index = len(validation_history) - 1
                 plateau_window_start_step = step
                 best_score = _training_history_score(validation_history[-1])
@@ -2550,6 +2634,10 @@ def _train_until_convergence(
         if max_steps is not None and step >= max_steps:
             stop_reason = "max-steps"
             break
+    phase_timings.add(
+        "training_stage_total",
+        seconds=time.perf_counter() - stage_started,
+    )
     return _TrainingStageResult(
         validation_history=tuple(validation_history),
         stop_reason=stop_reason,
@@ -3023,11 +3111,18 @@ def _should_write_model_checkpoint(
     *,
     training_run: TrainingRunRecord,
     gate_interval: int,
+    checkpoint_artifacts: tuple[ModelCheckpointArtifact, ...],
 ) -> bool:
     if gate_interval < 1:
         raise BenchmarkRunnerError("model checkpoint gate interval must be positive")
     latest = training_run.validation_history[-1]
-    return latest.validation_check % gate_interval == 0
+    if not checkpoint_artifacts:
+        return True
+    latest_score = _training_history_score(latest)
+    saved_score = max(
+        _checkpoint_estimated_score(checkpoint) for checkpoint in checkpoint_artifacts
+    )
+    return latest_score > saved_score
 
 
 def _write_model_checkpoint_artifact(
@@ -3220,6 +3315,21 @@ def _throughput_record(
         record["operation_runtime_fallbacks"] = [
             dict(fallback) for fallback in operation_fallbacks
         ]
+    return record
+
+
+def _throughput_with_progress_timings(
+    *,
+    throughput: Mapping[str, object],
+    progress_timings: TimingCollector,
+) -> dict[str, object]:
+    record = dict(throughput)
+    phase_timing = dict(cast(Mapping[str, object], record.get("phase_timing", {})))
+    phases = dict(cast(Mapping[str, object], phase_timing.get("phases", {})))
+    progress_record = progress_timings.to_record(kind="training-progress-phase-timing")
+    phases.update(cast(Mapping[str, object], progress_record["phases"]))
+    phase_timing["phases"] = phases
+    record["phase_timing"] = phase_timing
     return record
 
 

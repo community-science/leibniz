@@ -400,14 +400,12 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
             cast(float, rung_state_space_measure["value"]),
             cast(float, rung["complexity"]),
         )
-        assert math.isclose(
-            cast(float, state_space_request["minimum"]),
-            cast(float, rung["complexity"]),
-        )
-        assert math.isclose(
-            cast(float, state_space_request["maximum"]),
-            cast(float, rung["complexity"]),
-        )
+        request_minimum = cast(float, state_space_request["minimum"])
+        request_maximum = cast(float, state_space_request["maximum"])
+        rung_complexity = cast(float, rung["complexity"])
+        assert request_minimum <= rung_complexity
+        assert rung_complexity <= request_maximum
+        assert math.isclose(request_maximum - request_minimum, 1.0)
     assert [rung["sample_count"] for rung in curriculum_rungs] == [3]
     assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
         cast(float, rung["complexity"]) for rung in curriculum_rungs
@@ -665,7 +663,7 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert training_summary["model_checkpoint_gate_interval"] == 2
     checkpoints = cast(list[dict[str, object]], training_summary["model_checkpoints"])
     checkpoint_checks = [checkpoint["validation_check"] for checkpoint in checkpoints]
-    assert checkpoint_checks == [0, 2]
+    assert checkpoint_checks == [0]
     assert all(
         (tmp_path / cast(str, checkpoint["path"])).is_file()
         for checkpoint in checkpoints
@@ -999,8 +997,9 @@ def test_training_curriculum_can_advance_after_worse_loss_on_larger_rung() -> No
     )
 
 
-def test_evaluation_curriculum_uses_benchmark_owned_target_state_spaces() -> None:
+def test_evaluation_curriculum_uses_benchmark_owned_representative_windows() -> None:
     generator = load_generator(_digits_benchmark_root)
+    minimum = generator.minimum_state_space_measure().value
 
     candidates = cast(Any, benchmark_runner)._benchmark_state_space_curriculum_candidates(
         generator=generator,
@@ -1012,38 +1011,75 @@ def test_evaluation_curriculum_uses_benchmark_owned_target_state_spaces() -> Non
     )
     assert candidates[0].state_space.resolution_assignment is not None
     assert candidates[0].state_space.resolution_assignment.values == {"W": 16, "H": 16}
-    assert [candidate.state_space.cardinality for candidate in candidates[:9]] == [
+    assert [candidate.state_space.cardinality for candidate in candidates[:8]] == [
         10,
         20,
-        30,
         40,
-        50,
-        60,
-        70,
         80,
-        90,
+        160,
+        320,
+        640,
+        1280,
     ]
+    for index, candidate in enumerate(candidates[:8]):
+        assert math.isclose(candidate.state_space_request.minimum, minimum + index)
+        assert math.isclose(candidate.state_space_request.maximum, minimum + index + 1.0)
 
 
-def test_training_curriculum_uses_benchmark_owned_target_state_spaces() -> None:
+def test_training_curriculum_uses_benchmark_owned_representative_windows() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
+    minimum = generator.minimum_state_space_measure().value
 
     candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
         generator=generator,
         start_index=0,
     )
 
-    assert [candidate.state_space.cardinality for candidate in candidates[:9]] == [
+    assert [candidate.state_space.cardinality for candidate in candidates[:8]] == [
         10,
         20,
-        30,
         40,
-        50,
-        60,
-        70,
         80,
-        90,
+        160,
+        320,
+        640,
+        1280,
     ]
+    for index, candidate in enumerate(candidates[:8]):
+        assert math.isclose(candidate.state_space_request.minimum, minimum + index)
+        assert math.isclose(candidate.state_space_request.maximum, minimum + index + 1.0)
+        assert candidate.state_space.request.minimum == candidate.state_space.request.maximum
+        assert candidate.state_space_request.minimum <= candidate.complexity
+        assert candidate.complexity <= candidate.state_space_request.maximum
+
+
+def test_training_curriculum_representative_window_rematerializes() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
+        generator=generator,
+        start_index=6,
+    )
+    candidate = candidates[5]
+
+    exact_request = candidate.state_space.request
+    window_request = candidate.state_space_request
+    exact_sample = generator(
+        shape=1,
+        seed=123,
+        include_fields=True,
+        state_space_request=exact_request,
+    )
+    window_sample = generator(
+        shape=1,
+        seed=123,
+        include_fields=True,
+        state_space_request=window_request,
+    )
+
+    assert candidate.state_space.cardinality == 320
+    assert exact_sample.sample_count == 0
+    assert window_sample.sample_count == 1
+    assert window_sample.samples[0].require_field().shape == (1, 28, 28)
 
 
 def test_digits_state_space_for_request_materializes_constructed_affine_grid() -> None:
