@@ -971,8 +971,8 @@ def run_benchmark(
         "training_curriculum": _curriculum_record(
             kind="competence-gated-training-curriculum",
             source="structured-training-curriculum",
-            frontier_sampling_weight=0.7,
-            replay_sampling_weight=0.3,
+            frontier_sampling_weight=0.5,
+            replay_sampling_weight=0.5,
             rung_competence_threshold=plan.rung_competence_threshold,
             rungs=training_result.training_rungs,
             frontier_index=training_result.training_frontier_index,
@@ -1947,14 +1947,12 @@ def _train_and_predict_on_device(
         return training_rungs[training_frontier_index]
 
     def training_rung_for_step(step: int) -> _CurriculumRung:
-        if training_frontier_index == 0:
-            return current_frontier()
-        # Keep most updates on the frontier while reserving deterministic replay
-        # for previously unlocked training rungs.
-        if step % 10 < 7:
-            return current_frontier()
-        replay_index = (step // 10) % training_frontier_index
-        return training_rungs[replay_index]
+        return training_rungs[
+            _training_rung_index_for_step(
+                step=step,
+                frontier_index=training_frontier_index,
+            )
+        ]
 
     def training_batch_for_step(step: int) -> _TrainingStepBatch:
         rung = training_rung_for_step(step)
@@ -1964,9 +1962,7 @@ def _train_and_predict_on_device(
             generation_phase="training_formation_generation",
             tensor_phase="training_tensor_batch",
             rung=rung,
-            include_score_metadata=(
-                rung.index != training_frontier_index and step % 10 == 7
-            ),
+            include_score_metadata=rung.index != training_frontier_index,
         )
 
     def advance_frontier(history: Sequence[TrainingHistoryPoint]) -> bool:
@@ -2078,8 +2074,8 @@ def _train_and_predict_on_device(
                 _curriculum_record(
                     kind="competence-gated-training-curriculum",
                     source="structured-training-curriculum",
-                    frontier_sampling_weight=0.7,
-                    replay_sampling_weight=0.3,
+                    frontier_sampling_weight=0.5,
+                    replay_sampling_weight=0.5,
                     rung_competence_threshold=rung_competence_threshold,
                     rungs=tuple(training_rungs),
                     frontier_index=training_frontier_index,
@@ -3670,6 +3666,14 @@ def _training_history_frontier_point(point: TrainingHistoryPoint) -> ValidationC
         raise BenchmarkRunnerError("training gate score estimate has no competence point")
     latest_point = points[-1]
     return _validation_competence_point_from_sampled_record(latest_point)
+
+
+def _training_rung_index_for_step(*, step: int, frontier_index: int) -> int:
+    if frontier_index <= 0:
+        return 0
+    if step % 2 == 0:
+        return frontier_index
+    return (step // 2) % frontier_index
 
 
 def _validation_competence_point_from_sampled_record(

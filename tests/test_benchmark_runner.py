@@ -578,8 +578,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     )
     assert training_curriculum["kind"] == "competence-gated-training-curriculum"
     assert training_curriculum["source"] == "structured-training-curriculum"
-    assert training_curriculum["frontier_sampling_weight"] == 0.7
-    assert training_curriculum["replay_sampling_weight"] == 0.3
+    assert training_curriculum["frontier_sampling_weight"] == 0.5
+    assert training_curriculum["replay_sampling_weight"] == 0.5
     assert training_curriculum["rung_competence_threshold"] == 0.5
     assert (
         training_curriculum["gating_metric"]
@@ -1517,6 +1517,29 @@ def test_training_replay_frontier_points_keep_recent_window() -> None:
     assert rolling_point.sample_count == 8
     assert rolling_point.seed == 108
     assert math.isclose(rolling_point.accepted_mass, 4.5)
+
+
+def test_training_rung_schedule_alternates_frontier_and_replay() -> None:
+    rung_index = cast(Any, benchmark_runner)._training_rung_index_for_step
+
+    assert [rung_index(step=step, frontier_index=0) for step in range(4)] == [
+        0,
+        0,
+        0,
+        0,
+    ]
+    assert [rung_index(step=step, frontier_index=3) for step in range(10)] == [
+        3,
+        0,
+        3,
+        1,
+        3,
+        2,
+        3,
+        0,
+        3,
+        1,
+    ]
 
 
 def test_checkpoint_selection_uses_global_training_score_estimate() -> None:
