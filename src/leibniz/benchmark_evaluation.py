@@ -151,9 +151,9 @@ def sampled_competence_record(
             str(measurement.raw_scoring_evidence.id) for measurement in measurements
         ],
     }
-    if batch.state_space_request is not None:
-        record["complexity_minimum"] = batch.state_space_request.minimum
-        record["complexity_maximum"] = batch.state_space_request.maximum
+    if batch.complexity_request is not None:
+        record["complexity_minimum"] = batch.complexity_request.minimum
+        record["complexity_maximum"] = batch.complexity_request.maximum
     return record
 
 

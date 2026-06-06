@@ -1179,9 +1179,9 @@ function BenchmarkSampleCoordinateInspector({
   sample: GeneratedObservationSampleRecord | undefined;
   selectedBatch: GeneratedObservationBatchRecord;
 }) {
-  const stateSpaceSizes = realizedStateSpaceSizes(selectedBatch);
+  const complexityCardinalities = realizedComplexityCardinalities(selectedBatch);
   const entries: [string, string][] = [
-    ['State Spaces', stateSpaceSizes.length === 0 ? 'null set' : stateSpaceSizes.join(', ')],
+    ['Complexity Classes', complexityCardinalities.length === 0 ? 'null set' : complexityCardinalities.join(', ')],
     ...(sample
       ? [
           ['Component', String(sample.component_index)] as [string, string],
@@ -1195,10 +1195,10 @@ function BenchmarkSampleCoordinateInspector({
       aria-label="Selected sample coordinates"
     >
       <div className="benchmark-sample-coordinate-range">
-        <label htmlFor="benchmark-state-space-range">State Space Range</label>
+        <label htmlFor="benchmark-complexity-range">Complexity Range</label>
         <select
           className="benchmark-sample-window-select"
-          id="benchmark-state-space-range"
+          id="benchmark-complexity-range"
           onChange={(event) => onBatchChange(event.target.value)}
           value={batchKey(selectedBatch)}
         >
@@ -1221,16 +1221,16 @@ function BenchmarkSampleCoordinateInspector({
   );
 }
 
-function realizedStateSpaceSizes(batch: GeneratedObservationBatchRecord): string[] {
-  if (batch.state_space_sizes !== undefined) {
-    return batch.state_space_sizes.map((size) => String(size));
+function realizedComplexityCardinalities(batch: GeneratedObservationBatchRecord): string[] {
+  if (batch.complexity_cardinalities !== undefined) {
+    return batch.complexity_cardinalities.map((size) => String(size));
   }
   const sizes = new Set<number>();
   batch.samples.forEach((sample) => {
-    if (sample.state_space_measure === undefined || sample.state_space_measure === null) {
+    if (sample.complexity_value === undefined || sample.complexity_value === null) {
       return;
     }
-    sizes.add(Math.round(2 ** sample.state_space_measure.value));
+    sizes.add(Math.round(2 ** sample.complexity_value.value));
   });
   return [...sizes].sort((left, right) => left - right).map((size) => String(size));
 }

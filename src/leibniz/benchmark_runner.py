@@ -48,11 +48,11 @@ from leibniz.model_manifests import (
 )
 from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
 from leibniz.observation_generation import (
+    ComplexityCandidate,
+    ComplexityRequest,
+    ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
-    StateSpaceCandidate,
-    StateSpaceMeasureRequest,
-    StateSpaceMeasureValue,
     load_generator,
 )
 from leibniz.outcomes import OutcomeSpace
@@ -142,23 +142,25 @@ _full_variation_extent = 1.0
 class _FieldBenchmarkGenerator(BenchmarkGenerator, Protocol):
     """Internal contract for tensor-backed benchmark training."""
 
-    def minimum_state_space_measure(self) -> StateSpaceMeasureValue: ...
+    def minimum_complexity(self) -> ComplexityValue: ...
 
     def complexity_rung_size(self) -> float:
-        """Return the log2 state-space complexity width for curriculum rungs."""
+        """Return the log2 complexity width for curriculum rungs."""
         ...
 
-    def state_space_for_request(
+    def complexity_candidate_for_request(
         self,
         *,
-        request: StateSpaceMeasureRequest,
-    ) -> StateSpaceCandidate | None: ...
+        request: ComplexityRequest,
+    ) -> ComplexityCandidate | None: ...
 
-    def state_spaces_for_request(
+    def complexity_candidates_for_request(
         self,
         *,
-        request: StateSpaceMeasureRequest,
-    ) -> Sequence[StateSpaceCandidate]: ...
+        request: ComplexityRequest,
+    ) -> Sequence[ComplexityCandidate]:
+        """Return concrete benchmark candidates inside a complexity request band."""
+        ...
 
     def __call__(
         self,
@@ -167,7 +169,7 @@ class _FieldBenchmarkGenerator(BenchmarkGenerator, Protocol):
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
         include_metadata: bool = True,
-        state_space_request: StateSpaceMeasureRequest | None = None,
+        complexity_request: ComplexityRequest | None = None,
         component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
@@ -341,21 +343,21 @@ class _CurriculumRung:
         return self.batch.samples[0].complexity
 
     def to_record(self, *, status: str) -> dict[str, object]:
-        state_space_measure = self.batch.samples[0].state_space_measure
+        complexity_value = self.batch.samples[0].complexity_value
         return {
             "index": self.index,
             "status": status,
             "resolution_assignment": self.resolution_assignment.to_record(),
             "seed": self.seed,
-            "complexity_axis": _core_state_space_measure_id(),
+            "complexity_axis": _core_complexity_measure_id(),
             "complexity": self.complexity,
-            "state_space_measure": (
-                None if state_space_measure is None else state_space_measure.to_record()
+            "complexity_value": (
+                None if complexity_value is None else complexity_value.to_record()
             ),
-            "state_space_request": (
+            "complexity_request": (
                 None
-                if self.batch.state_space_request is None
-                else self.batch.state_space_request.to_record()
+                if self.batch.complexity_request is None
+                else self.batch.complexity_request.to_record()
             ),
             "sample_count": self.sample_count,
         }
@@ -400,17 +402,17 @@ def _evaluation_sampled_competence_record(
     return sampled_competence_curriculum_record(points)
 
 
-def _rung_state_space_request(rung: _CurriculumRung) -> StateSpaceMeasureRequest:
-    if rung.batch.state_space_request is not None:
-        return rung.batch.state_space_request
-    return StateSpaceMeasureRequest(
+def _rung_complexity_request(rung: _CurriculumRung) -> ComplexityRequest:
+    if rung.batch.complexity_request is not None:
+        return rung.batch.complexity_request
+    return ComplexityRequest(
         minimum=rung.complexity,
         maximum=rung.complexity,
     )
 
 
-def _core_state_space_measure_id() -> str:
-    return StateSpaceMeasureRequest(minimum=1.0, maximum=1.0).measure_id
+def _core_complexity_measure_id() -> str:
+    return ComplexityRequest(minimum=1.0, maximum=1.0).measure_id
 
 
 @dataclass(slots=True)
@@ -1431,7 +1433,7 @@ def _training_curriculum_rung(
     for candidate_index, candidate in enumerate(candidates):
         if candidate_index < index:
             continue
-        resolution_assignment = candidate.state_space.resolution_assignment
+        resolution_assignment = candidate.complexity_class.resolution_assignment
         if resolution_assignment is None:
             continue
         with _optional_timing_span(
@@ -1446,8 +1448,8 @@ def _training_curriculum_rung(
                 index=0,
                 outcome_id=outcome_space.outcomes[0].id,
                 complexity=candidate.complexity,
-                state_space_measure=StateSpaceMeasureValue(
-                    measure_id=_core_state_space_measure_id(),
+                complexity_value=ComplexityValue(
+                    measure_id=_core_complexity_measure_id(),
                     value=candidate.complexity,
                 ),
             )
@@ -1458,7 +1460,7 @@ def _training_curriculum_rung(
                 seed=rung_seed,
                 shape=(1,),
                 variation_extent=_full_variation_extent,
-                state_space_request=candidate.state_space_request,
+                complexity_request=candidate.complexity_request,
                 samples=(sample,),
             )
             return _CurriculumRung(
@@ -1513,7 +1515,7 @@ def _curriculum_rung_from_candidates(
             shape=sample_count,
             seed=rung_seed,
             include_fields=True,
-            state_space_request=candidate.state_space_request,
+            complexity_request=candidate.complexity_request,
             variation_extent=_full_variation_extent,
         )
         batch = sample_set
@@ -1547,18 +1549,18 @@ def _curriculum_rung_from_candidates(
 
 @dataclass(frozen=True, slots=True)
 class _CurriculumCandidate:
-    state_space: StateSpaceCandidate
-    source_request: StateSpaceMeasureRequest | None = None
+    complexity_class: ComplexityCandidate
+    source_request: ComplexityRequest | None = None
 
     @property
-    def state_space_request(self) -> StateSpaceMeasureRequest:
+    def complexity_request(self) -> ComplexityRequest:
         if self.source_request is not None:
             return self.source_request
-        return self.state_space.request
+        return self.complexity_class.request
 
     @property
     def complexity(self) -> float:
-        return self.state_space.complexity
+        return self.complexity_class.complexity
 
 
 def _optional_timing_span(timing: TimingCollector | None, phase: str) -> Any:
@@ -1600,7 +1602,7 @@ def _benchmark_complexity_candidates(
     phase_timings: TimingCollector | None = None,
 ) -> Sequence[_CurriculumCandidate]:
     target_candidate_count = start_index + 8
-    minimum = generator.minimum_state_space_measure().value
+    minimum = generator.minimum_complexity().value
     complexity_rung_size = _benchmark_complexity_rung_size(generator)
     candidates: list[_CurriculumCandidate] = []
     seen_complexities: set[float] = set()
@@ -1608,7 +1610,7 @@ def _benchmark_complexity_candidates(
     max_window_count = max(1024, 128 * target_candidate_count)
     while len(candidates) < target_candidate_count and window_index < max_window_count:
         complexity_minimum = minimum + window_index * complexity_rung_size
-        complexity_request = StateSpaceMeasureRequest(
+        complexity_request = ComplexityRequest(
             minimum=complexity_minimum,
             maximum=complexity_minimum + complexity_rung_size,
         )
@@ -1617,13 +1619,15 @@ def _benchmark_complexity_candidates(
             phase_timings,
             "training_frontier.complexity_request",
         ):
-            state_space = generator.state_space_for_request(request=complexity_request)
-        if state_space is None or state_space.complexity in seen_complexities:
+            complexity_class = generator.complexity_candidate_for_request(
+                request=complexity_request,
+            )
+        if complexity_class is None or complexity_class.complexity in seen_complexities:
             continue
-        seen_complexities.add(state_space.complexity)
+        seen_complexities.add(complexity_class.complexity)
         candidates.append(
             _CurriculumCandidate(
-                state_space=state_space,
+                complexity_class=complexity_class,
                 source_request=complexity_request,
             )
         )
@@ -1651,11 +1655,11 @@ def _curriculum_record(
 ) -> dict[str, object]:
     record: dict[str, object] = {
         "kind": kind,
-        "curriculum_variable": "state-space-measure",
-        "complexity_axis": _core_state_space_measure_id(),
-        "sampling_levers": ["state-space-measure"],
-        "state_space_measure": {
-            "measure_id": _core_state_space_measure_id(),
+        "curriculum_variable": "complexity",
+        "complexity_axis": _core_complexity_measure_id(),
+        "sampling_levers": ["complexity"],
+        "complexity_value": {
+            "measure_id": _core_complexity_measure_id(),
             "scale": "log2",
         },
         "candidate_policy": {
@@ -1692,7 +1696,7 @@ def _curriculum_record(
 
 def _curriculum_complexity_rung_size(rungs: Sequence[_CurriculumRung]) -> float:
     for rung in rungs:
-        request = rung.batch.state_space_request
+        request = rung.batch.complexity_request
         if request is not None and request.maximum > request.minimum:
             return request.maximum - request.minimum
     return _default_complexity_rung_size
@@ -1907,7 +1911,7 @@ def _train_and_predict_on_device(
                 shape=physical_sample_count,
                 seed=batch_seed,
                 include_metadata=include_score_metadata,
-                state_space_request=_rung_state_space_request(rung),
+                complexity_request=_rung_complexity_request(rung),
                 memory_limit_bytes=_runtime_memory_budget_bytes(runtime),
                 variation_extent=_full_variation_extent,
                 runtime=runtime,
@@ -1917,7 +1921,7 @@ def _train_and_predict_on_device(
             )
             if generated.sample_count == 0:
                 raise BenchmarkRunnerError(
-                    "generator returned no samples for selected state-space measure"
+                    "generator returned no samples for selected complexity"
                 )
             with phase_timings.span(tensor_phase, samples=physical_sample_count):
                 fields, labels = generated.require_tensors()
@@ -1948,7 +1952,7 @@ def _train_and_predict_on_device(
                 shape=physical_sample_count,
                 seed=batch_seed,
                 include_fields=False,
-                state_space_request=_rung_state_space_request(rung),
+                complexity_request=_rung_complexity_request(rung),
                 memory_limit_bytes=_runtime_memory_budget_bytes(runtime),
                 variation_extent=_full_variation_extent,
                 runtime=runtime,
@@ -1958,7 +1962,7 @@ def _train_and_predict_on_device(
             )
             if generated.sample_count == 0:
                 raise BenchmarkRunnerError(
-                    "generator returned no samples for selected state-space measure"
+                    "generator returned no samples for selected complexity"
                 )
             if not generated.includes_fields:
                 raise BenchmarkRunnerError("validation gate batch did not include fields")
@@ -2378,7 +2382,7 @@ def _evaluate_checkpoint_rung_measurements(
             seed=rung.seed,
             shape=(len(samples),),
             variation_extent=_full_variation_extent,
-            state_space_request=rung.batch.state_space_request,
+            complexity_request=rung.batch.complexity_request,
             samples=tuple(samples),
         ),
         tuple(probabilities),
@@ -2420,7 +2424,7 @@ def _checkpoint_evaluation_chunks(
                 shape=physical_sample_count,
                 seed=chunk_seed,
                 include_fields=False,
-                state_space_request=_rung_state_space_request(rung),
+                complexity_request=_rung_complexity_request(rung),
                 memory_limit_bytes=_runtime_memory_budget_bytes(predictor.runtime),
                 variation_extent=_full_variation_extent,
                 runtime=predictor.runtime,
@@ -2430,7 +2434,7 @@ def _checkpoint_evaluation_chunks(
             )
         if batch.sample_count == 0:
             raise BenchmarkRunnerError(
-                "generator returned no samples for selected state-space measure"
+                "generator returned no samples for selected complexity"
             )
         prediction_started = time.perf_counter()
         with phase_timings.span(
@@ -2625,7 +2629,7 @@ def generate_model_checkpoint_competition_record(
         seed=capacity_rung.seed,
         shape=(len(samples),),
         variation_extent=_full_variation_extent,
-        state_space_request=capacity_rung.batch.state_space_request,
+        complexity_request=capacity_rung.batch.complexity_request,
         samples=tuple(samples),
     )
     throughput = competition_counter.to_record(kind="checkpoint-competition-throughput")
@@ -3289,16 +3293,11 @@ def _train_until_convergence(
                         _renormalized_probabilities(row)
                         for row in softmax_prediction_rows(runtime, first_logits)
                     )
-                    measurements = finite_measurements_for_predictions(
-                        batch=training_batch.sample_set,
-                        outcome_space=outcome_space,
-                        probabilities=probabilities,
-                        run_slug=f"training-replay-{step:08d}",
-                    )
                     replay_point = _validation_competence_point_from_sampled_record(
-                        sampled_competence_record(
+                        _sampled_competence_record_for_predictions(
                             batch=training_batch.sample_set,
-                            measurements=measurements,
+                            probabilities=probabilities,
+                            outcome_ids=outcome_ids,
                             complexity_axis=None,
                         )
                     )
@@ -3414,15 +3413,10 @@ def _training_gate_score_estimate(
     running_max_inference_compute: int,
     training_compute_per_sample: int | None,
 ) -> dict[str, object]:
-    measurements = finite_measurements_for_predictions(
+    current_point = _sampled_competence_record_for_predictions(
         batch=batch,
-        outcome_space=outcome_space,
         probabilities=probabilities,
-        run_slug=f"training-gate-{validation_check:04d}",
-    )
-    current_point = sampled_competence_record(
-        batch=batch,
-        measurements=measurements,
+        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
         complexity_axis=None,
     )
     sampled_competence = _training_sampled_competence_record(
@@ -3477,6 +3471,52 @@ def _training_gate_score_estimate(
     }
     if training_compute_per_sample is not None:
         record["training_compute_per_sample"] = training_compute_per_sample
+    return record
+
+
+def _sampled_competence_record_for_predictions(
+    *,
+    batch: GeneratedSampleSet,
+    probabilities: tuple[tuple[float, ...], ...],
+    outcome_ids: tuple[str, ...],
+    complexity_axis: str | None,
+) -> dict[str, object]:
+    """Return sampled competence without materializing per-sample measurements."""
+
+    if len(batch.samples) != len(probabilities):
+        raise BenchmarkRunnerError("sampled competence requires one prediction per sample")
+    complexities = {sample.complexity for sample in batch.samples}
+    if len(complexities) != 1:
+        raise BenchmarkRunnerError("sampled competence requires one complexity class")
+    accepted_mass = tuple(
+        _prediction_target_mass(
+            row,
+            target_distribution=sample.target_distribution_or_one_hot(),
+            outcome_ids=outcome_ids,
+        )
+        for sample, row in zip(batch.samples, probabilities, strict=True)
+    )
+    finite_losses = tuple(-math.log(mass) for mass in accepted_mass if mass > 0.0)
+    mean_negative_log_score: float | str
+    if len(finite_losses) != len(accepted_mass):
+        mean_negative_log_score = "infinity"
+    else:
+        mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
+    record: dict[str, object] = {
+        "kind": "sampled-complexity-class",
+        "sampling_rule": "generator-uniform-component-index-v1",
+        "difficulty_assumption": "approximately-uniform-within-complexity-class",
+        "benchmark_id": str(batch.benchmark_id),
+        "complexity_axis": complexity_axis,
+        "complexity": next(iter(complexities)),
+        "seed": batch.seed,
+        "sample_count": len(batch.samples),
+        "mean_accepted_mass": math.fsum(accepted_mass) / len(accepted_mass),
+        "mean_negative_log_score": mean_negative_log_score,
+    }
+    if batch.complexity_request is not None:
+        record["complexity_minimum"] = batch.complexity_request.minimum
+        record["complexity_maximum"] = batch.complexity_request.maximum
     return record
 
 
@@ -3559,11 +3599,11 @@ def _training_sampled_competence_record(
 def _sampled_competence_interval_record(
     batch: GeneratedSampleSet,
 ) -> dict[str, object]:
-    if batch.state_space_request is None:
+    if batch.complexity_request is None:
         return {}
     return {
-        "complexity_minimum": batch.state_space_request.minimum,
-        "complexity_maximum": batch.state_space_request.maximum,
+        "complexity_minimum": batch.complexity_request.minimum,
+        "complexity_maximum": batch.complexity_request.maximum,
     }
 
 

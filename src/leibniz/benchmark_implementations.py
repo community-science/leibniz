@@ -15,10 +15,10 @@ from leibniz.timing import TimingCollector
 
 if TYPE_CHECKING:
     from leibniz.observation_generation import (
+        ComplexityCandidate,
+        ComplexityRequest,
+        ComplexityValue,
         GeneratedSampleSet,
-        StateSpaceCandidate,
-        StateSpaceMeasureRequest,
-        StateSpaceMeasureValue,
     )
     from leibniz.tensor_runtime import TensorRuntime
 
@@ -57,30 +57,32 @@ class Generator(Protocol):
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
         include_metadata: bool = True,
-        state_space_request: StateSpaceMeasureRequest | None = None,
+        complexity_request: ComplexityRequest | None = None,
         runtime: TensorRuntime | None = None,
         outcome_ids: tuple[str, ...] | None = None,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...
 
-    def minimum_state_space_measure(self) -> StateSpaceMeasureValue: ...
+    def minimum_complexity(self) -> ComplexityValue: ...
 
     def complexity_rung_size(self) -> float:
-        """Return the log2 state-space complexity width for curriculum rungs."""
+        """Return the log2 complexity width for curriculum rungs."""
         ...
 
-    def state_space_for_request(
+    def complexity_candidate_for_request(
         self,
         *,
-        request: StateSpaceMeasureRequest,
-    ) -> StateSpaceCandidate | None: ...
+        request: ComplexityRequest,
+    ) -> ComplexityCandidate | None: ...
 
-    def state_spaces_for_request(
+    def complexity_candidates_for_request(
         self,
         *,
-        request: StateSpaceMeasureRequest,
-    ) -> Sequence[StateSpaceCandidate]: ...
+        request: ComplexityRequest,
+    ) -> Sequence[ComplexityCandidate]:
+        """Return concrete benchmark candidates inside a complexity request band."""
+        ...
 
 
 class Benchmark(Protocol):

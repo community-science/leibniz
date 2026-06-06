@@ -15,6 +15,7 @@ from leibniz.benchmark_evaluation import (
     ValidationCompetencePoint,
     finite_measurements_for_predictions,
     sampled_competence_frontier_score,
+    sampled_competence_record,
 )
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.benchmark_runner import (
@@ -34,8 +35,8 @@ from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
 from leibniz.materialization import AxisAssignment
 from leibniz.observation_generation import (
+    ComplexityRequest,
     GeneratedSampleSet,
-    StateSpaceMeasureRequest,
     load_generator,
 )
 from leibniz.tensor_runtime import (
@@ -106,6 +107,69 @@ def test_fieldless_tensor_samples_can_score_predictions() -> None:
     )
 
 
+def test_training_sampled_competence_matches_measurement_scoring() -> None:
+    generator = load_generator(_digits_benchmark_root)
+    runtime = resolve_tensor_runtime("cpu")
+    outcome_space = generator.manifest.resolve_outcome_space()
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    request = ComplexityRequest(
+        minimum=generator.minimum_complexity().value,
+        maximum=generator.minimum_complexity().value + 0.1,
+    )
+    batch = generator(
+        seed=101,
+        shape=8,
+        include_fields=False,
+        complexity_request=request,
+        runtime=runtime,
+        outcome_ids=outcome_ids,
+    )
+    probabilities = tuple(
+        tuple(
+            0.7 if outcome_id == sample.outcome_id else 0.3 / (len(outcome_ids) - 1)
+            for outcome_id in outcome_ids
+        )
+        for sample in batch.samples
+    )
+    measurements = finite_measurements_for_predictions(
+        batch=batch,
+        outcome_space=outcome_space,
+        probabilities=probabilities,
+        run_slug="training-direct-score-test",
+    )
+    measurement_record = sampled_competence_record(
+        batch=batch,
+        measurements=measurements,
+        complexity_axis=None,
+    )
+    direct_record = cast(Any, benchmark_runner)._sampled_competence_record_for_predictions(
+        batch=batch,
+        probabilities=probabilities,
+        outcome_ids=outcome_ids,
+        complexity_axis=None,
+    )
+
+    comparable_keys = {
+        "benchmark_id",
+        "complexity",
+        "complexity_axis",
+        "complexity_maximum",
+        "complexity_minimum",
+        "difficulty_assumption",
+        "kind",
+        "mean_accepted_mass",
+        "mean_negative_log_score",
+        "sample_count",
+        "sampling_rule",
+        "seed",
+    }
+    assert {key: measurement_record[key] for key in comparable_keys} == {
+        key: direct_record[key] for key in comparable_keys
+    }
+    assert "measurement_ids" not in direct_record
+    assert "observation_ids" not in direct_record
+
+
 def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) -> None:
     summary = run_benchmark(
         BenchmarkRunPlan(
@@ -153,7 +217,7 @@ def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
             )
         ),
     )
-    request = StateSpaceMeasureRequest(minimum=20.0, maximum=20.0)
+    request = ComplexityRequest(minimum=20.0, maximum=20.0)
     rung = cast(Any, benchmark_runner)._CurriculumRung(
         index=0,
         resolution_assignment=AxisAssignment(values={"height": 1024, "width": 1024}),
@@ -164,7 +228,7 @@ def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
             generator_version="0.1.0",
             seed=101,
             shape=(0,),
-            state_space_request=request,
+            complexity_request=request,
         ),
     )
     timings = benchmark_runner.TimingCollector()
@@ -514,11 +578,11 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     training_curriculum = cast(dict[str, object], training_summary["training_curriculum"])
     curriculum_rungs = cast(list[dict[str, object]], evaluation_curriculum["rungs"])
     assert evaluation_curriculum["kind"] == "checkpoint-benchmark-evaluation-curriculum"
-    assert evaluation_curriculum["curriculum_variable"] == "state-space-measure"
-    assert evaluation_curriculum["sampling_levers"] == ["state-space-measure"]
-    state_space_measure = cast(dict[str, object], evaluation_curriculum["state_space_measure"])
-    assert state_space_measure["scale"] == "log2"
-    assert evaluation_curriculum["complexity_axis"] == state_space_measure["measure_id"]
+    assert evaluation_curriculum["curriculum_variable"] == "complexity"
+    assert evaluation_curriculum["sampling_levers"] == ["complexity"]
+    complexity_value = cast(dict[str, object], evaluation_curriculum["complexity_value"])
+    assert complexity_value["scale"] == "log2"
+    assert evaluation_curriculum["complexity_axis"] == complexity_value["measure_id"]
     candidate_policy = cast(dict[str, object], evaluation_curriculum["candidate_policy"])
     assert candidate_policy["kind"] == "benchmark-owned-complexity-window"
     assert math.isclose(cast(float, candidate_policy["complexity_rung_size"]), 0.1)
@@ -532,7 +596,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert {
         cast(str, rung["complexity_axis"])
         for rung in curriculum_rungs
-    } == {state_space_measure["measure_id"]}
+    } == {complexity_value["measure_id"]}
     assert all("generation_memory_limit_bytes" not in rung for rung in curriculum_rungs)
     assert all("resolution_assignment" in rung for rung in curriculum_rungs)
     expected_evaluation_rung_keys = {
@@ -544,8 +608,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         "resolution_assignment",
         "sample_count",
         "seed",
-        "state_space_measure",
-        "state_space_request",
+        "complexity_value",
+        "complexity_request",
         "status",
     }
     assert all(set(rung) == expected_evaluation_rung_keys for rung in curriculum_rungs)
@@ -558,16 +622,16 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         for rung in curriculum_rungs
     )
     for rung in curriculum_rungs:
-        rung_state_space_measure = cast(dict[str, object], rung["state_space_measure"])
-        state_space_request = cast(dict[str, object], rung["state_space_request"])
-        assert rung_state_space_measure["measure_id"] == state_space_measure["measure_id"]
-        assert state_space_request["measure_id"] == state_space_measure["measure_id"]
+        rung_complexity_value = cast(dict[str, object], rung["complexity_value"])
+        complexity_request = cast(dict[str, object], rung["complexity_request"])
+        assert rung_complexity_value["measure_id"] == complexity_value["measure_id"]
+        assert complexity_request["measure_id"] == complexity_value["measure_id"]
         assert math.isclose(
-            cast(float, rung_state_space_measure["value"]),
+            cast(float, rung_complexity_value["value"]),
             cast(float, rung["complexity"]),
         )
-        request_minimum = cast(float, state_space_request["minimum"])
-        request_maximum = cast(float, state_space_request["maximum"])
+        request_minimum = cast(float, complexity_request["minimum"])
+        request_maximum = cast(float, complexity_request["maximum"])
         rung_complexity = cast(float, rung["complexity"])
         assert request_minimum <= rung_complexity
         assert rung_complexity <= request_maximum
@@ -585,7 +649,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         training_curriculum["gating_metric"]
         == "monotone-frontier-validation-competence"
     )
-    assert training_curriculum["sampling_levers"] == ["state-space-measure"]
+    assert training_curriculum["sampling_levers"] == ["complexity"]
     assert training_curriculum["frontier_index"] == 0
     training_rungs = cast(list[dict[str, object]], training_curriculum["rungs"])
     assert [rung["index"] for rung in training_rungs] == [0]
@@ -1275,7 +1339,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
     batch = generator(
         shape=2,
         seed=101,
-        state_space_request=StateSpaceMeasureRequest(
+        complexity_request=ComplexityRequest(
             minimum=4.321928094887362,
             maximum=5.321928094887362,
         ),
@@ -1350,7 +1414,7 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
     generator = load_generator(_digits_benchmark_root)
     outcome_space = generator.manifest.resolve_outcome_space()
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    replay_request = StateSpaceMeasureRequest(
+    replay_request = ComplexityRequest(
         minimum=math.log2(10),
         maximum=math.log2(20),
     )
@@ -1361,7 +1425,7 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
         include_metadata=True,
         runtime=runtime,
         outcome_ids=outcome_ids,
-        state_space_request=replay_request,
+        complexity_request=replay_request,
     )
     fields, labels = replay_batch.require_tensors()
     prior_point = ValidationCompetencePoint(
@@ -1993,7 +2057,7 @@ def test_training_plateau_above_rung_competence_threshold_refines_before_advanci
 
 def test_evaluation_curriculum_uses_benchmark_owned_representative_windows() -> None:
     generator = load_generator(_digits_benchmark_root)
-    minimum = generator.minimum_state_space_measure().value
+    minimum = generator.minimum_complexity().value
 
     candidates = cast(Any, benchmark_runner)._benchmark_complexity_curriculum_candidates(
         generator=generator,
@@ -2003,9 +2067,9 @@ def test_evaluation_curriculum_uses_benchmark_owned_representative_windows() -> 
     assert [candidate.complexity for candidate in candidates] == sorted(
         candidate.complexity for candidate in candidates
     )
-    assert candidates[0].state_space.resolution_assignment is not None
-    assert candidates[0].state_space.resolution_assignment.values == {"W": 16, "H": 16}
-    assert [candidate.state_space.cardinality for candidate in candidates[:8]] == [
+    assert candidates[0].complexity_class.resolution_assignment is not None
+    assert candidates[0].complexity_class.resolution_assignment.values == {"W": 16, "H": 16}
+    assert [candidate.complexity_class.cardinality for candidate in candidates[:8]] == [
         10,
         20,
         30,
@@ -2016,25 +2080,25 @@ def test_evaluation_curriculum_uses_benchmark_owned_representative_windows() -> 
         80,
     ]
     for candidate in candidates[:8]:
-        assert candidate.state_space_request.minimum >= minimum
+        assert candidate.complexity_request.minimum >= minimum
         assert math.isclose(
-            candidate.state_space_request.maximum - candidate.state_space_request.minimum,
+            candidate.complexity_request.maximum - candidate.complexity_request.minimum,
             0.1,
         )
-        assert candidate.state_space_request.minimum <= candidate.complexity
-        assert candidate.complexity <= candidate.state_space_request.maximum
+        assert candidate.complexity_request.minimum <= candidate.complexity
+        assert candidate.complexity <= candidate.complexity_request.maximum
 
 
 def test_training_curriculum_uses_benchmark_owned_representative_windows() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
-    minimum = generator.minimum_state_space_measure().value
+    minimum = generator.minimum_complexity().value
 
     candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
         generator=generator,
         start_index=0,
     )
 
-    assert [candidate.state_space.cardinality for candidate in candidates[:8]] == [
+    assert [candidate.complexity_class.cardinality for candidate in candidates[:8]] == [
         10,
         20,
         30,
@@ -2045,14 +2109,17 @@ def test_training_curriculum_uses_benchmark_owned_representative_windows() -> No
         80,
     ]
     for candidate in candidates[:8]:
-        assert candidate.state_space_request.minimum >= minimum
+        assert candidate.complexity_request.minimum >= minimum
         assert math.isclose(
-            candidate.state_space_request.maximum - candidate.state_space_request.minimum,
+            candidate.complexity_request.maximum - candidate.complexity_request.minimum,
             0.1,
         )
-        assert candidate.state_space.request.minimum == candidate.state_space.request.maximum
-        assert candidate.state_space_request.minimum <= candidate.complexity
-        assert candidate.complexity <= candidate.state_space_request.maximum
+        assert (
+            candidate.complexity_class.request.minimum
+            == candidate.complexity_class.request.maximum
+        )
+        assert candidate.complexity_request.minimum <= candidate.complexity
+        assert candidate.complexity <= candidate.complexity_request.maximum
 
 
 def test_training_curriculum_representative_window_rematerializes() -> None:
@@ -2062,67 +2129,67 @@ def test_training_curriculum_representative_window_rematerializes() -> None:
         start_index=30,
     )
     candidate = next(
-        candidate for candidate in candidates if candidate.state_space.cardinality == 360
+        candidate for candidate in candidates if candidate.complexity_class.cardinality == 360
     )
 
-    exact_request = candidate.state_space.request
-    window_request = candidate.state_space_request
+    exact_request = candidate.complexity_class.request
+    window_request = candidate.complexity_request
     exact_sample = generator(
         shape=1,
         seed=123,
         include_fields=True,
-        state_space_request=exact_request,
+        complexity_request=exact_request,
     )
     window_sample = generator(
         shape=1,
         seed=123,
         include_fields=True,
-        state_space_request=window_request,
+        complexity_request=window_request,
     )
 
-    assert candidate.state_space.cardinality == 360
+    assert candidate.complexity_class.cardinality == 360
     assert exact_sample.sample_count == 1
     assert window_sample.sample_count == 1
     assert exact_sample.samples[0].require_field().shape == (1, 20, 20)
     assert window_sample.samples[0].require_field().shape == (1, 20, 20)
 
 
-def test_digits_state_space_for_request_materializes_constructed_affine_grid() -> None:
+def test_digits_complexity_candidate_for_request_materializes_constructed_affine_grid() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
-    minimum = generator.minimum_state_space_measure().value
+    minimum = generator.minimum_complexity().value
 
-    state_space = generator.state_space_for_request(
-        request=StateSpaceMeasureRequest(
+    complexity_class = generator.complexity_candidate_for_request(
+        request=ComplexityRequest(
             minimum=minimum + 5.0,
             maximum=minimum + 6.0,
         )
     )
 
-    assert state_space is not None
-    assert state_space.cardinality == 360
-    assert math.isclose(state_space.complexity, math.log2(360))
-    assert state_space.metadata["affine_transform_count"] == 36
-    assert state_space.metadata["requested_state_count"] == 360
-    assert state_space.metadata["realized_state_count"] == 360
-    assert state_space.metadata["construction"] == (
+    assert complexity_class is not None
+    assert complexity_class.cardinality == 360
+    assert math.isclose(complexity_class.complexity, math.log2(360))
+    assert complexity_class.metadata["affine_transform_count"] == 36
+    assert complexity_class.metadata["requested_cardinality"] == 360
+    assert complexity_class.metadata["realized_cardinality"] == 360
+    assert complexity_class.metadata["construction"] == (
         "symmetric-digits-over-finite-affine-product-grid"
     )
-    assert state_space.metadata["affine_grid"] == {
+    assert complexity_class.metadata["affine_grid"] == {
         "x_translation": 6,
         "y_translation": 6,
         "scale": 1,
         "rotation": 1,
         "x_shear": 1,
     }
-    assert state_space.metadata["affine_bounds"] == {
+    assert complexity_class.metadata["affine_bounds"] == {
         "x_translation": [-0.15, 0.15],
         "y_translation": [-0.15, 0.15],
         "scale": [0.92, 1.08],
         "rotation": [-0.03, 0.03],
         "x_shear": [-0.03, 0.03],
     }
-    assert state_space.resolution_assignment is not None
-    assert state_space.resolution_assignment.values == {
+    assert complexity_class.resolution_assignment is not None
+    assert complexity_class.resolution_assignment.values == {
         "W": 20,
         "H": 20,
     }

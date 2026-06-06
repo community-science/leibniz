@@ -45,12 +45,12 @@ from leibniz.observation_formation import (
     VariationTransformDeclaration,
 )
 from leibniz.observation_generation import (
+    ComplexityCandidate,
+    ComplexityRequest,
+    ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
-    StateSpaceCandidate,
-    StateSpaceMeasureRequest,
-    StateSpaceMeasureValue,
 )
 from leibniz.observation_showcases import (
     ObservationShowcaseManifest,
@@ -78,13 +78,13 @@ _outcome_space_id = ProtocolIdentifier.parse("benchmarks.digits.outcomes@0.1.0")
 _field_scalar_construction_bytes = 64
 _default_memory_budget_fraction = 0.10
 _default_generation_memory_limit_bytes = 32_768_000
-_state_space_digit_count = 10
-_state_space_canvas_minimum_side = 16
-_state_space_canvas_side_step = 4
-_maximum_state_space_candidates_per_request = 64
-_state_space_cardinality_relative_tolerance = 1e-12
+_complexity_class_digit_count = 10
+_complexity_class_canvas_minimum_side = 16
+_complexity_class_canvas_side_step = 4
+_maximum_complexity_class_candidates_per_request = 64
+_complexity_class_cardinality_relative_tolerance = 1e-12
 _default_constructed_affine_transform_count = 2
-_canonical_digits_state_count = _state_space_digit_count
+_canonical_digits_cardinality = _complexity_class_digit_count
 _constructed_affine_preset_max_count = 8
 _constructed_affine_translation_bounds = (-0.15, 0.15)
 _constructed_affine_effective_radius_fraction = 0.25
@@ -100,7 +100,7 @@ _constructed_affine_axis_names = (
     "rotation",
     "x_shear",
 )
-_console_preview_state_space_windows = (
+_console_preview_complexity_windows = (
     (3.0, 4.0),
     (5.0, 6.0),
     (8.0, 9.0),
@@ -163,14 +163,14 @@ class _ConstructedAffineGrid:
 
 
 @dataclass(frozen=True, slots=True)
-class _DigitsStateSpace:
+class _DigitsComplexityClass:
     affine_grid: _ConstructedAffineGrid
-    requested_state_count: int
+    requested_cardinality: int
     resolution_assignment: AxisAssignment | None = None
 
     @property
     def digit_count(self) -> int:
-        return _state_space_digit_count
+        return _complexity_class_digit_count
 
     @property
     def affine_transform_count(self) -> int:
@@ -184,26 +184,26 @@ class _DigitsStateSpace:
     def complexity(self) -> float:
         return math.log2(self.cardinality)
 
-    def measure(self) -> StateSpaceMeasureValue:
-        return _state_space_measure(self.complexity)
+    def measure(self) -> ComplexityValue:
+        return _complexity_value(self.complexity)
 
     def metadata(self) -> dict[str, object]:
         return {
-            "kind": "digits-requested-finite-state-space",
+            "kind": "digits-requested-finite-complexity-class",
             "digit_count": self.digit_count,
             "affine_transform_count": self.affine_transform_count,
-            "latent_state_count": self.cardinality,
-            "requested_state_count": self.requested_state_count,
-            "realized_state_count": self.cardinality,
+            "latent_cardinality": self.cardinality,
+            "requested_cardinality": self.requested_cardinality,
+            "realized_cardinality": self.cardinality,
             "construction": "symmetric-digits-over-finite-affine-product-grid",
             "affine_grid": self.affine_grid.to_record(),
             "affine_bounds": self.affine_grid.bounds_record(),
             "affine_parameters": list(_constructed_affine_axis_names),
         }
 
-    def candidate(self) -> StateSpaceCandidate:
-        return StateSpaceCandidate(
-            request=StateSpaceMeasureRequest(
+    def candidate(self) -> ComplexityCandidate:
+        return ComplexityCandidate(
+            request=ComplexityRequest(
                 minimum=self.complexity,
                 maximum=self.complexity,
             ),
@@ -369,7 +369,7 @@ class Generator:
         transform_indices: tuple[int, ...] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
-        state_space: _DigitsStateSpace,
+        complexity_class: _DigitsComplexityClass,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
         output_timing_prefix: str = "",
@@ -384,7 +384,7 @@ class Generator:
             sample_count=sample_count,
             seed=seed,
             component_indices=component_indices,
-            component_count=state_space.digit_count,
+            component_count=complexity_class.digit_count,
             timing=timing,
             timing_prefix=timing_prefix,
         )
@@ -397,7 +397,7 @@ class Generator:
         transform = self.formation.variation_transform
         transform_record = transform.to_record()
         with _timing_span(timing, f"{timing_prefix}complexity"):
-            complexity = state_space.complexity
+            complexity = complexity_class.complexity
         materialization_declaration = ArtifactReference(
             kind="materialization-declaration",
             protocol_id=self.materialization.id,
@@ -407,7 +407,7 @@ class Generator:
             sample_count=sample_count,
             seed=seed,
             transform_indices=transform_indices,
-            state_space=state_space,
+            complexity_class=complexity_class,
             timing=timing,
             timing_prefix=timing_prefix,
         )
@@ -433,7 +433,7 @@ class Generator:
             transform_record=transform_record,
             component_indices=component_index_samples,
             transform_indices=transform_index_samples,
-            state_space=state_space,
+            complexity_class=complexity_class,
             timing=timing,
             timing_phase=variation_timing_phase,
         )
@@ -453,7 +453,7 @@ class Generator:
                     seed=seed,
                     component_indices=component_index_samples,
                     transform_indices=transform_index_samples,
-                    state_space=state_space,
+                    complexity_class=complexity_class,
                     resolution_assignment=resolved_resolution_assignment,
                     memory_limit_bytes=memory_limit_bytes,
                     runtime=resolve_host_tensor_runtime(),
@@ -496,7 +496,7 @@ class Generator:
                         variation_values=variation_values,
                         outcome_id=self._outcome_id(component_index),
                         complexity=complexity,
-                        state_space_measure=_state_space_measure(complexity),
+                        complexity_value=_complexity_value(complexity),
                         latent_coordinates=self._latent_coordinates(
                             component_index=component_index,
                             digit_variant_index=digit_variant_index,
@@ -515,17 +515,17 @@ class Generator:
         *,
         sample_count: int,
         component_indices: tuple[int, ...],
-        state_space: _DigitsStateSpace,
+        complexity_class: _DigitsComplexityClass,
     ) -> tuple[GeneratedSample, ...]:
         if len(component_indices) != sample_count:
             raise ObservationGenerationError("component_indices length must match sample_count")
-        complexity = state_space.complexity
+        complexity = complexity_class.complexity
         return tuple(
             GeneratedSample(
                 index=index,
                 outcome_id=self._outcome_id(component_index),
                 complexity=complexity,
-                state_space_measure=_state_space_measure(complexity),
+                complexity_value=_complexity_value(complexity),
                 component_index=component_index,
             )
             for index, component_index in enumerate(component_indices)
@@ -599,7 +599,7 @@ class Generator:
         transform_record: Mapping[str, object],
         component_indices: tuple[int, ...],
         transform_indices: tuple[int, ...],
-        state_space: _DigitsStateSpace,
+        complexity_class: _DigitsComplexityClass,
         timing: TimingCollector | None,
         timing_phase: str,
     ) -> tuple[
@@ -625,7 +625,7 @@ class Generator:
                 transform_index = transform_indices[index]
                 if (
                     transform_index < 0
-                    or transform_index >= state_space.affine_transform_count
+                    or transform_index >= complexity_class.affine_transform_count
                 ):
                     raise ObservationGenerationError(
                         "transform index is outside active transform set"
@@ -634,7 +634,7 @@ class Generator:
                     transform=transform,
                     component_index=component_index,
                     transform_index=transform_index,
-                    grid=state_space.affine_grid,
+                    grid=complexity_class.affine_grid,
                 )
                 coordinates = (coordinate,)
                 samples.append(
@@ -642,9 +642,9 @@ class Generator:
                         {
                             "kind": "constructed-field-variation-transform-samples",
                             "bounds": transform_record,
-                            "state_space": state_space.metadata(),
+                            "complexity_class": complexity_class.metadata(),
                             "transform_index": transform_index,
-                            "transform_count": state_space.affine_transform_count,
+                            "transform_count": complexity_class.affine_transform_count,
                             "coordinates": [dict(item) for item in coordinates],
                         },
                         coordinates,
@@ -658,12 +658,12 @@ class Generator:
         sample_count: int,
         seed: int,
         transform_indices: tuple[int, ...] | None = None,
-        state_space: _DigitsStateSpace,
+        complexity_class: _DigitsComplexityClass,
         timing: TimingCollector | None,
         timing_prefix: str,
     ) -> tuple[int, ...]:
-        state_space_digest = str(ContentDigest.from_value(state_space.metadata()))
-        generator = random.Random(f"{seed}:variation:{state_space_digest}")
+        complexity_class_digest = str(ContentDigest.from_value(complexity_class.metadata()))
+        generator = random.Random(f"{seed}:variation:{complexity_class_digest}")
         with _timing_span(timing, f"{timing_prefix}transform_index", samples=sample_count):
             if transform_indices is not None:
                 if len(transform_indices) != sample_count:
@@ -671,7 +671,7 @@ class Generator:
                         "transform_indices length must match sample_count"
                     )
                 if any(
-                    index < 0 or index >= state_space.affine_transform_count
+                    index < 0 or index >= complexity_class.affine_transform_count
                     for index in transform_indices
                 ):
                     raise ObservationGenerationError(
@@ -679,7 +679,7 @@ class Generator:
                     )
                 return transform_indices
             return tuple(
-                generator.randrange(state_space.affine_transform_count)
+                generator.randrange(complexity_class.affine_transform_count)
                 for _index in range(sample_count)
             )
 
@@ -732,13 +732,13 @@ class Generator:
         sample_count: int,
         seed: int,
         transform_indices: tuple[int, ...] | None,
-        state_space: _DigitsStateSpace,
+        complexity_class: _DigitsComplexityClass,
         runtime: TensorRuntime,
         timing: TimingCollector | None,
         timing_prefix: str,
     ) -> Any:
         backend = tensor_runtime_backend(runtime)
-        state_space_digest = str(ContentDigest.from_value(state_space.metadata()))
+        complexity_class_digest = str(ContentDigest.from_value(complexity_class.metadata()))
         with _timing_span(timing, f"{timing_prefix}transform_index", samples=sample_count):
             if transform_indices is not None:
                 if len(transform_indices) != sample_count:
@@ -746,7 +746,7 @@ class Generator:
                         "transform_indices length must match sample_count"
                     )
                 if any(
-                    index < 0 or index >= state_space.affine_transform_count
+                    index < 0 or index >= complexity_class.affine_transform_count
                     for index in transform_indices
                 ):
                     raise ObservationGenerationError(
@@ -759,11 +759,11 @@ class Generator:
                 )
             generator = _runtime_generator(
                 runtime=runtime,
-                seed=f"{seed}:variation:{state_space_digest}",
+                seed=f"{seed}:variation:{complexity_class_digest}",
             )
             return backend.randint(
                 low=0,
-                high=state_space.affine_transform_count,
+                high=complexity_class.affine_transform_count,
                 size=(sample_count,),
                 dtype=backend.long,
                 device=runtime.device,
@@ -777,7 +777,7 @@ class Generator:
         seed: int,
         component_indices: tuple[int, ...] | None,
         transform_indices: tuple[int, ...] | None,
-        state_space: _DigitsStateSpace,
+        complexity_class: _DigitsComplexityClass,
         resolution_assignment: AxisAssignment | None,
         memory_limit_bytes: int | None,
         runtime: TensorRuntime,
@@ -785,7 +785,7 @@ class Generator:
         timing: TimingCollector | None,
         timing_prefix: str,
     ) -> tuple[Any, Any]:
-        """Generate tensor fields and targets directly from the Digits state space."""
+        """Generate tensor fields and targets directly from the Digits complexity class."""
 
         if not outcome_ids:
             raise ObservationGenerationError("tensor generation requires outcome_ids")
@@ -794,7 +794,7 @@ class Generator:
             sample_count=sample_count,
             seed=seed,
             component_indices=component_indices,
-            component_count=state_space.digit_count,
+            component_count=complexity_class.digit_count,
             runtime=runtime,
             timing=timing,
             timing_prefix=timing_prefix,
@@ -803,7 +803,7 @@ class Generator:
             sample_count=sample_count,
             seed=seed,
             transform_indices=transform_indices,
-            state_space=state_space,
+            complexity_class=complexity_class,
             runtime=runtime,
             timing=timing,
             timing_prefix=timing_prefix,
@@ -814,7 +814,7 @@ class Generator:
             seed=seed,
             component_indices=component_index_samples,
             transform_indices=transform_index_samples,
-            state_space=state_space,
+            complexity_class=complexity_class,
             resolution_assignment=resolution_assignment,
             memory_limit_bytes=memory_limit_bytes,
             runtime=runtime,
@@ -827,7 +827,7 @@ class Generator:
             )
             unknown = tuple(
                 outcome_id
-                for outcome_id in component_outcome_ids[: state_space.digit_count]
+                for outcome_id in component_outcome_ids[: complexity_class.digit_count]
                 if outcome_id not in outcome_ids
             )
             if unknown:
@@ -835,7 +835,7 @@ class Generator:
             component_to_outcome = backend.tensor(
                 [
                     outcome_ids.index(outcome_id)
-                    for outcome_id in component_outcome_ids[: state_space.digit_count]
+                    for outcome_id in component_outcome_ids[: complexity_class.digit_count]
                 ],
                 dtype=backend.long,
                 device=runtime.device,
@@ -858,7 +858,7 @@ class Generator:
         seed: int,
         component_indices: Any,
         transform_indices: Any,
-        state_space: _DigitsStateSpace,
+        complexity_class: _DigitsComplexityClass,
         resolution_assignment: AxisAssignment | None,
         memory_limit_bytes: int | None,
         runtime: TensorRuntime,
@@ -878,11 +878,11 @@ class Generator:
             fields = self._build_batch_tensor(
                 width=width,
                 height=height,
-                digit_count=state_space.digit_count,
+                digit_count=complexity_class.digit_count,
                 component_indices=component_indices,
                 transform_indices=transform_indices,
                 transform=self.formation.variation_transform,
-                grid=state_space.affine_grid,
+                grid=complexity_class.affine_grid,
                 runtime=runtime,
                 timing=timing,
                 timing_prefix=timing_prefix,
@@ -1313,189 +1313,193 @@ class Generator:
             raise ObservationGenerationError("variation_extent must be finite")
         if variation_extent_value < 0.0 or variation_extent_value > 1.0:
             raise ObservationGenerationError("variation_extent must be between 0 and 1")
-        return self._default_state_space(
+        return self._default_complexity_class(
             canonical_variation=variation_extent_value == 0.0,
         ).complexity
 
-    def constructed_state_space_complexity(
+    def constructed_complexity_class_complexity(
         self,
         *,
         affine_transform_count: int,
     ) -> float:
-        """Return the exact log2 count of constructed single-digit states."""
+        """Return the exact log2 count of constructed single-digit choices."""
 
-        return self._state_space_for_requested_state_count(
-            requested_state_count=_state_space_digit_count * affine_transform_count,
+        return self._complexity_candidate_for_requested_cardinality(
+            requested_cardinality=_complexity_class_digit_count * affine_transform_count,
             affine_transform_count=affine_transform_count,
         ).complexity
 
-    def minimum_state_space_measure(self) -> StateSpaceMeasureValue:
-        """Return the smallest score-bearing Digits state-space measure."""
+    def minimum_complexity(self) -> ComplexityValue:
+        """Return the smallest score-bearing Digits complexity."""
 
-        return _state_space_measure(math.log2(_canonical_digits_state_count))
+        return _complexity_value(math.log2(_canonical_digits_cardinality))
 
     def complexity_rung_size(self) -> float:
-        """Return the log2 state-space window size for curriculum rungs."""
+        """Return the log2 complexity window size for curriculum rungs."""
 
         return _complexity_rung_size
 
-    def state_space_for_request(
+    def complexity_candidate_for_request(
         self,
         *,
-        request: StateSpaceMeasureRequest,
-    ) -> StateSpaceCandidate | None:
-        """Return the smallest symmetric finite state space inside a request band."""
+        request: ComplexityRequest,
+    ) -> ComplexityCandidate | None:
+        """Return the smallest symmetric finite complexity class inside a request band."""
 
-        state_space = self._first_symmetric_state_space_in_request(request=request)
-        if state_space is None:
+        complexity_class = self._first_symmetric_complexity_class_in_request(request=request)
+        if complexity_class is None:
             return None
-        return state_space.candidate()
+        return complexity_class.candidate()
 
-    def state_spaces_for_request(
+    def complexity_candidates_for_request(
         self,
         *,
-        request: StateSpaceMeasureRequest,
-    ) -> tuple[StateSpaceCandidate, ...]:
-        """Return symmetric Digits state-space candidates inside a request band."""
+        request: ComplexityRequest,
+    ) -> tuple[ComplexityCandidate, ...]:
+        """Return symmetric Digits candidates inside a complexity request band."""
 
-        minimum_complexity = self.minimum_state_space_measure().value
+        minimum_complexity = self.minimum_complexity().value
         if request.maximum < minimum_complexity:
             return ()
-        minimum_cardinality = _ceil_state_space_cardinality(
+        minimum_cardinality = _ceil_complexity_class_cardinality(
             max(request.minimum, minimum_complexity)
         )
-        maximum_cardinality = _floor_state_space_cardinality(request.maximum)
+        maximum_cardinality = _floor_complexity_class_cardinality(request.maximum)
         if maximum_cardinality < minimum_cardinality:
             return ()
-        resolution_assignment = self._resolution_assignment_for_state_space_request(
+        resolution_assignment = self._resolution_assignment_for_complexity_request(
             request
         )
-        candidates: list[StateSpaceCandidate] = []
-        for state_space in self._symmetric_state_spaces_in_cardinality_range(
+        candidates: list[ComplexityCandidate] = []
+        for complexity_class in self._symmetric_complexity_classes_in_cardinality_range(
             minimum_cardinality=minimum_cardinality,
             maximum_cardinality=maximum_cardinality,
             resolution_assignment=resolution_assignment,
         ):
-            measure = state_space.measure()
+            measure = complexity_class.measure()
             if request.contains(measure):
-                candidates.append(state_space.candidate())
+                candidates.append(complexity_class.candidate())
         return tuple(candidates)
 
-    def _default_state_space(self, *, canonical_variation: bool = False) -> _DigitsStateSpace:
-        return self._state_space_for_affine_transform_count(
+    def _default_complexity_class(
+        self,
+        *,
+        canonical_variation: bool = False,
+    ) -> _DigitsComplexityClass:
+        return self._complexity_class_for_affine_transform_count(
             affine_transform_count=(
                 1 if canonical_variation else _default_constructed_affine_transform_count
             ),
         )
 
-    def _state_space_for_affine_transform_count(
+    def _complexity_class_for_affine_transform_count(
         self,
         *,
         affine_transform_count: int,
         resolution_assignment: AxisAssignment | None = None,
-    ) -> _DigitsStateSpace:
-        return self._state_space_for_requested_state_count(
-            requested_state_count=_state_space_digit_count * affine_transform_count,
+    ) -> _DigitsComplexityClass:
+        return self._complexity_candidate_for_requested_cardinality(
+            requested_cardinality=_complexity_class_digit_count * affine_transform_count,
             affine_transform_count=affine_transform_count,
             resolution_assignment=resolution_assignment,
         )
 
-    def _state_space_for_requested_state_count(
+    def _complexity_candidate_for_requested_cardinality(
         self,
         *,
-        requested_state_count: int,
+        requested_cardinality: int,
         affine_transform_count: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
-    ) -> _DigitsStateSpace:
+    ) -> _DigitsComplexityClass:
         _require_generation_positive_integer(
-            requested_state_count,
-            "requested_state_count",
+            requested_cardinality,
+            "requested_cardinality",
         )
         if affine_transform_count is None:
             affine_transform_count = max(
                 1,
-                math.ceil(requested_state_count / _state_space_digit_count),
+                math.ceil(requested_cardinality / _complexity_class_digit_count),
             )
-        requested_state_count = _state_space_digit_count * affine_transform_count
-        return _DigitsStateSpace(
+        requested_cardinality = _complexity_class_digit_count * affine_transform_count
+        return _DigitsComplexityClass(
             affine_grid=_constructed_affine_grid(
                 affine_transform_count,
                 resolution_assignment=resolution_assignment,
             ),
-            requested_state_count=requested_state_count,
+            requested_cardinality=requested_cardinality,
             resolution_assignment=resolution_assignment,
         )
 
-    def _symmetric_state_spaces_in_cardinality_range(
+    def _symmetric_complexity_classes_in_cardinality_range(
         self,
         *,
         minimum_cardinality: int,
         maximum_cardinality: int,
         resolution_assignment: AxisAssignment,
-    ) -> tuple[_DigitsStateSpace, ...]:
+    ) -> tuple[_DigitsComplexityClass, ...]:
         _require_generation_positive_integer(minimum_cardinality, "minimum_cardinality")
         _require_generation_positive_integer(maximum_cardinality, "maximum_cardinality")
         if maximum_cardinality < minimum_cardinality:
             return ()
-        state_spaces: list[_DigitsStateSpace] = []
+        complexity_classes: list[_DigitsComplexityClass] = []
         minimum_transform_count = max(
             1,
-            math.ceil(minimum_cardinality / _state_space_digit_count),
+            math.ceil(minimum_cardinality / _complexity_class_digit_count),
         )
         maximum_transform_count = max(
             1,
-            maximum_cardinality // _state_space_digit_count,
+            maximum_cardinality // _complexity_class_digit_count,
         )
         for affine_grid in _constructed_affine_grids_in_transform_count_range(
             minimum_transform_count=minimum_transform_count,
             maximum_transform_count=maximum_transform_count,
             resolution_assignment=resolution_assignment,
         ):
-            if len(state_spaces) >= _maximum_state_space_candidates_per_request:
+            if len(complexity_classes) >= _maximum_complexity_class_candidates_per_request:
                 break
-            state_spaces.append(
-                _DigitsStateSpace(
+            complexity_classes.append(
+                _DigitsComplexityClass(
                     affine_grid=affine_grid,
-                    requested_state_count=(
-                        _state_space_digit_count * affine_grid.transform_count
+                    requested_cardinality=(
+                        _complexity_class_digit_count * affine_grid.transform_count
                     ),
                     resolution_assignment=resolution_assignment,
                 )
             )
         return tuple(
             sorted(
-                state_spaces,
-                key=lambda state_space: (
-                    state_space.cardinality,
-                    state_space.digit_count,
-                    state_space.affine_transform_count,
+                complexity_classes,
+                key=lambda complexity_class: (
+                    complexity_class.cardinality,
+                    complexity_class.digit_count,
+                    complexity_class.affine_transform_count,
                 ),
             )
         )
 
-    def _first_symmetric_state_space_in_request(
+    def _first_symmetric_complexity_class_in_request(
         self,
         *,
-        request: StateSpaceMeasureRequest,
-    ) -> _DigitsStateSpace | None:
-        minimum_complexity = self.minimum_state_space_measure().value
+        request: ComplexityRequest,
+    ) -> _DigitsComplexityClass | None:
+        minimum_complexity = self.minimum_complexity().value
         if request.maximum < minimum_complexity:
             return None
-        minimum_cardinality = _ceil_state_space_cardinality(
+        minimum_cardinality = _ceil_complexity_class_cardinality(
             max(request.minimum, minimum_complexity)
         )
-        maximum_cardinality = _floor_state_space_cardinality(request.maximum)
+        maximum_cardinality = _floor_complexity_class_cardinality(request.maximum)
         minimum_transform_count = max(
             1,
-            math.ceil(minimum_cardinality / _state_space_digit_count),
+            math.ceil(minimum_cardinality / _complexity_class_digit_count),
         )
         maximum_transform_count = max(
             1,
-            maximum_cardinality // _state_space_digit_count,
+            maximum_cardinality // _complexity_class_digit_count,
         )
         if maximum_transform_count < minimum_transform_count:
             return None
-        resolution_assignment = self._resolution_assignment_for_state_space_request(
+        resolution_assignment = self._resolution_assignment_for_complexity_request(
             request
         )
         affine_grid = _constructed_affine_grid_in_transform_count_range(
@@ -1504,18 +1508,18 @@ class Generator:
             resolution_assignment=resolution_assignment,
         )
         if affine_grid is not None:
-            state_space = _DigitsStateSpace(
+            complexity_class = _DigitsComplexityClass(
                 affine_grid=affine_grid,
-                requested_state_count=_state_space_digit_count
+                requested_cardinality=_complexity_class_digit_count
                 * affine_grid.transform_count,
                 resolution_assignment=resolution_assignment,
             )
-            if request.contains(state_space.measure()):
-                return state_space
-        candidates = self.state_spaces_for_request(request=request)
+            if request.contains(complexity_class.measure()):
+                return complexity_class
+        candidates = self.complexity_candidates_for_request(request=request)
         if not candidates:
             return None
-        return self._state_space_for_candidate(candidates[0])
+        return self._complexity_class_for_candidate(candidates[0])
 
     def _materialization_plan(
         self,
@@ -1697,7 +1701,7 @@ class Generator:
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
         include_metadata: bool = True,
-        state_space_request: StateSpaceMeasureRequest | None = None,
+        complexity_request: ComplexityRequest | None = None,
         component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
@@ -1715,19 +1719,19 @@ class Generator:
             tuple(component_indices) if component_indices is not None else None
         )
         variation_extent_value = _variation_extent_value(variation_extent)
-        state_space = self._default_state_space(
+        complexity_class = self._default_complexity_class(
             canonical_variation=variation_extent_value == 0.0,
         )
-        if state_space_request is not None:
+        if complexity_request is not None:
             if resolution_assignment is not None:
                 raise ObservationGenerationError(
-                    "state-space request cannot be combined with resolution_assignment"
+                    "complexity request cannot be combined with resolution_assignment"
             )
-            candidate = self.state_space_for_request(request=state_space_request)
+            candidate = self.complexity_candidate_for_request(request=complexity_request)
             if candidate is None:
                 if runtime is not None:
                     raise ObservationGenerationError(
-                        "tensor generation state-space request matched no candidate"
+                        "tensor generation complexity request matched no candidate"
                     )
                 return GeneratedSampleSet(
                     benchmark_id=self.manifest.id,
@@ -1736,19 +1740,19 @@ class Generator:
                     seed=seed,
                     shape=(0,),
                     variation_extent=variation_extent,
-                    state_space_request=state_space_request,
+                    complexity_request=complexity_request,
                     samples=(),
                 )
             resolution_assignment = candidate.resolution_assignment
             if resolution_assignment is None:
                 raise ObservationGenerationError(
-                    "Digits state-space candidate is missing a resolution assignment"
+                    "Digits complexity candidate is missing a resolution assignment"
                 )
             if candidate.cardinality is None:
                 raise ObservationGenerationError(
-                    "Digits state-space candidate is missing cardinality"
+                    "Digits complexity candidate is missing cardinality"
                 )
-            state_space = self._state_space_for_candidate(candidate)
+            complexity_class = self._complexity_class_for_candidate(candidate)
         if runtime is not None and outcome_ids is None:
             raise ObservationGenerationError("tensor generation requires outcome_ids")
         shared_component_indices = requested_component_indices
@@ -1759,14 +1763,14 @@ class Generator:
                     sample_count=sample_count,
                     seed=seed,
                     component_indices=None,
-                    component_count=state_space.digit_count,
+                    component_count=complexity_class.digit_count,
                     timing=timing,
                     timing_prefix=timing_prefix,
                 )
             shared_transform_indices = self._sample_transform_indices(
                 sample_count=sample_count,
                 seed=seed,
-                state_space=state_space,
+                complexity_class=complexity_class,
                 timing=timing,
                 timing_prefix=timing_prefix,
             )
@@ -1780,7 +1784,7 @@ class Generator:
                 transform_indices=shared_transform_indices,
                 memory_limit_bytes=memory_limit_bytes,
                 resolution_assignment=resolution_assignment,
-                state_space=state_space,
+                complexity_class=complexity_class,
                 runtime=runtime,
                 outcome_ids=outcome_ids,
                 timing=timing,
@@ -1796,7 +1800,7 @@ class Generator:
                 samples = self._generate_tensor_metadata_samples(
                     sample_count=sample_count,
                     component_indices=shared_component_indices,
-                    state_space=state_space,
+                    complexity_class=complexity_class,
                 )
             else:
                 samples = self._generate_samples(
@@ -1807,7 +1811,7 @@ class Generator:
                     transform_indices=shared_transform_indices,
                     memory_limit_bytes=memory_limit_bytes,
                     resolution_assignment=resolution_assignment,
-                    state_space=state_space,
+                    complexity_class=complexity_class,
                     timing=timing,
                     timing_prefix=(
                         f"{timing_prefix}formation_batch." if include_fields else timing_prefix
@@ -1821,37 +1825,37 @@ class Generator:
             seed=seed,
             shape=sample_shape,
             variation_extent=variation_extent,
-            state_space_request=state_space_request,
+            complexity_request=complexity_request,
             samples=samples,
             fields=fields,
             targets=targets,
         )
 
     def console_preview_batches(self, *, atom_count: int) -> tuple[Mapping[str, object], ...]:
-        """Return browser-preview batches for declared state-space windows."""
+        """Return browser-preview batches for declared complexity windows."""
 
         if atom_count != len(self.manifest.outcome_space.outcomes):
             raise ObservationGenerationError("atom_count does not match outcome space")
         return tuple(
-            self._console_preview_state_space_window(
+            self._console_preview_complexity_window(
                 minimum=minimum,
                 maximum=maximum,
                 seed=401 + index,
             )
             for index, (minimum, maximum) in enumerate(
-                _console_preview_state_space_windows
+                _console_preview_complexity_windows
             )
         )
 
-    def _console_preview_state_space_window(
+    def _console_preview_complexity_window(
         self,
         *,
         minimum: float,
         maximum: float,
         seed: int,
     ) -> Mapping[str, object]:
-        request = StateSpaceMeasureRequest(minimum=minimum, maximum=maximum)
-        candidates = self.state_spaces_for_request(request=request)
+        request = ComplexityRequest(minimum=minimum, maximum=maximum)
+        candidates = self.complexity_candidates_for_request(request=request)
         samples: list[Mapping[str, object]] = []
         materialization_declaration = ArtifactReference(
             kind="materialization-declaration",
@@ -1861,37 +1865,39 @@ class Generator:
         transform = self.formation.variation_transform
         transform_record = transform.to_record()
         scaled_factors = tuple(self.latent_factors.sample_factors)
-        state_spaces = tuple(self._state_space_for_candidate(candidate) for candidate in candidates)
+        complexity_classes = tuple(
+            self._complexity_class_for_candidate(candidate) for candidate in candidates
+        )
 
         for candidate_index, component_index, transform_index in _preview_sample_coordinates(
-            state_spaces,
+            complexity_classes,
             limit=_console_preview_sample_limit,
         ):
-            state_space = state_spaces[candidate_index]
-            if state_space.resolution_assignment is None:
+            complexity_class = complexity_classes[candidate_index]
+            if complexity_class.resolution_assignment is None:
                 raise ObservationGenerationError(
-                    "Digits state-space candidate is missing a resolution assignment"
+                    "Digits complexity candidate is missing a resolution assignment"
                 )
             sample_index = len(samples)
             plan = self._materialization_plan(
                 seed=seed,
                 index=sample_index,
-                resolution_assignment=state_space.resolution_assignment,
+                resolution_assignment=complexity_class.resolution_assignment,
                 materialization_declaration=materialization_declaration,
             )
             variation_coordinate = _constructed_variation_coordinate_record(
                 transform=transform,
                 component_index=component_index,
                 transform_index=transform_index,
-                grid=state_space.affine_grid,
+                grid=complexity_class.affine_grid,
             )
             variation_values: Mapping[str, object] = {
                 "kind": "constructed-field-variation-transform-samples",
                 "bounds": transform_record,
-                "state_space": state_space.metadata(),
+                "complexity_class": complexity_class.metadata(),
                 "candidate_index": candidate_index,
                 "transform_index": transform_index,
-                "transform_count": state_space.affine_transform_count,
+                "transform_count": complexity_class.affine_transform_count,
                 "coordinates": [dict(variation_coordinate)],
             }
             field_tensor = self._generate_tensor_fields(
@@ -1899,8 +1905,8 @@ class Generator:
                 seed=seed,
                 component_indices=(component_index,),
                 transform_indices=(transform_index,),
-                state_space=state_space,
-                resolution_assignment=state_space.resolution_assignment,
+                complexity_class=complexity_class,
+                resolution_assignment=complexity_class.resolution_assignment,
                 memory_limit_bytes=None,
                 runtime=resolve_host_tensor_runtime(),
                 timing=None,
@@ -1918,8 +1924,8 @@ class Generator:
                     "index": sample_index,
                     "outcome_id": self._outcome_id(component_index),
                     "component_index": component_index,
-                    "complexity": state_space.complexity,
-                    "state_space_measure": state_space.measure().to_record(),
+                    "complexity": complexity_class.complexity,
+                    "complexity_value": complexity_class.measure().to_record(),
                     "field_shape": list(field_record.field.shape),
                     "image_data_url": _field_to_png_data_url(field_record.field),
                     "materialization_plan": plan.to_record(),
@@ -1937,16 +1943,16 @@ class Generator:
             )
         samples.sort(key=lambda sample: _sample_display_key(sample, len(samples)))
         return {
-            "mode": "state-space-window",
+            "mode": "complexity-window",
             "label": f"[{minimum:g}, {maximum:g}]",
             "seed": seed,
             "sample_count": len(samples),
-            "state_space_window": {
-                "measure_id": "log2_state_space_size",
+            "complexity_window": {
+                "measure_id": "log2_complexity_class_size",
                 "minimum": minimum,
                 "maximum": maximum,
             },
-            "state_space_sizes": [
+            "complexity_cardinalities": [
                 candidate.cardinality
                 for candidate in candidates
                 if candidate.cardinality is not None
@@ -1958,38 +1964,38 @@ class Generator:
             "samples": samples,
         }
 
-    def _state_space_for_candidate(
+    def _complexity_class_for_candidate(
         self,
-        candidate: StateSpaceCandidate,
-    ) -> _DigitsStateSpace:
+        candidate: ComplexityCandidate,
+    ) -> _DigitsComplexityClass:
         if candidate.cardinality is None:
             raise ObservationGenerationError(
-                "Digits state-space candidate is missing cardinality"
+                "Digits complexity candidate is missing cardinality"
             )
         if candidate.resolution_assignment is None:
             raise ObservationGenerationError(
-                "Digits state-space candidate is missing a resolution assignment"
+                "Digits complexity candidate is missing a resolution assignment"
             )
         affine_grid = _constructed_affine_grid_from_candidate(candidate)
-        return _DigitsStateSpace(
+        return _DigitsComplexityClass(
             affine_grid=affine_grid,
-            requested_state_count=candidate.cardinality,
+            requested_cardinality=candidate.cardinality,
             resolution_assignment=candidate.resolution_assignment,
         )
 
-    def _resolution_assignment_for_state_space_request(
+    def _resolution_assignment_for_complexity_request(
         self,
-        request: StateSpaceMeasureRequest,
+        request: ComplexityRequest,
     ) -> AxisAssignment:
-        minimum_complexity = self.minimum_state_space_measure().value
+        minimum_complexity = self.minimum_complexity().value
         if request.maximum < minimum_complexity:
-            side = _state_space_canvas_minimum_side
+            side = _complexity_class_canvas_minimum_side
         else:
-            minimum_cardinality = _ceil_state_space_cardinality(
+            minimum_cardinality = _ceil_complexity_class_cardinality(
                 max(request.minimum, minimum_complexity)
             )
-            maximum_cardinality = _floor_state_space_cardinality(request.maximum)
-            side = _state_space_canvas_side_for_cardinality_range(
+            maximum_cardinality = _floor_complexity_class_cardinality(request.maximum)
+            side = _complexity_class_canvas_side_for_cardinality_range(
                 minimum_cardinality=minimum_cardinality,
                 maximum_cardinality=maximum_cardinality,
             )
@@ -2005,20 +2011,20 @@ class Generator:
         )
         return AxisAssignment(values=values)
 
-    def _resolution_assignment_for_requested_state_count(
+    def _resolution_assignment_for_requested_cardinality(
         self,
-        requested_state_count: int,
+        requested_cardinality: int,
     ) -> AxisAssignment:
         _require_generation_positive_integer(
-            requested_state_count,
-            "requested_state_count",
+            requested_cardinality,
+            "requested_cardinality",
         )
         minimum_assignment = self.materialization.minimum_resolution()
         width_axis = self.formation.width_axis
         height_axis = self.formation.height_axis
-        side = _state_space_canvas_side_for_cardinality_range(
-            minimum_cardinality=requested_state_count,
-            maximum_cardinality=requested_state_count,
+        side = _complexity_class_canvas_side_for_cardinality_range(
+            minimum_cardinality=requested_cardinality,
+            maximum_cardinality=requested_cardinality,
         )
         values = dict(minimum_assignment.values)
         values[width_axis] = max(values.get(width_axis, 1), side)
@@ -2048,13 +2054,13 @@ def _sample_count(shape: Sequence[int]) -> int:
     return count
 
 
-def _state_space_measure(complexity: float) -> StateSpaceMeasureValue:
-    return StateSpaceMeasureValue(
+def _complexity_value(complexity: float) -> ComplexityValue:
+    return ComplexityValue(
         value=complexity,
     )
 
 
-def _state_space_canvas_side_for_cardinality_range(
+def _complexity_class_canvas_side_for_cardinality_range(
     *,
     minimum_cardinality: int,
     maximum_cardinality: int,
@@ -2063,21 +2069,21 @@ def _state_space_canvas_side_for_cardinality_range(
     _require_generation_positive_integer(maximum_cardinality, "maximum_cardinality")
     if maximum_cardinality < minimum_cardinality:
         raise ObservationGenerationError(
-            "state-space cardinality range maximum is below minimum"
+            "complexity cardinality range maximum is below minimum"
         )
     minimum_transform_count = max(
         1,
-        math.ceil(minimum_cardinality / _state_space_digit_count),
+        math.ceil(minimum_cardinality / _complexity_class_digit_count),
     )
     maximum_transform_count = max(
         1,
-        maximum_cardinality // _state_space_digit_count,
+        maximum_cardinality // _complexity_class_digit_count,
     )
     if maximum_transform_count < minimum_transform_count:
         raise ObservationGenerationError(
-            "state-space cardinality range contains no symmetric Digits state space"
+            "complexity cardinality range contains no symmetric Digits complexity class"
         )
-    side = _state_space_canvas_minimum_side
+    side = _complexity_class_canvas_minimum_side
     while True:
         bounds = _constructed_affine_bounds_for_canvas_side(side)
         capacities = _constructed_affine_axis_capacities(bounds=bounds, side=side)
@@ -2089,36 +2095,36 @@ def _state_space_canvas_side_for_cardinality_range(
                 resolution_assignment=assignment,
             ) is not None:
                 return side
-        side += _state_space_canvas_side_step
+        side += _complexity_class_canvas_side_step
 
 
-def _ceil_state_space_cardinality(complexity: float) -> int:
-    value = _state_space_cardinality_float(complexity)
-    tolerance = max(1.0, abs(value)) * _state_space_cardinality_relative_tolerance
+def _ceil_complexity_class_cardinality(complexity: float) -> int:
+    value = _complexity_class_cardinality_float(complexity)
+    tolerance = max(1.0, abs(value)) * _complexity_class_cardinality_relative_tolerance
     return max(2, math.ceil(value - tolerance))
 
 
-def _floor_state_space_cardinality(complexity: float) -> int:
-    value = _state_space_cardinality_float(complexity)
-    tolerance = max(1.0, abs(value)) * _state_space_cardinality_relative_tolerance
+def _floor_complexity_class_cardinality(complexity: float) -> int:
+    value = _complexity_class_cardinality_float(complexity)
+    tolerance = max(1.0, abs(value)) * _complexity_class_cardinality_relative_tolerance
     return max(2, math.floor(value + tolerance))
 
 
-def _state_space_cardinality_float(complexity: float) -> float:
+def _complexity_class_cardinality_float(complexity: float) -> float:
     if not math.isfinite(float(complexity)):
-        raise ObservationGenerationError("state-space complexity must be finite")
+        raise ObservationGenerationError("complexity must be finite")
     return 2.0**complexity
 
 
-def _state_space_canvas_side_from_assignment(
+def _complexity_class_canvas_side_from_assignment(
     resolution_assignment: AxisAssignment | None,
 ) -> int:
     if resolution_assignment is None:
-        return _state_space_canvas_minimum_side
+        return _complexity_class_canvas_minimum_side
     values = tuple(resolution_assignment.values.values())
     if not values:
-        return _state_space_canvas_minimum_side
-    return max(_state_space_canvas_minimum_side, max(values))
+        return _complexity_class_canvas_minimum_side
+    return max(_complexity_class_canvas_minimum_side, max(values))
 
 
 def _constructed_affine_bounds_for_canvas_side(
@@ -2178,28 +2184,28 @@ def _variation_extent_value(variation_extent: float) -> float:
     return value
 
 
-def _state_space_affine_transform_count(candidate: StateSpaceCandidate) -> int:
+def _complexity_class_affine_transform_count(candidate: ComplexityCandidate) -> int:
     value = candidate.metadata.get("affine_transform_count")
     if type(value) is not int or value <= 0:
         raise ObservationGenerationError(
-            "Digits state-space candidate metadata is missing affine_transform_count"
+            "Digits complexity candidate metadata is missing affine_transform_count"
         )
     return value
 
 
 def _constructed_affine_grid_from_candidate(
-    candidate: StateSpaceCandidate,
+    candidate: ComplexityCandidate,
 ) -> _ConstructedAffineGrid:
     grid_record = candidate.metadata.get("affine_grid")
     if not isinstance(grid_record, Mapping):
         raise ObservationGenerationError(
-            "Digits state-space candidate metadata is missing affine_grid"
+            "Digits complexity candidate metadata is missing affine_grid"
         )
     grid_metadata = cast(Mapping[object, object], grid_record)
     bounds_record = candidate.metadata.get("affine_bounds")
     if not isinstance(bounds_record, Mapping):
         raise ObservationGenerationError(
-            "Digits state-space candidate metadata is missing affine_bounds"
+            "Digits complexity candidate metadata is missing affine_bounds"
         )
     bounds_metadata = cast(Mapping[object, object], bounds_record)
     grid = _ConstructedAffineGrid(
@@ -2215,9 +2221,9 @@ def _constructed_affine_grid_from_candidate(
         x_shear_bounds=_metadata_bounds(bounds_metadata, "x_shear"),
         preset_count=_metadata_optional_positive_int(grid_metadata, "preset_count"),
     )
-    if grid.transform_count != _state_space_affine_transform_count(candidate):
+    if grid.transform_count != _complexity_class_affine_transform_count(candidate):
         raise ObservationGenerationError(
-            "Digits state-space candidate affine grid does not match transform count"
+            "Digits complexity candidate affine grid does not match transform count"
         )
     return grid
 
@@ -2275,36 +2281,38 @@ def _preview_index_selection(count: int, *, limit: int) -> tuple[int, ...]:
 
 
 def _preview_sample_coordinates(
-    state_spaces: tuple[_DigitsStateSpace, ...],
+    complexity_classes: tuple[_DigitsComplexityClass, ...],
     *,
     limit: int,
 ) -> tuple[tuple[int, int, int], ...]:
     full_count = sum(
-        state_space.digit_count * state_space.affine_transform_count
-        for state_space in state_spaces
+        complexity_class.digit_count * complexity_class.affine_transform_count
+        for complexity_class in complexity_classes
     )
     if full_count <= limit:
         return tuple(
-            (state_space_index, component_index, transform_index)
-            for state_space_index, state_space in enumerate(state_spaces)
-            for component_index in range(state_space.digit_count)
-            for transform_index in range(state_space.affine_transform_count)
+            (complexity_class_index, component_index, transform_index)
+            for complexity_class_index, complexity_class in enumerate(complexity_classes)
+            for component_index in range(complexity_class.digit_count)
+            for transform_index in range(complexity_class.affine_transform_count)
         )
     coordinates: list[tuple[int, int, int]] = []
     offset = 0
     selected_offsets = set(_preview_index_selection(full_count, limit=limit))
-    for state_space_index, state_space in enumerate(state_spaces):
-        state_space_count = state_space.digit_count * state_space.affine_transform_count
+    for complexity_class_index, complexity_class in enumerate(complexity_classes):
+        complexity_class_count = (
+            complexity_class.digit_count * complexity_class.affine_transform_count
+        )
         for selected_offset in sorted(
             value
             for value in selected_offsets
-            if offset <= value < offset + state_space_count
+            if offset <= value < offset + complexity_class_count
         ):
             local_offset = selected_offset - offset
-            component_index = local_offset // state_space.affine_transform_count
-            transform_index = local_offset % state_space.affine_transform_count
-            coordinates.append((state_space_index, component_index, transform_index))
-        offset += state_space_count
+            component_index = local_offset // complexity_class.affine_transform_count
+            transform_index = local_offset % complexity_class.affine_transform_count
+            coordinates.append((complexity_class_index, component_index, transform_index))
+        offset += complexity_class_count
     return tuple(coordinates)
 
 
@@ -2314,7 +2322,7 @@ def _constructed_affine_grid(
     resolution_assignment: AxisAssignment | None = None,
 ) -> _ConstructedAffineGrid:
     _require_generation_positive_integer(transform_count, "transform_count")
-    side = _state_space_canvas_side_from_assignment(resolution_assignment)
+    side = _complexity_class_canvas_side_from_assignment(resolution_assignment)
     bounds = _constructed_affine_bounds_for_canvas_side(side)
     if transform_count <= _constructed_affine_preset_max_count:
         return _ConstructedAffineGrid(
@@ -2379,7 +2387,7 @@ def _constructed_affine_grid_in_transform_count_range(
     )
     if maximum_transform_count < minimum_transform_count:
         return None
-    side = _state_space_canvas_side_from_assignment(resolution_assignment)
+    side = _complexity_class_canvas_side_from_assignment(resolution_assignment)
     bounds = _constructed_affine_bounds_for_canvas_side(side)
     capacities = _constructed_affine_axis_capacities(bounds=bounds, side=side)
     preset_count = _preset_count_in_range(
@@ -3483,15 +3491,15 @@ def _manifest() -> BenchmarkManifest:
             "affine_maximum_condition_number": 1.6,
             "affine_minimum_projected_extent": 0.65,
             "affine_maximum_projected_extent": 1.35,
-            "state_space_measure": {
-                "kind": "constructed-finite-state-space",
-                "measure_id": "log2_state_space_size",
-                "formula": "log2(realized_state_count)",
-                "digit_count": _state_space_digit_count,
+            "complexity_value": {
+                "kind": "constructed-finite-complexity-class",
+                "measure_id": "log2_complexity_class_size",
+                "formula": "log2(realized_cardinality)",
+                "digit_count": _complexity_class_digit_count,
                 "affine_transform_family": "constructed-finite-affine-product-grid",
                 "target_policy": "symmetric-realized-cardinalities-inside-request-band",
                 "description": (
-                    "Score-bearing Digits state spaces are requested finite "
+                    "Score-bearing Digits complexity classes are requested finite "
                     "single-digit slices. The minimum non-null request is the "
                     "canonical 10-way digit classification problem. Larger "
                     "requests add symmetric finite affine choices for every "
@@ -3499,7 +3507,7 @@ def _manifest() -> BenchmarkManifest:
                     "instead of forcing exact powers of two. Canvas resolution "
                     "is the smallest square lattice, rounded to the benchmark "
                     "resolution step, whose finite affine grid can express a "
-                    "cardinality inside the requested state-space band."
+                    "cardinality inside the requested complexity band."
                 ),
             },
             "description": (

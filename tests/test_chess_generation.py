@@ -5,8 +5,8 @@ import pytest
 
 from leibniz.benchmark_implementations import discover_benchmark_roots, load_benchmark
 from leibniz.observation_generation import (
+    ComplexityRequest,
     ObservationGenerationError,
-    StateSpaceMeasureRequest,
     load_generator,
 )
 
@@ -37,7 +37,7 @@ def test_chess_generator_exposes_python_manifest() -> None:
     )
 
 
-def test_chess_generator_returns_state_space_measured_samples_without_fields() -> None:
+def test_chess_generator_returns_complexity_valued_samples_without_fields() -> None:
     generator = load_generator(_chess_benchmark_root)
     sample_set = generator(seed=47, shape=3, include_fields=True)
 
@@ -47,12 +47,12 @@ def test_chess_generator_returns_state_space_measured_samples_without_fields() -
     assert sample_set.outcomes == ("g7f8", "g7f8", "g7f8")
     assert sample_set.complexities == (math.log2(3), math.log2(3), math.log2(3))
     sample = sample_set.samples[0]
-    assert sample.state_space_measure is not None
-    assert sample.state_space_measure.measure_id == StateSpaceMeasureRequest(
+    assert sample.complexity_value is not None
+    assert sample.complexity_value.measure_id == ComplexityRequest(
         minimum=1.0,
         maximum=1.0,
     ).measure_id
-    assert sample.state_space_measure.value == math.log2(3)
+    assert sample.complexity_value.value == math.log2(3)
     assert sample.latent_coordinates[0]["values"] == (
         "7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"
     )
@@ -66,8 +66,8 @@ def test_chess_sample_record_does_not_invent_image_surface_fields() -> None:
     record = generator(seed=47, shape=()).samples[0].to_record(include_field=True)
 
     assert record["outcome_id"] == "g7f8"
-    assert record["state_space_measure"] == {
-        "measure_id": StateSpaceMeasureRequest(minimum=1.0, maximum=1.0).measure_id,
+    assert record["complexity_value"] == {
+        "measure_id": ComplexityRequest(minimum=1.0, maximum=1.0).measure_id,
         "value": math.log2(3),
     }
     assert "materialization_plan" not in record
@@ -79,28 +79,28 @@ def test_chess_sample_record_does_not_invent_image_surface_fields() -> None:
     assert "field" not in record
 
 
-def test_chess_state_space_request_returns_empty_set_for_unexpressible_interval() -> None:
+def test_chess_complexity_request_returns_empty_set_for_unexpressible_interval() -> None:
     generator = load_generator(_chess_benchmark_root)
-    request = StateSpaceMeasureRequest(
+    request = ComplexityRequest(
         minimum=1.0,
         maximum=1.0,
     )
-    sample_set = generator(seed=47, shape=5, state_space_request=request)
+    sample_set = generator(seed=47, shape=5, complexity_request=request)
 
     assert sample_set.shape == (0,)
     assert sample_set.samples == ()
-    assert sample_set.state_space_request == request
+    assert sample_set.complexity_request == request
     assert sample_set.to_record()["sample_count"] == 0
 
 
-def test_chess_state_space_request_accepts_matching_interval() -> None:
+def test_chess_complexity_request_accepts_matching_interval() -> None:
     generator = load_generator(_chess_benchmark_root)
-    request = StateSpaceMeasureRequest(
+    request = ComplexityRequest(
         minimum=math.log2(3),
         maximum=math.log2(3),
     )
-    sample_set = generator(seed=47, shape=(2, 2), state_space_request=request)
+    sample_set = generator(seed=47, shape=(2, 2), complexity_request=request)
 
     assert sample_set.shape == (2, 2)
     assert len(sample_set.samples) == 4
-    assert all(sample.state_space_measure is not None for sample in sample_set.samples)
+    assert all(sample.complexity_value is not None for sample in sample_set.samples)

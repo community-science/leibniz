@@ -17,11 +17,11 @@ from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment, MaterializationPlan
 from leibniz.observation_formation import FieldObservation
 from leibniz.observation_generation import (
+    ComplexityCandidate,
+    ComplexityRequest,
+    ComplexityValue,
     GeneratedSampleSet,
     ObservationGenerationError,
-    StateSpaceCandidate,
-    StateSpaceMeasureRequest,
-    StateSpaceMeasureValue,
 )
 from leibniz.tensor_runtime import TensorRuntimeError, resolve_tensor_runtime
 from leibniz.timing import TimingCollector
@@ -263,7 +263,7 @@ def test_digits_generator_samples_resolution_from_memory_bound() -> None:
     assert sample.outcome_id == "digit-1"
 
 
-def test_digits_generator_counts_constructed_finite_state_space() -> None:
+def test_digits_generator_counts_constructed_finite_complexity_class() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
     scale_one = _formation_payload(generator, sample_count=3, seed=101)
@@ -298,10 +298,10 @@ def test_digits_generator_counts_constructed_finite_state_space() -> None:
     }
     assert sample_width(scale_one.samples[0]) >= 1
     assert sample_height(scale_one.samples[0]) >= 1
-    minimum = generator.constructed_state_space_complexity(
+    minimum = generator.constructed_complexity_class_complexity(
         affine_transform_count=1,
     )
-    larger = generator.constructed_state_space_complexity(
+    larger = generator.constructed_complexity_class_complexity(
         affine_transform_count=8,
     )
     assert math.isclose(minimum, math.log2(10))
@@ -331,11 +331,11 @@ def test_digits_generator_uses_runtime_memory_limit_as_canvas_cap() -> None:
     assert large.samples[0].complexity == small.samples[0].complexity
 
 
-def test_digits_generator_accepts_state_space_measure_requests() -> None:
+def test_digits_generator_accepts_complexity_value_requests() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
-    requested_complexity = generator.minimum_state_space_measure().value
+    requested_complexity = generator.minimum_complexity().value
 
-    state_space_request = StateSpaceMeasureRequest(
+    complexity_request = ComplexityRequest(
         minimum=requested_complexity,
         maximum=requested_complexity + 1.0,
     )
@@ -343,10 +343,10 @@ def test_digits_generator_accepts_state_space_measure_requests() -> None:
         generator,
         sample_count=2,
         seed=101,
-        state_space_request=state_space_request,
+        complexity_request=complexity_request,
     )
 
-    assert batch.state_space_request is not None
+    assert batch.complexity_request is not None
     assert "component_count" not in batch.to_record()
     assert [sample.require_field().shape for sample in batch.samples] == [
         (1, 16, 16),
@@ -355,39 +355,39 @@ def test_digits_generator_accepts_state_space_measure_requests() -> None:
     assert [sample.outcome_id for sample in batch.samples] == ["digit-8", "digit-7"]
     assert [sample.component_index for sample in batch.samples] == [8, 7]
     assert {
-        sample.state_space_measure
+        sample.complexity_value
         for sample in batch.samples
     } == {
-        batch.samples[0].state_space_measure,
+        batch.samples[0].complexity_value,
     }
-    assert batch.samples[0].state_space_measure is not None
-    assert batch.samples[0].state_space_measure.measure_id == state_space_request.measure_id
-    assert math.isclose(batch.samples[0].state_space_measure.value, requested_complexity)
+    assert batch.samples[0].complexity_value is not None
+    assert batch.samples[0].complexity_value.measure_id == complexity_request.measure_id
+    assert math.isclose(batch.samples[0].complexity_value.value, requested_complexity)
 
 
-def test_digits_generator_materializes_target_state_space_band() -> None:
+def test_digits_generator_materializes_target_complexity_class_band() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
-    target = generator.minimum_state_space_measure().value + 3.0
+    target = generator.minimum_complexity().value + 3.0
 
-    state_space = generator.state_space_for_request(
-        request=StateSpaceMeasureRequest(
+    complexity_class = generator.complexity_candidate_for_request(
+        request=ComplexityRequest(
             minimum=target,
             maximum=target + 1.0,
         )
     )
 
-    assert state_space is not None
-    assert state_space.cardinality == 80
-    assert math.isclose(state_space.complexity, math.log2(80))
-    assert state_space.resolution_assignment is not None
-    assert state_space.metadata["affine_transform_count"] == 8
-    assert state_space.metadata["digit_count"] == 10
-    assert state_space.metadata["requested_state_count"] == 80
-    assert state_space.metadata["realized_state_count"] == 80
-    assert state_space.metadata["construction"] == (
+    assert complexity_class is not None
+    assert complexity_class.cardinality == 80
+    assert math.isclose(complexity_class.complexity, math.log2(80))
+    assert complexity_class.resolution_assignment is not None
+    assert complexity_class.metadata["affine_transform_count"] == 8
+    assert complexity_class.metadata["digit_count"] == 10
+    assert complexity_class.metadata["requested_cardinality"] == 80
+    assert complexity_class.metadata["realized_cardinality"] == 80
+    assert complexity_class.metadata["construction"] == (
         "symmetric-digits-over-finite-affine-product-grid"
     )
-    assert state_space.metadata["affine_parameters"] == [
+    assert complexity_class.metadata["affine_parameters"] == [
         "x_translation",
         "y_translation",
         "scale",
@@ -399,8 +399,8 @@ def test_digits_generator_materializes_target_state_space_band() -> None:
 def test_digits_generator_high_cardinality_request_has_one_representative() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
-    candidates = generator.state_spaces_for_request(
-        request=StateSpaceMeasureRequest(
+    candidates = generator.complexity_candidates_for_request(
+        request=ComplexityRequest(
             minimum=21.0,
             maximum=22.0,
         )
@@ -412,19 +412,19 @@ def test_digits_generator_high_cardinality_request_has_one_representative() -> N
     assert 21.0 <= math.log2(candidate.cardinality) <= 22.0
 
 
-def test_digits_generator_materializes_large_target_state_space_directly() -> None:
+def test_digits_generator_materializes_large_target_complexity_class_directly() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
-    state_space = generator.state_space_for_request(
-        request=StateSpaceMeasureRequest(minimum=20.0, maximum=21.0)
+    complexity_class = generator.complexity_candidate_for_request(
+        request=ComplexityRequest(minimum=20.0, maximum=21.0)
     )
 
-    assert state_space is not None
-    assert state_space.cardinality == 1_069_200
-    assert 20.0 <= state_space.complexity <= 21.0
-    assert state_space.resolution_assignment is not None
-    assert state_space.resolution_assignment.values == {"W": 148, "H": 148}
-    assert state_space.metadata["affine_grid"] == {
+    assert complexity_class is not None
+    assert complexity_class.cardinality == 1_069_200
+    assert 20.0 <= complexity_class.complexity <= 21.0
+    assert complexity_class.resolution_assignment is not None
+    assert complexity_class.resolution_assignment.values == {"W": 148, "H": 148}
+    assert complexity_class.metadata["affine_grid"] == {
         "x_translation": 45,
         "y_translation": 44,
         "scale": 6,
@@ -433,9 +433,9 @@ def test_digits_generator_materializes_large_target_state_space_directly() -> No
     }
 
 
-def test_state_space_candidates_can_declare_exact_integer_cardinality() -> None:
-    candidate = StateSpaceCandidate(
-        request=StateSpaceMeasureRequest(
+def test_complexity_class_candidates_can_declare_exact_integer_cardinality() -> None:
+    candidate = ComplexityCandidate(
+        request=ComplexityRequest(
             minimum=math.log2(17),
             maximum=math.log2(17),
         ),
@@ -449,66 +449,66 @@ def test_state_space_candidates_can_declare_exact_integer_cardinality() -> None:
 def test_digits_generator_returns_empty_set_below_canonical_digit_space() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
-    state_space_request = StateSpaceMeasureRequest(
+    complexity_request = ComplexityRequest(
         minimum=1.0,
         maximum=1.0,
     )
     batch = generator(
         shape=3,
         seed=101,
-        state_space_request=state_space_request,
+        complexity_request=complexity_request,
     )
 
     assert batch.shape == (0,)
     assert len(batch.samples) == 0
-    assert batch.state_space_request is not None
-    assert batch.state_space_request.measure_id == state_space_request.measure_id
+    assert batch.complexity_request is not None
+    assert batch.complexity_request.measure_id == complexity_request.measure_id
 
 
-def test_state_space_measure_ids_are_core_contract() -> None:
+def test_complexity_value_ids_are_core_contract() -> None:
     assert (
         str(
             capture_generation_error(
-                lambda: StateSpaceMeasureRequest(
+                lambda: ComplexityRequest(
                     minimum=0.0,
                     maximum=0.0,
                 )
             )
         )
-        == "state-space measure minimum must be at least 1"
+        == "complexity minimum must be at least 1"
     )
     assert (
         str(
             capture_generation_error(
-                lambda: StateSpaceMeasureValue(
+                lambda: ComplexityValue(
                     value=0.0,
                 )
             )
         )
-        == "state-space measure value must be at least 1"
+        == "complexity value must be at least 1"
     )
     assert (
         str(
             capture_generation_error(
-                lambda: StateSpaceMeasureRequest(
+                lambda: ComplexityRequest(
                     measure_id="benchmarks.chess.valid-move-count",
                     minimum=1.0,
                     maximum=1.0,
                 )
             )
         )
-        == "state-space measure id is not a core measure"
+        == "complexity id is not a core measure"
     )
     assert (
         str(
             capture_generation_error(
-                lambda: StateSpaceMeasureValue(
+                lambda: ComplexityValue(
                     measure_id="benchmarks.chess.valid-move-count",
                     value=1.0,
                 )
             )
         )
-        == "state-space measure id is not a core measure"
+        == "complexity id is not a core measure"
     )
 
 
@@ -583,9 +583,9 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
         pytest.skip(str(error))
     outcome_space = generator.manifest.resolve_outcome_space()
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    request = StateSpaceMeasureRequest(
-        minimum=generator.minimum_state_space_measure().value + 6.0,
-        maximum=generator.minimum_state_space_measure().value + 7.0,
+    request = ComplexityRequest(
+        minimum=generator.minimum_complexity().value + 6.0,
+        maximum=generator.minimum_complexity().value + 7.0,
     )
 
     cpu_fields = generator(
@@ -594,7 +594,7 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
         include_fields=False,
         runtime=cpu_runtime,
         outcome_ids=outcome_ids,
-        state_space_request=request,
+        complexity_request=request,
     ).require_tensors()[0]
     cuda_fields = generator(
         shape=16,
@@ -602,28 +602,28 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
         include_fields=False,
         runtime=cuda_runtime,
         outcome_ids=outcome_ids,
-        state_space_request=request,
+        complexity_request=request,
     ).require_tensors()[0]
 
     assert cuda_runtime.torch.equal(cpu_fields, cuda_fields.detach().cpu())
 
 
-def test_digits_tensor_generation_rejects_unmatched_state_space_requests() -> None:
+def test_digits_tensor_generation_rejects_unmatched_complexity_requests() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
     outcome_space = generator.manifest.resolve_outcome_space()
-    request = StateSpaceMeasureRequest(minimum=1.0, maximum=1.0)
+    request = ComplexityRequest(minimum=1.0, maximum=1.0)
 
     with pytest.raises(
         ObservationGenerationError,
-        match="tensor generation state-space request matched no candidate",
+        match="tensor generation complexity request matched no candidate",
     ):
         generator(
             shape=1,
             seed=910,
             runtime=runtime,
             outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
-            state_space_request=request,
+            complexity_request=request,
         )
 
 

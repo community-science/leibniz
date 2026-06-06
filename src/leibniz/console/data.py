@@ -343,7 +343,7 @@ class ConsoleDataBuilder:
                         benchmark_root,
                         repository_root=self._repository_root,
                     ),
-                    "complexity_axis": "log2_state_space_size",
+                    "complexity_axis": "log2_complexity_class_size",
                     "outcome_atom_name": outcome_atom_name,
                     "outcome_atom_count": atom_count,
                     "code_surfaces": self._benchmark_code_surfaces(benchmark_root),
@@ -418,7 +418,7 @@ class ConsoleDataBuilder:
         benchmark_root: Path,
     ) -> str:
         hasher = hashlib.sha256()
-        hasher.update(b"state-space-window-sample-sets-v1\0")
+        hasher.update(b"complexity-window-sample-sets-v1\0")
         entrypoint = benchmark_root / "benchmark.py"
         if entrypoint.is_file():
             self._hash_file(hasher, entrypoint)
@@ -458,7 +458,7 @@ class ConsoleDataBuilder:
     ) -> tuple[Mapping[str, object], ...]:
         cache_key = (
             str(generator.manifest.id),
-            "state-space-window-samples",
+            "complexity-window-samples",
             source_fingerprint,
         )
         cached = _generated_batch_cache.get(cache_key)
@@ -473,7 +473,7 @@ class ConsoleDataBuilder:
         preview_batches = getattr(generator, "console_preview_batches", None)
         if not callable(preview_batches):
             raise ConsoleDataValidationError(
-                "benchmark generator does not expose state-space-window preview batches"
+                "benchmark generator does not expose complexity-window preview batches"
             )
         try:
             records = tuple(

@@ -28,13 +28,13 @@ export type GeneratedObservationBatchRecord = {
   label: string;
   seed: number;
   sample_count: number;
-  state_space_window?: GeneratedStateSpaceWindowRecord;
-  state_space_sizes?: number[];
+  complexity_window?: GeneratedComplexityWindowRecord;
+  complexity_cardinalities?: number[];
   presentation: GeneratedObservationBatchPresentationRecord;
   samples: GeneratedObservationSampleRecord[];
 };
 
-export type GeneratedStateSpaceWindowRecord = {
+export type GeneratedComplexityWindowRecord = {
   measure_id: string;
   minimum: number;
   maximum: number;
@@ -50,14 +50,14 @@ export type GeneratedObservationSampleRecord = {
   outcome_id: string;
   component_index: number;
   complexity: number;
-  state_space_measure?: GeneratedStateSpaceMeasureRecord | null;
+  complexity_value?: GeneratedComplexityValueRecord | null;
   field_shape: number[];
   image_data_url: string;
   materialization_plan: Record<string, unknown>;
   latent_coordinates: GeneratedLatentCoordinateRecord[];
 };
 
-export type GeneratedStateSpaceMeasureRecord = {
+export type GeneratedComplexityValueRecord = {
   measure_id: string;
   value: number;
 };
@@ -100,16 +100,16 @@ function validateBatch(value: unknown, path: string): void {
   const record = requireRecord(value, path, error);
   const sampleCount = requireNumber(record.sample_count, `${path}.sample_count`, error);
   const samples = requireArray(record.samples, `${path}.samples`, error);
-  const stateSpaceWindow = record.state_space_window;
-  if (stateSpaceWindow !== undefined) {
-    validateStateSpaceWindow(stateSpaceWindow, `${path}.state_space_window`);
+  const complexityWindow = record.complexity_window;
+  if (complexityWindow !== undefined) {
+    validateComplexityWindow(complexityWindow, `${path}.complexity_window`);
   }
-  if (record.state_space_sizes !== undefined) {
-    requireArray(record.state_space_sizes, `${path}.state_space_sizes`, error).forEach(
+  if (record.complexity_cardinalities !== undefined) {
+    requireArray(record.complexity_cardinalities, `${path}.complexity_cardinalities`, error).forEach(
       (size, index) => {
-        const value = requireNumber(size, `${path}.state_space_sizes.${index}`, error);
+        const value = requireNumber(size, `${path}.complexity_cardinalities.${index}`, error);
         if (!Number.isInteger(value) || value < 1) {
-          throw error(`${path}.state_space_sizes.${index}: expected positive integer`);
+          throw error(`${path}.complexity_cardinalities.${index}: expected positive integer`);
         }
       },
     );
@@ -119,7 +119,7 @@ function validateBatch(value: unknown, path: string): void {
   }
 }
 
-function validateStateSpaceWindow(value: unknown, path: string): void {
+function validateComplexityWindow(value: unknown, path: string): void {
   const record = requireRecord(value, path, error);
   requireString(record.measure_id, `${path}.measure_id`, error);
   requireNumber(record.minimum, `${path}.minimum`, error);
