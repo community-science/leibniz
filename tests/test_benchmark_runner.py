@@ -591,8 +591,14 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         evaluation_curriculum["gating_metric"]
         == "monotone-frontier-validation-competence"
     )
-    assert evaluation_curriculum["frontier_index"] == 0
-    assert [rung["index"] for rung in curriculum_rungs] == [0]
+    evaluation_frontier_index = cast(int, evaluation_curriculum["frontier_index"])
+    evaluation_lookahead = cast(
+        int,
+        cast(Any, benchmark_runner)._default_evaluation_frontier_lookahead_rungs,
+    )
+    assert evaluation_frontier_index >= 0
+    assert len(curriculum_rungs) == evaluation_frontier_index + 1 + evaluation_lookahead
+    assert [rung["index"] for rung in curriculum_rungs] == list(range(len(curriculum_rungs)))
     assert {
         cast(str, rung["complexity_axis"])
         for rung in curriculum_rungs
@@ -636,7 +642,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         assert request_minimum <= rung_complexity
         assert rung_complexity <= request_maximum
         assert math.isclose(request_maximum - request_minimum, 0.1)
-    assert [rung["sample_count"] for rung in curriculum_rungs] == [64]
+    assert [rung["sample_count"] for rung in curriculum_rungs] == [64] * len(curriculum_rungs)
     assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
         cast(float, rung["complexity"]) for rung in curriculum_rungs
     )
@@ -667,13 +673,18 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         == "approximately-uniform-within-complexity-class"
     )
     assert sampled_competence["complexity_axis"] is None
-    assert math.isclose(cast(float, sampled_competence["complexity"]), math.log2(10))
-    assert sampled_competence["sample_count"] == 64
+    assert math.isclose(
+        cast(float, sampled_competence["complexity"]),
+        cast(float, curriculum_rungs[0]["complexity"]),
+    )
+    assert sampled_competence["sample_count"] == 64 * len(curriculum_rungs)
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
-    assert len(points) == 1
-    assert [point["sample_count"] for point in points] == [64]
-    assert math.isclose(cast(float, points[0]["complexity"]), math.log2(10))
+    assert len(points) == len(curriculum_rungs)
+    assert [point["sample_count"] for point in points] == [64] * len(curriculum_rungs)
+    assert [point["complexity"] for point in points] == [
+        rung["complexity"] for rung in curriculum_rungs
+    ]
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
     )
@@ -780,7 +791,6 @@ def test_checkpoint_evaluation_stops_at_runtime_capacity(
             description="checkpoint artifact",
         )
     )
-    checkpoint_record["evaluation_rung_count"] = 2
     checkpoint_artifact_path.write_bytes(canonical_document_bytes(checkpoint_record) + b"\n")
 
     original_physical_count = cast(Any, benchmark_runner)._physical_execution_sample_count
@@ -862,6 +872,37 @@ def test_evaluation_frontier_requires_confidence_above_chance() -> None:
         )
         == 2
     )
+
+
+def test_evaluation_curriculum_target_depends_only_on_evaluation_evidence() -> None:
+    rung_evidence = cast(Any, benchmark_runner)._CheckpointEvaluationRungEvidence
+    target_count = cast(Any, benchmark_runner)._evaluation_curriculum_target_rung_count
+    outcome_ids = tuple(f"digit-{index}" for index in range(10))
+
+    assert target_count(evaluation_results=(), outcome_ids=outcome_ids) == 1
+
+    results = (
+        rung_evidence(
+            rung=SimpleNamespace(index=0),
+            mean_accepted_mass=0.20,
+            sample_count=100,
+            confidence_half_width=0.01,
+        ),
+    )
+
+    assert target_count(evaluation_results=results, outcome_ids=outcome_ids) == 9
+
+    results = tuple(
+        rung_evidence(
+            rung=SimpleNamespace(index=index),
+            mean_accepted_mass=0.20,
+            sample_count=100,
+            confidence_half_width=0.01,
+        )
+        for index in range(9)
+    )
+
+    assert target_count(evaluation_results=results, outcome_ids=outcome_ids) == 17
 
 
 def test_benchmark_runner_reports_only_final_evaluation_rung(
@@ -997,6 +1038,9 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     checkpoints = cast(list[dict[str, object]], training_summary["model_checkpoints"])
     checkpoint_checks = [checkpoint["validation_check"] for checkpoint in checkpoints]
     assert checkpoint_checks == [0]
+    assert all("evaluation_rung_count" not in checkpoint for checkpoint in checkpoints)
+    selected_checkpoint = cast(dict[str, object], training_summary["selected_model_checkpoint"])
+    assert "evaluation_rung_count" not in selected_checkpoint
     assert all(
         (tmp_path / cast(str, checkpoint["path"])).is_file()
         for checkpoint in checkpoints
