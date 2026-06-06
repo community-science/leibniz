@@ -34,11 +34,21 @@ __all__ = [
     "TensorRuntimeDevice",
     "TensorRuntimeDeviceKind",
     "tensor_runtime_available_memory_bytes",
+    "tensor_runtime_backend",
+    "tensor_runtime_default_device",
+    "tensor_runtime_device_choices",
     "tensor_runtime_device_kinds",
+    "tensor_runtime_has_fixed_device_memory",
+    "tensor_runtime_prefers_compiled_renderer",
+    "tensor_runtime_total_memory_bytes",
+    "tensor_runtime_used_memory_bytes",
+    "tensor_value_to_host",
+    "resolve_host_tensor_runtime",
     "resolve_tensor_runtime",
     "runtime_roofline_record",
     "save_tensor_runtime_state",
     "load_tensor_runtime_state",
+    "runtime_capacity_error",
     "validate_tensor_runtime_device",
 ]
 
@@ -59,6 +69,93 @@ class TensorRuntime:
     torch: Any
     device: Any
     device_kind: Literal["cpu", "cuda", "mps"]
+
+
+def tensor_runtime_backend(runtime: TensorRuntime) -> Any:
+    """Return the tensor backend module for code that needs backend-native APIs."""
+
+    return runtime.torch
+
+
+def tensor_runtime_device_choices() -> tuple[str, ...]:
+    """Return the public tensor runtime device choices."""
+
+    return ("auto", "cpu", "cuda", "mps")
+
+
+def tensor_runtime_default_device() -> str:
+    """Return the portable default tensor runtime device name."""
+
+    return "cpu"
+
+
+def resolve_host_tensor_runtime() -> TensorRuntime:
+    """Resolve the portable host tensor runtime."""
+
+    return resolve_tensor_runtime("cpu")
+
+
+def tensor_value_to_host(value: Any) -> Any:
+    """Detach a backend tensor-like value and move it to host memory when possible."""
+
+    detach = getattr(value, "detach", None)
+    if callable(detach):
+        value = detach()
+    move_to_host = getattr(value, "cpu", None)
+    if callable(move_to_host):
+        value = move_to_host()
+    return value
+
+
+def tensor_runtime_has_fixed_device_memory(runtime: TensorRuntime) -> bool:
+    """Return whether the runtime exposes a fixed device memory budget."""
+
+    return runtime.device_kind == "cuda"
+
+
+def tensor_runtime_prefers_compiled_renderer(runtime: TensorRuntime) -> bool:
+    """Return whether benchmark renderers should prefer compiled device kernels."""
+
+    return runtime.device_kind == "cuda"
+
+
+def tensor_runtime_total_memory_bytes(runtime: TensorRuntime) -> int | None:
+    """Return total fixed device memory bytes, if the runtime exposes it."""
+
+    if runtime.device_kind == "cuda":
+        try:
+            _free_bytes, total_bytes = runtime.torch.cuda.mem_get_info(runtime.device)
+        except Exception as error:  # pragma: no cover - backend-specific failure
+            raise TensorRuntimeError(f"could not query device memory: {error}") from error
+        return _positive_memory_bytes(total_bytes, field="device total memory")
+    return None
+
+
+def tensor_runtime_used_memory_bytes(runtime: TensorRuntime) -> int:
+    """Return current fixed device memory usage bytes for diagnostics."""
+
+    if runtime.device_kind == "cuda":
+        try:
+            free_bytes, total_bytes = runtime.torch.cuda.mem_get_info(runtime.device)
+        except Exception as error:  # pragma: no cover - backend-specific failure
+            raise TensorRuntimeError(f"could not query device memory: {error}") from error
+        return max(0, int(total_bytes) - int(free_bytes))
+    return 0
+
+
+def runtime_capacity_error(error: RuntimeError) -> bool:
+    """Return whether a backend runtime error represents memory capacity exhaustion."""
+
+    message = str(error).lower()
+    return any(
+        phrase in message
+        for phrase in (
+            "out of memory",
+            "can't allocate memory",
+            "cannot allocate memory",
+            "cuda error: out of memory",
+        )
+    )
 
 
 @dataclass(slots=True)

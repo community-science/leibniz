@@ -73,10 +73,15 @@ from leibniz.tensor_runtime import (
     make_long_tensor,
     no_grad_context,
     resolve_tensor_runtime,
+    runtime_capacity_error,
     runtime_roofline_record,
     save_tensor_runtime_state,
     seed_runtime,
     tensor_runtime_device_kinds,
+    tensor_runtime_has_fixed_device_memory,
+    tensor_runtime_total_memory_bytes,
+    tensor_runtime_used_memory_bytes,
+    tensor_value_to_host,
     validate_tensor_runtime_device,
 )
 from leibniz.timing import TimingCollector
@@ -108,6 +113,9 @@ _document_suffix = document_filename_suffix()
 _progress_format = "leibniz.benchmark-training-progress"
 _progress_format_version = 1
 _default_sample_count = 512
+_default_runtime_memory_budget_fraction = 0.1
+_runtime_batch_memory_safety_factor = 8
+_float32_bytes = 4
 _default_train_steps: int | None = None
 _default_gate_check_interval = 32
 _default_model_checkpoint_gate_interval = 1
@@ -115,6 +123,9 @@ _default_convergence_patience = 6
 _default_convergence_min_delta = 1e-3
 _default_convergence_min_steps = 500
 _converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
+_legal_uncapped_training_stage_stop_reasons = frozenset(
+    {"validation-plateau", "capacity-limited"}
+)
 _minimum_plateau_lr_reductions = 3
 _state_space_target_spacing = 1.0
 _full_variation_extent = 1.0
@@ -257,6 +268,10 @@ def _require_field_generator(generator: BenchmarkGenerator) -> _FieldBenchmarkGe
 class _TrainingStageResult:
     validation_history: tuple[TrainingHistoryPoint, ...]
     stop_reason: str
+
+
+class _TrainingCapacityReached(Exception):
+    """Raised when the active rung cannot fit one physical training batch."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1716,14 +1731,23 @@ def _train_and_predict_on_device(
         batch_sample_count: int,
         generation_phase: str,
         tensor_phase: str,
-        state_space_request: StateSpaceMeasureRequest,
+        rung: _CurriculumRung,
     ) -> tuple[Any, Any]:
-        with phase_timings.span(generation_phase, samples=batch_sample_count):
+        physical_sample_count = _physical_execution_sample_count(
+            runtime=runtime,
+            generator=generator,
+            rung=rung,
+            requested_sample_count=batch_sample_count,
+            outcome_count=len(outcome_ids),
+            phase_timings=phase_timings,
+            phase=generation_phase,
+        )
+        with phase_timings.span(generation_phase, samples=physical_sample_count):
             generated = generator(
-                shape=batch_sample_count,
+                shape=physical_sample_count,
                 seed=batch_seed,
                 include_metadata=False,
-                state_space_request=state_space_request,
+                state_space_request=_rung_state_space_request(rung),
                 variation_extent=_full_variation_extent,
                 runtime=runtime,
                 outcome_ids=outcome_ids,
@@ -1734,7 +1758,7 @@ def _train_and_predict_on_device(
                 raise BenchmarkRunnerError(
                     "generator returned no samples for selected state-space measure"
                 )
-            with phase_timings.span(tensor_phase, samples=batch_sample_count):
+            with phase_timings.span(tensor_phase, samples=physical_sample_count):
                 return generated.require_tensors()
 
     def validation_sample_batch_for_seed(
@@ -1742,14 +1766,23 @@ def _train_and_predict_on_device(
         *,
         batch_sample_count: int,
         generation_phase: str,
-        state_space_request: StateSpaceMeasureRequest,
+        rung: _CurriculumRung,
     ) -> GeneratedSampleSet:
-        with phase_timings.span(generation_phase, samples=batch_sample_count):
+        physical_sample_count = _physical_execution_sample_count(
+            runtime=runtime,
+            generator=generator,
+            rung=rung,
+            requested_sample_count=batch_sample_count,
+            outcome_count=len(outcome_ids),
+            phase_timings=phase_timings,
+            phase=generation_phase,
+        )
+        with phase_timings.span(generation_phase, samples=physical_sample_count):
             generated = generator(
-                shape=batch_sample_count,
+                shape=physical_sample_count,
                 seed=batch_seed,
                 include_fields=False,
-                state_space_request=state_space_request,
+                state_space_request=_rung_state_space_request(rung),
                 variation_extent=_full_variation_extent,
                 runtime=runtime,
                 outcome_ids=outcome_ids,
@@ -1835,14 +1868,14 @@ def _train_and_predict_on_device(
                 batch_sample_count=sample_count,
                 generation_phase="training_formation_generation",
                 tensor_phase="training_tensor_batch",
-                state_space_request=_rung_state_space_request(training_rung_for_step(step)),
+                rung=training_rung_for_step(step),
             )
         ),
         validation_batch=lambda check: validation_sample_batch_for_seed(
             seed + 1_000_003 + check,
             batch_sample_count=gate_sample_count,
             generation_phase="validation_formation_generation",
-            state_space_request=_rung_state_space_request(current_frontier()),
+            rung=current_frontier(),
         ),
         outcome_space=outcome_space,
         outcome_ids=outcome_ids,
@@ -1875,6 +1908,11 @@ def _train_and_predict_on_device(
                     convergence_min_delta=convergence_min_delta,
                     convergence_min_steps=convergence_min_steps,
                     tensor_device=runtime.device_kind,
+                    runtime_memory_budget_fraction=(
+                        _default_runtime_memory_budget_fraction
+                        if tensor_runtime_has_fixed_device_memory(runtime)
+                        else None
+                    ),
                     validation_history=history,
                     training_compute=training_compute_counter.compute,
                 ),
@@ -1914,7 +1952,9 @@ def _train_and_predict_on_device(
     )
     validation_history = training_result.validation_history
     final_training_stop_reason = training_result.stop_reason
-    if train_steps is None and not training_stage_converged(final_training_stop_reason):
+    if train_steps is None and not _training_stage_finished_legally(
+        final_training_stop_reason
+    ):
         raise BenchmarkRunnerError("uncapped training curriculum ended before convergence")
     training_run = _training_run_record(
         seed=seed,
@@ -1930,6 +1970,11 @@ def _train_and_predict_on_device(
         convergence_min_delta=convergence_min_delta,
         convergence_min_steps=convergence_min_steps,
         tensor_device=runtime.device_kind,
+        runtime_memory_budget_fraction=(
+            _default_runtime_memory_budget_fraction
+            if tensor_runtime_has_fixed_device_memory(runtime)
+            else None
+        ),
         validation_history=tuple(validation_history),
         stop_reason=final_training_stop_reason,
         training_compute=training_compute_counter.compute,
@@ -2156,6 +2201,99 @@ def _tensor_input_shape(fields: Any) -> tuple[int, ...] | None:
             return None
         input_shape.append(value)
     return tuple(input_shape)
+
+
+def _rung_tensor_input_shape(
+    *,
+    generator: _FieldBenchmarkGenerator,
+    rung: _CurriculumRung,
+) -> tuple[int, ...]:
+    formation = getattr(generator, "formation", None)
+    channel_count = getattr(formation, "channel_count", None)
+    height_axis = getattr(formation, "height_axis", None)
+    width_axis = getattr(formation, "width_axis", None)
+    if (
+        type(channel_count) is not int
+        or channel_count < 1
+        or type(height_axis) is not str
+        or type(width_axis) is not str
+    ):
+        raise BenchmarkRunnerError(
+            "dynamic batch sizing requires benchmark formation channel and canvas axes"
+        )
+    height = rung.resolution_assignment.require_axis(height_axis)
+    width = rung.resolution_assignment.require_axis(width_axis)
+    if height < 1 or width < 1:
+        raise BenchmarkRunnerError("dynamic batch sizing requires positive canvas axes")
+    return (channel_count, height, width)
+
+
+def _runtime_memory_budget_bytes(runtime: TensorRuntime) -> int | None:
+    total_bytes = tensor_runtime_total_memory_bytes(runtime)
+    if total_bytes is None:
+        return None
+    return max(1, int(total_bytes * _default_runtime_memory_budget_fraction))
+
+
+def _runtime_used_memory_bytes(runtime: TensorRuntime) -> int:
+    return tensor_runtime_used_memory_bytes(runtime)
+
+
+def _estimated_runtime_batch_sample_bytes(
+    *,
+    input_shape: tuple[int, ...],
+    outcome_count: int,
+) -> int:
+    element_count = 1
+    for axis in input_shape:
+        element_count *= axis
+    element_count += outcome_count
+    return max(
+        1,
+        element_count * _float32_bytes * _runtime_batch_memory_safety_factor,
+    )
+
+
+def _physical_execution_sample_count(
+    *,
+    runtime: TensorRuntime,
+    generator: _FieldBenchmarkGenerator,
+    rung: _CurriculumRung,
+    requested_sample_count: int,
+    outcome_count: int,
+    phase_timings: TimingCollector,
+    phase: str,
+) -> int:
+    if requested_sample_count < 1:
+        raise BenchmarkRunnerError("requested_sample_count must be positive")
+    budget_bytes = _runtime_memory_budget_bytes(runtime)
+    if budget_bytes is None:
+        return requested_sample_count
+    input_shape = _rung_tensor_input_shape(generator=generator, rung=rung)
+    used_bytes = _runtime_used_memory_bytes(runtime)
+    available_bytes = budget_bytes
+    sample_bytes = _estimated_runtime_batch_sample_bytes(
+        input_shape=input_shape,
+        outcome_count=outcome_count,
+    )
+    physical_sample_count = min(requested_sample_count, available_bytes // sample_bytes)
+    phase_timings.add_counters(
+        f"{phase}.dynamic_batch",
+        {
+            "requested_sample_count": float(requested_sample_count),
+            "physical_sample_count": float(physical_sample_count),
+            "runtime_memory_budget_bytes": float(budget_bytes),
+            "runtime_used_memory_bytes": float(used_bytes),
+            "estimated_sample_bytes": float(sample_bytes),
+        },
+    )
+    if physical_sample_count < 1:
+        raise _TrainingCapacityReached()
+    return int(physical_sample_count)
+
+
+def _is_runtime_capacity_error(error: RuntimeError) -> bool:
+    return runtime_capacity_error(error)
 
 
 def _architecture_with_input_shape(
@@ -2426,6 +2564,10 @@ def training_stage_converged(stop_reason: str) -> bool:
     return stop_reason in _converged_training_stage_stop_reasons
 
 
+def _training_stage_finished_legally(stop_reason: str) -> bool:
+    return stop_reason in _legal_uncapped_training_stage_stop_reasons
+
+
 def _train_until_convergence(
     *,
     runtime: TensorRuntime,
@@ -2551,7 +2693,18 @@ def _train_until_convergence(
             samples=actual_gate_sample_count,
         )
 
-    append_validation(step=start_step, check=start_check)
+    try:
+        append_validation(step=start_step, check=start_check)
+    except _TrainingCapacityReached as error:
+        raise BenchmarkRunnerError(
+            "training memory budget cannot fit one validation sample for the first rung"
+        ) from error
+    except RuntimeError as error:
+        if not _is_runtime_capacity_error(error):
+            raise
+        raise BenchmarkRunnerError(
+            "training runtime could not fit one validation sample for the first rung"
+        ) from error
     if max_steps == start_step:
         phase_timings.add(
             "training_stage_total",
@@ -2565,7 +2718,16 @@ def _train_until_convergence(
     steps = count(start_step + 1) if max_steps is None else range(start_step + 1, max_steps + 1)
     for step in steps:
         training_started = time.perf_counter()
-        fields, labels = train_batch(step)
+        try:
+            fields, labels = train_batch(step)
+        except _TrainingCapacityReached:
+            stop_reason = "capacity-limited"
+            break
+        except RuntimeError as error:
+            if not _is_runtime_capacity_error(error):
+                raise
+            stop_reason = "capacity-limited"
+            break
         actual_batch_size = _tensor_batch_size(fields, fallback=batch_size)
         with phase_timings.span("training_max_training_compute"):
             batch_training_compute_per_sample = _batch_max_training_compute_per_sample(
@@ -2576,12 +2738,18 @@ def _train_until_convergence(
         module.train()
         with phase_timings.span("training_zero_grad"):
             optimizer.zero_grad(set_to_none=True)
-        with phase_timings.span("training_forward_loss", samples=batch_size):
-            loss = loss_function(module(fields), labels)
-        with phase_timings.span("training_backward", samples=batch_size):
-            loss.backward()
-        with phase_timings.span("training_optimizer_step"):
-            optimizer.step()
+        try:
+            with phase_timings.span("training_forward_loss", samples=actual_batch_size):
+                loss = loss_function(module(fields), labels)
+            with phase_timings.span("training_backward", samples=actual_batch_size):
+                loss.backward()
+            with phase_timings.span("training_optimizer_step"):
+                optimizer.step()
+        except RuntimeError as error:
+            if not _is_runtime_capacity_error(error):
+                raise
+            stop_reason = "capacity-limited"
+            break
         if scheduler is not None:
             with phase_timings.span("training_scheduler_step"):
                 scheduler.step_after_optimizer()
@@ -2602,7 +2770,16 @@ def _train_until_convergence(
         hit_step_cap = max_steps is not None and step == max_steps
         if step % gate_check_interval != 0 and not hit_step_cap:
             continue
-        append_validation(step=step, check=validation_check)
+        try:
+            append_validation(step=step, check=validation_check)
+        except _TrainingCapacityReached:
+            stop_reason = "capacity-limited"
+            break
+        except RuntimeError as error:
+            if not _is_runtime_capacity_error(error):
+                raise
+            stop_reason = "capacity-limited"
+            break
         validation_check += 1
         with phase_timings.span("validation_plateau_check"):
             should_stop_for_plateau = (
@@ -2879,6 +3056,7 @@ def _training_run_record(
     convergence_min_delta: float,
     convergence_min_steps: int,
     tensor_device: str,
+    runtime_memory_budget_fraction: float | None = None,
     validation_history: tuple[TrainingHistoryPoint, ...],
     stop_reason: str,
     training_compute: float | None,
@@ -2888,7 +3066,7 @@ def _training_run_record(
         status = "completed"
     elif stop_reason == "validation-plateau":
         status = "converged"
-    elif stop_reason == "max-steps":
+    elif stop_reason in {"max-steps", "capacity-limited"}:
         status = "budget-exhausted"
     else:
         status = "completed"
@@ -2916,6 +3094,7 @@ def _training_run_record(
             min_steps=convergence_min_steps,
             tensor_runtime="pytorch",
             tensor_device=tensor_device,
+            runtime_memory_budget_fraction=runtime_memory_budget_fraction,
         ),
         validation_history=validation_history,
     )
@@ -2936,6 +3115,7 @@ def _running_training_run_record(
     convergence_min_delta: float,
     convergence_min_steps: int,
     tensor_device: str,
+    runtime_memory_budget_fraction: float | None = None,
     validation_history: tuple[TrainingHistoryPoint, ...],
     training_compute: float | None,
 ) -> TrainingRunRecord:
@@ -2963,6 +3143,7 @@ def _running_training_run_record(
             min_steps=convergence_min_steps,
             tensor_runtime="pytorch",
             tensor_device=tensor_device,
+            runtime_memory_budget_fraction=runtime_memory_budget_fraction,
         ),
         validation_history=validation_history,
     )
@@ -3225,13 +3406,7 @@ def _load_torch_checkpoint(
 def _portable_state_dict(module: Any) -> Mapping[str, object]:
     state: dict[str, object] = {}
     for key, value in module.state_dict().items():
-        detach = getattr(value, "detach", None)
-        if callable(detach):
-            value = detach()
-        cpu = getattr(value, "cpu", None)
-        if callable(cpu):
-            value = cpu()
-        state[str(key)] = value
+        state[str(key)] = tensor_value_to_host(value)
     return state
 
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Literal, cast
 
 from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
+from leibniz.tensor_runtime import tensor_runtime_default_device
 
 __all__ = [
     "TrainingHistoryPoint",
@@ -45,6 +46,7 @@ _protocol_record = RecordSpec(
         "min_steps": FieldSpec(kind="integer", required=False),
         "tensor_runtime": FieldSpec(kind="string", required=False),
         "tensor_device": FieldSpec(kind="string", required=False),
+        "runtime_memory_budget_fraction": FieldSpec(kind="number", required=False),
         "validation_source": FieldSpec(kind="string"),
     }
 )
@@ -107,7 +109,8 @@ class TrainingProtocol:
     validation_source: str
     min_steps: int = 0
     tensor_runtime: str = "pytorch"
-    tensor_device: str = "cpu"
+    tensor_device: str = tensor_runtime_default_device()
+    runtime_memory_budget_fraction: float | None = None
 
     def __post_init__(self) -> None:
         if not self.kind:
@@ -135,6 +138,14 @@ class TrainingProtocol:
             raise TrainingRunValidationError("tensor_runtime must be nonempty")
         if not self.tensor_device:
             raise TrainingRunValidationError("tensor_device must be nonempty")
+        if self.runtime_memory_budget_fraction is not None and (
+            not math.isfinite(float(self.runtime_memory_budget_fraction))
+            or self.runtime_memory_budget_fraction <= 0.0
+            or self.runtime_memory_budget_fraction > 1.0
+        ):
+            raise TrainingRunValidationError(
+                "runtime_memory_budget_fraction must be in (0, 1]"
+            )
         if not self.validation_source:
             raise TrainingRunValidationError("validation_source must be nonempty")
 
@@ -187,8 +198,16 @@ class TrainingProtocol:
                 "tensor_runtime",
             ),
             tensor_device=_extract.non_empty_string(
-                validated.get("tensor_device", "cpu"),
+                validated.get("tensor_device", tensor_runtime_default_device()),
                 "tensor_device",
+            ),
+            runtime_memory_budget_fraction=(
+                None
+                if "runtime_memory_budget_fraction" not in validated
+                else _extract.finite_float(
+                    validated["runtime_memory_budget_fraction"],
+                    "runtime_memory_budget_fraction",
+                )
             ),
         )
 
@@ -210,6 +229,10 @@ class TrainingProtocol:
             "tensor_device": self.tensor_device,
             "validation_source": self.validation_source,
         }
+        if self.runtime_memory_budget_fraction is not None:
+            record["runtime_memory_budget_fraction"] = (
+                self.runtime_memory_budget_fraction
+            )
         if self.max_steps is not None:
             record["max_steps"] = self.max_steps
         if self.min_steps:

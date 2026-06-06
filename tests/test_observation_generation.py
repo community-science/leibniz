@@ -23,7 +23,7 @@ from leibniz.observation_generation import (
     StateSpaceMeasureRequest,
     StateSpaceMeasureValue,
 )
-from leibniz.tensor_runtime import resolve_tensor_runtime
+from leibniz.tensor_runtime import TensorRuntimeError, resolve_tensor_runtime
 from leibniz.timing import TimingCollector
 
 _repository_root = Path(__file__).parents[1]
@@ -556,6 +556,40 @@ def test_digits_tensor_fields_match_recorded_field_samples() -> None:
     for index, sample in enumerate(batch.samples):
         assert tuple(fields[index].shape) == sample.require_field().shape
         assert fields[index].flatten().tolist() == list(sample.require_field().values)
+
+
+def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    cpu_runtime = resolve_tensor_runtime("cpu")
+    try:
+        cuda_runtime = resolve_tensor_runtime("cuda")
+    except TensorRuntimeError as error:
+        pytest.skip(str(error))
+    outcome_space = generator.manifest.resolve_outcome_space()
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    request = StateSpaceMeasureRequest(
+        minimum=generator.minimum_state_space_measure().value + 6.0,
+        maximum=generator.minimum_state_space_measure().value + 7.0,
+    )
+
+    cpu_fields = generator(
+        shape=16,
+        seed=444,
+        include_fields=False,
+        runtime=cpu_runtime,
+        outcome_ids=outcome_ids,
+        state_space_request=request,
+    ).require_tensors()[0]
+    cuda_fields = generator(
+        shape=16,
+        seed=444,
+        include_fields=False,
+        runtime=cuda_runtime,
+        outcome_ids=outcome_ids,
+        state_space_request=request,
+    ).require_tensors()[0]
+
+    assert cuda_runtime.torch.equal(cpu_fields, cuda_fields.detach().cpu())
 
 
 def test_digits_tensor_generation_rejects_unmatched_state_space_requests() -> None:

@@ -229,15 +229,17 @@ def test_field_extraction_helpers_are_not_duplicated_outside_records() -> None:
     assert offenders == ()
 
 
-def test_torch_is_imported_only_in_tensor_runtime() -> None:
+def test_backend_terms_are_used_only_in_tensor_runtime() -> None:
     source_root = _repository_root / "src" / "leibniz"
+    banned_terms = ("torch", "cuda", "cpu")
 
     offenders = tuple(
-        f"{path.relative_to(_repository_root)}:{line_number}"
+        f"{path.relative_to(_repository_root)}:{line_number}:{term}"
         for path in sorted(source_root.rglob("*.py"))
         if path.relative_to(source_root).as_posix() != "tensor_runtime.py"
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
-        if re.search(r"\btorch", line)
+        for term in banned_terms
+        if re.search(rf"\b{re.escape(term)}", line, flags=re.IGNORECASE)
     )
 
     assert offenders == ()
