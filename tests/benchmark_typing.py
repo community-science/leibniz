@@ -89,15 +89,6 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...
 
-    def sample_variation_transform_coordinates(
-        self,
-        *,
-        seed: int,
-        sample_index: int,
-        component_index: int = 0,
-        affine_transform_count: int = 2,
-    ) -> Mapping[str, object]: ...
-
     def console_preview_batches(self, *, atom_count: int) -> Sequence[Mapping[str, object]]: ...
 
 

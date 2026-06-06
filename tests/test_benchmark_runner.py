@@ -320,9 +320,9 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         dict[str, object],
         timing_phases["training_formation_generation.transform_index"],
     )
-    state_tensor_timing = cast(
+    render_timing = cast(
         dict[str, object],
-        timing_phases["training_formation_generation.state_tensor_cache"],
+        timing_phases["training_formation_generation.batch_tensor_render"],
     )
     roofline = cast(dict[str, object], throughput["roofline"])
     roofline_comparison = cast(dict[str, object], throughput["roofline_comparison"])
@@ -335,7 +335,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert cast(float, tensor_batch_timing["seconds"]) > 0
     assert component_timing["sample_count"] == 2
     assert transform_timing["sample_count"] == 2
-    assert cast(float, state_tensor_timing["seconds"]) >= 0
+    assert cast(float, render_timing["seconds"]) > 0
     assert forward_timing["sample_count"] == 2
     assert cast(float, forward_timing["seconds"]) > 0
     assert cast(float, roofline["peak_bytes_per_second"]) > 0

@@ -100,7 +100,9 @@ def test_digits_generator_is_deterministic() -> None:
         generator.formation.variation_transform.to_record()
     )
     coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
-    assert [coordinate["component_index"] for coordinate in coordinates] == [0]
+    assert [coordinate["component_index"] for coordinate in coordinates] == [
+        field_record.component_index
+    ]
     assert len(coordinates) == 1
     constructed_parameters = cast(
         dict[str, float],
@@ -597,53 +599,16 @@ def test_generated_observation_records_can_include_fields() -> None:
     assert "field" in expanded_sample
 
 
-def test_variation_transform_sampling_is_deterministic_and_declaration_driven() -> None:
-    generator = load_digits_generator(_digits_benchmark_root)
-    transform = generator.formation.variation_transform
+def test_digits_benchmark_uses_single_tensor_render_path() -> None:
+    source = (_digits_benchmark_root / "benchmark.py").read_text(encoding="utf-8")
 
-    left = generator.sample_variation_transform_coordinates(
-        seed=707,
-        sample_index=2,
-        component_index=1,
-        affine_transform_count=30,
-    )
-    right = generator.sample_variation_transform_coordinates(
-        seed=707,
-        sample_index=2,
-        component_index=1,
-        affine_transform_count=30,
-    )
-    other = generator.sample_variation_transform_coordinates(
-        seed=707,
-        sample_index=3,
-        component_index=1,
-        affine_transform_count=30,
-    )
-    other_component = generator.sample_variation_transform_coordinates(
-        seed=707,
-        sample_index=2,
-        component_index=2,
-        affine_transform_count=30,
-    )
-
-    assert left == right
-    assert left != other
-    assert left != other_component
-    assert set(cast(dict[str, object], left["constructed_affine_parameters"])) == {
-        "x_translation",
-        "y_translation",
-        "scale",
-        "rotation",
-        "x_shear",
-    }
-    assert set(cast(dict[str, object], left["constructed_affine_indices"])) == {
-        "x_translation",
-        "y_translation",
-        "scale",
-        "rotation",
-        "x_shear",
-    }
-    assert _within_transform_bounds(left, bounds=transform.to_record())
+    assert "sample_variation_transform_coordinates" not in source
+    assert ".formation.form_observation(" not in source
+    assert "state_tensor_cache" not in source
+    assert "full_state_tensor" not in source
+    assert "sampled_state_tensor" not in source
+    assert "field_tensor_gather" not in source
+    assert "_FormationTensorCache" not in source
 
 
 def test_digits_console_preview_png_encoding_is_deterministic() -> None:
