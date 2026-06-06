@@ -574,6 +574,9 @@ def build_optimizer(
 
 class _LossSearchOptimizer:
     requires_loss_closure = True
+    _beta1 = 0.9
+    _beta2 = 0.999
+    _epsilon = 1e-8
 
     def __init__(self, parameters: Any) -> None:
         self._parameters = tuple(parameters)
@@ -605,29 +608,53 @@ class _LossSearchOptimizer:
             None if parameter.grad is None else parameter.grad.detach().clone()
             for parameter in self._parameters
         )
-        gradient_square = sum(
-            float(gradient.pow(2).sum().detach())
-            for gradient in gradients
-            if gradient is not None
+        next_step = self._next_step_index()
+        direction_records = tuple(
+            None
+            if gradient is None
+            else self._direction_record(
+                parameter=parameter,
+                gradient=gradient,
+                step=next_step,
+            )
+            for parameter, gradient in zip(self._parameters, gradients, strict=True)
         )
-        if gradient_square <= 0.0 or not math.isfinite(gradient_square):
+        directional_derivative = sum(
+            float((gradient * record["direction"]).sum().detach())
+            for gradient, record in zip(gradients, direction_records, strict=True)
+            if gradient is not None and record is not None
+        )
+        if directional_derivative <= 0.0 or not math.isfinite(directional_derivative):
             return baseline_loss
         originals = tuple(parameter.detach().clone() for parameter in self._parameters)
-        step_size = min(self._step_size, max(1e-12, baseline_value / gradient_square))
+        step_size = min(self._step_size, max(1e-12, baseline_value / directional_derivative))
         for _attempt in range(12):
             with torch.no_grad():
-                for parameter, original, gradient in zip(
+                for parameter, original, record in zip(
                     self._parameters,
                     originals,
-                    gradients,
+                    direction_records,
                     strict=True,
                 ):
-                    if gradient is not None:
-                        parameter.copy_(original - step_size * gradient)
+                    if record is not None:
+                        parameter.copy_(
+                            original - step_size * record["direction"]
+                        )
             with torch.enable_grad():
                 trial_loss = closure()
             trial_value = float(trial_loss.detach())
             if math.isfinite(trial_value) and trial_value <= baseline_value:
+                for parameter, record in zip(
+                    self._parameters,
+                    direction_records,
+                    strict=True,
+                ):
+                    if record is not None:
+                        self.state[parameter] = {
+                            "step": next_step,
+                            "exp_avg": record["exp_avg"],
+                            "exp_avg_sq": record["exp_avg_sq"],
+                        }
                 self._step_size = min(step_size * 2.0, 1.0)
                 return trial_loss
             step_size *= 0.5
@@ -636,6 +663,41 @@ class _LossSearchOptimizer:
                 parameter.copy_(original)
         self._step_size = max(step_size, 1e-12)
         return baseline_loss
+
+    def _next_step_index(self) -> int:
+        steps = (
+            step
+            for state in self.state.values()
+            for step in (state.get("step"),)
+            if type(step) is int
+        )
+        return max(steps, default=0) + 1
+
+    def _direction_record(
+        self,
+        *,
+        parameter: Any,
+        gradient: Any,
+        step: int,
+    ) -> dict[str, Any]:
+        torch = _torch()
+        state = self.state.get(parameter, {})
+        exp_avg = cast(Any, state.get("exp_avg"))
+        exp_avg_sq = cast(Any, state.get("exp_avg_sq"))
+        if exp_avg is None:
+            exp_avg = torch.zeros_like(parameter)
+        if exp_avg_sq is None:
+            exp_avg_sq = torch.zeros_like(parameter)
+        exp_avg = self._beta1 * exp_avg + (1.0 - self._beta1) * gradient
+        exp_avg_sq = self._beta2 * exp_avg_sq + (1.0 - self._beta2) * gradient * gradient
+        bias_corrected_avg = exp_avg / (1.0 - self._beta1**step)
+        bias_corrected_avg_sq = exp_avg_sq / (1.0 - self._beta2**step)
+        direction = bias_corrected_avg / (bias_corrected_avg_sq.sqrt() + self._epsilon)
+        return {
+            "direction": direction,
+            "exp_avg": exp_avg.detach().clone(),
+            "exp_avg_sq": exp_avg_sq.detach().clone(),
+        }
 
 
 def optimizer_step(runtime: TensorRuntime, optimizer: Any, closure: Any) -> Any:

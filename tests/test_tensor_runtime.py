@@ -79,6 +79,9 @@ def test_loss_search_optimizer_decreases_loss_without_learning_rate() -> None:
     stepped_loss = float(closure().detach())
 
     assert "lr" not in optimizer.param_groups[0]
+    assert optimizer.state[parameter]["step"] == 1
+    assert "exp_avg" in optimizer.state[parameter]
+    assert "exp_avg_sq" in optimizer.state[parameter]
     assert stepped_loss < baseline_loss
 
 
