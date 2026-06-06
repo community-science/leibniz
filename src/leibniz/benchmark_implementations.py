@@ -66,6 +66,10 @@ class Generator(Protocol):
 
     def minimum_state_space_measure(self) -> StateSpaceMeasureValue: ...
 
+    def complexity_rung_size(self) -> float:
+        """Return the log2 state-space complexity width for curriculum rungs."""
+        ...
+
     def state_space_for_request(
         self,
         *,

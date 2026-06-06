@@ -135,7 +135,7 @@ _legal_uncapped_training_stage_stop_reasons = frozenset(
 )
 _minimum_plateau_lr_reductions = 3
 _minimum_plateau_refinement_windows = 3
-_state_space_target_spacing = 1.0
+_default_complexity_rung_size = 1.0
 _full_variation_extent = 1.0
 
 
@@ -143,6 +143,10 @@ class _FieldBenchmarkGenerator(BenchmarkGenerator, Protocol):
     """Internal contract for tensor-backed benchmark training."""
 
     def minimum_state_space_measure(self) -> StateSpaceMeasureValue: ...
+
+    def complexity_rung_size(self) -> float:
+        """Return the log2 state-space complexity width for curriculum rungs."""
+        ...
 
     def state_space_for_request(
         self,
@@ -1398,7 +1402,7 @@ def _evaluation_curriculum_rung(
         sample_count=sample_count,
         seed=seed,
         index=index,
-        candidates=_benchmark_state_space_curriculum_candidates(
+        candidates=_benchmark_complexity_curriculum_candidates(
             generator=generator,
             start_index=index,
         ),
@@ -1563,13 +1567,13 @@ def _optional_timing_span(timing: TimingCollector | None, phase: str) -> Any:
     return timing.span(phase)
 
 
-def _benchmark_state_space_curriculum_candidates(
+def _benchmark_complexity_curriculum_candidates(
     *,
     generator: _FieldBenchmarkGenerator,
     start_index: int,
     phase_timings: TimingCollector | None = None,
 ) -> Sequence[_CurriculumCandidate]:
-    return _benchmark_state_space_candidates(
+    return _benchmark_complexity_candidates(
         generator=generator,
         start_index=start_index,
         phase_timings=phase_timings,
@@ -1582,44 +1586,57 @@ def _structured_training_curriculum_candidates(
     start_index: int,
     phase_timings: TimingCollector | None = None,
 ) -> Sequence[_CurriculumCandidate]:
-    return _benchmark_state_space_candidates(
+    return _benchmark_complexity_candidates(
         generator=generator,
         start_index=start_index,
         phase_timings=phase_timings,
     )
 
 
-def _benchmark_state_space_candidates(
+def _benchmark_complexity_candidates(
     *,
     generator: _FieldBenchmarkGenerator,
     start_index: int,
     phase_timings: TimingCollector | None = None,
 ) -> Sequence[_CurriculumCandidate]:
-    stage_count = max(8, start_index + 8)
+    target_candidate_count = start_index + 8
     minimum = generator.minimum_state_space_measure().value
+    complexity_rung_size = _benchmark_complexity_rung_size(generator)
     candidates: list[_CurriculumCandidate] = []
     seen_complexities: set[float] = set()
-    for target_index in range(stage_count):
-        target = minimum + target_index * _state_space_target_spacing
-        request = StateSpaceMeasureRequest(
-            minimum=target,
-            maximum=target + _state_space_target_spacing,
+    window_index = 0
+    max_window_count = max(1024, 128 * target_candidate_count)
+    while len(candidates) < target_candidate_count and window_index < max_window_count:
+        complexity_minimum = minimum + window_index * complexity_rung_size
+        complexity_request = StateSpaceMeasureRequest(
+            minimum=complexity_minimum,
+            maximum=complexity_minimum + complexity_rung_size,
         )
+        window_index += 1
         with _optional_timing_span(
             phase_timings,
-            "training_frontier.state_space_request",
+            "training_frontier.complexity_request",
         ):
-            state_space = generator.state_space_for_request(request=request)
+            state_space = generator.state_space_for_request(request=complexity_request)
         if state_space is None or state_space.complexity in seen_complexities:
             continue
         seen_complexities.add(state_space.complexity)
         candidates.append(
             _CurriculumCandidate(
                 state_space=state_space,
-                source_request=request,
+                source_request=complexity_request,
             )
         )
     return tuple(candidates)
+
+
+def _benchmark_complexity_rung_size(generator: _FieldBenchmarkGenerator) -> float:
+    """Return the benchmark-owned width of each complexity request window."""
+
+    value = float(generator.complexity_rung_size())
+    if not math.isfinite(value) or value <= 0.0:
+        raise BenchmarkRunnerError("benchmark complexity_rung_size must be positive")
+    return value
 
 
 def _curriculum_record(
@@ -1642,8 +1659,8 @@ def _curriculum_record(
             "scale": "log2",
         },
         "candidate_policy": {
-            "kind": "benchmark-owned-target-state-space",
-            "target_spacing": _state_space_target_spacing,
+            "kind": "benchmark-owned-complexity-window",
+            "complexity_rung_size": _curriculum_complexity_rung_size(rungs),
         },
         "gating_metric": "monotone-frontier-validation-competence",
         "rung_policy": "unbounded-competence-frontier",
@@ -1671,6 +1688,14 @@ def _curriculum_record(
     if rung_competence_threshold is not None:
         record["rung_competence_threshold"] = rung_competence_threshold
     return record
+
+
+def _curriculum_complexity_rung_size(rungs: Sequence[_CurriculumRung]) -> float:
+    for rung in rungs:
+        request = rung.batch.state_space_request
+        if request is not None and request.maximum > request.minimum:
+            return request.maximum - request.minimum
+    return _default_complexity_rung_size
 
 
 def _validate_architecture_for_batch(

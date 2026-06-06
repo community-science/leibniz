@@ -520,8 +520,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert state_space_measure["scale"] == "log2"
     assert evaluation_curriculum["complexity_axis"] == state_space_measure["measure_id"]
     candidate_policy = cast(dict[str, object], evaluation_curriculum["candidate_policy"])
-    assert candidate_policy["kind"] == "benchmark-owned-target-state-space"
-    assert candidate_policy["target_spacing"] == 1.0
+    assert candidate_policy["kind"] == "benchmark-owned-complexity-window"
+    assert math.isclose(cast(float, candidate_policy["complexity_rung_size"]), 0.1)
     assert evaluation_curriculum["rung_policy"] == "unbounded-competence-frontier"
     assert (
         evaluation_curriculum["gating_metric"]
@@ -571,7 +571,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         rung_complexity = cast(float, rung["complexity"])
         assert request_minimum <= rung_complexity
         assert rung_complexity <= request_maximum
-        assert math.isclose(request_maximum - request_minimum, 1.0)
+        assert math.isclose(request_maximum - request_minimum, 0.1)
     assert [rung["sample_count"] for rung in curriculum_rungs] == [64]
     assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
         cast(float, rung["complexity"]) for rung in curriculum_rungs
@@ -1995,7 +1995,7 @@ def test_evaluation_curriculum_uses_benchmark_owned_representative_windows() -> 
     generator = load_generator(_digits_benchmark_root)
     minimum = generator.minimum_state_space_measure().value
 
-    candidates = cast(Any, benchmark_runner)._benchmark_state_space_curriculum_candidates(
+    candidates = cast(Any, benchmark_runner)._benchmark_complexity_curriculum_candidates(
         generator=generator,
         start_index=0,
     )
@@ -2008,16 +2008,21 @@ def test_evaluation_curriculum_uses_benchmark_owned_representative_windows() -> 
     assert [candidate.state_space.cardinality for candidate in candidates[:8]] == [
         10,
         20,
+        30,
         40,
+        50,
+        60,
+        70,
         80,
-        160,
-        360,
-        640,
-        1280,
     ]
-    for index, candidate in enumerate(candidates[:8]):
-        assert math.isclose(candidate.state_space_request.minimum, minimum + index)
-        assert math.isclose(candidate.state_space_request.maximum, minimum + index + 1.0)
+    for candidate in candidates[:8]:
+        assert candidate.state_space_request.minimum >= minimum
+        assert math.isclose(
+            candidate.state_space_request.maximum - candidate.state_space_request.minimum,
+            0.1,
+        )
+        assert candidate.state_space_request.minimum <= candidate.complexity
+        assert candidate.complexity <= candidate.state_space_request.maximum
 
 
 def test_training_curriculum_uses_benchmark_owned_representative_windows() -> None:
@@ -2032,16 +2037,19 @@ def test_training_curriculum_uses_benchmark_owned_representative_windows() -> No
     assert [candidate.state_space.cardinality for candidate in candidates[:8]] == [
         10,
         20,
+        30,
         40,
+        50,
+        60,
+        70,
         80,
-        160,
-        360,
-        640,
-        1280,
     ]
-    for index, candidate in enumerate(candidates[:8]):
-        assert math.isclose(candidate.state_space_request.minimum, minimum + index)
-        assert math.isclose(candidate.state_space_request.maximum, minimum + index + 1.0)
+    for candidate in candidates[:8]:
+        assert candidate.state_space_request.minimum >= minimum
+        assert math.isclose(
+            candidate.state_space_request.maximum - candidate.state_space_request.minimum,
+            0.1,
+        )
         assert candidate.state_space.request.minimum == candidate.state_space.request.maximum
         assert candidate.state_space_request.minimum <= candidate.complexity
         assert candidate.complexity <= candidate.state_space_request.maximum
@@ -2051,9 +2059,11 @@ def test_training_curriculum_representative_window_rematerializes() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
         generator=generator,
-        start_index=6,
+        start_index=30,
     )
-    candidate = candidates[5]
+    candidate = next(
+        candidate for candidate in candidates if candidate.state_space.cardinality == 360
+    )
 
     exact_request = candidate.state_space.request
     window_request = candidate.state_space_request

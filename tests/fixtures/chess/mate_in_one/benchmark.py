@@ -141,6 +141,11 @@ class Generator:
 
         return _state_space_measure()
 
+    def complexity_rung_size(self) -> float:
+        """Return the log2 state-space complexity width for curriculum rungs."""
+
+        return 1.0
+
     def state_space_for_request(
         self,
         *,

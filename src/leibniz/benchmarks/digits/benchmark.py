@@ -106,6 +106,7 @@ _console_preview_state_space_windows = (
     (8.0, 9.0),
 )
 _console_preview_sample_limit = 50
+_complexity_rung_size = 0.1
 
 _CurvePoints: TypeAlias = tuple[tuple[float, float], ...]
 
@@ -1332,6 +1333,11 @@ class Generator:
         """Return the smallest score-bearing Digits state-space measure."""
 
         return _state_space_measure(math.log2(_canonical_digits_state_count))
+
+    def complexity_rung_size(self) -> float:
+        """Return the log2 state-space window size for curriculum rungs."""
+
+        return _complexity_rung_size
 
     def state_space_for_request(
         self,
