@@ -1147,6 +1147,11 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
     evaluation_protocol: dict[str, object] = {
         "kind": "checkpoint-benchmark-evaluation",
         "measurement_count": len(measurements),
+        "score_status": (
+            "provisional"
+            if _checkpoint_evaluation_capacity_limited(checkpoint_evaluation_throughput)
+            else "accepted"
+        ),
         "evaluation_convergence": {
             "kind": "accepted-mass-confidence-half-width",
             "minimum_sample_count": _default_evaluation_convergence_min_samples,
@@ -1197,6 +1202,10 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         evaluation_bundle_path=evaluation_bundle_path,
         measurement_count=len(measurements),
     )
+
+
+def _checkpoint_evaluation_capacity_limited(throughput: Mapping[str, object]) -> bool:
+    return throughput.get("capacity_limited") is True
 
 
 def _evaluation_input_from_plan(
@@ -3763,9 +3772,20 @@ def _evaluation_result_frontier_index(
     chance_mass = _chance_accepted_mass(outcome_ids)
     frontier_index = 0
     for index, result in enumerate(evaluation_results):
-        if result.mean_accepted_mass > chance_mass + 1e-12:
+        if _evaluation_rung_confidently_above_chance(
+            result,
+            chance_mass=chance_mass,
+        ):
             frontier_index = index
     return frontier_index
+
+
+def _evaluation_rung_confidently_above_chance(
+    result: _CheckpointEvaluationRungEvidence,
+    *,
+    chance_mass: float,
+) -> bool:
+    return result.mean_accepted_mass - result.confidence_half_width > chance_mass
 
 
 def has_windowed_validation_plateau(
@@ -3996,7 +4016,7 @@ def _training_estimate_record(
     seed = _required_int(points[0].get("seed"), "training_estimate.seed")
     return {
         "kind": "training-running-score-estimate",
-        "status": "tentative",
+        "status": "provisional",
         "evidence_status": "not-accepted",
         "score_frame": "none",
         "score_basis": "provisional-sampled-competence",

@@ -207,7 +207,7 @@ export type CostSummaryRecord = {
 
 export type ModelResultRecord = {
   model_key: string;
-  result_status: 'accepted' | 'tentative';
+  result_status: 'accepted' | 'provisional';
   architecture_digest: string;
   benchmark_id: string;
   score: number;
@@ -225,7 +225,7 @@ export type ModelResultRecord = {
 
 export type RunResultRecord = {
   source_kind: string;
-  result_status: 'accepted' | 'tentative';
+  result_status: 'accepted' | 'provisional';
   source_path: string;
   run_id: string;
   run_slug: string;
@@ -365,12 +365,12 @@ function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultReco
 function parseModelResult(value: unknown, path: string): ModelResultRecord {
   const record = requireRecord(value, path, transportError);
   requireStrings(record, path, ['model_key', 'result_status', 'architecture_digest', 'benchmark_id']);
-  if (record.result_status !== 'accepted' && record.result_status !== 'tentative') {
-    throw transportError(`${path}.result_status must be accepted or tentative`);
+  if (record.result_status !== 'accepted' && record.result_status !== 'provisional') {
+    throw transportError(`${path}.result_status must be accepted or provisional`);
   }
   return withFields(record, {
     model_key: requireString(record.model_key, `${path}.model_key`, transportError),
-    result_status: requireString(record.result_status, `${path}.result_status`, transportError) as 'accepted' | 'tentative',
+    result_status: requireString(record.result_status, `${path}.result_status`, transportError) as 'accepted' | 'provisional',
     architecture_digest: requireString(record.architecture_digest, `${path}.architecture_digest`, transportError),
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
@@ -438,8 +438,8 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
     'model_key',
     'measurement_dataset_digest',
   ]);
-  if (record.result_status !== 'accepted' && record.result_status !== 'tentative') {
-    throw transportError(`${path}.result_status must be accepted or tentative`);
+  if (record.result_status !== 'accepted' && record.result_status !== 'provisional') {
+    throw transportError(`${path}.result_status must be accepted or provisional`);
   }
   return withFields(record, {
     measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`, transportError),

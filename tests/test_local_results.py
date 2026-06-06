@@ -581,7 +581,7 @@ def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: 
     view = dict(load_console_result_view(summary.view_file.read_bytes()))
     results = cast(list[dict[str, object]], view["benchmark_results"])
     history = cast(list[dict[str, object]], results[0]["training_history"])
-    assert history[0]["result_status"] == "tentative"
+    assert history[0]["result_status"] == "provisional"
     protocol = cast(dict[str, object], history[0]["training_diagnostics"])["protocol"]
     cast(dict[str, object], protocol)["gate_check_interval"] = 0
 
