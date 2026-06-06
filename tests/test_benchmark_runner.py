@@ -746,11 +746,58 @@ def test_checkpoint_evaluation_stops_at_runtime_capacity(
         evaluation_summary.evaluation_bundle_path.read_bytes()
     ).bundle
     evaluation_curriculum = cast(dict[str, object], bundle.evaluation_curriculum)
+    evaluation_protocol = cast(dict[str, object], bundle.evaluation_protocol)
     throughput = cast(dict[str, object], bundle.throughput["checkpoint_evaluation"])
 
+    assert evaluation_protocol["score_status"] == "provisional"
     assert throughput["capacity_limited"] is True
     assert evaluation_curriculum["frontier_index"] == 0
     assert len(cast(list[object], evaluation_curriculum["rungs"])) == 1
+    view_summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=tmp_path / "results",
+    )
+    view = load_console_result_view(view_summary.view_file.read_bytes())
+    result = cast(list[dict[str, object]], view["benchmark_results"])[0]
+    assert cast(list[dict[str, object]], result["leaderboard"]) == []
+    assert cast(dict[str, object], result["frontiers"])["storage_bytes"] == []
+    plot_runs = cast(list[dict[str, object]], result["plot_runs"])
+    assert [run["result_status"] for run in plot_runs] == ["provisional"]
+    assert cast(list[dict[str, object]], result["model_candidates"])[0][
+        "result_status"
+    ] == "provisional"
+
+
+def test_evaluation_frontier_requires_confidence_above_chance() -> None:
+    rung_evidence = cast(Any, benchmark_runner)._CheckpointEvaluationRungEvidence
+    results = (
+        rung_evidence(
+            rung=SimpleNamespace(index=0),
+            mean_accepted_mass=0.20,
+            sample_count=100,
+            confidence_half_width=0.01,
+        ),
+        rung_evidence(
+            rung=SimpleNamespace(index=1),
+            mean_accepted_mass=0.16,
+            sample_count=100,
+            confidence_half_width=0.08,
+        ),
+        rung_evidence(
+            rung=SimpleNamespace(index=2),
+            mean_accepted_mass=0.18,
+            sample_count=100,
+            confidence_half_width=0.03,
+        ),
+    )
+
+    assert (
+        cast(Any, benchmark_runner)._evaluation_result_frontier_index(
+            evaluation_results=results,
+            outcome_ids=tuple(f"digit-{index}" for index in range(10)),
+        )
+        == 2
+    )
 
 
 def test_benchmark_runner_reports_only_final_evaluation_rung(
@@ -2510,7 +2557,7 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     assert cast(dict[str, object], progress_result["frontiers"])["storage_bytes"] == []
     progress_plot_runs = cast(list[dict[str, object]], progress_result["plot_runs"])
     assert len(progress_plot_runs) == 1
-    assert progress_plot_runs[0]["result_status"] == "tentative"
+    assert progress_plot_runs[0]["result_status"] == "provisional"
     assert progress_plot_runs[0]["source_kind"] == "local-training-estimate"
     progress_cost = cast(dict[str, object], progress_plot_runs[0]["cost_summary"])
     assert isinstance(progress_cost["inference_compute"], int | float)
@@ -2553,7 +2600,7 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     assert cast(list[dict[str, object]], final_result["leaderboard"]) == []
     final_plot_runs = cast(list[dict[str, object]], final_result["plot_runs"])
     assert len(final_plot_runs) == 1
-    assert final_plot_runs[0]["result_status"] == "tentative"
+    assert final_plot_runs[0]["result_status"] == "provisional"
     final_estimate = cast(dict[str, object], final_record["training_estimate"])
     assert math.isclose(
         cast(float, final_plot_runs[0]["score"]),

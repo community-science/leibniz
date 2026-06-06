@@ -301,7 +301,7 @@ function BenchmarkFrontierPlot({
         <div className="frontier-chart-legend" aria-label="Measurements plot legend">
           <span><i className="frontier" />Frontier</span>
           <span><i className="measured" />Measured</span>
-          <span><i className="tentative" />Tentative</span>
+          <span><i className="provisional" />Provisional</span>
         </div>
         <svg
           aria-label={`Measurements by ${costAxis}`}
@@ -411,7 +411,7 @@ function BenchmarkFrontierPlot({
                 className={[
                   'frontier-chart-point',
                   point.frontier ? 'frontier' : '',
-                  point.resultStatus === 'tentative' ? 'tentative' : '',
+                  point.resultStatus === 'provisional' ? 'provisional' : '',
                   selectedId === point.id ? 'selected' : '',
                   hoveredId === point.id ? 'hovered' : '',
                 ].filter(Boolean).join(' ')}
@@ -473,7 +473,7 @@ function BenchmarkFrontierPlot({
         {activePoint === undefined ? null : (
           <div className="frontier-chart-tooltip">
             <span className="frontier-chart-tooltip-kicker">
-              {activePoint.resultStatus === 'tentative'
+              {activePoint.resultStatus === 'provisional'
                 ? 'Training estimate'
                 : activePoint.frontier ? 'Frontier highlight' : 'Accepted result'}
             </span>

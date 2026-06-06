@@ -28,7 +28,7 @@ export type BenchmarkPlotModelPoint = {
   logCost: number;
   score: number;
   frontier: boolean;
-  resultStatus: 'accepted' | 'tentative';
+  resultStatus: 'accepted' | 'provisional';
   model?: ModelResultRecord;
   run?: RunResultRecord;
 };
@@ -403,12 +403,12 @@ function plotRunPoint(
 ): BenchmarkPlotModelPoint | null {
   const leaderboardModel = leaderboardModels.byModelKey.get(run.model_key);
   const candidateModel = candidateModels.byModelKey.get(run.model_key);
-  const model = run.result_status === 'tentative'
+  const model = run.result_status === 'provisional'
     ? candidateModel ?? leaderboardModel
     : leaderboardModel;
   const cost = costValue(run.cost_summary, costAxis);
   const score = model === undefined
-    ? run.result_status === 'tentative' && scoreAxis === 'absolute'
+    ? run.result_status === 'provisional' && scoreAxis === 'absolute'
       ? run.score
       : Number.NaN
     : scoreValue(model, scoreAxis);

@@ -612,7 +612,7 @@ def _local_run_records(
         records.append(
             _BenchmarkRunRecord(
                 source_kind="local-run",
-                result_status="accepted",
+                result_status=_evaluation_result_status(summary),
                 source_path=source_path,
                 run_id=summary.run_slug,
                 run_slug=summary.run_slug,
@@ -699,7 +699,7 @@ def _local_training_estimate_records(
         records.append(
             _BenchmarkRunRecord(
                 source_kind="local-training-estimate",
-                result_status="tentative",
+                result_status="provisional",
                 source_path=_result_state_record_path(path, results_root=results_root),
                 run_id=run_slug,
                 run_slug=run_slug,
@@ -872,6 +872,31 @@ def _evaluation_summary_cost_summary(
             "evaluation_protocol.training_compute",
         )
     return cost_summary
+
+
+def _evaluation_result_status(summary: _EvaluationBundleSummary) -> str:
+    score_status = summary.evaluation_protocol.get("score_status")
+    if score_status in {"accepted", "provisional"}:
+        return cast(str, score_status)
+    if score_status is not None:
+        raise LocalResultImportError("evaluation_protocol.score_status is invalid")
+    if _evaluation_summary_capacity_limited(summary):
+        return "provisional"
+    return "accepted"
+
+
+def _evaluation_summary_capacity_limited(summary: _EvaluationBundleSummary) -> bool:
+    for key in ("checkpoint_evaluation", "evaluation"):
+        phase = summary.throughput.get(key)
+        if not isinstance(phase, Mapping):
+            continue
+        phase_record = _extract.mapping(
+            cast(Mapping[str, object], phase),
+            f"throughput.{key}",
+        )
+        if phase_record.get("capacity_limited") is True:
+            return True
+    return False
 
 
 def _evaluation_summary_max_inference_compute(
@@ -1402,7 +1427,7 @@ def _model_result_records(
         result_status = (
             "accepted"
             if any(run.result_status == "accepted" for run in ordered_runs)
-            else "tentative"
+            else "provisional"
         )
         score_basis = {
             "kind": "competence-integral-over-complexity-v1",
@@ -3121,7 +3146,7 @@ def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
         prefix,
         ("model_key", "result_status", "architecture_digest", "benchmark_id"),
     )
-    if record.get("result_status") not in {"accepted", "tentative"}:
+    if record.get("result_status") not in {"accepted", "provisional"}:
         raise LocalResultImportError(f"{_field_path(prefix, 'result_status')} is invalid")
     _as_nonnegative_number(record.get("score"), _field_path(prefix, "score"))
     _require_sequence_fields(
@@ -3253,7 +3278,7 @@ def _validate_run_result(record: Mapping[str, object], prefix: str) -> None:
             "measurement_dataset_digest",
         ),
     )
-    if record.get("result_status") not in {"accepted", "tentative"}:
+    if record.get("result_status") not in {"accepted", "provisional"}:
         raise LocalResultImportError(f"{_field_path(prefix, 'result_status')} is invalid")
     _as_nonnegative_number(
         record.get("measurement_count"),

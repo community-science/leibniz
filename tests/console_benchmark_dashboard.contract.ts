@@ -426,7 +426,7 @@ assertEqual(benchmarkScoreAxis('relative', benchmarkScoreAxes(result)), 'relativ
 assertEqual(plotModel.frontierPoints.length, 1, 'plot frontier count');
 assertEqual(relativePlotModel.points[0]?.score, 1200, 'relative plot score');
 assertEqual(plotModel.staircase.length, 1, 'plot staircase point count');
-const tentativeScalePlotModel = benchmarkPlotModel(
+const provisionalScalePlotModel = benchmarkPlotModel(
   {
     ...result,
     leaderboard: [
@@ -447,7 +447,7 @@ const tentativeScalePlotModel = benchmarkPlotModel(
       result.plot_runs[0]!,
       {
         ...result.plot_runs[1]!,
-        result_status: 'tentative',
+        result_status: 'provisional',
         score: 0.5,
       },
     ],
@@ -455,14 +455,14 @@ const tentativeScalePlotModel = benchmarkPlotModel(
   'storage_bytes',
 );
 assertEqual(
-  tentativeScalePlotModel.points.find((point) => point.resultStatus === 'tentative')?.score,
+  provisionalScalePlotModel.points.find((point) => point.resultStatus === 'provisional')?.score,
   6,
-  'tentative plot points use score-axis scale',
+  'provisional plot points use score-axis scale',
 );
 assertEqual(
-  tentativeScalePlotModel.points.find((point) => point.resultStatus === 'tentative')?.frontier,
+  provisionalScalePlotModel.points.find((point) => point.resultStatus === 'provisional')?.frontier,
   false,
-  'tentative plot points are not frontier points',
+  'provisional plot points are not frontier points',
 );
 const repeatedArchitectureResult: BenchmarkResultRecord = {
   ...result,
