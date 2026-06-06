@@ -127,6 +127,7 @@ _default_model_checkpoint_gate_interval = 1
 _default_convergence_patience = 6
 _default_convergence_min_delta = 1e-3
 _default_rung_competence_threshold = 0.5
+_training_replay_score_window_batches = 8
 _converged_training_stage_stop_reasons = frozenset({"validation-plateau"})
 _legal_uncapped_training_stage_stop_reasons = frozenset(
     {"validation-plateau", "capacity-limited"}
@@ -283,37 +284,37 @@ class _TrainingStepBatch:
 
 @dataclass(frozen=True, slots=True)
 class _RollingValidationCompetencePoint:
-    point: ValidationCompetencePoint
-    accepted_mass_sum: float
+    points: tuple[ValidationCompetencePoint, ...]
 
     @classmethod
     def from_point(
         cls,
         point: ValidationCompetencePoint,
     ) -> _RollingValidationCompetencePoint:
-        return cls(
-            point=point,
-            accepted_mass_sum=point.accepted_mass * point.sample_count,
-        )
+        return cls(points=(point,))
 
     def add(
         self,
         point: ValidationCompetencePoint,
     ) -> _RollingValidationCompetencePoint:
-        sample_count = self.point.sample_count + point.sample_count
-        accepted_mass_sum = self.accepted_mass_sum + (
-            point.accepted_mass * point.sample_count
-        )
         return _RollingValidationCompetencePoint(
-            point=ValidationCompetencePoint(
-                complexity=point.complexity,
-                accepted_mass=accepted_mass_sum / sample_count,
-                sample_count=sample_count,
-                seed=point.seed,
-                complexity_minimum=point.complexity_minimum,
-                complexity_maximum=point.complexity_maximum,
-            ),
-            accepted_mass_sum=accepted_mass_sum,
+            points=(*self.points, point)[-_training_replay_score_window_batches:],
+        )
+
+    @property
+    def point(self) -> ValidationCompetencePoint:
+        latest = self.points[-1]
+        sample_count = sum(point.sample_count for point in self.points)
+        accepted_mass_sum = math.fsum(
+            point.accepted_mass * point.sample_count for point in self.points
+        )
+        return ValidationCompetencePoint(
+            complexity=latest.complexity,
+            accepted_mass=accepted_mass_sum / sample_count,
+            sample_count=sample_count,
+            seed=latest.seed,
+            complexity_minimum=latest.complexity_minimum,
+            complexity_maximum=latest.complexity_maximum,
         )
 
 
