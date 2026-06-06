@@ -75,6 +75,10 @@ def test_fieldless_tensor_samples_can_score_predictions() -> None:
     assert batch.targets is not None
     assert batch.samples
     assert all(sample.field is None for sample in batch.samples)
+    target_indices = batch.targets.argmax(dim=1).detach().cpu().tolist()
+    assert [
+        outcome_ids[int(target_index)] for target_index in target_indices
+    ] == [sample.outcome_id for sample in batch.samples]
 
     probabilities = tuple(
         tuple(1.0 if outcome_id == sample.outcome_id else 0.0 for outcome_id in outcome_ids)

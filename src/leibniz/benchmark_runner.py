@@ -47,6 +47,7 @@ from leibniz.model_manifests import (
 )
 from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
 from leibniz.observation_generation import (
+    GeneratedSample,
     GeneratedSampleSet,
     StateSpaceCandidate,
     StateSpaceMeasureRequest,
@@ -262,6 +263,7 @@ class _CurriculumRung:
     resolution_assignment: AxisAssignment
     seed: int
     batch: GeneratedSampleSet
+    sample_count: int
 
     @property
     def complexity(self) -> float:
@@ -284,7 +286,7 @@ class _CurriculumRung:
                 if self.batch.state_space_request is None
                 else self.batch.state_space_request.to_record()
             ),
-            "sample_count": len(self.batch.samples),
+            "sample_count": self.sample_count,
         }
 
 
@@ -1247,17 +1249,48 @@ def _training_curriculum_rung(
     seed: int,
     index: int,
 ) -> _CurriculumRung:
-    return _curriculum_rung_from_candidates(
-        architecture=architecture,
+    del architecture
+    candidates = _structured_training_curriculum_candidates(
         generator=generator,
-        sample_count=sample_count,
-        seed=seed,
-        index=index,
-        candidates=_structured_training_curriculum_candidates(
-            generator=generator,
-            start_index=index,
-        ),
+        start_index=index,
     )
+    for candidate_index, candidate in enumerate(candidates):
+        if candidate_index < index:
+            continue
+        resolution_assignment = candidate.state_space.resolution_assignment
+        if resolution_assignment is None:
+            continue
+        rung_seed = seed if index == 0 else seed + 2_000_003 * index
+        outcome_space = generator.manifest.resolve_outcome_space()
+        if not outcome_space.outcomes:
+            raise BenchmarkRunnerError("benchmark outcome space is empty")
+        sample = GeneratedSample(
+            index=0,
+            outcome_id=outcome_space.outcomes[0].id,
+            complexity=candidate.complexity,
+            state_space_measure=StateSpaceMeasureValue(
+                measure_id=_core_state_space_measure_id(),
+                value=candidate.complexity,
+            ),
+        )
+        batch = GeneratedSampleSet(
+            benchmark_id=generator.manifest.id,
+            generator_id=cast(ProtocolIdentifier, generator.id),
+            generator_version=generator.version,
+            seed=rung_seed,
+            shape=(1,),
+            variation_extent=_full_variation_extent,
+            state_space_request=candidate.state_space_request,
+            samples=(sample,),
+        )
+        return _CurriculumRung(
+            index=index,
+            resolution_assignment=resolution_assignment,
+            seed=rung_seed,
+            batch=batch,
+            sample_count=sample_count,
+        )
+    raise BenchmarkRunnerError("training curriculum did not produce any rungs")
 
 
 def _competition_curriculum_rung(
@@ -1281,6 +1314,7 @@ def _competition_curriculum_rung(
         resolution_assignment=resolution_assignment,
         seed=batch.seed,
         batch=batch,
+        sample_count=len(batch.samples),
     )
 
 
@@ -1328,6 +1362,7 @@ def _curriculum_rung_from_candidates(
             resolution_assignment=materialization_plan.resolution_assignment,
             seed=batch.seed,
             batch=batch,
+            sample_count=len(batch.samples),
         )
     raise BenchmarkRunnerError("evaluation curriculum did not produce any rungs")
 
