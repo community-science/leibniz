@@ -2,6 +2,7 @@ import inspect
 import math
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -27,7 +28,9 @@ from leibniz.benchmark_runner import (
 from leibniz.cli import main
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
+from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
+from leibniz.materialization import AxisAssignment
 from leibniz.observation_generation import (
     GeneratedSampleSet,
     StateSpaceMeasureRequest,
@@ -119,6 +122,115 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
         "digits-arch-186021388794-seed101-samples2-steps1-train-"
     )
     assert not (tmp_path / "results").exists()
+
+
+def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
+    class _FakeCuda:
+        @staticmethod
+        def mem_get_info(device: object) -> tuple[int, int]:
+            del device
+            total = 10 * 1024 * 1024 * 1024
+            free = 9 * 1024 * 1024 * 1024
+            return free, total
+
+    runtime = cast(
+        TensorRuntime,
+        SimpleNamespace(
+            device_kind="cuda",
+            torch=SimpleNamespace(cuda=_FakeCuda()),
+            device="cuda:0",
+        ),
+    )
+    generator = cast(
+        Any,
+        SimpleNamespace(
+            formation=SimpleNamespace(
+                channel_count=1,
+                height_axis="height",
+                width_axis="width",
+            )
+        ),
+    )
+    request = StateSpaceMeasureRequest(minimum=20.0, maximum=20.0)
+    rung = cast(Any, benchmark_runner)._CurriculumRung(
+        index=0,
+        resolution_assignment=AxisAssignment(values={"height": 1024, "width": 1024}),
+        seed=101,
+        batch=GeneratedSampleSet(
+            benchmark_id=ProtocolIdentifier.parse("benchmarks.fake@0.1.0"),
+            generator_id=ProtocolIdentifier.parse("generators.fake@0.1.0"),
+            generator_version="0.1.0",
+            seed=101,
+            shape=(0,),
+            state_space_request=request,
+        ),
+        sample_count=512,
+    )
+    timings = benchmark_runner.TimingCollector()
+
+    physical_count = cast(Any, benchmark_runner)._physical_execution_sample_count(
+        runtime=runtime,
+        generator=generator,
+        rung=rung,
+        requested_sample_count=512,
+        outcome_count=10,
+        phase_timings=timings,
+        phase="training_formation_generation",
+    )
+
+    assert 25 <= physical_count <= 35
+    phases = cast(Mapping[str, object], timings.to_record()["phases"])
+    dynamic_record = cast(
+        Mapping[str, object],
+        phases["training_formation_generation.dynamic_batch"],
+    )
+    counters = cast(Mapping[str, object], dynamic_record["counters"])
+    assert counters["requested_sample_count"] == 512.0
+    assert counters["physical_sample_count"] == float(physical_count)
+
+
+def test_capacity_limited_training_run_is_budget_exhausted() -> None:
+    training_run = cast(Any, benchmark_runner)._training_run_record(
+        seed=101,
+        batch_size=512,
+        max_steps=None,
+        learning_rate=0.01,
+        optimizer_name="adam",
+        schedule_name="reduce-on-plateau",
+        gate_check_interval=32,
+        gate_sample_count=512,
+        gate_decision_rule="score-estimate-plateau",
+        convergence_patience=6,
+        convergence_min_delta=0.001,
+        convergence_min_steps=500,
+        tensor_device="cuda",
+        runtime_memory_budget_fraction=0.1,
+        validation_history=(
+            TrainingHistoryPoint(
+                step=320,
+                validation_check=10,
+                validation_loss=math.log(10),
+                stale_checks=0,
+                learning_rates=(0.01,),
+                score_estimate=_score_estimate(
+                    check=10,
+                    step=320,
+                    score=12.0,
+                    complexity=12.0,
+                    accepted_mass=1.0,
+                ),
+            ),
+        ),
+        stop_reason="capacity-limited",
+        training_compute=100.0,
+    )
+
+    assert training_run.status == "budget-exhausted"
+    assert training_run.protocol.runtime_memory_budget_fraction == 0.1
+    assert cast(Any, benchmark_runner)._training_stage_finished_legally(
+        "capacity-limited"
+    )
+    assert not benchmark_runner.training_stage_converged("capacity-limited")
 
 
 def test_digits_benchmark_runner_dry_run_does_not_discover_runtime(
@@ -320,9 +432,9 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
         dict[str, object],
         timing_phases["training_formation_generation.transform_index"],
     )
-    state_tensor_timing = cast(
+    render_timing = cast(
         dict[str, object],
-        timing_phases["training_formation_generation.state_tensor_cache"],
+        timing_phases["training_formation_generation.batch_tensor_render"],
     )
     roofline = cast(dict[str, object], throughput["roofline"])
     roofline_comparison = cast(dict[str, object], throughput["roofline_comparison"])
@@ -335,7 +447,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert cast(float, tensor_batch_timing["seconds"]) > 0
     assert component_timing["sample_count"] == 2
     assert transform_timing["sample_count"] == 2
-    assert cast(float, state_tensor_timing["seconds"]) >= 0
+    assert cast(float, render_timing["seconds"]) > 0
     assert forward_timing["sample_count"] == 2
     assert cast(float, forward_timing["seconds"]) > 0
     assert cast(float, roofline["peak_bytes_per_second"]) > 0

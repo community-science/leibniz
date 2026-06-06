@@ -63,6 +63,7 @@ def test_miniforge_environment_declares_linux_cuda_pytorch_selector() -> None:
     lines = (_root / "environment.yml").read_text(encoding="utf-8").splitlines()
 
     assert "  - sel(linux): pytorch-cuda=12.4" in lines
+    assert "      - \"triton; platform_system == 'Linux'\"" in lines
 
 
 def test_main_branch_triggers_pages_rebuild() -> None:

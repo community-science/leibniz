@@ -67,7 +67,7 @@ from leibniz.outcomes import OutcomeSpace
 from leibniz.projection_records import ProjectionRecordDocument
 from leibniz.resources import ResourceReportDocument, ResourceReportSetDocument
 from leibniz.submission_registries import SubmissionRegistryDocument
-from leibniz.tensor_runtime import TensorRuntimeDevice
+from leibniz.tensor_runtime import TensorRuntimeDevice, tensor_runtime_device_choices
 from leibniz.view_manifests import ViewManifestDocument
 
 __all__ = ["main"]
@@ -371,8 +371,8 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument(
         "--device",
         default="auto",
-        choices=("auto", "cpu", "cuda", "mps"),
-        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
+        choices=tensor_runtime_device_choices(),
+        help="tensor runtime device; auto prefers accelerated runtimes before host",
     )
     train.add_argument("--dry-run", action="store_true")
     evaluate = benchmark_subcommands.add_parser(
@@ -407,8 +407,8 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "--device",
         default="auto",
-        choices=("auto", "cpu", "cuda", "mps"),
-        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
+        choices=tensor_runtime_device_choices(),
+        help="tensor runtime device; auto prefers accelerated runtimes before host",
     )
     profile = benchmark_subcommands.add_parser(
         "profile",
@@ -423,8 +423,8 @@ def _parser() -> argparse.ArgumentParser:
     profile.add_argument(
         "--device",
         default="auto",
-        choices=("auto", "cpu", "cuda", "mps"),
-        help="tensor runtime device; auto prefers CUDA, then MPS, then CPU",
+        choices=tensor_runtime_device_choices(),
+        help="tensor runtime device; auto prefers accelerated runtimes before host",
     )
 
     console = subcommands.add_parser(
