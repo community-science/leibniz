@@ -27,7 +27,7 @@ def test_training_run_record_round_trips_protocol_and_history() -> None:
         "gate_check_interval": 1,
         "gate_batch_target": 2,
         "gate_decision_rule": "score-estimate-plateau",
-        "rung_competence_threshold": 0.01,
+        "rung_competence_threshold": 0.5,
         "min_delta": 0.0,
         "patience": 0,
         "tensor_runtime": "pytorch",
@@ -158,7 +158,7 @@ def test_training_protocol_defaults_missing_rung_competence_threshold() -> None:
 
     parsed = TrainingProtocol.from_record(record)
 
-    assert parsed.rung_competence_threshold == 0.01
+    assert parsed.rung_competence_threshold == 0.5
 
 
 def _training_run() -> TrainingRunRecord:

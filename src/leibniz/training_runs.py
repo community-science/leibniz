@@ -44,7 +44,6 @@ _protocol_record = RecordSpec(
         "rung_competence_threshold": FieldSpec(kind="number", required=False),
         "min_delta": FieldSpec(kind="number"),
         "patience": FieldSpec(kind="integer"),
-        "min_steps": FieldSpec(kind="integer", required=False),
         "tensor_runtime": FieldSpec(kind="string", required=False),
         "tensor_device": FieldSpec(kind="string", required=False),
         "runtime_memory_budget_fraction": FieldSpec(kind="number", required=False),
@@ -108,8 +107,7 @@ class TrainingProtocol:
     min_delta: float
     patience: int
     validation_source: str
-    min_steps: int = 0
-    rung_competence_threshold: float = 0.01
+    rung_competence_threshold: float = 0.5
     tensor_runtime: str = "pytorch"
     tensor_device: str = tensor_runtime_default_device()
     runtime_memory_budget_fraction: float | None = None
@@ -143,7 +141,6 @@ class TrainingProtocol:
             )
         _require_nonnegative_finite(self.min_delta, "min_delta")
         _require_nonnegative_int(self.patience, "patience")
-        _require_nonnegative_int(self.min_steps, "min_steps")
         if not self.tensor_runtime:
             raise TrainingRunValidationError("tensor_runtime must be nonempty")
         if not self.tensor_device:
@@ -200,7 +197,7 @@ class TrainingProtocol:
                 "gate_decision_rule",
             ),
             rung_competence_threshold=_extract.finite_float(
-                validated.get("rung_competence_threshold", 0.01),
+                validated.get("rung_competence_threshold", 0.5),
                 "rung_competence_threshold",
             ),
             min_delta=_extract.finite_float(validated["min_delta"], "min_delta"),
@@ -209,7 +206,6 @@ class TrainingProtocol:
                 validated["validation_source"],
                 "validation_source",
             ),
-            min_steps=_extract.integer(validated.get("min_steps", 0), "min_steps"),
             tensor_runtime=_extract.non_empty_string(
                 validated.get("tensor_runtime", "pytorch"),
                 "tensor_runtime",
@@ -253,8 +249,6 @@ class TrainingProtocol:
             )
         if self.max_steps is not None:
             record["max_steps"] = self.max_steps
-        if self.min_steps:
-            record["min_steps"] = self.min_steps
         return record
 
 

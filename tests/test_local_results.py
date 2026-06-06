@@ -81,14 +81,14 @@ def test_competent_complexity_score_integrates_bits_above_chance() -> None:
             ({"complexity": complexity, "score": 0.55},),
             chance_mass=chance_mass,
         ),
-        20.0,
+        19.5,
     )
     assert math.isclose(
         local_results.competent_complexity_score(
             ({"complexity": complexity * 4.0, "score": chance_mass},),
             chance_mass=chance_mass,
         ),
-        80.0,
+        79.0,
     )
     assert math.isclose(
         local_results.competent_complexity_score(
@@ -98,7 +98,7 @@ def test_competent_complexity_score_integrates_bits_above_chance() -> None:
             ),
             chance_mass=chance_mass,
         ),
-        30.0,
+        39.0,
     )
 
 

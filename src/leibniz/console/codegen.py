@@ -269,7 +269,6 @@ export type TrainingProtocolRecord = {
   gate_decision_rule: string;
   min_delta: number;
   patience: number;
-  min_steps?: number;
   validation_source: string;
 };
 

@@ -145,12 +145,11 @@ packaged benchmark roots by benchmark id. The default local training profile is
 an uncapped convergence run:
 competence gates are checked every 32 steps, every gate check updates the
 running progress record, model checkpoint artifacts are written every gate
-check, training runs at least 500 steps before early stopping, patience is 6
-gate checks, and convergence min delta is `1e-3`. Override those with
-`--train-steps`, `--convergence-min-steps`, `--gate-check-interval`,
-`--gate-sample-count`, `--model-checkpoint-gate-interval`,
-`--convergence-patience`, and `--convergence-min-delta` when you need a shorter
-diagnostic run or a cheaper checkpoint cadence.
+check, patience is 6 gate checks, and convergence min delta is `1e-3`.
+Override those with `--train-steps`, `--gate-check-interval`,
+`--model-checkpoint-gate-interval`, `--convergence-patience`, and
+`--convergence-min-delta` when you need a shorter diagnostic run or a cheaper
+checkpoint cadence.
 
 The digits benchmark samples rectangular canvases with independently varying
 height and width. Observation formation now derives the lower canvas floor from
