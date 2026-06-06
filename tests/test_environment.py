@@ -14,6 +14,7 @@ def test_miniforge_environment_declares_development_toolchain() -> None:
     assert "  - python=3.12" in lines
     assert "  - nodejs=24" in lines
     assert "  - pip>=24" in lines
+    assert "  - numpy" in lines
     assert '      - "-e .[dev]"' in lines
 
 

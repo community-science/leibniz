@@ -200,6 +200,7 @@ def test_capacity_limited_training_run_is_budget_exhausted() -> None:
         gate_check_interval=32,
         gate_sample_count=512,
         gate_decision_rule="score-estimate-plateau",
+        rung_competence_threshold=0.01,
         convergence_patience=6,
         convergence_min_delta=0.001,
         convergence_min_steps=500,
@@ -415,6 +416,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_run.protocol.tensor_device == "cpu"
     assert training_run.protocol.max_steps == 1
     assert training_run.protocol.gate_sample_count == 2
+    assert training_run.protocol.rung_competence_threshold == 0.01
     assert training_summary["tensor_runtime"] == "pytorch"
     assert training_summary["tensor_device"] == "cpu"
     throughput = cast(dict[str, object], training_summary["throughput"])
@@ -526,6 +528,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(tmp_path: Path) -
     assert training_curriculum["source"] == "structured-training-curriculum"
     assert training_curriculum["frontier_sampling_weight"] == 0.7
     assert training_curriculum["replay_sampling_weight"] == 0.3
+    assert training_curriculum["rung_competence_threshold"] == 0.01
     assert (
         training_curriculum["gating_metric"]
         == "monotone-frontier-validation-competence"
@@ -665,6 +668,7 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
             gate_check_interval=32,
             gate_sample_count=2,
             gate_decision_rule="score-estimate-plateau",
+            rung_competence_threshold=0.01,
             convergence_patience=6,
             convergence_min_delta=0.001,
             convergence_min_steps=500,
@@ -937,6 +941,9 @@ def test_training_stage_records_current_validation_loss_without_global_best(
         def item(self) -> float:
             return 2.0
 
+        def backward(self) -> None:
+            pass
+
     class FakeLossFunction:
         def __call__(self, _logits: object, _labels: object) -> FakeLossValue:
             return FakeLossValue()
@@ -1005,20 +1012,24 @@ def test_training_stage_records_current_validation_loss_without_global_best(
         loss_function=FakeLossFunction(),
         train_batch=fake_batch,
         validation_batch=cast(Any, fake_validation_batch),
-        outcome_space=load_digits_benchmark(_digits_benchmark_root).manifest.resolve_outcome_space(),
+        outcome_space=(
+            load_digits_benchmark(_digits_benchmark_root)
+            .manifest.resolve_outcome_space()
+        ),
         outcome_ids=("digit-0",),
         max_steps=100,
         gate_check_interval=1,
         patience=1,
         min_delta=0.0,
-            min_steps=0,
-            batch_size=1,
-            gate_sample_count=1,
-            architecture=ArchitectureManifestDocument.from_bytes(
-                _digits_architecture.read_bytes()
-            ).manifest,
-            training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
-            training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
+        rung_competence_threshold=0.9,
+        min_steps=0,
+        batch_size=1,
+        gate_sample_count=1,
+        architecture=ArchitectureManifestDocument.from_bytes(
+            _digits_architecture.read_bytes()
+        ).manifest,
+        training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
         validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         phase_timings=benchmark_runner.TimingCollector(),
         start_step=100,
@@ -1107,6 +1118,125 @@ def test_training_curriculum_can_advance_after_worse_loss_on_larger_rung() -> No
         previous_frontier_points=(first_rung_point,),
         chance_mass=0.1,
     )
+
+
+def test_training_plateau_below_rung_competence_threshold_converges_without_advancing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_batch(_index: int) -> tuple[object, object]:
+        return object(), object()
+
+    class FakeLossValue:
+        def item(self) -> float:
+            return 2.0
+
+        def backward(self) -> None:
+            pass
+
+    class FakeLossFunction:
+        def __call__(self, _logits: object, _labels: object) -> FakeLossValue:
+            return FakeLossValue()
+
+    class FakeModule:
+        training = True
+
+        def __call__(self, _fields: object) -> object:
+            return object()
+
+        def eval(self) -> None:
+            self.training = False
+
+        def train(self) -> None:
+            self.training = True
+
+    class FakeValidationBatch:
+        sample_count = 2
+
+    class FakeOptimizer:
+        param_groups = [{"lr": 0.01}]
+
+        def zero_grad(self, *, set_to_none: bool) -> None:
+            _ = set_to_none
+
+        def step(self) -> None:
+            pass
+
+    def fake_validation_batch(_index: int) -> FakeValidationBatch:
+        return FakeValidationBatch()
+
+    def fake_batch_tensors(**_kwargs: object) -> tuple[object, object]:
+        return object(), object()
+
+    def fake_predictions(_runtime: object, _module: object, _fields: object) -> list[list[float]]:
+        return [[1.0]]
+
+    def fake_training_gate_score_estimate(**kwargs: object) -> dict[str, object]:
+        return _score_estimate(
+            check=cast(int, kwargs["validation_check"]),
+            step=cast(int, kwargs["step"]),
+            score=1.0,
+            complexity=math.log2(10),
+            accepted_mass=0.5,
+        )
+
+    def fake_batch_max_compute(**_kwargs: object) -> int:
+        return 10
+
+    def fail_if_advancing(_history: object) -> bool:
+        raise AssertionError("frontier should not advance below competence threshold")
+
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    outcome_ids = tuple(
+        outcome.id for outcome in benchmark.manifest.resolve_outcome_space().outcomes
+    )
+    monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
+    monkeypatch.setattr(benchmark_runner, "apply_softmax_predictions", fake_predictions)
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_inference_compute",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_training_compute_per_sample",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_training_gate_score_estimate",
+        fake_training_gate_score_estimate,
+    )
+
+    stage_result = cast(Any, benchmark_runner)._train_until_convergence(
+        runtime=resolve_tensor_runtime("cpu"),
+        module=FakeModule(),
+        optimizer=FakeOptimizer(),
+        scheduler=None,
+        loss_function=FakeLossFunction(),
+        train_batch=fake_batch,
+        validation_batch=cast(Any, fake_validation_batch),
+        outcome_space=benchmark.manifest.resolve_outcome_space(),
+        outcome_ids=outcome_ids,
+        max_steps=10,
+        gate_check_interval=1,
+        patience=1,
+        min_delta=0.001,
+        min_steps=0,
+        rung_competence_threshold=0.9,
+        batch_size=1,
+        gate_sample_count=1,
+        architecture=ArchitectureManifestDocument.from_bytes(
+            _digits_architecture.read_bytes()
+        ).manifest,
+        training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
+        validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        phase_timings=benchmark_runner.TimingCollector(),
+        on_plateau=fail_if_advancing,
+    )
+
+    assert stage_result.stop_reason == "validation-plateau"
+    assert len(stage_result.validation_history) == 2
 
 
 def test_evaluation_curriculum_uses_benchmark_owned_representative_windows() -> None:

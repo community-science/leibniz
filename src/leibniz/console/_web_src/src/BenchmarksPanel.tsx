@@ -916,7 +916,6 @@ function runsForModel(
   return result.training_history.filter(
     (run) =>
       run.model_key === model.model_key ||
-      run.architecture_digest === model.architecture_digest ||
       runIds.has(run.run_id),
   );
 }

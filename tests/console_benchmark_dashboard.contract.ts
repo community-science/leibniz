@@ -464,6 +464,62 @@ assertEqual(
   false,
   'tentative plot points are not frontier points',
 );
+const repeatedArchitectureResult: BenchmarkResultRecord = {
+  ...result,
+  leaderboard: [
+    {
+      ...result.leaderboard[0]!,
+      model_key: 'checkpoint-a',
+      run_ids: ['run-a'],
+      score: 8,
+      score_views: {
+        absolute: { key: 'absolute', label: 'Absolute Score', score: 8 },
+      },
+    },
+    {
+      ...result.leaderboard[0]!,
+      model_key: 'checkpoint-b',
+      run_ids: ['run-b'],
+      score: 9,
+      score_views: {
+        absolute: { key: 'absolute', label: 'Absolute Score', score: 9 },
+      },
+    },
+  ],
+  model_candidates: [],
+  plot_runs: [
+    {
+      ...result.plot_runs[0]!,
+      model_key: 'checkpoint-a',
+      run_id: 'run-a',
+      run_slug: 'train-a',
+      score: 0.2,
+    },
+    {
+      ...result.plot_runs[0]!,
+      model_key: 'checkpoint-b',
+      run_id: 'run-b',
+      run_slug: 'train-b',
+      score: 0.3,
+    },
+  ],
+};
+const repeatedArchitecturePlotModel = benchmarkPlotModel(repeatedArchitectureResult, 'storage_bytes');
+assertEqual(
+  repeatedArchitecturePlotModel.points.find((point) => point.run?.run_id === 'run-a')?.score,
+  8,
+  'same-architecture run keeps first checkpoint score',
+);
+assertEqual(
+  repeatedArchitecturePlotModel.points.find((point) => point.run?.run_id === 'run-b')?.score,
+  9,
+  'same-architecture run keeps second checkpoint score',
+);
+assertEqual(
+  repeatedArchitecturePlotModel.points.find((point) => point.run?.run_id === 'run-a')?.frontier,
+  false,
+  'same-architecture run does not inherit another checkpoint frontier status',
+);
 assertEqual(plotModel.xTicks.includes(10), true, 'plot log ticks');
 assertEqual(plotModel.xDomain[0], 0, 'plot default x minimum');
 assertEqual(plotModel.xDomain[1], 10, 'plot default x maximum');
