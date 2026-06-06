@@ -540,6 +540,28 @@ def test_console_result_view_validates_training_diagnostics_records(tmp_path: Pa
         load_console_result_view(canonical_document_bytes(view))
 
 
+def test_console_result_view_validates_training_estimate_comparison(
+    tmp_path: Path,
+) -> None:
+    _run_and_evaluate_digits_benchmark(tmp_path / "results")
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=tmp_path / "results",
+    )
+
+    view = dict(load_console_result_view(summary.view_file.read_bytes()))
+    results = cast(list[dict[str, object]], view["benchmark_results"])
+    leaderboard = cast(list[dict[str, object]], results[0]["leaderboard"])
+    comparison = cast(dict[str, object], leaderboard[0]["training_estimate_comparison"])
+    comparison["kind"] = "other"
+
+    with pytest.raises(
+        LocalResultImportError,
+        match=r"training_estimate_comparison.kind is invalid",
+    ):
+        load_console_result_view(canonical_document_bytes(view))
+
+
 def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: Path) -> None:
     results_root = tmp_path / "results"
     run_benchmark(
@@ -631,8 +653,24 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
         "Model Contract",
         "Architecture Graph",
         "Evidence",
+        "Training Estimate",
+        "Training Estimate Rungs",
         "Resources",
     ]
+    comparison = cast(dict[str, object], leaderboard[0]["training_estimate_comparison"])
+    assert comparison["kind"] == "training-vs-accepted-sampled-competence-v1"
+    assert math.isclose(
+        cast(float, comparison["score_delta"]),
+        cast(float, comparison["training_score"])
+        - cast(float, comparison["accepted_score"]),
+    )
+    comparison_points = cast(list[dict[str, object]], comparison["points"])
+    assert comparison_points
+    assert comparison["matched_point_count"] == len(comparison_points)
+    assert comparison_points[0]["status"] == "matched"
+    assert "training_score" in comparison_points[0]
+    assert "accepted_score" in comparison_points[0]
+    assert "score_delta" in comparison_points[0]
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     assert "parameter_count" not in cost_summary
     assert cost_summary["storage_bytes"] == 200
@@ -656,6 +694,41 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
         "model-inspection",
         "model-manifest",
     }
+
+
+def test_training_estimate_comparison_uses_selected_checkpoint_estimate(
+    tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    _run_and_evaluate_digits_benchmark(results_root)
+    training_summary_path = next((results_root / "training" / "digits").glob("*.json"))
+    training_summary = dict(
+        load_object_document(
+            training_summary_path.read_bytes(),
+            description="training summary",
+        )
+    )
+    selected_checkpoint = cast(
+        dict[str, object],
+        training_summary["selected_model_checkpoint"],
+    )
+    selected_estimate = cast(dict[str, object], selected_checkpoint["score_estimate"])
+    terminal_estimate = dict(selected_estimate)
+    terminal_estimate["score"] = 0.0
+    training_summary["training_estimate"] = terminal_estimate
+    training_summary_path.write_bytes(canonical_document_bytes(training_summary))
+
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=results_root,
+    )
+    view = load_console_result_view(summary.view_file.read_bytes())
+    result = cast(list[dict[str, object]], view["benchmark_results"])[0]
+    leaderboard = cast(list[dict[str, object]], result["leaderboard"])
+    comparison = cast(dict[str, object], leaderboard[0]["training_estimate_comparison"])
+
+    assert comparison["training_score"] == selected_estimate["score"]
+    assert comparison["training_score"] != terminal_estimate["score"]
 
 
 def test_cli_benchmark_evaluate_discovers_training_checkpoints(

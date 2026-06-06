@@ -87,3 +87,14 @@ def test_development_extra_contains_no_isolation_build_backend() -> None:
 
     assert "build>=1.2" in dev_dependencies
     assert "hatchling>=1.25" in dev_dependencies
+
+
+def test_console_extra_declares_runtime_dependencies() -> None:
+    pyproject = tomllib.loads((_root / "pyproject.toml").read_text(encoding="utf-8"))
+
+    optional_dependencies = pyproject["project"]["optional-dependencies"]
+
+    assert "numpy>=1.26" in optional_dependencies["console"]
+    assert "torch>=2" in optional_dependencies["console"]
+    assert "numpy>=1.26" in optional_dependencies["dev"]
+    assert "torch>=2" in optional_dependencies["dev"]

@@ -1431,6 +1431,13 @@ def _model_result_records(
             "measurement_count": sum(run.measurement_count for run in ordered_runs),
             "source_kinds": sorted({run.source_kind for run in ordered_runs}),
         }
+        training_estimate_comparison = _training_estimate_comparison_record(
+            run=best_run,
+            accepted_points=points,
+            accepted_score=score,
+        )
+        if training_estimate_comparison is not None:
+            record["training_estimate_comparison"] = training_estimate_comparison
         record["console_view_model"] = _model_console_view_model(
             manifest=manifest,
             model=record,
@@ -2190,6 +2197,7 @@ def _model_console_view_model(
                 ),
             ),
         ),
+        *_model_training_estimate_comparison_sections(model),
         _console_detail_entries_section(
             title="Resources",
             entries=(
@@ -2206,6 +2214,105 @@ def _model_console_view_model(
         ),
     ]
     return {"detail_sections": sections}
+
+
+def _model_training_estimate_comparison_sections(
+    model: Mapping[str, object],
+) -> tuple[Mapping[str, object], ...]:
+    comparison = _extract.optional_mapping(
+        model.get("training_estimate_comparison"),
+        "model.training_estimate_comparison",
+    )
+    if comparison is None:
+        return ()
+    points = _as_sequence(
+        comparison.get("points"),
+        "model.training_estimate_comparison.points",
+    )
+    return (
+        _console_detail_entries_section(
+            title="Training Estimate",
+            entries=(
+                (
+                    "Training Score",
+                    _console_number_value(comparison.get("training_score"), precision=4),
+                ),
+                (
+                    "Accepted Score",
+                    _console_number_value(comparison.get("accepted_score"), precision=4),
+                ),
+                (
+                    "Delta",
+                    _console_number_value(comparison.get("score_delta"), precision=4),
+                ),
+                (
+                    "Matched Rungs",
+                    (
+                        f"{_console_number_value(comparison.get('matched_point_count'))}"
+                        f" / {_console_number_value(comparison.get('point_count'))}"
+                    ),
+                ),
+            ),
+        ),
+        {
+            "title": "Training Estimate Rungs",
+            "table": {
+                "aria_label": "Training estimate compared with accepted evaluation by rung",
+                "columns": [
+                    "Range",
+                    "Training",
+                    "Accepted",
+                    "Delta",
+                    "Samples",
+                    "Status",
+                ],
+                "rows": [
+                    _console_training_estimate_comparison_row(
+                        _extract.mapping(
+                            point,
+                            "model.training_estimate_comparison.points",
+                        )
+                    )
+                    for point in points
+                ],
+            },
+        },
+    )
+
+
+def _console_training_estimate_comparison_row(
+    point: Mapping[str, object],
+) -> list[str]:
+    training_sample_count = point.get("training_sample_count")
+    accepted_sample_count = point.get("accepted_sample_count")
+    return [
+        _console_interval_label(point),
+        _console_number_value(point.get("training_score"), precision=4),
+        _console_number_value(point.get("accepted_score"), precision=4),
+        _console_number_value(point.get("score_delta"), precision=4),
+        (
+            f"{_console_number_value(training_sample_count)}"
+            f" / {_console_number_value(accepted_sample_count)}"
+        ),
+        _console_string_value(point.get("status")),
+    ]
+
+
+def _console_interval_label(point: Mapping[str, object]) -> str:
+    minimum = _optional_nonnegative_number(
+        point.get("complexity_minimum"),
+        "training_estimate_comparison.point.complexity_minimum",
+    )
+    maximum = _optional_nonnegative_number(
+        point.get("complexity_maximum"),
+        "training_estimate_comparison.point.complexity_maximum",
+    )
+    if minimum is None or maximum is None:
+        return _console_number_value(point.get("complexity"), precision=2)
+    return (
+        f"[{_console_number_value(minimum, precision=2)}, "
+        f"{_console_number_value(maximum, precision=2)}]"
+    )
 
 
 def _prediction_space_label(manifest: BenchmarkManifest) -> str:
@@ -2355,6 +2462,180 @@ def competent_complexity_score(
         ),
         chance_mass=chance_mass,
     )
+
+
+def _training_estimate_comparison_record(
+    *,
+    run: _BenchmarkRunRecord,
+    accepted_points: tuple[dict[str, object], ...],
+    accepted_score: float,
+) -> dict[str, object] | None:
+    if run.result_status != "accepted" or run.training_summary is None:
+        return None
+    estimate = _selected_checkpoint_training_estimate(run.training_summary)
+    if estimate is None:
+        return None
+    sampled_competence = _extract.mapping(
+        estimate.get("sampled_competence"),
+        "training_estimate.sampled_competence",
+    )
+    training_points = _training_estimate_competence_points(sampled_competence)
+    training_score = _as_nonnegative_number(
+        estimate.get("score"),
+        "training_estimate.score",
+    )
+    accepted_by_interval = {
+        _comparison_interval_key(point): point for point in accepted_points
+    }
+    training_by_interval = {
+        _comparison_interval_key(point): point for point in training_points
+    }
+    comparison_points: list[dict[str, object]] = []
+    for key in sorted(
+        {*accepted_by_interval, *training_by_interval},
+        key=_comparison_interval_sort_key,
+    ):
+        accepted_point = accepted_by_interval.get(key)
+        training_point = training_by_interval.get(key)
+        comparison_point: dict[str, object] = {
+            "complexity": _comparison_interval_complexity(
+                accepted_point if accepted_point is not None else training_point
+            ),
+            "status": _comparison_point_status(
+                accepted_point=accepted_point,
+                training_point=training_point,
+            ),
+        }
+        _copy_optional_interval_fields(
+            comparison_point,
+            accepted_point if accepted_point is not None else training_point,
+        )
+        if accepted_point is not None:
+            comparison_point["accepted_score"] = _point_score(accepted_point)
+            comparison_point["accepted_sample_count"] = _point_sample_count(accepted_point)
+        if training_point is not None:
+            comparison_point["training_score"] = _point_score(training_point)
+            comparison_point["training_sample_count"] = _point_sample_count(training_point)
+        if accepted_point is not None and training_point is not None:
+            comparison_point["score_delta"] = (
+                _point_score(training_point) - _point_score(accepted_point)
+            )
+        comparison_points.append(comparison_point)
+    accepted_sample_count = sum(_point_sample_count(point) for point in accepted_points)
+    training_sample_count = sum(_point_sample_count(point) for point in training_points)
+    return {
+        "kind": "training-vs-accepted-sampled-competence-v1",
+        "accepted_score": accepted_score,
+        "training_score": training_score,
+        "score_delta": training_score - accepted_score,
+        "accepted_sample_count": accepted_sample_count,
+        "training_sample_count": training_sample_count,
+        "point_count": len(comparison_points),
+        "matched_point_count": sum(
+            1 for point in comparison_points if point["status"] == "matched"
+        ),
+        "points": comparison_points,
+    }
+
+
+def _selected_checkpoint_training_estimate(
+    training_summary: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    selected_checkpoint = _extract.optional_mapping(
+        training_summary.get("selected_model_checkpoint"),
+        "selected_model_checkpoint",
+    )
+    if selected_checkpoint is not None:
+        checkpoint_estimate = _extract.optional_mapping(
+            selected_checkpoint.get("score_estimate"),
+            "selected_model_checkpoint.score_estimate",
+        )
+        if checkpoint_estimate is not None:
+            return checkpoint_estimate
+    return _extract.optional_mapping(
+        training_summary.get("training_estimate"),
+        "training_estimate",
+    )
+
+
+def _training_estimate_competence_points(
+    sampled_competence: Mapping[str, object],
+) -> tuple[dict[str, object], ...]:
+    points = sampled_competence.get("points")
+    if not isinstance(points, list | tuple):
+        return (_competence_point_from_sampled_record(sampled_competence),)
+    return tuple(
+        _competence_point_from_sampled_record(point)
+        for point in (
+            _extract.mapping(value, "training_estimate.sampled_competence.points")
+            for value in _as_sequence(
+                cast(object, points),
+                "training_estimate.sampled_competence.points",
+            )
+        )
+    )
+
+
+def _comparison_interval_key(point: Mapping[str, object]) -> tuple[float, float]:
+    complexity = _point_complexity(point)
+    minimum = _optional_nonnegative_number(
+        point.get("complexity_minimum"),
+        "competence_point.complexity_minimum",
+    )
+    maximum = _optional_nonnegative_number(
+        point.get("complexity_maximum"),
+        "competence_point.complexity_maximum",
+    )
+    return (
+        minimum if minimum is not None else complexity,
+        maximum if maximum is not None else complexity,
+    )
+
+
+def _comparison_interval_sort_key(key: tuple[float, float]) -> tuple[float, float]:
+    return key
+
+
+def _comparison_interval_complexity(point: Mapping[str, object] | None) -> float:
+    if point is None:
+        raise LocalResultImportError("training comparison point is missing")
+    return _point_complexity(point)
+
+
+def _copy_optional_interval_fields(
+    target: dict[str, object],
+    point: Mapping[str, object] | None,
+) -> None:
+    if point is None:
+        return
+    minimum = _optional_nonnegative_number(
+        point.get("complexity_minimum"),
+        "competence_point.complexity_minimum",
+    )
+    maximum = _optional_nonnegative_number(
+        point.get("complexity_maximum"),
+        "competence_point.complexity_maximum",
+    )
+    if minimum is not None:
+        target["complexity_minimum"] = minimum
+    if maximum is not None:
+        target["complexity_maximum"] = maximum
+
+
+def _comparison_point_status(
+    *,
+    accepted_point: Mapping[str, object] | None,
+    training_point: Mapping[str, object] | None,
+) -> str:
+    if accepted_point is not None and training_point is not None:
+        return "matched"
+    if accepted_point is not None:
+        return "accepted-only"
+    return "training-only"
+
+
+def _point_sample_count(point: Mapping[str, object]) -> int:
+    return _as_positive_int(point.get("sample_count"), "competence_point.sample_count")
 
 
 def _chance_mass(manifest: BenchmarkManifest) -> float:
@@ -2863,6 +3144,66 @@ def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
             _as_nonnegative_number(view_record.get("score"), _field_path(view_path, "score"))
             if "basis" in view_record:
                 _extract.mapping(view_record["basis"], _field_path(view_path, "basis"))
+    if "training_estimate_comparison" in record:
+        _validate_training_estimate_comparison(
+            _extract.mapping(
+                record["training_estimate_comparison"],
+                _field_path(prefix, "training_estimate_comparison"),
+            ),
+            _field_path(prefix, "training_estimate_comparison"),
+        )
+
+
+def _validate_training_estimate_comparison(
+    record: Mapping[str, object],
+    prefix: str,
+) -> None:
+    _require_string_fields(record, prefix, ("kind",))
+    if record.get("kind") != "training-vs-accepted-sampled-competence-v1":
+        raise LocalResultImportError(f"{_field_path(prefix, 'kind')} is invalid")
+    for field in (
+        "accepted_score",
+        "training_score",
+        "accepted_sample_count",
+        "training_sample_count",
+        "point_count",
+        "matched_point_count",
+    ):
+        _as_nonnegative_number(record.get(field), _field_path(prefix, field))
+    _as_finite_number(record.get("score_delta"), _field_path(prefix, "score_delta"))
+    points = _as_sequence(record.get("points"), _field_path(prefix, "points"))
+    for index, point in enumerate(points):
+        point_path = f"{prefix}.points.{index}"
+        point_record = _extract.mapping(point, point_path)
+        _extract.non_empty_string(point_record.get("status"), _field_path(point_path, "status"))
+        if point_record.get("status") not in {
+            "matched",
+            "accepted-only",
+            "training-only",
+        }:
+            raise LocalResultImportError(f"{_field_path(point_path, 'status')} is invalid")
+        _as_nonnegative_number(
+            point_record.get("complexity"),
+            _field_path(point_path, "complexity"),
+        )
+        for optional_number in (
+            "complexity_minimum",
+            "complexity_maximum",
+            "accepted_score",
+            "training_score",
+            "accepted_sample_count",
+            "training_sample_count",
+        ):
+            if optional_number in point_record:
+                _as_nonnegative_number(
+                    point_record[optional_number],
+                    _field_path(point_path, optional_number),
+                )
+        if "score_delta" in point_record:
+            _as_finite_number(
+                point_record["score_delta"],
+                _field_path(point_path, "score_delta"),
+            )
 
 
 def _validate_competition_summary_record(record: Mapping[str, object], prefix: str) -> None:
@@ -3123,6 +3464,15 @@ def _as_nonnegative_number(value: object, field: str) -> float:
     numeric = float(value)
     if numeric < 0 or not math.isfinite(numeric):
         raise LocalResultImportError(f"{field}: expected finite nonnegative number")
+    return numeric
+
+
+def _as_finite_number(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise LocalResultImportError(f"{field}: expected number")
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise LocalResultImportError(f"{field}: expected finite number")
     return numeric
 
 
