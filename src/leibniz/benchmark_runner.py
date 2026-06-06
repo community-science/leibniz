@@ -281,6 +281,42 @@ class _TrainingStepBatch:
     sample_set: GeneratedSampleSet | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _RollingValidationCompetencePoint:
+    point: ValidationCompetencePoint
+    accepted_mass_sum: float
+
+    @classmethod
+    def from_point(
+        cls,
+        point: ValidationCompetencePoint,
+    ) -> _RollingValidationCompetencePoint:
+        return cls(
+            point=point,
+            accepted_mass_sum=point.accepted_mass * point.sample_count,
+        )
+
+    def add(
+        self,
+        point: ValidationCompetencePoint,
+    ) -> _RollingValidationCompetencePoint:
+        sample_count = self.point.sample_count + point.sample_count
+        accepted_mass_sum = self.accepted_mass_sum + (
+            point.accepted_mass * point.sample_count
+        )
+        return _RollingValidationCompetencePoint(
+            point=ValidationCompetencePoint(
+                complexity=point.complexity,
+                accepted_mass=accepted_mass_sum / sample_count,
+                sample_count=sample_count,
+                seed=point.seed,
+                complexity_minimum=point.complexity_minimum,
+                complexity_maximum=point.complexity_maximum,
+            ),
+            accepted_mass_sum=accepted_mass_sum,
+        )
+
+
 class _RuntimeCapacityReached(Exception):
     """Raised when the active rung cannot fit one physical execution batch."""
 
@@ -3033,7 +3069,10 @@ def _train_until_convergence(
     plateau_window_start_index = 0
     max_validation_inference_compute: int | None = None
     latest_training_compute_per_sample: int | None = None
-    replay_frontier_points: dict[tuple[float, float], ValidationCompetencePoint] = {}
+    replay_frontier_points: dict[
+        tuple[float, float],
+        _RollingValidationCompetencePoint,
+    ] = {}
 
     def append_validation(*, step: int, check: int) -> None:
         nonlocal best_score, max_validation_inference_compute, stale_checks
@@ -3082,7 +3121,7 @@ def _train_until_convergence(
                 probabilities=probabilities,
                 previous_frontier_points=_refreshed_frontier_points(
                     frontier_points(),
-                    replay_frontier_points.values(),
+                    (rolling.point for rolling in replay_frontier_points.values()),
                 ),
                 validation_check=check,
                 step=step,
@@ -3203,9 +3242,10 @@ def _train_until_convergence(
                             complexity_axis=None,
                         )
                     )
-                    replay_frontier_points[
-                        _validation_competence_point_interval_key(replay_point)
-                    ] = replay_point
+                    _accumulate_replay_frontier_point(
+                        replay_frontier_points,
+                        replay_point,
+                    )
             with phase_timings.span("training_backward", samples=actual_batch_size):
                 loss.backward()
             with phase_timings.span("training_optimizer_step"):
@@ -3396,6 +3436,23 @@ def _refreshed_frontier_points(
         by_interval[key]
         for key in sorted(by_interval, key=lambda interval: (interval[0], interval[1]))
     )
+
+
+def _accumulate_replay_frontier_point(
+    replay_frontier_points: dict[
+        tuple[float, float],
+        _RollingValidationCompetencePoint,
+    ],
+    point: ValidationCompetencePoint,
+) -> None:
+    key = _validation_competence_point_interval_key(point)
+    existing = replay_frontier_points.get(key)
+    if existing is None:
+        replay_frontier_points[key] = _RollingValidationCompetencePoint.from_point(
+            point
+        )
+        return
+    replay_frontier_points[key] = existing.add(point)
 
 
 def _validation_competence_point_interval_key(

@@ -1458,6 +1458,40 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
     assert replay_refreshed_points[0].accepted_mass < 1e-6
 
 
+def test_training_replay_frontier_points_are_sample_weighted_by_interval() -> None:
+    replay_points: dict[tuple[float, float], object] = {}
+
+    cast(Any, benchmark_runner)._accumulate_replay_frontier_point(
+        replay_points,
+        ValidationCompetencePoint(
+            complexity=4.0,
+            accepted_mass=0.25,
+            sample_count=4,
+            seed=101,
+            complexity_minimum=4.0,
+            complexity_maximum=5.0,
+        ),
+    )
+    cast(Any, benchmark_runner)._accumulate_replay_frontier_point(
+        replay_points,
+        ValidationCompetencePoint(
+            complexity=4.0,
+            accepted_mass=0.75,
+            sample_count=12,
+            seed=202,
+            complexity_minimum=4.0,
+            complexity_maximum=5.0,
+        ),
+    )
+
+    rolling_point = cast(Any, replay_points[(4.0, 5.0)]).point
+    assert rolling_point.sample_count == 16
+    assert rolling_point.seed == 202
+    assert rolling_point.complexity_minimum == 4.0
+    assert rolling_point.complexity_maximum == 5.0
+    assert math.isclose(rolling_point.accepted_mass, 0.625)
+
+
 def test_training_plateau_signal_uses_current_rung_competence() -> None:
     score_estimate = _score_estimate(
         check=1,
