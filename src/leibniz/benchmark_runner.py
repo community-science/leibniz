@@ -512,7 +512,7 @@ class _LearningRateSchedule:
     update_on: str
     lr_reduction_count: int = 0
     minimum_effective_learning_rate: float | None = None
-    base_learning_rates: tuple[float, ...] = ()
+    curriculum_expansion_learning_rates: tuple[float, ...] = ()
 
     def learning_rates(self) -> tuple[float, ...]:
         return tuple(float(group["lr"]) for group in self.optimizer.param_groups)
@@ -542,13 +542,13 @@ class _LearningRateSchedule:
 
     def reset_for_curriculum_expansion(self) -> None:
         self.reset_plateau_response_count()
-        if self.base_learning_rates:
-            for group, base_learning_rate in zip(
+        if self.curriculum_expansion_learning_rates:
+            for group, restart_learning_rate in zip(
                 self.optimizer.param_groups,
-                self.base_learning_rates,
+                self.curriculum_expansion_learning_rates,
                 strict=True,
             ):
-                group["lr"] = base_learning_rate
+                group["lr"] = max(float(group["lr"]), restart_learning_rate)
         reset_scheduler = getattr(self.scheduler, "_reset", None)
         if callable(reset_scheduler):
             reset_scheduler()
@@ -997,7 +997,7 @@ def run_benchmark(
             ),
             "model_checkpoints": [dict(record) for record in checkpoint_records],
             "selected_model_checkpoint": selected_checkpoint_record,
-            "selected_model_checkpoint_policy": "highest-current-rung-training-competence",
+            "selected_model_checkpoint_policy": "highest-training-score-estimate",
             "evaluation_model_artifact": selected_checkpoint_record,
         },
     )
@@ -3914,7 +3914,7 @@ def _training_progress_record(
         "selected_model_checkpoint": (
             None if selected_model_checkpoint is None else dict(selected_model_checkpoint)
         ),
-        "selected_model_checkpoint_policy": "highest-current-rung-training-competence",
+        "selected_model_checkpoint_policy": "highest-training-score-estimate",
     }
     record["sampled_competence"] = dict(
         cast(Mapping[str, object], training_estimate["sampled_competence"])
@@ -4147,13 +4147,7 @@ def _checkpoint_selection_score(checkpoint: ModelCheckpointArtifact) -> float:
 def _checkpoint_score_estimate_selection_score(
     score_estimate: Mapping[str, object],
 ) -> float:
-    return _training_score_estimate_frontier_competence(
-        score_estimate,
-        chance_mass=_required_float(
-            score_estimate.get("chance_mass"),
-            "score_estimate.chance_mass",
-        ),
-    )
+    return _training_score_estimate_score(score_estimate)
 
 
 def _throughput_record(
@@ -4416,7 +4410,6 @@ def _make_scheduler(
             scheduler=build_cosine_lr_schedule(runtime, optimizer, T_max=max(1, max_steps)),
             optimizer=optimizer,
             update_on="optimizer-step",
-            base_learning_rates=tuple(float(group["lr"]) for group in optimizer.param_groups),
         )
     if name == "reduce-on-plateau":
         factor = 0.1
@@ -4433,7 +4426,9 @@ def _make_scheduler(
             optimizer=optimizer,
             update_on="score-estimate",
             minimum_effective_learning_rate=eps / (1.0 - factor),
-            base_learning_rates=tuple(float(group["lr"]) for group in optimizer.param_groups),
+            curriculum_expansion_learning_rates=tuple(
+                float(group["lr"]) * factor for group in optimizer.param_groups
+            ),
         )
     raise BenchmarkRunnerError(f"unsupported schedule: {name}")
 

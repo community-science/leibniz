@@ -696,6 +696,41 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     }
 
 
+def test_training_estimate_comparison_uses_selected_checkpoint_estimate(
+    tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    _run_and_evaluate_digits_benchmark(results_root)
+    training_summary_path = next((results_root / "training" / "digits").glob("*.json"))
+    training_summary = dict(
+        load_object_document(
+            training_summary_path.read_bytes(),
+            description="training summary",
+        )
+    )
+    selected_checkpoint = cast(
+        dict[str, object],
+        training_summary["selected_model_checkpoint"],
+    )
+    selected_estimate = cast(dict[str, object], selected_checkpoint["score_estimate"])
+    terminal_estimate = dict(selected_estimate)
+    terminal_estimate["score"] = 0.0
+    training_summary["training_estimate"] = terminal_estimate
+    training_summary_path.write_bytes(canonical_document_bytes(training_summary))
+
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=results_root,
+    )
+    view = load_console_result_view(summary.view_file.read_bytes())
+    result = cast(list[dict[str, object]], view["benchmark_results"])[0]
+    leaderboard = cast(list[dict[str, object]], result["leaderboard"])
+    comparison = cast(dict[str, object], leaderboard[0]["training_estimate_comparison"])
+
+    assert comparison["training_score"] == selected_estimate["score"]
+    assert comparison["training_score"] != terminal_estimate["score"]
+
+
 def test_cli_benchmark_evaluate_discovers_training_checkpoints(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

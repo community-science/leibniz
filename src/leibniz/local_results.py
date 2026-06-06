@@ -2472,10 +2472,7 @@ def _training_estimate_comparison_record(
 ) -> dict[str, object] | None:
     if run.result_status != "accepted" or run.training_summary is None:
         return None
-    estimate = _extract.optional_mapping(
-        run.training_summary.get("training_estimate"),
-        "training_estimate",
-    )
+    estimate = _selected_checkpoint_training_estimate(run.training_summary)
     if estimate is None:
         return None
     sampled_competence = _extract.mapping(
@@ -2539,6 +2536,26 @@ def _training_estimate_comparison_record(
         ),
         "points": comparison_points,
     }
+
+
+def _selected_checkpoint_training_estimate(
+    training_summary: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    selected_checkpoint = _extract.optional_mapping(
+        training_summary.get("selected_model_checkpoint"),
+        "selected_model_checkpoint",
+    )
+    if selected_checkpoint is not None:
+        checkpoint_estimate = _extract.optional_mapping(
+            selected_checkpoint.get("score_estimate"),
+            "selected_model_checkpoint.score_estimate",
+        )
+        if checkpoint_estimate is not None:
+            return checkpoint_estimate
+    return _extract.optional_mapping(
+        training_summary.get("training_estimate"),
+        "training_estimate",
+    )
 
 
 def _training_estimate_competence_points(
