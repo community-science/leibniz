@@ -23,6 +23,7 @@ from leibniz.observation_generation import (
     StateSpaceMeasureRequest,
     StateSpaceMeasureValue,
 )
+from leibniz.tensor_runtime import resolve_tensor_runtime
 from leibniz.timing import TimingCollector
 
 _repository_root = Path(__file__).parents[1]
@@ -393,6 +394,27 @@ def test_digits_generator_materializes_target_state_space_band() -> None:
     ]
 
 
+def test_digits_generator_materializes_large_target_state_space_directly() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+
+    state_space = generator.state_space_for_request(
+        request=StateSpaceMeasureRequest(minimum=20.0, maximum=21.0)
+    )
+
+    assert state_space is not None
+    assert state_space.cardinality == 1_048_580
+    assert math.isclose(state_space.complexity, math.log2(1_048_580))
+    assert state_space.resolution_assignment is not None
+    assert state_space.resolution_assignment.values == {"W": 1452, "H": 1452}
+    assert state_space.metadata["affine_grid"] == {
+        "x_translation": 109,
+        "y_translation": 74,
+        "scale": 13,
+        "rotation": 1,
+        "x_shear": 1,
+    }
+
+
 def test_state_space_candidates_can_declare_exact_integer_cardinality() -> None:
     candidate = StateSpaceCandidate(
         request=StateSpaceMeasureRequest(
@@ -514,6 +536,43 @@ def test_digits_generator_applies_recorded_variation_coordinates() -> None:
     assert field_record.field == direct.field
     assert field_record.field != untransformed.field
     assert all(0.0 <= value <= 1.0 for value in sample.require_field().values)
+
+
+def test_digits_tensor_fields_match_recorded_field_samples() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    runtime = resolve_tensor_runtime("cpu")
+    outcome_space = generator.manifest.resolve_outcome_space()
+    batch = generator(
+        shape=4,
+        seed=909,
+        include_fields=True,
+        runtime=runtime,
+        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
+    )
+
+    fields = batch.require_tensors()[0].detach().cpu()
+    for index, sample in enumerate(batch.samples):
+        assert tuple(fields[index].shape) == sample.require_field().shape
+        assert fields[index].flatten().tolist() == list(sample.require_field().values)
+
+
+def test_digits_tensor_generation_rejects_unmatched_state_space_requests() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    runtime = resolve_tensor_runtime("cpu")
+    outcome_space = generator.manifest.resolve_outcome_space()
+    request = StateSpaceMeasureRequest(minimum=1.0, maximum=1.0)
+
+    with pytest.raises(
+        ObservationGenerationError,
+        match="tensor generation state-space request matched no candidate",
+    ):
+        generator(
+            shape=1,
+            seed=910,
+            runtime=runtime,
+            outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
+            state_space_request=request,
+        )
 
 
 def test_digits_generator_rejects_edge_clipped_affine_samples() -> None:
