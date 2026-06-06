@@ -449,7 +449,10 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     training_run = TrainingRunRecord.from_record(
         cast(Mapping[str, object], training_summary["training_run"])
     )
-    assert training_run.protocol.optimizer == "adam"
+    assert training_run.protocol.optimizer == "loss-search"
+    assert training_run.protocol.learning_rate is None
+    assert "learning_rate" not in training_run.protocol.to_record()
+    assert "learning_rate" not in training_summary
     assert training_run.protocol.objective == "cross-entropy"
     assert training_run.protocol.tensor_runtime == "pytorch"
     assert training_run.protocol.tensor_device == "cpu"
@@ -489,7 +492,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert component_timing["sample_count"] == 2
     assert transform_timing["sample_count"] == 2
     assert cast(float, render_timing["seconds"]) > 0
-    assert forward_timing["sample_count"] == 2
+    assert cast(int, forward_timing["sample_count"]) >= 2
     assert cast(float, forward_timing["seconds"]) > 0
     assert cast(float, roofline["peak_bytes_per_second"]) > 0
     assert training_throughput["sample_count"] == 2
@@ -1799,6 +1802,125 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
     assert len(stage_result.validation_history) == 2
 
 
+def test_training_plateau_above_rung_competence_threshold_refines_before_advancing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_batch(_index: int) -> tuple[object, object]:
+        return object(), object()
+
+    class FakeLossValue:
+        def item(self) -> float:
+            return 2.0
+
+        def backward(self) -> None:
+            pass
+
+    class FakeLossFunction:
+        def __call__(self, _logits: object, _labels: object) -> FakeLossValue:
+            return FakeLossValue()
+
+    class FakeModule:
+        training = True
+
+        def __call__(self, _fields: object) -> object:
+            return object()
+
+        def eval(self) -> None:
+            self.training = False
+
+        def train(self) -> None:
+            self.training = True
+
+    class FakeValidationBatch:
+        sample_count = 2
+
+    class FakeOptimizer:
+        param_groups: list[dict[str, object]] = [{}]
+
+        def zero_grad(self, *, set_to_none: bool) -> None:
+            _ = set_to_none
+
+        def step(self) -> None:
+            pass
+
+    def fake_validation_batch(_index: int) -> FakeValidationBatch:
+        return FakeValidationBatch()
+
+    def fake_batch_tensors(**_kwargs: object) -> tuple[object, object]:
+        return object(), object()
+
+    def fake_predictions(_runtime: object, _module: object, _fields: object) -> list[list[float]]:
+        return [[1.0]]
+
+    def fake_training_gate_score_estimate(**kwargs: object) -> dict[str, object]:
+        return _score_estimate(
+            check=cast(int, kwargs["validation_check"]),
+            step=cast(int, kwargs["step"]),
+            score=1.0,
+            complexity=math.log2(10),
+            accepted_mass=0.6,
+        )
+
+    def fake_batch_max_compute(**_kwargs: object) -> int:
+        return 10
+
+    def fail_if_advancing(_history: object) -> bool:
+        raise AssertionError(
+            "frontier should not advance immediately at the trainability threshold"
+        )
+
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    outcome_ids = tuple(
+        outcome.id for outcome in benchmark.manifest.resolve_outcome_space().outcomes
+    )
+    monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
+    monkeypatch.setattr(benchmark_runner, "apply_softmax_predictions", fake_predictions)
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_inference_compute",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_training_compute_per_sample",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_training_gate_score_estimate",
+        fake_training_gate_score_estimate,
+    )
+
+    stage_result = cast(Any, benchmark_runner)._train_until_convergence(
+        runtime=resolve_tensor_runtime("cpu"),
+        module=FakeModule(),
+        optimizer=FakeOptimizer(),
+        scheduler=None,
+        loss_function=FakeLossFunction(),
+        train_batch=fake_batch,
+        validation_batch=cast(Any, fake_validation_batch),
+        outcome_space=benchmark.manifest.resolve_outcome_space(),
+        outcome_ids=outcome_ids,
+        max_steps=2,
+        gate_check_interval=1,
+        patience=1,
+        min_delta=0.001,
+        rung_competence_threshold=0.5,
+        training_batch_target=1,
+        architecture=ArchitectureManifestDocument.from_bytes(
+            _digits_architecture.read_bytes()
+        ).manifest,
+        training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
+        validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        phase_timings=benchmark_runner.TimingCollector(),
+        on_plateau=fail_if_advancing,
+    )
+
+    assert stage_result.stop_reason == "max-steps"
+    assert len(stage_result.validation_history) == 3
+
+
 def test_evaluation_curriculum_uses_benchmark_owned_representative_windows() -> None:
     generator = load_generator(_digits_benchmark_root)
     minimum = generator.minimum_state_space_measure().value
@@ -2113,7 +2235,6 @@ def test_digits_benchmark_runner_run_slug_includes_training_controls() -> None:
         benchmark_root=_digits_benchmark_root,
         seed=401,
         train_steps=10,
-        optimizer="sgd",
     )
     alternate_plan = BenchmarkRunPlan(
         architecture_path=_digits_architecture,
@@ -2121,6 +2242,8 @@ def test_digits_benchmark_runner_run_slug_includes_training_controls() -> None:
         seed=401,
         train_steps=10,
         optimizer="adam",
+        learning_rate=0.01,
+        schedule="reduce-on-plateau",
     )
 
     assert base_plan.run_slug.startswith("seed401-steps10-train-")
@@ -2369,6 +2492,14 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     progress_cost = cast(dict[str, object], progress_plot_runs[0]["cost_summary"])
     assert isinstance(progress_cost["inference_compute"], int | float)
     training_estimate = cast(dict[str, object], progress_records[0]["training_estimate"])
+    materialized_progress_record = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="training progress",
+    )
+    materialized_training_estimate = cast(
+        dict[str, object],
+        materialized_progress_record["training_estimate"],
+    )
     assert isinstance(training_estimate["max_inference_compute"], int)
     sampled_competence = cast(dict[str, object], training_estimate["sampled_competence"])
     sampled_points = cast(list[dict[str, object]], sampled_competence["points"])
@@ -2377,7 +2508,7 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     assert "observation_ids" not in sampled_points[0]
     assert math.isclose(
         cast(float, progress_plot_runs[0]["score"]),
-        cast(float, training_estimate["score"]),
+        cast(float, materialized_training_estimate["score"]),
     )
     progress_candidates = cast(list[dict[str, object]], progress_result["model_candidates"])
     assert len(progress_candidates) == 1

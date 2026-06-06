@@ -17,7 +17,7 @@ __all__ = [
     "TrainingRunValidationError",
 ]
 
-_optimizer_kind = Literal["sgd", "adam", "adamw"]
+_optimizer_kind = Literal["loss-search", "sgd", "adam", "adamw"]
 _schedule_kind = Literal["none", "cosine", "reduce-on-plateau"]
 _training_status = Literal[
     "running",
@@ -33,7 +33,7 @@ _protocol_record = RecordSpec(
         "kind": FieldSpec(kind="string"),
         "objective": FieldSpec(kind="string"),
         "optimizer": FieldSpec(kind="string"),
-        "learning_rate": FieldSpec(kind="number"),
+        "learning_rate": FieldSpec(kind="number", required=False),
         "schedule": FieldSpec(kind="string"),
         "seed": FieldSpec(kind="integer"),
         "training_batch_target": FieldSpec(kind="integer"),
@@ -96,7 +96,7 @@ class TrainingProtocol:
     kind: str
     objective: str
     optimizer: _optimizer_kind
-    learning_rate: float
+    learning_rate: float | None
     schedule: _schedule_kind
     seed: int
     training_batch_target: int
@@ -117,10 +117,21 @@ class TrainingProtocol:
             raise TrainingRunValidationError("kind must be nonempty")
         if not self.objective:
             raise TrainingRunValidationError("objective must be nonempty")
-        if self.optimizer not in {"sgd", "adam", "adamw"}:
+        if self.optimizer not in {"loss-search", "sgd", "adam", "adamw"}:
             raise TrainingRunValidationError(f"unsupported optimizer: {self.optimizer}")
-        if not _is_positive_finite(self.learning_rate):
-            raise TrainingRunValidationError("learning_rate must be positive and finite")
+        if self.optimizer == "loss-search":
+            if self.learning_rate is not None:
+                raise TrainingRunValidationError(
+                    "loss-search optimizer does not accept learning_rate"
+                )
+            if self.schedule != "none":
+                raise TrainingRunValidationError(
+                    "loss-search optimizer does not accept a schedule"
+                )
+        elif self.learning_rate is None or not _is_positive_finite(self.learning_rate):
+            raise TrainingRunValidationError(
+                f"{self.optimizer} optimizer requires positive finite learning_rate"
+            )
         if self.schedule not in {"none", "cosine", "reduce-on-plateau"}:
             raise TrainingRunValidationError(f"unsupported schedule: {self.schedule}")
         _require_nonnegative_int(self.seed, "seed")
@@ -169,7 +180,11 @@ class TrainingProtocol:
                 _optimizer_kind,
                 _extract.non_empty_string(validated["optimizer"], "optimizer"),
             ),
-            learning_rate=_extract.finite_float(validated["learning_rate"], "learning_rate"),
+            learning_rate=(
+                None
+                if "learning_rate" not in validated
+                else _extract.finite_float(validated["learning_rate"], "learning_rate")
+            ),
             schedule=cast(
                 _schedule_kind,
                 _extract.non_empty_string(validated["schedule"], "schedule"),
@@ -229,7 +244,6 @@ class TrainingProtocol:
             "kind": self.kind,
             "objective": self.objective,
             "optimizer": self.optimizer,
-            "learning_rate": self.learning_rate,
             "schedule": self.schedule,
             "seed": self.seed,
             "training_batch_target": self.training_batch_target,
@@ -243,6 +257,8 @@ class TrainingProtocol:
             "tensor_device": self.tensor_device,
             "validation_source": self.validation_source,
         }
+        if self.learning_rate is not None:
+            record["learning_rate"] = self.learning_rate
         if self.runtime_memory_budget_fraction is not None:
             record["runtime_memory_budget_fraction"] = (
                 self.runtime_memory_budget_fraction

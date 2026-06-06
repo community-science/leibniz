@@ -925,7 +925,6 @@ function trainingProtocolEntries(protocol: TrainingProtocolRecord): [string, str
     ['Objective', protocol.objective],
     ['Optimizer', protocol.optimizer],
     ['Schedule', protocol.schedule],
-    ['Learning Rate', protocol.learning_rate],
     ['Steps', protocol.max_steps],
     ['Training Batch Target', protocol.training_batch_target],
     ['Gate Check', protocol.gate_check_interval],
@@ -934,6 +933,9 @@ function trainingProtocolEntries(protocol: TrainingProtocolRecord): [string, str
     ['Patience', protocol.patience],
     ['Validation', protocol.validation_source],
   ];
+  if (protocol.learning_rate !== undefined) {
+    entries.splice(3, 0, ['Learning Rate', protocol.learning_rate]);
+  }
   return entries
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
     .map(([label, value]) => [label, parameterValueLabel(value)]);

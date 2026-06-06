@@ -350,13 +350,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     train.add_argument("--seed", default=101, type=int)
     train.add_argument("--train-steps", default=None, type=int)
-    train.add_argument("--learning-rate", default=0.01, type=float)
-    train.add_argument("--optimizer", default="adam", choices=("sgd", "adam", "adamw"))
-    train.add_argument(
-        "--schedule",
-        default="reduce-on-plateau",
-        choices=("none", "cosine", "reduce-on-plateau"),
-    )
     train.add_argument("--gate-check-interval", default=32, type=int)
     train.add_argument("--model-checkpoint-gate-interval", default=1, type=int)
     train.add_argument("--gate-decision-rule", default="score-estimate-plateau")
@@ -676,9 +669,6 @@ def _benchmark_run_plan(
         benchmark_root=benchmark_root,
         seed=args.seed,
         train_steps=args.train_steps,
-        learning_rate=args.learning_rate,
-        optimizer=args.optimizer,
-        schedule=args.schedule,
         gate_check_interval=args.gate_check_interval,
         model_checkpoint_gate_interval=args.model_checkpoint_gate_interval,
         gate_decision_rule=args.gate_decision_rule,

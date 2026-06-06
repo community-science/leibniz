@@ -10,6 +10,8 @@ from leibniz.tensor_runtime import (
     TensorRuntimeError,
     architecture_supported_by_tensor_runtime,
     architecture_tensor_runtime_issue,
+    build_optimizer,
+    optimizer_step,
     resolve_tensor_runtime,
     runtime_roofline_record,
     tensor_runtime_device_kinds,
@@ -53,6 +55,48 @@ def test_resolve_tensor_runtime_rejects_unavailable_explicit_device() -> None:
     else:
         with pytest.raises(TensorRuntimeError, match="cuda is not available"):
             resolve_tensor_runtime("cuda")
+
+
+def test_loss_search_optimizer_decreases_loss_without_learning_rate() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    parameter = torch.nn.Parameter(torch.tensor([2.0], device=runtime.device))
+    optimizer = build_optimizer(
+        runtime,
+        name="loss-search",
+        parameters=[parameter],
+        learning_rate=None,
+    )
+
+    def closure() -> Any:
+        optimizer.zero_grad(set_to_none=True)
+        loss = (parameter - 0.25).pow(2).sum()
+        loss.backward()
+        return loss
+
+    baseline_loss = float(closure().detach())
+    optimizer_step(runtime, optimizer, closure)
+    stepped_loss = float(closure().detach())
+
+    assert "lr" not in optimizer.param_groups[0]
+    assert optimizer.state[parameter]["step"] == 1
+    assert "exp_avg" in optimizer.state[parameter]
+    assert "exp_avg_sq" in optimizer.state[parameter]
+    assert stepped_loss < baseline_loss
+
+
+def test_loss_search_optimizer_rejects_missing_closure() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    parameter = runtime.torch.nn.Parameter(runtime.torch.tensor([1.0]))
+    optimizer = build_optimizer(
+        runtime,
+        name="loss-search",
+        parameters=[parameter],
+        learning_rate=None,
+    )
+
+    with pytest.raises(TensorRuntimeError, match="requires a loss closure"):
+        optimizer.step()
 
 
 def test_mps_architecture_support_allows_operation_level_fallback() -> None:
