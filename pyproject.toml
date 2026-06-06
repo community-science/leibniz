@@ -25,12 +25,18 @@ dependencies = []
 leibniz = "leibniz.cli:main"
 
 [project.optional-dependencies]
+console = [
+    "numpy>=1.26",
+    "torch>=2",
+]
 dev = [
     "build>=1.2",
     "hatchling>=1.25",
+    "numpy>=1.26",
     "pyright>=1.1",
     "pytest>=8.2",
     "ruff>=0.8",
+    "torch>=2",
 ]
 
 [tool.hatch.build.targets.wheel]

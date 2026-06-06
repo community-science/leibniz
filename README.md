@@ -41,6 +41,13 @@ source scripts/activate_environment.sh
 `environment.yml` declares CUDA-enabled PyTorch on Linux and CPU/Mac PyTorch on
 non-Linux hosts using conda selectors.
 
+Hosted console publishers that install Leibniz with pip should install the
+console extra and cache pip downloads in CI:
+
+```bash
+python -m pip install -e '.[console]'
+```
+
 Run the local checks:
 
 ```bash

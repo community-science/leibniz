@@ -42,6 +42,13 @@ CUDA-enabled PyTorch on Linux and CPU/Mac PyTorch on non-Linux hosts using
 conda selectors. CI uses the same environment specification and
 `pyproject.toml` inputs.
 
+Hosted console builds that install Leibniz directly with pip should use the
+console extra and enable pip caching in the workflow:
+
+```bash
+python -m pip install -e '.[console]'
+```
+
 ## Agent Guidance
 
 Automated coding agents should read `README.md` and `CONTRIBUTING.md` before
