@@ -11,12 +11,12 @@ from leibniz.benchmark_implementations import Benchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.observation_generation import (
+    ComplexityCandidate,
+    ComplexityRequest,
+    ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
-    StateSpaceCandidate,
-    StateSpaceMeasureRequest,
-    StateSpaceMeasureValue,
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.timing import TimingCollector
@@ -80,7 +80,7 @@ class Generator:
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
         include_metadata: bool = True,
-        state_space_request: StateSpaceMeasureRequest | None = None,
+        complexity_request: ComplexityRequest | None = None,
         runtime: object | None = None,
         outcome_ids: tuple[str, ...] | None = None,
         timing: TimingCollector | None = None,
@@ -101,15 +101,15 @@ class Generator:
                 "Chess fixture metadata-free generation requires a tensor runtime"
             )
         sample_shape = _sample_shape(shape)
-        measure = _state_space_measure()
-        if state_space_request is not None and not state_space_request.contains(measure):
+        measure = _complexity_value()
+        if complexity_request is not None and not complexity_request.contains(measure):
             return GeneratedSampleSet(
                 benchmark_id=self.manifest.id,
                 generator_id=self.id,
                 generator_version=self.version,
                 seed=seed,
                 shape=(0,),
-                state_space_request=state_space_request,
+                complexity_request=complexity_request,
                 samples=(),
             )
         samples = (
@@ -118,7 +118,7 @@ class Generator:
                     index=index,
                     outcome_id=_accepted_move,
                     complexity=measure.value,
-                    state_space_measure=measure,
+                    complexity_value=measure,
                     latent_coordinates=_latent_coordinates(),
                 )
                 for index in range(_sample_count(sample_shape))
@@ -132,27 +132,32 @@ class Generator:
             generator_version=self.version,
             seed=seed,
             shape=sample_shape,
-            state_space_request=state_space_request,
+            complexity_request=complexity_request,
             samples=samples,
         )
 
-    def minimum_state_space_measure(self) -> StateSpaceMeasureValue:
-        """Return the smallest exact Chess fixture state-space measure."""
+    def minimum_complexity(self) -> ComplexityValue:
+        """Return the smallest exact Chess fixture complexity."""
 
-        return _state_space_measure()
+        return _complexity_value()
 
-    def state_space_for_request(
+    def complexity_rung_size(self) -> float:
+        """Return the log2 complexity width for curriculum rungs."""
+
+        return 1.0
+
+    def complexity_candidate_for_request(
         self,
         *,
-        request: StateSpaceMeasureRequest,
-    ) -> StateSpaceCandidate | None:
-        """Return the exact legal-move-cardinality state space for this fixture."""
+        request: ComplexityRequest,
+    ) -> ComplexityCandidate | None:
+        """Return the exact legal-move-cardinality complexity class for this fixture."""
 
-        measure = _state_space_measure()
+        measure = _complexity_value()
         if not request.contains(measure):
             return None
-        return StateSpaceCandidate(
-            request=StateSpaceMeasureRequest(
+        return ComplexityCandidate(
+            request=ComplexityRequest(
                 minimum=measure.value,
                 maximum=measure.value,
             ),
@@ -163,17 +168,17 @@ class Generator:
             },
         )
 
-    def state_spaces_for_request(
+    def complexity_candidates_for_request(
         self,
         *,
-        request: StateSpaceMeasureRequest,
-    ) -> tuple[StateSpaceCandidate, ...]:
-        """Return all exact legal-move-cardinality candidates in a request band."""
+        request: ComplexityRequest,
+    ) -> tuple[ComplexityCandidate, ...]:
+        """Return exact legal-move-cardinality candidates in a complexity band."""
 
-        state_space = self.state_space_for_request(request=request)
-        if state_space is None:
+        complexity_class = self.complexity_candidate_for_request(request=request)
+        if complexity_class is None:
             return ()
-        return (state_space,)
+        return (complexity_class,)
 
 
 def _manifest() -> BenchmarkManifest:
@@ -188,8 +193,8 @@ def _manifest() -> BenchmarkManifest:
     )
 
 
-def _state_space_measure() -> StateSpaceMeasureValue:
-    return StateSpaceMeasureValue(
+def _complexity_value() -> ComplexityValue:
+    return ComplexityValue(
         value=math.log2(len(_valid_moves)),
     )
 
@@ -205,7 +210,7 @@ def _latent_coordinates() -> tuple[dict[str, object], ...]:
         },
         {
             "name": "benchmarks.chess.position.valid-move-count",
-            "role": "state-space",
+            "role": "complexity",
             "degree_measure": {"kind": "discrete-log2-count", "count": 1.0},
             "multiplicity": 1,
             "values": len(_valid_moves),

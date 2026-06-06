@@ -271,15 +271,15 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
         "affine_maximum_condition_number": 1.6,
         "affine_minimum_projected_extent": 0.65,
         "affine_maximum_projected_extent": 1.35,
-        "state_space_measure": {
-            "kind": "constructed-finite-state-space",
-            "measure_id": "log2_state_space_size",
-            "formula": "log2(realized_state_count)",
+        "complexity_value": {
+            "kind": "constructed-finite-complexity-class",
+            "measure_id": "log2_complexity_class_size",
+            "formula": "log2(realized_cardinality)",
             "digit_count": 10,
             "affine_transform_family": "constructed-finite-affine-product-grid",
             "target_policy": "symmetric-realized-cardinalities-inside-request-band",
             "description": (
-                "Score-bearing Digits state spaces are requested finite "
+                "Score-bearing Digits complexity classes are requested finite "
                 "single-digit slices. The minimum non-null request is the "
                 "canonical 10-way digit classification problem. Larger "
                 "requests add symmetric finite affine choices for every "
@@ -287,7 +287,7 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
                 "instead of forcing exact powers of two. Canvas resolution "
                 "is the smallest square lattice, rounded to the benchmark "
                 "resolution step, whose finite affine grid can express a "
-                "cardinality inside the requested state-space band."
+                "cardinality inside the requested complexity band."
             ),
         },
     }

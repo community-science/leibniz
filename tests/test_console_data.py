@@ -46,16 +46,16 @@ def test_console_data_reuses_persistent_generated_observation_batch_cache(
     ).clear()
     cache_key = (
         "benchmarks.fake@0.1.0",
-        "state-space-window-samples",
+        "complexity-window-samples",
         "source-fingerprint",
     )
     cached_batches: tuple[Mapping[str, object], ...] = ({
-        "mode": "state-space-window",
+        "mode": "complexity-window",
         "label": "Cached samples",
         "seed": 401,
         "sample_count": 0,
-        "state_space_window": {
-            "measure_id": "log2_state_space_size",
+        "complexity_window": {
+            "measure_id": "log2_complexity_class_size",
             "minimum": 1,
             "maximum": 2,
         },
@@ -299,16 +299,16 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     task = benchmark_tasks[0]
     assert task["kind"] == "generated-observations"
     assert task["benchmark_id"] == "benchmarks.digits@0.1.0"
-    assert task["complexity_axis"] == "log2_state_space_size"
+    assert task["complexity_axis"] == "log2_complexity_class_size"
     assert task["outcome_atom_count"] == 10
     batches = cast(list[dict[str, object]], task["batches"])
     assert [
         (batch["mode"], batch["sample_count"])
         for batch in batches
     ] == [
-        ("state-space-window", 10),
-        ("state-space-window", 40),
-        ("state-space-window", 50),
+        ("complexity-window", 10),
+        ("complexity-window", 40),
+        ("complexity-window", 50),
     ]
     assert [batch["label"] for batch in batches] == [
         "[3, 4]",
@@ -399,7 +399,7 @@ def test_console_benchmark_tasks_load_python_implementation_without_exported_jso
         assert atom_count == 10
         assert source_fingerprint
         return ({
-            "mode": "state-space-window",
+            "mode": "complexity-window",
             "label": "Fake samples",
             "seed": 401,
             "sample_count": 0,

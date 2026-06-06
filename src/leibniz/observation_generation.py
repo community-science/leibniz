@@ -25,15 +25,15 @@ __all__ = [
     "GeneratedSample",
     "GeneratedSampleSet",
     "ObservationGenerationError",
-    "StateSpaceCandidate",
-    "StateSpaceMeasureRequest",
-    "StateSpaceMeasureValue",
+    "ComplexityCandidate",
+    "ComplexityRequest",
+    "ComplexityValue",
     "load_generator",
 ]
 
-_core_state_space_measure_id = "log2_state_space_size"
-_core_state_space_measure_ids = frozenset({_core_state_space_measure_id})
-_minimum_state_space_measure_value = 1.0
+_core_complexity_measure_id = "log2_complexity_class_size"
+_core_complexity_measure_ids = frozenset({_core_complexity_measure_id})
+_minimum_complexity_value = 1.0
 
 
 def _empty_metadata() -> Mapping[str, object]:
@@ -45,32 +45,32 @@ class ObservationGenerationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class StateSpaceMeasureRequest:
-    """A core state-space measure interval requested by a runner."""
+class ComplexityRequest:
+    """A core complexity interval requested by a runner."""
 
     minimum: float
     maximum: float
-    measure_id: str = _core_state_space_measure_id
+    measure_id: str = _core_complexity_measure_id
 
     def __post_init__(self) -> None:
         if not self.measure_id:
-            raise ObservationGenerationError("state-space measure id must be nonempty")
-        if self.measure_id not in _core_state_space_measure_ids:
-            raise ObservationGenerationError("state-space measure id is not a core measure")
+            raise ObservationGenerationError("complexity id must be nonempty")
+        if self.measure_id not in _core_complexity_measure_ids:
+            raise ObservationGenerationError("complexity id is not a core measure")
         if not math.isfinite(float(self.minimum)):
-            raise ObservationGenerationError("state-space measure minimum must be finite")
+            raise ObservationGenerationError("complexity minimum must be finite")
         if not math.isfinite(float(self.maximum)):
-            raise ObservationGenerationError("state-space measure maximum must be finite")
-        if self.minimum < _minimum_state_space_measure_value:
+            raise ObservationGenerationError("complexity maximum must be finite")
+        if self.minimum < _minimum_complexity_value:
             raise ObservationGenerationError(
-                "state-space measure minimum must be at least 1"
+                "complexity minimum must be at least 1"
             )
         if self.maximum < self.minimum:
             raise ObservationGenerationError(
-                "state-space measure maximum must be at least the minimum"
+                "complexity maximum must be at least the minimum"
             )
 
-    def contains(self, value: StateSpaceMeasureValue) -> bool:
+    def contains(self, value: ComplexityValue) -> bool:
         """Return whether a measured sample satisfies this interval."""
 
         if value.measure_id != self.measure_id:
@@ -88,22 +88,22 @@ class StateSpaceMeasureRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class StateSpaceMeasureValue:
-    """A generated sample's value for a core state-space measure."""
+class ComplexityValue:
+    """A generated sample's value for a core complexity."""
 
     value: float
-    measure_id: str = _core_state_space_measure_id
+    measure_id: str = _core_complexity_measure_id
 
     def __post_init__(self) -> None:
         if not self.measure_id:
-            raise ObservationGenerationError("state-space measure id must be nonempty")
-        if self.measure_id not in _core_state_space_measure_ids:
-            raise ObservationGenerationError("state-space measure id is not a core measure")
+            raise ObservationGenerationError("complexity id must be nonempty")
+        if self.measure_id not in _core_complexity_measure_ids:
+            raise ObservationGenerationError("complexity id is not a core measure")
         if not math.isfinite(float(self.value)):
-            raise ObservationGenerationError("state-space measure value must be finite")
-        if self.value < _minimum_state_space_measure_value:
+            raise ObservationGenerationError("complexity value must be finite")
+        if self.value < _minimum_complexity_value:
             raise ObservationGenerationError(
-                "state-space measure value must be at least 1"
+                "complexity value must be at least 1"
             )
 
     def to_record(self) -> dict[str, object]:
@@ -116,10 +116,10 @@ class StateSpaceMeasureValue:
 
 
 @dataclass(frozen=True, slots=True)
-class StateSpaceCandidate:
-    """A benchmark-owned concrete state space offered for curriculum sampling."""
+class ComplexityCandidate:
+    """A benchmark-owned concrete complexity class for curriculum sampling."""
 
-    request: StateSpaceMeasureRequest
+    request: ComplexityRequest
     cardinality: int | None = None
     resolution_assignment: AxisAssignment | None = None
     metadata: Mapping[str, object] = dataclass_field(default_factory=_empty_metadata)
@@ -127,12 +127,12 @@ class StateSpaceCandidate:
     def __post_init__(self) -> None:
         if self.request.minimum != self.request.maximum:
             raise ObservationGenerationError(
-                "state-space candidate request must name one realized cardinality"
+                "complexity candidate request must name one realized cardinality"
             )
         if self.cardinality is not None:
             if type(self.cardinality) is not int or self.cardinality < 1:
                 raise ObservationGenerationError(
-                    "state-space candidate cardinality must be a positive integer"
+                    "complexity candidate cardinality must be a positive integer"
                 )
             if not math.isclose(
                 math.log2(self.cardinality),
@@ -141,7 +141,7 @@ class StateSpaceCandidate:
                 abs_tol=1e-9,
             ):
                 raise ObservationGenerationError(
-                    "state-space candidate cardinality must match its log2 measure"
+                    "complexity candidate cardinality must match log2 cardinality"
                 )
 
     @property
@@ -151,7 +151,7 @@ class StateSpaceCandidate:
         return self.request.minimum
 
     def to_record(self) -> dict[str, object]:
-        """Return a record for this benchmark-owned candidate."""
+        """Return a record for this benchmark-owned complexity candidate."""
 
         record: dict[str, object] = {
             "request": self.request.to_record(),
@@ -173,7 +173,7 @@ class GeneratedSample:
     index: int
     outcome_id: str
     complexity: float
-    state_space_measure: StateSpaceMeasureValue | None = None
+    complexity_value: ComplexityValue | None = None
     observable_state_id: str | None = None
     target_distribution: Mapping[str, float] | None = None
     latent_coordinates: tuple[Mapping[str, object], ...] = ()
@@ -249,8 +249,8 @@ class GeneratedSample:
             ]
         if self.variation_values is not None:
             record["variation_values"] = dict(self.variation_values)
-        if self.state_space_measure is not None:
-            record["state_space_measure"] = self.state_space_measure.to_record()
+        if self.complexity_value is not None:
+            record["complexity_value"] = self.complexity_value.to_record()
         if self.field is not None and include_field:
             record["field"] = self.field.to_record()
         return record
@@ -269,7 +269,7 @@ class GeneratedSampleSet:
     fields: Any | None = None
     targets: Any | None = None
     variation_extent: float | None = None
-    state_space_request: StateSpaceMeasureRequest | None = None
+    complexity_request: ComplexityRequest | None = None
 
     def __post_init__(self) -> None:
         if type(self.seed) is not int or self.seed < 0:
@@ -289,9 +289,9 @@ class GeneratedSampleSet:
             raise ObservationGenerationError("empty sample sets must have shape [0]")
         if self.samples and len(self.samples) != self.sample_count:
             raise ObservationGenerationError("sample count does not match sample shape")
-        if not self.samples and not has_tensors and self.state_space_request is None:
+        if not self.samples and not has_tensors and self.complexity_request is None:
             raise ObservationGenerationError(
-                "empty sample sets require a state-space request"
+                "empty sample sets require a complexity request"
             )
         for sample in self.samples:
             if (
@@ -299,14 +299,14 @@ class GeneratedSampleSet:
                 and sample.materialization_plan.benchmark_id != self.benchmark_id
             ):
                 raise ObservationGenerationError("sample benchmark_id does not match sample set")
-            if self.state_space_request is not None:
-                if sample.state_space_measure is None:
+            if self.complexity_request is not None:
+                if sample.complexity_value is None:
                     raise ObservationGenerationError(
-                        "state-space request requires sample measure values"
+                        "complexity request requires sample complexity values"
                     )
-                if not self.state_space_request.contains(sample.state_space_measure):
+                if not self.complexity_request.contains(sample.complexity_value):
                     raise ObservationGenerationError(
-                        "sample state-space measure is outside requested interval"
+                        "sample complexity is outside requested interval"
                     )
 
     @property
@@ -357,10 +357,10 @@ class GeneratedSampleSet:
             "seed": self.seed,
             "shape": list(self.shape),
             "sample_count": self.sample_count,
-            "state_space_request": (
+            "complexity_request": (
                 None
-                if self.state_space_request is None
-                else self.state_space_request.to_record()
+                if self.complexity_request is None
+                else self.complexity_request.to_record()
             ),
             "includes_fields": self.includes_fields,
             "includes_tensors": self.fields is not None,

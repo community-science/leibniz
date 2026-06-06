@@ -23,12 +23,12 @@ from leibniz.materialization import (
 )
 from leibniz.observation_formation import ObservationFormationDeclaration
 from leibniz.observation_generation import (
+    ComplexityCandidate,
+    ComplexityRequest,
+    ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
-    StateSpaceCandidate,
-    StateSpaceMeasureRequest,
-    StateSpaceMeasureValue,
     load_generator,
 )
 from leibniz.observation_showcases import ObservationShowcaseManifest
@@ -51,25 +51,25 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         variation_extent: float = 1.0,
     ) -> float: ...
 
-    def constructed_state_space_complexity(
+    def constructed_complexity_class_complexity(
         self,
         *,
         affine_transform_count: int,
     ) -> float: ...
 
-    def minimum_state_space_measure(self) -> StateSpaceMeasureValue: ...
+    def minimum_complexity(self) -> ComplexityValue: ...
 
-    def state_space_for_request(
+    def complexity_candidate_for_request(
         self,
         *,
-        request: StateSpaceMeasureRequest,
-    ) -> StateSpaceCandidate | None: ...
+        request: ComplexityRequest,
+    ) -> ComplexityCandidate | None: ...
 
-    def state_spaces_for_request(
+    def complexity_candidates_for_request(
         self,
         *,
-        request: StateSpaceMeasureRequest,
-    ) -> Sequence[StateSpaceCandidate]: ...
+        request: ComplexityRequest,
+    ) -> Sequence[ComplexityCandidate]: ...
 
     def __call__(
         self,
@@ -78,7 +78,7 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
         include_metadata: bool = True,
-        state_space_request: StateSpaceMeasureRequest | None = None,
+        complexity_request: ComplexityRequest | None = None,
         component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
