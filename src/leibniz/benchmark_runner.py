@@ -119,6 +119,7 @@ _default_gate_batch_target = 512
 _default_evaluation_convergence_min_samples = 64
 _default_evaluation_convergence_half_width = 0.05
 _default_evaluation_convergence_confidence_z = 1.96
+_default_evaluation_frontier_lookahead_rungs = 8
 _default_runtime_memory_budget_fraction = 0.1
 _runtime_batch_memory_safety_factor = 8
 _float32_bytes = 4
@@ -199,7 +200,6 @@ class _EvaluationInput:
     checkpoint: ModelCheckpointArtifact
     run_slug: str
     benchmark_id: ProtocolIdentifier
-    evaluation_rung_count: int
     training_compute: float | None
 
 
@@ -826,7 +826,6 @@ def run_benchmark(
     def checkpoint_record(
         checkpoint: ModelCheckpointArtifact,
         *,
-        evaluation_rung_count: int | None,
         training_compute: float | None,
     ) -> dict[str, object]:
         return _model_checkpoint_artifact_record(
@@ -834,7 +833,6 @@ def run_benchmark(
             architecture=architecture,
             benchmark_id=summary.benchmark_id,
             run_slug=summary.run_slug,
-            evaluation_rung_count=evaluation_rung_count,
             training_compute=training_compute,
             results_root=plan.results_root,
         )
@@ -882,7 +880,6 @@ def run_benchmark(
             progress_checkpoint_records = tuple(
                 checkpoint_record(
                     checkpoint,
-                    evaluation_rung_count=1,
                     training_compute=training_run.training_compute,
                 )
                 for checkpoint in checkpoint_artifacts
@@ -892,7 +889,6 @@ def run_benchmark(
                 if selected_checkpoint is None
                 else checkpoint_record(
                     selected_checkpoint,
-                    evaluation_rung_count=1,
                     training_compute=training_run.training_compute,
                 )
             )
@@ -957,7 +953,6 @@ def run_benchmark(
     checkpoint_records = tuple(
         checkpoint_record(
             checkpoint,
-            evaluation_rung_count=len(training_result.training_rungs),
             training_compute=training_result.training_run.training_compute,
         )
         for checkpoint in checkpoint_artifacts
@@ -966,7 +961,6 @@ def run_benchmark(
         _write_document(Path(_required_string(record.get("record_path"), "record_path")), record)
     selected_checkpoint_record = checkpoint_record(
         selected_checkpoint,
-        evaluation_rung_count=len(training_result.training_rungs),
         training_compute=training_result.training_run.training_compute,
     )
     completed_record = {
@@ -1085,7 +1079,6 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         architecture=architecture,
         generator=generator,
         outcome_space=outcome_space,
-        training_rung_count=evaluation_input.evaluation_rung_count,
         seed=evaluation_seed,
         tensor_device=plan.tensor_device,
         checkpoint=selected_checkpoint,
@@ -1176,7 +1169,6 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         architecture=architecture,
         benchmark_id=benchmark_id,
         run_slug=run_slug,
-        evaluation_rung_count=evaluation_input.evaluation_rung_count,
         training_compute=evaluation_input.training_compute,
         results_root=plan.results_root,
     )
@@ -1243,12 +1235,6 @@ def _evaluation_input_from_plan(
             "checkpoint_artifact.benchmark_id does not match benchmark root"
         )
     run_slug = _required_string(checkpoint_record.get("run_slug"), "checkpoint_artifact.run_slug")
-    evaluation_rung_count = _required_int(
-        checkpoint_record.get("evaluation_rung_count"),
-        "checkpoint_artifact.evaluation_rung_count",
-    )
-    if evaluation_rung_count < 1:
-        raise BenchmarkRunnerError("checkpoint_artifact.evaluation_rung_count must be positive")
     training_compute = _extract.optional_float(
         checkpoint_record.get("training_compute"),
         "checkpoint_artifact.training_compute",
@@ -1263,7 +1249,6 @@ def _evaluation_input_from_plan(
         ),
         run_slug=run_slug,
         benchmark_id=checkpoint_benchmark_id,
-        evaluation_rung_count=evaluation_rung_count,
         training_compute=training_compute,
     )
 
@@ -2186,7 +2171,6 @@ def evaluate_model_checkpoint_artifact(
     architecture: ArchitectureManifest,
     generator: _FieldBenchmarkGenerator,
     outcome_space: OutcomeSpace,
-    training_rung_count: int,
     seed: int,
     tensor_device: TensorRuntimeDevice,
     checkpoint: ModelCheckpointArtifact,
@@ -2210,7 +2194,12 @@ def evaluate_model_checkpoint_artifact(
     results: list[_CheckpointEvaluationRungEvidence] = []
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     capacity_limited = False
-    for index in range(training_rung_count):
+    target_rung_count = _evaluation_curriculum_target_rung_count(
+        evaluation_results=results,
+        outcome_ids=outcome_ids,
+    )
+    index = 0
+    while index < target_rung_count:
         rung = _evaluation_curriculum_rung(
             architecture=architecture,
             generator=generator,
@@ -2240,6 +2229,11 @@ def evaluate_model_checkpoint_artifact(
             batch_max_inference_compute,
         )
         results.append(rung_evidence)
+        index += 1
+        target_rung_count = _evaluation_curriculum_target_rung_count(
+            evaluation_results=results,
+            outcome_ids=outcome_ids,
+        )
     if not results:
         raise BenchmarkRunnerError("checkpoint evaluation did not produce any results")
     evaluation_frontier_index = _evaluation_result_frontier_index(
@@ -2321,6 +2315,22 @@ def _evaluate_checkpoint_rung(
         ),
         max_inference_compute,
     )
+
+
+def _evaluation_curriculum_target_rung_count(
+    *,
+    evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
+    outcome_ids: tuple[str, ...],
+) -> int:
+    """Return how many rungs accepted evaluation must inspect before stopping."""
+
+    if not evaluation_results:
+        return 1
+    frontier_index = _evaluation_result_frontier_index(
+        evaluation_results=evaluation_results,
+        outcome_ids=outcome_ids,
+    )
+    return frontier_index + 1 + _default_evaluation_frontier_lookahead_rungs
 
 
 @dataclass(frozen=True, slots=True)
@@ -2904,7 +2914,6 @@ def _model_checkpoint_artifact_record(
     architecture: ArchitectureManifest,
     benchmark_id: ProtocolIdentifier,
     run_slug: str,
-    evaluation_rung_count: int | None,
     training_compute: float | None,
     results_root: Path | None = None,
 ) -> dict[str, object]:
@@ -2923,8 +2932,6 @@ def _model_checkpoint_artifact_record(
     record["run_slug"] = run_slug
     record["architecture_manifest"] = architecture.to_record()
     record["model_manifest"] = checkpoint.manifest.to_record()
-    if evaluation_rung_count is not None:
-        record["evaluation_rung_count"] = evaluation_rung_count
     if training_compute is not None:
         record["training_compute"] = training_compute
     return record
