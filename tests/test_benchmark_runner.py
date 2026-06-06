@@ -1516,6 +1516,77 @@ def test_training_replay_frontier_points_keep_recent_window() -> None:
     assert math.isclose(rolling_point.accepted_mass, 4.5)
 
 
+def test_checkpoint_selection_uses_current_rung_competence_not_cumulative_score() -> None:
+    stale_cumulative_estimate = _score_estimate(
+        check=1,
+        step=32,
+        score=100.0,
+        complexity=20.0,
+        accepted_mass=0.2,
+    )
+    current_rung_estimate = _score_estimate(
+        check=2,
+        step=64,
+        score=1.0,
+        complexity=20.0,
+        accepted_mass=0.8,
+    )
+    selected = cast(Any, benchmark_runner)._selected_model_checkpoint(
+        (
+            SimpleNamespace(
+                score_estimate=stale_cumulative_estimate,
+                validation_loss=0.1,
+                validation_check=1,
+                step=32,
+            ),
+            SimpleNamespace(
+                score_estimate=current_rung_estimate,
+                validation_loss=1.0,
+                validation_check=2,
+                step=64,
+            ),
+        )
+    )
+
+    assert selected.step == 64
+
+
+def test_checkpoint_write_gate_uses_current_rung_competence_not_cumulative_score() -> None:
+    stale_cumulative_estimate = _score_estimate(
+        check=1,
+        step=32,
+        score=100.0,
+        complexity=20.0,
+        accepted_mass=0.2,
+    )
+    current_rung_estimate = _score_estimate(
+        check=2,
+        step=64,
+        score=1.0,
+        complexity=20.0,
+        accepted_mass=0.8,
+    )
+    training_run = SimpleNamespace(
+        validation_history=(
+            TrainingHistoryPoint(
+                step=64,
+                validation_check=2,
+                validation_loss=1.0,
+                stale_checks=0,
+                score_estimate=current_rung_estimate,
+            ),
+        )
+    )
+
+    assert cast(Any, benchmark_runner)._should_write_model_checkpoint(
+        training_run=training_run,
+        gate_interval=1,
+        checkpoint_artifacts=(
+            SimpleNamespace(score_estimate=stale_cumulative_estimate),
+        ),
+    )
+
+
 def test_training_plateau_signal_uses_current_rung_competence() -> None:
     score_estimate = _score_estimate(
         check=1,

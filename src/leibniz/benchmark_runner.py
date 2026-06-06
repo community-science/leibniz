@@ -997,7 +997,7 @@ def run_benchmark(
             ),
             "model_checkpoints": [dict(record) for record in checkpoint_records],
             "selected_model_checkpoint": selected_checkpoint_record,
-            "selected_model_checkpoint_policy": "highest-training-score-estimate",
+            "selected_model_checkpoint_policy": "highest-current-rung-training-competence",
             "evaluation_model_artifact": selected_checkpoint_record,
         },
     )
@@ -3560,10 +3560,10 @@ def _training_score_estimate_score(score_estimate: Mapping[str, object]) -> floa
     return _required_float(score_estimate.get("score"), "score_estimate.score")
 
 
-def _training_history_score(point: TrainingHistoryPoint) -> float:
+def _training_history_checkpoint_selection_score(point: TrainingHistoryPoint) -> float:
     if point.score_estimate is None:
-        return 0.0
-    return _training_score_estimate_score(point.score_estimate)
+        return -float("inf")
+    return _checkpoint_score_estimate_selection_score(point.score_estimate)
 
 
 def _training_score_estimate_frontier_competence(
@@ -3914,7 +3914,7 @@ def _training_progress_record(
         "selected_model_checkpoint": (
             None if selected_model_checkpoint is None else dict(selected_model_checkpoint)
         ),
-        "selected_model_checkpoint_policy": "highest-training-score-estimate",
+        "selected_model_checkpoint_policy": "highest-current-rung-training-competence",
     }
     record["sampled_competence"] = dict(
         cast(Mapping[str, object], training_estimate["sampled_competence"])
@@ -4006,9 +4006,9 @@ def _should_write_model_checkpoint(
     latest = training_run.validation_history[-1]
     if not checkpoint_artifacts:
         return True
-    latest_score = _training_history_score(latest)
+    latest_score = _training_history_checkpoint_selection_score(latest)
     saved_score = max(
-        _checkpoint_estimated_score(checkpoint) for checkpoint in checkpoint_artifacts
+        _checkpoint_selection_score(checkpoint) for checkpoint in checkpoint_artifacts
     )
     return latest_score > saved_score
 
@@ -4130,7 +4130,7 @@ def _selected_model_checkpoint(
     return max(
         checkpoints,
         key=lambda checkpoint: (
-            _checkpoint_estimated_score(checkpoint),
+            _checkpoint_selection_score(checkpoint),
             -checkpoint.validation_loss,
             checkpoint.validation_check,
             checkpoint.step,
@@ -4138,10 +4138,22 @@ def _selected_model_checkpoint(
     )
 
 
-def _checkpoint_estimated_score(checkpoint: ModelCheckpointArtifact) -> float:
+def _checkpoint_selection_score(checkpoint: ModelCheckpointArtifact) -> float:
     if checkpoint.score_estimate is None:
         return -float("inf")
-    return _training_score_estimate_score(checkpoint.score_estimate)
+    return _checkpoint_score_estimate_selection_score(checkpoint.score_estimate)
+
+
+def _checkpoint_score_estimate_selection_score(
+    score_estimate: Mapping[str, object],
+) -> float:
+    return _training_score_estimate_frontier_competence(
+        score_estimate,
+        chance_mass=_required_float(
+            score_estimate.get("chance_mass"),
+            "score_estimate.chance_mass",
+        ),
+    )
 
 
 def _throughput_record(
