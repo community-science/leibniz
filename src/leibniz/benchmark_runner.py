@@ -134,6 +134,7 @@ _legal_uncapped_training_stage_stop_reasons = frozenset(
     {"validation-plateau", "capacity-limited"}
 )
 _minimum_plateau_lr_reductions = 3
+_minimum_plateau_refinement_windows = 3
 _state_space_target_spacing = 1.0
 _full_variation_extent = 1.0
 
@@ -3074,6 +3075,7 @@ def _train_until_convergence(
     stale_checks = 0
     stop_reason = "training-stopped"
     plateau_window_start_index = 0
+    plateau_refinement_checks = 0
     max_validation_inference_compute: int | None = None
     latest_training_compute_per_sample: int | None = None
     replay_frontier_points: dict[
@@ -3082,7 +3084,8 @@ def _train_until_convergence(
     ] = {}
 
     def append_validation(*, step: int, check: int) -> None:
-        nonlocal best_score, max_validation_inference_compute, stale_checks
+        nonlocal best_score, max_validation_inference_compute, plateau_refinement_checks
+        nonlocal stale_checks
         validation_started = time.perf_counter()
         batch = validation_batch(check)
         with phase_timings.span("validation_max_inference_compute"):
@@ -3142,6 +3145,7 @@ def _train_until_convergence(
         )
         if plateau_signal > best_score + min_delta:
             best_score = plateau_signal
+            plateau_refinement_checks = 0
             stale_checks = 0
         else:
             stale_checks += 1
@@ -3328,8 +3332,18 @@ def _train_until_convergence(
             if best_rung_competence < rung_competence_threshold:
                 stop_reason = "validation-plateau"
                 break
+            if hit_step_cap:
+                stop_reason = "max-steps"
+                break
             if scheduler is not None and not scheduler.has_exhausted_plateau_response():
                 continue
+            if scheduler is None:
+                required_refinement_checks = (
+                    _minimum_plateau_refinement_windows * patience
+                )
+                if plateau_refinement_checks < required_refinement_checks:
+                    plateau_refinement_checks += 1
+                    continue
             with phase_timings.span("validation_plateau_handler"):
                 advanced_frontier = (
                     on_plateau is not None and on_plateau(tuple(validation_history))
@@ -3340,6 +3354,7 @@ def _train_until_convergence(
                     validation_history[-1],
                     chance_mass=_chance_accepted_mass(outcome_ids),
                 )
+                plateau_refinement_checks = 0
                 stale_checks = 0
                 continue
             stop_reason = "validation-plateau"

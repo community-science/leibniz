@@ -1802,6 +1802,125 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
     assert len(stage_result.validation_history) == 2
 
 
+def test_training_plateau_above_rung_competence_threshold_refines_before_advancing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_batch(_index: int) -> tuple[object, object]:
+        return object(), object()
+
+    class FakeLossValue:
+        def item(self) -> float:
+            return 2.0
+
+        def backward(self) -> None:
+            pass
+
+    class FakeLossFunction:
+        def __call__(self, _logits: object, _labels: object) -> FakeLossValue:
+            return FakeLossValue()
+
+    class FakeModule:
+        training = True
+
+        def __call__(self, _fields: object) -> object:
+            return object()
+
+        def eval(self) -> None:
+            self.training = False
+
+        def train(self) -> None:
+            self.training = True
+
+    class FakeValidationBatch:
+        sample_count = 2
+
+    class FakeOptimizer:
+        param_groups: list[dict[str, object]] = [{}]
+
+        def zero_grad(self, *, set_to_none: bool) -> None:
+            _ = set_to_none
+
+        def step(self) -> None:
+            pass
+
+    def fake_validation_batch(_index: int) -> FakeValidationBatch:
+        return FakeValidationBatch()
+
+    def fake_batch_tensors(**_kwargs: object) -> tuple[object, object]:
+        return object(), object()
+
+    def fake_predictions(_runtime: object, _module: object, _fields: object) -> list[list[float]]:
+        return [[1.0]]
+
+    def fake_training_gate_score_estimate(**kwargs: object) -> dict[str, object]:
+        return _score_estimate(
+            check=cast(int, kwargs["validation_check"]),
+            step=cast(int, kwargs["step"]),
+            score=1.0,
+            complexity=math.log2(10),
+            accepted_mass=0.6,
+        )
+
+    def fake_batch_max_compute(**_kwargs: object) -> int:
+        return 10
+
+    def fail_if_advancing(_history: object) -> bool:
+        raise AssertionError(
+            "frontier should not advance immediately at the trainability threshold"
+        )
+
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    outcome_ids = tuple(
+        outcome.id for outcome in benchmark.manifest.resolve_outcome_space().outcomes
+    )
+    monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
+    monkeypatch.setattr(benchmark_runner, "apply_softmax_predictions", fake_predictions)
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_inference_compute",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_training_compute_per_sample",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_training_gate_score_estimate",
+        fake_training_gate_score_estimate,
+    )
+
+    stage_result = cast(Any, benchmark_runner)._train_until_convergence(
+        runtime=resolve_tensor_runtime("cpu"),
+        module=FakeModule(),
+        optimizer=FakeOptimizer(),
+        scheduler=None,
+        loss_function=FakeLossFunction(),
+        train_batch=fake_batch,
+        validation_batch=cast(Any, fake_validation_batch),
+        outcome_space=benchmark.manifest.resolve_outcome_space(),
+        outcome_ids=outcome_ids,
+        max_steps=2,
+        gate_check_interval=1,
+        patience=1,
+        min_delta=0.001,
+        rung_competence_threshold=0.5,
+        training_batch_target=1,
+        architecture=ArchitectureManifestDocument.from_bytes(
+            _digits_architecture.read_bytes()
+        ).manifest,
+        training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
+        validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        phase_timings=benchmark_runner.TimingCollector(),
+        on_plateau=fail_if_advancing,
+    )
+
+    assert stage_result.stop_reason == "max-steps"
+    assert len(stage_result.validation_history) == 3
+
+
 def test_evaluation_curriculum_uses_benchmark_owned_representative_windows() -> None:
     generator = load_generator(_digits_benchmark_root)
     minimum = generator.minimum_state_space_measure().value
