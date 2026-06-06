@@ -620,7 +620,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     result = results[0]
     assert result["benchmark_id"] == "benchmarks.digits@0.1.0"
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
-    assert leaderboard[0]["measurement_count"] == 512
+    assert leaderboard[0]["measurement_count"] == 64
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     assert isinstance(cost_summary["inference_compute"], int | float)
     frontiers = cast(dict[str, object], result["frontiers"])
@@ -927,7 +927,7 @@ def test_cli_publishes_local_benchmark_results(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert "published 512 measurement(s)" in captured.out
+    assert "published 64 measurement(s)" in captured.out
     assert "commit: " in captured.out
     assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 1
     assert _git(results_root, "status", "--porcelain").stdout == ""

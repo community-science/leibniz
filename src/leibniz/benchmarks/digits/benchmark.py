@@ -2274,16 +2274,21 @@ def _constructed_affine_grids_in_transform_count_range(
             )
         )
         seen_products.add(preset_count)
-    for counts in _constructed_affine_count_products(
-        capacities=capacities,
-        minimum_product=max(
+    for transform_count in range(
+        max(
             minimum_transform_count,
             _constructed_affine_preset_max_count + 1,
         ),
-        maximum_product=maximum_transform_count,
+        maximum_transform_count + 1,
     ):
-        transform_count = _sample_count(counts)
         if transform_count in seen_products:
+            continue
+        try:
+            counts = _constructed_affine_counts_for_transform_count(
+                transform_count=transform_count,
+                capacities=capacities,
+            )
+        except ObservationGenerationError:
             continue
         seen_products.add(transform_count)
         grids.append(
@@ -2374,54 +2379,6 @@ def _prime_factors(value: int) -> tuple[int, ...]:
     if remaining > 1:
         factors.append(remaining)
     return tuple(factors)
-
-
-def _constructed_affine_count_products(
-    *,
-    capacities: tuple[int, int, int, int, int],
-    minimum_product: int,
-    maximum_product: int,
-) -> tuple[tuple[int, int, int, int, int], ...]:
-    products: list[tuple[int, int, int, int, int]] = []
-    for x_translation in range(1, capacities[0] + 1):
-        partial_x = x_translation
-        if partial_x > maximum_product:
-            break
-        for y_translation in range(1, capacities[1] + 1):
-            partial_y = partial_x * y_translation
-            if partial_y > maximum_product:
-                break
-            for scale in range(1, capacities[2] + 1):
-                partial_scale = partial_y * scale
-                if partial_scale > maximum_product:
-                    break
-                for rotation in range(1, capacities[3] + 1):
-                    partial_rotation = partial_scale * rotation
-                    if partial_rotation > maximum_product:
-                        break
-                    for x_shear in range(1, capacities[4] + 1):
-                        product = partial_rotation * x_shear
-                        if product > maximum_product:
-                            break
-                        if product >= minimum_product:
-                            products.append(
-                                (
-                                    x_translation,
-                                    y_translation,
-                                    scale,
-                                    rotation,
-                                    x_shear,
-                                )
-                            )
-    return tuple(
-        sorted(
-            products,
-            key=lambda counts: (
-                _sample_count(counts),
-                *_constructed_affine_count_sort_key(counts),
-            ),
-        )
-    )
 
 
 def _constructed_affine_indices(

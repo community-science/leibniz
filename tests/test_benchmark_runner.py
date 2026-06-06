@@ -116,7 +116,7 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     )
 
     assert summary.dry_run is True
-    assert summary.measurement_count == 512
+    assert summary.measurement_count == 0
     assert summary.run_slug.startswith(
         "digits-arch-186021388794-seed101-steps1-train-"
     )
@@ -191,7 +191,7 @@ def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
 def test_capacity_limited_training_run_is_budget_exhausted() -> None:
     training_run = cast(Any, benchmark_runner)._training_run_record(
         seed=101,
-        training_evidence_count=512,
+        training_batch_target=512,
         max_steps=None,
         learning_rate=0.01,
         optimizer_name="adam",
@@ -395,8 +395,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     manifest = load_digits_benchmark(_digits_benchmark_root).manifest
 
     evaluation_bundle.measurement_dataset.validate_manifest(manifest)
-    assert evaluation_summary.measurement_count == 512
-    assert len(evaluation_bundle.measurement_dataset.measurements) == 512
+    assert evaluation_summary.measurement_count == 64
+    assert len(evaluation_bundle.measurement_dataset.measurements) == 64
     assert evaluation_bundle.measurement_score_view.source_dataset_digest == (
         evaluation_bundle.measurement_dataset.digest
     )
@@ -453,7 +453,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert training_run.protocol.tensor_runtime == "pytorch"
     assert training_run.protocol.tensor_device == "cpu"
     assert training_run.protocol.max_steps == 1
-    assert training_run.protocol.gate_evidence_count == 512
+    assert training_run.protocol.gate_batch_target == 512
     assert training_run.protocol.rung_competence_threshold == 0.01
     assert training_summary["tensor_runtime"] == "pytorch"
     assert training_summary["tensor_device"] == "cpu"
@@ -531,10 +531,12 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     } == {state_space_measure["measure_id"]}
     assert all("generation_memory_limit_bytes" not in rung for rung in curriculum_rungs)
     assert all("resolution_assignment" in rung for rung in curriculum_rungs)
-    expected_rung_keys = {
+    expected_evaluation_rung_keys = {
         "complexity",
         "complexity_axis",
+        "confidence_half_width",
         "index",
+        "mean_accepted_mass",
         "resolution_assignment",
         "sample_count",
         "seed",
@@ -542,7 +544,15 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         "state_space_request",
         "status",
     }
-    assert all(set(rung) == expected_rung_keys for rung in curriculum_rungs)
+    assert all(set(rung) == expected_evaluation_rung_keys for rung in curriculum_rungs)
+    assert all(
+        isinstance(rung["mean_accepted_mass"], float)
+        for rung in curriculum_rungs
+    )
+    assert all(
+        isinstance(rung["confidence_half_width"], float)
+        for rung in curriculum_rungs
+    )
     for rung in curriculum_rungs:
         rung_state_space_measure = cast(dict[str, object], rung["state_space_measure"])
         state_space_request = cast(dict[str, object], rung["state_space_request"])
@@ -558,7 +568,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         assert request_minimum <= rung_complexity
         assert rung_complexity <= request_maximum
         assert math.isclose(request_maximum - request_minimum, 1.0)
-    assert [rung["sample_count"] for rung in curriculum_rungs] == [512]
+    assert [rung["sample_count"] for rung in curriculum_rungs] == [64]
     assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
         cast(float, rung["complexity"]) for rung in curriculum_rungs
     )
@@ -575,7 +585,12 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert training_curriculum["frontier_index"] == 0
     training_rungs = cast(list[dict[str, object]], training_curriculum["rungs"])
     assert [rung["index"] for rung in training_rungs] == [0]
-    assert all(set(rung) == expected_rung_keys for rung in training_rungs)
+    expected_training_rung_keys = {
+        key
+        for key in expected_evaluation_rung_keys
+        if key not in {"confidence_half_width", "mean_accepted_mass"}
+    }
+    assert all(set(rung) == expected_training_rung_keys for rung in training_rungs)
     sampled_competence = cast(dict[str, object], evaluation_record["sampled_competence"])
     assert sampled_competence["kind"] == "sampled-competence-curriculum"
     assert sampled_competence["sampling_rule"] == "generator-uniform-component-index-v1"
@@ -585,11 +600,11 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     )
     assert sampled_competence["complexity_axis"] is None
     assert math.isclose(cast(float, sampled_competence["complexity"]), math.log2(10))
-    assert sampled_competence["sample_count"] == 512
+    assert sampled_competence["sample_count"] == 64
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
     assert len(points) == 1
-    assert [point["sample_count"] for point in points] == [512]
+    assert [point["sample_count"] for point in points] == [64]
     assert math.isclose(cast(float, points[0]["complexity"]), math.log2(10))
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
@@ -658,7 +673,7 @@ def test_digits_benchmark_runner_accepts_convnet_architecture(
         evaluation_summary.evaluation_bundle_path.read_bytes()
     ).bundle.model_inspection
 
-    assert evaluation_summary.measurement_count == 512
+    assert evaluation_summary.measurement_count == 64
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
         "fixed-support-affine",
         "local-affine",
@@ -693,7 +708,7 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
         progress_callback = cast(Any, kwargs["progress_callback"])
         training_run = cast(Any, benchmark_runner)._training_run_record(
             seed=101,
-            training_evidence_count=2,
+            training_batch_target=2,
             max_steps=1,
             learning_rate=0.01,
             optimizer_name="adam",
@@ -755,7 +770,7 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
         description="training summary",
     )
 
-    assert summary.measurement_count == 512
+    assert summary.measurement_count == 0
     assert "sampled_competence" not in training_summary
     assert "evaluation_curriculum" not in training_summary
     assert "measurement_dataset_digest" not in training_summary
@@ -797,7 +812,7 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert training_run.protocol.schedule == "cosine"
     assert training_run.protocol.learning_rate == 0.005
     assert training_run.protocol.gate_check_interval == 1
-    assert training_run.protocol.gate_evidence_count == 512
+    assert training_run.protocol.gate_batch_target == 512
     assert training_run.protocol.gate_decision_rule == "score-estimate-plateau"
     assert training_run.protocol.patience == 2
     assert training_run.protocol.min_delta == 0.001
@@ -1051,7 +1066,7 @@ def test_training_stage_records_current_validation_loss_without_global_best(
         min_delta=0.0,
         rung_competence_threshold=0.9,
         min_steps=0,
-        training_evidence_count=1,
+        training_batch_target=1,
         architecture=ArchitectureManifestDocument.from_bytes(
             _digits_architecture.read_bytes()
         ).manifest,
@@ -1250,7 +1265,7 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
         min_delta=0.001,
         min_steps=0,
         rung_competence_threshold=0.9,
-        training_evidence_count=1,
+        training_batch_target=1,
         architecture=ArchitectureManifestDocument.from_bytes(
             _digits_architecture.read_bytes()
         ).manifest,
@@ -1673,7 +1688,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert math.isclose(observed_complexities[0], math.log2(10))
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
-    assert points[0]["sample_count"] == 512
+    assert points[0]["sample_count"] == 64
     assert len(inspections) == 1
     assert inspections[0]["source_path"] == history[0]["model_inspection_path"]
     assert "measurement_dataset" in inspections[0]

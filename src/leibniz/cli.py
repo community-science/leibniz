@@ -72,8 +72,6 @@ from leibniz.view_manifests import ViewManifestDocument
 
 __all__ = ["main"]
 
-_relative_evaluation_evidence_count = 512
-
 
 @dataclass(frozen=True, slots=True)
 class _CompetitionEvaluationPair:
@@ -414,7 +412,7 @@ def _parser() -> argparse.ArgumentParser:
         help="profile benchmark formation paths",
     )
     profile.add_argument("--benchmark-root", type=Path, required=True)
-    profile.add_argument("--evidence-count", default=64, type=int)
+    profile.add_argument("--batch-target", default=64, type=int)
     profile.add_argument("--seed", default=101, type=int)
     profile.add_argument("--repeats", default=3, type=int)
     profile.add_argument("--warmup-repeats", default=1, type=int)
@@ -592,7 +590,6 @@ def _benchmark(args: argparse.Namespace) -> int:
                     right_evaluation=args.right_evaluation,
                     benchmark_roots=benchmark_roots,
                     benchmark_selectors=benchmark_selectors,
-                    sample_count=_relative_evaluation_evidence_count,
                     tensor_device=args.device,
                 )
                 _print_competition_summaries(
@@ -613,7 +610,7 @@ def _benchmark(args: argparse.Namespace) -> int:
             summary = time_formation_paths(
                 FormationTimingPlan(
                     benchmark_root=args.benchmark_root,
-                    sample_count=args.evidence_count,
+                    sample_count=args.batch_target,
                     seed=args.seed,
                     repeats=args.repeats,
                     warmup_repeats=args.warmup_repeats,
@@ -949,7 +946,6 @@ def _run_benchmark_competitions(
     right_evaluation: Path | None,
     benchmark_roots: Mapping[str, Path],
     benchmark_selectors: tuple[str, ...],
-    sample_count: int,
     tensor_device: TensorRuntimeDevice,
 ) -> tuple[list[BenchmarkCompetitionSummary], int]:
     competition_summaries: list[BenchmarkCompetitionSummary] = []
@@ -988,7 +984,6 @@ def _run_benchmark_competitions(
                         right_evaluation_path=right_path,
                         benchmark_root=benchmark_root,
                         results_root=results_root,
-                        evidence_count=sample_count,
                         tensor_device=tensor_device,
                     )
                 )

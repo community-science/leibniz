@@ -396,6 +396,26 @@ def test_digits_generator_materializes_target_state_space_band() -> None:
     ]
 
 
+def test_digits_generator_high_cardinality_candidates_are_bounded() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+
+    candidates = generator.state_spaces_for_request(
+        request=StateSpaceMeasureRequest(
+            minimum=21.0,
+            maximum=22.0,
+        )
+    )
+
+    assert candidates
+    assert len(candidates) <= 64
+    assert candidates == tuple(
+        sorted(candidates, key=lambda candidate: candidate.cardinality or 0)
+    )
+    for candidate in candidates:
+        assert candidate.cardinality is not None
+        assert 21.0 <= math.log2(candidate.cardinality) <= 22.0
+
+
 def test_digits_generator_materializes_large_target_state_space_directly() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
@@ -643,6 +663,7 @@ def test_digits_benchmark_uses_single_tensor_render_path() -> None:
     assert "sampled_state_tensor" not in source
     assert "field_tensor_gather" not in source
     assert "_FormationTensorCache" not in source
+    assert "_constructed_affine_count_products" not in source
 
 
 def test_digits_console_preview_png_encoding_is_deterministic() -> None:

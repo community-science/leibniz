@@ -483,7 +483,7 @@ def test_cli_profiles_benchmark_formation_paths(
             "profile",
             "--benchmark-root",
             str(_digits_benchmark_root),
-            "--evidence-count",
+            "--batch-target",
             "1",
             "--repeats",
             "1",

@@ -249,13 +249,21 @@ class BenchmarkCompetitionBundle:
             self.competition_result.get("sample_count"),
             "competition_result.sample_count",
         )
-        protocol_evidence_count = _record.integer(
-            self.competition_protocol.get("evidence_count"),
-            "competition_protocol.evidence_count",
-        )
-        if sample_count != protocol_evidence_count:
+        if sample_count <= 0:
             raise BenchmarkCompetitionBundleValidationError(
-                "competition_protocol evidence_count does not match competition_result"
+                "competition_result.sample_count must be positive"
+            )
+        convergence = _record.mapping(
+            self.competition_protocol.get("evaluation_convergence"),
+            "competition_protocol.evaluation_convergence",
+        )
+        convergence_kind = _record.non_empty_string(
+            convergence.get("kind"),
+            "competition_protocol.evaluation_convergence.kind",
+        )
+        if convergence_kind != "paired-score-confidence-half-width":
+            raise BenchmarkCompetitionBundleValidationError(
+                "competition_protocol evaluation_convergence kind is unsupported"
             )
         _validate_measured_max_inference_compute(
             self.throughput,

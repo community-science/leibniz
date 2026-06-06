@@ -36,10 +36,10 @@ _protocol_record = RecordSpec(
         "learning_rate": FieldSpec(kind="number"),
         "schedule": FieldSpec(kind="string"),
         "seed": FieldSpec(kind="integer"),
-        "training_evidence_count": FieldSpec(kind="integer"),
+        "training_batch_target": FieldSpec(kind="integer"),
         "max_steps": FieldSpec(kind="integer", required=False),
         "gate_check_interval": FieldSpec(kind="integer"),
-        "gate_evidence_count": FieldSpec(kind="integer"),
+        "gate_batch_target": FieldSpec(kind="integer"),
         "gate_decision_rule": FieldSpec(kind="string"),
         "rung_competence_threshold": FieldSpec(kind="number", required=False),
         "min_delta": FieldSpec(kind="number"),
@@ -100,10 +100,10 @@ class TrainingProtocol:
     learning_rate: float
     schedule: _schedule_kind
     seed: int
-    training_evidence_count: int
+    training_batch_target: int
     max_steps: int | None
     gate_check_interval: int
-    gate_evidence_count: int
+    gate_batch_target: int
     gate_decision_rule: str
     min_delta: float
     patience: int
@@ -126,11 +126,11 @@ class TrainingProtocol:
         if self.schedule not in {"none", "cosine", "reduce-on-plateau"}:
             raise TrainingRunValidationError(f"unsupported schedule: {self.schedule}")
         _require_nonnegative_int(self.seed, "seed")
-        _require_positive_int(self.training_evidence_count, "training_evidence_count")
+        _require_positive_int(self.training_batch_target, "training_batch_target")
         if self.max_steps is not None:
             _require_nonnegative_int(self.max_steps, "max_steps")
         _require_positive_int(self.gate_check_interval, "gate_check_interval")
-        _require_positive_int(self.gate_evidence_count, "gate_evidence_count")
+        _require_positive_int(self.gate_batch_target, "gate_batch_target")
         if not self.gate_decision_rule:
             raise TrainingRunValidationError("gate_decision_rule must be nonempty")
         if (
@@ -178,9 +178,9 @@ class TrainingProtocol:
                 _extract.non_empty_string(validated["schedule"], "schedule"),
             ),
             seed=_extract.integer(validated["seed"], "seed"),
-            training_evidence_count=_extract.integer(
-                validated["training_evidence_count"],
-                "training_evidence_count",
+            training_batch_target=_extract.integer(
+                validated["training_batch_target"],
+                "training_batch_target",
             ),
             max_steps=(
                 None
@@ -191,9 +191,9 @@ class TrainingProtocol:
                 validated["gate_check_interval"],
                 "gate_check_interval",
             ),
-            gate_evidence_count=_extract.integer(
-                validated["gate_evidence_count"],
-                "gate_evidence_count",
+            gate_batch_target=_extract.integer(
+                validated["gate_batch_target"],
+                "gate_batch_target",
             ),
             gate_decision_rule=_extract.non_empty_string(
                 validated["gate_decision_rule"],
@@ -236,9 +236,9 @@ class TrainingProtocol:
             "learning_rate": self.learning_rate,
             "schedule": self.schedule,
             "seed": self.seed,
-            "training_evidence_count": self.training_evidence_count,
+            "training_batch_target": self.training_batch_target,
             "gate_check_interval": self.gate_check_interval,
-            "gate_evidence_count": self.gate_evidence_count,
+            "gate_batch_target": self.gate_batch_target,
             "gate_decision_rule": self.gate_decision_rule,
             "rung_competence_threshold": self.rung_competence_threshold,
             "min_delta": self.min_delta,

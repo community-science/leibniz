@@ -1094,8 +1094,8 @@ def _run_console_view_model(
                     ),
                     ("Steps", _console_number_value(protocol.get("max_steps"))),
                     (
-                        "Training Evidence",
-                        _console_number_value(protocol.get("training_evidence_count")),
+                        "Training Batch Target",
+                        _console_number_value(protocol.get("training_batch_target")),
                     ),
                     ("Gate Check", _console_number_value(protocol.get("gate_check_interval"))),
                     (
@@ -1105,8 +1105,8 @@ def _run_console_view_model(
                         ),
                     ),
                     (
-                        "Gate Evidence",
-                        _console_number_value(protocol.get("gate_evidence_count")),
+                        "Gate Batch Target",
+                        _console_number_value(protocol.get("gate_batch_target")),
                     ),
                     ("Gate Rule", _console_string_value(protocol.get("gate_decision_rule"))),
                     ("Validation", _console_string_value(protocol.get("validation_source"))),
@@ -2963,9 +2963,9 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
         _as_nonnegative_number(protocol.get(field), f"{prefix}.protocol.{field}")
     protocol_positive_ints = (
         "seed",
-        "training_evidence_count",
+        "training_batch_target",
         "gate_check_interval",
-        "gate_evidence_count",
+        "gate_batch_target",
     )
     for field in protocol_positive_ints:
         _as_positive_int(protocol.get(field), f"{prefix}.protocol.{field}")
