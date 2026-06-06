@@ -152,7 +152,7 @@ assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind'
 assertEqual(benchmarkTask?.batches.length, 3, 'benchmark batch count');
 assertEqual(
   benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.sample_count}`).join('|'),
-  'state-space-window:10|state-space-window:50|state-space-window:50',
+  'state-space-window:10|state-space-window:40|state-space-window:50',
   'generated benchmark batches',
 );
 const generatedSamples = benchmarkTask?.batches[0]?.samples ?? [];

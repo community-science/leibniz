@@ -81,14 +81,14 @@ def test_competent_complexity_score_integrates_bits_above_chance() -> None:
             ({"complexity": complexity, "score": 0.55},),
             chance_mass=chance_mass,
         ),
-        20.0,
+        19.5,
     )
     assert math.isclose(
         local_results.competent_complexity_score(
             ({"complexity": complexity * 4.0, "score": chance_mass},),
             chance_mass=chance_mass,
         ),
-        80.0,
+        79.0,
     )
     assert math.isclose(
         local_results.competent_complexity_score(
@@ -98,7 +98,7 @@ def test_competent_complexity_score_integrates_bits_above_chance() -> None:
             ),
             chance_mass=chance_mass,
         ),
-        30.0,
+        39.0,
     )
 
 
@@ -620,7 +620,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     result = results[0]
     assert result["benchmark_id"] == "benchmarks.digits@0.1.0"
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
-    assert leaderboard[0]["measurement_count"] == 512
+    assert leaderboard[0]["measurement_count"] == 64
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     assert isinstance(cost_summary["inference_compute"], int | float)
     frontiers = cast(dict[str, object], result["frontiers"])
@@ -927,7 +927,7 @@ def test_cli_publishes_local_benchmark_results(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert "published 512 measurement(s)" in captured.out
+    assert "published 64 measurement(s)" in captured.out
     assert "commit: " in captured.out
     assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 1
     assert _git(results_root, "status", "--porcelain").stdout == ""

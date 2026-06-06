@@ -207,7 +207,7 @@ const result: BenchmarkResultRecord = {
         final_validation_loss: 0.4,
         final_validation_step: 3,
         protocol: {
-          training_evidence_count: 2,
+          training_batch_target: 2,
           kind: 'fixed-step-local-batch',
           learning_rate: 0.01,
           max_steps: 3,
@@ -218,7 +218,7 @@ const result: BenchmarkResultRecord = {
           schedule: 'none',
           seed: 101,
           gate_check_interval: 1,
-          gate_evidence_count: 2,
+          gate_batch_target: 2,
           gate_decision_rule: 'score-estimate-plateau',
           validation_source: 'generator-resample',
         },

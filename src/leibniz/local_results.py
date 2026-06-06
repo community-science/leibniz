@@ -686,6 +686,10 @@ def _local_training_estimate_records(
         )
         if estimate is None:
             continue
+        sampled_competence = _extract.mapping(
+            estimate.get("sampled_competence"),
+            "training_estimate.sampled_competence",
+        )
         architecture = _architecture_manifest_from_training_record(
             repository_root=repository_root,
             training_summary=summary,
@@ -702,11 +706,11 @@ def _local_training_estimate_records(
                 benchmark_id=_as_identifier(summary.get("benchmark_id"), "benchmark_id"),
                 architecture_digest=architecture.digest,
                 model_key=str(architecture.digest),
-                complexity=_sampled_competence_record_complexity(estimate),
+                complexity=_sampled_competence_record_complexity(sampled_competence),
                 measurement_count=0,
                 score=_as_nonnegative_number(
-                    estimate.get("mean_accepted_mass"),
-                    "training_estimate.mean_accepted_mass",
+                    estimate.get("score"),
+                    "training_estimate.score",
                 ),
                 cost_summary=cost_summary,
                 architecture=architecture.to_record(),
@@ -721,7 +725,7 @@ def _local_training_estimate_records(
                 model_inspection_path=None,
                 measurement_dataset=empty_dataset,
                 measurement_dataset_digest=empty_dataset.digest,
-                sampled_competence=estimate,
+                sampled_competence=sampled_competence,
                 training_summary=summary,
             )
         )
@@ -1094,8 +1098,8 @@ def _run_console_view_model(
                     ),
                     ("Steps", _console_number_value(protocol.get("max_steps"))),
                     (
-                        "Training Evidence",
-                        _console_number_value(protocol.get("training_evidence_count")),
+                        "Training Batch Target",
+                        _console_number_value(protocol.get("training_batch_target")),
                     ),
                     ("Gate Check", _console_number_value(protocol.get("gate_check_interval"))),
                     (
@@ -1105,8 +1109,8 @@ def _run_console_view_model(
                         ),
                     ),
                     (
-                        "Gate Evidence",
-                        _console_number_value(protocol.get("gate_evidence_count")),
+                        "Gate Batch Target",
+                        _console_number_value(protocol.get("gate_batch_target")),
                     ),
                     ("Gate Rule", _console_string_value(protocol.get("gate_decision_rule"))),
                     ("Validation", _console_string_value(protocol.get("validation_source"))),
@@ -1399,7 +1403,7 @@ def _model_result_records(
             "chance_mass": chance_mass,
             "point_score": "accepted-mass",
             "local_competence": "above-chance-accepted-mass",
-            "integration": "free-competence-to-first-observed-then-trapezoid",
+            "integration": "free-empty-rungs-then-first-observed-competence",
         }
         record: dict[str, object] = {
             "model_key": model_key,
@@ -2222,56 +2226,62 @@ def _node_list_label(value: object) -> str:
 def _competence_points(
     runs: tuple[_BenchmarkRunRecord, ...],
 ) -> tuple[dict[str, object], ...]:
-    by_complexity: dict[float, list[tuple[_BenchmarkRunRecord, float, int]]] = {}
+    by_interval: dict[
+        tuple[float, float | None, float | None],
+        list[tuple[_BenchmarkRunRecord, float, int]],
+    ] = {}
     for run in runs:
-        for complexity, score, sample_count in _run_competence_points(run):
-            by_complexity.setdefault(complexity, []).append((run, score, sample_count))
+        for point in _run_competence_points(run):
+            complexity = _as_nonnegative_number(point.get("complexity"), "point.complexity")
+            minimum = _optional_nonnegative_number(
+                point.get("complexity_minimum"),
+                "point.complexity_minimum",
+            )
+            maximum = _optional_nonnegative_number(
+                point.get("complexity_maximum"),
+                "point.complexity_maximum",
+            )
+            score = _as_nonnegative_number(point.get("score"), "point.score")
+            sample_count = _as_positive_int(point.get("sample_count"), "point.sample_count")
+            by_interval.setdefault((complexity, minimum, maximum), []).append(
+                (run, score, sample_count)
+            )
     points: list[dict[str, object]] = []
-    for complexity, evidence in by_complexity.items():
+    for (complexity, minimum, maximum), evidence in by_interval.items():
         total_samples = sum(sample_count for _run, _score, sample_count in evidence)
         score = (
             sum(score * sample_count for _run, score, sample_count in evidence)
             / total_samples
         )
-        points.append(
-            {
-                "complexity": complexity,
-                "score": score,
-                "sample_count": total_samples,
-                "run_ids": [
-                    run.run_id
-                    for run in sorted(
-                        {
-                            run.run_id: run
-                            for run, _score, _sample_count in evidence
-                        }.values(),
-                        key=_run_sort_key,
-                    )
-                ],
-            }
-        )
+        point: dict[str, object] = {
+            "complexity": complexity,
+            "score": score,
+            "sample_count": total_samples,
+            "run_ids": [
+                run.run_id
+                for run in sorted(
+                    {
+                        run.run_id: run
+                        for run, _score, _sample_count in evidence
+                    }.values(),
+                    key=_run_sort_key,
+                )
+            ],
+        }
+        if minimum is not None:
+            point["complexity_minimum"] = minimum
+        if maximum is not None:
+            point["complexity_maximum"] = maximum
+        points.append(point)
     return tuple(sorted(points, key=_point_complexity))
 
 
-def _run_competence_points(run: _BenchmarkRunRecord) -> tuple[tuple[float, float, int], ...]:
+def _run_competence_points(run: _BenchmarkRunRecord) -> tuple[dict[str, object], ...]:
     if run.sampled_competence is not None:
         points = run.sampled_competence.get("points")
         if isinstance(points, list | tuple):
             return tuple(
-                (
-                    _as_nonnegative_number(
-                        point.get("complexity"),
-                        "sampled_competence.point.complexity",
-                    ),
-                    _as_nonnegative_number(
-                        point.get("mean_accepted_mass"),
-                        "sampled_competence.point.mean_accepted_mass",
-                    ),
-                    _as_positive_int(
-                        point.get("sample_count"),
-                        "sampled_competence.point.sample_count",
-                    ),
-                )
+                _competence_point_from_sampled_record(point)
                 for point in (
                     _extract.mapping(value, "sampled_competence.points")
                     for value in _as_sequence(
@@ -2280,25 +2290,46 @@ def _run_competence_points(run: _BenchmarkRunRecord) -> tuple[tuple[float, float
                     )
                 )
             )
-        return (
-            (
-                _as_nonnegative_number(
-                    run.sampled_competence.get("complexity"),
-                    "sampled_competence.complexity",
-                ),
-                _as_nonnegative_number(
-                    run.sampled_competence.get("mean_accepted_mass"),
-                    "sampled_competence.mean_accepted_mass",
-                ),
-                _as_positive_int(
-                    run.sampled_competence.get("sample_count"),
-                    "sampled_competence.sample_count",
-                ),
-            ),
-        )
+        return (_competence_point_from_sampled_record(run.sampled_competence),)
     if run.complexity is None:
         return ()
-    return ((run.complexity, run.score, run.measurement_count),)
+    return (
+        {
+            "complexity": run.complexity,
+            "score": run.score,
+            "sample_count": run.measurement_count,
+        },
+    )
+
+
+def _competence_point_from_sampled_record(point: Mapping[str, object]) -> dict[str, object]:
+    record: dict[str, object] = {
+        "complexity": _as_nonnegative_number(
+            point.get("complexity"),
+            "sampled_competence.point.complexity",
+        ),
+        "score": _as_nonnegative_number(
+            point.get("mean_accepted_mass"),
+            "sampled_competence.point.mean_accepted_mass",
+        ),
+        "sample_count": _as_positive_int(
+            point.get("sample_count"),
+            "sampled_competence.point.sample_count",
+        ),
+    }
+    minimum = _optional_nonnegative_number(
+        point.get("complexity_minimum"),
+        "sampled_competence.point.complexity_minimum",
+    )
+    maximum = _optional_nonnegative_number(
+        point.get("complexity_maximum"),
+        "sampled_competence.point.complexity_maximum",
+    )
+    if minimum is not None:
+        record["complexity_minimum"] = minimum
+    if maximum is not None:
+        record["complexity_maximum"] = maximum
+    return record
 
 
 def competent_complexity_score(
@@ -2311,6 +2342,14 @@ def competent_complexity_score(
             CompetencePoint(
                 complexity=_point_complexity(point),
                 accepted_mass=_point_score(point),
+                complexity_minimum=_optional_nonnegative_number(
+                    point.get("complexity_minimum"),
+                    "competence_point.complexity_minimum",
+                ),
+                complexity_maximum=_optional_nonnegative_number(
+                    point.get("complexity_maximum"),
+                    "competence_point.complexity_maximum",
+                ),
             )
             for point in points
         ),
@@ -2963,9 +3002,9 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
         _as_nonnegative_number(protocol.get(field), f"{prefix}.protocol.{field}")
     protocol_positive_ints = (
         "seed",
-        "training_evidence_count",
+        "training_batch_target",
         "gate_check_interval",
-        "gate_evidence_count",
+        "gate_batch_target",
     )
     for field in protocol_positive_ints:
         _as_positive_int(protocol.get(field), f"{prefix}.protocol.{field}")
@@ -3085,6 +3124,12 @@ def _as_nonnegative_number(value: object, field: str) -> float:
     if numeric < 0 or not math.isfinite(numeric):
         raise LocalResultImportError(f"{field}: expected finite nonnegative number")
     return numeric
+
+
+def _optional_nonnegative_number(value: object, field: str) -> float | None:
+    if value is None:
+        return None
+    return _as_nonnegative_number(value, field)
 
 
 def _as_probability(value: object, field: str) -> float:

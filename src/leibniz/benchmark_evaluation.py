@@ -32,6 +32,10 @@ class CompetencePoint:
 
     complexity: float
     accepted_mass: float
+    sample_count: int = 1
+    seed: int = 0
+    complexity_minimum: float | None = None
+    complexity_maximum: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,7 +132,7 @@ def sampled_competence_record(
         mean_negative_log_score = "infinity"
     else:
         mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
-    return {
+    record: dict[str, object] = {
         "kind": "sampled-complexity-class",
         "sampling_rule": "generator-uniform-component-index-v1",
         "difficulty_assumption": "approximately-uniform-within-complexity-class",
@@ -147,6 +151,10 @@ def sampled_competence_record(
             str(measurement.raw_scoring_evidence.id) for measurement in measurements
         ],
     }
+    if batch.state_space_request is not None:
+        record["complexity_minimum"] = batch.state_space_request.minimum
+        record["complexity_maximum"] = batch.state_space_request.maximum
+    return record
 
 
 def sampled_competence_curriculum_record(
@@ -217,33 +225,52 @@ def sampled_competence_frontier_score(
     if not points:
         return 0.0
     ordered = tuple(sorted(points, key=lambda point: point.complexity))
-    first_complexity = _finite_nonnegative_number(
-        ordered[0].complexity,
+    area = 0.0
+    cursor = 0.0
+    for point in sorted(ordered, key=_competence_point_interval_sort_key):
+        lower, upper = _competence_point_interval(point)
+        if lower > cursor:
+            area += lower - cursor
+        measured_lower = max(lower, cursor)
+        if upper <= measured_lower:
+            continue
+        area += (upper - measured_lower) * _above_chance_competence(
+            point.accepted_mass,
+            chance_mass=chance_mass,
+        )
+        cursor = upper
+    return area
+
+
+def _competence_point_interval_sort_key(point: CompetencePoint) -> tuple[float, float]:
+    lower, upper = _competence_point_interval(point)
+    return (lower, upper)
+
+
+def _competence_point_interval(point: CompetencePoint) -> tuple[float, float]:
+    complexity = _finite_nonnegative_number(
+        point.complexity,
         field="competence_frontier.complexity",
     )
-    area = first_complexity
-    for left, right in zip(ordered, ordered[1:], strict=False):
-        left_complexity = _finite_nonnegative_number(
-            left.complexity,
-            field="competence_frontier.complexity",
+    lower = (
+        max(0.0, complexity - 1.0)
+        if point.complexity_minimum is None
+        else _finite_nonnegative_number(
+            point.complexity_minimum,
+            field="competence_frontier.complexity_minimum",
         )
-        right_complexity = _finite_nonnegative_number(
-            right.complexity,
-            field="competence_frontier.complexity",
+    )
+    upper = (
+        complexity
+        if point.complexity_maximum is None
+        else _finite_nonnegative_number(
+            point.complexity_maximum,
+            field="competence_frontier.complexity_maximum",
         )
-        width = right_complexity - left_complexity
-        if width <= 0.0:
-            continue
-        left_competence = _above_chance_competence(
-            left.accepted_mass,
-            chance_mass=chance_mass,
-        )
-        right_competence = _above_chance_competence(
-            right.accepted_mass,
-            chance_mass=chance_mass,
-        )
-        area += width * (left_competence + right_competence) / 2.0
-    return area
+    )
+    if upper < lower:
+        raise ValueError("competence frontier interval maximum is below minimum")
+    return (lower, upper)
 
 
 def validation_competence_frontier_score(

@@ -396,6 +396,22 @@ def test_digits_generator_materializes_target_state_space_band() -> None:
     ]
 
 
+def test_digits_generator_high_cardinality_request_has_one_representative() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+
+    candidates = generator.state_spaces_for_request(
+        request=StateSpaceMeasureRequest(
+            minimum=21.0,
+            maximum=22.0,
+        )
+    )
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.cardinality is not None
+    assert 21.0 <= math.log2(candidate.cardinality) <= 22.0
+
+
 def test_digits_generator_materializes_large_target_state_space_directly() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
@@ -404,16 +420,16 @@ def test_digits_generator_materializes_large_target_state_space_directly() -> No
     )
 
     assert state_space is not None
-    assert state_space.cardinality == 1_048_580
-    assert math.isclose(state_space.complexity, math.log2(1_048_580))
+    assert state_space.cardinality == 1_069_200
+    assert 20.0 <= state_space.complexity <= 21.0
     assert state_space.resolution_assignment is not None
-    assert state_space.resolution_assignment.values == {"W": 1452, "H": 1452}
+    assert state_space.resolution_assignment.values == {"W": 148, "H": 148}
     assert state_space.metadata["affine_grid"] == {
-        "x_translation": 109,
-        "y_translation": 74,
-        "scale": 13,
-        "rotation": 1,
-        "x_shear": 1,
+        "x_translation": 45,
+        "y_translation": 44,
+        "scale": 6,
+        "rotation": 3,
+        "x_shear": 3,
     }
 
 
@@ -643,6 +659,7 @@ def test_digits_benchmark_uses_single_tensor_render_path() -> None:
     assert "sampled_state_tensor" not in source
     assert "field_tensor_gather" not in source
     assert "_FormationTensorCache" not in source
+    assert "_constructed_affine_count_products" not in source
 
 
 def test_digits_console_preview_png_encoding_is_deterministic() -> None:
@@ -657,11 +674,11 @@ def test_digits_console_preview_png_encoding_is_deterministic() -> None:
     assert [
         (batch["label"], batch["sample_count"])
         for batch in left
-    ] == [
-        ("[3, 4]", 10),
-        ("[5, 6]", 50),
-        ("[8, 9]", 50),
-    ]
+        ] == [
+            ("[3, 4]", 10),
+            ("[5, 6]", 40),
+            ("[8, 9]", 50),
+        ]
     assert data_url.startswith("data:image/png;base64,")
 
 
