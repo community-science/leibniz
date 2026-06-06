@@ -72,6 +72,7 @@ from leibniz.tensor_runtime import (
     make_float_tensor,
     make_long_tensor,
     no_grad_context,
+    optimizer_step,
     resolve_tensor_runtime,
     runtime_capacity_error,
     runtime_roofline_record,
@@ -633,9 +634,9 @@ class BenchmarkRunPlan:
     results_root: Path = Path("results")
     seed: int = 101
     train_steps: int | None = _default_train_steps
-    learning_rate: float = 0.01
-    optimizer: str = "adam"
-    schedule: str = "reduce-on-plateau"
+    learning_rate: float | None = None
+    optimizer: str = "loss-search"
+    schedule: str = "none"
     gate_check_interval: int = _default_gate_check_interval
     model_checkpoint_gate_interval: int = _default_model_checkpoint_gate_interval
     gate_decision_rule: str = "score-estimate-plateau"
@@ -656,10 +657,15 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError("cosine schedule requires train_steps")
         if self.train_steps is None and self.convergence_patience == 0:
             raise BenchmarkRunnerError("uncapped training requires convergence_patience")
-        if self.learning_rate <= 0:
-            raise BenchmarkRunnerError("learning_rate must be positive")
-        if self.optimizer not in {"sgd", "adam", "adamw"}:
+        if self.optimizer not in {"loss-search", "sgd", "adam", "adamw"}:
             raise BenchmarkRunnerError(f"unsupported optimizer: {self.optimizer}")
+        if self.optimizer == "loss-search":
+            if self.learning_rate is not None:
+                raise BenchmarkRunnerError("loss-search optimizer does not accept learning_rate")
+            if self.schedule != "none":
+                raise BenchmarkRunnerError("loss-search optimizer does not accept a schedule")
+        elif self.learning_rate is None or self.learning_rate <= 0:
+            raise BenchmarkRunnerError(f"{self.optimizer} optimizer requires learning_rate")
         if self.schedule not in {"none", "cosine", "reduce-on-plateau"}:
             raise BenchmarkRunnerError(f"unsupported schedule: {self.schedule}")
         if type(self.gate_check_interval) is not int or self.gate_check_interval < 1:
@@ -705,7 +711,6 @@ class BenchmarkRunPlan:
         """Return a compact identity atom for training/convergence controls."""
 
         controls = {
-            "learning_rate": float(self.learning_rate),
             "optimizer": self.optimizer,
             "schedule": self.schedule,
             "gate_check_interval": self.gate_check_interval,
@@ -716,6 +721,8 @@ class BenchmarkRunPlan:
             "convergence_min_delta": float(self.convergence_min_delta),
             "tensor_device": self.tensor_device,
         }
+        if self.learning_rate is not None:
+            controls["learning_rate"] = float(self.learning_rate)
         return f"train-{ContentDigest.from_value(controls).hex[:12]}"
 
 
@@ -915,7 +922,7 @@ def run_benchmark(
         sample_count=_default_training_batch_target,
         gate_sample_count=_default_gate_batch_target,
         train_steps=plan.train_steps,
-        learning_rate=float(plan.learning_rate),
+        learning_rate=plan.learning_rate,
         optimizer_name=plan.optimizer,
         schedule_name=plan.schedule,
         gate_check_interval=plan.gate_check_interval,
@@ -955,52 +962,51 @@ def run_benchmark(
         evaluation_rung_count=len(training_result.training_rungs),
         training_compute=training_result.training_run.training_compute,
     )
-    _write_document_atomic(
-        summary.training_summary_path,
-        {
-            **summary.to_record(),
-            "dry_run": False,
-            "run_status": "completed",
-            "training_batch_target": _default_training_batch_target,
-            "training_curriculum": _curriculum_record(
-                kind="competence-gated-training-curriculum",
-                source="structured-training-curriculum",
-                frontier_sampling_weight=0.7,
-                replay_sampling_weight=0.3,
-                rung_competence_threshold=plan.rung_competence_threshold,
-                rungs=training_result.training_rungs,
-                frontier_index=training_result.training_frontier_index,
-            ),
-            "training_estimate": _training_estimate_record(
-                summary=summary,
-                training_run=training_result.training_run,
-            ),
-            "seed": plan.seed,
-            "train_steps": plan.train_steps,
-            "learning_rate": float(plan.learning_rate),
-            "optimizer": plan.optimizer,
-            "schedule": plan.schedule,
-            "gate_check_interval": plan.gate_check_interval,
-            "model_checkpoint_gate_interval": plan.model_checkpoint_gate_interval,
-            "gate_batch_target": _default_gate_batch_target,
-            "gate_decision_rule": plan.gate_decision_rule,
-            "convergence_patience": plan.convergence_patience,
-            "convergence_min_delta": float(plan.convergence_min_delta),
-            "tensor_runtime": "pytorch",
-            "tensor_device": training_result.training_run.protocol.tensor_device,
-            "training_run": training_result.training_run.to_record(),
-            "throughput": training_result.throughput,
-            "architecture": model_inspection.architecture.to_record(),
-            "cost_summary": _training_cost_summary(
-                inspection=model_inspection,
-                training_run=training_result.training_run,
-            ),
-            "model_checkpoints": [dict(record) for record in checkpoint_records],
-            "selected_model_checkpoint": selected_checkpoint_record,
-            "selected_model_checkpoint_policy": "highest-training-score-estimate",
-            "evaluation_model_artifact": selected_checkpoint_record,
-        },
-    )
+    completed_record = {
+        **summary.to_record(),
+        "dry_run": False,
+        "run_status": "completed",
+        "training_batch_target": _default_training_batch_target,
+        "training_curriculum": _curriculum_record(
+            kind="competence-gated-training-curriculum",
+            source="structured-training-curriculum",
+            frontier_sampling_weight=0.7,
+            replay_sampling_weight=0.3,
+            rung_competence_threshold=plan.rung_competence_threshold,
+            rungs=training_result.training_rungs,
+            frontier_index=training_result.training_frontier_index,
+        ),
+        "training_estimate": _training_estimate_record(
+            summary=summary,
+            training_run=training_result.training_run,
+        ),
+        "seed": plan.seed,
+        "train_steps": plan.train_steps,
+        "optimizer": plan.optimizer,
+        "schedule": plan.schedule,
+        "gate_check_interval": plan.gate_check_interval,
+        "model_checkpoint_gate_interval": plan.model_checkpoint_gate_interval,
+        "gate_batch_target": _default_gate_batch_target,
+        "gate_decision_rule": plan.gate_decision_rule,
+        "convergence_patience": plan.convergence_patience,
+        "convergence_min_delta": float(plan.convergence_min_delta),
+        "tensor_runtime": "pytorch",
+        "tensor_device": training_result.training_run.protocol.tensor_device,
+        "training_run": training_result.training_run.to_record(),
+        "throughput": training_result.throughput,
+        "architecture": model_inspection.architecture.to_record(),
+        "cost_summary": _training_cost_summary(
+            inspection=model_inspection,
+            training_run=training_result.training_run,
+        ),
+        "model_checkpoints": [dict(record) for record in checkpoint_records],
+        "selected_model_checkpoint": selected_checkpoint_record,
+        "selected_model_checkpoint_policy": "highest-training-score-estimate",
+        "evaluation_model_artifact": selected_checkpoint_record,
+    }
+    if plan.learning_rate is not None:
+        completed_record["learning_rate"] = float(plan.learning_rate)
+    _write_document_atomic(summary.training_summary_path, completed_record)
     if progress_path != summary.training_summary_path:
         progress_path.unlink(missing_ok=True)
     return summary
@@ -1729,7 +1735,7 @@ def _train_and_predict(
     sample_count: int,
     gate_sample_count: int,
     train_steps: int | None,
-    learning_rate: float,
+    learning_rate: float | None,
     optimizer_name: str,
     schedule_name: str,
     gate_check_interval: int,
@@ -1792,7 +1798,7 @@ def _train_and_predict_on_device(
     sample_count: int,
     gate_sample_count: int,
     train_steps: int | None,
-    learning_rate: float,
+    learning_rate: float | None,
     optimizer_name: str,
     schedule_name: str,
     gate_check_interval: int,
@@ -2030,7 +2036,7 @@ def _train_and_predict_on_device(
                     seed=seed,
                     training_batch_target=sample_count,
                     max_steps=train_steps,
-                    learning_rate=float(learning_rate),
+                    learning_rate=learning_rate,
                     optimizer_name=optimizer_name,
                     schedule_name=schedule_name,
                     gate_check_interval=gate_check_interval,
@@ -2093,7 +2099,7 @@ def _train_and_predict_on_device(
         seed=seed,
         training_batch_target=sample_count,
         max_steps=train_steps,
-        learning_rate=float(learning_rate),
+        learning_rate=learning_rate,
         optimizer_name=optimizer_name,
         schedule_name=schedule_name,
         gate_check_interval=gate_check_interval,
@@ -3144,7 +3150,7 @@ def _train_until_convergence(
                 scheduler.step_after_validation(-plateau_signal)
                 learning_rates = scheduler.learning_rates()
             else:
-                learning_rates = tuple(float(group["lr"]) for group in optimizer.param_groups)
+                learning_rates = _optimizer_learning_rates(optimizer)
         validation_counter.add(
             seconds=time.perf_counter() - validation_started,
             samples=actual_gate_sample_count,
@@ -3215,20 +3221,39 @@ def _train_until_convergence(
             )
         latest_training_compute_per_sample = batch_training_compute_per_sample
         module.train()
-        with phase_timings.span("training_zero_grad"):
-            optimizer.zero_grad(set_to_none=True)
         try:
-            with phase_timings.span("training_forward_loss", samples=actual_batch_size):
-                logits = module(fields)
-                loss = loss_function(logits, labels)
+            first_logits: Any | None = None
+
+            def loss_closure(
+                fields: Any = fields,
+                labels: Any = labels,
+                actual_batch_size: int = actual_batch_size,
+            ) -> Any:
+                nonlocal first_logits
+                with phase_timings.span("training_zero_grad"):
+                    optimizer.zero_grad(set_to_none=True)
+                with phase_timings.span("training_forward_loss", samples=actual_batch_size):
+                    logits = module(fields)
+                    loss = loss_function(logits, labels)
+                if first_logits is None:
+                    detach_logits = getattr(logits, "detach", None)
+                    first_logits = detach_logits() if callable(detach_logits) else logits
+                with phase_timings.span("training_backward", samples=actual_batch_size):
+                    loss.backward()
+                return loss
+
+            with phase_timings.span("training_optimizer_step"):
+                optimizer_step(runtime, optimizer, loss_closure)
             if training_batch.sample_set is not None:
+                if first_logits is None:
+                    raise BenchmarkRunnerError("optimizer did not evaluate training loss")
                 with phase_timings.span(
                     "training_replay_score_update",
                     samples=training_batch.sample_set.sample_count,
                 ):
                     probabilities = tuple(
                         _renormalized_probabilities(row)
-                        for row in softmax_prediction_rows(runtime, logits)
+                        for row in softmax_prediction_rows(runtime, first_logits)
                     )
                     measurements = finite_measurements_for_predictions(
                         batch=training_batch.sample_set,
@@ -3247,10 +3272,6 @@ def _train_until_convergence(
                         replay_frontier_points,
                         replay_point,
                     )
-            with phase_timings.span("training_backward", samples=actual_batch_size):
-                loss.backward()
-            with phase_timings.span("training_optimizer_step"):
-                optimizer.step()
         except RuntimeError as error:
             if not _is_runtime_capacity_error(error):
                 raise
@@ -3755,7 +3776,7 @@ def _training_run_record(
     seed: int,
     training_batch_target: int,
     max_steps: int | None,
-    learning_rate: float,
+    learning_rate: float | None,
     optimizer_name: str,
     schedule_name: str,
     gate_check_interval: int,
@@ -3814,7 +3835,7 @@ def _running_training_run_record(
     seed: int,
     training_batch_target: int,
     max_steps: int | None,
-    learning_rate: float,
+    learning_rate: float | None,
     optimizer_name: str,
     schedule_name: str,
     gate_check_interval: int,
@@ -3885,7 +3906,6 @@ def _training_progress_record(
         "training_batch_target": _default_training_batch_target,
         "seed": plan.seed,
         "train_steps": plan.train_steps,
-        "learning_rate": float(plan.learning_rate),
         "optimizer": plan.optimizer,
         "schedule": plan.schedule,
         "gate_check_interval": plan.gate_check_interval,
@@ -3916,6 +3936,8 @@ def _training_progress_record(
         ),
         "selected_model_checkpoint_policy": "highest-training-score-estimate",
     }
+    if plan.learning_rate is not None:
+        record["learning_rate"] = float(plan.learning_rate)
     record["sampled_competence"] = dict(
         cast(Mapping[str, object], training_estimate["sampled_competence"])
     )
@@ -4382,7 +4404,7 @@ def _make_optimizer(
     runtime: TensorRuntime,
     parameters: Any,
     name: str,
-    learning_rate: float,
+    learning_rate: float | None,
 ) -> Any:
     try:
         return build_optimizer(
@@ -4390,6 +4412,18 @@ def _make_optimizer(
         )
     except TensorRuntimeError as error:
         raise BenchmarkRunnerError(str(error)) from error
+
+
+def _optimizer_learning_rates(optimizer: Any) -> tuple[float, ...]:
+    rates: list[float] = []
+    for group in getattr(optimizer, "param_groups", ()):
+        if not isinstance(group, Mapping) or "lr" not in group:
+            continue
+        group_record = cast(Mapping[str, object], group)
+        value = group_record["lr"]
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            rates.append(float(value))
+    return tuple(rates)
 
 
 def _make_scheduler(

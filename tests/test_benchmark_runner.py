@@ -449,7 +449,10 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     training_run = TrainingRunRecord.from_record(
         cast(Mapping[str, object], training_summary["training_run"])
     )
-    assert training_run.protocol.optimizer == "adam"
+    assert training_run.protocol.optimizer == "loss-search"
+    assert training_run.protocol.learning_rate is None
+    assert "learning_rate" not in training_run.protocol.to_record()
+    assert "learning_rate" not in training_summary
     assert training_run.protocol.objective == "cross-entropy"
     assert training_run.protocol.tensor_runtime == "pytorch"
     assert training_run.protocol.tensor_device == "cpu"
@@ -489,7 +492,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert component_timing["sample_count"] == 2
     assert transform_timing["sample_count"] == 2
     assert cast(float, render_timing["seconds"]) > 0
-    assert forward_timing["sample_count"] == 2
+    assert cast(int, forward_timing["sample_count"]) >= 2
     assert cast(float, forward_timing["seconds"]) > 0
     assert cast(float, roofline["peak_bytes_per_second"]) > 0
     assert training_throughput["sample_count"] == 2
@@ -2113,7 +2116,6 @@ def test_digits_benchmark_runner_run_slug_includes_training_controls() -> None:
         benchmark_root=_digits_benchmark_root,
         seed=401,
         train_steps=10,
-        optimizer="sgd",
     )
     alternate_plan = BenchmarkRunPlan(
         architecture_path=_digits_architecture,
@@ -2121,6 +2123,8 @@ def test_digits_benchmark_runner_run_slug_includes_training_controls() -> None:
         seed=401,
         train_steps=10,
         optimizer="adam",
+        learning_rate=0.01,
+        schedule="reduce-on-plateau",
     )
 
     assert base_plan.run_slug.startswith("seed401-steps10-train-")

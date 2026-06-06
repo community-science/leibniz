@@ -286,7 +286,7 @@ export type TrainingProtocolRecord = {
   kind: string;
   objective: string;
   optimizer: string;
-  learning_rate: number;
+  learning_rate?: number;
   schedule: string;
   seed: number;
   training_batch_target: number;

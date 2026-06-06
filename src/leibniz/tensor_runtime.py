@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import math
 import os
 import time
 from collections.abc import Mapping, Sequence
@@ -25,6 +26,7 @@ __all__ = [
     "make_float_tensor",
     "make_long_tensor",
     "no_grad_context",
+    "optimizer_step",
     "OperationFallbackSequential",
     "preferred_tensor_runtime_device_kind",
     "seed_runtime",
@@ -551,12 +553,16 @@ def build_optimizer(
     *,
     name: str,
     parameters: Any,
-    learning_rate: float,
+    learning_rate: float | None,
 ) -> Any:
     """Build a named optimizer for module parameters."""
 
     _ = runtime
     torch = _torch()
+    if name == "loss-search":
+        return _LossSearchOptimizer(parameters)
+    if learning_rate is None:
+        raise TensorRuntimeError(f"{name} optimizer requires a learning rate")
     if name == "sgd":
         return torch.optim.SGD(parameters, lr=learning_rate)
     if name == "adam":
@@ -564,6 +570,81 @@ def build_optimizer(
     if name == "adamw":
         return torch.optim.AdamW(parameters, lr=learning_rate)
     raise TensorRuntimeError(f"unsupported optimizer: {name}")
+
+
+class _LossSearchOptimizer:
+    requires_loss_closure = True
+
+    def __init__(self, parameters: Any) -> None:
+        self._parameters = tuple(parameters)
+        self.param_groups: list[dict[str, object]] = [{"params": list(self._parameters)}]
+        self.state: dict[object, dict[str, object]] = {}
+        self._step_size = 1.0
+
+    def zero_grad(self, *, set_to_none: bool = False) -> None:
+        for parameter in self._parameters:
+            gradient = getattr(parameter, "grad", None)
+            if gradient is None:
+                continue
+            if set_to_none:
+                parameter.grad = None
+            else:
+                gradient.detach_()
+                gradient.zero_()
+
+    def step(self, closure: Any | None = None) -> Any:
+        if closure is None:
+            raise TensorRuntimeError("loss-search optimizer requires a loss closure")
+        torch = _torch()
+        with torch.enable_grad():
+            baseline_loss = closure()
+        baseline_value = float(baseline_loss.detach())
+        if not math.isfinite(baseline_value):
+            return baseline_loss
+        gradients = tuple(
+            None if parameter.grad is None else parameter.grad.detach().clone()
+            for parameter in self._parameters
+        )
+        gradient_square = sum(
+            float(gradient.pow(2).sum().detach())
+            for gradient in gradients
+            if gradient is not None
+        )
+        if gradient_square <= 0.0 or not math.isfinite(gradient_square):
+            return baseline_loss
+        originals = tuple(parameter.detach().clone() for parameter in self._parameters)
+        step_size = min(self._step_size, max(1e-12, baseline_value / gradient_square))
+        for _attempt in range(12):
+            with torch.no_grad():
+                for parameter, original, gradient in zip(
+                    self._parameters,
+                    originals,
+                    gradients,
+                    strict=True,
+                ):
+                    if gradient is not None:
+                        parameter.copy_(original - step_size * gradient)
+            with torch.enable_grad():
+                trial_loss = closure()
+            trial_value = float(trial_loss.detach())
+            if math.isfinite(trial_value) and trial_value <= baseline_value:
+                self._step_size = min(step_size * 2.0, 1.0)
+                return trial_loss
+            step_size *= 0.5
+        with torch.no_grad():
+            for parameter, original in zip(self._parameters, originals, strict=True):
+                parameter.copy_(original)
+        self._step_size = max(step_size, 1e-12)
+        return baseline_loss
+
+
+def optimizer_step(runtime: TensorRuntime, optimizer: Any, closure: Any) -> Any:
+    _ = runtime
+    if getattr(optimizer, "requires_loss_closure", False):
+        return optimizer.step(closure)
+    loss = closure()
+    optimizer.step()
+    return loss
 
 
 def build_cosine_lr_schedule(runtime: TensorRuntime, optimizer: Any, *, T_max: int) -> Any:

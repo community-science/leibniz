@@ -1092,9 +1092,18 @@ def _run_console_view_model(
                     ("Objective", _console_string_value(protocol.get("objective"))),
                     ("Optimizer", _console_string_value(protocol.get("optimizer"))),
                     ("Schedule", _console_string_value(protocol.get("schedule"))),
-                    (
-                        "Learning Rate",
-                        _console_number_value(protocol.get("learning_rate"), precision=4),
+                    *(
+                        (
+                            (
+                                "Learning Rate",
+                                _console_number_value(
+                                    protocol.get("learning_rate"),
+                                    precision=4,
+                                ),
+                            ),
+                        )
+                        if "learning_rate" in protocol
+                        else ()
                     ),
                     ("Steps", _console_number_value(protocol.get("max_steps"))),
                     (
@@ -3338,9 +3347,12 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
         protocol_path,
         ("kind", "objective", "optimizer", "schedule", "validation_source"),
     )
-    protocol_numbers = ("learning_rate", "min_delta")
-    for field in protocol_numbers:
-        _as_nonnegative_number(protocol.get(field), f"{prefix}.protocol.{field}")
+    if "learning_rate" in protocol:
+        _as_nonnegative_number(
+            protocol.get("learning_rate"),
+            f"{prefix}.protocol.learning_rate",
+        )
+    _as_nonnegative_number(protocol.get("min_delta"), f"{prefix}.protocol.min_delta")
     protocol_positive_ints = (
         "seed",
         "training_batch_target",

@@ -111,6 +111,77 @@ def test_training_protocol_rejects_unsupported_optimizer() -> None:
         )
 
 
+def test_training_protocol_loss_search_omits_learning_rate() -> None:
+    protocol = TrainingProtocol(
+        kind="fixed-step-local-batch",
+        objective="cross-entropy",
+        optimizer="loss-search",
+        learning_rate=None,
+        schedule="none",
+        seed=101,
+        training_batch_target=2,
+        max_steps=1,
+        gate_check_interval=1,
+        gate_batch_target=2,
+        gate_decision_rule="score-estimate-plateau",
+        min_delta=0.0,
+        patience=0,
+        validation_source="training-batch",
+    )
+
+    record = protocol.to_record()
+    parsed = TrainingProtocol.from_record(record)
+
+    assert parsed == protocol
+    assert "learning_rate" not in record
+
+
+def test_training_protocol_loss_search_rejects_learning_rate() -> None:
+    with pytest.raises(
+        TrainingRunValidationError,
+        match="loss-search optimizer does not accept learning_rate",
+    ):
+        TrainingProtocol(
+            kind="fixed-step-local-batch",
+            objective="cross-entropy",
+            optimizer="loss-search",
+            learning_rate=0.01,
+            schedule="none",
+            seed=101,
+            training_batch_target=2,
+            max_steps=1,
+            gate_check_interval=1,
+            gate_batch_target=2,
+            gate_decision_rule="score-estimate-plateau",
+            min_delta=0.0,
+            patience=0,
+            validation_source="training-batch",
+        )
+
+
+def test_training_protocol_loss_search_rejects_schedule() -> None:
+    with pytest.raises(
+        TrainingRunValidationError,
+        match="loss-search optimizer does not accept a schedule",
+    ):
+        TrainingProtocol(
+            kind="fixed-step-local-batch",
+            objective="cross-entropy",
+            optimizer="loss-search",
+            learning_rate=None,
+            schedule="reduce-on-plateau",
+            seed=101,
+            training_batch_target=2,
+            max_steps=1,
+            gate_check_interval=1,
+            gate_batch_target=2,
+            gate_decision_rule="score-estimate-plateau",
+            min_delta=0.0,
+            patience=0,
+            validation_source="training-batch",
+        )
+
+
 def test_training_protocol_requires_positive_gate_check_interval() -> None:
     with pytest.raises(TrainingRunValidationError, match="gate_check_interval"):
         TrainingProtocol(
