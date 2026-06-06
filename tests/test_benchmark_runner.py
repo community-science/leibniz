@@ -2492,6 +2492,14 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     progress_cost = cast(dict[str, object], progress_plot_runs[0]["cost_summary"])
     assert isinstance(progress_cost["inference_compute"], int | float)
     training_estimate = cast(dict[str, object], progress_records[0]["training_estimate"])
+    materialized_progress_record = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="training progress",
+    )
+    materialized_training_estimate = cast(
+        dict[str, object],
+        materialized_progress_record["training_estimate"],
+    )
     assert isinstance(training_estimate["max_inference_compute"], int)
     sampled_competence = cast(dict[str, object], training_estimate["sampled_competence"])
     sampled_points = cast(list[dict[str, object]], sampled_competence["points"])
@@ -2500,7 +2508,7 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     assert "observation_ids" not in sampled_points[0]
     assert math.isclose(
         cast(float, progress_plot_runs[0]["score"]),
-        cast(float, training_estimate["score"]),
+        cast(float, materialized_training_estimate["score"]),
     )
     progress_candidates = cast(list[dict[str, object]], progress_result["model_candidates"])
     assert len(progress_candidates) == 1
