@@ -77,6 +77,7 @@ from leibniz.tensor_runtime import (
     runtime_roofline_record,
     save_tensor_runtime_state,
     seed_runtime,
+    softmax_prediction_rows,
     tensor_runtime_device_kinds,
     tensor_runtime_has_fixed_device_memory,
     tensor_runtime_total_memory_bytes,
@@ -271,6 +272,13 @@ def _require_field_generator(generator: BenchmarkGenerator) -> _FieldBenchmarkGe
 class _TrainingStageResult:
     validation_history: tuple[TrainingHistoryPoint, ...]
     stop_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class _TrainingStepBatch:
+    fields: Any
+    labels: Any
+    sample_set: GeneratedSampleSet | None = None
 
 
 class _RuntimeCapacityReached(Exception):
@@ -1805,7 +1813,8 @@ def _train_and_predict_on_device(
         generation_phase: str,
         tensor_phase: str,
         rung: _CurriculumRung,
-    ) -> tuple[Any, Any]:
+        include_score_metadata: bool,
+    ) -> _TrainingStepBatch:
         physical_sample_count = _physical_execution_sample_count(
             runtime=runtime,
             generator=generator,
@@ -1819,7 +1828,7 @@ def _train_and_predict_on_device(
             generated = generator(
                 shape=physical_sample_count,
                 seed=batch_seed,
-                include_metadata=False,
+                include_metadata=include_score_metadata,
                 state_space_request=_rung_state_space_request(rung),
                 memory_limit_bytes=_runtime_memory_budget_bytes(runtime),
                 variation_extent=_full_variation_extent,
@@ -1833,7 +1842,12 @@ def _train_and_predict_on_device(
                     "generator returned no samples for selected state-space measure"
                 )
             with phase_timings.span(tensor_phase, samples=physical_sample_count):
-                return generated.require_tensors()
+                fields, labels = generated.require_tensors()
+                return _TrainingStepBatch(
+                    fields=fields,
+                    labels=labels,
+                    sample_set=generated if include_score_metadata else None,
+                )
 
     def validation_sample_batch_for_seed(
         batch_seed: int,
@@ -1898,6 +1912,19 @@ def _train_and_predict_on_device(
         replay_index = (step // 10) % training_frontier_index
         return training_rungs[replay_index]
 
+    def training_batch_for_step(step: int) -> _TrainingStepBatch:
+        rung = training_rung_for_step(step)
+        return training_batch_for_seed(
+            seed + step,
+            batch_sample_count=sample_count,
+            generation_phase="training_formation_generation",
+            tensor_phase="training_tensor_batch",
+            rung=rung,
+            include_score_metadata=(
+                rung.index != training_frontier_index and step % 10 == 7
+            ),
+        )
+
     def advance_frontier(history: Sequence[TrainingHistoryPoint]) -> bool:
         nonlocal training_frontier_index
         latest = history[-1]
@@ -1937,15 +1964,7 @@ def _train_and_predict_on_device(
         optimizer=optimizer,
         scheduler=scheduler,
         loss_function=loss_function,
-        train_batch=lambda step: (
-            training_batch_for_seed(
-                seed + step,
-                batch_sample_count=sample_count,
-                generation_phase="training_formation_generation",
-                tensor_phase="training_tensor_batch",
-                rung=training_rung_for_step(step),
-            )
-        ),
+        train_batch=training_batch_for_step,
         validation_batch=lambda check: validation_sample_batch_for_seed(
             seed + 1_000_003 + check,
             batch_sample_count=gate_sample_count,
@@ -2984,7 +3003,7 @@ def _train_until_convergence(
     optimizer: Any,
     scheduler: _LearningRateSchedule | None,
     loss_function: Any,
-    train_batch: Callable[[int], tuple[Any, Any]],
+    train_batch: Callable[[int], _TrainingStepBatch | tuple[Any, Any]],
     validation_batch: Callable[[int], GeneratedSampleSet],
     outcome_space: OutcomeSpace,
     outcome_ids: tuple[str, ...],
@@ -3014,6 +3033,7 @@ def _train_until_convergence(
     plateau_window_start_index = 0
     max_validation_inference_compute: int | None = None
     latest_training_compute_per_sample: int | None = None
+    replay_frontier_points: dict[tuple[float, float], ValidationCompetencePoint] = {}
 
     def append_validation(*, step: int, check: int) -> None:
         nonlocal best_score, max_validation_inference_compute, stale_checks
@@ -3060,7 +3080,10 @@ def _train_until_convergence(
                 batch=batch,
                 outcome_space=outcome_space,
                 probabilities=probabilities,
-                previous_frontier_points=frontier_points(),
+                previous_frontier_points=_refreshed_frontier_points(
+                    frontier_points(),
+                    replay_frontier_points.values(),
+                ),
                 validation_check=check,
                 step=step,
                 max_inference_compute=batch_max_inference_compute,
@@ -3132,7 +3155,7 @@ def _train_until_convergence(
     for step in steps:
         training_started = time.perf_counter()
         try:
-            fields, labels = train_batch(step)
+            raw_training_batch = train_batch(step)
         except _RuntimeCapacityReached:
             stop_reason = "capacity-limited"
             break
@@ -3141,6 +3164,9 @@ def _train_until_convergence(
                 raise
             stop_reason = "capacity-limited"
             break
+        training_batch = _coerce_training_step_batch(raw_training_batch)
+        fields = training_batch.fields
+        labels = training_batch.labels
         actual_batch_size = _tensor_batch_size(fields, fallback=training_batch_target)
         with phase_timings.span("training_max_training_compute"):
             batch_training_compute_per_sample = _batch_max_training_compute_per_sample(
@@ -3153,7 +3179,33 @@ def _train_until_convergence(
             optimizer.zero_grad(set_to_none=True)
         try:
             with phase_timings.span("training_forward_loss", samples=actual_batch_size):
-                loss = loss_function(module(fields), labels)
+                logits = module(fields)
+                loss = loss_function(logits, labels)
+            if training_batch.sample_set is not None:
+                with phase_timings.span(
+                    "training_replay_score_update",
+                    samples=training_batch.sample_set.sample_count,
+                ):
+                    probabilities = tuple(
+                        _renormalized_probabilities(row)
+                        for row in softmax_prediction_rows(runtime, logits)
+                    )
+                    measurements = finite_measurements_for_predictions(
+                        batch=training_batch.sample_set,
+                        outcome_space=outcome_space,
+                        probabilities=probabilities,
+                        run_slug=f"training-replay-{step:08d}",
+                    )
+                    replay_point = _validation_competence_point_from_sampled_record(
+                        sampled_competence_record(
+                            batch=training_batch.sample_set,
+                            measurements=measurements,
+                            complexity_axis=None,
+                        )
+                    )
+                    replay_frontier_points[
+                        _validation_competence_point_interval_key(replay_point)
+                    ] = replay_point
             with phase_timings.span("training_backward", samples=actual_batch_size):
                 loss.backward()
             with phase_timings.span("training_optimizer_step"):
@@ -3319,6 +3371,40 @@ def _training_gate_score_estimate(
     if training_compute_per_sample is not None:
         record["training_compute_per_sample"] = training_compute_per_sample
     return record
+
+
+def _coerce_training_step_batch(
+    value: _TrainingStepBatch | tuple[Any, Any],
+) -> _TrainingStepBatch:
+    if isinstance(value, _TrainingStepBatch):
+        return value
+    fields, labels = value
+    return _TrainingStepBatch(fields=fields, labels=labels)
+
+
+def _refreshed_frontier_points(
+    historical_points: Iterable[ValidationCompetencePoint],
+    replay_points: Iterable[ValidationCompetencePoint],
+) -> tuple[ValidationCompetencePoint, ...]:
+    by_interval = {
+        _validation_competence_point_interval_key(point): point
+        for point in historical_points
+    }
+    for point in replay_points:
+        by_interval[_validation_competence_point_interval_key(point)] = point
+    return tuple(
+        by_interval[key]
+        for key in sorted(by_interval, key=lambda interval: (interval[0], interval[1]))
+    )
+
+
+def _validation_competence_point_interval_key(
+    point: ValidationCompetencePoint,
+) -> tuple[float, float]:
+    return (
+        point.complexity if point.complexity_minimum is None else point.complexity_minimum,
+        point.complexity if point.complexity_maximum is None else point.complexity_maximum,
+    )
 
 
 def _training_sampled_competence_record(
@@ -3489,26 +3575,32 @@ def _training_history_frontier_point(point: TrainingHistoryPoint) -> ValidationC
     if not points:
         raise BenchmarkRunnerError("training gate score estimate has no competence point")
     latest_point = points[-1]
+    return _validation_competence_point_from_sampled_record(latest_point)
+
+
+def _validation_competence_point_from_sampled_record(
+    point: Mapping[str, object],
+) -> ValidationCompetencePoint:
     return ValidationCompetencePoint(
-        complexity=_required_float(latest_point.get("complexity"), "score_estimate.complexity"),
+        complexity=_required_float(point.get("complexity"), "score_estimate.complexity"),
         accepted_mass=_required_float(
-            latest_point.get("mean_accepted_mass"),
+            point.get("mean_accepted_mass"),
             "score_estimate.mean_accepted_mass",
         ),
         sample_count=_required_int(
-            latest_point.get("sample_count"),
+            point.get("sample_count"),
             "score_estimate.sample_count",
         ),
         seed=_required_int(
-            latest_point.get("seed"),
+            point.get("seed"),
             "score_estimate.seed",
         ),
         complexity_minimum=_optional_nonnegative_float(
-            latest_point.get("complexity_minimum"),
+            point.get("complexity_minimum"),
             "score_estimate.complexity_minimum",
         ),
         complexity_maximum=_optional_nonnegative_float(
-            latest_point.get("complexity_maximum"),
+            point.get("complexity_maximum"),
             "score_estimate.complexity_maximum",
         ),
     )

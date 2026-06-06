@@ -1290,6 +1290,174 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
     )
 
 
+def test_training_replay_batches_refresh_prior_frontier_score_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    runtime = resolve_tensor_runtime("cpu")
+    torch = importlib.import_module("torch")
+    generator = load_generator(_digits_benchmark_root)
+    outcome_space = generator.manifest.resolve_outcome_space()
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    replay_request = StateSpaceMeasureRequest(
+        minimum=math.log2(10),
+        maximum=math.log2(20),
+    )
+    replay_batch = generator(
+        shape=4,
+        seed=101,
+        include_fields=True,
+        include_metadata=True,
+        runtime=runtime,
+        outcome_ids=outcome_ids,
+        state_space_request=replay_request,
+    )
+    fields, labels = replay_batch.require_tensors()
+    prior_point = ValidationCompetencePoint(
+        complexity=math.log2(10),
+        complexity_minimum=math.log2(10),
+        complexity_maximum=math.log2(20),
+        accepted_mass=1.0,
+        sample_count=64,
+        seed=202,
+    )
+    gate_prior_points: list[tuple[ValidationCompetencePoint, ...]] = []
+
+    class FakeLossValue:
+        def item(self) -> float:
+            return 2.0
+
+        def backward(self) -> None:
+            pass
+
+    class FakeLossFunction:
+        def __call__(self, _logits: object, _labels: object) -> FakeLossValue:
+            return FakeLossValue()
+
+    class FakeModule:
+        training = True
+
+        def __call__(self, batch_fields: object) -> object:
+            sample_count = cast(Any, batch_fields).shape[0]
+            logits = torch.full((sample_count, len(outcome_ids)), -1000.0)
+            logits[:, 0] = 1000.0
+            return logits
+
+        def eval(self) -> None:
+            self.training = False
+
+        def train(self) -> None:
+            self.training = True
+
+    class FakeOptimizer:
+        param_groups = [{"lr": 0.01}]
+
+        def zero_grad(self, *, set_to_none: bool) -> None:
+            _ = set_to_none
+
+        def step(self) -> None:
+            pass
+
+    def fake_training_batch(_step: int) -> object:
+        return cast(Any, benchmark_runner)._TrainingStepBatch(
+            fields=fields,
+            labels=labels,
+            sample_set=replay_batch,
+        )
+
+    def fake_validation_batch(_index: int) -> GeneratedSampleSet:
+        return replay_batch
+
+    def fake_batch_tensors(**_kwargs: object) -> tuple[object, object]:
+        return fields, labels
+
+    def fake_predictions(
+        _runtime: object,
+        _module: object,
+        _fields: object,
+    ) -> list[list[float]]:
+        return [[1.0, *([0.0] * (len(outcome_ids) - 1))] for _ in range(4)]
+
+    def fake_training_gate_score_estimate(**kwargs: object) -> dict[str, object]:
+        gate_prior_points.append(
+            cast(tuple[ValidationCompetencePoint, ...], kwargs["previous_frontier_points"])
+        )
+        return _score_estimate(
+            check=cast(int, kwargs["validation_check"]),
+            step=cast(int, kwargs["step"]),
+            score=1.0,
+            complexity=20.0,
+            accepted_mass=1.0,
+        )
+
+    def fake_batch_max_compute(**_kwargs: object) -> int:
+        return 10
+
+    monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
+    monkeypatch.setattr(benchmark_runner, "apply_softmax_predictions", fake_predictions)
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_inference_compute",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_training_compute_per_sample",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_training_gate_score_estimate",
+        fake_training_gate_score_estimate,
+    )
+
+    stage_result = cast(Any, benchmark_runner)._train_until_convergence(
+        runtime=runtime,
+        module=FakeModule(),
+        optimizer=FakeOptimizer(),
+        scheduler=None,
+        loss_function=FakeLossFunction(),
+        train_batch=cast(Any, fake_training_batch),
+        validation_batch=fake_validation_batch,
+        outcome_space=outcome_space,
+        outcome_ids=outcome_ids,
+        max_steps=1,
+        gate_check_interval=1,
+        patience=10,
+        min_delta=0.001,
+        rung_competence_threshold=0.9,
+        training_batch_target=4,
+        architecture=ArchitectureManifestDocument.from_bytes(
+            _digits_architecture.read_bytes()
+        ).manifest,
+        training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
+        validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        phase_timings=benchmark_runner.TimingCollector(),
+        frontier_points=lambda: (prior_point,),
+    )
+
+    assert stage_result.stop_reason == "max-steps"
+    assert len(gate_prior_points) == 2
+    assert gate_prior_points[0] == (prior_point,)
+    replay_refreshed_points = gate_prior_points[1]
+    assert len(replay_refreshed_points) == 1
+    assert replay_refreshed_points[0].sample_count == replay_batch.sample_count
+    assert replay_refreshed_points[0].seed == replay_batch.seed
+    assert replay_refreshed_points[0].complexity_minimum is not None
+    assert replay_refreshed_points[0].complexity_maximum is not None
+    assert math.isclose(
+        replay_refreshed_points[0].complexity_minimum,
+        replay_request.minimum,
+    )
+    assert math.isclose(
+        replay_refreshed_points[0].complexity_maximum,
+        replay_request.maximum,
+    )
+    assert replay_refreshed_points[0].accepted_mass < 1e-6
+
+
 def test_training_plateau_signal_uses_current_rung_competence() -> None:
     score_estimate = _score_estimate(
         check=1,

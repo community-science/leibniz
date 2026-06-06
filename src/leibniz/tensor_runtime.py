@@ -28,6 +28,7 @@ __all__ = [
     "OperationFallbackSequential",
     "preferred_tensor_runtime_device_kind",
     "seed_runtime",
+    "softmax_prediction_rows",
     "synchronize_runtime",
     "TensorRuntime",
     "TensorRuntimeError",
@@ -538,6 +539,11 @@ def apply_softmax_predictions(
 ) -> list[list[float]]:
     _ = runtime
     return _torch().softmax(module(fields), dim=1).tolist()
+
+
+def softmax_prediction_rows(runtime: TensorRuntime, logits: Any) -> list[list[float]]:
+    _ = runtime
+    return _torch().softmax(logits.detach(), dim=1).tolist()
 
 
 def build_optimizer(
