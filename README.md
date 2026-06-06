@@ -38,6 +38,9 @@ bash scripts/setup_environment.sh
 source scripts/activate_environment.sh
 ```
 
+`environment.yml` declares CUDA-enabled PyTorch on Linux and CPU/Mac PyTorch on
+non-Linux hosts using conda selectors.
+
 Run the local checks:
 
 ```bash

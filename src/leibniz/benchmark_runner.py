@@ -15,11 +15,12 @@ from typing import Any, Protocol, cast
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.artifacts import ArtifactReference, reference_for_record
 from leibniz.benchmark_evaluation import (
+    CompetencePoint,
     ValidationCompetencePoint,
     finite_measurements_for_predictions,
     sampled_competence_curriculum_record,
+    sampled_competence_frontier_score,
     sampled_competence_record,
-    validation_competence,
     validation_competence_frontier_advances,
 )
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
@@ -46,6 +47,7 @@ from leibniz.model_manifests import (
 )
 from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
 from leibniz.observation_generation import (
+    GeneratedSample,
     GeneratedSampleSet,
     StateSpaceCandidate,
     StateSpaceMeasureRequest,
@@ -187,9 +189,10 @@ class ModelCheckpointArtifact:
     step: int
     validation_check: int
     validation_loss: float
+    score_estimate: Mapping[str, object] | None = None
 
     def to_record(self) -> dict[str, object]:
-        return {
+        record: dict[str, object] = {
             "kind": "model-checkpoint",
             "path": self.path.as_posix(),
             "digest": str(self.digest),
@@ -199,6 +202,9 @@ class ModelCheckpointArtifact:
             "validation_check": self.validation_check,
             "validation_loss": self.validation_loss,
         }
+        if self.score_estimate is not None:
+            record["score_estimate"] = dict(self.score_estimate)
+        return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +263,7 @@ class _CurriculumRung:
     resolution_assignment: AxisAssignment
     seed: int
     batch: GeneratedSampleSet
+    sample_count: int
 
     @property
     def complexity(self) -> float:
@@ -279,7 +286,7 @@ class _CurriculumRung:
                 if self.batch.state_space_request is None
                 else self.batch.state_space_request.to_record()
             ),
-            "sample_count": len(self.batch.samples),
+            "sample_count": self.sample_count,
         }
 
 
@@ -357,16 +364,16 @@ class _LearningRateSchedule:
         if self.update_on == "optimizer-step":
             self.scheduler.step()
 
-    def step_after_validation(self, validation_loss: float) -> None:
-        if self.update_on == "validation-loss":
+    def step_after_validation(self, plateau_metric: float) -> None:
+        if self.update_on == "score-estimate":
             before = self.learning_rates()
-            self.scheduler.step(validation_loss)
+            self.scheduler.step(plateau_metric)
             after = self.learning_rates()
             if any(new < old for old, new in zip(before, after, strict=True)):
                 self.lr_reduction_count += 1
 
     def has_exhausted_plateau_response(self) -> bool:
-        if self.update_on != "validation-loss":
+        if self.update_on != "score-estimate":
             return True
         return (
             self.lr_reduction_count >= _minimum_plateau_lr_reductions
@@ -480,7 +487,7 @@ class BenchmarkRunPlan:
     gate_check_interval: int = _default_gate_check_interval
     model_checkpoint_gate_interval: int = _default_model_checkpoint_gate_interval
     gate_sample_count: int | None = None
-    gate_decision_rule: str = "validation-loss-plateau"
+    gate_decision_rule: str = "score-estimate-plateau"
     convergence_patience: int = _default_convergence_patience
     convergence_min_delta: float = _default_convergence_min_delta
     convergence_min_steps: int = _default_convergence_min_steps
@@ -527,7 +534,7 @@ class BenchmarkRunPlan:
             type(self.gate_sample_count) is not int or self.gate_sample_count < 1
         ):
             raise BenchmarkRunnerError("gate_sample_count must be a positive integer")
-        if self.gate_decision_rule != "validation-loss-plateau":
+        if self.gate_decision_rule != "score-estimate-plateau":
             raise BenchmarkRunnerError(
                 f"unsupported gate_decision_rule: {self.gate_decision_rule}"
             )
@@ -736,8 +743,6 @@ def run_benchmark(
                 summary=summary,
                 architecture=architecture,
                 inspection=progress_inspection,
-                outcome_space=outcome_space,
-                evaluation_rungs=(initial_evaluation_rung,),
                 evaluation_curriculum=_curriculum_record(
                     kind="competence-gated-evaluation-curriculum",
                     rungs=(initial_evaluation_rung,),
@@ -786,15 +791,8 @@ def run_benchmark(
         convergence_min_delta=float(plan.convergence_min_delta),
         convergence_min_steps=plan.convergence_min_steps,
         tensor_device=plan.tensor_device,
-        work_estimates=_training_work_estimates(
-            architecture=architecture,
-            inference_compute=model_inspection.cost_summary.inference_compute,
-            training_compute_per_sample=(
-                model_inspection.cost_summary.training_compute_per_sample
-            ),
-            storage_bytes=model_inspection.cost_summary.storage_bytes,
-            batch_size=plan.sample_count,
-        ),
+        storage_bytes=model_inspection.cost_summary.storage_bytes,
+        batch_size=plan.sample_count,
         seed=plan.seed,
         progress_callback=publish_progress,
     )
@@ -842,10 +840,7 @@ def run_benchmark(
             ),
             "training_estimate": _training_estimate_record(
                 summary=summary,
-                outcome_space=outcome_space,
                 training_run=training_result.training_run,
-                training_rungs=training_result.training_rungs,
-                frontier_index=training_result.training_frontier_index,
             ),
             "seed": plan.seed,
             "train_steps": plan.train_steps,
@@ -864,10 +859,13 @@ def run_benchmark(
             "training_run": training_result.training_run.to_record(),
             "throughput": training_result.throughput,
             "architecture": model_inspection.architecture.to_record(),
-            "cost_summary": model_inspection.cost_summary.to_record(),
+            "cost_summary": _training_cost_summary(
+                inspection=model_inspection,
+                training_run=training_result.training_run,
+            ),
             "model_checkpoints": [dict(record) for record in checkpoint_records],
             "selected_model_checkpoint": selected_checkpoint_record,
-            "selected_model_checkpoint_policy": "lowest-validation-loss",
+            "selected_model_checkpoint_policy": "highest-training-score-estimate",
             "evaluation_model_artifact": selected_checkpoint_record,
         },
     )
@@ -1251,17 +1249,48 @@ def _training_curriculum_rung(
     seed: int,
     index: int,
 ) -> _CurriculumRung:
-    return _curriculum_rung_from_candidates(
-        architecture=architecture,
+    del architecture
+    candidates = _structured_training_curriculum_candidates(
         generator=generator,
-        sample_count=sample_count,
-        seed=seed,
-        index=index,
-        candidates=_structured_training_curriculum_candidates(
-            generator=generator,
-            start_index=index,
-        ),
+        start_index=index,
     )
+    for candidate_index, candidate in enumerate(candidates):
+        if candidate_index < index:
+            continue
+        resolution_assignment = candidate.state_space.resolution_assignment
+        if resolution_assignment is None:
+            continue
+        rung_seed = seed if index == 0 else seed + 2_000_003 * index
+        outcome_space = generator.manifest.resolve_outcome_space()
+        if not outcome_space.outcomes:
+            raise BenchmarkRunnerError("benchmark outcome space is empty")
+        sample = GeneratedSample(
+            index=0,
+            outcome_id=outcome_space.outcomes[0].id,
+            complexity=candidate.complexity,
+            state_space_measure=StateSpaceMeasureValue(
+                measure_id=_core_state_space_measure_id(),
+                value=candidate.complexity,
+            ),
+        )
+        batch = GeneratedSampleSet(
+            benchmark_id=generator.manifest.id,
+            generator_id=cast(ProtocolIdentifier, generator.id),
+            generator_version=generator.version,
+            seed=rung_seed,
+            shape=(1,),
+            variation_extent=_full_variation_extent,
+            state_space_request=candidate.state_space_request,
+            samples=(sample,),
+        )
+        return _CurriculumRung(
+            index=index,
+            resolution_assignment=resolution_assignment,
+            seed=rung_seed,
+            batch=batch,
+            sample_count=sample_count,
+        )
+    raise BenchmarkRunnerError("training curriculum did not produce any rungs")
 
 
 def _competition_curriculum_rung(
@@ -1285,6 +1314,7 @@ def _competition_curriculum_rung(
         resolution_assignment=resolution_assignment,
         seed=batch.seed,
         batch=batch,
+        sample_count=len(batch.samples),
     )
 
 
@@ -1332,6 +1362,7 @@ def _curriculum_rung_from_candidates(
             resolution_assignment=materialization_plan.resolution_assignment,
             seed=batch.seed,
             batch=batch,
+            sample_count=len(batch.samples),
         )
     raise BenchmarkRunnerError("evaluation curriculum did not produce any rungs")
 
@@ -1523,7 +1554,8 @@ def _train_and_predict(
     convergence_min_delta: float,
     convergence_min_steps: int,
     tensor_device: TensorRuntimeDevice,
-    work_estimates: _TrainingWorkEstimates | None,
+    storage_bytes: int | None,
+    batch_size: int,
     seed: int,
     progress_callback: (
         Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object], Any], None]
@@ -1555,7 +1587,8 @@ def _train_and_predict(
                 convergence_min_delta=convergence_min_delta,
                 convergence_min_steps=convergence_min_steps,
                 tensor_device=device_kind,
-                work_estimates=work_estimates,
+                storage_bytes=storage_bytes,
+                batch_size=batch_size,
                 seed=seed,
                 progress_callback=progress_callback,
                 fallback_errors=tuple(fallback_errors),
@@ -1586,7 +1619,8 @@ def _train_and_predict_on_device(
     convergence_min_delta: float,
     convergence_min_steps: int,
     tensor_device: TensorRuntimeDeviceKind,
-    work_estimates: _TrainingWorkEstimates | None,
+    storage_bytes: int | None,
+    batch_size: int,
     seed: int,
     progress_callback: (
         Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object], Any], None]
@@ -1627,7 +1661,7 @@ def _train_and_predict_on_device(
     evaluation_counter = _ThroughputCounter()
     phase_timings = TimingCollector()
 
-    def batch_for_seed(
+    def training_batch_for_seed(
         batch_seed: int,
         *,
         batch_sample_count: int,
@@ -1653,6 +1687,33 @@ def _train_and_predict_on_device(
                 )
             with phase_timings.span(tensor_phase, samples=batch_sample_count):
                 return generated.require_tensors()
+
+    def validation_sample_batch_for_seed(
+        batch_seed: int,
+        *,
+        batch_sample_count: int,
+        generation_phase: str,
+        state_space_request: StateSpaceMeasureRequest,
+    ) -> GeneratedSampleSet:
+        with phase_timings.span(generation_phase, samples=batch_sample_count):
+            generated = generator(
+                shape=batch_sample_count,
+                seed=batch_seed,
+                include_fields=False,
+                state_space_request=state_space_request,
+                variation_extent=_full_variation_extent,
+                runtime=runtime,
+                outcome_ids=outcome_ids,
+                timing=phase_timings,
+                timing_prefix=f"{generation_phase}.",
+            )
+            if generated.sample_count == 0:
+                raise BenchmarkRunnerError(
+                    "generator returned no samples for selected state-space measure"
+                )
+            if not generated.includes_fields:
+                raise BenchmarkRunnerError("validation gate batch did not include fields")
+            return generated
 
     training_rungs: list[_CurriculumRung] = [
         _training_curriculum_rung(
@@ -1683,11 +1744,7 @@ def _train_and_predict_on_device(
         nonlocal training_frontier_index
         latest = history[-1]
         chance_mass = _chance_accepted_mass(outcome_ids)
-        frontier_point = _frontier_plateau_competence_point(
-            validation_loss=latest.validation_loss,
-            outcome_count=len(outcome_ids),
-            complexity=current_frontier().complexity,
-        )
+        frontier_point = _training_history_frontier_point(latest)
         if not _frontier_plateau_advances(
             frontier_point=frontier_point,
             previous_frontier_points=tuple(frontier_plateau_points),
@@ -1717,7 +1774,7 @@ def _train_and_predict_on_device(
         scheduler=scheduler,
         loss_function=loss_function,
         train_batch=lambda step: (
-            batch_for_seed(
+            training_batch_for_seed(
                 seed + step,
                 batch_sample_count=sample_count,
                 generation_phase="training_formation_generation",
@@ -1725,13 +1782,14 @@ def _train_and_predict_on_device(
                 state_space_request=_rung_state_space_request(training_rung_for_step(step)),
             )
         ),
-        validation_batch=lambda check: batch_for_seed(
+        validation_batch=lambda check: validation_sample_batch_for_seed(
             seed + 1_000_003 + check,
             batch_sample_count=gate_sample_count,
             generation_phase="validation_formation_generation",
-            tensor_phase="validation_tensor_batch",
             state_space_request=_rung_state_space_request(current_frontier()),
         ),
+        outcome_space=outcome_space,
+        outcome_ids=outcome_ids,
         max_steps=train_steps,
         gate_check_interval=gate_check_interval,
         patience=convergence_patience,
@@ -1739,9 +1797,7 @@ def _train_and_predict_on_device(
         min_steps=convergence_min_steps,
         batch_size=sample_count,
         gate_sample_count=gate_sample_count,
-        training_compute_per_sample=(
-            None if work_estimates is None else work_estimates.training.compute_per_sample
-        ),
+        architecture=architecture,
         training_counter=training_counter,
         training_compute_counter=training_compute_counter,
         validation_counter=validation_counter,
@@ -1773,7 +1829,15 @@ def _train_and_predict_on_device(
                     evaluation_counter=evaluation_counter,
                     competition_counter=None,
                     roofline=runtime_roofline_record(runtime),
-                    work_estimates=work_estimates,
+                    work_estimates=_training_work_estimates(
+                        architecture=architecture,
+                        inference_compute=_training_history_max_inference_compute(history),
+                        training_compute_per_sample=(
+                            _training_history_latest_training_compute_per_sample(history)
+                        ),
+                        storage_bytes=storage_bytes,
+                        batch_size=batch_size,
+                    ),
                     phase_timings=phase_timings,
                     fallback_errors=fallback_errors,
                     operation_fallbacks=module.operation_fallback_records(),
@@ -1826,7 +1890,15 @@ def _train_and_predict_on_device(
             evaluation_counter=evaluation_counter,
             competition_counter=None,
             roofline=runtime_roofline_record(runtime),
-            work_estimates=work_estimates,
+            work_estimates=_training_work_estimates(
+                architecture=architecture,
+                inference_compute=_training_history_max_inference_compute(validation_history),
+                training_compute_per_sample=(
+                    _training_history_latest_training_compute_per_sample(validation_history)
+                ),
+                storage_bytes=storage_bytes,
+                batch_size=batch_size,
+            ),
             phase_timings=phase_timings,
             fallback_errors=fallback_errors,
             operation_fallbacks=module.operation_fallback_records(),
@@ -1987,6 +2059,12 @@ def _batch_max_inference_compute(
     architecture: ArchitectureManifest,
     batch: GeneratedSampleSet,
 ) -> int | None:
+    tensor_input_shape = _tensor_input_shape(batch.fields)
+    if tensor_input_shape is not None:
+        plan = summarize_architecture_operators(
+            _architecture_with_input_shape(architecture, tensor_input_shape)
+        )
+        return plan.inference_compute
     max_compute: int | None = None
     for input_shape in sorted({sample.require_field().shape for sample in batch.samples}):
         plan = summarize_architecture_operators(
@@ -1996,6 +2074,32 @@ def _batch_max_inference_compute(
             return None
         max_compute = _max_optional_int(max_compute, plan.inference_compute)
     return max_compute
+
+
+def _batch_max_training_compute_per_sample(
+    *,
+    architecture: ArchitectureManifest,
+    fields: Any,
+) -> int | None:
+    input_shape = _tensor_input_shape(fields)
+    if input_shape is None:
+        return None
+    plan = summarize_architecture_operators(
+        _architecture_with_input_shape(architecture, input_shape)
+    )
+    return plan.training_compute_per_sample
+
+
+def _tensor_input_shape(fields: Any) -> tuple[int, ...] | None:
+    shape = getattr(fields, "shape", None)
+    if shape is None or len(shape) < 2:
+        return None
+    input_shape: list[int] = []
+    for value in tuple(shape)[1:]:
+        if type(value) is not int or value < 0:
+            return None
+        input_shape.append(value)
+    return tuple(input_shape)
 
 
 def _architecture_with_input_shape(
@@ -2274,7 +2378,9 @@ def _train_until_convergence(
     scheduler: _LearningRateSchedule | None,
     loss_function: Any,
     train_batch: Callable[[int], tuple[Any, Any]],
-    validation_batch: Callable[[int], tuple[Any, Any]],
+    validation_batch: Callable[[int], GeneratedSampleSet],
+    outcome_space: OutcomeSpace,
+    outcome_ids: tuple[str, ...],
     max_steps: int | None,
     gate_check_interval: int,
     patience: int,
@@ -2282,7 +2388,7 @@ def _train_until_convergence(
     min_steps: int,
     batch_size: int,
     gate_sample_count: int,
-    training_compute_per_sample: float | None,
+    architecture: ArchitectureManifest,
     training_counter: _ThroughputCounter,
     training_compute_counter: _ComputeCounter,
     validation_counter: _ThroughputCounter,
@@ -2293,32 +2399,71 @@ def _train_until_convergence(
     on_gate_check: Callable[[tuple[TrainingHistoryPoint, ...], Any], None] | None = None,
 ) -> _TrainingStageResult:
     validation_history: list[TrainingHistoryPoint] = []
-    best_loss = float("inf")
+    best_score = -float("inf")
     stale_checks = 0
     stop_reason = "training-stopped"
     plateau_window_start_index = 0
     plateau_window_start_step = start_step
+    max_validation_inference_compute: int | None = None
+    latest_training_compute_per_sample: int | None = None
 
     def append_validation(*, step: int, check: int) -> None:
-        nonlocal best_loss, stale_checks
+        nonlocal best_score, max_validation_inference_compute, stale_checks
         validation_started = time.perf_counter()
-        fields, labels = validation_batch(check)
+        batch = validation_batch(check)
+        batch_max_inference_compute = _batch_max_inference_compute(
+            architecture=architecture,
+            batch=batch,
+        )
+        if batch_max_inference_compute is None:
+            raise BenchmarkRunnerError(
+                "training gate could not measure max_inference_compute"
+            )
+        max_validation_inference_compute = _max_optional_int(
+            max_validation_inference_compute,
+            batch_max_inference_compute,
+        )
+        if max_validation_inference_compute is None:
+            raise BenchmarkRunnerError(
+                "training gate could not measure running max_inference_compute"
+            )
+        with phase_timings.span("validation_tensor_batch", samples=batch.sample_count):
+            fields, labels = _batch_tensors(
+                runtime=runtime,
+                batch=batch,
+                outcome_ids=outcome_ids,
+                device=runtime.device,
+            )
         actual_gate_sample_count = _tensor_batch_size(fields, fallback=gate_sample_count)
         with phase_timings.span("validation_forward_loss", samples=actual_gate_sample_count):
-            validation_loss = _validation_loss(
-                runtime=runtime,
-                module=module,
-                fields=fields,
-                labels=labels,
-                loss_function=loss_function,
-            )
-        if validation_loss < best_loss - min_delta:
-            best_loss = validation_loss
+            was_training = bool(module.training)
+            module.eval()
+            with no_grad_context(runtime):
+                validation_loss = float(loss_function(module(fields), labels).item())
+                probabilities = tuple(
+                    _renormalized_probabilities(row)
+                    for row in apply_softmax_predictions(runtime, module, fields)
+                )
+            if was_training:
+                module.train()
+        score_estimate = _training_gate_score_estimate(
+            batch=batch,
+            outcome_space=outcome_space,
+            probabilities=probabilities,
+            validation_check=check,
+            step=step,
+            max_inference_compute=batch_max_inference_compute,
+            running_max_inference_compute=max_validation_inference_compute,
+            training_compute_per_sample=latest_training_compute_per_sample,
+        )
+        score = _training_score_estimate_score(score_estimate)
+        if score > best_score + min_delta:
+            best_score = score
             stale_checks = 0
         else:
             stale_checks += 1
         if scheduler is not None:
-            scheduler.step_after_validation(validation_loss)
+            scheduler.step_after_validation(-score)
             learning_rates = scheduler.learning_rates()
         else:
             learning_rates = tuple(float(group["lr"]) for group in optimizer.param_groups)
@@ -2333,6 +2478,7 @@ def _train_until_convergence(
                 validation_loss=validation_loss,
                 stale_checks=stale_checks,
                 learning_rates=learning_rates,
+                score_estimate=score_estimate,
             )
         )
         if on_gate_check is not None:
@@ -2350,6 +2496,11 @@ def _train_until_convergence(
         training_started = time.perf_counter()
         fields, labels = train_batch(step)
         actual_batch_size = _tensor_batch_size(fields, fallback=batch_size)
+        batch_training_compute_per_sample = _batch_max_training_compute_per_sample(
+            architecture=architecture,
+            fields=fields,
+        )
+        latest_training_compute_per_sample = batch_training_compute_per_sample
         module.train()
         with phase_timings.span("training_zero_grad"):
             optimizer.zero_grad(set_to_none=True)
@@ -2367,7 +2518,7 @@ def _train_until_convergence(
             samples=actual_batch_size,
         )
         training_compute_counter.add(
-            compute_per_sample=training_compute_per_sample,
+            compute_per_sample=batch_training_compute_per_sample,
             samples=actual_batch_size,
         )
         hit_step_cap = max_steps is not None and step == max_steps
@@ -2391,7 +2542,7 @@ def _train_until_convergence(
             if on_plateau is not None and on_plateau(tuple(validation_history)):
                 plateau_window_start_index = len(validation_history) - 1
                 plateau_window_start_step = step
-                best_loss = validation_history[-1].validation_loss
+                best_score = _training_history_score(validation_history[-1])
                 stale_checks = 0
                 continue
             stop_reason = "validation-plateau"
@@ -2405,21 +2556,166 @@ def _train_until_convergence(
     )
 
 
-def _validation_loss(
+def _training_gate_score_estimate(
     *,
-    runtime: TensorRuntime,
-    module: Any,
-    fields: Any,
-    labels: Any,
-    loss_function: Any,
-) -> float:
-    was_training = bool(module.training)
-    module.eval()
-    with no_grad_context(runtime):
-        loss = float(loss_function(module(fields), labels).item())
-    if was_training:
-        module.train()
-    return loss
+    batch: GeneratedSampleSet,
+    outcome_space: OutcomeSpace,
+    probabilities: tuple[tuple[float, ...], ...],
+    validation_check: int,
+    step: int,
+    max_inference_compute: int,
+    running_max_inference_compute: int,
+    training_compute_per_sample: int | None,
+) -> dict[str, object]:
+    measurements = finite_measurements_for_predictions(
+        batch=batch,
+        outcome_space=outcome_space,
+        probabilities=probabilities,
+        run_slug=f"training-gate-{validation_check:04d}",
+    )
+    sampled_competence = sampled_competence_curriculum_record(
+        (
+            sampled_competence_record(
+                batch=batch,
+                measurements=measurements,
+                complexity_axis=None,
+            ),
+        )
+    )
+    compact_sampled_competence = _compact_training_sampled_competence(sampled_competence)
+    point_records = _training_score_estimate_points(compact_sampled_competence)
+    chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
+    score = sampled_competence_frontier_score(
+        tuple(
+            CompetencePoint(
+                complexity=_required_float(point.get("complexity"), "score_estimate.complexity"),
+                accepted_mass=_required_float(
+                    point.get("mean_accepted_mass"),
+                    "score_estimate.mean_accepted_mass",
+                ),
+            )
+            for point in point_records
+        ),
+        chance_mass=chance_mass,
+    )
+    record: dict[str, object] = {
+        "kind": "training-running-score-estimate",
+        "status": "provisional",
+        "evidence_status": "not-accepted",
+        "score_frame": "none",
+        "scoring_recipe": "sampled-competence-v1",
+        "score": score,
+        "validation_check": validation_check,
+        "step": step,
+        "max_inference_compute": max_inference_compute,
+        "running_max_inference_compute": running_max_inference_compute,
+        "chance_mass": chance_mass,
+        "sampled_competence": compact_sampled_competence,
+    }
+    if training_compute_per_sample is not None:
+        record["training_compute_per_sample"] = training_compute_per_sample
+    return record
+
+
+def _compact_training_sampled_competence(
+    sampled_competence: Mapping[str, object],
+) -> dict[str, object]:
+    compact = {
+        key: value
+        for key, value in sampled_competence.items()
+        if key not in {"measurement_ids", "observation_ids", "points"}
+    }
+    points = sampled_competence.get("points")
+    if isinstance(points, Sequence) and not isinstance(points, str | bytes):
+        compact_points: list[dict[str, object]] = []
+        for raw_point in cast(Sequence[object], points):
+            if not isinstance(raw_point, Mapping):
+                continue
+            point = cast(Mapping[str, object], raw_point)
+            compact_points.append(
+                {
+                    key: value
+                    for key, value in point.items()
+                    if key not in {"measurement_ids", "observation_ids"}
+                }
+            )
+        compact["points"] = compact_points
+    return compact
+
+
+def _training_score_estimate_points(
+    score_estimate_or_sampled_competence: Mapping[str, object],
+) -> tuple[Mapping[str, object], ...]:
+    sampled_competence = score_estimate_or_sampled_competence.get("sampled_competence")
+    record = (
+        cast(Mapping[str, object], sampled_competence)
+        if isinstance(sampled_competence, Mapping)
+        else score_estimate_or_sampled_competence
+    )
+    points = record.get("points")
+    if isinstance(points, list | tuple):
+        raw_points = cast(Sequence[object], points)
+        return tuple(
+            cast(Mapping[str, object], point)
+            for point in raw_points
+            if isinstance(point, Mapping)
+        )
+    return (record,)
+
+
+def _training_score_estimate_score(score_estimate: Mapping[str, object]) -> float:
+    return _required_float(score_estimate.get("score"), "score_estimate.score")
+
+
+def _training_history_score(point: TrainingHistoryPoint) -> float:
+    if point.score_estimate is None:
+        return 0.0
+    return _training_score_estimate_score(point.score_estimate)
+
+
+def _training_history_max_inference_compute(
+    validation_history: Sequence[TrainingHistoryPoint],
+) -> int | None:
+    max_compute: int | None = None
+    for point in validation_history:
+        if point.score_estimate is None:
+            continue
+        value = point.score_estimate.get("running_max_inference_compute")
+        if type(value) is int:
+            max_compute = _max_optional_int(max_compute, value)
+            continue
+        current = point.score_estimate.get("max_inference_compute")
+        if type(current) is int:
+            max_compute = _max_optional_int(max_compute, current)
+    return max_compute
+
+
+def _training_history_latest_training_compute_per_sample(
+    validation_history: Sequence[TrainingHistoryPoint],
+) -> int | None:
+    for point in reversed(validation_history):
+        if point.score_estimate is None:
+            continue
+        value = point.score_estimate.get("training_compute_per_sample")
+        if type(value) is int:
+            return value
+    return None
+
+
+def _training_history_frontier_point(point: TrainingHistoryPoint) -> ValidationCompetencePoint:
+    if point.score_estimate is None:
+        raise BenchmarkRunnerError("training gate is missing score estimate")
+    points = _training_score_estimate_points(point.score_estimate)
+    if not points:
+        raise BenchmarkRunnerError("training gate score estimate has no competence point")
+    latest_point = points[-1]
+    return ValidationCompetencePoint(
+        complexity=_required_float(latest_point.get("complexity"), "score_estimate.complexity"),
+        accepted_mass=_required_float(
+            latest_point.get("mean_accepted_mass"),
+            "score_estimate.mean_accepted_mass",
+        ),
+    )
 
 
 def _tensor_batch_size(fields: Any, *, fallback: int) -> int:
@@ -2430,24 +2726,6 @@ def _tensor_batch_size(fields: Any, *, fallback: int) -> int:
     if type(value) is int and value >= 0:
         return value
     return fallback
-
-
-def _frontier_plateau_competence_point(
-    *,
-    validation_loss: float,
-    outcome_count: int,
-    complexity: float,
-) -> ValidationCompetencePoint:
-    chance_mass = 1.0 / outcome_count if outcome_count > 0 else 1.0
-    local_competence = validation_competence(
-        validation_loss=validation_loss,
-        outcome_count=outcome_count,
-    )
-    accepted_mass_equivalent = chance_mass + local_competence * (1.0 - chance_mass)
-    return ValidationCompetencePoint(
-        complexity=complexity,
-        accepted_mass=accepted_mass_equivalent,
-    )
 
 
 def _frontier_plateau_advances(
@@ -2495,7 +2773,7 @@ def has_windowed_validation_plateau(
         return False
     current = validation_history[-1]
     window_start = validation_history[-1 - window_checks]
-    return window_start.validation_loss - current.validation_loss < min_delta
+    return _training_history_score(current) - _training_history_score(window_start) < min_delta
 
 
 def _training_run_record(
@@ -2608,8 +2886,6 @@ def _training_progress_record(
     summary: BenchmarkRunSummary,
     architecture: ArchitectureManifest,
     inspection: ModelInspectionRecord,
-    outcome_space: OutcomeSpace,
-    evaluation_rungs: tuple[_CurriculumRung, ...],
     evaluation_curriculum: Mapping[str, object],
     training_curriculum: Mapping[str, object],
     training_run: TrainingRunRecord,
@@ -2617,22 +2893,10 @@ def _training_progress_record(
     model_checkpoints: tuple[Mapping[str, object], ...],
     selected_model_checkpoint: Mapping[str, object] | None,
 ) -> Mapping[str, object]:
-    provisional_score = validation_competence(
-        validation_loss=training_run.validation_history[-1].validation_loss,
-        outcome_count=len(outcome_space.outcomes),
+    training_estimate = _training_estimate_record(
+        summary=summary,
+        training_run=training_run,
     )
-    chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
-    accepted_mass_equivalent = chance_mass + provisional_score * (1.0 - chance_mass)
-    frontier_index_value = evaluation_curriculum.get("frontier_index", 0)
-    frontier_index = (
-        frontier_index_value
-        if isinstance(frontier_index_value, int)
-        and 0 <= frontier_index_value < len(evaluation_rungs)
-        else 0
-    )
-    evaluation_batch = evaluation_rungs[frontier_index].batch
-    complexities = {sample.complexity for sample in evaluation_batch.samples}
-    progress_complexity = next(iter(complexities)) if len(complexities) == 1 else None
     record: dict[str, object] = {
         "format": _progress_format,
         "format_version": _progress_format_version,
@@ -2661,75 +2925,98 @@ def _training_progress_record(
         "evaluation_curriculum": dict(evaluation_curriculum),
         "training_curriculum": dict(training_curriculum),
         "architecture": inspection.architecture.to_record(),
-        "cost_summary": inspection.cost_summary.to_record(),
+        "cost_summary": _training_cost_summary(
+            inspection=inspection,
+            training_run=training_run,
+        ),
         "model_inspection": inspection.to_record(),
         "architecture_digest": str(architecture.digest),
         "model_inspection_digest": str(inspection.digest),
-        "provisional_score": provisional_score,
-        "training_estimate": _training_estimate_record(
-            summary=summary,
-            outcome_space=outcome_space,
-            training_run=training_run,
-            training_rungs=evaluation_rungs,
-            frontier_index=frontier_index,
-        ),
+        "provisional_score": training_estimate["score"],
+        "training_estimate": training_estimate,
         "model_checkpoints": [dict(checkpoint) for checkpoint in model_checkpoints],
         "selected_model_checkpoint": (
             None if selected_model_checkpoint is None else dict(selected_model_checkpoint)
         ),
-        "selected_model_checkpoint_policy": "lowest-validation-loss",
+        "selected_model_checkpoint_policy": "highest-training-score-estimate",
     }
-    if progress_complexity is not None:
-        record["sampled_competence"] = {
-            "kind": "provisional-validation-competence",
-            "sampling_rule": "generator-validation-resample-v1",
-            "difficulty_assumption": "validation-loss-proxy-for-sampled-competence",
-            "benchmark_id": str(summary.benchmark_id),
-            "complexity_axis": None,
-            "complexity": progress_complexity,
-            "seed": evaluation_batch.seed,
-            "sample_count": len(evaluation_batch.samples),
-            "mean_accepted_mass": accepted_mass_equivalent,
-            "validation_competence": provisional_score,
-        }
+    record["sampled_competence"] = dict(
+        cast(Mapping[str, object], training_estimate["sampled_competence"])
+    )
     return record
 
 
 def _training_estimate_record(
     *,
     summary: BenchmarkRunSummary,
-    outcome_space: OutcomeSpace,
     training_run: TrainingRunRecord,
-    training_rungs: tuple[_CurriculumRung, ...],
-    frontier_index: int,
 ) -> dict[str, object]:
     if not training_run.validation_history:
         raise BenchmarkRunnerError("training estimate requires validation history")
-    if not training_rungs:
-        raise BenchmarkRunnerError("training estimate requires at least one curriculum rung")
-    bounded_index = min(max(frontier_index, 0), len(training_rungs) - 1)
-    frontier_rung = training_rungs[bounded_index]
-    batch = frontier_rung.batch
-    complexities = {sample.complexity for sample in batch.samples}
-    complexity = next(iter(complexities)) if len(complexities) == 1 else frontier_rung.complexity
-    provisional_score = validation_competence(
-        validation_loss=training_run.validation_history[-1].validation_loss,
-        outcome_count=len(outcome_space.outcomes),
+    latest = training_run.validation_history[-1]
+    if latest.score_estimate is None:
+        raise BenchmarkRunnerError("training estimate requires gate score estimate")
+    score_estimate = latest.score_estimate
+    sampled_competence_value = score_estimate.get("sampled_competence")
+    if not isinstance(sampled_competence_value, Mapping):
+        raise BenchmarkRunnerError("training gate score estimate is missing sampled competence")
+    sampled_competence = cast(Mapping[str, object], sampled_competence_value)
+    complexity = _required_float(
+        sampled_competence.get("complexity"),
+        "training_estimate.complexity",
     )
-    chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
-    accepted_mass_equivalent = chance_mass + provisional_score * (1.0 - chance_mass)
+    mean_accepted_mass = _required_float(
+        sampled_competence.get("mean_accepted_mass"),
+        "training_estimate.mean_accepted_mass",
+    )
+    sample_count = _required_int(
+        sampled_competence.get("sample_count"),
+        "training_estimate.sample_count",
+    )
+    points = _training_score_estimate_points(sampled_competence)
+    if not points:
+        raise BenchmarkRunnerError("training estimate requires sampled competence point")
+    seed = _required_int(points[0].get("seed"), "training_estimate.seed")
     return {
-        "kind": "training-estimated-benchmark-score",
+        "kind": "training-running-score-estimate",
         "status": "tentative",
-        "score_basis": "validation-loss-proxy-for-accepted-mass",
+        "evidence_status": "not-accepted",
+        "score_frame": "none",
+        "score_basis": "provisional-sampled-competence",
+        "scoring_recipe": score_estimate.get("scoring_recipe", "sampled-competence-v1"),
         "benchmark_id": str(summary.benchmark_id),
         "complexity_axis": None,
         "complexity": complexity,
-        "seed": batch.seed,
-        "sample_count": len(batch.samples),
-        "mean_accepted_mass": accepted_mass_equivalent,
-        "validation_competence": provisional_score,
+        "seed": seed,
+        "sample_count": sample_count,
+        "mean_accepted_mass": mean_accepted_mass,
+        "score": _training_score_estimate_score(score_estimate),
+        "validation_check": latest.validation_check,
+        "step": latest.step,
+        "max_inference_compute": _required_int(
+            score_estimate.get("running_max_inference_compute"),
+            "training_estimate.max_inference_compute",
+        ),
+        "sampled_competence": dict(sampled_competence),
     }
+
+
+def _training_cost_summary(
+    *,
+    inspection: ModelInspectionRecord,
+    training_run: TrainingRunRecord,
+) -> dict[str, object]:
+    cost_summary = inspection.cost_summary.to_record()
+    cost_summary.pop("inference_compute", None)
+    cost_summary.pop("training_compute_per_sample", None)
+    max_inference_compute = _training_history_max_inference_compute(
+        training_run.validation_history
+    )
+    if max_inference_compute is not None:
+        cost_summary["inference_compute"] = max_inference_compute
+    if training_run.training_compute is not None:
+        cost_summary["training_compute"] = training_run.training_compute
+    return cost_summary
 
 
 def _should_write_model_checkpoint(
@@ -2802,6 +3089,7 @@ def _write_model_checkpoint_artifact(
         step=latest.step,
         validation_check=latest.validation_check,
         validation_loss=latest.validation_loss,
+        score_estimate=latest.score_estimate,
     )
 
 
@@ -2862,14 +3150,21 @@ def _selected_model_checkpoint(
 ) -> ModelCheckpointArtifact | None:
     if not checkpoints:
         return None
-    return min(
+    return max(
         checkpoints,
         key=lambda checkpoint: (
-            checkpoint.validation_loss,
+            _checkpoint_estimated_score(checkpoint),
+            -checkpoint.validation_loss,
             checkpoint.validation_check,
             checkpoint.step,
         ),
     )
+
+
+def _checkpoint_estimated_score(checkpoint: ModelCheckpointArtifact) -> float:
+    if checkpoint.score_estimate is None:
+        return -float("inf")
+    return _training_score_estimate_score(checkpoint.score_estimate)
 
 
 def _throughput_record(
@@ -3132,7 +3427,7 @@ def _make_scheduler(
                 eps=eps,
             ),
             optimizer=optimizer,
-            update_on="validation-loss",
+            update_on="score-estimate",
             minimum_effective_learning_rate=eps / (1.0 - factor),
             base_learning_rates=tuple(float(group["lr"]) for group in optimizer.param_groups),
         )
@@ -3146,6 +3441,8 @@ def _batch_tensors(
     outcome_ids: tuple[str, ...],
     device: Any,
 ) -> tuple[Any, Any]:
+    if batch.fields is not None and batch.targets is not None:
+        return batch.fields, batch.targets
     return (
         _batch_tensor(runtime=runtime, batch=batch, device=device),
         _batch_target_tensor(

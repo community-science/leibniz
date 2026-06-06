@@ -219,7 +219,7 @@ const result: BenchmarkResultRecord = {
           seed: 101,
           gate_check_interval: 1,
           gate_sample_count: 2,
-          gate_decision_rule: 'validation-loss-plateau',
+          gate_decision_rule: 'score-estimate-plateau',
           validation_source: 'generator-resample',
         },
         status: 'budget-exhausted',

@@ -37,8 +37,10 @@ source scripts/activate_environment.sh
 ```
 
 Prefer the activated environment over ad hoc `PYTHONPATH` changes. The package
-is installed editable by the environment setup, and CI uses the same
-`environment.yml` and `pyproject.toml` inputs.
+is installed editable by the environment setup. `environment.yml` declares
+CUDA-enabled PyTorch on Linux and CPU/Mac PyTorch on non-Linux hosts using
+conda selectors. CI uses the same environment specification and
+`pyproject.toml` inputs.
 
 ## Agent Guidance
 

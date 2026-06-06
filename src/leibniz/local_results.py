@@ -2073,7 +2073,8 @@ def _run_training_compute_value(run: _BenchmarkRunRecord) -> float | None:
 def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
     cost_summary = dict(run.cost_summary)
     cost_summary.pop("parameter_count", None)
-    if run.source_kind == "local-run":
+    cost_summary.pop("training_compute_per_sample", None)
+    if run.source_kind in {"local-run", "local-training-estimate"}:
         inference_compute = _optional_cost_value(cost_summary, "inference_compute")
         if inference_compute is not None:
             cost_summary["inference_compute"] = inference_compute

@@ -9,7 +9,10 @@ from benchmark_typing import load_digits_benchmark, load_digits_generator
 
 import leibniz.benchmark_runner as benchmark_runner
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
-from leibniz.benchmark_evaluation import ValidationCompetencePoint
+from leibniz.benchmark_evaluation import (
+    ValidationCompetencePoint,
+    finite_measurements_for_predictions,
+)
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.benchmark_runner import (
     BenchmarkCompetitionPlan,
@@ -53,6 +56,49 @@ def _observation_payload(
 ) -> GeneratedSampleSet:
     sample_set = generator(include_fields=True, **cast(Any, kwargs))
     return sample_set
+
+
+def test_fieldless_tensor_samples_can_score_predictions() -> None:
+    generator = load_generator(_digits_benchmark_root)
+    runtime = resolve_tensor_runtime("cpu")
+    outcome_space = generator.manifest.resolve_outcome_space()
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    batch = generator(
+        seed=101,
+        shape=2,
+        include_fields=False,
+        runtime=runtime,
+        outcome_ids=outcome_ids,
+    )
+
+    assert batch.fields is not None
+    assert batch.targets is not None
+    assert batch.samples
+    assert all(sample.field is None for sample in batch.samples)
+    target_indices = batch.targets.argmax(dim=1).detach().cpu().tolist()
+    assert [
+        outcome_ids[int(target_index)] for target_index in target_indices
+    ] == [sample.outcome_id for sample in batch.samples]
+
+    probabilities = tuple(
+        tuple(1.0 if outcome_id == sample.outcome_id else 0.0 for outcome_id in outcome_ids)
+        for sample in batch.samples
+    )
+    measurements = finite_measurements_for_predictions(
+        batch=batch,
+        outcome_space=outcome_space,
+        probabilities=probabilities,
+        run_slug="fieldless-tensor-test",
+    )
+
+    assert len(measurements) == batch.sample_count
+    assert all(not measurement.evidence_artifacts for measurement in measurements)
+    assert all(
+        measurement.raw_scoring_evidence.observation_id.startswith(
+            f"{batch.generator_id}.seed-{batch.seed}.sample-"
+        )
+        for measurement in measurements
+    )
 
 
 def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) -> None:
@@ -508,20 +554,27 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
             schedule_name="reduce-on-plateau",
             gate_check_interval=32,
             gate_sample_count=2,
-            gate_decision_rule="validation-loss-plateau",
+            gate_decision_rule="score-estimate-plateau",
             convergence_patience=6,
             convergence_min_delta=0.001,
             convergence_min_steps=500,
             tensor_device="cpu",
             validation_history=(
-                TrainingHistoryPoint(
-                    step=0,
-                    validation_check=0,
-                    validation_loss=math.log(10),
-                    stale_checks=0,
-                    learning_rates=(0.01,),
+                    TrainingHistoryPoint(
+                        step=0,
+                        validation_check=0,
+                        validation_loss=math.log(10),
+                        stale_checks=0,
+                        learning_rates=(0.01,),
+                        score_estimate=_score_estimate(
+                            check=0,
+                            step=0,
+                            score=0.0,
+                            complexity=initial_rung.complexity,
+                            accepted_mass=0.1,
+                        ),
+                    ),
                 ),
-            ),
             stop_reason="max-steps",
             training_compute=0.0,
         )
@@ -603,7 +656,7 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert training_run.protocol.learning_rate == 0.005
     assert training_run.protocol.gate_check_interval == 1
     assert training_run.protocol.gate_sample_count == 3
-    assert training_run.protocol.gate_decision_rule == "validation-loss-plateau"
+    assert training_run.protocol.gate_decision_rule == "score-estimate-plateau"
     assert training_run.protocol.patience == 2
     assert training_run.protocol.min_delta == 0.001
     assert training_run.protocol.validation_source == "generator-resample"
@@ -621,9 +674,9 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
 
 def test_windowed_plateau_ignores_tiny_recent_best_loss_resets() -> None:
     history = (
-        _history_point(check=0, step=0, loss=1.0),
-        _history_point(check=1, step=250, loss=1.01, stale_checks=1),
-        _history_point(check=2, step=500, loss=0.9995),
+        _history_point(check=0, step=0, loss=1.0, score=1.0),
+        _history_point(check=1, step=250, loss=1.01, score=0.99, stale_checks=1),
+        _history_point(check=2, step=500, loss=0.9995, score=1.0005),
     )
 
     assert benchmark_runner.has_windowed_validation_plateau(
@@ -635,9 +688,9 @@ def test_windowed_plateau_ignores_tiny_recent_best_loss_resets() -> None:
 
 def test_windowed_plateau_continues_after_material_best_loss_improvement() -> None:
     history = (
-        _history_point(check=0, step=0, loss=1.0),
-        _history_point(check=1, step=250, loss=1.01, stale_checks=1),
-        _history_point(check=2, step=500, loss=0.998),
+        _history_point(check=0, step=0, loss=1.0, score=1.0),
+        _history_point(check=1, step=250, loss=1.01, score=0.99, stale_checks=1),
+        _history_point(check=2, step=500, loss=0.998, score=1.002),
     )
 
     assert not benchmark_runner.has_windowed_validation_plateau(
@@ -674,7 +727,7 @@ def test_plateau_scheduler_requires_progressive_learning_rate_reductions() -> No
     schedule = schedule_class(
         scheduler=FakeScheduler(optimizer),
         optimizer=optimizer,
-        update_on="validation-loss",
+        update_on="score-estimate",
     )
 
     for _index in range(2):
@@ -701,7 +754,7 @@ def test_plateau_scheduler_exhausts_at_effective_learning_rate_floor() -> None:
     schedule = schedule_class(
         scheduler=FakeScheduler(),
         optimizer=FakeOptimizer(),
-        update_on="validation-loss",
+        update_on="score-estimate",
         minimum_effective_learning_rate=1e-8,
     )
 
@@ -730,7 +783,7 @@ def test_plateau_scheduler_resets_learning_rate_for_curriculum_expansion() -> No
     schedule = schedule_class(
         scheduler=scheduler,
         optimizer=optimizer,
-        update_on="validation-loss",
+        update_on="score-estimate",
         lr_reduction_count=3,
         minimum_effective_learning_rate=1e-8,
         base_learning_rates=(0.01,),
@@ -767,31 +820,95 @@ def test_reduce_on_plateau_scheduler_uses_convergence_patience() -> None:
 def test_training_stage_records_current_validation_loss_without_global_best(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def constant_validation_loss(**_kwargs: object) -> float:
-        return 2.0
-
     def fake_batch(_index: int) -> tuple[object, object]:
         return object(), object()
 
-    monkeypatch.setattr(benchmark_runner, "_validation_loss", constant_validation_loss)
+    class FakeLossValue:
+        def item(self) -> float:
+            return 2.0
+
+    class FakeLossFunction:
+        def __call__(self, _logits: object, _labels: object) -> FakeLossValue:
+            return FakeLossValue()
+
+    class FakeModule:
+        training = True
+        train_called = False
+
+        def __call__(self, _fields: object) -> object:
+            return object()
+
+        def eval(self) -> None:
+            self.training = False
+
+        def train(self) -> None:
+            self.training = True
+            self.train_called = True
+
+    class FakeValidationBatch:
+        sample_count = 1
+
+    def fake_validation_batch(_index: int) -> FakeValidationBatch:
+        return FakeValidationBatch()
+
+    def fake_batch_tensors(**_kwargs: object) -> tuple[object, object]:
+        return object(), object()
+
+    def fake_predictions(_runtime: object, _module: object, _fields: object) -> list[list[float]]:
+        return [[1.0]]
+
+    def fake_training_gate_score_estimate(**kwargs: object) -> dict[str, object]:
+        return _score_estimate(
+            check=cast(int, kwargs["validation_check"]),
+            step=cast(int, kwargs["step"]),
+            score=1.0,
+            complexity=1.0,
+            accepted_mass=1.0,
+        )
+
+    def fake_batch_max_compute(**_kwargs: object) -> int:
+        return 10
+
+    monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
+    monkeypatch.setattr(benchmark_runner, "apply_softmax_predictions", fake_predictions)
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_inference_compute",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_training_compute_per_sample",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_training_gate_score_estimate",
+        fake_training_gate_score_estimate,
+    )
+    module = FakeModule()
     stage_result = cast(Any, benchmark_runner)._train_until_convergence(
         runtime=resolve_tensor_runtime("cpu"),
-        module=object(),
+        module=module,
         optimizer=type("FakeOptimizer", (), {"param_groups": [{"lr": 0.01}]})(),
         scheduler=None,
-        loss_function=object(),
+        loss_function=FakeLossFunction(),
         train_batch=fake_batch,
-        validation_batch=fake_batch,
+        validation_batch=cast(Any, fake_validation_batch),
+        outcome_space=load_digits_benchmark(_digits_benchmark_root).manifest.resolve_outcome_space(),
+        outcome_ids=("digit-0",),
         max_steps=100,
         gate_check_interval=1,
         patience=1,
         min_delta=0.0,
-        min_steps=0,
-        batch_size=1,
-        gate_sample_count=1,
-        training_compute_per_sample=10.0,
-        training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
-        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
+            min_steps=0,
+            batch_size=1,
+            gate_sample_count=1,
+            architecture=ArchitectureManifestDocument.from_bytes(
+                _digits_architecture.read_bytes()
+            ).manifest,
+            training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+            training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
         validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         phase_timings=benchmark_runner.TimingCollector(),
         start_step=100,
@@ -800,6 +917,7 @@ def test_training_stage_records_current_validation_loss_without_global_best(
 
     point = stage_result.validation_history[0]
     assert point.validation_loss == 2.0
+    assert module.train_called
     assert "best_validation_loss" not in point.to_record()
 
 
@@ -863,39 +981,15 @@ def test_training_curriculum_gate_delegates_frontier_scoring_to_benchmark_api() 
         assert leaked_scoring_detail not in source
 
 
-def test_frontier_plateau_competence_point_uses_validation_loss_scoring_api() -> None:
-    competence_point = cast(Any, benchmark_runner)._frontier_plateau_competence_point
-
-    assert competence_point(
-        validation_loss=0.0,
-        outcome_count=10,
-        complexity=math.log2(10),
-    ) == ValidationCompetencePoint(
+def test_training_curriculum_can_advance_after_worse_loss_on_larger_rung() -> None:
+    advances = cast(Any, benchmark_runner)._frontier_plateau_advances
+    first_rung_point = ValidationCompetencePoint(
         complexity=math.log2(10),
         accepted_mass=1.0,
     )
-    assert math.isclose(
-        competence_point(
-            validation_loss=0.8 * math.log(10),
-            outcome_count=10,
-            complexity=10.0,
-        ).accepted_mass,
-        0.28,
-    )
-
-
-def test_training_curriculum_can_advance_after_worse_loss_on_larger_rung() -> None:
-    competence_point = cast(Any, benchmark_runner)._frontier_plateau_competence_point
-    advances = cast(Any, benchmark_runner)._frontier_plateau_advances
-    first_rung_point = competence_point(
-        validation_loss=0.0,
-        outcome_count=10,
-        complexity=math.log2(10),
-    )
-    larger_rung_point = competence_point(
-        validation_loss=0.8 * math.log(10),
-        outcome_count=10,
+    larger_rung_point = ValidationCompetencePoint(
         complexity=40.0,
+        accepted_mass=0.28,
     )
 
     assert advances(
@@ -1242,8 +1336,8 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     validation_history = cast(list[dict[str, object]], diagnostics["validation_history"])
     assert validation_history
     cost_summary = cast(dict[str, object], history[0]["cost_summary"])
-    assert cost_summary["training_compute"] == 2784.0
-    assert cost_summary["training_compute_per_sample"] == 1392
+    assert cost_summary["training_compute"] == 1504.0
+    assert "training_compute_per_sample" not in cost_summary
     console_view_model = cast(dict[str, object], history[0]["console_view_model"])
     detail_sections = cast(list[dict[str, object]], console_view_model["detail_sections"])
     assert [section["title"] for section in detail_sections] == [
@@ -1444,6 +1538,15 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     assert len(progress_plot_runs) == 1
     assert progress_plot_runs[0]["result_status"] == "tentative"
     assert progress_plot_runs[0]["source_kind"] == "local-training-estimate"
+    progress_cost = cast(dict[str, object], progress_plot_runs[0]["cost_summary"])
+    assert isinstance(progress_cost["inference_compute"], int | float)
+    training_estimate = cast(dict[str, object], progress_records[0]["training_estimate"])
+    assert isinstance(training_estimate["max_inference_compute"], int)
+    sampled_competence = cast(dict[str, object], training_estimate["sampled_competence"])
+    sampled_points = cast(list[dict[str, object]], sampled_competence["points"])
+    assert training_estimate["seed"] == sampled_points[0]["seed"]
+    assert "measurement_ids" not in sampled_points[0]
+    assert "observation_ids" not in sampled_points[0]
     final_record = load_object_document(
         summary.training_summary_path.read_bytes(),
         description="training summary",
@@ -1518,6 +1621,7 @@ def _history_point(
     check: int,
     step: int,
     loss: float,
+    score: float = 0.0,
     stale_checks: int = 0,
 ) -> TrainingHistoryPoint:
     return TrainingHistoryPoint(
@@ -1525,4 +1629,59 @@ def _history_point(
         validation_check=check,
         validation_loss=loss,
         stale_checks=stale_checks,
+        score_estimate=_score_estimate(
+            check=check,
+            step=step,
+            score=score,
+            complexity=1.0,
+            accepted_mass=0.5,
+        ),
     )
+
+
+def _score_estimate(
+    *,
+    check: int,
+    step: int,
+    score: float,
+    complexity: float,
+    accepted_mass: float,
+) -> dict[str, object]:
+    sampled_competence = {
+        "kind": "sampled-competence-curriculum",
+        "sampling_rule": "generator-uniform-component-index-v1",
+        "difficulty_assumption": "approximately-uniform-within-complexity-class",
+        "benchmark_id": "benchmarks.digits@0.1.0",
+        "complexity_axis": None,
+        "complexity": complexity,
+        "sample_count": 2,
+        "mean_accepted_mass": accepted_mass,
+        "points": [
+            {
+                "kind": "sampled-complexity-class",
+                "sampling_rule": "generator-uniform-component-index-v1",
+                "difficulty_assumption": "approximately-uniform-within-complexity-class",
+                "benchmark_id": "benchmarks.digits@0.1.0",
+                "complexity_axis": None,
+                "complexity": complexity,
+                "seed": 101,
+                "sample_count": 2,
+                "mean_accepted_mass": accepted_mass,
+            }
+        ],
+    }
+    return {
+        "kind": "training-running-score-estimate",
+        "status": "provisional",
+        "evidence_status": "not-accepted",
+        "score_frame": "none",
+        "scoring_recipe": "sampled-competence-v1",
+        "score": score,
+        "validation_check": check,
+        "step": step,
+        "max_inference_compute": 10,
+        "running_max_inference_compute": 10,
+        "training_compute_per_sample": 10,
+        "chance_mass": 0.1,
+        "sampled_competence": sampled_competence,
+    }

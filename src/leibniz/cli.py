@@ -364,7 +364,7 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--gate-check-interval", default=32, type=int)
     train.add_argument("--model-checkpoint-gate-interval", default=1, type=int)
     train.add_argument("--gate-sample-count", default=None, type=int)
-    train.add_argument("--gate-decision-rule", default="validation-loss-plateau")
+    train.add_argument("--gate-decision-rule", default="score-estimate-plateau")
     train.add_argument("--convergence-patience", default=6, type=int)
     train.add_argument("--convergence-min-delta", default=1e-3, type=float)
     train.add_argument("--convergence-min-steps", default=500, type=int)

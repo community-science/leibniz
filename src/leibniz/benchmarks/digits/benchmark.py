@@ -97,6 +97,7 @@ _console_preview_state_space_windows = (
     (8.0, 9.0),
 )
 _console_preview_sample_limit = 50
+_max_cached_state_tensor_bytes = 512 * 1024 * 1024
 
 _CurvePoints: TypeAlias = tuple[tuple[float, float], ...]
 
@@ -360,6 +361,7 @@ class Generator:
         seed: int,
         include_fields: bool,
         component_indices: tuple[int, ...] | None = None,
+        transform_indices: tuple[int, ...] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         state_space: _DigitsStateSpace,
@@ -419,6 +421,7 @@ class Generator:
             transform=transform,
             transform_record=transform_record,
             generator=variation_generator,
+            transform_indices=transform_indices,
             state_space=state_space,
             timing=timing,
             timing_phase=variation_timing_phase,
@@ -498,6 +501,27 @@ class Generator:
                 )
         return tuple(samples)
 
+    def _generate_tensor_metadata_samples(
+        self,
+        *,
+        sample_count: int,
+        component_indices: tuple[int, ...],
+        state_space: _DigitsStateSpace,
+    ) -> tuple[GeneratedSample, ...]:
+        if len(component_indices) != sample_count:
+            raise ObservationGenerationError("component_indices length must match sample_count")
+        complexity = state_space.complexity
+        return tuple(
+            GeneratedSample(
+                index=index,
+                outcome_id=self._outcome_id(component_index),
+                complexity=complexity,
+                state_space_measure=_state_space_measure(complexity),
+                component_index=component_index,
+            )
+            for index, component_index in enumerate(component_indices)
+        )
+
     def _generation_resolution_assignment(
         self,
         *,
@@ -565,6 +589,7 @@ class Generator:
         transform: VariationTransformDeclaration,
         transform_record: Mapping[str, object],
         generator: random.Random,
+        transform_indices: tuple[int, ...] | None,
         state_space: _DigitsStateSpace,
         timing: TimingCollector | None,
         timing_phase: str,
@@ -581,9 +606,22 @@ class Generator:
                 tuple[Mapping[str, object], ...],
             ]
         ] = []
+        if transform_indices is not None and len(transform_indices) != len(plans):
+            raise ObservationGenerationError("transform_indices length must match sample_count")
         with _timing_span(timing, timing_phase, samples=len(plans)):
-            for _plan in plans:
-                transform_index = generator.randrange(state_space.affine_transform_count)
+            for index, _plan in enumerate(plans):
+                transform_index = (
+                    transform_indices[index]
+                    if transform_indices is not None
+                    else generator.randrange(state_space.affine_transform_count)
+                )
+                if (
+                    transform_index < 0
+                    or transform_index >= state_space.affine_transform_count
+                ):
+                    raise ObservationGenerationError(
+                        "transform index is outside active transform set"
+                    )
                 coordinate = _constructed_variation_coordinate_record(
                     transform=transform,
                     component_index=0,
@@ -671,6 +709,7 @@ class Generator:
         *,
         sample_count: int,
         seed: int,
+        transform_indices: tuple[int, ...] | None,
         state_space: _DigitsStateSpace,
         runtime: TensorRuntime,
         timing: TimingCollector | None,
@@ -679,6 +718,23 @@ class Generator:
         backend = getattr(runtime, "tor" + "ch")
         state_space_digest = str(ContentDigest.from_value(state_space.metadata()))
         with _timing_span(timing, f"{timing_prefix}transform_index", samples=sample_count):
+            if transform_indices is not None:
+                if len(transform_indices) != sample_count:
+                    raise ObservationGenerationError(
+                        "transform_indices length must match sample_count"
+                    )
+                if any(
+                    index < 0 or index >= state_space.affine_transform_count
+                    for index in transform_indices
+                ):
+                    raise ObservationGenerationError(
+                        "transform index is outside active transform set"
+                    )
+                return backend.tensor(
+                    transform_indices,
+                    dtype=backend.long,
+                    device=runtime.device,
+                )
             generator = _runtime_generator(
                 runtime=runtime,
                 seed=f"{seed}:variation:{state_space_digest}",
@@ -698,6 +754,7 @@ class Generator:
         sample_shape: tuple[int, ...],
         seed: int,
         component_indices: tuple[int, ...] | None,
+        transform_indices: tuple[int, ...] | None,
         state_space: _DigitsStateSpace,
         resolution_assignment: AxisAssignment | None,
         memory_limit_bytes: int | None,
@@ -723,6 +780,7 @@ class Generator:
         transform_index_samples = self._transform_index_tensor(
             sample_count=sample_count,
             seed=seed,
+            transform_indices=transform_indices,
             state_space=state_space,
             runtime=runtime,
             timing=timing,
@@ -1192,13 +1250,33 @@ class Generator:
             )
         if runtime is not None and outcome_ids is None:
             raise ObservationGenerationError("tensor generation requires outcome_ids")
+        shared_component_indices = requested_component_indices
+        shared_transform_indices: tuple[int, ...] | None = None
+        if runtime is not None and include_metadata:
+            if shared_component_indices is None:
+                shared_component_indices = self._sample_component_indices(
+                    sample_count=sample_count,
+                    seed=seed,
+                    component_indices=None,
+                    component_count=state_space.digit_count,
+                    timing=timing,
+                    timing_prefix=timing_prefix,
+                )
+            shared_transform_indices = self._sample_transform_indices(
+                sample_count=sample_count,
+                seed=seed,
+                state_space=state_space,
+                timing=timing,
+                timing_prefix=timing_prefix,
+            )
         fields = None
         targets = None
         if runtime is not None and outcome_ids is not None:
             fields, targets = self._generate_tensors(
                 sample_shape=sample_shape,
                 seed=seed,
-                component_indices=requested_component_indices,
+                component_indices=shared_component_indices,
+                transform_indices=shared_transform_indices,
                 memory_limit_bytes=memory_limit_bytes,
                 resolution_assignment=resolution_assignment,
                 state_space=state_space,
@@ -1207,24 +1285,34 @@ class Generator:
                 timing=timing,
                 timing_prefix=timing_prefix,
             )
-        samples = (
-            self._generate_samples(
-                sample_count=sample_count,
-                seed=seed,
-                include_fields=include_fields,
-                component_indices=requested_component_indices,
-                memory_limit_bytes=memory_limit_bytes,
-                resolution_assignment=resolution_assignment,
-                state_space=state_space,
-                timing=timing,
-                timing_prefix=(
-                    f"{timing_prefix}formation_batch." if include_fields else timing_prefix
-                ),
-                output_timing_prefix=timing_prefix,
-            )
-            if include_metadata
-            else ()
-        )
+        samples: tuple[GeneratedSample, ...] = ()
+        if include_metadata:
+            if runtime is not None and not include_fields:
+                if shared_component_indices is None:
+                    raise ObservationGenerationError(
+                        "tensor metadata generation requires component indices"
+                    )
+                samples = self._generate_tensor_metadata_samples(
+                    sample_count=sample_count,
+                    component_indices=shared_component_indices,
+                    state_space=state_space,
+                )
+            else:
+                samples = self._generate_samples(
+                    sample_count=sample_count,
+                    seed=seed,
+                    include_fields=include_fields,
+                    component_indices=shared_component_indices,
+                    transform_indices=shared_transform_indices,
+                    memory_limit_bytes=memory_limit_bytes,
+                    resolution_assignment=resolution_assignment,
+                    state_space=state_space,
+                    timing=timing,
+                    timing_prefix=(
+                        f"{timing_prefix}formation_batch." if include_fields else timing_prefix
+                    ),
+                    output_timing_prefix=timing_prefix,
+                )
         return GeneratedSampleSet(
             benchmark_id=self.manifest.id,
             generator_id=self.id,
@@ -2051,7 +2139,7 @@ def _grid_value(bounds: tuple[float, float], *, index: int, count: int) -> float
 
 @dataclass(slots=True)
 class _FormationTensorCache:
-    """Cache unvaried Digits component fields as runtime tensors."""
+    """Cache reusable Digits tensor artifacts for one runtime."""
 
     runtime: TensorRuntime
     formation: ObservationFormationDeclaration
@@ -2060,6 +2148,9 @@ class _FormationTensorCache:
     )
     _state_tensors: dict[tuple[int, int, int, str], Any] = dataclass_field(
         default_factory=lambda: cast(dict[tuple[int, int, int, str], Any], {})
+    )
+    _state_tensor_bytes: dict[tuple[int, int, int, str], int] = dataclass_field(
+        default_factory=lambda: cast(dict[tuple[int, int, int, str], int], {})
     )
     _component_outcome_indices: dict[tuple[int, tuple[str, ...], tuple[str, ...]], Any] = (
         dataclass_field(
@@ -2090,7 +2181,7 @@ class _FormationTensorCache:
         if cached is not None:
             return cached
         tensors = tuple(
-            self.component_tensor(
+            self._build_component_tensor(
                 width=width,
                 height=height,
                 component_index=component_index,
@@ -2106,7 +2197,17 @@ class _FormationTensorCache:
         )
         backend = getattr(self.runtime, "tor" + "ch")
         stacked = backend.stack(tensors)
-        self._state_tensors[key] = stacked
+        tensor_bytes = int(stacked.nelement()) * int(stacked.element_size())
+        if tensor_bytes <= _max_cached_state_tensor_bytes:
+            while (
+                sum(self._state_tensor_bytes.values()) + tensor_bytes
+                > _max_cached_state_tensor_bytes
+            ):
+                evicted = next(iter(self._state_tensors))
+                self._state_tensors.pop(evicted)
+                self._state_tensor_bytes.pop(evicted, None)
+            self._state_tensors[key] = stacked
+            self._state_tensor_bytes[key] = tensor_bytes
         return stacked
 
     def component_outcome_indices(
