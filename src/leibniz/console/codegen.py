@@ -164,9 +164,35 @@ export type ScoreViewRecord = {
 
 export type CompetencePointRecord = {
   complexity: number;
+  complexity_minimum?: number;
+  complexity_maximum?: number;
   score: number;
   sample_count?: number;
   run_ids: string[];
+};
+
+export type TrainingEstimateComparisonPointRecord = {
+  complexity: number;
+  complexity_minimum?: number;
+  complexity_maximum?: number;
+  status: 'matched' | 'accepted-only' | 'training-only';
+  accepted_score?: number;
+  training_score?: number;
+  score_delta?: number;
+  accepted_sample_count?: number;
+  training_sample_count?: number;
+};
+
+export type TrainingEstimateComparisonRecord = {
+  kind: 'training-vs-accepted-sampled-competence-v1';
+  accepted_score: number;
+  training_score: number;
+  score_delta: number;
+  accepted_sample_count: number;
+  training_sample_count: number;
+  point_count: number;
+  matched_point_count: number;
+  points: TrainingEstimateComparisonPointRecord[];
 };
 
 export type CostSummaryRecord = {
@@ -193,6 +219,7 @@ export type ModelResultRecord = {
   run_ids: string[];
   measurement_count: number;
   source_kinds: string[];
+  training_estimate_comparison?: TrainingEstimateComparisonRecord;
   console_view_model?: RunDetailViewModelRecord;
 };
 
@@ -355,8 +382,47 @@ function parseModelResult(value: unknown, path: string): ModelResultRecord {
     run_ids: stringArray(record.run_ids, `${path}.run_ids`),
     measurement_count: requireNumber(record.measurement_count, `${path}.measurement_count`, transportError),
     source_kinds: stringArray(record.source_kinds, `${path}.source_kinds`),
+    training_estimate_comparison: optional(record.training_estimate_comparison, `${path}.training_estimate_comparison`, parseTrainingEstimateComparison),
     console_view_model: optional(record.console_view_model, `${path}.console_view_model`, parseRunDetailViewModel),
   }) as ModelResultRecord;
+}
+
+function parseTrainingEstimateComparison(value: unknown, path: string): TrainingEstimateComparisonRecord {
+  const record = requireRecord(value, path, transportError);
+  requireStrings(record, path, ['kind']);
+  if (record.kind !== 'training-vs-accepted-sampled-competence-v1') {
+    throw transportError(`${path}.kind is invalid`);
+  }
+  return withFields(record, {
+    kind: requireString(record.kind, `${path}.kind`, transportError) as 'training-vs-accepted-sampled-competence-v1',
+    accepted_score: requireNumber(record.accepted_score, `${path}.accepted_score`, transportError),
+    training_score: requireNumber(record.training_score, `${path}.training_score`, transportError),
+    score_delta: requireNumber(record.score_delta, `${path}.score_delta`, transportError),
+    accepted_sample_count: requireNumber(record.accepted_sample_count, `${path}.accepted_sample_count`, transportError),
+    training_sample_count: requireNumber(record.training_sample_count, `${path}.training_sample_count`, transportError),
+    point_count: requireNumber(record.point_count, `${path}.point_count`, transportError),
+    matched_point_count: requireNumber(record.matched_point_count, `${path}.matched_point_count`, transportError),
+    points: arrayOf(record.points, `${path}.points`, parseTrainingEstimateComparisonPoint),
+  }) as TrainingEstimateComparisonRecord;
+}
+
+function parseTrainingEstimateComparisonPoint(value: unknown, path: string): TrainingEstimateComparisonPointRecord {
+  const record = requireRecord(value, path, transportError);
+  requireStrings(record, path, ['status']);
+  if (record.status !== 'matched' && record.status !== 'accepted-only' && record.status !== 'training-only') {
+    throw transportError(`${path}.status is invalid`);
+  }
+  return withFields(record, {
+    complexity: requireNumber(record.complexity, `${path}.complexity`, transportError),
+    complexity_minimum: optional(record.complexity_minimum, `${path}.complexity_minimum`, parseNumber),
+    complexity_maximum: optional(record.complexity_maximum, `${path}.complexity_maximum`, parseNumber),
+    status: requireString(record.status, `${path}.status`, transportError) as 'matched' | 'accepted-only' | 'training-only',
+    accepted_score: optional(record.accepted_score, `${path}.accepted_score`, parseNumber),
+    training_score: optional(record.training_score, `${path}.training_score`, parseNumber),
+    score_delta: optional(record.score_delta, `${path}.score_delta`, parseNumber),
+    accepted_sample_count: optional(record.accepted_sample_count, `${path}.accepted_sample_count`, parseNumber),
+    training_sample_count: optional(record.training_sample_count, `${path}.training_sample_count`, parseNumber),
+  }) as TrainingEstimateComparisonPointRecord;
 }
 
 function parseRunResult(value: unknown, path: string): RunResultRecord {
@@ -528,6 +594,10 @@ function arrayOf<T>(value: unknown, path: string, parse: (item: unknown, path: s
 
 function optional<T>(value: unknown, path: string, parse: (item: unknown, path: string) => T): T | undefined {
   return value === undefined ? undefined : parse(value, path);
+}
+
+function parseNumber(value: unknown, path: string): number {
+  return requireNumber(value, path, transportError);
 }
 
 function requireStrings(record: Record<string, unknown>, path: string, fields: string[]): void {

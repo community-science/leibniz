@@ -540,6 +540,28 @@ def test_console_result_view_validates_training_diagnostics_records(tmp_path: Pa
         load_console_result_view(canonical_document_bytes(view))
 
 
+def test_console_result_view_validates_training_estimate_comparison(
+    tmp_path: Path,
+) -> None:
+    _run_and_evaluate_digits_benchmark(tmp_path / "results")
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=tmp_path / "results",
+    )
+
+    view = dict(load_console_result_view(summary.view_file.read_bytes()))
+    results = cast(list[dict[str, object]], view["benchmark_results"])
+    leaderboard = cast(list[dict[str, object]], results[0]["leaderboard"])
+    comparison = cast(dict[str, object], leaderboard[0]["training_estimate_comparison"])
+    comparison["kind"] = "other"
+
+    with pytest.raises(
+        LocalResultImportError,
+        match=r"training_estimate_comparison.kind is invalid",
+    ):
+        load_console_result_view(canonical_document_bytes(view))
+
+
 def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: Path) -> None:
     results_root = tmp_path / "results"
     run_benchmark(
@@ -631,8 +653,24 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
         "Model Contract",
         "Architecture Graph",
         "Evidence",
+        "Training Estimate",
+        "Training Estimate Rungs",
         "Resources",
     ]
+    comparison = cast(dict[str, object], leaderboard[0]["training_estimate_comparison"])
+    assert comparison["kind"] == "training-vs-accepted-sampled-competence-v1"
+    assert math.isclose(
+        cast(float, comparison["score_delta"]),
+        cast(float, comparison["training_score"])
+        - cast(float, comparison["accepted_score"]),
+    )
+    comparison_points = cast(list[dict[str, object]], comparison["points"])
+    assert comparison_points
+    assert comparison["matched_point_count"] == len(comparison_points)
+    assert comparison_points[0]["status"] == "matched"
+    assert "training_score" in comparison_points[0]
+    assert "accepted_score" in comparison_points[0]
+    assert "score_delta" in comparison_points[0]
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     assert "parameter_count" not in cost_summary
     assert cost_summary["storage_bytes"] == 200
