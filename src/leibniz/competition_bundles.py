@@ -249,13 +249,13 @@ class BenchmarkCompetitionBundle:
             self.competition_result.get("sample_count"),
             "competition_result.sample_count",
         )
-        protocol_sample_count = _record.integer(
-            self.competition_protocol.get("sample_count"),
-            "competition_protocol.sample_count",
+        protocol_evidence_count = _record.integer(
+            self.competition_protocol.get("evidence_count"),
+            "competition_protocol.evidence_count",
         )
-        if sample_count != protocol_sample_count:
+        if sample_count != protocol_evidence_count:
             raise BenchmarkCompetitionBundleValidationError(
-                "competition_protocol sample_count does not match competition_result"
+                "competition_protocol evidence_count does not match competition_result"
             )
         _validate_measured_max_inference_compute(
             self.throughput,

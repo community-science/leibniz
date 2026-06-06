@@ -8,7 +8,7 @@ import secrets
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import count
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -112,7 +112,10 @@ __all__ = [
 _document_suffix = document_filename_suffix()
 _progress_format = "leibniz.benchmark-training-progress"
 _progress_format_version = 1
-_default_sample_count = 512
+_default_training_evidence_count = 512
+_default_evaluation_evidence_count = 512
+_default_gate_evidence_count = 512
+_default_competition_evidence_count = 512
 _default_runtime_memory_budget_fraction = 0.1
 _runtime_batch_memory_safety_factor = 8
 _float32_bytes = 4
@@ -271,8 +274,8 @@ class _TrainingStageResult:
     stop_reason: str
 
 
-class _TrainingCapacityReached(Exception):
-    """Raised when the active rung cannot fit one physical training batch."""
+class _RuntimeCapacityReached(Exception):
+    """Raised when the active rung cannot fit one physical execution batch."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,7 +284,7 @@ class _CurriculumRung:
     resolution_assignment: AxisAssignment
     seed: int
     batch: GeneratedSampleSet
-    sample_count: int
+    sample_count: int = 0
 
     @property
     def complexity(self) -> float:
@@ -306,6 +309,13 @@ class _CurriculumRung:
             ),
             "sample_count": self.sample_count,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class _CheckpointEvaluationRungEvidence:
+    rung: _CurriculumRung
+    mean_accepted_mass: float
+    sample_count: int
 
 
 def _rung_state_space_request(rung: _CurriculumRung) -> StateSpaceMeasureRequest:
@@ -464,12 +474,12 @@ class BenchmarkCompetitionPlan:
     right_evaluation_path: Path
     benchmark_root: Path
     results_root: Path = Path("results")
-    sample_count: int = _default_sample_count
+    evidence_count: int = _default_competition_evidence_count
     tensor_device: TensorRuntimeDevice = "auto"
 
     def __post_init__(self) -> None:
-        if type(self.sample_count) is not int or self.sample_count < 1:
-            raise BenchmarkRunnerError("sample_count must be a positive integer")
+        if type(self.evidence_count) is not int or self.evidence_count < 1:
+            raise BenchmarkRunnerError("evidence_count must be a positive integer")
         try:
             validate_tensor_runtime_device(self.tensor_device)
         except TensorRuntimeError as error:
@@ -495,8 +505,6 @@ class BenchmarkRunPlan:
     architecture_path: Path
     benchmark_root: Path
     results_root: Path = Path("results")
-    sample_count: int = _default_sample_count
-    evaluation_sample_count: int | None = None
     seed: int = 101
     train_steps: int | None = _default_train_steps
     learning_rate: float = 0.01
@@ -504,7 +512,6 @@ class BenchmarkRunPlan:
     schedule: str = "reduce-on-plateau"
     gate_check_interval: int = _default_gate_check_interval
     model_checkpoint_gate_interval: int = _default_model_checkpoint_gate_interval
-    gate_sample_count: int | None = None
     gate_decision_rule: str = "score-estimate-plateau"
     rung_competence_threshold: float = _default_rung_competence_threshold
     convergence_patience: int = _default_convergence_patience
@@ -514,16 +521,6 @@ class BenchmarkRunPlan:
     dry_run: bool = False
 
     def __post_init__(self) -> None:
-        if type(self.sample_count) is not int or self.sample_count < 1:
-            raise BenchmarkRunnerError("sample_count must be a positive integer")
-        if (
-            self.evaluation_sample_count is not None
-            and (
-                type(self.evaluation_sample_count) is not int
-                or self.evaluation_sample_count < 1
-            )
-        ):
-            raise BenchmarkRunnerError("evaluation_sample_count must be a positive integer")
         if type(self.seed) is not int or self.seed < 0:
             raise BenchmarkRunnerError("seed must be a nonnegative integer")
         if self.train_steps is not None and (
@@ -549,10 +546,6 @@ class BenchmarkRunPlan:
             raise BenchmarkRunnerError(
                 "model_checkpoint_gate_interval must be a positive integer"
             )
-        if self.gate_sample_count is not None and (
-            type(self.gate_sample_count) is not int or self.gate_sample_count < 1
-        ):
-            raise BenchmarkRunnerError("gate_sample_count must be a positive integer")
         if self.gate_decision_rule != "score-estimate-plateau":
             raise BenchmarkRunnerError(
                 f"unsupported gate_decision_rule: {self.gate_decision_rule}"
@@ -578,13 +571,11 @@ class BenchmarkRunPlan:
     def run_slug(self) -> str:
         """Return the deterministic local run suffix."""
 
-        base = (
-            f"seed{self.seed}-samples{self.sample_count}"
+        return (
+            f"seed{self.seed}"
             f"-steps{self.train_steps if self.train_steps is not None else 'converge'}"
+            f"-{self.training_control_atom}"
         )
-        if self.resolved_evaluation_sample_count == self.sample_count:
-            return f"{base}-{self.training_control_atom}"
-        return f"{base}-eval{self.resolved_evaluation_sample_count}-{self.training_control_atom}"
 
     @property
     def training_control_atom(self) -> str:
@@ -596,7 +587,6 @@ class BenchmarkRunPlan:
             "schedule": self.schedule,
             "gate_check_interval": self.gate_check_interval,
             "model_checkpoint_gate_interval": self.model_checkpoint_gate_interval,
-            "gate_sample_count": self.resolved_gate_sample_count,
             "gate_decision_rule": self.gate_decision_rule,
             "rung_competence_threshold": float(self.rung_competence_threshold),
             "convergence_patience": self.convergence_patience,
@@ -605,22 +595,6 @@ class BenchmarkRunPlan:
             "tensor_device": self.tensor_device,
         }
         return f"train-{ContentDigest.from_value(controls).hex[:12]}"
-
-    @property
-    def resolved_evaluation_sample_count(self) -> int:
-        """Return the explicit evaluation sample count for this run."""
-
-        if self.evaluation_sample_count is None:
-            return self.sample_count
-        return self.evaluation_sample_count
-
-    @property
-    def resolved_gate_sample_count(self) -> int:
-        """Return the generated validation sample count for competence gates."""
-
-        if self.gate_sample_count is None:
-            return self.sample_count
-        return self.gate_sample_count
 
 
 @dataclass(frozen=True, slots=True)
@@ -676,7 +650,7 @@ def run_benchmark(
     initial_evaluation_rung = _evaluation_curriculum_rung(
         architecture=architecture,
         generator=generator,
-        sample_count=plan.resolved_evaluation_sample_count,
+        sample_count=_default_evaluation_evidence_count,
         seed=plan.seed,
         index=0,
     )
@@ -724,7 +698,7 @@ def run_benchmark(
             architecture=architecture,
             benchmark_id=summary.benchmark_id,
             run_slug=summary.run_slug,
-            evaluation_sample_count=plan.resolved_evaluation_sample_count,
+            evaluation_evidence_count=_default_evaluation_evidence_count,
             evaluation_rung_count=evaluation_rung_count,
             training_compute=training_compute,
             results_root=plan.results_root,
@@ -817,9 +791,9 @@ def run_benchmark(
         initial_evaluation_rung=initial_evaluation_rung,
         generator=generator,
         outcome_space=outcome_space,
-        sample_count=plan.sample_count,
-        evaluation_sample_count=plan.resolved_evaluation_sample_count,
-        gate_sample_count=plan.resolved_gate_sample_count,
+        sample_count=_default_training_evidence_count,
+        evaluation_sample_count=_default_evaluation_evidence_count,
+        gate_sample_count=_default_gate_evidence_count,
         train_steps=plan.train_steps,
         learning_rate=float(plan.learning_rate),
         optimizer_name=plan.optimizer,
@@ -832,7 +806,7 @@ def run_benchmark(
         convergence_min_steps=plan.convergence_min_steps,
         tensor_device=plan.tensor_device,
         storage_bytes=model_inspection.cost_summary.storage_bytes,
-        batch_size=plan.sample_count,
+        batch_size=_default_training_evidence_count,
         seed=plan.seed,
         progress_callback=publish_progress,
     )
@@ -868,8 +842,8 @@ def run_benchmark(
             **summary.to_record(),
             "dry_run": False,
             "run_status": "completed",
-            "sample_count": plan.sample_count,
-            "evaluation_sample_count": plan.resolved_evaluation_sample_count,
+            "training_evidence_count": _default_training_evidence_count,
+            "evaluation_evidence_count": _default_evaluation_evidence_count,
             "training_curriculum": _curriculum_record(
                 kind="competence-gated-training-curriculum",
                 source="structured-training-curriculum",
@@ -890,7 +864,7 @@ def run_benchmark(
             "schedule": plan.schedule,
             "gate_check_interval": plan.gate_check_interval,
             "model_checkpoint_gate_interval": plan.model_checkpoint_gate_interval,
-            "gate_sample_count": plan.resolved_gate_sample_count,
+            "gate_evidence_count": _default_gate_evidence_count,
             "gate_decision_rule": plan.gate_decision_rule,
             "convergence_patience": plan.convergence_patience,
             "convergence_min_delta": float(plan.convergence_min_delta),
@@ -928,7 +902,7 @@ def _run_summary(
         run_slug=run_slug,
         benchmark_id=benchmark_id,
         architecture_path=plan.architecture_path,
-        measurement_count=plan.resolved_evaluation_sample_count,
+        measurement_count=_default_evaluation_evidence_count,
         training_summary_path=(
             plan.results_root / "training" / benchmark_atom / f"{run_slug}{_document_suffix}"
         ),
@@ -972,7 +946,12 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         plan.results_root / "evaluations" / benchmark_atom / f"{run_slug}{_document_suffix}"
     )
     evaluation_seed = _unpredictable_evaluation_seed()
-    evaluation_results, checkpoint_evaluation_throughput = evaluate_model_checkpoint_artifact(
+    (
+        evaluation_results,
+        final_evaluation_batch,
+        final_evaluation_probabilities,
+        checkpoint_evaluation_throughput,
+    ) = evaluate_model_checkpoint_artifact(
         architecture=architecture,
         generator=generator,
         outcome_space=outcome_space,
@@ -986,19 +965,18 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         evaluation_results=evaluation_results,
         outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
     )
-    final_evaluation_result = evaluation_results[evaluation_frontier_index]
     measurement_groups = (
         finite_measurements_for_predictions(
-            batch=final_evaluation_result[0].batch,
+            batch=final_evaluation_batch,
             outcome_space=outcome_space,
-            probabilities=final_evaluation_result[1],
+            probabilities=final_evaluation_probabilities,
             run_slug=f"{run_slug}.final",
         ),
     )
     sampled_competence = sampled_competence_curriculum_record(
         (
             sampled_competence_record(
-                batch=final_evaluation_result[0].batch,
+                batch=final_evaluation_batch,
                 measurements=measurement_groups[0],
                 complexity_axis=None,
             ),
@@ -1020,7 +998,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
     )
     evaluation_curriculum = _curriculum_record(
         kind="checkpoint-benchmark-evaluation-curriculum",
-        rungs=tuple(rung for rung, _probabilities in evaluation_results),
+        rungs=tuple(result.rung for result in evaluation_results),
         frontier_index=evaluation_frontier_index,
     )
     throughput = {
@@ -1036,7 +1014,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
     evaluation_protocol: dict[str, object] = {
         "kind": "checkpoint-benchmark-evaluation",
         "measurement_count": len(measurements),
-        "evaluation_sample_count": evaluation_input.evaluation_sample_count,
+        "evaluation_evidence_count": evaluation_input.evaluation_sample_count,
         "evaluation_curriculum_rung_count": len(evaluation_results),
         "tensor_runtime": "pytorch",
         "tensor_device": evaluation_tensor_device,
@@ -1049,7 +1027,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         architecture=architecture,
         benchmark_id=benchmark_id,
         run_slug=run_slug,
-        evaluation_sample_count=evaluation_input.evaluation_sample_count,
+        evaluation_evidence_count=evaluation_input.evaluation_sample_count,
         evaluation_rung_count=evaluation_input.evaluation_rung_count,
         training_compute=evaluation_input.training_compute,
         results_root=plan.results_root,
@@ -1113,12 +1091,12 @@ def _evaluation_input_from_plan(
             "checkpoint_artifact.benchmark_id does not match benchmark root"
         )
     run_slug = _required_string(checkpoint_record.get("run_slug"), "checkpoint_artifact.run_slug")
-    evaluation_sample_count = _required_int(
-        checkpoint_record.get("evaluation_sample_count"),
-        "checkpoint_artifact.evaluation_sample_count",
+    evaluation_evidence_count = _required_int(
+        checkpoint_record.get("evaluation_evidence_count"),
+        "checkpoint_artifact.evaluation_evidence_count",
     )
-    if evaluation_sample_count < 1:
-        raise BenchmarkRunnerError("checkpoint_artifact.evaluation_sample_count must be positive")
+    if evaluation_evidence_count < 1:
+        raise BenchmarkRunnerError("checkpoint_artifact.evaluation_evidence_count must be positive")
     evaluation_rung_count = _required_int(
         checkpoint_record.get("evaluation_rung_count"),
         "checkpoint_artifact.evaluation_rung_count",
@@ -1139,7 +1117,7 @@ def _evaluation_input_from_plan(
         ),
         run_slug=run_slug,
         benchmark_id=checkpoint_benchmark_id,
-        evaluation_sample_count=evaluation_sample_count,
+        evaluation_sample_count=evaluation_evidence_count,
         evaluation_rung_count=evaluation_rung_count,
         training_compute=training_compute,
     )
@@ -1188,7 +1166,7 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
             right_evaluation_path=plan.left_evaluation_path,
             benchmark_root=plan.benchmark_root,
             results_root=plan.results_root,
-            sample_count=plan.sample_count,
+            evidence_count=plan.evidence_count,
             tensor_device=plan.tensor_device,
         )
         return compete_benchmark_checkpoints(swapped)
@@ -1208,7 +1186,7 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
         right_architecture=right_architecture,
         generator=generator,
         outcome_space=outcome_space,
-        sample_count=plan.sample_count,
+        sample_count=plan.evidence_count,
         seed=competition_seed,
         index=0,
         resolution_assignment=resolution_assignment,
@@ -1222,7 +1200,7 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
     )
     competition_protocol = {
         "kind": "checkpoint-benchmark-competition",
-        "sample_count": plan.sample_count,
+        "evidence_count": plan.evidence_count,
         "requested_seed": competition_seed,
         "tensor_runtime": "pytorch",
         "tensor_device": _required_string(
@@ -1255,7 +1233,7 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
         competition_id=competition_id,
         benchmark_id=benchmark_id,
         competition_bundle_path=competition_path,
-        sample_count=plan.sample_count,
+        sample_count=plan.evidence_count,
         left_model_key=left_model_key,
         right_model_key=right_model_key,
     )
@@ -1265,7 +1243,7 @@ def _evaluation_curriculum_rung(
     *,
     architecture: ArchitectureManifest,
     generator: _FieldBenchmarkGenerator,
-    sample_count: int,
+    sample_count: int = _default_evaluation_evidence_count,
     seed: int,
     index: int,
 ) -> _CurriculumRung:
@@ -1902,8 +1880,8 @@ def _train_and_predict_on_device(
         min_delta=convergence_min_delta,
         min_steps=convergence_min_steps,
         rung_competence_threshold=rung_competence_threshold,
-        batch_size=sample_count,
-        gate_sample_count=gate_sample_count,
+        training_evidence_count=sample_count,
+        gate_evidence_count=gate_sample_count,
         architecture=architecture,
         training_counter=training_counter,
         training_compute_counter=training_compute_counter,
@@ -1914,13 +1892,13 @@ def _train_and_predict_on_device(
             progress_callback(
                 _running_training_run_record(
                     seed=seed,
-                    batch_size=sample_count,
+                    training_evidence_count=sample_count,
                     max_steps=train_steps,
                     learning_rate=float(learning_rate),
                     optimizer_name=optimizer_name,
                     schedule_name=schedule_name,
                     gate_check_interval=gate_check_interval,
-                    gate_sample_count=gate_sample_count,
+                    gate_evidence_count=gate_sample_count,
                     gate_decision_rule=gate_decision_rule,
                     rung_competence_threshold=rung_competence_threshold,
                     convergence_patience=convergence_patience,
@@ -1978,13 +1956,13 @@ def _train_and_predict_on_device(
         raise BenchmarkRunnerError("uncapped training curriculum ended before convergence")
     training_run = _training_run_record(
         seed=seed,
-        batch_size=sample_count,
+        training_evidence_count=sample_count,
         max_steps=train_steps,
         learning_rate=float(learning_rate),
         optimizer_name=optimizer_name,
         schedule_name=schedule_name,
         gate_check_interval=gate_check_interval,
-        gate_sample_count=gate_sample_count,
+        gate_evidence_count=gate_sample_count,
         gate_decision_rule=gate_decision_rule,
         rung_competence_threshold=rung_competence_threshold,
         convergence_patience=convergence_patience,
@@ -2039,7 +2017,9 @@ def evaluate_model_checkpoint_artifact(
     tensor_device: TensorRuntimeDevice,
     checkpoint: ModelCheckpointArtifact,
 ) -> tuple[
-    tuple[tuple[_CurriculumRung, tuple[tuple[float, ...], ...]], ...],
+    tuple[_CheckpointEvaluationRungEvidence, ...],
+    GeneratedSampleSet,
+    tuple[tuple[float, ...], ...],
     Mapping[str, object],
 ]:
     """Generate benchmark evaluation evidence from a saved checkpoint artifact."""
@@ -2051,8 +2031,10 @@ def evaluate_model_checkpoint_artifact(
         tensor_device=tensor_device,
     )
     evaluation_counter = _ThroughputCounter()
+    phase_timings = TimingCollector()
     max_inference_compute: int | None = None
-    results: list[tuple[_CurriculumRung, tuple[tuple[float, ...], ...]]] = []
+    results: list[_CheckpointEvaluationRungEvidence] = []
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     for index in range(training_rung_count):
         rung = _evaluation_curriculum_rung(
             architecture=architecture,
@@ -2061,36 +2043,253 @@ def evaluate_model_checkpoint_artifact(
             seed=seed,
             index=index,
         )
-        evaluation_started = time.perf_counter()
-        predictions = predictor.predict_batch(rung.batch)
-        evaluation_counter.add(
-            seconds=time.perf_counter() - evaluation_started,
-            samples=len(rung.batch.samples),
-        )
-        batch_max_inference_compute = _batch_max_inference_compute(
+        rung_evidence, batch_max_inference_compute = _evaluate_checkpoint_rung(
+            predictor=predictor,
             architecture=architecture,
-            batch=rung.batch,
+            generator=generator,
+            rung=rung,
+            outcome_ids=outcome_ids,
+            requested_sample_count=evaluation_sample_count,
+            evaluation_counter=evaluation_counter,
+            phase_timings=phase_timings,
         )
-        if batch_max_inference_compute is None:
-            raise BenchmarkRunnerError(
-                "checkpoint evaluation could not measure max_inference_compute"
-            )
         max_inference_compute = _max_optional_int(
             max_inference_compute,
             batch_max_inference_compute,
         )
-        results.append((rung, predictions))
+        results.append(rung_evidence)
     if not results:
         raise BenchmarkRunnerError("checkpoint evaluation did not produce any results")
+    evaluation_frontier_index = _evaluation_result_frontier_index(
+        evaluation_results=results,
+        outcome_ids=outcome_ids,
+    )
+    final_batch, final_probabilities, final_max_inference_compute = (
+        _evaluate_checkpoint_rung_measurements(
+            predictor=predictor,
+            architecture=architecture,
+            generator=generator,
+            rung=results[evaluation_frontier_index].rung,
+            outcome_ids=outcome_ids,
+            requested_sample_count=evaluation_sample_count,
+            evaluation_counter=evaluation_counter,
+            phase_timings=phase_timings,
+        )
+    )
+    max_inference_compute = _max_optional_int(
+        max_inference_compute,
+        final_max_inference_compute,
+    )
     throughput = evaluation_counter.to_record(kind="checkpoint-evaluation-throughput")
     throughput["tensor_runtime"] = "pytorch"
     throughput["tensor_device"] = predictor.runtime.device_kind
+    throughput["phase_timing"] = phase_timings.to_record()
     if max_inference_compute is None:
         raise BenchmarkRunnerError(
             "checkpoint evaluation could not measure max_inference_compute"
         )
     throughput["max_inference_compute"] = max_inference_compute
-    return tuple(results), throughput
+    return tuple(results), final_batch, final_probabilities, throughput
+
+
+def _evaluate_checkpoint_rung(
+    *,
+    predictor: CheckpointModelPredictor,
+    architecture: ArchitectureManifest,
+    generator: _FieldBenchmarkGenerator,
+    rung: _CurriculumRung,
+    outcome_ids: tuple[str, ...],
+    requested_sample_count: int,
+    evaluation_counter: _ThroughputCounter,
+    phase_timings: TimingCollector,
+) -> tuple[_CheckpointEvaluationRungEvidence, int]:
+    accepted_mass_sum = 0.0
+    observed_sample_count = 0
+    max_inference_compute: int | None = None
+    for chunk in _checkpoint_evaluation_chunks(
+        predictor=predictor,
+        architecture=architecture,
+        generator=generator,
+        rung=rung,
+        outcome_ids=outcome_ids,
+        requested_sample_count=requested_sample_count,
+        evaluation_counter=evaluation_counter,
+        phase_timings=phase_timings,
+        purpose="score",
+    ):
+        accepted_mass_sum += chunk.accepted_mass_sum
+        observed_sample_count += chunk.sample_count
+        max_inference_compute = _max_optional_int(
+            max_inference_compute,
+            chunk.max_inference_compute,
+        )
+    if observed_sample_count < 1:
+        raise BenchmarkRunnerError("checkpoint evaluation rung produced no samples")
+    if max_inference_compute is None:
+        raise BenchmarkRunnerError(
+            "checkpoint evaluation could not measure max_inference_compute"
+        )
+    return (
+        _CheckpointEvaluationRungEvidence(
+            rung=rung,
+            mean_accepted_mass=accepted_mass_sum / observed_sample_count,
+            sample_count=observed_sample_count,
+        ),
+        max_inference_compute,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _CheckpointEvaluationChunk:
+    batch: GeneratedSampleSet
+    probabilities: tuple[tuple[float, ...], ...]
+    accepted_mass_sum: float
+    sample_count: int
+    max_inference_compute: int
+
+
+def _evaluate_checkpoint_rung_measurements(
+    *,
+    predictor: CheckpointModelPredictor,
+    architecture: ArchitectureManifest,
+    generator: _FieldBenchmarkGenerator,
+    rung: _CurriculumRung,
+    outcome_ids: tuple[str, ...],
+    requested_sample_count: int,
+    evaluation_counter: _ThroughputCounter,
+    phase_timings: TimingCollector,
+) -> tuple[GeneratedSampleSet, tuple[tuple[float, ...], ...], int]:
+    samples: list[GeneratedSample] = []
+    probabilities: list[tuple[float, ...]] = []
+    max_inference_compute: int | None = None
+    for chunk in _checkpoint_evaluation_chunks(
+        predictor=predictor,
+        architecture=architecture,
+        generator=generator,
+        rung=rung,
+        outcome_ids=outcome_ids,
+        requested_sample_count=requested_sample_count,
+        evaluation_counter=evaluation_counter,
+        phase_timings=phase_timings,
+        purpose="measurements",
+    ):
+        sample_offset = len(samples)
+        samples.extend(
+            replace(sample, index=sample_offset + index)
+            for index, sample in enumerate(chunk.batch.samples)
+        )
+        probabilities.extend(chunk.probabilities)
+        max_inference_compute = _max_optional_int(
+            max_inference_compute,
+            chunk.max_inference_compute,
+        )
+    if not samples:
+        raise BenchmarkRunnerError("checkpoint evaluation final rung produced no samples")
+    if max_inference_compute is None:
+        raise BenchmarkRunnerError(
+            "checkpoint evaluation could not measure max_inference_compute"
+        )
+    return (
+        GeneratedSampleSet(
+            benchmark_id=rung.batch.benchmark_id,
+            generator_id=rung.batch.generator_id,
+            generator_version=rung.batch.generator_version,
+            seed=rung.seed,
+            shape=(len(samples),),
+            variation_extent=_full_variation_extent,
+            state_space_request=rung.batch.state_space_request,
+            samples=tuple(samples),
+        ),
+        tuple(probabilities),
+        max_inference_compute,
+    )
+
+
+def _checkpoint_evaluation_chunks(
+    *,
+    predictor: CheckpointModelPredictor,
+    architecture: ArchitectureManifest,
+    generator: _FieldBenchmarkGenerator,
+    rung: _CurriculumRung,
+    outcome_ids: tuple[str, ...],
+    requested_sample_count: int,
+    evaluation_counter: _ThroughputCounter,
+    phase_timings: TimingCollector,
+    purpose: str,
+) -> Iterable[_CheckpointEvaluationChunk]:
+    remaining = requested_sample_count
+    chunk_index = 0
+    while remaining > 0:
+        physical_sample_count = _physical_execution_sample_count(
+            runtime=predictor.runtime,
+            generator=generator,
+            rung=rung,
+            requested_sample_count=remaining,
+            outcome_count=len(outcome_ids),
+            phase_timings=phase_timings,
+            phase=f"checkpoint_evaluation_{purpose}",
+        )
+        chunk_seed = rung.seed + 1_000_003 * chunk_index
+        generation_started = time.perf_counter()
+        with phase_timings.span(
+            f"checkpoint_evaluation_{purpose}_generation",
+            samples=physical_sample_count,
+        ):
+            batch = generator(
+                shape=physical_sample_count,
+                seed=chunk_seed,
+                include_fields=False,
+                state_space_request=_rung_state_space_request(rung),
+                variation_extent=_full_variation_extent,
+                runtime=predictor.runtime,
+                outcome_ids=outcome_ids,
+                timing=phase_timings,
+                timing_prefix=f"checkpoint_evaluation_{purpose}_generation.",
+            )
+        if batch.sample_count == 0:
+            raise BenchmarkRunnerError(
+                "generator returned no samples for selected state-space measure"
+            )
+        prediction_started = time.perf_counter()
+        with phase_timings.span(
+            f"checkpoint_evaluation_{purpose}_prediction",
+            samples=batch.sample_count,
+        ):
+            predictions = predictor.predict_batch(batch)
+        evaluation_counter.add(
+            seconds=time.perf_counter() - generation_started,
+            samples=batch.sample_count,
+        )
+        phase_timings.add(
+            f"checkpoint_evaluation_{purpose}_prediction_latency",
+            seconds=time.perf_counter() - prediction_started,
+            samples=batch.sample_count,
+        )
+        batch_max_inference_compute = _batch_max_inference_compute(
+            architecture=architecture,
+            batch=batch,
+        )
+        if batch_max_inference_compute is None:
+            raise BenchmarkRunnerError(
+                "checkpoint evaluation could not measure max_inference_compute"
+            )
+        accepted_mass = tuple(
+            _prediction_target_mass(
+                row,
+                target_distribution=sample.target_distribution_or_one_hot(),
+                outcome_ids=outcome_ids,
+            )
+            for sample, row in zip(batch.samples, predictions, strict=True)
+        )
+        yield _CheckpointEvaluationChunk(
+            batch=batch,
+            probabilities=predictions,
+            accepted_mass_sum=math.fsum(accepted_mass),
+            sample_count=batch.sample_count,
+            max_inference_compute=batch_max_inference_compute,
+        )
+        remaining -= batch.sample_count
+        chunk_index += 1
 
 
 def generate_model_checkpoint_competition_record(
@@ -2125,32 +2324,101 @@ def generate_model_checkpoint_competition_record(
         checkpoint=right_checkpoint,
         tensor_device=tensor_device,
     )
-    rung = _competition_curriculum_rung(
+    capacity_rung = _competition_curriculum_rung(
         generator=generator,
-        sample_count=sample_count,
+        sample_count=1,
         seed=seed,
         index=index,
         resolution_assignment=resolution_assignment,
     )
     competition_counter = _ThroughputCounter()
-    competition_started = time.perf_counter()
-    left_predictions = left_predictor.predict_batch(rung.batch)
-    right_predictions = right_predictor.predict_batch(rung.batch)
-    competition_counter.add(
-        seconds=time.perf_counter() - competition_started,
-        samples=2 * len(rung.batch.samples),
-    )
-    throughput = competition_counter.to_record(kind="checkpoint-competition-throughput")
-    throughput["tensor_runtime"] = "pytorch"
-    throughput["tensor_device"] = left_predictor.runtime.device_kind
-    left_max_inference_compute = _batch_max_inference_compute(
-        architecture=left_architecture,
-        batch=rung.batch,
-    )
-    right_max_inference_compute = _batch_max_inference_compute(
-        architecture=right_architecture,
-        batch=rung.batch,
-    )
+    phase_timings = TimingCollector()
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    samples: list[GeneratedSample] = []
+    left_predictions: list[tuple[float, ...]] = []
+    right_predictions: list[tuple[float, ...]] = []
+    left_max_inference_compute: int | None = None
+    right_max_inference_compute: int | None = None
+    remaining = sample_count
+    chunk_index = 0
+    while remaining > 0:
+        physical_sample_count = _physical_execution_sample_count(
+            runtime=left_predictor.runtime,
+            generator=generator,
+            rung=capacity_rung,
+            requested_sample_count=remaining,
+            outcome_count=len(outcome_ids),
+            phase_timings=phase_timings,
+            phase="checkpoint_competition",
+        )
+        chunk_seed = capacity_rung.seed + 1_000_003 * chunk_index
+        competition_started = time.perf_counter()
+        with phase_timings.span(
+            "checkpoint_competition_generation",
+            samples=physical_sample_count,
+        ):
+            batch = generator(
+                shape=physical_sample_count,
+                seed=chunk_seed,
+                include_fields=False,
+                resolution_assignment=resolution_assignment,
+                variation_extent=_full_variation_extent,
+                runtime=left_predictor.runtime,
+                outcome_ids=outcome_ids,
+                timing=phase_timings,
+                timing_prefix="checkpoint_competition_generation.",
+            )
+        if batch.sample_count == 0:
+            raise BenchmarkRunnerError(
+                "generator returned no samples for selected competition measure"
+            )
+        with phase_timings.span(
+            "checkpoint_competition_left_prediction",
+            samples=batch.sample_count,
+        ):
+            left_chunk_predictions = left_predictor.predict_batch(batch)
+        with phase_timings.span(
+            "checkpoint_competition_right_prediction",
+            samples=batch.sample_count,
+        ):
+            right_chunk_predictions = right_predictor.predict_batch(batch)
+        competition_counter.add(
+            seconds=time.perf_counter() - competition_started,
+            samples=2 * batch.sample_count,
+        )
+        chunk_left_max_inference_compute = _batch_max_inference_compute(
+            architecture=left_architecture,
+            batch=batch,
+        )
+        chunk_right_max_inference_compute = _batch_max_inference_compute(
+            architecture=right_architecture,
+            batch=batch,
+        )
+        if chunk_left_max_inference_compute is None:
+            raise BenchmarkRunnerError(
+                "checkpoint competition could not measure left_max_inference_compute"
+            )
+        if chunk_right_max_inference_compute is None:
+            raise BenchmarkRunnerError(
+                "checkpoint competition could not measure right_max_inference_compute"
+            )
+        left_max_inference_compute = _max_optional_int(
+            left_max_inference_compute,
+            chunk_left_max_inference_compute,
+        )
+        right_max_inference_compute = _max_optional_int(
+            right_max_inference_compute,
+            chunk_right_max_inference_compute,
+        )
+        sample_offset = len(samples)
+        samples.extend(
+            replace(sample, index=sample_offset + sample_index)
+            for sample_index, sample in enumerate(batch.samples)
+        )
+        left_predictions.extend(left_chunk_predictions)
+        right_predictions.extend(right_chunk_predictions)
+        remaining -= batch.sample_count
+        chunk_index += 1
     if left_max_inference_compute is None:
         raise BenchmarkRunnerError(
             "checkpoint competition could not measure left_max_inference_compute"
@@ -2159,13 +2427,27 @@ def generate_model_checkpoint_competition_record(
         raise BenchmarkRunnerError(
             "checkpoint competition could not measure right_max_inference_compute"
         )
+    competition_batch = GeneratedSampleSet(
+        benchmark_id=capacity_rung.batch.benchmark_id,
+        generator_id=capacity_rung.batch.generator_id,
+        generator_version=capacity_rung.batch.generator_version,
+        seed=capacity_rung.seed,
+        shape=(len(samples),),
+        variation_extent=_full_variation_extent,
+        state_space_request=capacity_rung.batch.state_space_request,
+        samples=tuple(samples),
+    )
+    throughput = competition_counter.to_record(kind="checkpoint-competition-throughput")
+    throughput["tensor_runtime"] = "pytorch"
+    throughput["tensor_device"] = left_predictor.runtime.device_kind
+    throughput["phase_timing"] = phase_timings.to_record()
     throughput["left_max_inference_compute"] = left_max_inference_compute
     throughput["right_max_inference_compute"] = right_max_inference_compute
     return (
         _checkpoint_competition_record(
-            batch=rung.batch,
-            left_probabilities=left_predictions,
-            right_probabilities=right_predictions,
+            batch=competition_batch,
+            left_probabilities=tuple(left_predictions),
+            right_probabilities=tuple(right_predictions),
             outcome_space=outcome_space,
             left_model_key=left_model_key,
             right_model_key=right_model_key,
@@ -2309,7 +2591,7 @@ def _physical_execution_sample_count(
         },
     )
     if physical_sample_count < 1:
-        raise _TrainingCapacityReached()
+        raise _RuntimeCapacityReached()
     return int(physical_sample_count)
 
 
@@ -2426,7 +2708,7 @@ def _model_checkpoint_artifact_record(
     architecture: ArchitectureManifest,
     benchmark_id: ProtocolIdentifier,
     run_slug: str,
-    evaluation_sample_count: int,
+    evaluation_evidence_count: int,
     evaluation_rung_count: int | None,
     training_compute: float | None,
     results_root: Path | None = None,
@@ -2446,7 +2728,7 @@ def _model_checkpoint_artifact_record(
     record["run_slug"] = run_slug
     record["architecture_manifest"] = architecture.to_record()
     record["model_manifest"] = checkpoint.manifest.to_record()
-    record["evaluation_sample_count"] = evaluation_sample_count
+    record["evaluation_evidence_count"] = evaluation_evidence_count
     if evaluation_rung_count is not None:
         record["evaluation_rung_count"] = evaluation_rung_count
     if training_compute is not None:
@@ -2606,8 +2888,8 @@ def _train_until_convergence(
     min_delta: float,
     min_steps: int,
     rung_competence_threshold: float,
-    batch_size: int,
-    gate_sample_count: int,
+    training_evidence_count: int,
+    gate_evidence_count: int = _default_gate_evidence_count,
     architecture: ArchitectureManifest,
     training_counter: _ThroughputCounter,
     training_compute_counter: _ComputeCounter,
@@ -2656,7 +2938,7 @@ def _train_until_convergence(
                 outcome_ids=outcome_ids,
                 device=runtime.device,
             )
-        actual_gate_sample_count = _tensor_batch_size(fields, fallback=gate_sample_count)
+        actual_gate_sample_count = _tensor_batch_size(fields, fallback=gate_evidence_count)
         with phase_timings.span("validation_forward_loss", samples=actual_gate_sample_count):
             was_training = bool(module.training)
             module.eval()
@@ -2717,7 +2999,7 @@ def _train_until_convergence(
 
     try:
         append_validation(step=start_step, check=start_check)
-    except _TrainingCapacityReached as error:
+    except _RuntimeCapacityReached as error:
         raise BenchmarkRunnerError(
             "training memory budget cannot fit one validation sample for the first rung"
         ) from error
@@ -2742,7 +3024,7 @@ def _train_until_convergence(
         training_started = time.perf_counter()
         try:
             fields, labels = train_batch(step)
-        except _TrainingCapacityReached:
+        except _RuntimeCapacityReached:
             stop_reason = "capacity-limited"
             break
         except RuntimeError as error:
@@ -2750,7 +3032,7 @@ def _train_until_convergence(
                 raise
             stop_reason = "capacity-limited"
             break
-        actual_batch_size = _tensor_batch_size(fields, fallback=batch_size)
+        actual_batch_size = _tensor_batch_size(fields, fallback=training_evidence_count)
         with phase_timings.span("training_max_training_compute"):
             batch_training_compute_per_sample = _batch_max_training_compute_per_sample(
                 architecture=architecture,
@@ -2794,7 +3076,7 @@ def _train_until_convergence(
             continue
         try:
             append_validation(step=step, check=validation_check)
-        except _TrainingCapacityReached:
+        except _RuntimeCapacityReached:
             stop_reason = "capacity-limited"
             break
         except RuntimeError as error:
@@ -3067,22 +3349,15 @@ def _frontier_plateau_advances(
 
 def _evaluation_result_frontier_index(
     *,
-    evaluation_results: Sequence[
-        tuple[_CurriculumRung, tuple[tuple[float, ...], ...]]
-    ],
+    evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
     outcome_ids: tuple[str, ...],
 ) -> int:
     if not evaluation_results:
         raise BenchmarkRunnerError("evaluation did not produce any rungs")
     chance_mass = _chance_accepted_mass(outcome_ids)
     frontier_index = 0
-    for index, (rung, probabilities) in enumerate(evaluation_results):
-        accepted_mass = _mean_prediction_accepted_mass(
-            batch=rung.batch,
-            probabilities=probabilities,
-            outcome_ids=outcome_ids,
-        )
-        if accepted_mass > chance_mass + 1e-12:
+    for index, result in enumerate(evaluation_results):
+        if result.mean_accepted_mass > chance_mass + 1e-12:
             frontier_index = index
     return frontier_index
 
@@ -3103,13 +3378,13 @@ def has_windowed_validation_plateau(
 def _training_run_record(
     *,
     seed: int,
-    batch_size: int,
+    training_evidence_count: int,
     max_steps: int | None,
     learning_rate: float,
     optimizer_name: str,
     schedule_name: str,
     gate_check_interval: int,
-    gate_sample_count: int,
+    gate_evidence_count: int = _default_gate_evidence_count,
     gate_decision_rule: str,
     rung_competence_threshold: float,
     convergence_patience: int,
@@ -3143,10 +3418,10 @@ def _training_run_record(
             learning_rate=learning_rate,
             schedule=cast(Any, schedule_name),
             seed=seed,
-            batch_size=batch_size,
+            training_evidence_count=training_evidence_count,
             max_steps=max_steps,
             gate_check_interval=gate_check_interval,
-            gate_sample_count=gate_sample_count,
+            gate_evidence_count=gate_evidence_count,
             gate_decision_rule=gate_decision_rule,
             rung_competence_threshold=rung_competence_threshold,
             min_delta=convergence_min_delta,
@@ -3164,13 +3439,13 @@ def _training_run_record(
 def _running_training_run_record(
     *,
     seed: int,
-    batch_size: int,
+    training_evidence_count: int,
     max_steps: int | None,
     learning_rate: float,
     optimizer_name: str,
     schedule_name: str,
     gate_check_interval: int,
-    gate_sample_count: int,
+    gate_evidence_count: int,
     gate_decision_rule: str,
     rung_competence_threshold: float,
     convergence_patience: int,
@@ -3194,10 +3469,10 @@ def _running_training_run_record(
             learning_rate=learning_rate,
             schedule=cast(Any, schedule_name),
             seed=seed,
-            batch_size=batch_size,
+            training_evidence_count=training_evidence_count,
             max_steps=max_steps,
             gate_check_interval=gate_check_interval,
-            gate_sample_count=gate_sample_count,
+            gate_evidence_count=gate_evidence_count,
             gate_decision_rule=gate_decision_rule,
             rung_competence_threshold=rung_competence_threshold,
             min_delta=convergence_min_delta,
@@ -3236,8 +3511,8 @@ def _training_progress_record(
         "run_status": "running",
         "benchmark_id": str(summary.benchmark_id),
         "architecture_path": summary.architecture_path.as_posix(),
-        "sample_count": plan.sample_count,
-        "evaluation_sample_count": plan.resolved_evaluation_sample_count,
+        "training_evidence_count": _default_training_evidence_count,
+        "evaluation_evidence_count": _default_evaluation_evidence_count,
         "seed": plan.seed,
         "train_steps": plan.train_steps,
         "learning_rate": float(plan.learning_rate),
@@ -3245,7 +3520,7 @@ def _training_progress_record(
         "schedule": plan.schedule,
         "gate_check_interval": plan.gate_check_interval,
         "model_checkpoint_gate_interval": plan.model_checkpoint_gate_interval,
-        "gate_sample_count": plan.resolved_gate_sample_count,
+        "gate_evidence_count": _default_gate_evidence_count,
         "gate_decision_rule": plan.gate_decision_rule,
         "convergence_patience": plan.convergence_patience,
         "convergence_min_delta": float(plan.convergence_min_delta),
@@ -3858,23 +4133,6 @@ def _renormalized_probabilities(probabilities: Sequence[float]) -> tuple[float, 
     return tuple(normalized)
 
 
-def _mean_prediction_accepted_mass(
-    *,
-    batch: GeneratedSampleSet,
-    probabilities: tuple[tuple[float, ...], ...],
-    outcome_ids: tuple[str, ...],
-) -> float:
-    accepted_mass = tuple(
-        _prediction_target_mass(
-            row,
-            target_distribution=sample.target_distribution_or_one_hot(),
-            outcome_ids=outcome_ids,
-        )
-        for sample, row in zip(batch.samples, probabilities, strict=True)
-    )
-    return math.fsum(accepted_mass) / len(accepted_mass)
-
-
 def _prediction_target_mass(
     probabilities: Sequence[float],
     *,
@@ -3936,7 +4194,11 @@ def _checkpoint_competition_record(
                     f"benchmarks.{_identifier_atom(benchmark_id)}.competition."
                     f"{competition_id}.sample-{sample.index}@0.1.0"
                 ),
-                "observation_id": str(sample.field_record().id),
+                "observation_id": sample.observable_state_id
+                or (
+                    f"benchmarks.{_identifier_atom(benchmark_id)}.competition."
+                    f"{competition_id}.sample-{sample.index}@0.1.0"
+                ),
                 "accepted_outcome_id": sample.outcome_id,
                 "target_distribution": [
                     {"outcome_id": outcome_id, "probability": probability}
