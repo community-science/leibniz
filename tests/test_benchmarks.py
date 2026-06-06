@@ -284,7 +284,10 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
                 "canonical 10-way digit classification problem. Larger "
                 "requests add symmetric finite affine choices for every "
                 "digit, and the benchmark reports the realized cardinality "
-                "instead of forcing exact powers of two."
+                "instead of forcing exact powers of two. Canvas resolution "
+                "is the smallest square lattice, rounded to the benchmark "
+                "resolution step, whose finite affine grid can express a "
+                "cardinality inside the requested state-space band."
             ),
         },
     }

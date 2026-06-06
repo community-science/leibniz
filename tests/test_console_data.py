@@ -307,7 +307,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         for batch in batches
     ] == [
         ("state-space-window", 10),
-        ("state-space-window", 50),
+        ("state-space-window", 40),
         ("state-space-window", 50),
     ]
     assert [batch["label"] for batch in batches] == [
