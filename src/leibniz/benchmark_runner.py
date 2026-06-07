@@ -563,6 +563,10 @@ class BenchmarkRunnerError(ValueError):
     """Raised when a local benchmark run cannot be planned or executed."""
 
 
+class _CurriculumExhausted(BenchmarkRunnerError):
+    """Raised when a finite benchmark has no further curriculum candidates."""
+
+
 _extract = RecordExtractor(error_type=BenchmarkRunnerError)
 
 
@@ -1549,7 +1553,7 @@ def _curriculum_rung_from_candidates(
             batch=batch,
             sample_count=len(batch.samples),
         )
-    raise BenchmarkRunnerError("evaluation curriculum did not produce any rungs")
+    raise _CurriculumExhausted("evaluation curriculum did not produce any rungs")
 
 
 @dataclass(frozen=True, slots=True)
@@ -2037,8 +2041,8 @@ def _train_and_predict_on_device(
             return False
         next_index = training_frontier_index + 1
         with phase_timings.span("training_frontier.rung_append"):
-            training_rungs.append(
-                _training_curriculum_rung(
+            try:
+                next_rung = _training_curriculum_rung(
                     architecture=architecture,
                     generator=generator,
                     sample_count=sample_count,
@@ -2046,7 +2050,9 @@ def _train_and_predict_on_device(
                     index=next_index,
                     phase_timings=phase_timings,
                 )
-            )
+            except _CurriculumExhausted:
+                return False
+            training_rungs.append(next_rung)
         with phase_timings.span("training_frontier.bookkeeping"):
             frontier_plateau_points.append(frontier_point)
             training_frontier_index += 1
@@ -2234,15 +2240,20 @@ def evaluate_model_checkpoint_artifact(
     )
     index = 0
     while index < target_rung_count:
-        rung = _evaluation_curriculum_rung(
-            architecture=architecture,
-            generator=generator,
-            sample_count=1,
-            seed=seed,
-            index=index,
-            runtime=predictor.runtime,
-            outcome_ids=outcome_ids,
-        )
+        try:
+            rung = _evaluation_curriculum_rung(
+                architecture=architecture,
+                generator=generator,
+                sample_count=1,
+                seed=seed,
+                index=index,
+                runtime=predictor.runtime,
+                outcome_ids=outcome_ids,
+            )
+        except _CurriculumExhausted:
+            if not results:
+                raise
+            break
         try:
             rung_evidence, batch_max_inference_compute = _evaluate_checkpoint_rung(
                 predictor=predictor,

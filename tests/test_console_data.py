@@ -130,6 +130,10 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert [(artifact["kind"], artifact["source_path"]) for artifact in artifacts] == [
         (
             "architecture-manifest",
+            "tests/fixtures/architecture/chess_board_linear.json",
+        ),
+        (
+            "architecture-manifest",
             "tests/fixtures/architecture/digits_convnet.json",
         ),
         ("architecture-manifest", "tests/fixtures/architecture/digits_pool.json"),
@@ -192,6 +196,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert [
         inspection["source_path"] for inspection in model_inspections
     ] == [
+        "tests/fixtures/architecture/chess_board_linear.json",
         "tests/fixtures/architecture/digits_convnet.json",
         "tests/fixtures/architecture/digits_pool.json",
     ]
@@ -309,8 +314,9 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     )
     assert cast(int, chess_task["outcome_atom_count"]) > 1000
     chess_batches = cast(list[dict[str, object]], chess_task["batches"])
-    assert len(chess_batches) == 1
-    assert chess_batches[0]["complexity_cardinalities"] == [23]
+    assert [
+        batch["complexity_cardinalities"] for batch in chess_batches
+    ] == [[18], [23], [24], [28], [32], [33]]
 
     task = next(
         task

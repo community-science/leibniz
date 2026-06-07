@@ -55,6 +55,13 @@ _digits_architecture = (
 _digits_convnet_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_convnet.json"
 )
+_chess_linear_architecture = (
+    _repository_root
+    / "tests"
+    / "fixtures"
+    / "architecture"
+    / "chess_board_linear.json"
+)
 
 
 def _observation_payload(
@@ -447,38 +454,48 @@ def test_runner_accepts_exact_fixed_input_shape() -> None:
 
 def test_chess_benchmark_runner_accepts_fixed_board_tensor(tmp_path: Path) -> None:
     generator = load_generator(_chess_benchmark_root)
-    outcome_count = len(generator.manifest.resolve_outcome_space().outcomes)
     results_root = tmp_path / "results"
-    architecture_path = results_root / "architectures" / "chess_board_dense.json"
-    architecture_path.parent.mkdir(parents=True)
-    architecture_path.write_bytes(
-        canonical_document_bytes(
-            {
-                "input_shape": [18, 8, 8],
-                "output_shape": [outcome_count],
-                "layers": [
-                    {"kind": "flatten"},
-                    {"kind": "dense", "parameters": {"out": outcome_count}},
-                ],
-            }
-        )
-        + b"\n"
-    )
 
     summary = run_benchmark(
-            BenchmarkRunPlan(
-                architecture_path=architecture_path,
-                benchmark_root=_chess_benchmark_root,
-                results_root=results_root,
-                seed=101,
-                train_steps=1,
-                tensor_device="cpu",
+        BenchmarkRunPlan(
+            architecture_path=_chess_linear_architecture,
+            benchmark_root=_chess_benchmark_root,
+            results_root=results_root,
+            seed=101,
+            train_steps=1,
+            tensor_device="cpu",
         )
     )
 
     assert summary.benchmark_id == generator.manifest.id
     assert summary.dry_run is False
     assert summary.training_summary_path.exists()
+    training_summary = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    checkpoint_artifact_path = results_root / "chess-evaluation-model-artifact.json"
+    checkpoint_artifact_path.write_bytes(
+        canonical_document_bytes(training_summary["evaluation_model_artifact"]) + b"\n"
+    )
+
+    evaluation_summary = evaluate_benchmark_checkpoint(
+        BenchmarkEvaluationPlan(
+            checkpoint_artifact_path=checkpoint_artifact_path,
+            benchmark_root=_chess_benchmark_root,
+            results_root=results_root,
+            tensor_device="cpu",
+        )
+    )
+    bundle = BenchmarkEvaluationBundleDocument.from_bytes(
+        evaluation_summary.evaluation_bundle_path.read_bytes()
+    ).bundle
+    evaluation_protocol = cast(dict[str, object], bundle.evaluation_protocol)
+    evaluation_curriculum = cast(dict[str, object], bundle.evaluation_curriculum)
+
+    assert evaluation_protocol["score_status"] in {"accepted", "provisional"}
+    assert cast(int, evaluation_protocol["evaluation_curriculum_rung_count"]) >= 1
+    assert cast(int, evaluation_curriculum["unlocked_rung_count"]) >= 1
 
 
 def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
