@@ -178,6 +178,10 @@ def test_chess_complexity_candidates_are_legal_move_cardinalities() -> None:
         assert candidate.complexity == math.log2(candidate.cardinality)
         assert candidate.metadata["kind"] == "chess-legal-move-cardinality"
         assert candidate.metadata["legal_move_count"] == candidate.cardinality
+        representative = cast(dict[str, object], candidate.metadata["representative"])
+        assert representative["kind"] == "chess-mate-in-one-cardinality-representative"
+        assert representative["legal_move_count"] == candidate.cardinality
+        assert representative["target_policy"] == "mate-in-one"
 
 
 def test_chess_complexity_curriculum_uses_supported_legal_move_counts() -> None:
@@ -214,6 +218,44 @@ def test_chess_corpus_targets_are_rules_validated_mate_in_one_moves() -> None:
         assert mate_moves
         legal_move_counts.append(len(legal_moves))
     assert tuple(sorted(legal_move_counts)) == _expected_legal_move_cardinalities
+
+
+def test_chess_representative_ladder_declares_piece_coverage() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    candidates = tuple(
+        generator.complexity_curriculum_candidates(
+            start_index=0,
+            count=len(_expected_legal_move_cardinalities),
+        )
+    )
+
+    assert tuple(candidate.cardinality for candidate in candidates) == (
+        _expected_legal_move_cardinalities
+    )
+    legal_piece_symbols = {
+        symbol
+        for candidate in candidates
+        for symbol in cast(
+            list[str],
+            cast(dict[str, object], candidate.metadata["representative"])[
+                "legal_move_piece_symbols"
+            ],
+        )
+    }
+    mate_piece_symbols = {
+        symbol
+        for candidate in candidates
+        for symbol in cast(
+            list[str],
+            cast(dict[str, object], candidate.metadata["representative"])[
+                "mate_move_piece_symbols"
+            ],
+        )
+    }
+
+    assert {"B", "K", "N", "Q", "R"} <= legal_piece_symbols
+    assert "Q" in mate_piece_symbols
+    assert mate_piece_symbols != {"Q"}
 
 
 def test_chess_generator_returns_board_tensors_and_move_targets() -> None:
@@ -278,6 +320,13 @@ def test_chess_console_preview_uses_board_images_and_text_metadata() -> None:
     assert batch["sample_count"] == 1
     sample = cast(list[dict[str, object]], batch["samples"])[0]
     assert sample["observable_state_id"] == f"fen:{_minimum_chess_fen}"
+    coverage_coordinate = cast(list[dict[str, object]], sample["latent_coordinates"])[4]
+    assert coverage_coordinate["name"] == (
+        "benchmarks.chess.position.representative-piece-coverage"
+    )
+    coverage_values = cast(dict[str, object], coverage_coordinate["values"])
+    assert coverage_values["legal_move_piece_symbols"] == ["K", "Q"]
+    assert coverage_values["mate_move_piece_symbols"] == ["Q"]
     image_data_url = cast(str, sample["image_data_url"])
     assert image_data_url.startswith("data:image/svg+xml;base64,")
     svg = _decode_svg_data_url(image_data_url)
