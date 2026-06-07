@@ -53,6 +53,7 @@ from leibniz.observation_generation import (
     ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
+    ObservationGenerationError,
     load_generator,
 )
 from leibniz.outcomes import OutcomeSpace
@@ -140,7 +141,7 @@ _default_complexity_rung_size = 1.0
 _full_variation_extent = 1.0
 
 
-class _FieldBenchmarkGenerator(BenchmarkGenerator, Protocol):
+class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
     """Internal contract for tensor-backed benchmark training."""
 
     def minimum_complexity(self) -> ComplexityValue: ...
@@ -259,22 +260,8 @@ class CheckpointModelPredictor:
             )
 
 
-def _require_field_generator(generator: BenchmarkGenerator) -> _FieldBenchmarkGenerator:
-    missing = tuple(
-        name
-        for name in (
-            "materialization",
-            "formation",
-            "distinguishable_state_complexity",
-        )
-        if not hasattr(generator, name)
-    )
-    if missing:
-        raise BenchmarkRunnerError(
-            "tensor benchmark runner requires a field-generating benchmark; missing "
-            + ", ".join(missing)
-        )
-    return cast(_FieldBenchmarkGenerator, generator)
+def _require_tensor_generator(generator: BenchmarkGenerator) -> _TensorBenchmarkGenerator:
+    return cast(_TensorBenchmarkGenerator, generator)
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,7 +320,7 @@ class _RuntimeCapacityReached(Exception):
 @dataclass(frozen=True, slots=True)
 class _CurriculumRung:
     index: int
-    resolution_assignment: AxisAssignment
+    resolution_assignment: AxisAssignment | None
     seed: int
     batch: GeneratedSampleSet
     sample_count: int = 0
@@ -344,10 +331,9 @@ class _CurriculumRung:
 
     def to_record(self, *, status: str) -> dict[str, object]:
         complexity_value = self.batch.samples[0].complexity_value
-        return {
+        record: dict[str, object] = {
             "index": self.index,
             "status": status,
-            "resolution_assignment": self.resolution_assignment.to_record(),
             "seed": self.seed,
             "complexity_axis": _core_complexity_measure_id(),
             "complexity": self.complexity,
@@ -361,6 +347,9 @@ class _CurriculumRung:
             ),
             "sample_count": self.sample_count,
         }
+        if self.resolution_assignment is not None:
+            record["resolution_assignment"] = self.resolution_assignment.to_record()
+        return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -778,25 +767,12 @@ def run_benchmark(
 ) -> BenchmarkRunSummary:
     """Run or dry-run a tiny local benchmark workflow."""
 
-    generator = _require_field_generator(load_generator(plan.benchmark_root))
+    generator = _require_tensor_generator(load_generator(plan.benchmark_root))
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
     outcome_space = generator.manifest.resolve_outcome_space()
-    initial_evaluation_rung = _evaluation_curriculum_rung(
-        architecture=architecture,
-        generator=generator,
-        sample_count=1,
-        seed=plan.seed,
-        index=0,
-    )
-    evaluation_batch = initial_evaluation_rung.batch
-    _validate_architecture_for_batch(
-        architecture=architecture,
-        batch=evaluation_batch,
-        outcome_space=outcome_space,
-    )
-
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     summary = _run_summary(
         plan=plan,
         benchmark_id=generator.manifest.id,
@@ -809,8 +785,47 @@ def run_benchmark(
         ),
         architecture_manifest=architecture,
     )
+    try:
+        initial_evaluation_rung = _evaluation_curriculum_rung(
+            architecture=architecture,
+            generator=generator,
+            sample_count=1,
+            seed=plan.seed,
+            index=0,
+        )
+    except BenchmarkRunnerError as error:
+        if "must return tensors or inspectable field metadata" not in str(error):
+            raise
+        initial_evaluation_rung = None
+
+    if initial_evaluation_rung is not None:
+        evaluation_batch = initial_evaluation_rung.batch
+        _validate_architecture_for_batch(
+            architecture=architecture,
+            batch=evaluation_batch,
+            outcome_space=outcome_space,
+        )
+
     if plan.dry_run:
         return summary
+
+    if initial_evaluation_rung is None:
+        validation_runtime = resolve_tensor_runtime(plan.tensor_device)
+        initial_evaluation_rung = _evaluation_curriculum_rung(
+            architecture=architecture,
+            generator=generator,
+            sample_count=1,
+            seed=plan.seed,
+            index=0,
+            runtime=validation_runtime,
+            outcome_ids=outcome_ids,
+        )
+        evaluation_batch = initial_evaluation_rung.batch
+        _validate_architecture_for_batch(
+            architecture=architecture,
+            batch=evaluation_batch,
+            outcome_space=outcome_space,
+        )
 
     progress_path = _training_progress_path(summary)
     model_interface = ModelInterface.from_outcome_space(
@@ -1058,7 +1073,7 @@ def _training_progress_path(summary: BenchmarkRunSummary) -> Path:
 def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEvaluationSummary:
     """Generate benchmark evidence from a saved training checkpoint artifact."""
 
-    generator = _require_field_generator(load_generator(plan.benchmark_root))
+    generator = _require_tensor_generator(load_generator(plan.benchmark_root))
     evaluation_input = _evaluation_input_from_plan(plan, generator=generator)
     outcome_space = generator.manifest.resolve_outcome_space()
     architecture = evaluation_input.architecture
@@ -1267,7 +1282,7 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
         raise BenchmarkRunnerError(str(error)) from error
     left_evaluation = left_evaluation_bundle.to_record()
     right_evaluation = right_evaluation_bundle.to_record()
-    generator = _require_field_generator(load_generator(plan.benchmark_root))
+    generator = _require_tensor_generator(load_generator(plan.benchmark_root))
     benchmark_id = generator.manifest.id
     outcome_space = generator.manifest.resolve_outcome_space()
     left_architecture = left_evaluation_bundle.architecture_manifest
@@ -1378,10 +1393,12 @@ def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCo
 def _evaluation_curriculum_rung(
     *,
     architecture: ArchitectureManifest,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     sample_count: int = 1,
     seed: int,
     index: int,
+    runtime: TensorRuntime | None = None,
+    outcome_ids: tuple[str, ...] | None = None,
 ) -> _CurriculumRung:
     return _curriculum_rung_from_candidates(
         architecture=architecture,
@@ -1389,6 +1406,8 @@ def _evaluation_curriculum_rung(
         sample_count=sample_count,
         seed=seed,
         index=index,
+        runtime=runtime,
+        outcome_ids=outcome_ids,
         candidates=_benchmark_complexity_curriculum_candidates(
             generator=generator,
             start_index=index,
@@ -1399,7 +1418,7 @@ def _evaluation_curriculum_rung(
 def _training_curriculum_rung(
     *,
     architecture: ArchitectureManifest,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     sample_count: int,
     seed: int,
     index: int,
@@ -1419,8 +1438,6 @@ def _training_curriculum_rung(
         if candidate_index < index:
             continue
         resolution_assignment = candidate.complexity_class.resolution_assignment
-        if resolution_assignment is None:
-            continue
         with _optional_timing_span(
             phase_timings,
             "training_frontier.rung_record_construction",
@@ -1460,7 +1477,7 @@ def _training_curriculum_rung(
 
 def _competition_curriculum_rung(
     *,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     sample_count: int,
     seed: int,
     index: int,
@@ -1486,10 +1503,12 @@ def _competition_curriculum_rung(
 def _curriculum_rung_from_candidates(
     *,
     architecture: ArchitectureManifest,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     sample_count: int,
     seed: int,
     index: int,
+    runtime: TensorRuntime | None = None,
+    outcome_ids: tuple[str, ...] | None = None,
     candidates: Sequence[_CurriculumCandidate],
 ) -> _CurriculumRung:
     for candidate_index, candidate in enumerate(candidates):
@@ -1502,13 +1521,16 @@ def _curriculum_rung_from_candidates(
             include_fields=True,
             complexity_request=candidate.complexity_request,
             variation_extent=_full_variation_extent,
+            runtime=runtime,
+            outcome_ids=outcome_ids,
         )
         batch = sample_set
         if not batch.samples:
             continue
+        sample_shape = _batch_sample_input_shape(batch=batch)
         input_reason = _input_shape_boundary_reason(
             architecture=architecture,
-            sample_shape=batch.samples[0].require_field().shape,
+            sample_shape=sample_shape,
         )
         if input_reason is not None:
             if index == 0:
@@ -1518,13 +1540,11 @@ def _curriculum_rung_from_candidates(
                 f"{input_reason}"
             )
         materialization_plan = batch.samples[0].materialization_plan
-        if materialization_plan is None:
-            raise BenchmarkRunnerError(
-                "field curriculum sample did not include a materialization plan"
-            )
         return _CurriculumRung(
             index=index,
-            resolution_assignment=materialization_plan.resolution_assignment,
+            resolution_assignment=(
+                None if materialization_plan is None else materialization_plan.resolution_assignment
+            ),
             seed=batch.seed,
             batch=batch,
             sample_count=len(batch.samples),
@@ -1556,7 +1576,7 @@ def _optional_timing_span(timing: TimingCollector | None, phase: str) -> Any:
 
 def _benchmark_complexity_curriculum_candidates(
     *,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     start_index: int,
     phase_timings: TimingCollector | None = None,
 ) -> Sequence[_CurriculumCandidate]:
@@ -1569,7 +1589,7 @@ def _benchmark_complexity_curriculum_candidates(
 
 def _structured_training_curriculum_candidates(
     *,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     start_index: int,
     phase_timings: TimingCollector | None = None,
 ) -> Sequence[_CurriculumCandidate]:
@@ -1582,7 +1602,7 @@ def _structured_training_curriculum_candidates(
 
 def _benchmark_complexity_candidates(
     *,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     start_index: int,
     phase_timings: TimingCollector | None = None,
 ) -> Sequence[_CurriculumCandidate]:
@@ -1619,7 +1639,7 @@ def _benchmark_complexity_candidates(
     return tuple(candidates)
 
 
-def _benchmark_complexity_rung_size(generator: _FieldBenchmarkGenerator) -> float:
+def _benchmark_complexity_rung_size(generator: _TensorBenchmarkGenerator) -> float:
     """Return the benchmark-owned width of each complexity request window."""
 
     value = float(generator.complexity_rung_size())
@@ -1693,7 +1713,16 @@ def _validate_architecture_for_batch(
     batch: GeneratedSampleSet,
     outcome_space: OutcomeSpace,
 ) -> None:
-    sample_shape = batch.samples[0].require_field().shape
+    sample_shape = _batch_sample_input_shape(batch=batch)
+    if (
+        architecture.model_scale_contract is None
+        and batch.samples
+        and batch.samples[0].materialization_plan is not None
+    ):
+        raise BenchmarkRunnerError(
+            "architecture must declare a variable-shape scale contract for generated "
+            f"observation shape {sample_shape}"
+        )
     input_reason = _input_shape_boundary_reason(
         architecture=architecture,
         sample_shape=sample_shape,
@@ -1721,8 +1750,11 @@ def _input_shape_boundary_reason(
             f"architecture variable-shape scale contract does not accept generated "
             f"observation shape {sample_shape}"
         )
+    if architecture.input_shape == sample_shape:
+        return None
     return (
-        "architecture must declare a variable-shape scale contract for generated "
+        "architecture input_shape must match generated tensor shape or declare "
+        "a variable-shape scale contract for generated "
         "observation shape "
         f"{sample_shape}"
     )
@@ -1754,7 +1786,7 @@ def _train_and_predict(
     *,
     architecture: ArchitectureManifest,
     initial_evaluation_rung: _CurriculumRung,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     outcome_space: OutcomeSpace,
     sample_count: int,
     gate_sample_count: int,
@@ -1817,7 +1849,7 @@ def _train_and_predict_on_device(
     *,
     architecture: ArchitectureManifest,
     initial_evaluation_rung: _CurriculumRung,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     outcome_space: OutcomeSpace,
     sample_count: int,
     gate_sample_count: int,
@@ -1884,6 +1916,7 @@ def _train_and_predict_on_device(
     ) -> _TrainingStepBatch:
         physical_sample_count = _physical_execution_sample_count(
             runtime=runtime,
+            architecture=architecture,
             generator=generator,
             rung=rung,
             requested_sample_count=batch_sample_count,
@@ -1925,6 +1958,7 @@ def _train_and_predict_on_device(
     ) -> GeneratedSampleSet:
         physical_sample_count = _physical_execution_sample_count(
             runtime=runtime,
+            architecture=architecture,
             generator=generator,
             rung=rung,
             requested_sample_count=batch_sample_count,
@@ -2169,7 +2203,7 @@ def _train_and_predict_on_device(
 def evaluate_model_checkpoint_artifact(
     *,
     architecture: ArchitectureManifest,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     outcome_space: OutcomeSpace,
     seed: int,
     tensor_device: TensorRuntimeDevice,
@@ -2206,6 +2240,8 @@ def evaluate_model_checkpoint_artifact(
             sample_count=1,
             seed=seed,
             index=index,
+            runtime=predictor.runtime,
+            outcome_ids=outcome_ids,
         )
         try:
             rung_evidence, batch_max_inference_compute = _evaluate_checkpoint_rung(
@@ -2273,7 +2309,7 @@ def _evaluate_checkpoint_rung(
     *,
     predictor: CheckpointModelPredictor,
     architecture: ArchitectureManifest,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
     evaluation_counter: _ThroughputCounter,
@@ -2347,7 +2383,7 @@ def _evaluate_checkpoint_rung_measurements(
     *,
     predictor: CheckpointModelPredictor,
     architecture: ArchitectureManifest,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
     requested_sample_count: int,
@@ -2404,7 +2440,7 @@ def _checkpoint_evaluation_chunks(
     *,
     predictor: CheckpointModelPredictor,
     architecture: ArchitectureManifest,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
     requested_sample_count: int,
@@ -2417,6 +2453,7 @@ def _checkpoint_evaluation_chunks(
     while remaining > 0:
         physical_sample_count = _physical_execution_sample_count(
             runtime=predictor.runtime,
+            architecture=architecture,
             generator=generator,
             rung=rung,
             requested_sample_count=remaining,
@@ -2493,7 +2530,7 @@ def generate_model_checkpoint_competition_record(
     *,
     left_architecture: ArchitectureManifest,
     right_architecture: ArchitectureManifest,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     outcome_space: OutcomeSpace,
     seed: int,
     index: int,
@@ -2541,6 +2578,7 @@ def generate_model_checkpoint_competition_record(
         next_sample_count = _evaluation_next_sample_count(estimator)
         physical_sample_count = _physical_execution_sample_count(
             runtime=left_predictor.runtime,
+            architecture=left_architecture,
             generator=generator,
             rung=capacity_rung,
             requested_sample_count=next_sample_count,
@@ -2686,6 +2724,23 @@ def _batch_max_inference_compute(
     return max_compute
 
 
+def _batch_sample_input_shape(
+    *,
+    batch: GeneratedSampleSet,
+) -> tuple[int, ...]:
+    tensor_input_shape = _tensor_input_shape(batch.fields)
+    if tensor_input_shape is not None:
+        return tensor_input_shape
+    if batch.samples:
+        try:
+            return batch.samples[0].require_field().shape
+        except ObservationGenerationError:
+            pass
+    raise BenchmarkRunnerError(
+        "tensor benchmark generator must return tensors or inspectable field metadata"
+    )
+
+
 def _batch_max_training_compute_per_sample(
     *,
     architecture: ArchitectureManifest,
@@ -2714,13 +2769,19 @@ def _tensor_input_shape(fields: Any) -> tuple[int, ...] | None:
 
 def _rung_tensor_input_shape(
     *,
-    generator: _FieldBenchmarkGenerator,
+    generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
+    architecture: ArchitectureManifest,
 ) -> tuple[int, ...]:
+    tensor_input_shape = _tensor_input_shape(rung.batch.fields)
+    if tensor_input_shape is not None:
+        return tensor_input_shape
     formation = getattr(generator, "formation", None)
     channel_count = getattr(formation, "channel_count", None)
     height_axis = getattr(formation, "height_axis", None)
     width_axis = getattr(formation, "width_axis", None)
+    if rung.resolution_assignment is None:
+        return architecture.input_shape
     if (
         type(channel_count) is not int
         or channel_count < 1
@@ -2766,7 +2827,8 @@ def _estimated_runtime_batch_sample_bytes(
 def _physical_execution_sample_count(
     *,
     runtime: TensorRuntime,
-    generator: _FieldBenchmarkGenerator,
+    architecture: ArchitectureManifest,
+    generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
     requested_sample_count: int,
     outcome_count: int,
@@ -2778,7 +2840,11 @@ def _physical_execution_sample_count(
     budget_bytes = _runtime_memory_budget_bytes(runtime)
     if budget_bytes is None:
         return requested_sample_count
-    input_shape = _rung_tensor_input_shape(generator=generator, rung=rung)
+    input_shape = _rung_tensor_input_shape(
+        generator=generator,
+        rung=rung,
+        architecture=architecture,
+    )
     used_bytes = _runtime_used_memory_bytes(runtime)
     available_bytes = budget_bytes
     sample_bytes = _estimated_runtime_batch_sample_bytes(

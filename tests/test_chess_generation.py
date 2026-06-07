@@ -10,6 +10,7 @@ from leibniz.observation_generation import (
     ObservationGenerationError,
     load_generator,
 )
+from leibniz.tensor_runtime import resolve_tensor_runtime, tensor_value_to_host
 
 _repository_root = Path(__file__).parents[1]
 _benchmark_parent = _repository_root / "src" / "leibniz" / "benchmarks"
@@ -143,6 +144,55 @@ def test_chess_complexity_candidates_are_legal_move_cardinalities() -> None:
     assert candidate.complexity == math.log2(candidate.cardinality)
     assert candidate.metadata["kind"] == "chess-legal-move-cardinality"
     assert candidate.metadata["legal_move_count"] == candidate.cardinality
+
+
+def test_chess_generator_returns_board_tensors_and_move_targets() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    runtime = resolve_tensor_runtime("cpu")
+    outcome_ids = tuple(outcome.id for outcome in generator.manifest.outcome_space.outcomes)
+    complexity = generator.minimum_complexity().value
+    request = ComplexityRequest(minimum=complexity, maximum=complexity)
+
+    sample_set = generator(
+        seed=47,
+        shape=2,
+        runtime=runtime,
+        outcome_ids=outcome_ids,
+        complexity_request=request,
+    )
+    fields, targets = sample_set.require_tensors()
+
+    assert tuple(fields.shape) == (2, 18, 8, 8)
+    assert tuple(targets.shape) == (2, len(outcome_ids))
+    field_values = tensor_value_to_host(fields).tolist()
+    target_values = tensor_value_to_host(targets).tolist()
+    assert field_values[0][4][6][6] == 1.0
+    assert field_values[0][5][5][6] == 1.0
+    assert field_values[0][11][7][7] == 1.0
+    assert field_values[0][12][0][0] == 1.0
+    assert math.isclose(sum(target_values[0]), 1.0, rel_tol=0.0, abs_tol=1e-6)
+    assert sample_set.samples[0].outcome_id in outcome_ids
+    assert target_values[0][outcome_ids.index(sample_set.samples[0].outcome_id)] > 0.0
+
+
+def test_chess_generator_can_return_metadata_free_tensors() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    runtime = resolve_tensor_runtime("cpu")
+    outcome_ids = tuple(outcome.id for outcome in generator.manifest.outcome_space.outcomes)
+
+    sample_set = generator(
+        seed=47,
+        shape=3,
+        include_metadata=False,
+        runtime=runtime,
+        outcome_ids=outcome_ids,
+    )
+
+    fields, targets = sample_set.require_tensors()
+    assert sample_set.samples == ()
+    assert sample_set.includes_fields
+    assert tuple(fields.shape) == (3, 18, 8, 8)
+    assert tuple(targets.shape) == (3, len(outcome_ids))
 
 
 def test_chess_console_preview_uses_text_samples() -> None:

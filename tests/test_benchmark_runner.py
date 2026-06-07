@@ -48,6 +48,7 @@ from leibniz.training_runs import TrainingHistoryPoint, TrainingRunRecord
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
+_chess_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "chess"
 _digits_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool.json"
 )
@@ -232,9 +233,20 @@ def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
         ),
     )
     timings = benchmark_runner.TimingCollector()
+    architecture = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 1024, 1024],
+            "output_shape": [10],
+            "layers": [
+                {"kind": "flatten"},
+                {"kind": "dense", "parameters": {"out": 10}},
+            ],
+        }
+    )
 
     physical_count = cast(Any, benchmark_runner)._physical_execution_sample_count(
         runtime=runtime,
+        architecture=architecture,
         generator=generator,
         rung=rung,
         requested_sample_count=512,
@@ -406,6 +418,67 @@ def test_digits_scale_contract_accepts_rectangular_generated_shapes() -> None:
         architecture=architecture,
         sample_shape=(1, 27, 24),
     ) is None
+
+
+def test_runner_accepts_exact_fixed_input_shape() -> None:
+    architecture = ArchitectureManifest.from_record(
+        {
+            "input_shape": [18, 8, 8],
+            "output_shape": [16],
+            "layers": [
+                {"kind": "flatten"},
+                {"kind": "dense", "parameters": {"out": 16}},
+            ],
+        }
+    )
+
+    assert cast(Any, benchmark_runner)._input_shape_boundary_reason(
+        architecture=architecture,
+        sample_shape=(18, 8, 8),
+    ) is None
+    assert cast(Any, benchmark_runner)._input_shape_boundary_reason(
+        architecture=architecture,
+        sample_shape=(18, 9, 8),
+    ) == (
+        "architecture input_shape must match generated tensor shape or declare "
+        "a variable-shape scale contract for generated observation shape (18, 9, 8)"
+    )
+
+
+def test_chess_benchmark_runner_accepts_fixed_board_tensor(tmp_path: Path) -> None:
+    generator = load_generator(_chess_benchmark_root)
+    outcome_count = len(generator.manifest.resolve_outcome_space().outcomes)
+    results_root = tmp_path / "results"
+    architecture_path = results_root / "architectures" / "chess_board_dense.json"
+    architecture_path.parent.mkdir(parents=True)
+    architecture_path.write_bytes(
+        canonical_document_bytes(
+            {
+                "input_shape": [18, 8, 8],
+                "output_shape": [outcome_count],
+                "layers": [
+                    {"kind": "flatten"},
+                    {"kind": "dense", "parameters": {"out": outcome_count}},
+                ],
+            }
+        )
+        + b"\n"
+    )
+
+    summary = run_benchmark(
+            BenchmarkRunPlan(
+                architecture_path=architecture_path,
+                benchmark_root=_chess_benchmark_root,
+                results_root=results_root,
+                seed=101,
+                train_steps=1,
+                tensor_device="cpu",
+        )
+    )
+
+    assert summary.benchmark_id == generator.manifest.id
+    assert summary.dry_run is False
+    assert summary.training_summary_path.exists()
 
 
 def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(

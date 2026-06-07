@@ -7,6 +7,7 @@ import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import chess
 
@@ -22,6 +23,7 @@ from leibniz.observation_generation import (
     ObservationGenerationError,
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
+from leibniz.tensor_runtime import TensorRuntime, make_float_tensor
 from leibniz.timing import TimingCollector
 
 __all__ = ["all_meaningful_uci_moves", "benchmark"]
@@ -31,6 +33,7 @@ _generator_id = ProtocolIdentifier.parse("benchmarks.chess.generator@0.1.0")
 _outcome_space_id = ProtocolIdentifier.parse("benchmarks.chess.uci-moves@0.1.0")
 _console_preview_limit = 12
 _complexity_rung_size = 0.1
+_tensor_shape = (18, 8, 8)
 
 _mate_in_one_fens = (
     "7k/6Q1/6K1/8/8/8/8/8 w - - 0 1",
@@ -118,22 +121,27 @@ class Generator:
         include_fields: bool = False,
         include_metadata: bool = True,
         complexity_request: ComplexityRequest | None = None,
-        runtime: object | None = None,
+        component_indices: Sequence[int] | None = None,
+        memory_limit_bytes: int | None = None,
+        resolution_assignment: object | None = None,
+        variation_extent: float = 1.0,
+        runtime: TensorRuntime | None = None,
         outcome_ids: tuple[str, ...] | None = None,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet:
-        """Generate text-backed mate-in-one samples for a complexity request."""
+        """Generate mate-in-one samples and optional board-state tensors."""
 
         _ = include_fields
-        _ = outcome_ids
+        _ = component_indices
+        _ = memory_limit_bytes
+        _ = resolution_assignment
+        _ = variation_extent
         _ = timing
         _ = timing_prefix
-        if runtime is not None:
-            raise ObservationGenerationError(
-                "Chess benchmark does not define tensor generation yet"
-            )
-        if not include_metadata:
+        if runtime is not None and outcome_ids is None:
+            raise ObservationGenerationError("tensor generation requires outcome_ids")
+        if runtime is None and not include_metadata:
             raise ObservationGenerationError(
                 "Chess metadata-free generation requires a tensor runtime"
             )
@@ -151,12 +159,24 @@ class Generator:
             )
 
         rng = random.Random(seed)
-        samples = tuple(
-            self._sample(
-                index=index,
-                position=rng.choice(positions),
+        sample_count = _sample_count(sample_shape)
+        selected_positions = tuple(rng.choice(positions) for _index in range(sample_count))
+        samples = (
+            tuple(
+                self._sample(
+                    index=index,
+                    position=position,
+                )
+                for index, position in enumerate(selected_positions)
             )
-            for index in range(_sample_count(sample_shape))
+            if include_metadata
+            else ()
+        )
+        fields, targets = _tensor_batch(
+            runtime=runtime,
+            positions=selected_positions,
+            outcome_ids=outcome_ids,
+            sample_shape=sample_shape,
         )
         return GeneratedSampleSet(
             benchmark_id=self.manifest.id,
@@ -166,6 +186,8 @@ class Generator:
             shape=sample_shape,
             complexity_request=complexity_request,
             samples=samples,
+            fields=fields,
+            targets=targets,
         )
 
     def minimum_complexity(self) -> ComplexityValue:
@@ -411,6 +433,99 @@ def _sample_preview_record(sample: GeneratedSample) -> Mapping[str, object]:
             dict(coordinate) for coordinate in sample.latent_coordinates
         ],
     }
+
+
+def _tensor_batch(
+    *,
+    runtime: TensorRuntime | None,
+    positions: Sequence[_MateInOnePosition],
+    outcome_ids: tuple[str, ...] | None,
+    sample_shape: tuple[int, ...],
+) -> tuple[Any | None, Any | None]:
+    if runtime is None:
+        return None, None
+    if outcome_ids is None:
+        raise ObservationGenerationError("tensor generation requires outcome_ids")
+    unknown_outcomes = tuple(
+        outcome_id
+        for position in positions
+        for outcome_id in (*position.legal_moves, *position.mate_moves)
+        if outcome_id not in outcome_ids
+    )
+    if unknown_outcomes:
+        raise ObservationGenerationError(
+            "tensor generation outcome_ids do not cover generated Chess moves"
+        )
+    fields = make_float_tensor(
+        runtime,
+        [_board_tensor(position.fen) for position in positions],
+        device=runtime.device,
+    )
+    targets = make_float_tensor(
+        runtime,
+        [
+            _target_row(position.target_distribution, outcome_ids=outcome_ids)
+            for position in positions
+        ],
+        device=runtime.device,
+    )
+    return (
+        fields.reshape((*sample_shape, *_tensor_shape)),
+        targets.reshape((*sample_shape, len(outcome_ids))),
+    )
+
+
+def _board_tensor(fen: str) -> list[list[list[float]]]:
+    board = chess.Board(fen)
+    planes = [
+        [[0.0 for _file in range(8)] for _rank in range(8)]
+        for _plane in range(_tensor_shape[0])
+    ]
+    for square, piece in board.piece_map().items():
+        plane = _piece_plane(piece)
+        planes[plane][chess.square_rank(square)][chess.square_file(square)] = 1.0
+    if board.turn == chess.WHITE:
+        _fill_plane(planes[12], 1.0)
+    if board.has_kingside_castling_rights(chess.WHITE):
+        _fill_plane(planes[13], 1.0)
+    if board.has_queenside_castling_rights(chess.WHITE):
+        _fill_plane(planes[14], 1.0)
+    if board.has_kingside_castling_rights(chess.BLACK):
+        _fill_plane(planes[15], 1.0)
+    if board.has_queenside_castling_rights(chess.BLACK):
+        _fill_plane(planes[16], 1.0)
+    if board.ep_square is not None:
+        planes[17][chess.square_rank(board.ep_square)][
+            chess.square_file(board.ep_square)
+        ] = 1.0
+    return planes
+
+
+def _piece_plane(piece: chess.Piece) -> int:
+    piece_offsets = {
+        chess.PAWN: 0,
+        chess.KNIGHT: 1,
+        chess.BISHOP: 2,
+        chess.ROOK: 3,
+        chess.QUEEN: 4,
+        chess.KING: 5,
+    }
+    color_offset = 0 if piece.color == chess.WHITE else 6
+    return color_offset + piece_offsets[piece.piece_type]
+
+
+def _fill_plane(plane: list[list[float]], value: float) -> None:
+    for rank in plane:
+        for file_index in range(len(rank)):
+            rank[file_index] = value
+
+
+def _target_row(
+    distribution: Mapping[str, float],
+    *,
+    outcome_ids: tuple[str, ...],
+) -> list[float]:
+    return [float(distribution.get(outcome_id, 0.0)) for outcome_id in outcome_ids]
 
 
 def _all_meaningful_uci_moves() -> tuple[str, ...]:
