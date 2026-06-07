@@ -1132,8 +1132,13 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     checkpoint_checks = [checkpoint["validation_check"] for checkpoint in checkpoints]
     assert checkpoint_checks == [0]
     assert all("evaluation_rung_count" not in checkpoint for checkpoint in checkpoints)
+    assert all("score_estimate" not in checkpoint for checkpoint in checkpoints)
+    assert all("score" in checkpoint for checkpoint in checkpoints)
+    assert all("architecture_manifest" not in checkpoint for checkpoint in checkpoints)
+    assert all("model_manifest" not in checkpoint for checkpoint in checkpoints)
     selected_checkpoint = cast(dict[str, object], training_summary["selected_model_checkpoint"])
     assert "evaluation_rung_count" not in selected_checkpoint
+    assert "score_estimate" in selected_checkpoint
     assert all(
         (tmp_path / cast(str, checkpoint["path"])).is_file()
         for checkpoint in checkpoints

@@ -871,12 +871,16 @@ def run_benchmark(
                 else model_inspection
             )
         with progress_timings.span("training_progress.checkpoint_records"):
-            progress_checkpoint_records = tuple(
+            progress_full_checkpoint_records = tuple(
                 checkpoint_record(
                     checkpoint,
                     training_compute=training_run.training_compute,
                 )
                 for checkpoint in checkpoint_artifacts
+            )
+            progress_checkpoint_records = tuple(
+                _compact_model_checkpoint_summary_record(record)
+                for record in progress_full_checkpoint_records
             )
             selected_checkpoint_record = (
                 None
@@ -944,15 +948,19 @@ def run_benchmark(
         model_manifest=selected_checkpoint.manifest,
         architecture_manifest=architecture,
     )
-    checkpoint_records = tuple(
+    full_checkpoint_records = tuple(
         checkpoint_record(
             checkpoint,
             training_compute=training_result.training_run.training_compute,
         )
         for checkpoint in checkpoint_artifacts
     )
-    for record in checkpoint_records:
+    for record in full_checkpoint_records:
         _write_document(Path(_required_string(record.get("record_path"), "record_path")), record)
+    checkpoint_records = tuple(
+        _compact_model_checkpoint_summary_record(record)
+        for record in full_checkpoint_records
+    )
     selected_checkpoint_record = checkpoint_record(
         selected_checkpoint,
         training_compute=training_result.training_run.training_compute,
@@ -2617,6 +2625,33 @@ def _model_checkpoint_artifact_record(
     if training_compute is not None:
         record["training_compute"] = training_compute
     return record
+
+
+def _compact_model_checkpoint_summary_record(
+    record: Mapping[str, object],
+) -> dict[str, object]:
+    summary_keys = (
+        "kind",
+        "path",
+        "digest",
+        "manifest_path",
+        "manifest_digest",
+        "record_path",
+        "step",
+        "validation_check",
+        "validation_loss",
+        "benchmark_id",
+        "run_slug",
+        "training_compute",
+    )
+    compact = {key: record[key] for key in summary_keys if key in record}
+    score_estimate = record.get("score_estimate")
+    if isinstance(score_estimate, Mapping):
+        score_estimate_record = cast(Mapping[str, object], score_estimate)
+        score = score_estimate_record.get("score")
+        if isinstance(score, int | float):
+            compact["score"] = float(score)
+    return compact
 
 
 def _artifact_record_path(path: Path, *, results_root: Path | None) -> str:
