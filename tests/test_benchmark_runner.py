@@ -674,8 +674,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert complexity_value["scale"] == "log2"
     assert evaluation_curriculum["complexity_axis"] == complexity_value["measure_id"]
     candidate_policy = cast(dict[str, object], evaluation_curriculum["candidate_policy"])
-    assert candidate_policy["kind"] == "benchmark-owned-complexity-window"
-    assert math.isclose(cast(float, candidate_policy["complexity_rung_size"]), 0.1)
+    assert candidate_policy == {"kind": "benchmark-owned-complexity-schedule"}
     assert evaluation_curriculum["rung_policy"] == "unbounded-competence-frontier"
     assert (
         evaluation_curriculum["gating_metric"]
@@ -736,7 +735,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         rung_complexity = cast(float, rung["complexity"])
         assert request_minimum <= rung_complexity
         assert rung_complexity <= request_maximum
-        assert math.isclose(request_maximum - request_minimum, 0.1)
+        assert math.isclose(request_minimum, request_maximum)
     assert [rung["sample_count"] for rung in curriculum_rungs] == [64] * len(curriculum_rungs)
     assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
         cast(float, rung["complexity"]) for rung in curriculum_rungs
@@ -2194,7 +2193,7 @@ def test_training_plateau_above_rung_competence_threshold_refines_before_advanci
     assert len(stage_result.validation_history) == 3
 
 
-def test_evaluation_curriculum_uses_benchmark_owned_representative_windows() -> None:
+def test_evaluation_curriculum_uses_benchmark_owned_complexity_schedule() -> None:
     generator = load_generator(_digits_benchmark_root)
     minimum = generator.minimum_complexity().value
 
@@ -2221,14 +2220,14 @@ def test_evaluation_curriculum_uses_benchmark_owned_representative_windows() -> 
     for candidate in candidates[:8]:
         assert candidate.complexity_request.minimum >= minimum
         assert math.isclose(
-            candidate.complexity_request.maximum - candidate.complexity_request.minimum,
-            0.1,
+            candidate.complexity_request.minimum,
+            candidate.complexity_request.maximum,
         )
         assert candidate.complexity_request.minimum <= candidate.complexity
         assert candidate.complexity <= candidate.complexity_request.maximum
 
 
-def test_training_curriculum_uses_benchmark_owned_representative_windows() -> None:
+def test_training_curriculum_uses_benchmark_owned_complexity_schedule() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     minimum = generator.minimum_complexity().value
 
@@ -2250,8 +2249,8 @@ def test_training_curriculum_uses_benchmark_owned_representative_windows() -> No
     for candidate in candidates[:8]:
         assert candidate.complexity_request.minimum >= minimum
         assert math.isclose(
-            candidate.complexity_request.maximum - candidate.complexity_request.minimum,
-            0.1,
+            candidate.complexity_request.minimum,
+            candidate.complexity_request.maximum,
         )
         assert (
             candidate.complexity_class.request.minimum

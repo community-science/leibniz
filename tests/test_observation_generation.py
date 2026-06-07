@@ -427,6 +427,26 @@ def test_digits_generator_materializes_target_complexity_class_band() -> None:
     ]
 
 
+def test_digits_complexity_curriculum_uses_supported_finite_cardinalities() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+
+    candidates = tuple(
+        generator.complexity_curriculum_candidates(start_index=0, count=4)
+    )
+
+    assert [candidate.cardinality for candidate in candidates] == [10, 20, 30, 40]
+    assert [candidate.metadata["affine_transform_count"] for candidate in candidates] == [
+        1,
+        2,
+        3,
+        4,
+    ]
+    for candidate in candidates:
+        assert candidate.cardinality is not None
+        assert math.isclose(candidate.complexity, math.log2(candidate.cardinality))
+        assert candidate.request.minimum == candidate.request.maximum
+
+
 def test_digits_generator_high_cardinality_request_has_one_representative() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 

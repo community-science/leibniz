@@ -180,6 +180,21 @@ def test_chess_complexity_candidates_are_legal_move_cardinalities() -> None:
         assert candidate.metadata["legal_move_count"] == candidate.cardinality
 
 
+def test_chess_complexity_curriculum_uses_supported_legal_move_counts() -> None:
+    generator = load_generator(_chess_benchmark_root)
+
+    candidates = tuple(
+        generator.complexity_curriculum_candidates(start_index=0, count=5)
+    )
+
+    cardinalities = tuple(candidate.cardinality for candidate in candidates)
+    assert cardinalities == _expected_legal_move_cardinalities[:5]
+    for candidate in candidates:
+        assert candidate.cardinality is not None
+        assert math.isclose(candidate.complexity, math.log2(candidate.cardinality))
+        assert candidate.request.minimum == candidate.request.maximum
+
+
 def test_chess_corpus_targets_are_rules_validated_mate_in_one_moves() -> None:
     generator = load_generator(_chess_benchmark_root)
     observation_ids = generator.manifest.observation_ids

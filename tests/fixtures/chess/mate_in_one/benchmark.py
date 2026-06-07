@@ -141,11 +141,6 @@ class Generator:
 
         return _complexity_value()
 
-    def complexity_rung_size(self) -> float:
-        """Return the log2 complexity width for curriculum rungs."""
-
-        return 1.0
-
     def complexity_candidate_for_request(
         self,
         *,
@@ -179,6 +174,34 @@ class Generator:
         if complexity_class is None:
             return ()
         return (complexity_class,)
+
+    def complexity_curriculum_candidates(
+        self,
+        *,
+        start_index: int,
+        count: int,
+    ) -> tuple[ComplexityCandidate, ...]:
+        """Return the fixture's exact legal-move-cardinality schedule."""
+
+        if start_index < 0:
+            raise ObservationGenerationError("start_index must be non-negative")
+        if count < 0:
+            raise ObservationGenerationError("count must be non-negative")
+        if start_index > 0 or count == 0:
+            return ()
+        return (
+            ComplexityCandidate(
+                request=ComplexityRequest(
+                    minimum=_complexity_value().value,
+                    maximum=_complexity_value().value,
+                ),
+                cardinality=len(_valid_moves),
+                metadata={
+                    "kind": "chess-legal-move-cardinality",
+                    "fen": _fen,
+                },
+            ),
+        )
 
 
 def _manifest() -> BenchmarkManifest:

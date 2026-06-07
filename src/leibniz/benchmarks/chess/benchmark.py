@@ -33,7 +33,6 @@ _benchmark_id = ProtocolIdentifier.parse("benchmarks.chess@0.1.0")
 _generator_id = ProtocolIdentifier.parse("benchmarks.chess.generator@0.1.0")
 _outcome_space_id = ProtocolIdentifier.parse("benchmarks.chess.uci-moves@0.1.0")
 _console_preview_limit = 12
-_complexity_rung_size = 0.1
 _tensor_shape = (18, 8, 8)
 _board_preview_size = 512
 _board_preview_square_size = _board_preview_size // 8
@@ -229,11 +228,6 @@ class Generator:
 
         return min(self.positions, key=lambda position: position.complexity).complexity_value
 
-    def complexity_rung_size(self) -> float:
-        """Return the log2 complexity width for curriculum rungs."""
-
-        return _complexity_rung_size
-
     def complexity_candidate_for_request(
         self,
         *,
@@ -253,6 +247,36 @@ class Generator:
     ) -> tuple[ComplexityCandidate, ...]:
         """Return exact legal-move-count candidates inside a complexity band."""
 
+        return tuple(
+            candidate
+            for candidate in self._legal_move_count_candidates()
+            if request.contains(
+                ComplexityValue(
+                    measure_id=candidate.request.measure_id,
+                    value=candidate.complexity,
+                )
+            )
+        )
+
+    def complexity_curriculum_candidates(
+        self,
+        *,
+        start_index: int,
+        count: int,
+    ) -> tuple[ComplexityCandidate, ...]:
+        """Return Chess' ordered exact legal-move-cardinality schedule."""
+
+        if start_index < 0:
+            raise ObservationGenerationError("start_index must be non-negative")
+        if count < 0:
+            raise ObservationGenerationError("count must be non-negative")
+        if count == 0:
+            return ()
+
+        candidates = self._legal_move_count_candidates()
+        return candidates[start_index : start_index + count]
+
+    def _legal_move_count_candidates(self) -> tuple[ComplexityCandidate, ...]:
         candidates: list[ComplexityCandidate] = []
         seen_counts: set[int] = set()
         for position in sorted(
@@ -260,8 +284,6 @@ class Generator:
             key=lambda item: (item.legal_move_count, item.fen),
         ):
             if position.legal_move_count in seen_counts:
-                continue
-            if not request.contains(position.complexity_value):
                 continue
             seen_counts.add(position.legal_move_count)
             candidates.append(
