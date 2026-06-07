@@ -295,8 +295,28 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     ]
 
     benchmark_tasks = cast(list[dict[str, object]], record["benchmark_tasks"])
-    assert len(benchmark_tasks) == 1
-    task = benchmark_tasks[0]
+    assert {
+        task["benchmark_id"]
+        for task in benchmark_tasks
+    } == {
+        "benchmarks.chess@0.1.0",
+        "benchmarks.digits@0.1.0",
+    }
+    chess_task = next(
+        task
+        for task in benchmark_tasks
+        if task["benchmark_id"] == "benchmarks.chess@0.1.0"
+    )
+    assert cast(int, chess_task["outcome_atom_count"]) > 1000
+    chess_batches = cast(list[dict[str, object]], chess_task["batches"])
+    assert len(chess_batches) == 1
+    assert chess_batches[0]["complexity_cardinalities"] == [23]
+
+    task = next(
+        task
+        for task in benchmark_tasks
+        if task["benchmark_id"] == "benchmarks.digits@0.1.0"
+    )
     assert task["kind"] == "generated-observations"
     assert task["benchmark_id"] == "benchmarks.digits@0.1.0"
     assert task["complexity_axis"] == "log2_complexity_class_size"

@@ -174,6 +174,7 @@ class GeneratedSample:
     outcome_id: str
     complexity: float
     complexity_value: ComplexityValue | None = None
+    available_outcome_ids: tuple[str, ...] = ()
     observable_state_id: str | None = None
     target_distribution: Mapping[str, float] | None = None
     latent_coordinates: tuple[Mapping[str, object], ...] = ()
@@ -195,6 +196,10 @@ class GeneratedSample:
             raise ObservationGenerationError("sample outcome_id must be nonempty")
         if self.observable_state_id is not None and not self.observable_state_id:
             raise ObservationGenerationError("sample observable_state_id must be nonempty")
+        if len(set(self.available_outcome_ids)) != len(self.available_outcome_ids):
+            raise ObservationGenerationError("available_outcome_ids must be unique")
+        if any(not outcome_id for outcome_id in self.available_outcome_ids):
+            raise ObservationGenerationError("available_outcome_ids must be nonempty")
         if self.target_distribution is not None:
             _validate_target_distribution(self.target_distribution)
 
@@ -238,6 +243,8 @@ class GeneratedSample:
             record["component_index"] = self.component_index
         if self.observable_state_id is not None:
             record["observable_state_id"] = self.observable_state_id
+        if self.available_outcome_ids:
+            record["available_outcome_ids"] = list(self.available_outcome_ids)
         if self.target_distribution is not None:
             record["target_distribution"] = [
                 {"outcome_id": outcome_id, "probability": probability}

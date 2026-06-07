@@ -20,6 +20,7 @@ from leibniz.observation_generation import (
     ComplexityCandidate,
     ComplexityRequest,
     ComplexityValue,
+    GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
 )
@@ -55,6 +56,35 @@ def _formation_payload(
     return sample_set
 
 
+def test_generated_sample_records_available_outcome_ids() -> None:
+    sample = GeneratedSample(
+        index=0,
+        outcome_id="yes",
+        complexity=1.0,
+        available_outcome_ids=("no", "yes"),
+    )
+
+    assert sample.to_record()["available_outcome_ids"] == ["no", "yes"]
+
+
+def test_generated_sample_rejects_invalid_available_outcome_ids() -> None:
+    with pytest.raises(ObservationGenerationError, match="available_outcome_ids must be unique"):
+        GeneratedSample(
+            index=0,
+            outcome_id="yes",
+            complexity=1.0,
+            available_outcome_ids=("yes", "yes"),
+        )
+
+    with pytest.raises(ObservationGenerationError, match="available_outcome_ids must be nonempty"):
+        GeneratedSample(
+            index=0,
+            outcome_id="yes",
+            complexity=1.0,
+            available_outcome_ids=("",),
+        )
+
+
 def test_digits_generator_is_deterministic() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
@@ -88,6 +118,7 @@ def test_digits_generator_is_deterministic() -> None:
         "outcome_id": "digit-8",
     }
     assert first_sample.observable_state_id is None
+    assert first_sample.available_outcome_ids == ()
     assert first_sample.target_distribution is None
     variation = _coordinate(first_sample.latent_coordinates, role="variation")
     assert variation["multiplicity"] == 1
