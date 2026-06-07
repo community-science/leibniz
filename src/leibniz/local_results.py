@@ -78,6 +78,7 @@ _result_directories = (
 _benchmark_cost_axis_key = "cost"
 _benchmark_cost_axis_keys = (_benchmark_cost_axis_key,)
 _default_bit_length_per_op = 32.0
+_console_validation_history_max_points = 512
 _reference_curve_default_maximum_cost = 10_000_000_000
 _reference_curve_initial_curriculum_count = 16
 _component_count = 1
@@ -874,6 +875,7 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
         _extract.mapping(run.training_summary.get("training_run"), "training_run")
     )
     history = training_run.validation_history
+    console_history = _sample_console_validation_history(history)
     final = history[-1]
     record: dict[str, object] = {
         "status": training_run.status,
@@ -884,9 +886,20 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
         "final_validation_step": final.step,
         "final_validation_check": final.validation_check,
         "protocol": training_run.protocol.to_record(),
-        "validation_history": [point.to_record() for point in history],
+        "validation_history": [
+            _console_validation_history_point_record(point)
+            for point in console_history
+        ],
+        "validation_history_sample_count": len(console_history),
+        "validation_history_total_count": len(history),
         "artifacts": _training_artifact_references(run),
     }
+    validation_loss_reference = _training_validation_loss_reference(
+        training_summary=run.training_summary,
+        history=history,
+    )
+    if validation_loss_reference is not None:
+        record["validation_loss_reference"] = validation_loss_reference
     if training_run.training_compute is not None:
         record["training_compute"] = training_run.training_compute
     throughput = run.training_summary.get("throughput")
@@ -903,6 +916,75 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
             cast(Mapping[str, object], training_curriculum)
         )
     return record
+
+
+def _sample_console_validation_history(
+    history: Sequence[Any],
+) -> tuple[Any, ...]:
+    if len(history) <= _console_validation_history_max_points:
+        return tuple(history)
+    if _console_validation_history_max_points < 4:
+        return (history[0], history[-1])
+
+    bucket_count = max(1, (_console_validation_history_max_points - 2) // 2)
+    interior = history[1:-1]
+    selected: dict[tuple[int, int], Any] = {
+        _validation_history_point_key(history[0]): history[0],
+        _validation_history_point_key(history[-1]): history[-1],
+    }
+    for bucket_index in range(bucket_count):
+        start = bucket_index * len(interior) // bucket_count
+        end = (bucket_index + 1) * len(interior) // bucket_count
+        bucket = interior[start:end]
+        if not bucket:
+            continue
+        low = min(bucket, key=lambda point: (point.validation_loss, point.step))
+        high = max(bucket, key=lambda point: (point.validation_loss, -point.step))
+        selected[_validation_history_point_key(low)] = low
+        selected[_validation_history_point_key(high)] = high
+    return tuple(
+        selected[key]
+        for key in sorted(selected, key=lambda key: (key[0], key[1]))
+    )
+
+
+def _console_validation_history_point_record(point: Any) -> dict[str, object]:
+    record = {
+        "step": point.step,
+        "validation_check": point.validation_check,
+        "validation_loss": point.validation_loss,
+        "stale_checks": point.stale_checks,
+    }
+    learning_rates = getattr(point, "learning_rates", ())
+    if learning_rates:
+        record["learning_rates"] = list(learning_rates)
+    return record
+
+
+def _validation_history_point_key(point: Any) -> tuple[int, int]:
+    return (int(point.step), int(point.validation_check))
+
+
+def _training_validation_loss_reference(
+    *,
+    training_summary: Mapping[str, object],
+    history: Sequence[Any],
+) -> float | None:
+    estimate = training_summary.get("training_estimate")
+    if isinstance(estimate, Mapping):
+        estimate_record = cast(Mapping[str, object], estimate)
+        chance_mass = estimate_record.get("chance_mass")
+        if isinstance(chance_mass, int | float) and 0.0 < float(chance_mass) <= 1.0:
+            return -math.log(float(chance_mass))
+    for point in reversed(history):
+        score_estimate = getattr(point, "score_estimate", None)
+        if not isinstance(score_estimate, Mapping):
+            continue
+        score_estimate_record = cast(Mapping[str, object], score_estimate)
+        chance_mass = score_estimate_record.get("chance_mass")
+        if isinstance(chance_mass, int | float) and 0.0 < float(chance_mass) <= 1.0:
+            return -math.log(float(chance_mass))
+    return None
 
 
 def _training_artifact_references(run: _BenchmarkRunRecord) -> list[dict[str, object]]:
@@ -1664,26 +1746,52 @@ def _integrated_model_compute_cost_from_points(
     architecture: ArchitectureManifest,
 ) -> float:
     return integrated_compute_cost(
-        tuple(
+        _compute_cost_points_from_sampled_competence(
+            points=points,
+            architecture=architecture,
+        )
+    )
+
+
+def _compute_cost_points_from_sampled_competence(
+    *,
+    points: tuple[dict[str, object], ...],
+    architecture: ArchitectureManifest,
+) -> tuple[ComputeCostPoint, ...]:
+    ordered = sorted(points, key=lambda point: _point_complexity(point))
+    cursor = 0.0
+    cost_points: list[ComputeCostPoint] = []
+    for point in ordered:
+        complexity = _point_complexity(point)
+        minimum = _optional_nonnegative_number(
+            point.get("complexity_minimum"),
+            "compute_cost_point.complexity_minimum",
+        )
+        maximum = _optional_nonnegative_number(
+            point.get("complexity_maximum"),
+            "compute_cost_point.complexity_maximum",
+        )
+        if minimum is None:
+            minimum = cursor
+        if maximum is None:
+            maximum = complexity
+        if maximum <= minimum:
+            minimum = cursor
+            maximum = complexity
+        cost_points.append(
             ComputeCostPoint(
-                complexity=_point_complexity(point),
+                complexity=complexity,
                 compute_per_sample=_point_inference_compute(
                     point,
                     architecture=architecture,
                 ),
                 bit_length_per_op=_default_bit_length_per_op,
-                complexity_minimum=_optional_nonnegative_number(
-                    point.get("complexity_minimum"),
-                    "compute_cost_point.complexity_minimum",
-                ),
-                complexity_maximum=_optional_nonnegative_number(
-                    point.get("complexity_maximum"),
-                    "compute_cost_point.complexity_maximum",
-                ),
+                complexity_minimum=minimum,
+                complexity_maximum=maximum,
             )
-            for point in points
         )
-    )
+        cursor = max(cursor, maximum)
+    return tuple(cost_points)
 
 
 def _point_inference_compute(
@@ -2972,6 +3080,21 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
         _as_nonnegative_number(
             record.get("training_compute"),
             _field_path(prefix, "training_compute"),
+        )
+    if "validation_loss_reference" in record:
+        _as_nonnegative_number(
+            record.get("validation_loss_reference"),
+            _field_path(prefix, "validation_loss_reference"),
+        )
+    if "validation_history_sample_count" in record:
+        _as_positive_int(
+            record.get("validation_history_sample_count"),
+            _field_path(prefix, "validation_history_sample_count"),
+        )
+    if "validation_history_total_count" in record:
+        _as_positive_int(
+            record.get("validation_history_total_count"),
+            _field_path(prefix, "validation_history_total_count"),
         )
     protocol = _extract.mapping(record.get("protocol"), _field_path(prefix, "protocol"))
     protocol_path = _field_path(prefix, "protocol")

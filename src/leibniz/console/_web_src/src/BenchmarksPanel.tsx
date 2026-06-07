@@ -69,6 +69,7 @@ type ValidationHistoryPoint = {
   stale_checks?: number;
   step: number;
   validation_loss: number;
+  validation_loss_reference?: number;
 };
 
 const modelValidationPlotWidth = 560;
@@ -662,16 +663,23 @@ function ModelValidationChart({
 }) {
   const steps = points.map((point) => point.step);
   const losses = points.map((point) => point.validation_loss);
+  const references = points
+    .map((point) => point.validation_loss_reference)
+    .filter((value): value is number => value !== undefined && Number.isFinite(value) && value > 0);
   const xMin = Math.min(...steps);
   const xMax = Math.max(...steps, xMin + 1);
   const yMin = 0;
-  const yMax = Math.max(...losses, Number.EPSILON);
+  const yMax = references.length === 0
+    ? Math.max(...losses, Number.EPSILON)
+    : Math.max(...references);
   const x = (step: number) =>
     modelValidationPlotMargin.left +
     ((step - xMin) / (xMax - xMin)) * modelValidationPlotBodyWidth;
-  const y = (loss: number) =>
-    modelValidationPlotMargin.top +
-    (1 - (loss - yMin) / (yMax - yMin)) * modelValidationPlotBodyHeight;
+  const y = (loss: number) => {
+    const chartLoss = Math.max(yMin, Math.min(loss, yMax));
+    return modelValidationPlotMargin.top +
+      (1 - (chartLoss - yMin) / (yMax - yMin)) * modelValidationPlotBodyHeight;
+  };
   const line = points.map((point) => `${x(point.step)},${y(point.validation_loss)}`).join(' ');
   return (
     <div className="benchmark-model-validation-chart">
@@ -945,6 +953,7 @@ function trainingValidationHistory(run: RunResultRecord): ValidationHistoryPoint
       stale_checks: point.stale_checks,
       step: point.step,
       validation_loss: point.validation_loss,
+      validation_loss_reference: run.training_diagnostics?.validation_loss_reference,
     }),
   );
 }

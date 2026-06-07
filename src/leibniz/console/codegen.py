@@ -271,9 +271,12 @@ export type TrainingDiagnosticsRecord = {
   steps_run: number;
   validation_checks: number;
   final_validation_loss: number;
+  validation_loss_reference?: number;
   final_validation_step: number;
   final_validation_check: number;
   training_compute?: number;
+  validation_history_sample_count?: number;
+  validation_history_total_count?: number;
   protocol: TrainingProtocolRecord;
   validation_history: TrainingHistoryPointRecord[];
   artifacts: TrainingArtifactReferenceRecord[];
@@ -535,6 +538,9 @@ function parseTrainingDiagnostics(value: unknown, path: string): TrainingDiagnos
   ]);
   return withFields(record, {
     training_compute: optionalNumber(record.training_compute, `${path}.training_compute`, transportError),
+    validation_loss_reference: optionalNumber(record.validation_loss_reference, `${path}.validation_loss_reference`, transportError),
+    validation_history_sample_count: optionalNumber(record.validation_history_sample_count, `${path}.validation_history_sample_count`, transportError),
+    validation_history_total_count: optionalNumber(record.validation_history_total_count, `${path}.validation_history_total_count`, transportError),
     protocol: requireRecord(record.protocol, `${path}.protocol`, transportError) as TrainingProtocolRecord,
     validation_history: requireArray(record.validation_history, `${path}.validation_history`, transportError) as TrainingHistoryPointRecord[],
     artifacts: requireArray(record.artifacts, `${path}.artifacts`, transportError) as TrainingArtifactReferenceRecord[],

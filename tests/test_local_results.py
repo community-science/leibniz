@@ -1,5 +1,6 @@
 import math
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from textwrap import dedent
 from typing import Any, cast
@@ -29,6 +30,7 @@ from leibniz.model_operators import (
     architecture_with_input_shape,
     summarize_architecture_operators,
 )
+from leibniz.training_runs import TrainingHistoryPoint
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -236,6 +238,32 @@ def test_console_result_view_validates_training_diagnostics_records(tmp_path: Pa
         load_console_result_view(canonical_document_bytes(view))
 
 
+def test_console_validation_history_is_bounded_and_preserves_extrema() -> None:
+    history = tuple(
+        TrainingHistoryPoint(
+            step=index,
+            validation_check=index,
+            validation_loss=100.0 if index == 250 else float(index % 11),
+            stale_checks=0,
+        )
+        for index in range(1000)
+    )
+
+    sample_history = cast(
+        Callable[
+            [tuple[TrainingHistoryPoint, ...]],
+            tuple[TrainingHistoryPoint, ...],
+        ],
+        local_results._sample_console_validation_history,  # pyright: ignore[reportPrivateUsage]
+    )
+    sampled = sample_history(history)
+
+    assert len(sampled) <= 512
+    assert sampled[0] == history[0]
+    assert sampled[-1] == history[-1]
+    assert any(point.validation_loss == 100.0 for point in sampled)
+
+
 def test_console_result_view_validates_training_estimate_comparison(
     tmp_path: Path,
 ) -> None:
@@ -411,7 +439,11 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     history = cast(list[dict[str, object]], result["training_history"])
     assert history[0]["source_kind"] == "local-run"
     diagnostics = cast(dict[str, object], history[0]["training_diagnostics"])
-    assert cast(list[dict[str, object]], diagnostics["validation_history"])
+    assert math.isclose(cast(float, diagnostics["validation_loss_reference"]), math.log(10))
+    validation_history = cast(list[dict[str, object]], diagnostics["validation_history"])
+    assert validation_history
+    assert diagnostics["validation_history_sample_count"] == len(validation_history)
+    assert cast(int, diagnostics["validation_history_total_count"]) >= len(validation_history)
     inspections = cast(list[dict[str, object]], result["model_inspections"])
     assert len(inspections) == 1
     assert inspections[0]["source_path"] == history[0]["source_path"]
@@ -448,13 +480,11 @@ def test_integrated_model_cost_reconstructs_point_density_from_input_shape() -> 
         points=(
             {
                 "complexity": 1.0,
-                "complexity_minimum": 0.0,
-                "complexity_maximum": 1.0,
                 "input_shape": list(first_input_shape),
             },
             {
                 "complexity": 2.0,
-                "complexity_minimum": 1.0,
+                "complexity_minimum": 2.0,
                 "complexity_maximum": 2.0,
                 "input_shape": list(second_input_shape),
             },

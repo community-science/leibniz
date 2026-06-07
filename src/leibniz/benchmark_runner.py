@@ -134,7 +134,6 @@ _legal_uncapped_training_stage_stop_reasons = frozenset(
     {"validation-plateau", "capacity-limited"}
 )
 _minimum_plateau_lr_reductions = 3
-_minimum_plateau_refinement_windows = 3
 _full_variation_extent = 1.0
 
 
@@ -988,7 +987,7 @@ def run_benchmark(
         "convergence_min_delta": float(plan.convergence_min_delta),
         "tensor_runtime": "pytorch",
         "tensor_device": training_result.training_run.protocol.tensor_device,
-        "training_run": training_result.training_run.to_record(),
+        "training_run": _training_run_artifact_record(training_result.training_run),
         "throughput": training_result.throughput,
         "architecture": model_inspection.architecture.to_record(),
         "cost_summary": _training_cost_summary(
@@ -2738,7 +2737,6 @@ def _train_until_convergence(
     stale_checks = 0
     stop_reason = "training-stopped"
     plateau_window_start_index = 0
-    plateau_refinement_checks = 0
     max_validation_inference_compute: int | None = None
     latest_training_compute_per_sample: int | None = None
     replay_frontier_points: dict[
@@ -2747,7 +2745,7 @@ def _train_until_convergence(
     ] = {}
 
     def append_validation(*, step: int, check: int) -> None:
-        nonlocal best_score, max_validation_inference_compute, plateau_refinement_checks
+        nonlocal best_score, max_validation_inference_compute
         nonlocal stale_checks
         validation_started = time.perf_counter()
         batch = validation_batch(check)
@@ -2808,7 +2806,6 @@ def _train_until_convergence(
         )
         if plateau_signal > best_score + min_delta:
             best_score = plateau_signal
-            plateau_refinement_checks = 0
             stale_checks = 0
         else:
             stale_checks += 1
@@ -2995,13 +2992,6 @@ def _train_until_convergence(
                 break
             if scheduler is not None and not scheduler.has_exhausted_plateau_response():
                 continue
-            if scheduler is None:
-                required_refinement_checks = (
-                    _minimum_plateau_refinement_windows * patience
-                )
-                if plateau_refinement_checks < required_refinement_checks:
-                    plateau_refinement_checks += 1
-                    continue
             with phase_timings.span("validation_plateau_handler"):
                 advanced_frontier = (
                     on_plateau is not None and on_plateau(tuple(validation_history))
@@ -3012,7 +3002,6 @@ def _train_until_convergence(
                     validation_history[-1],
                     chance_mass=_chance_accepted_mass(outcome_ids),
                 )
-                plateau_refinement_checks = 0
                 stale_checks = 0
                 continue
             stop_reason = "validation-plateau"
@@ -3427,6 +3416,7 @@ def _validation_competence_point_from_sampled_record(
             point.get("complexity_maximum"),
             "score_estimate.complexity_maximum",
         ),
+        input_shape=_optional_point_input_shape(point),
     )
 
 
@@ -3672,7 +3662,7 @@ def _training_progress_record(
         "convergence_min_delta": float(plan.convergence_min_delta),
         "tensor_runtime": "pytorch",
         "tensor_device": training_run.protocol.tensor_device,
-        "training_run": training_run.to_record(),
+        "training_run": _training_run_artifact_record(training_run),
         "throughput": throughput,
         "evaluation_curriculum": dict(evaluation_curriculum),
         "training_curriculum": dict(training_curriculum),
@@ -3697,6 +3687,29 @@ def _training_progress_record(
     record["sampled_competence"] = dict(
         cast(Mapping[str, object], training_estimate["sampled_competence"])
     )
+    return record
+
+
+def _training_run_artifact_record(training_run: TrainingRunRecord) -> dict[str, object]:
+    record = training_run.to_record()
+    record["validation_history"] = [
+        _training_history_artifact_point_record(point)
+        for point in training_run.validation_history
+    ]
+    return record
+
+
+def _training_history_artifact_point_record(
+    point: TrainingHistoryPoint,
+) -> dict[str, object]:
+    record: dict[str, object] = {
+        "step": point.step,
+        "validation_check": point.validation_check,
+        "validation_loss": point.validation_loss,
+        "stale_checks": point.stale_checks,
+    }
+    if point.learning_rates:
+        record["learning_rates"] = list(point.learning_rates)
     return record
 
 
@@ -3744,6 +3757,7 @@ def _training_estimate_record(
         "seed": seed,
         "sample_count": sample_count,
         "mean_accepted_mass": mean_accepted_mass,
+        "chance_mass": score_estimate.get("chance_mass"),
         "score": _training_score_estimate_score(score_estimate),
         "validation_check": latest.validation_check,
         "step": latest.step,
@@ -3835,7 +3849,9 @@ def _write_model_checkpoint_artifact(
         training_provenance=(
             ArtifactReference(
                 kind="training-run",
-                record_digest=ContentDigest.from_value(training_run.to_record()),
+                record_digest=ContentDigest.from_value(
+                    _training_run_artifact_record(training_run)
+                ),
             ),
         ),
     )

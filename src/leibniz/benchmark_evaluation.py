@@ -273,6 +273,7 @@ def sampled_competence_frontier_score(
             area += lower - cursor
         measured_lower = max(lower, cursor)
         if upper <= measured_lower:
+            cursor = max(cursor, lower, upper)
             continue
         area += (upper - measured_lower) * _above_chance_competence(
             point.accepted_mass,
@@ -357,19 +358,10 @@ def validation_competence_frontier_advances(
 ) -> bool:
     """Return whether a measured frontier point advances the benchmark ladder."""
 
-    if frontier_point.accepted_mass <= chance_mass + 1e-12:
-        return False
-    previous_score = validation_competence_frontier_score(
-        previous_frontier_points,
+    return _above_chance_competence(
+        frontier_point.accepted_mass,
         chance_mass=chance_mass,
-    )
-    next_score = validation_competence_frontier_score(
-        (*previous_frontier_points, frontier_point),
-        chance_mass=chance_mass,
-    )
-    if next_score <= 0.0:
-        return False
-    return next_score > previous_score
+    ) > 0.0
 
 
 def _above_chance_competence(score: float, *, chance_mass: float) -> float:

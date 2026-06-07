@@ -1410,6 +1410,45 @@ def test_training_stage_records_current_validation_loss_without_global_best(
     assert "best_validation_loss" not in point.to_record()
 
 
+def test_training_run_artifact_record_omits_historical_score_estimates() -> None:
+    training_run = cast(Any, benchmark_runner)._training_run_record(
+        seed=101,
+        training_batch_target=512,
+        max_steps=None,
+        learning_rate=None,
+        optimizer_name="loss-search",
+        schedule_name="none",
+        gate_check_interval=32,
+        gate_decision_rule="score-estimate-plateau",
+        rung_competence_threshold=0.5,
+        convergence_patience=6,
+        convergence_min_delta=0.001,
+        tensor_device="cpu",
+        validation_history=(
+            TrainingHistoryPoint(
+                step=32,
+                validation_check=1,
+                validation_loss=1.0,
+                stale_checks=0,
+                score_estimate=_score_estimate(
+                    check=1,
+                    step=32,
+                    score=1.0,
+                    complexity=1.0,
+                    accepted_mass=1.0,
+                ),
+            ),
+        ),
+        stop_reason="validation-plateau",
+        training_compute=10.0,
+    )
+
+    record = cast(Any, benchmark_runner)._training_run_artifact_record(training_run)
+
+    assert "score_estimate" not in record["validation_history"][0]
+    assert record["validation_history"][0]["validation_loss"] == 1.0
+
+
 def test_training_curriculum_is_not_step_indexed() -> None:
     source = Path(benchmark_runner.__file__).read_text(encoding="utf-8")
 
@@ -1424,17 +1463,22 @@ def test_training_curriculum_is_not_step_indexed() -> None:
     assert "initial_evaluation_rung" in source
 
 
-def test_training_curriculum_only_advances_on_improved_frontier_competence() -> None:
+def test_training_curriculum_advances_on_current_rung_competence() -> None:
     advances = cast(Any, benchmark_runner)._frontier_plateau_advances
     chance_mass = 0.1
 
     assert advances(
-        frontier_point=ValidationCompetencePoint(complexity=10.0, accepted_mass=1.0),
+        frontier_point=ValidationCompetencePoint(
+            complexity=0.0,
+            accepted_mass=1.0,
+            complexity_minimum=0.0,
+            complexity_maximum=0.0,
+        ),
         previous_frontier_points=(),
         chance_mass=chance_mass,
     )
     assert advances(
-        frontier_point=ValidationCompetencePoint(complexity=20.0, accepted_mass=1.0),
+        frontier_point=ValidationCompetencePoint(complexity=10.0, accepted_mass=1.0),
         previous_frontier_points=(
             ValidationCompetencePoint(complexity=10.0, accepted_mass=1.0),
         ),
@@ -1575,6 +1619,7 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
         accepted_mass=1.0,
         sample_count=64,
         seed=202,
+        input_shape=(1, 16, 16),
     )
     gate_prior_points: list[tuple[ValidationCompetencePoint, ...]] = []
 
@@ -1699,6 +1744,7 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
     assert len(replay_refreshed_points) == 1
     assert replay_refreshed_points[0].sample_count == replay_batch.sample_count
     assert replay_refreshed_points[0].seed == replay_batch.seed
+    assert replay_refreshed_points[0].input_shape == tuple(fields.shape[1:])
     assert replay_refreshed_points[0].complexity_minimum is not None
     assert replay_refreshed_points[0].complexity_maximum is not None
     assert math.isclose(
@@ -1724,6 +1770,7 @@ def test_training_replay_frontier_points_are_sample_weighted_by_interval() -> No
             seed=101,
             complexity_minimum=4.0,
             complexity_maximum=5.0,
+            input_shape=(1, 16, 16),
         ),
     )
     cast(Any, benchmark_runner)._accumulate_replay_frontier_point(
@@ -1735,6 +1782,7 @@ def test_training_replay_frontier_points_are_sample_weighted_by_interval() -> No
             seed=202,
             complexity_minimum=4.0,
             complexity_maximum=5.0,
+            input_shape=(1, 20, 20),
         ),
     )
 
@@ -1743,6 +1791,7 @@ def test_training_replay_frontier_points_are_sample_weighted_by_interval() -> No
     assert rolling_point.seed == 202
     assert rolling_point.complexity_minimum == 4.0
     assert rolling_point.complexity_maximum == 5.0
+    assert rolling_point.input_shape == (1, 20, 20)
     assert math.isclose(rolling_point.accepted_mass, 0.625)
 
 
