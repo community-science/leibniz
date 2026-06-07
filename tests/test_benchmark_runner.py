@@ -467,11 +467,11 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     )
     assert evaluation_bundle.model_inspection.cost_summary.parameter_count == 50
     assert evaluation_bundle.model_inspection.cost_summary.inference_compute == 656
-    evaluation_throughput = cast(
+    checkpoint_evaluation_throughput = cast(
         dict[str, object],
         evaluation_bundle.throughput["checkpoint_evaluation"],
     )
-    phase_timing = cast(dict[str, object], evaluation_throughput["phase_timing"])
+    phase_timing = cast(dict[str, object], checkpoint_evaluation_throughput["phase_timing"])
     phases = cast(dict[str, object], phase_timing["phases"])
     score_generation = cast(
         dict[str, object],
@@ -492,8 +492,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         float,
         dynamic_counters["physical_sample_count"],
     )
-    assert isinstance(evaluation_throughput["max_inference_compute"], int)
-    assert evaluation_throughput["max_inference_compute"] >= 0
+    assert isinstance(checkpoint_evaluation_throughput["max_inference_compute"], int)
+    assert checkpoint_evaluation_throughput["max_inference_compute"] >= 0
     assert (
         evaluation_bundle.model_checkpoint["manifest_digest"]
         == str(evaluation_bundle.model_manifest.digest)
@@ -597,7 +597,12 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         cast(Any, benchmark_runner)._default_evaluation_frontier_lookahead_rungs,
     )
     assert evaluation_frontier_index >= 0
-    assert len(curriculum_rungs) == evaluation_frontier_index + 1 + evaluation_lookahead
+    requested_evaluation_rung_count = evaluation_frontier_index + 1 + evaluation_lookahead
+    if checkpoint_evaluation_throughput["capacity_limited"] is True:
+        assert evaluation_frontier_index + 1 <= len(curriculum_rungs)
+        assert len(curriculum_rungs) <= requested_evaluation_rung_count
+    else:
+        assert len(curriculum_rungs) == requested_evaluation_rung_count
     assert [rung["index"] for rung in curriculum_rungs] == list(range(len(curriculum_rungs)))
     assert {
         cast(str, rung["complexity_axis"])
