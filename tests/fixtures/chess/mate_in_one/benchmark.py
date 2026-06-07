@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -146,7 +145,7 @@ class Generator:
         *,
         request: ComplexityRequest,
     ) -> ComplexityCandidate | None:
-        """Return the exact legal-move-cardinality complexity class for this fixture."""
+        """Return the exact sample cardinality complexity class for this fixture."""
 
         measure = _complexity_value()
         if not request.contains(measure):
@@ -156,10 +155,12 @@ class Generator:
                 minimum=measure.value,
                 maximum=measure.value,
             ),
-            cardinality=len(_valid_moves),
+            cardinality=1,
             metadata={
-                "kind": "chess-legal-move-cardinality",
+                "kind": "chess-sample-cardinality",
                 "fen": _fen,
+                "sample_cardinality": 1,
+                "valid_move_count": len(_valid_moves),
             },
         )
 
@@ -168,7 +169,7 @@ class Generator:
         *,
         request: ComplexityRequest,
     ) -> tuple[ComplexityCandidate, ...]:
-        """Return exact legal-move-cardinality candidates in a complexity band."""
+        """Return exact sample cardinality candidates in a complexity band."""
 
         complexity_class = self.complexity_candidate_for_request(request=request)
         if complexity_class is None:
@@ -181,7 +182,7 @@ class Generator:
         start_index: int,
         count: int,
     ) -> tuple[ComplexityCandidate, ...]:
-        """Return the fixture's exact legal-move-cardinality schedule."""
+        """Return the fixture's exact sample cardinality schedule."""
 
         if start_index < 0:
             raise ObservationGenerationError("start_index must be non-negative")
@@ -195,10 +196,12 @@ class Generator:
                     minimum=_complexity_value().value,
                     maximum=_complexity_value().value,
                 ),
-                cardinality=len(_valid_moves),
+                cardinality=1,
                 metadata={
-                    "kind": "chess-legal-move-cardinality",
+                    "kind": "chess-sample-cardinality",
                     "fen": _fen,
+                    "sample_cardinality": 1,
+                    "valid_move_count": len(_valid_moves),
                 },
             ),
         )
@@ -218,7 +221,7 @@ def _manifest() -> BenchmarkManifest:
 
 def _complexity_value() -> ComplexityValue:
     return ComplexityValue(
-        value=math.log2(len(_valid_moves)),
+        value=0.0,
     )
 
 
@@ -233,8 +236,8 @@ def _latent_coordinates() -> tuple[dict[str, object], ...]:
         },
         {
             "name": "benchmarks.chess.position.valid-move-count",
-            "role": "complexity",
-            "degree_measure": {"kind": "discrete-log2-count", "count": 1.0},
+            "role": "content",
+            "degree_measure": {"kind": "finite-set", "count": len(_valid_moves)},
             "multiplicity": 1,
             "values": len(_valid_moves),
         },

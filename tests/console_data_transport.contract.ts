@@ -160,14 +160,20 @@ assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind'
 assertEqual(benchmarkTask?.batches.length, 3, 'benchmark batch count');
 assertEqual(
   benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.sample_count}`).join('|'),
-  'complexity-window:10|complexity-window:40|complexity-window:50',
+  'complexity-window:50|complexity-window:50|complexity-window:50',
   'generated benchmark batches',
 );
 const generatedSamples = benchmarkTask?.batches[0]?.samples ?? [];
+const generatedComponentIndices = generatedSamples.map(requiredComponentIndex);
 assertEqual(
-  digitCounts(generatedSamples.map(requiredComponentIndex)).join(','),
-  '1,1,1,1,1,1,1,1,1,1',
-  'canonical digit counts',
+  generatedComponentIndices.length,
+  50,
+  'generated digit sample count',
+);
+assertEqual(
+  new Set(generatedComponentIndices.map((sample) => sample.component_index)).size,
+  10,
+  'generated digit label coverage',
 );
 assertEqual(
   new Set(generatedSamples.map((sample) => requiredFieldShape(sample).join('x'))).size,
@@ -258,8 +264,13 @@ if (chessSample === undefined) {
   throw new Error('expected chess generated sample');
 }
 assertEqual(
-  chessSample.available_outcome_ids?.length,
   chessBenchmarkTask.batches[0]?.complexity_cardinalities?.[0],
+  1,
+  'chess sample cardinality',
+);
+assertEqual(
+  chessSample.available_outcome_ids?.length,
+  2,
   'chess sample legal move count',
 );
 assertEqual(
@@ -353,16 +364,6 @@ function assertDataError(callback: () => void, expectedMessage: string) {
   }
 
   throw new Error(`expected console data transport error: ${expectedMessage}`);
-}
-
-function digitCounts(samples: { component_index: number }[]): number[] {
-  const counts = new Map<number, number>();
-  for (const sample of samples) {
-    counts.set(sample.component_index, (counts.get(sample.component_index) ?? 0) + 1);
-  }
-  return Array.from(counts.entries())
-    .sort(([left], [right]) => left - right)
-    .map(([, count]) => count);
 }
 
 function assignmentLabel(value: unknown): string {

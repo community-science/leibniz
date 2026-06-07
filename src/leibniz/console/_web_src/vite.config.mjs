@@ -11,7 +11,7 @@ const resolvedConsoleDataModuleId = `\0${consoleDataModuleId}`;
 const consoleDataUpdateEvent = 'leibniz-console-data:update';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const defaultResultRoot = 'results';
-const consoleDataPayloadMaxBuffer = 64 * 1024 * 1024;
+export const consoleDataPayloadMaxBuffer = 64 * 1024 * 1024;
 const consoleDataRefreshDebounceMs = 250;
 const consoleDataCachePath = resolve(
   repositoryRoot,

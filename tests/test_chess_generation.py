@@ -19,6 +19,7 @@ _repository_root = Path(__file__).parents[1]
 _benchmark_parent = _repository_root / "src" / "leibniz" / "benchmarks"
 _chess_benchmark_root = _benchmark_parent / "chess"
 _expected_legal_move_cardinalities = tuple(range(2, 34))
+_expected_sample_cardinalities = tuple(range(1, 33))
 _minimum_chess_fen = "8/8/8/8/8/8/2Q5/krK5 w - - 0 1"
 
 
@@ -67,23 +68,24 @@ def test_chess_generator_returns_complexity_valued_samples_without_fields() -> N
     assert sample_set.sample_count == 3
     assert not sample_set.includes_fields
     sample = sample_set.samples[0]
-    legal_move_count = _legal_move_count(sample)
+    legal_move_count = _sample_legal_move_count(sample)
     assert sample_set.outcomes == (sample.outcome_id,) * 3
-    assert sample_set.complexities == (math.log2(legal_move_count),) * 3
+    assert sample_set.complexities == (0.0,) * 3
     assert sample.complexity_value is not None
     assert sample.complexity_value.measure_id == ComplexityRequest(
-        minimum=1.0,
-        maximum=1.0,
+        minimum=0.0,
+        maximum=0.0,
     ).measure_id
-    assert sample.complexity_value.value == math.log2(legal_move_count)
+    assert sample.complexity_value.value == 0.0
     assert sample.target_distribution is not None
     assert sample.outcome_id in sample.target_distribution
     assert sum(sample.target_distribution.values()) == 1.0
     assert len(sample.available_outcome_ids) == legal_move_count
     assert sample.outcome_id in sample.available_outcome_ids
-    assert sample.latent_coordinates[0]["values"] == _minimum_chess_fen
-    assert sample.latent_coordinates[1]["values"] == legal_move_count
-    assert len(cast(list[object], sample.latent_coordinates[2]["values"])) == legal_move_count
+    assert sample.latent_coordinates[0]["values"] == 1
+    assert sample.latent_coordinates[1]["values"] == _minimum_chess_fen
+    assert sample.latent_coordinates[2]["values"] == legal_move_count
+    assert len(cast(list[object], sample.latent_coordinates[3]["values"])) == legal_move_count
     with pytest.raises(ObservationGenerationError, match="does not include generated field"):
         sample.require_field()
 
@@ -100,10 +102,10 @@ def test_chess_sample_record_does_not_invent_image_surface_fields() -> None:
     assert record["outcome_id"] in target_outcomes
     available_outcomes = cast(list[str], record["available_outcome_ids"])
     assert record["outcome_id"] in available_outcomes
-    assert len(available_outcomes) == _legal_move_count_complexity_cardinality(record)
+    assert len(available_outcomes) == _legal_move_count(record)
     assert record["complexity_value"] == {
-        "measure_id": ComplexityRequest(minimum=1.0, maximum=1.0).measure_id,
-        "value": _legal_move_count_complexity(record),
+        "measure_id": ComplexityRequest(minimum=0.0, maximum=0.0).measure_id,
+        "value": math.log2(_sample_space_cardinality(record)),
     }
     assert "materialization_plan" not in record
     assert "width" not in record
@@ -165,26 +167,29 @@ def test_chess_complexity_request_accepts_matching_interval() -> None:
     assert all(sample.complexity_value is not None for sample in sample_set.samples)
 
 
-def test_chess_complexity_candidates_are_legal_move_cardinalities() -> None:
+def test_chess_complexity_candidates_are_sample_space_cardinalities() -> None:
     generator = load_generator(_chess_benchmark_root)
-    request = ComplexityRequest(minimum=1.0, maximum=6.0)
+    request = ComplexityRequest(minimum=0.0, maximum=5.0)
 
     candidates = tuple(generator.complexity_candidates_for_request(request=request))
 
     cardinalities = tuple(candidate.cardinality for candidate in candidates)
-    assert cardinalities == _expected_legal_move_cardinalities
+    assert cardinalities == _expected_sample_cardinalities
     for candidate in candidates:
         assert candidate.cardinality is not None
         assert candidate.complexity == math.log2(candidate.cardinality)
-        assert candidate.metadata["kind"] == "chess-legal-move-cardinality"
-        assert candidate.metadata["legal_move_count"] == candidate.cardinality
-        representative = cast(dict[str, object], candidate.metadata["representative"])
-        assert representative["kind"] == "chess-mate-in-one-cardinality-representative"
-        assert representative["legal_move_count"] == candidate.cardinality
-        assert representative["target_policy"] == "mate-in-one"
+        assert candidate.metadata["kind"] == "chess-sample-space-cardinality"
+        assert candidate.metadata["sample_cardinality"] == candidate.cardinality
+        assert candidate.metadata["target_policy"] == "mate-in-one"
+        assert len(cast(list[object], candidate.metadata["representatives"])) == (
+            candidate.cardinality
+        )
+        assert len(cast(list[object], candidate.metadata["legal_move_counts"])) == (
+            candidate.cardinality
+        )
 
 
-def test_chess_complexity_curriculum_uses_supported_legal_move_counts() -> None:
+def test_chess_complexity_curriculum_uses_supported_sample_cardinalities() -> None:
     generator = load_generator(_chess_benchmark_root)
 
     candidates = tuple(
@@ -192,7 +197,7 @@ def test_chess_complexity_curriculum_uses_supported_legal_move_counts() -> None:
     )
 
     cardinalities = tuple(candidate.cardinality for candidate in candidates)
-    assert cardinalities == _expected_legal_move_cardinalities[:5]
+    assert cardinalities == _expected_sample_cardinalities[:5]
     for candidate in candidates:
         assert candidate.cardinality is not None
         assert math.isclose(candidate.complexity, math.log2(candidate.cardinality))
@@ -230,32 +235,74 @@ def test_chess_representative_ladder_declares_piece_coverage() -> None:
     )
 
     assert tuple(candidate.cardinality for candidate in candidates) == (
-        _expected_legal_move_cardinalities
+        _expected_sample_cardinalities
     )
     legal_piece_symbols = {
         symbol
         for candidate in candidates
+        for representative in cast(list[dict[str, object]], candidate.metadata["representatives"])
         for symbol in cast(
             list[str],
-            cast(dict[str, object], candidate.metadata["representative"])[
-                "legal_move_piece_symbols"
-            ],
+            representative["legal_move_piece_symbols"],
         )
     }
     mate_piece_symbols = {
         symbol
         for candidate in candidates
+        for representative in cast(list[dict[str, object]], candidate.metadata["representatives"])
         for symbol in cast(
             list[str],
-            cast(dict[str, object], candidate.metadata["representative"])[
-                "mate_move_piece_symbols"
-            ],
+            representative["mate_move_piece_symbols"],
         )
     }
 
     assert {"B", "K", "N", "Q", "R"} <= legal_piece_symbols
     assert "Q" in mate_piece_symbols
     assert mate_piece_symbols != {"Q"}
+
+
+def test_chess_representative_analysis_exposes_deterministic_quality_flags() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    candidates = tuple(
+        generator.complexity_curriculum_candidates(
+            start_index=0,
+            count=len(_expected_legal_move_cardinalities),
+        )
+    )
+
+    flags_by_legal_move_count = {
+        representative["legal_move_count"]: frozenset(
+            flag
+            for flag in cast(
+                list[str],
+                cast(dict[str, object], representative["analysis"])["quality_flags"],
+            )
+        )
+        for candidate in candidates
+        for representative in cast(
+            list[dict[str, object]],
+            candidate.metadata["representatives"],
+        )
+    }
+
+    assert flags_by_legal_move_count[2] == {
+        "minimal-material",
+        "queen-only-mate",
+        "single-mate-move",
+    }
+    assert "single-legal-piece-type" in flags_by_legal_move_count[15]
+    assert any(
+        "queen-only-mate" not in flags
+        for flags in flags_by_legal_move_count.values()
+    )
+    assert (
+        sum("minimal-material" in flags for flags in flags_by_legal_move_count.values())
+        >= 16
+    )
+    assert (
+        sum("queen-only-mate" in flags for flags in flags_by_legal_move_count.values())
+        >= 24
+    )
 
 
 def test_chess_generator_returns_board_tensors_and_move_targets() -> None:
@@ -320,13 +367,19 @@ def test_chess_console_preview_uses_board_images_and_text_metadata() -> None:
     assert batch["sample_count"] == 1
     sample = cast(list[dict[str, object]], batch["samples"])[0]
     assert sample["observable_state_id"] == f"fen:{_minimum_chess_fen}"
-    coverage_coordinate = cast(list[dict[str, object]], sample["latent_coordinates"])[4]
+    coverage_coordinate = cast(list[dict[str, object]], sample["latent_coordinates"])[5]
     assert coverage_coordinate["name"] == (
         "benchmarks.chess.position.representative-piece-coverage"
     )
     coverage_values = cast(dict[str, object], coverage_coordinate["values"])
     assert coverage_values["legal_move_piece_symbols"] == ["K", "Q"]
     assert coverage_values["mate_move_piece_symbols"] == ["Q"]
+    coverage_analysis = cast(dict[str, object], coverage_values["analysis"])
+    assert coverage_analysis["quality_flags"] == [
+        "minimal-material",
+        "single-mate-move",
+        "queen-only-mate",
+    ]
     image_data_url = cast(str, sample["image_data_url"])
     assert image_data_url.startswith("data:image/svg+xml;base64,")
     svg = _decode_svg_data_url(image_data_url)
@@ -349,21 +402,26 @@ def test_chess_console_preview_uses_board_images_and_text_metadata() -> None:
     assert "available_outcome_ids" in sample
 
 
-def _legal_move_count(sample: Any) -> int:
-    legal_count = cast(tuple[dict[str, object], ...], sample.latent_coordinates)[1]["values"]
-    assert isinstance(legal_count, int)
-    return legal_count
-
-
-def _legal_move_count_complexity(record: dict[str, object]) -> float:
-    return math.log2(_legal_move_count_complexity_cardinality(record))
-
-
-def _legal_move_count_complexity_cardinality(record: dict[str, object]) -> int:
+def _legal_move_count(record: dict[str, object]) -> int:
     coordinates = cast(list[dict[str, object]], record["latent_coordinates"])
-    legal_count = coordinates[1]["values"]
+    legal_count = coordinates[2]["values"]
     assert isinstance(legal_count, int)
     return legal_count
+
+
+def _sample_legal_move_count(sample: Any) -> int:
+    legal_count = cast(tuple[dict[str, object], ...], sample.latent_coordinates)[2][
+        "values"
+    ]
+    assert isinstance(legal_count, int)
+    return legal_count
+
+
+def _sample_space_cardinality(record: dict[str, object]) -> int:
+    coordinates = cast(list[dict[str, object]], record["latent_coordinates"])
+    cardinality = coordinates[0]["values"]
+    assert isinstance(cardinality, int)
+    return cardinality
 
 
 def _is_checkmate_after_move(board: chess.Board, move: chess.Move) -> bool:
