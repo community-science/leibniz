@@ -125,7 +125,7 @@ def test_training_sampled_competence_matches_measurement_scoring() -> None:
     batch = generator(
         seed=101,
         shape=8,
-        include_fields=False,
+        include_fields=True,
         complexity_request=request,
         runtime=runtime,
         outcome_ids=outcome_ids,
@@ -163,6 +163,7 @@ def test_training_sampled_competence_matches_measurement_scoring() -> None:
         "complexity_minimum",
         "difficulty_assumption",
         "kind",
+        "input_shape",
         "mean_accepted_mass",
         "mean_negative_log_score",
         "sample_count",
@@ -769,6 +770,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     points = cast(list[dict[str, object]], sampled_competence["points"])
     assert len(points) == len(curriculum_rungs)
     assert [point["sample_count"] for point in points] == [64] * len(curriculum_rungs)
+    assert all(isinstance(point["input_shape"], list) for point in points)
     assert [point["complexity"] for point in points] == [
         rung["complexity"] for rung in curriculum_rungs
     ]
@@ -937,18 +939,21 @@ def test_evaluation_frontier_requires_confidence_above_chance() -> None:
             mean_accepted_mass=0.20,
             sample_count=100,
             confidence_half_width=0.01,
+            input_shape=(1, 16, 16),
         ),
         rung_evidence(
             rung=SimpleNamespace(index=1),
             mean_accepted_mass=0.16,
             sample_count=100,
             confidence_half_width=0.08,
+            input_shape=(1, 16, 16),
         ),
         rung_evidence(
             rung=SimpleNamespace(index=2),
             mean_accepted_mass=0.18,
             sample_count=100,
             confidence_half_width=0.03,
+            input_shape=(1, 16, 16),
         ),
     )
 
@@ -974,6 +979,7 @@ def test_evaluation_curriculum_target_depends_only_on_evaluation_evidence() -> N
             mean_accepted_mass=0.20,
             sample_count=100,
             confidence_half_width=0.01,
+            input_shape=(1, 16, 16),
         ),
     )
 
@@ -985,6 +991,7 @@ def test_evaluation_curriculum_target_depends_only_on_evaluation_evidence() -> N
             mean_accepted_mass=0.20,
             sample_count=100,
             confidence_half_width=0.01,
+            input_shape=(1, 16, 16),
         )
         for index in range(9)
     )
@@ -1125,12 +1132,23 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     checkpoint_checks = [checkpoint["validation_check"] for checkpoint in checkpoints]
     assert checkpoint_checks == [0]
     assert all("evaluation_rung_count" not in checkpoint for checkpoint in checkpoints)
+    assert all("score_estimate" not in checkpoint for checkpoint in checkpoints)
+    assert all("score" in checkpoint for checkpoint in checkpoints)
+    assert all("architecture_manifest" not in checkpoint for checkpoint in checkpoints)
+    assert all("model_manifest" not in checkpoint for checkpoint in checkpoints)
     selected_checkpoint = cast(dict[str, object], training_summary["selected_model_checkpoint"])
     assert "evaluation_rung_count" not in selected_checkpoint
+    assert "score_estimate" not in selected_checkpoint
+    assert "selected_model_checkpoint_score_estimate" in training_summary
     assert all(
         (tmp_path / cast(str, checkpoint["path"])).is_file()
         for checkpoint in checkpoints
     )
+    checkpoint_record = load_object_document(
+        (tmp_path / cast(str, checkpoints[0]["record_path"])).read_bytes(),
+        description="checkpoint record",
+    )
+    assert "score_estimate" not in checkpoint_record
 
 
 def test_windowed_plateau_uses_current_rung_competence() -> None:
@@ -1403,6 +1421,45 @@ def test_training_stage_records_current_validation_loss_without_global_best(
     assert "best_validation_loss" not in point.to_record()
 
 
+def test_training_run_artifact_record_omits_historical_score_estimates() -> None:
+    training_run = cast(Any, benchmark_runner)._training_run_record(
+        seed=101,
+        training_batch_target=512,
+        max_steps=None,
+        learning_rate=None,
+        optimizer_name="loss-search",
+        schedule_name="none",
+        gate_check_interval=32,
+        gate_decision_rule="score-estimate-plateau",
+        rung_competence_threshold=0.5,
+        convergence_patience=6,
+        convergence_min_delta=0.001,
+        tensor_device="cpu",
+        validation_history=(
+            TrainingHistoryPoint(
+                step=32,
+                validation_check=1,
+                validation_loss=1.0,
+                stale_checks=0,
+                score_estimate=_score_estimate(
+                    check=1,
+                    step=32,
+                    score=1.0,
+                    complexity=1.0,
+                    accepted_mass=1.0,
+                ),
+            ),
+        ),
+        stop_reason="validation-plateau",
+        training_compute=10.0,
+    )
+
+    record = cast(Any, benchmark_runner)._training_run_artifact_record(training_run)
+
+    assert "score_estimate" not in record["validation_history"][0]
+    assert record["validation_history"][0]["validation_loss"] == 1.0
+
+
 def test_training_curriculum_is_not_step_indexed() -> None:
     source = Path(benchmark_runner.__file__).read_text(encoding="utf-8")
 
@@ -1417,17 +1474,22 @@ def test_training_curriculum_is_not_step_indexed() -> None:
     assert "initial_evaluation_rung" in source
 
 
-def test_training_curriculum_only_advances_on_improved_frontier_competence() -> None:
+def test_training_curriculum_advances_on_current_rung_competence() -> None:
     advances = cast(Any, benchmark_runner)._frontier_plateau_advances
     chance_mass = 0.1
 
     assert advances(
-        frontier_point=ValidationCompetencePoint(complexity=10.0, accepted_mass=1.0),
+        frontier_point=ValidationCompetencePoint(
+            complexity=0.0,
+            accepted_mass=1.0,
+            complexity_minimum=0.0,
+            complexity_maximum=0.0,
+        ),
         previous_frontier_points=(),
         chance_mass=chance_mass,
     )
     assert advances(
-        frontier_point=ValidationCompetencePoint(complexity=20.0, accepted_mass=1.0),
+        frontier_point=ValidationCompetencePoint(complexity=10.0, accepted_mass=1.0),
         previous_frontier_points=(
             ValidationCompetencePoint(complexity=10.0, accepted_mass=1.0),
         ),
@@ -1469,6 +1531,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
     batch = generator(
         shape=2,
         seed=101,
+        include_fields=True,
         complexity_request=ComplexityRequest(
             minimum=4.321928094887362,
             maximum=5.321928094887362,
@@ -1508,6 +1571,8 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
     assert points[0]["sample_count"] == 64
     assert points[0]["seed"] == 202
     assert points[0]["mean_accepted_mass"] == 1.0
+    assert "input_shape" not in points[0]
+    assert points[1]["input_shape"] == list(batch.samples[0].require_field().shape)
     assert math.isclose(
         cast(float, estimate["score"]),
         sampled_competence_frontier_score(
@@ -1565,6 +1630,7 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
         accepted_mass=1.0,
         sample_count=64,
         seed=202,
+        input_shape=(1, 16, 16),
     )
     gate_prior_points: list[tuple[ValidationCompetencePoint, ...]] = []
 
@@ -1689,6 +1755,7 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
     assert len(replay_refreshed_points) == 1
     assert replay_refreshed_points[0].sample_count == replay_batch.sample_count
     assert replay_refreshed_points[0].seed == replay_batch.seed
+    assert replay_refreshed_points[0].input_shape == tuple(fields.shape[1:])
     assert replay_refreshed_points[0].complexity_minimum is not None
     assert replay_refreshed_points[0].complexity_maximum is not None
     assert math.isclose(
@@ -1714,6 +1781,7 @@ def test_training_replay_frontier_points_are_sample_weighted_by_interval() -> No
             seed=101,
             complexity_minimum=4.0,
             complexity_maximum=5.0,
+            input_shape=(1, 16, 16),
         ),
     )
     cast(Any, benchmark_runner)._accumulate_replay_frontier_point(
@@ -1725,6 +1793,7 @@ def test_training_replay_frontier_points_are_sample_weighted_by_interval() -> No
             seed=202,
             complexity_minimum=4.0,
             complexity_maximum=5.0,
+            input_shape=(1, 20, 20),
         ),
     )
 
@@ -1733,6 +1802,7 @@ def test_training_replay_frontier_points_are_sample_weighted_by_interval() -> No
     assert rolling_point.seed == 202
     assert rolling_point.complexity_minimum == 4.0
     assert rolling_point.complexity_maximum == 5.0
+    assert rolling_point.input_shape == (1, 20, 20)
     assert math.isclose(rolling_point.accepted_mass, 0.625)
 
 
@@ -2066,7 +2136,7 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
     assert len(stage_result.validation_history) == 2
 
 
-def test_training_plateau_above_rung_competence_threshold_refines_before_advancing(
+def test_training_plateau_above_rung_competence_threshold_advances_frontier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_batch(_index: int) -> tuple[object, object]:
@@ -2128,10 +2198,11 @@ def test_training_plateau_above_rung_competence_threshold_refines_before_advanci
     def fake_batch_max_compute(**_kwargs: object) -> int:
         return 10
 
-    def fail_if_advancing(_history: object) -> bool:
-        raise AssertionError(
-            "frontier should not advance immediately at the trainability threshold"
-        )
+    plateau_history_lengths: list[int] = []
+
+    def advance_frontier(history: object) -> bool:
+        plateau_history_lengths.append(len(cast(tuple[object, ...], history)))
+        return True
 
     benchmark = load_digits_benchmark(_digits_benchmark_root)
     outcome_ids = tuple(
@@ -2178,11 +2249,12 @@ def test_training_plateau_above_rung_competence_threshold_refines_before_advanci
         training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
         validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         phase_timings=benchmark_runner.TimingCollector(),
-        on_plateau=fail_if_advancing,
+        on_plateau=advance_frontier,
     )
 
     assert stage_result.stop_reason == "max-steps"
     assert len(stage_result.validation_history) == 3
+    assert plateau_history_lengths == [2]
 
 
 def test_evaluation_curriculum_uses_benchmark_owned_complexity_schedule() -> None:
@@ -2619,7 +2691,10 @@ def _selected_checkpoint_artifact_path(training_summary_path: Path) -> Path:
         description="training summary",
     )
     checkpoint = cast(dict[str, object], training_summary["selected_model_checkpoint"])
-    return Path(cast(str, checkpoint["record_path"]))
+    path = Path(cast(str, checkpoint["record_path"]))
+    if path.parts[:1] == ("results",):
+        return training_summary_path.parents[2] / path.relative_to("results")
+    return path
 
 
 def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(

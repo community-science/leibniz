@@ -6,7 +6,7 @@ import importlib
 import math
 import os
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, cast
@@ -41,6 +41,10 @@ from leibniz.measurements import (
 from leibniz.model_inspection import (
     ModelInspectionRecord,
 )
+from leibniz.model_operators import (
+    architecture_with_input_shape,
+    summarize_architecture_operators,
+)
 from leibniz.observation_generation import ComplexityCandidate, ComplexityRequest
 from leibniz.records import RecordExtractor
 from leibniz.training_runs import TrainingRunRecord
@@ -73,8 +77,8 @@ _result_directories = (
 )
 _benchmark_cost_axis_key = "cost"
 _benchmark_cost_axis_keys = (_benchmark_cost_axis_key,)
-_cost_density_source_key = "inference_compute"
 _default_bit_length_per_op = 32.0
+_console_validation_history_max_points = 512
 _reference_curve_default_maximum_cost = 10_000_000_000
 _reference_curve_initial_curriculum_count = 16
 _component_count = 1
@@ -535,10 +539,7 @@ def _local_run_records(
                     "sampled_competence.mean_accepted_mass",
                 ),
                 cost_summary=cost_summary,
-                architecture=_extract.mapping(
-                    summary.model_inspection.get("architecture"),
-                    "model_inspection.architecture",
-                ),
+                architecture=summary.architecture_manifest.to_record(),
                 model_inspection=model_inspection,
                 model_inspection_digest=model_inspection_digest,
                 model_inspection_path=model_inspection_path,
@@ -874,6 +875,7 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
         _extract.mapping(run.training_summary.get("training_run"), "training_run")
     )
     history = training_run.validation_history
+    console_history = _sample_console_validation_history(history)
     final = history[-1]
     record: dict[str, object] = {
         "status": training_run.status,
@@ -884,9 +886,20 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
         "final_validation_step": final.step,
         "final_validation_check": final.validation_check,
         "protocol": training_run.protocol.to_record(),
-        "validation_history": [point.to_record() for point in history],
+        "validation_history": [
+            _console_validation_history_point_record(point)
+            for point in console_history
+        ],
+        "validation_history_sample_count": len(console_history),
+        "validation_history_total_count": len(history),
         "artifacts": _training_artifact_references(run),
     }
+    validation_loss_reference = _training_validation_loss_reference(
+        training_summary=run.training_summary,
+        history=history,
+    )
+    if validation_loss_reference is not None:
+        record["validation_loss_reference"] = validation_loss_reference
     if training_run.training_compute is not None:
         record["training_compute"] = training_run.training_compute
     throughput = run.training_summary.get("throughput")
@@ -903,6 +916,75 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
             cast(Mapping[str, object], training_curriculum)
         )
     return record
+
+
+def _sample_console_validation_history(
+    history: Sequence[Any],
+) -> tuple[Any, ...]:
+    if len(history) <= _console_validation_history_max_points:
+        return tuple(history)
+    if _console_validation_history_max_points < 4:
+        return (history[0], history[-1])
+
+    bucket_count = max(1, (_console_validation_history_max_points - 2) // 2)
+    interior = history[1:-1]
+    selected: dict[tuple[int, int], Any] = {
+        _validation_history_point_key(history[0]): history[0],
+        _validation_history_point_key(history[-1]): history[-1],
+    }
+    for bucket_index in range(bucket_count):
+        start = bucket_index * len(interior) // bucket_count
+        end = (bucket_index + 1) * len(interior) // bucket_count
+        bucket = interior[start:end]
+        if not bucket:
+            continue
+        low = min(bucket, key=lambda point: (point.validation_loss, point.step))
+        high = max(bucket, key=lambda point: (point.validation_loss, -point.step))
+        selected[_validation_history_point_key(low)] = low
+        selected[_validation_history_point_key(high)] = high
+    return tuple(
+        selected[key]
+        for key in sorted(selected, key=lambda key: (key[0], key[1]))
+    )
+
+
+def _console_validation_history_point_record(point: Any) -> dict[str, object]:
+    record = {
+        "step": point.step,
+        "validation_check": point.validation_check,
+        "validation_loss": point.validation_loss,
+        "stale_checks": point.stale_checks,
+    }
+    learning_rates = getattr(point, "learning_rates", ())
+    if learning_rates:
+        record["learning_rates"] = list(learning_rates)
+    return record
+
+
+def _validation_history_point_key(point: Any) -> tuple[int, int]:
+    return (int(point.step), int(point.validation_check))
+
+
+def _training_validation_loss_reference(
+    *,
+    training_summary: Mapping[str, object],
+    history: Sequence[Any],
+) -> float | None:
+    estimate = training_summary.get("training_estimate")
+    if isinstance(estimate, Mapping):
+        estimate_record = cast(Mapping[str, object], estimate)
+        chance_mass = estimate_record.get("chance_mass")
+        if isinstance(chance_mass, int | float) and 0.0 < float(chance_mass) <= 1.0:
+            return -math.log(float(chance_mass))
+    for point in reversed(history):
+        score_estimate = getattr(point, "score_estimate", None)
+        if not isinstance(score_estimate, Mapping):
+            continue
+        score_estimate_record = cast(Mapping[str, object], score_estimate)
+        chance_mass = score_estimate_record.get("chance_mass")
+        if isinstance(chance_mass, int | float) and 0.0 < float(chance_mass) <= 1.0:
+            return -math.log(float(chance_mass))
+    return None
 
 
 def _training_artifact_references(run: _BenchmarkRunRecord) -> list[dict[str, object]]:
@@ -1428,13 +1510,14 @@ def _integrated_reference_curve_points(
         )
         cumulative_cost += _integrated_compute_cost_from_points(
             points=(
-                {
-                    "complexity": complexity,
-                    "complexity_minimum": previous_complexity,
-                    "complexity_maximum": complexity,
-                },
-            ),
-            compute_per_sample=cost_density,
+                ComputeCostPoint(
+                    complexity=complexity,
+                    compute_per_sample=cost_density,
+                    bit_length_per_op=_default_bit_length_per_op,
+                    complexity_minimum=previous_complexity,
+                    complexity_maximum=complexity,
+                ),
+            )
         )
         integrated_points.append(
             {
@@ -1575,14 +1658,12 @@ def _model_cost_summary(
     cost_summary.pop("parameter_count", None)
     cost_summary.pop("cost", None)
     cost_summary.pop("inference_compute", None)
-    inference_compute = _model_measured_inference_compute(
-        runs,
-    )
+    inference_compute = _model_measured_inference_compute(runs)
     if inference_compute is not None:
         cost_summary["inference_compute"] = inference_compute
-        cost_summary["cost"] = _integrated_compute_cost_from_points(
+        cost_summary["cost"] = _integrated_model_compute_cost_from_points(
             points=points,
-            compute_per_sample=inference_compute,
+            architecture=_run_architecture_manifest(best_run),
         )
     training_values = tuple(_run_training_compute_value(run) for run in runs)
     if any(value is None for value in training_values):
@@ -1604,6 +1685,10 @@ def _model_measured_inference_compute(
     if not values:
         return None
     return max(values)
+
+
+def _run_architecture_manifest(run: _BenchmarkRunRecord) -> ArchitectureManifest:
+    return ArchitectureManifest.from_record(run.architecture)
 
 
 def _throughput_max_inference_compute(
@@ -1636,9 +1721,9 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
         inference_compute = _optional_cost_value(cost_summary, "inference_compute")
         if inference_compute is not None:
             cost_summary["inference_compute"] = inference_compute
-            cost_summary["cost"] = _integrated_compute_cost_from_points(
+            cost_summary["cost"] = _integrated_model_compute_cost_from_points(
                 points=_run_competence_points(run),
-                compute_per_sample=inference_compute,
+                architecture=_run_architecture_manifest(run),
             )
     else:
         cost_summary.pop("inference_compute", None)
@@ -1650,27 +1735,107 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
 
 def _integrated_compute_cost_from_points(
     *,
+    points: tuple[ComputeCostPoint, ...],
+) -> float:
+    return integrated_compute_cost(points)
+
+
+def _integrated_model_compute_cost_from_points(
+    *,
     points: tuple[dict[str, object], ...],
-    compute_per_sample: float,
+    architecture: ArchitectureManifest,
 ) -> float:
     return integrated_compute_cost(
-        tuple(
-            ComputeCostPoint(
-                complexity=_point_complexity(point),
-                compute_per_sample=compute_per_sample,
-                bit_length_per_op=_default_bit_length_per_op,
-                complexity_minimum=_optional_nonnegative_number(
-                    point.get("complexity_minimum"),
-                    "compute_cost_point.complexity_minimum",
-                ),
-                complexity_maximum=_optional_nonnegative_number(
-                    point.get("complexity_maximum"),
-                    "compute_cost_point.complexity_maximum",
-                ),
-            )
-            for point in points
+        _compute_cost_points_from_sampled_competence(
+            points=points,
+            architecture=architecture,
         )
     )
+
+
+def _compute_cost_points_from_sampled_competence(
+    *,
+    points: tuple[dict[str, object], ...],
+    architecture: ArchitectureManifest,
+) -> tuple[ComputeCostPoint, ...]:
+    ordered = sorted(points, key=lambda point: _point_complexity(point))
+    cursor = 0.0
+    cost_points: list[ComputeCostPoint] = []
+    for point in ordered:
+        complexity = _point_complexity(point)
+        minimum = _optional_nonnegative_number(
+            point.get("complexity_minimum"),
+            "compute_cost_point.complexity_minimum",
+        )
+        maximum = _optional_nonnegative_number(
+            point.get("complexity_maximum"),
+            "compute_cost_point.complexity_maximum",
+        )
+        if minimum is None:
+            minimum = cursor
+        if maximum is None:
+            maximum = complexity
+        if maximum <= minimum:
+            minimum = cursor
+            maximum = complexity
+        cost_points.append(
+            ComputeCostPoint(
+                complexity=complexity,
+                compute_per_sample=_point_inference_compute(
+                    point,
+                    architecture=architecture,
+                ),
+                bit_length_per_op=_default_bit_length_per_op,
+                complexity_minimum=minimum,
+                complexity_maximum=maximum,
+            )
+        )
+        cursor = max(cursor, maximum)
+    return tuple(cost_points)
+
+
+def _point_inference_compute(
+    point: Mapping[str, object],
+    *,
+    architecture: ArchitectureManifest,
+) -> float:
+    plan = summarize_architecture_operators(
+        architecture_with_input_shape(architecture, _point_input_shape(point))
+    )
+    if plan.inference_compute is None:
+        raise LocalResultImportError("compute_cost_point input_shape has unknown inference compute")
+    return float(plan.inference_compute)
+
+
+def _point_input_shape(point: Mapping[str, object]) -> tuple[int, ...]:
+    value = point.get("input_shape")
+    if not isinstance(value, list | tuple):
+        raise LocalResultImportError("compute_cost_point.input_shape: expected shape")
+    shape: list[int] = []
+    for axis in cast(Sequence[object], value):
+        if type(axis) is not int or axis < 1:
+            raise LocalResultImportError(
+                "compute_cost_point.input_shape: expected positive integer shape"
+            )
+        shape.append(axis)
+    return tuple(shape)
+
+
+def _optional_point_input_shape(
+    point: Mapping[str, object],
+    field: str,
+) -> tuple[int, ...] | None:
+    if "input_shape" not in point:
+        return None
+    value = point.get("input_shape")
+    if not isinstance(value, list | tuple):
+        raise LocalResultImportError(f"{field}: expected shape")
+    shape: list[int] = []
+    for axis in cast(Sequence[object], value):
+        if type(axis) is not int or axis < 1:
+            raise LocalResultImportError(f"{field}: expected positive integer shape")
+        shape.append(axis)
+    return tuple(shape)
 
 
 def _integrated_compute_cost_basis() -> dict[str, object]:
@@ -1678,7 +1843,7 @@ def _integrated_compute_cost_basis() -> dict[str, object]:
         "kind": "compute-integral-over-observed-complexity-v1",
         "cost_unit": "bit-ops-per-sample complexity-bits",
         "complexity_axis": "log2-distinguishable-states",
-        "density_source": _cost_density_source_key,
+        "density_source": "architecture+sampled_competence.points.input_shape",
         "density_unit": "ops-per-sample",
         "bit_length_per_op": _default_bit_length_per_op,
         "integration": "observed-complexity-intervals",
@@ -1919,7 +2084,7 @@ def _competence_points(
 ) -> tuple[dict[str, object], ...]:
     by_interval: dict[
         tuple[float, float | None, float | None],
-        list[tuple[_BenchmarkRunRecord, float, int]],
+        list[tuple[_BenchmarkRunRecord, float, int, tuple[int, ...] | None]],
     ] = {}
     for run in runs:
         for point in _run_competence_points(run):
@@ -1934,14 +2099,20 @@ def _competence_points(
             )
             score = _as_nonnegative_number(point.get("score"), "point.score")
             sample_count = _as_positive_int(point.get("sample_count"), "point.sample_count")
+            input_shape = _optional_point_input_shape(point, "point.input_shape")
             by_interval.setdefault((complexity, minimum, maximum), []).append(
-                (run, score, sample_count)
+                (run, score, sample_count, input_shape)
             )
     points: list[dict[str, object]] = []
     for (complexity, minimum, maximum), evidence in by_interval.items():
-        total_samples = sum(sample_count for _run, _score, sample_count in evidence)
+        total_samples = sum(
+            sample_count for _run, _score, sample_count, _input_shape in evidence
+        )
         score = (
-            sum(score * sample_count for _run, score, sample_count in evidence)
+            sum(
+                score * sample_count
+                for _run, score, sample_count, _input_shape in evidence
+            )
             / total_samples
         )
         point: dict[str, object] = {
@@ -1953,12 +2124,22 @@ def _competence_points(
                 for run in sorted(
                     {
                         run.run_id: run
-                        for run, _score, _sample_count in evidence
+                        for run, _score, _sample_count, _input_shape in evidence
                     }.values(),
                     key=_run_sort_key,
                 )
             ],
         }
+        input_shapes = {
+            input_shape for _run, _score, _sample_count, input_shape in evidence
+            if input_shape is not None
+        }
+        if len(input_shapes) > 1:
+            raise LocalResultImportError(
+                "cannot merge competence points with different input_shape values"
+            )
+        if input_shapes:
+            point["input_shape"] = list(next(iter(input_shapes)))
         if minimum is not None:
             point["complexity_minimum"] = minimum
         if maximum is not None:
@@ -2016,6 +2197,12 @@ def _competence_point_from_sampled_record(point: Mapping[str, object]) -> dict[s
         point.get("complexity_maximum"),
         "sampled_competence.point.complexity_maximum",
     )
+    input_shape = _optional_point_input_shape(
+        point,
+        "sampled_competence.point.input_shape",
+    )
+    if input_shape is not None:
+        record["input_shape"] = list(input_shape)
     if minimum is not None:
         record["complexity_minimum"] = minimum
     if maximum is not None:
@@ -2125,17 +2312,12 @@ def _training_estimate_comparison_record(
 def _selected_checkpoint_training_estimate(
     training_summary: Mapping[str, object],
 ) -> Mapping[str, object] | None:
-    selected_checkpoint = _extract.optional_mapping(
-        training_summary.get("selected_model_checkpoint"),
-        "selected_model_checkpoint",
+    selected_estimate = _extract.optional_mapping(
+        training_summary.get("selected_model_checkpoint_score_estimate"),
+        "selected_model_checkpoint_score_estimate",
     )
-    if selected_checkpoint is not None:
-        checkpoint_estimate = _extract.optional_mapping(
-            selected_checkpoint.get("score_estimate"),
-            "selected_model_checkpoint.score_estimate",
-        )
-        if checkpoint_estimate is not None:
-            return checkpoint_estimate
+    if selected_estimate is not None:
+        return selected_estimate
     return _extract.optional_mapping(
         training_summary.get("training_estimate"),
         "training_estimate",
@@ -2893,6 +3075,21 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
         _as_nonnegative_number(
             record.get("training_compute"),
             _field_path(prefix, "training_compute"),
+        )
+    if "validation_loss_reference" in record:
+        _as_nonnegative_number(
+            record.get("validation_loss_reference"),
+            _field_path(prefix, "validation_loss_reference"),
+        )
+    if "validation_history_sample_count" in record:
+        _as_positive_int(
+            record.get("validation_history_sample_count"),
+            _field_path(prefix, "validation_history_sample_count"),
+        )
+    if "validation_history_total_count" in record:
+        _as_positive_int(
+            record.get("validation_history_total_count"),
+            _field_path(prefix, "validation_history_total_count"),
         )
     protocol = _extract.mapping(record.get("protocol"), _field_path(prefix, "protocol"))
     protocol_path = _field_path(prefix, "protocol")

@@ -182,6 +182,7 @@ const result: BenchmarkResultRecord = {
         ],
         final_validation_check: 1,
         final_validation_loss: 0.4,
+        validation_loss_reference: Math.log(10),
         final_validation_step: 3,
         protocol: {
           training_batch_target: 2,
@@ -203,6 +204,8 @@ const result: BenchmarkResultRecord = {
         steps_run: 3,
         stop_reason: 'max-steps',
         validation_checks: 2,
+        validation_history_sample_count: 2,
+        validation_history_total_count: 2,
         validation_history: [
           {
             stale_checks: 0,
