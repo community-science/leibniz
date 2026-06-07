@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 
 import leibniz.local_results as local_results
+from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.benchmark_runner import (
     BenchmarkEvaluationPlan,
     BenchmarkRunPlan,
@@ -23,6 +24,10 @@ from leibniz.local_results import (
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
     push_result_checkout,
+)
+from leibniz.model_operators import (
+    architecture_with_input_shape,
+    summarize_architecture_operators,
 )
 
 _repository_root = Path(__file__).parents[1]
@@ -350,7 +355,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
         "kind": "compute-integral-over-observed-complexity-v1",
         "cost_unit": "bit-ops-per-sample complexity-bits",
         "complexity_axis": "log2-distinguishable-states",
-        "density_source": "inference_compute",
+        "density_source": "architecture+sampled_competence.points.input_shape",
         "density_unit": "ops-per-sample",
         "bit_length_per_op": 32.0,
         "integration": "observed-complexity-intervals",
@@ -421,6 +426,43 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
         "model-inspection",
         "model-manifest",
     }
+
+
+def test_integrated_model_cost_reconstructs_point_density_from_input_shape() -> None:
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    first_input_shape = (1, 16, 16)
+    second_input_shape = (1, 32, 32)
+    first_compute = summarize_architecture_operators(
+        architecture_with_input_shape(architecture, first_input_shape)
+    ).inference_compute
+    second_compute = summarize_architecture_operators(
+        architecture_with_input_shape(architecture, second_input_shape)
+    ).inference_compute
+
+    assert first_compute is not None
+    assert second_compute is not None
+
+    cost = cast(Any, local_results)._integrated_model_compute_cost_from_points(
+        points=(
+            {
+                "complexity": 1.0,
+                "complexity_minimum": 0.0,
+                "complexity_maximum": 1.0,
+                "input_shape": list(first_input_shape),
+            },
+            {
+                "complexity": 2.0,
+                "complexity_minimum": 1.0,
+                "complexity_maximum": 2.0,
+                "input_shape": list(second_input_shape),
+            },
+        ),
+        architecture=architecture,
+    )
+
+    assert math.isclose(cost, 32.0 * (first_compute + second_compute))
 
 
 def test_training_estimate_comparison_uses_selected_checkpoint_estimate(

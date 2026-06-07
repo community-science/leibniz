@@ -38,6 +38,7 @@ class CompetencePoint:
     seed: int = 0
     complexity_minimum: float | None = None
     complexity_maximum: float | None = None
+    input_shape: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +125,7 @@ def sampled_competence_record(
     batch: GeneratedSampleSet,
     measurements: tuple[MeasurementRecord, ...],
     complexity_axis: str | None,
+    input_shape: tuple[int, ...] | None = None,
 ) -> dict[str, object]:
     """Return aggregate competence evidence for one sampled complexity class."""
 
@@ -164,10 +166,35 @@ def sampled_competence_record(
             str(measurement.raw_scoring_evidence.id) for measurement in measurements
         ],
     }
+    resolved_input_shape = input_shape
+    if resolved_input_shape is None:
+        resolved_input_shape = _sampled_input_shape(batch)
+    record["input_shape"] = list(resolved_input_shape)
     if batch.complexity_request is not None:
         record["complexity_minimum"] = batch.complexity_request.minimum
         record["complexity_maximum"] = batch.complexity_request.maximum
     return record
+
+
+def _sampled_input_shape(batch: GeneratedSampleSet) -> tuple[int, ...]:
+    tensor_shape = getattr(batch.fields, "shape", None)
+    if tensor_shape is not None and len(tensor_shape) >= 2:
+        input_shape: list[int] = []
+        for axis in tuple(tensor_shape)[1:]:
+            if type(axis) is not int or axis < 1:
+                input_shape = []
+                break
+            input_shape.append(axis)
+        if input_shape:
+            return tuple(input_shape)
+    sample_shapes = {
+        sample.field.shape
+        for sample in batch.samples
+        if sample.field is not None
+    }
+    if len(sample_shapes) == 1:
+        return next(iter(sample_shapes))
+    raise ValueError("sampled competence requires an inspectable input shape")
 
 
 def sampled_competence_curriculum_record(

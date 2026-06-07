@@ -27,6 +27,7 @@ __all__ = [
     "ModelProgramEffectDescriptor",
     "ModelProgramEffectPlan",
     "ModelProgramEffectSummary",
+    "architecture_with_input_shape",
     "model_operator_vocabulary",
     "summarize_model_program_effects",
     "summarize_architecture_operators",
@@ -487,6 +488,19 @@ def summarize_architecture_operators(
         output_shape=architecture.output_shape,
         operators=tuple(operators),
     )
+
+
+def architecture_with_input_shape(
+    architecture: ArchitectureManifest,
+    input_shape: tuple[int, ...],
+) -> ArchitectureManifest:
+    """Return an architecture manifest specialized to a concrete input shape."""
+
+    record = architecture.to_record()
+    record["input_shape"] = list(input_shape)
+    record.pop("id", None)
+    record.pop("model_scale_contract", None)
+    return ArchitectureManifest.from_record(record)
 
 
 def _descriptor_for_layer(layer: ArchitectureLayer) -> ModelOperatorDescriptor:

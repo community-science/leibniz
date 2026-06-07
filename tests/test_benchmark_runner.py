@@ -125,7 +125,7 @@ def test_training_sampled_competence_matches_measurement_scoring() -> None:
     batch = generator(
         seed=101,
         shape=8,
-        include_fields=False,
+        include_fields=True,
         complexity_request=request,
         runtime=runtime,
         outcome_ids=outcome_ids,
@@ -163,6 +163,7 @@ def test_training_sampled_competence_matches_measurement_scoring() -> None:
         "complexity_minimum",
         "difficulty_assumption",
         "kind",
+        "input_shape",
         "mean_accepted_mass",
         "mean_negative_log_score",
         "sample_count",
@@ -769,6 +770,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     points = cast(list[dict[str, object]], sampled_competence["points"])
     assert len(points) == len(curriculum_rungs)
     assert [point["sample_count"] for point in points] == [64] * len(curriculum_rungs)
+    assert all(isinstance(point["input_shape"], list) for point in points)
     assert [point["complexity"] for point in points] == [
         rung["complexity"] for rung in curriculum_rungs
     ]
@@ -937,18 +939,21 @@ def test_evaluation_frontier_requires_confidence_above_chance() -> None:
             mean_accepted_mass=0.20,
             sample_count=100,
             confidence_half_width=0.01,
+            input_shape=(1, 16, 16),
         ),
         rung_evidence(
             rung=SimpleNamespace(index=1),
             mean_accepted_mass=0.16,
             sample_count=100,
             confidence_half_width=0.08,
+            input_shape=(1, 16, 16),
         ),
         rung_evidence(
             rung=SimpleNamespace(index=2),
             mean_accepted_mass=0.18,
             sample_count=100,
             confidence_half_width=0.03,
+            input_shape=(1, 16, 16),
         ),
     )
 
@@ -974,6 +979,7 @@ def test_evaluation_curriculum_target_depends_only_on_evaluation_evidence() -> N
             mean_accepted_mass=0.20,
             sample_count=100,
             confidence_half_width=0.01,
+            input_shape=(1, 16, 16),
         ),
     )
 
@@ -985,6 +991,7 @@ def test_evaluation_curriculum_target_depends_only_on_evaluation_evidence() -> N
             mean_accepted_mass=0.20,
             sample_count=100,
             confidence_half_width=0.01,
+            input_shape=(1, 16, 16),
         )
         for index in range(9)
     )
@@ -1469,6 +1476,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
     batch = generator(
         shape=2,
         seed=101,
+        include_fields=True,
         complexity_request=ComplexityRequest(
             minimum=4.321928094887362,
             maximum=5.321928094887362,
@@ -1508,6 +1516,8 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
     assert points[0]["sample_count"] == 64
     assert points[0]["seed"] == 202
     assert points[0]["mean_accepted_mass"] == 1.0
+    assert "input_shape" not in points[0]
+    assert points[1]["input_shape"] == list(batch.samples[0].require_field().shape)
     assert math.isclose(
         cast(float, estimate["score"]),
         sampled_competence_frontier_score(

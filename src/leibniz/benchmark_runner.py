@@ -44,7 +44,11 @@ from leibniz.model_manifests import (
     ModelArtifactManifestDocument,
     ModelExecutionFamily,
 )
-from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
+from leibniz.model_operators import (
+    ExecutableModelOperator,
+    architecture_with_input_shape,
+    summarize_architecture_operators,
+)
 from leibniz.observation_generation import (
     ComplexityCandidate,
     ComplexityRequest,
@@ -308,6 +312,7 @@ class _RollingValidationCompetencePoint:
             seed=latest.seed,
             complexity_minimum=latest.complexity_minimum,
             complexity_maximum=latest.complexity_maximum,
+            input_shape=latest.input_shape,
         )
 
 
@@ -356,6 +361,7 @@ class _CheckpointEvaluationRungEvidence:
     mean_accepted_mass: float
     sample_count: int
     confidence_half_width: float
+    input_shape: tuple[int, ...]
 
 
 def _evaluation_sampled_competence_record(
@@ -383,6 +389,7 @@ def _evaluation_sampled_competence_record(
                 "seed": result.rung.seed,
                 "sample_count": result.sample_count,
                 "mean_accepted_mass": result.mean_accepted_mass,
+                "input_shape": list(result.input_shape),
                 **_sampled_competence_interval_record(result.rung.batch),
             }
         )
@@ -1087,6 +1094,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         batch=final_evaluation_batch,
         measurements=measurement_groups[0],
         complexity_axis=None,
+        input_shape=evaluation_results[evaluation_frontier_index].input_shape,
     )
     sampled_competence = _evaluation_sampled_competence_record(
         benchmark_id=benchmark_id,
@@ -2143,6 +2151,7 @@ def _evaluate_checkpoint_rung(
             mean_accepted_mass=estimator.mean,
             sample_count=observed_sample_count,
             confidence_half_width=_evaluation_confidence_half_width(estimator),
+            input_shape=_batch_sample_input_shape(batch=rung.batch),
         ),
         max_inference_compute,
     )
@@ -2329,13 +2338,13 @@ def _batch_max_inference_compute(
     tensor_input_shape = _tensor_input_shape(batch.fields)
     if tensor_input_shape is not None:
         plan = summarize_architecture_operators(
-            _architecture_with_input_shape(architecture, tensor_input_shape)
+            architecture_with_input_shape(architecture, tensor_input_shape)
         )
         return plan.inference_compute
     max_compute: int | None = None
     for input_shape in sorted({sample.require_field().shape for sample in batch.samples}):
         plan = summarize_architecture_operators(
-            _architecture_with_input_shape(architecture, input_shape)
+            architecture_with_input_shape(architecture, input_shape)
         )
         if plan.inference_compute is None:
             return None
@@ -2369,7 +2378,7 @@ def _batch_max_training_compute_per_sample(
     if input_shape is None:
         return None
     plan = summarize_architecture_operators(
-        _architecture_with_input_shape(architecture, input_shape)
+        architecture_with_input_shape(architecture, input_shape)
     )
     return plan.training_compute_per_sample
 
@@ -2488,17 +2497,6 @@ def _physical_execution_sample_count(
 
 def _is_runtime_capacity_error(error: RuntimeError) -> bool:
     return runtime_capacity_error(error)
-
-
-def _architecture_with_input_shape(
-    architecture: ArchitectureManifest,
-    input_shape: tuple[int, ...],
-) -> ArchitectureManifest:
-    record = architecture.to_record()
-    record["input_shape"] = list(input_shape)
-    record.pop("id", None)
-    record.pop("model_scale_contract", None)
-    return ArchitectureManifest.from_record(record)
 
 
 def _max_optional_int(left: int | None, right: int | None) -> int | None:
@@ -2675,6 +2673,22 @@ def _optional_nonnegative_float(value: object, field: str) -> float | None:
     if result < 0.0:
         raise BenchmarkRunnerError(f"{field} must be nonnegative")
     return result
+
+
+def _optional_point_input_shape(point: Mapping[str, object]) -> tuple[int, ...] | None:
+    if "input_shape" not in point:
+        return None
+    value = point.get("input_shape")
+    if not isinstance(value, list | tuple):
+        raise BenchmarkRunnerError("score_estimate.input_shape must be a shape")
+    shape: list[int] = []
+    for axis in cast(Sequence[object], value):
+        if type(axis) is not int or axis < 1:
+            raise BenchmarkRunnerError(
+                "score_estimate.input_shape must be a positive integer shape"
+            )
+        shape.append(axis)
+    return tuple(shape)
 
 
 def _unpredictable_evaluation_seed() -> int:
@@ -3057,6 +3071,7 @@ def _training_gate_score_estimate(
                     point.get("sample_count"),
                     "score_estimate.sample_count",
                 ),
+                input_shape=_optional_point_input_shape(point),
                 complexity_minimum=_optional_nonnegative_float(
                     point.get("complexity_minimum"),
                     "score_estimate.complexity_minimum",
@@ -3129,10 +3144,23 @@ def _sampled_competence_record_for_predictions(
         "mean_accepted_mass": math.fsum(accepted_mass) / len(accepted_mass),
         "mean_negative_log_score": mean_negative_log_score,
     }
+    input_shape = _optional_batch_sample_input_shape(batch=batch)
+    if input_shape is not None:
+        record["input_shape"] = list(input_shape)
     if batch.complexity_request is not None:
         record["complexity_minimum"] = batch.complexity_request.minimum
         record["complexity_maximum"] = batch.complexity_request.maximum
     return record
+
+
+def _optional_batch_sample_input_shape(
+    *,
+    batch: GeneratedSampleSet,
+) -> tuple[int, ...] | None:
+    try:
+        return _batch_sample_input_shape(batch=batch)
+    except BenchmarkRunnerError:
+        return None
 
 
 def _coerce_training_step_batch(
@@ -3203,6 +3231,7 @@ def _training_sampled_competence_record(
             "seed": point.seed,
             "sample_count": point.sample_count,
             "mean_accepted_mass": point.accepted_mass,
+            **_competence_point_input_shape_record(point),
             **_competence_point_interval_record(point),
         }
         for point in previous_frontier_points
@@ -3229,6 +3258,14 @@ def _competence_point_interval_record(point: ValidationCompetencePoint) -> dict[
         "complexity_minimum": point.complexity_minimum,
         "complexity_maximum": point.complexity_maximum,
     }
+
+
+def _competence_point_input_shape_record(
+    point: ValidationCompetencePoint,
+) -> dict[str, object]:
+    if point.input_shape is None:
+        return {}
+    return {"input_shape": list(point.input_shape)}
 
 
 def _compact_training_sampled_competence(
