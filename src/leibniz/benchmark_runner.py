@@ -25,7 +25,6 @@ from leibniz.benchmark_evaluation import (
     validation_competence_frontier_advances,
 )
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
-from leibniz.competition_bundles import BenchmarkCompetitionBundle
 from leibniz.content import ContentDigest
 from leibniz.documents import (
     canonical_document_bytes,
@@ -34,7 +33,6 @@ from leibniz.documents import (
 )
 from leibniz.evaluation_bundles import (
     BenchmarkEvaluationBundle,
-    BenchmarkEvaluationBundleDocument,
 )
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment
@@ -95,15 +93,11 @@ __all__ = [
     "BenchmarkRunnerError",
     "BenchmarkEvaluationPlan",
     "BenchmarkEvaluationSummary",
-    "BenchmarkCompetitionPlan",
-    "BenchmarkCompetitionSummary",
     "BenchmarkRunPlan",
     "BenchmarkRunSummary",
     "CheckpointModelPredictor",
     "evaluate_benchmark_checkpoint",
-    "compete_benchmark_checkpoints",
     "evaluate_model_checkpoint_artifact",
-    "generate_model_checkpoint_competition_record",
     "load_model_checkpoint_artifact",
     "load_model_checkpoint_predictor",
     "ModelCheckpointArtifact",
@@ -598,35 +592,6 @@ class BenchmarkEvaluationSummary:
     benchmark_id: ProtocolIdentifier
     evaluation_bundle_path: Path
     measurement_count: int
-
-
-@dataclass(frozen=True, slots=True)
-class BenchmarkCompetitionPlan:
-    """A pairwise benchmark competition plan over two evaluated checkpoints."""
-
-    left_evaluation_path: Path
-    right_evaluation_path: Path
-    benchmark_root: Path
-    results_root: Path = Path("results")
-    tensor_device: TensorRuntimeDevice = "auto"
-
-    def __post_init__(self) -> None:
-        try:
-            validate_tensor_runtime_device(self.tensor_device)
-        except TensorRuntimeError as error:
-            raise BenchmarkRunnerError(str(error)) from error
-
-
-@dataclass(frozen=True, slots=True)
-class BenchmarkCompetitionSummary:
-    """Summary of a pairwise benchmark competition record."""
-
-    competition_id: str
-    benchmark_id: ProtocolIdentifier
-    competition_bundle_path: Path
-    sample_count: int
-    left_model_key: str
-    right_model_key: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -1276,128 +1241,6 @@ def _evaluation_input_from_plan(
     )
 
 
-def compete_benchmark_checkpoints(plan: BenchmarkCompetitionPlan) -> BenchmarkCompetitionSummary:
-    """Generate pairwise benchmark competition evidence from two evaluated checkpoints."""
-
-    try:
-        left_evaluation_bundle = BenchmarkEvaluationBundleDocument.from_bytes(
-            plan.left_evaluation_path.read_bytes()
-        ).bundle
-        right_evaluation_bundle = BenchmarkEvaluationBundleDocument.from_bytes(
-            plan.right_evaluation_path.read_bytes()
-        ).bundle
-    except ValueError as error:
-        raise BenchmarkRunnerError(str(error)) from error
-    left_evaluation = left_evaluation_bundle.to_record()
-    right_evaluation = right_evaluation_bundle.to_record()
-    generator = _require_tensor_generator(load_generator(plan.benchmark_root))
-    benchmark_id = generator.manifest.id
-    outcome_space = generator.manifest.resolve_outcome_space()
-    left_architecture = left_evaluation_bundle.architecture_manifest
-    right_architecture = right_evaluation_bundle.architecture_manifest
-    left_checkpoint = load_model_checkpoint_artifact(
-        _extract_record(
-            left_evaluation.get("model_checkpoint"),
-            "model_checkpoint",
-        ),
-        results_root=plan.results_root,
-    )
-    right_checkpoint = load_model_checkpoint_artifact(
-        _extract_record(
-            right_evaluation.get("model_checkpoint"),
-            "model_checkpoint",
-        ),
-        results_root=plan.results_root,
-    )
-    left_model_key = _model_key_from_checkpoint(left_checkpoint)
-    right_model_key = _model_key_from_checkpoint(right_checkpoint)
-    if left_model_key == right_model_key:
-        raise BenchmarkRunnerError("benchmark competition requires two distinct models")
-    if right_model_key < left_model_key:
-        swapped = BenchmarkCompetitionPlan(
-            left_evaluation_path=plan.right_evaluation_path,
-            right_evaluation_path=plan.left_evaluation_path,
-            benchmark_root=plan.benchmark_root,
-            results_root=plan.results_root,
-            tensor_device=plan.tensor_device,
-        )
-        return compete_benchmark_checkpoints(swapped)
-    competition_seed = _unpredictable_evaluation_seed()
-    competition_id = _competition_id(
-        benchmark_id=benchmark_id,
-        left_model_key=left_model_key,
-        right_model_key=right_model_key,
-        competition_seed=competition_seed,
-    )
-    resolution_assignment = _competition_resolution_assignment_from_evaluations(
-        left_evaluation,
-        right_evaluation,
-    )
-    competition_record, throughput = generate_model_checkpoint_competition_record(
-        left_architecture=left_architecture,
-        right_architecture=right_architecture,
-        generator=generator,
-        outcome_space=outcome_space,
-        seed=competition_seed,
-        index=0,
-        resolution_assignment=resolution_assignment,
-        tensor_device=plan.tensor_device,
-        left_checkpoint=left_checkpoint,
-        right_checkpoint=right_checkpoint,
-        left_model_key=left_model_key,
-        right_model_key=right_model_key,
-        benchmark_id=benchmark_id,
-        competition_id=competition_id,
-    )
-    competition_protocol = {
-        "kind": "checkpoint-benchmark-competition",
-        "evaluation_convergence": {
-            "kind": "paired-score-confidence-half-width",
-            "minimum_sample_count": _default_evaluation_convergence_min_samples,
-            "confidence_z": _default_evaluation_convergence_confidence_z,
-            "half_width_threshold": _default_evaluation_convergence_half_width,
-        },
-        "requested_seed": competition_seed,
-        "tensor_runtime": "pytorch",
-        "tensor_device": _required_string(
-            throughput.get("tensor_device"),
-            "checkpoint_competition.tensor_device",
-        ),
-        "requested_tensor_device": plan.tensor_device,
-        "mechanic": "paired-prediction-accepted-mass",
-    }
-    competition_record["throughput"] = dict(throughput)
-    competition_bundle = BenchmarkCompetitionBundle(
-        id=ProtocolIdentifier.parse(f"benchmark-competitions.{competition_id}@0.1.0"),
-        benchmark_manifest=generator.manifest,
-        left_evaluation_bundle=left_evaluation_bundle,
-        right_evaluation_bundle=right_evaluation_bundle,
-        competition_result=competition_record,
-        competition_protocol=competition_protocol,
-        competition_seed=_required_int(competition_record.get("seed"), "competition.seed"),
-        throughput=throughput,
-    )
-    competition_path = (
-        plan.results_root
-        / "evaluations"
-        / _identifier_atom(benchmark_id)
-        / "competitions"
-        / f"{competition_id}{_document_suffix}"
-    )
-    _write_document(competition_path, competition_bundle.to_record())
-    return BenchmarkCompetitionSummary(
-        competition_id=competition_id,
-        benchmark_id=benchmark_id,
-        competition_bundle_path=competition_path,
-        sample_count=_required_int(
-            competition_record.get("sample_count"),
-            "competition.sample_count",
-        ),
-        left_model_key=left_model_key,
-        right_model_key=right_model_key,
-    )
-
-
 def _evaluation_curriculum_rung(
     *,
     architecture: ArchitectureManifest,
@@ -1479,31 +1322,6 @@ def _training_curriculum_rung(
                 sample_count=sample_count,
             )
     raise BenchmarkRunnerError("training curriculum did not produce any rungs")
-
-
-def _competition_curriculum_rung(
-    *,
-    generator: _TensorBenchmarkGenerator,
-    sample_count: int,
-    seed: int,
-    index: int,
-    resolution_assignment: AxisAssignment,
-) -> _CurriculumRung:
-    sample_set = generator(
-        shape=sample_count,
-        seed=seed + 9_000_009 + 2_000_003 * index,
-        include_fields=True,
-        resolution_assignment=resolution_assignment,
-        variation_extent=_full_variation_extent,
-    )
-    batch = sample_set
-    return _CurriculumRung(
-        index=index,
-        resolution_assignment=resolution_assignment,
-        seed=batch.seed,
-        batch=batch,
-        sample_count=len(batch.samples),
-    )
 
 
 def _curriculum_rung_from_candidates(
@@ -2087,7 +1905,6 @@ def _train_and_predict_on_device(
                     training_counter=training_counter,
                     validation_counter=validation_counter,
                     evaluation_counter=evaluation_counter,
-                    competition_counter=None,
                     roofline=runtime_roofline_record(runtime),
                     work_estimates=_training_work_estimates(
                         architecture=architecture,
@@ -2156,7 +1973,6 @@ def _train_and_predict_on_device(
             training_counter=training_counter,
             validation_counter=validation_counter,
             evaluation_counter=evaluation_counter,
-            competition_counter=None,
             roofline=runtime_roofline_record(runtime),
             work_estimates=_training_work_estimates(
                 architecture=architecture,
@@ -2505,182 +2321,6 @@ def _checkpoint_evaluation_chunks(
         chunk_index += 1
 
 
-def generate_model_checkpoint_competition_record(
-    *,
-    left_architecture: ArchitectureManifest,
-    right_architecture: ArchitectureManifest,
-    generator: _TensorBenchmarkGenerator,
-    outcome_space: OutcomeSpace,
-    seed: int,
-    index: int,
-    resolution_assignment: AxisAssignment,
-    tensor_device: TensorRuntimeDevice,
-    left_checkpoint: ModelCheckpointArtifact,
-    right_checkpoint: ModelCheckpointArtifact,
-    left_model_key: str,
-    right_model_key: str,
-    benchmark_id: ProtocolIdentifier,
-    competition_id: str,
-) -> tuple[dict[str, object], Mapping[str, object]]:
-    """Generate pairwise competition evidence from two saved checkpoint artifacts."""
-
-    left_predictor = load_model_checkpoint_predictor(
-        architecture=left_architecture,
-        outcome_space=outcome_space,
-        checkpoint=left_checkpoint,
-        tensor_device=tensor_device,
-    )
-    right_predictor = load_model_checkpoint_predictor(
-        architecture=right_architecture,
-        outcome_space=outcome_space,
-        checkpoint=right_checkpoint,
-        tensor_device=tensor_device,
-    )
-    capacity_rung = _competition_curriculum_rung(
-        generator=generator,
-        sample_count=1,
-        seed=seed,
-        index=index,
-        resolution_assignment=resolution_assignment,
-    )
-    competition_counter = _ThroughputCounter()
-    phase_timings = TimingCollector()
-    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    samples: list[GeneratedSample] = []
-    left_predictions: list[tuple[float, ...]] = []
-    right_predictions: list[tuple[float, ...]] = []
-    left_max_inference_compute: int | None = None
-    right_max_inference_compute: int | None = None
-    estimator = _RunningMeanEstimator()
-    chunk_index = 0
-    while not _evaluation_estimate_converged(estimator):
-        next_sample_count = _evaluation_next_sample_count(estimator)
-        physical_sample_count = _physical_execution_sample_count(
-            runtime=left_predictor.runtime,
-            architecture=left_architecture,
-            generator=generator,
-            rung=capacity_rung,
-            requested_sample_count=next_sample_count,
-            outcome_count=len(outcome_ids),
-            phase_timings=phase_timings,
-            phase="checkpoint_competition",
-        )
-        chunk_seed = capacity_rung.seed + 1_000_003 * chunk_index
-        competition_started = time.perf_counter()
-        with phase_timings.span(
-            "checkpoint_competition_generation",
-            samples=physical_sample_count,
-        ):
-            batch = generator(
-                shape=physical_sample_count,
-                seed=chunk_seed,
-                include_fields=False,
-                resolution_assignment=resolution_assignment,
-                memory_limit_bytes=_runtime_memory_budget_bytes(left_predictor.runtime),
-                variation_extent=_full_variation_extent,
-                runtime=left_predictor.runtime,
-                outcome_ids=outcome_ids,
-                timing=phase_timings,
-                timing_prefix="checkpoint_competition_generation.",
-            )
-        if batch.sample_count == 0:
-            raise BenchmarkRunnerError(
-                "generator returned no samples for selected competition measure"
-            )
-        with phase_timings.span(
-            "checkpoint_competition_left_prediction",
-            samples=batch.sample_count,
-        ):
-            left_chunk_predictions = left_predictor.predict_batch(batch)
-        with phase_timings.span(
-            "checkpoint_competition_right_prediction",
-            samples=batch.sample_count,
-        ):
-            right_chunk_predictions = right_predictor.predict_batch(batch)
-        competition_counter.add(
-            seconds=time.perf_counter() - competition_started,
-            samples=2 * batch.sample_count,
-        )
-        chunk_left_max_inference_compute = _batch_max_inference_compute(
-            architecture=left_architecture,
-            batch=batch,
-        )
-        chunk_right_max_inference_compute = _batch_max_inference_compute(
-            architecture=right_architecture,
-            batch=batch,
-        )
-        if chunk_left_max_inference_compute is None:
-            raise BenchmarkRunnerError(
-                "checkpoint competition could not measure left_max_inference_compute"
-            )
-        if chunk_right_max_inference_compute is None:
-            raise BenchmarkRunnerError(
-                "checkpoint competition could not measure right_max_inference_compute"
-            )
-        left_max_inference_compute = _max_optional_int(
-            left_max_inference_compute,
-            chunk_left_max_inference_compute,
-        )
-        right_max_inference_compute = _max_optional_int(
-            right_max_inference_compute,
-            chunk_right_max_inference_compute,
-        )
-        sample_offset = len(samples)
-        samples.extend(
-            replace(sample, index=sample_offset + sample_index)
-            for sample_index, sample in enumerate(batch.samples)
-        )
-        left_predictions.extend(left_chunk_predictions)
-        right_predictions.extend(right_chunk_predictions)
-        estimator.extend(
-            _competition_left_score_values(
-                batch=batch,
-                left_probabilities=left_chunk_predictions,
-                right_probabilities=right_chunk_predictions,
-                outcome_ids=outcome_ids,
-            )
-        )
-        chunk_index += 1
-    if left_max_inference_compute is None:
-        raise BenchmarkRunnerError(
-            "checkpoint competition could not measure left_max_inference_compute"
-        )
-    if right_max_inference_compute is None:
-        raise BenchmarkRunnerError(
-            "checkpoint competition could not measure right_max_inference_compute"
-        )
-    competition_batch = GeneratedSampleSet(
-        benchmark_id=capacity_rung.batch.benchmark_id,
-        generator_id=capacity_rung.batch.generator_id,
-        generator_version=capacity_rung.batch.generator_version,
-        seed=capacity_rung.seed,
-        shape=(len(samples),),
-        variation_extent=_full_variation_extent,
-        complexity_request=capacity_rung.batch.complexity_request,
-        samples=tuple(samples),
-    )
-    throughput = competition_counter.to_record(kind="checkpoint-competition-throughput")
-    throughput["tensor_runtime"] = "pytorch"
-    throughput["tensor_device"] = left_predictor.runtime.device_kind
-    throughput["phase_timing"] = phase_timings.to_record()
-    throughput["left_max_inference_compute"] = left_max_inference_compute
-    throughput["right_max_inference_compute"] = right_max_inference_compute
-    throughput["confidence_half_width"] = _evaluation_confidence_half_width(estimator)
-    return (
-        _checkpoint_competition_record(
-            batch=competition_batch,
-            left_probabilities=tuple(left_predictions),
-            right_probabilities=tuple(right_predictions),
-            outcome_space=outcome_space,
-            left_model_key=left_model_key,
-            right_model_key=right_model_key,
-            benchmark_id=benchmark_id,
-            competition_id=competition_id,
-        ),
-        throughput,
-    )
-
-
 def _batch_max_inference_compute(
     *,
     architecture: ArchitectureManifest,
@@ -3010,12 +2650,6 @@ def _extract_record(value: object, field: str) -> Mapping[str, object]:
     return cast(Mapping[str, object], value)
 
 
-def _extract_sequence(value: object, field: str) -> tuple[object, ...]:
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        raise BenchmarkRunnerError(f"{field} must be a sequence")
-    return tuple(cast(Sequence[object], value))
-
-
 def _required_string(value: object, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise BenchmarkRunnerError(f"{field} must be a nonempty string")
@@ -3045,77 +2679,6 @@ def _optional_nonnegative_float(value: object, field: str) -> float | None:
 
 def _unpredictable_evaluation_seed() -> int:
     return secrets.randbelow(2**63)
-
-
-def _competition_id(
-    *,
-    benchmark_id: ProtocolIdentifier,
-    left_model_key: str,
-    right_model_key: str,
-    competition_seed: int,
-) -> str:
-    digest = ContentDigest.from_value(
-        {
-            "kind": "benchmark-model-competition",
-            "version": 2,
-            "benchmark_id": str(benchmark_id),
-            "left_model_key": left_model_key,
-            "right_model_key": right_model_key,
-            "competition_seed": competition_seed,
-        }
-    )
-    return f"models-{digest.hex[:16]}"
-
-
-def _model_key_from_checkpoint(checkpoint: ModelCheckpointArtifact) -> str:
-    return str(checkpoint.digest)
-
-
-def _competition_resolution_assignment_from_evaluations(
-    left_evaluation: Mapping[str, object],
-    right_evaluation: Mapping[str, object],
-) -> AxisAssignment:
-    left_rung = _competition_frontier_rung_from_evaluation(left_evaluation, field="left")
-    right_rung = _competition_frontier_rung_from_evaluation(right_evaluation, field="right")
-    selected = min(
-        (left_rung, right_rung),
-        key=lambda rung: (
-            _required_float(rung.get("complexity"), "evaluation_curriculum.rungs.complexity"),
-            _required_int(rung.get("index"), "evaluation_curriculum.rungs.index"),
-        ),
-    )
-    resolution_record = _extract_record(
-        selected.get("resolution_assignment"),
-        "evaluation_curriculum.rungs.resolution_assignment",
-    )
-    return AxisAssignment.from_record(resolution_record)
-
-
-def _competition_frontier_rung_from_evaluation(
-    evaluation: Mapping[str, object],
-    *,
-    field: str,
-) -> Mapping[str, object]:
-    curriculum = _extract_record(
-        evaluation.get("evaluation_curriculum"),
-        f"{field}.evaluation_curriculum",
-    )
-    rungs = _extract_sequence(
-        curriculum.get("rungs"),
-        f"{field}.evaluation_curriculum.rungs",
-    )
-    frontier_index = _required_int(
-        curriculum.get("frontier_index"),
-        f"{field}.evaluation_curriculum.frontier_index",
-    )
-    if frontier_index < 0 or frontier_index >= len(rungs):
-        raise BenchmarkRunnerError(
-            f"{field}.evaluation_curriculum.frontier_index is out of range"
-        )
-    return _extract_record(
-        rungs[frontier_index],
-        f"{field}.evaluation_curriculum.rungs",
-    )
 
 
 def training_stage_converged(stop_reason: str) -> bool:
@@ -4334,7 +3897,6 @@ def _throughput_record(
     training_counter: _ThroughputCounter,
     validation_counter: _ThroughputCounter,
     evaluation_counter: _ThroughputCounter,
-    competition_counter: _ThroughputCounter | None,
     roofline: Mapping[str, object],
     work_estimates: _TrainingWorkEstimates | None,
     phase_timings: TimingCollector,
@@ -4344,11 +3906,6 @@ def _throughput_record(
     training = training_counter.to_record(kind="training-throughput")
     validation = validation_counter.to_record(kind="validation-throughput")
     evaluation = evaluation_counter.to_record(kind="evaluation-throughput")
-    competition = (
-        None
-        if competition_counter is None
-        else competition_counter.to_record(kind="competition-throughput")
-    )
     record: dict[str, object] = {
         "kind": "benchmark-throughput",
         "tensor_runtime": "pytorch",
@@ -4366,8 +3923,6 @@ def _throughput_record(
             work_estimates=work_estimates,
         ),
     }
-    if competition is not None:
-        record["competition"] = competition
     if fallback_errors:
         record["runtime_fallbacks"] = [
             {
@@ -4710,125 +4265,6 @@ def _prediction_target_mass(
         float(target_probability) * float(probabilities[outcome_indexes[outcome_id]])
         for outcome_id, target_probability in target_distribution.items()
     )
-
-
-def _competition_left_score_values(
-    *,
-    batch: GeneratedSampleSet,
-    left_probabilities: tuple[tuple[float, ...], ...],
-    right_probabilities: tuple[tuple[float, ...], ...],
-    outcome_ids: tuple[str, ...],
-) -> tuple[float, ...]:
-    values: list[float] = []
-    for sample, left_row, right_row in zip(
-        batch.samples,
-        left_probabilities,
-        right_probabilities,
-        strict=True,
-    ):
-        target_distribution = sample.target_distribution_or_one_hot()
-        left_score = _prediction_target_mass(
-            left_row,
-            target_distribution=target_distribution,
-            outcome_ids=outcome_ids,
-        )
-        right_score = _prediction_target_mass(
-            right_row,
-            target_distribution=target_distribution,
-            outcome_ids=outcome_ids,
-        )
-        if left_score > right_score:
-            values.append(1.0)
-        elif right_score > left_score:
-            values.append(0.0)
-        else:
-            values.append(0.5)
-    return tuple(values)
-
-
-def _checkpoint_competition_record(
-    *,
-    batch: GeneratedSampleSet,
-    left_probabilities: tuple[tuple[float, ...], ...],
-    right_probabilities: tuple[tuple[float, ...], ...],
-    outcome_space: OutcomeSpace,
-    left_model_key: str,
-    right_model_key: str,
-    benchmark_id: ProtocolIdentifier,
-    competition_id: str,
-) -> dict[str, object]:
-    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    entries: list[dict[str, object]] = []
-    left_wins = 0
-    right_wins = 0
-    ties = 0
-    for sample, left_row, right_row in zip(
-        batch.samples,
-        left_probabilities,
-        right_probabilities,
-        strict=True,
-    ):
-        target_distribution = sample.target_distribution_or_one_hot()
-        left_score = _prediction_target_mass(
-            left_row,
-            target_distribution=target_distribution,
-            outcome_ids=outcome_ids,
-        )
-        right_score = _prediction_target_mass(
-            right_row,
-            target_distribution=target_distribution,
-            outcome_ids=outcome_ids,
-        )
-        if left_score > right_score:
-            winner = "left"
-            left_wins += 1
-        elif right_score > left_score:
-            winner = "right"
-            right_wins += 1
-        else:
-            winner = "tie"
-            ties += 1
-        entries.append(
-            {
-                "id": (
-                    f"benchmarks.{_identifier_atom(benchmark_id)}.competition."
-                    f"{competition_id}.sample-{sample.index}@0.1.0"
-                ),
-                "observation_id": sample.observable_state_id
-                or (
-                    f"benchmarks.{_identifier_atom(benchmark_id)}.competition."
-                    f"{competition_id}.sample-{sample.index}@0.1.0"
-                ),
-                "accepted_outcome_id": sample.outcome_id,
-                "target_distribution": [
-                    {"outcome_id": outcome_id, "probability": probability}
-                    for outcome_id, probability in target_distribution.items()
-                ],
-                "left_score": left_score,
-                "right_score": right_score,
-                "winner": winner,
-            }
-        )
-    sample_count = len(entries)
-    left_score = 0.0 if sample_count == 0 else (left_wins + 0.5 * ties) / sample_count
-    return {
-        "format": "leibniz.model-competition",
-        "format_version": 1,
-        "benchmark_id": str(benchmark_id),
-        "competition_id": competition_id,
-        "mechanic": "paired-prediction-accepted-mass",
-        "seed": batch.seed,
-        "sample_count": sample_count,
-        "outcome_space_id": str(outcome_space.id),
-        "left_model_key": left_model_key,
-        "right_model_key": right_model_key,
-        "left_score": left_score,
-        "right_score": 1.0 - left_score,
-        "left_wins": left_wins,
-        "right_wins": right_wins,
-        "ties": ties,
-        "entries": entries,
-    }
 
 
 def _chance_accepted_mass(outcome_ids: tuple[str, ...]) -> float:

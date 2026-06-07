@@ -19,12 +19,10 @@ from leibniz.benchmark_evaluation import (
 )
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.benchmark_runner import (
-    BenchmarkCompetitionPlan,
     BenchmarkEvaluationPlan,
     BenchmarkRunnerError,
     BenchmarkRunPlan,
     BenchmarkRunSummary,
-    compete_benchmark_checkpoints,
     evaluate_benchmark_checkpoint,
     run_benchmark,
 )
@@ -1079,7 +1077,6 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
     assert "evaluation_curriculum" not in training_summary
     assert "measurement_dataset_digest" not in training_summary
     assert "model_inspection_digest" not in training_summary
-    assert "competition_profile_path" not in training_summary
     assert "selected_model_checkpoint" in training_summary
 
 
@@ -2614,105 +2611,6 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     assert len(inspections) == 1
     assert inspections[0]["source_path"] == history[0]["model_inspection_path"]
     assert "measurement_dataset" in inspections[0]
-
-
-def test_benchmark_competition_uses_evaluation_bundles_as_handoff_contract(
-    tmp_path: Path,
-) -> None:
-    results_root = tmp_path / "results"
-    first_training = run_benchmark(
-        BenchmarkRunPlan(
-            architecture_path=_digits_architecture,
-            benchmark_root=_digits_benchmark_root,
-            results_root=results_root,
-            seed=101,
-            train_steps=0,
-            tensor_device="cpu",
-        )
-    )
-    second_training = run_benchmark(
-        BenchmarkRunPlan(
-            architecture_path=_digits_architecture,
-            benchmark_root=_digits_benchmark_root,
-            results_root=results_root,
-            seed=202,
-            train_steps=0,
-            tensor_device="cpu",
-        )
-    )
-    first_evaluation = evaluate_benchmark_checkpoint(
-        BenchmarkEvaluationPlan(
-            checkpoint_artifact_path=_selected_checkpoint_artifact_path(
-                first_training.training_summary_path
-            ),
-            benchmark_root=_digits_benchmark_root,
-            results_root=results_root,
-            tensor_device="cpu",
-        )
-    )
-    second_evaluation = evaluate_benchmark_checkpoint(
-        BenchmarkEvaluationPlan(
-            checkpoint_artifact_path=_selected_checkpoint_artifact_path(
-                second_training.training_summary_path
-            ),
-            benchmark_root=_digits_benchmark_root,
-            results_root=results_root,
-            tensor_device="cpu",
-        )
-    )
-    for path in (
-        first_evaluation.evaluation_bundle_path,
-        second_evaluation.evaluation_bundle_path,
-    ):
-        record = dict(load_object_document(path.read_bytes(), description="evaluation bundle"))
-        path.write_bytes(canonical_document_bytes(record) + b"\n")
-    first_training.training_summary_path.unlink()
-    second_training.training_summary_path.unlink()
-
-    competition = compete_benchmark_checkpoints(
-        BenchmarkCompetitionPlan(
-            left_evaluation_path=first_evaluation.evaluation_bundle_path,
-            right_evaluation_path=second_evaluation.evaluation_bundle_path,
-            benchmark_root=_digits_benchmark_root,
-            results_root=results_root,
-            tensor_device="cpu",
-        )
-    )
-
-    first_bundle = BenchmarkEvaluationBundleDocument.from_bytes(
-        first_evaluation.evaluation_bundle_path.read_bytes()
-    ).bundle
-    second_bundle = BenchmarkEvaluationBundleDocument.from_bytes(
-        second_evaluation.evaluation_bundle_path.read_bytes()
-    ).bundle
-    expected_keys = {
-        str(first_bundle.model_checkpoint["digest"]),
-        str(second_bundle.model_checkpoint["digest"]),
-    }
-    assert {competition.left_model_key, competition.right_model_key} == expected_keys
-    competition_record = load_object_document(
-        competition.competition_bundle_path.read_bytes(),
-        description="competition bundle",
-    )
-    assert competition_record["format"] == "leibniz.benchmark-competition"
-    competition_result = cast(dict[str, object], competition_record["competition_result"])
-    assert {
-        competition_result["left_model_key"],
-        competition_result["right_model_key"],
-    } == expected_keys
-    competition_throughput = cast(dict[str, object], competition_record["throughput"])
-    assert isinstance(competition_throughput["left_max_inference_compute"], int)
-    assert isinstance(competition_throughput["right_max_inference_compute"], int)
-
-    view_summary = materialize_benchmark_result_views(
-        repository_root=_repository_root,
-        results_root=results_root,
-    )
-    view = load_console_result_view(view_summary.view_file.read_bytes())
-    result = cast(list[dict[str, object]], view["benchmark_results"])[0]
-    leaderboard = cast(list[dict[str, object]], result["leaderboard"])
-    assert {model["model_key"] for model in leaderboard} == expected_keys
-    assert len(leaderboard) == 2
 
 
 def _selected_checkpoint_artifact_path(training_summary_path: Path) -> Path:

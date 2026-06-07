@@ -22,7 +22,6 @@ from leibniz.benchmark_implementations import (
     load_benchmark,
 )
 from leibniz.benchmarks import BenchmarkManifest
-from leibniz.competition_bundles import BenchmarkCompetitionBundleSummary
 from leibniz.console.protocol import (
     console_protocol_format_versions,
     console_protocol_formats,
@@ -56,7 +55,6 @@ __all__ = [
     "materialize_benchmark_result_views",
     "publish_local_benchmark_results",
     "push_result_checkout",
-    "relative_frontier_competition_requests",
 ]
 
 _protocol_formats = console_protocol_formats()
@@ -333,16 +331,10 @@ def materialize_benchmark_result_views(
     view_root.mkdir(parents=True, exist_ok=True)
     for benchmark_id, benchmark in sorted(benchmarks.items(), key=lambda item: str(item[0])):
         benchmark_runs = tuple(run for run in runs if run.benchmark_id == benchmark_id)
-        benchmark_competitions = tuple(
-            competition
-            for competition in _local_competition_records(results_root)
-            if competition.get("benchmark_id") == str(benchmark_id)
-        )
         benchmark_record = _benchmark_result_record(
             benchmark=benchmark,
             repository_root=repository_root,
             runs=benchmark_runs,
-            competitions=benchmark_competitions,
         )
         benchmark_records.append(benchmark_record)
         benchmark_view_root = view_root / _identifier_atom(benchmark_id)
@@ -383,54 +375,6 @@ def load_console_result_view(data: bytes) -> Mapping[str, object]:
         _validate_benchmark_result_view(record)
         return record
     raise LocalResultImportError("console result view has unsupported format")
-
-
-def relative_frontier_competition_requests(
-    *,
-    results_root: Path = _default_results_root,
-    benchmark_selectors: tuple[str, ...] = (),
-) -> tuple[tuple[str, str], ...]:
-    """Return model pairs that need more evidence to certify relative frontiers."""
-
-    competitions = _local_competition_records(results_root)
-    requests: set[tuple[str, str]] = set()
-    runs_by_benchmark: dict[str, dict[str, _BenchmarkRunRecord]] = {}
-    for run in _local_run_records(
-        results_root,
-        include_model_details=False,
-    ):
-        benchmark_id = str(run.benchmark_id)
-        if not _benchmark_selected_for_relative_requests(benchmark_id, benchmark_selectors):
-            continue
-        best_runs = runs_by_benchmark.setdefault(benchmark_id, {})
-        current = best_runs.get(run.model_key)
-        if current is None or run.score > current.score:
-            best_runs[run.model_key] = run
-    for benchmark_id, best_runs in runs_by_benchmark.items():
-        benchmark_competitions = tuple(
-            competition
-            for competition in competitions
-            if competition.get("benchmark_id") == benchmark_id
-        )
-        outcomes = _pairwise_competition_outcomes(best_runs, benchmark_competitions)
-        requests.update(
-            _relative_frontier_competition_requests(best_runs, outcomes=outcomes)
-        )
-    return tuple(sorted(requests))
-
-
-def _benchmark_selected_for_relative_requests(
-    benchmark_id: str,
-    selectors: tuple[str, ...],
-) -> bool:
-    if not selectors:
-        return True
-    benchmark_name = benchmark_id.split("@", maxsplit=1)[0]
-    benchmark_atom = benchmark_name.rsplit(".", maxsplit=1)[-1]
-    return any(
-        selector in {benchmark_id, benchmark_name, benchmark_atom}
-        for selector in selectors
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,15 +433,6 @@ class _BenchmarkRunRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class _ModelCompetitionOutcome:
-    left_model_key: str
-    right_model_key: str
-    left_score: float
-    right_score: float
-    sample_count: int
-
-
-@dataclass(frozen=True, slots=True)
 class _EvaluationBundleSummary:
     run_slug: str
     benchmark_manifest: Mapping[str, object]
@@ -509,44 +444,6 @@ class _EvaluationBundleSummary:
     evaluation_protocol: Mapping[str, object]
     evaluation_curriculum: Mapping[str, object]
     throughput: Mapping[str, object]
-
-
-@dataclass(frozen=True, slots=True)
-class _AggregatedCompetitionPair:
-    lower_model_key: str
-    upper_model_key: str
-    lower_score_samples: float
-    upper_score_samples: float
-    sample_count: int
-    competition_count: int
-
-
-@dataclass(frozen=True, slots=True)
-class _RelativeModelRating:
-    score: float
-    sample_count: int
-    opponent_count: int
-    competition_count: int
-    uncertainty: float
-    provisional: bool
-
-
-@dataclass(frozen=True, slots=True)
-class _RelativeRatingFit:
-    ratings: Mapping[str, _RelativeModelRating]
-    model_index: Mapping[str, int]
-    covariance: tuple[tuple[float, ...], ...]
-
-
-@dataclass(frozen=True, slots=True)
-class _RelativeFrontierConfidence:
-    model_key: str
-    competitor_model_key: str | None
-    cost_axis: str
-    false_frontier_risk: float
-    rating_margin: float | None
-    margin_uncertainty: float | None
-    certified: bool
 
 
 def _known_benchmarks(
@@ -738,22 +635,6 @@ def _local_training_estimate_records(
                 training_summary=summary,
             )
         )
-    return tuple(records)
-
-
-def _local_competition_records(results_root: Path) -> tuple[Mapping[str, object], ...]:
-    evaluation_root = results_root / "evaluations"
-    if not evaluation_root.is_dir():
-        return ()
-    records: list[Mapping[str, object]] = []
-    for path in sorted(evaluation_root.rglob("competitions/*" + _document_suffix)):
-        record = load_object_document(path.read_bytes(), description="benchmark competition")
-        if record.get("format") != "leibniz.benchmark-competition":
-            continue
-        summary = BenchmarkCompetitionBundleSummary.from_record(record)
-        result = summary.competition_result_record()
-        _validate_competition_summary_record(result, "competition")
-        records.append(result)
     return tuple(records)
 
 
@@ -1338,7 +1219,6 @@ def _benchmark_result_record(
     benchmark: Benchmark,
     repository_root: Path,
     runs: tuple[_BenchmarkRunRecord, ...],
-    competitions: tuple[Mapping[str, object], ...],
 ) -> dict[str, object]:
     manifest = benchmark.manifest
     accepted_runs = tuple(run for run in runs if run.result_status == "accepted")
@@ -1347,7 +1227,6 @@ def _benchmark_result_record(
             accepted_runs,
             manifest=manifest,
             repository_root=repository_root,
-            competitions=competitions,
         )
     )
     model_candidates = tuple(
@@ -1355,13 +1234,11 @@ def _benchmark_result_record(
             runs,
             manifest=manifest,
             repository_root=repository_root,
-            competitions=(),
         )
     )
     record: dict[str, object] = {
         "benchmark_id": str(manifest.id),
         "cost_axes": _benchmark_cost_axis_records(),
-        "score_axes": _benchmark_score_axis_records(models),
         "leaderboard": list(models),
         "model_candidates": list(model_candidates),
         "frontiers": {
@@ -1389,18 +1266,6 @@ def _benchmark_cost_axis_records() -> list[dict[str, object]]:
     ]
 
 
-def _benchmark_score_axis_records(
-    models: tuple[Mapping[str, object], ...],
-) -> list[dict[str, object]]:
-    axes: list[dict[str, object]] = [{"key": "absolute", "label": "Absolute Score"}]
-    if any(
-        "relative" in _extract.mapping(model.get("score_views"), "score_views")
-        for model in models
-    ):
-        axes.append({"key": "relative", "label": "Relative Score"})
-    return axes
-
-
 def _benchmark_reference_curve_records(
     *,
     generator: Any,
@@ -1420,7 +1285,7 @@ def _benchmark_reference_curve_records(
             "key": "oracle_inference_compute",
             "label": "Oracle Reference",
             "x_axis": "inference_compute",
-            "y_axis": "absolute",
+            "y_axis": "score",
             "points": points,
         }
     ]
@@ -1599,17 +1464,14 @@ def _model_result_records(
     *,
     manifest: BenchmarkManifest,
     repository_root: Path,
-    competitions: tuple[Mapping[str, object], ...] = (),
 ) -> tuple[dict[str, object], ...]:
     grouped: dict[str, list[_BenchmarkRunRecord]] = {}
     for run in runs:
         grouped.setdefault(run.model_key, []).append(run)
 
-    competition_inference_compute = _competition_inference_compute_by_model(competitions)
     reference_baseline_complexity = _reference_baseline_complexity
     chance_mass = _chance_mass(manifest)
     records: list[dict[str, object]] = []
-    best_runs: dict[str, _BenchmarkRunRecord] = {}
     for model_key, model_runs in grouped.items():
         ordered_runs = tuple(sorted(model_runs, key=_run_sort_key))
         points = _competence_points(ordered_runs)
@@ -1621,7 +1483,6 @@ def _model_result_records(
             ordered_runs,
             key=lambda run: (run.score, -_cost_value(run.cost_summary, "storage_bytes")),
         )
-        best_runs[model_key] = best_run
         result_status = (
             "accepted"
             if any(run.result_status == "accepted" for run in ordered_runs)
@@ -1644,20 +1505,11 @@ def _model_result_records(
             "benchmark_id": str(best_run.benchmark_id),
             "score": score,
             "score_basis": score_basis,
-            "score_views": {
-                "absolute": {
-                    "key": "absolute",
-                    "label": "Absolute Score",
-                    "score": score,
-                    "basis": score_basis,
-                }
-            },
             "observed_complexities": [point["complexity"] for point in points],
             "points": list(points),
             "cost_summary": _model_cost_summary(
                 ordered_runs,
                 best_run=best_run,
-                competition_inference_compute=competition_inference_compute.get(model_key),
             ),
             "run_ids": [run.run_id for run in ordered_runs],
             "measurement_count": sum(run.measurement_count for run in ordered_runs),
@@ -1677,572 +1529,19 @@ def _model_result_records(
             inspection=best_run.model_inspection,
         )
         records.append(record)
-    _add_relative_score_views(records, best_runs=best_runs, competitions=competitions)
     return tuple(sorted(records, key=_model_sort_key))
 
-
-def _add_relative_score_views(
-    records: list[dict[str, object]],
-    *,
-    best_runs: Mapping[str, _BenchmarkRunRecord],
-    competitions: tuple[Mapping[str, object], ...],
-) -> None:
-    if len(records) < 2:
-        return
-    competition_outcomes = _pairwise_competition_outcomes(best_runs, competitions)
-    if not competition_outcomes:
-        return
-    rating_fit = _relative_rating_fit(best_runs, outcomes=competition_outcomes)
-    relative_ratings = rating_fit.ratings
-    frontier_confidence = _relative_frontier_confidence_by_model(
-        records,
-        rating_fit=rating_fit,
-    )
-    for record in records:
-        model_key = str(record["model_key"])
-        rating = relative_ratings.get(model_key, _baseline_relative_model_rating())
-        confidence_records = frontier_confidence.get(model_key, {})
-        score_views = cast(dict[str, object], record["score_views"])
-        score_views["relative"] = {
-            "key": "relative",
-            "label": "Relative Score",
-            "score": rating.score,
-            "basis": {
-                "kind": "model-competition-bradley-terry-batch-v1",
-                "score_unit": "rating-points",
-                "baseline": _relative_score_baseline,
-                "rating_projection": "regularized-batch-bradley-terry",
-                "competition_mechanic": "paired-prediction-accepted-mass",
-                "pair_outcome": "sample-weighted-normalized-score-share",
-                "tie_value": 0.5,
-                "prior_sample_weight": _relative_score_prior_sample_weight,
-                "competition_count": rating.competition_count,
-                "sample_count": rating.sample_count,
-                "opponent_count": rating.opponent_count,
-                "rating_uncertainty": rating.uncertainty,
-                "provisional": rating.provisional,
-                "frontier_confidence": confidence_records,
-            },
-        }
-
-
-_relative_score_baseline = 1000.0
-_relative_score_scale = 400.0
-_relative_score_prior_sample_weight = 2.0
-_relative_score_fit_iterations = 64
-_relative_score_fit_tolerance = 1e-10
-_relative_score_provisional_min_opponents = 2
-_relative_score_provisional_min_samples = 64
-_relative_frontier_false_risk_threshold = 0.05
-
-
-def _baseline_relative_model_rating() -> _RelativeModelRating:
-    return _RelativeModelRating(
-        score=_relative_score_baseline,
-        sample_count=0,
-        opponent_count=0,
-        competition_count=0,
-        uncertainty=_relative_score_points_per_logit()
-        / math.sqrt(_relative_score_prior_sample_weight),
-        provisional=True,
-    )
-
-
-def _relative_rating_fit(
-    best_runs: Mapping[str, _BenchmarkRunRecord],
-    *,
-    outcomes: tuple[_ModelCompetitionOutcome, ...],
-) -> _RelativeRatingFit:
-    model_keys = tuple(sorted(best_runs))
-    pairs = _aggregated_competition_pairs(outcomes)
-    if not pairs:
-        return _RelativeRatingFit(
-            ratings={model_key: _baseline_relative_model_rating() for model_key in model_keys},
-            model_index={model_key: index for index, model_key in enumerate(model_keys)},
-            covariance=tuple(
-                tuple(
-                    (1.0 / _relative_score_prior_sample_weight) if row == column else 0.0
-                    for column in range(len(model_keys))
-                )
-                for row in range(len(model_keys))
-            ),
-        )
-    model_index = {model_key: index for index, model_key in enumerate(model_keys)}
-    logits = _fit_bradley_terry_logits(
-        model_count=len(model_keys),
-        model_index=model_index,
-        pairs=pairs,
-    )
-    information = _bradley_terry_information_matrix(
-        logits=logits,
-        model_index=model_index,
-        pairs=pairs,
-    )
-    covariance = _invert_positive_definite_matrix(information)
-    evidence = _relative_rating_evidence(model_keys=model_keys, pairs=pairs)
-    points_per_logit = _relative_score_points_per_logit()
-    ratings: dict[str, _RelativeModelRating] = {}
-    for model_key in model_keys:
-        index = model_index[model_key]
-        sample_count, opponent_count, competition_count = evidence[model_key]
-        uncertainty = points_per_logit * math.sqrt(max(covariance[index][index], 0.0))
-        ratings[model_key] = _RelativeModelRating(
-            score=_relative_score_baseline + points_per_logit * logits[index],
-            sample_count=sample_count,
-            opponent_count=opponent_count,
-            competition_count=competition_count,
-            uncertainty=uncertainty,
-            provisional=(
-                opponent_count < _relative_score_provisional_min_opponents
-                or sample_count < _relative_score_provisional_min_samples
-            ),
-        )
-    return _RelativeRatingFit(
-        ratings=ratings,
-        model_index=model_index,
-        covariance=tuple(tuple(row) for row in covariance),
-    )
-
-
-def _relative_frontier_confidence_by_model(
-    records: list[dict[str, object]],
-    *,
-    rating_fit: _RelativeRatingFit,
-) -> dict[str, dict[str, object]]:
-    confidence_by_model: dict[str, dict[str, object]] = {}
-    for confidence in _relative_frontier_confidence_records(
-        records,
-        rating_fit=rating_fit,
-    ):
-        model_record = confidence_by_model.setdefault(confidence.model_key, {})
-        record: dict[str, object] = {
-            "certified": confidence.certified,
-            "false_frontier_risk": confidence.false_frontier_risk,
-            "risk_threshold": _relative_frontier_false_risk_threshold,
-        }
-        if confidence.competitor_model_key is not None:
-            record["competitor_model_key"] = confidence.competitor_model_key
-        if confidence.rating_margin is not None:
-            record["rating_margin"] = confidence.rating_margin
-        if confidence.margin_uncertainty is not None:
-            record["margin_uncertainty"] = confidence.margin_uncertainty
-        model_record[confidence.cost_axis] = record
-    return confidence_by_model
-
-
-def _relative_frontier_confidence_records(
-    records: list[dict[str, object]],
-    *,
-    rating_fit: _RelativeRatingFit,
-) -> tuple[_RelativeFrontierConfidence, ...]:
-    confidence: list[_RelativeFrontierConfidence] = []
-    for cost_axis in _benchmark_cost_axis_keys:
-        try:
-            frontier_records = _relative_frontier_model_records(
-                records,
-                cost_axis=cost_axis,
-                rating_fit=rating_fit,
-            )
-        except LocalResultImportError:
-            continue
-        for record in frontier_records:
-            try:
-                competitor = _nearest_relative_frontier_competitor(
-                    records,
-                    frontier_record=record,
-                    cost_axis=cost_axis,
-                    rating_fit=rating_fit,
-                )
-            except LocalResultImportError:
-                continue
-            model_key = str(record["model_key"])
-            if competitor is None:
-                confidence.append(
-                    _RelativeFrontierConfidence(
-                        model_key=model_key,
-                        competitor_model_key=None,
-                        cost_axis=cost_axis,
-                        false_frontier_risk=0.0,
-                        rating_margin=None,
-                        margin_uncertainty=None,
-                        certified=True,
-                    )
-                )
-                continue
-            competitor_key = str(competitor["model_key"])
-            margin = rating_fit.ratings[model_key].score - rating_fit.ratings[competitor_key].score
-            uncertainty = _relative_rating_margin_uncertainty(
-                rating_fit=rating_fit,
-                left_model_key=model_key,
-                right_model_key=competitor_key,
-            )
-            risk = _normal_cdf(-margin / uncertainty) if uncertainty > 0.0 else 0.0
-            confidence.append(
-                _RelativeFrontierConfidence(
-                    model_key=model_key,
-                    competitor_model_key=competitor_key,
-                    cost_axis=cost_axis,
-                    false_frontier_risk=risk,
-                    rating_margin=margin,
-                    margin_uncertainty=uncertainty,
-                    certified=risk <= _relative_frontier_false_risk_threshold,
-                )
-            )
-    return tuple(confidence)
-
-
-def _relative_frontier_competition_requests(
-    best_runs: Mapping[str, _BenchmarkRunRecord],
-    *,
-    outcomes: tuple[_ModelCompetitionOutcome, ...],
-) -> tuple[tuple[str, str], ...]:
-    if len(best_runs) < 2:
-        return ()
-    records: list[dict[str, object]] = [
-        {
-            "model_key": model_key,
-            "score_views": {},
-            "cost_summary": _run_cost_summary(run),
-        }
-        for model_key, run in best_runs.items()
-    ]
-    rating_fit = _relative_rating_fit(best_runs, outcomes=outcomes)
-    requested: set[tuple[str, str]] = set()
-    for confidence in _relative_frontier_confidence_records(
-        records,
-        rating_fit=rating_fit,
-    ):
-        if confidence.certified or confidence.competitor_model_key is None:
-            continue
-        lower, upper = sorted((confidence.model_key, confidence.competitor_model_key))
-        requested.add((lower, upper))
-    return tuple(sorted(requested))
-
-
-def _aggregated_competition_pairs(
-    outcomes: tuple[_ModelCompetitionOutcome, ...],
-) -> tuple[_AggregatedCompetitionPair, ...]:
-    aggregates: dict[tuple[str, str], list[float]] = {}
-    for outcome in sorted(
-        outcomes,
-        key=lambda item: (item.left_model_key, item.right_model_key),
-    ):
-        if outcome.left_model_key == outcome.right_model_key:
-            continue
-        lower, upper = sorted((outcome.left_model_key, outcome.right_model_key))
-        lower_share = (
-            _normalized_pair_score(outcome.left_score, outcome.right_score)
-            if outcome.left_model_key == lower
-            else _normalized_pair_score(outcome.right_score, outcome.left_score)
-        )
-        values = aggregates.setdefault((lower, upper), [0.0, 0.0, 0.0])
-        values[0] += lower_share * outcome.sample_count
-        values[1] += (1.0 - lower_share) * outcome.sample_count
-        values[2] += 1.0
-    return tuple(
-        _AggregatedCompetitionPair(
-            lower_model_key=lower,
-            upper_model_key=upper,
-            lower_score_samples=values[0],
-            upper_score_samples=values[1],
-            sample_count=int(round(values[0] + values[1])),
-            competition_count=int(values[2]),
-        )
-        for (lower, upper), values in sorted(aggregates.items())
-    )
-
-
-def _fit_bradley_terry_logits(
-    *,
-    model_count: int,
-    model_index: Mapping[str, int],
-    pairs: tuple[_AggregatedCompetitionPair, ...],
-) -> list[float]:
-    logits = [0.0] * model_count
-    for _iteration in range(_relative_score_fit_iterations):
-        gradient, information = _bradley_terry_gradient_and_information(
-            logits=logits,
-            model_index=model_index,
-            pairs=pairs,
-        )
-        step = _solve_linear_system(information, gradient)
-        max_step = max((abs(value) for value in step), default=0.0)
-        logits = [logit + value for logit, value in zip(logits, step, strict=True)]
-        mean_logit = sum(logits) / len(logits)
-        logits = [logit - mean_logit for logit in logits]
-        if max_step < _relative_score_fit_tolerance:
-            break
-    return logits
-
-
-def _bradley_terry_information_matrix(
-    *,
-    logits: list[float],
-    model_index: Mapping[str, int],
-    pairs: tuple[_AggregatedCompetitionPair, ...],
-) -> list[list[float]]:
-    _gradient, information = _bradley_terry_gradient_and_information(
-        logits=logits,
-        model_index=model_index,
-        pairs=pairs,
-    )
-    return information
-
-
-def _bradley_terry_gradient_and_information(
-    *,
-    logits: list[float],
-    model_index: Mapping[str, int],
-    pairs: tuple[_AggregatedCompetitionPair, ...],
-) -> tuple[list[float], list[list[float]]]:
-    model_count = len(logits)
-    gradient = [-_relative_score_prior_sample_weight * logit for logit in logits]
-    information = [
-        [0.0 for _column in range(model_count)]
-        for _row in range(model_count)
-    ]
-    for index in range(model_count):
-        information[index][index] = _relative_score_prior_sample_weight
-    for pair in pairs:
-        lower_index = model_index[pair.lower_model_key]
-        upper_index = model_index[pair.upper_model_key]
-        total = pair.lower_score_samples + pair.upper_score_samples
-        expected = _logistic(logits[lower_index] - logits[upper_index])
-        residual = pair.lower_score_samples - total * expected
-        gradient[lower_index] += residual
-        gradient[upper_index] -= residual
-        weight = total * expected * (1.0 - expected)
-        information[lower_index][lower_index] += weight
-        information[upper_index][upper_index] += weight
-        information[lower_index][upper_index] -= weight
-        information[upper_index][lower_index] -= weight
-    return gradient, information
-
-
-def _relative_rating_evidence(
-    *,
-    model_keys: tuple[str, ...],
-    pairs: tuple[_AggregatedCompetitionPair, ...],
-) -> dict[str, tuple[int, int, int]]:
-    samples = dict.fromkeys(model_keys, 0)
-    competitions = dict.fromkeys(model_keys, 0)
-    opponents = {model_key: set[str]() for model_key in model_keys}
-    for pair in pairs:
-        samples[pair.lower_model_key] += pair.sample_count
-        samples[pair.upper_model_key] += pair.sample_count
-        competitions[pair.lower_model_key] += pair.competition_count
-        competitions[pair.upper_model_key] += pair.competition_count
-        opponents[pair.lower_model_key].add(pair.upper_model_key)
-        opponents[pair.upper_model_key].add(pair.lower_model_key)
-    return {
-        model_key: (
-            samples[model_key],
-            len(opponents[model_key]),
-            competitions[model_key],
-        )
-        for model_key in model_keys
-    }
-
-
-def _relative_score_points_per_logit() -> float:
-    return _relative_score_scale / math.log(10.0)
-
-
-def _relative_frontier_model_records(
-    records: list[dict[str, object]],
-    *,
-    cost_axis: str,
-    rating_fit: _RelativeRatingFit,
-) -> tuple[dict[str, object], ...]:
-    ordered = sorted(
-        (
-            record
-            for record in records
-            if str(record["model_key"]) in rating_fit.ratings
-            and _optional_cost_value(
-                _extract.mapping(record["cost_summary"], "cost_summary"),
-                cost_axis,
-            )
-            is not None
-        ),
-        key=lambda record: (
-            _cost_value(_extract.mapping(record["cost_summary"], "cost_summary"), cost_axis),
-            -rating_fit.ratings[str(record["model_key"])].score,
-            str(record["model_key"]),
-        ),
-    )
-    frontier: list[dict[str, object]] = []
-    best_score = -math.inf
-    for record in ordered:
-        score = rating_fit.ratings[str(record["model_key"])].score
-        if score > best_score:
-            frontier.append(record)
-            best_score = score
-    return tuple(frontier)
-
-
-def _nearest_relative_frontier_competitor(
-    records: list[dict[str, object]],
-    *,
-    frontier_record: dict[str, object],
-    cost_axis: str,
-    rating_fit: _RelativeRatingFit,
-) -> dict[str, object] | None:
-    frontier_key = str(frontier_record["model_key"])
-    frontier_cost = _cost_value(
-        _extract.mapping(frontier_record["cost_summary"], "cost_summary"),
-        cost_axis,
-    )
-    candidates = [
-        record
-        for record in records
-        if str(record["model_key"]) != frontier_key
-        and str(record["model_key"]) in rating_fit.ratings
-        and (
-            cost := _optional_cost_value(
-                _extract.mapping(record["cost_summary"], "cost_summary"),
-                cost_axis,
-            )
-        )
-        is not None
-        and cost <= frontier_cost
-    ]
-    if not candidates:
-        return None
-    return max(
-        candidates,
-        key=lambda record: (
-            rating_fit.ratings[str(record["model_key"])].score,
-            -abs(
-                frontier_cost
-                - _cost_value(_extract.mapping(record["cost_summary"], "cost_summary"), cost_axis)
-            ),
-            str(record["model_key"]),
-        ),
-    )
-
-def _relative_rating_margin_uncertainty(
-    *,
-    rating_fit: _RelativeRatingFit,
-    left_model_key: str,
-    right_model_key: str,
-) -> float:
-    left_index = rating_fit.model_index[left_model_key]
-    right_index = rating_fit.model_index[right_model_key]
-    covariance = rating_fit.covariance
-    variance = (
-        covariance[left_index][left_index]
-        + covariance[right_index][right_index]
-        - 2.0 * covariance[left_index][right_index]
-    )
-    return _relative_score_points_per_logit() * math.sqrt(max(variance, 0.0))
-
-
-def _pairwise_competition_outcomes(
-    best_runs: Mapping[str, _BenchmarkRunRecord],
-    competitions: tuple[Mapping[str, object], ...],
-) -> tuple[_ModelCompetitionOutcome, ...]:
-    known_models = set(best_runs)
-    outcomes: list[_ModelCompetitionOutcome] = []
-    for competition in competitions:
-        left_model_key = _extract.non_empty_string(
-            competition.get("left_model_key"),
-            "competition.left_model_key",
-        )
-        right_model_key = _extract.non_empty_string(
-            competition.get("right_model_key"),
-            "competition.right_model_key",
-        )
-        if left_model_key not in known_models or right_model_key not in known_models:
-            continue
-        outcomes.append(
-            _ModelCompetitionOutcome(
-                left_model_key=left_model_key,
-                right_model_key=right_model_key,
-                left_score=_as_probability(
-                    competition.get("left_score"),
-                    "competition.left_score",
-                ),
-                right_score=_as_probability(
-                    competition.get("right_score"),
-                    "competition.right_score",
-                ),
-                sample_count=_as_positive_int(
-                    competition.get("sample_count"),
-                    "competition.sample_count",
-                ),
-            )
-        )
-    return tuple(outcomes)
-
-
-def _normalized_pair_score(left_score: float, right_score: float) -> float:
-    total = left_score + right_score
-    if total <= 0.0:
-        return 0.5
-    return left_score / total
-
-
-def _logistic(value: float) -> float:
-    if value >= 0.0:
-        factor = math.exp(-value)
-        return 1.0 / (1.0 + factor)
-    factor = math.exp(value)
-    return factor / (1.0 + factor)
-
-
-def _normal_cdf(value: float) -> float:
-    return 0.5 * math.erfc(-value / math.sqrt(2.0))
-
-
-def _solve_linear_system(matrix: list[list[float]], vector: list[float]) -> list[float]:
-    size = len(vector)
-    augmented = [row.copy() + [value] for row, value in zip(matrix, vector, strict=True)]
-    for column in range(size):
-        pivot_row = max(range(column, size), key=lambda row: abs(augmented[row][column]))
-        pivot = augmented[pivot_row][column]
-        if abs(pivot) <= 0.0:
-            raise LocalResultImportError("relative rating fit has singular information matrix")
-        if pivot_row != column:
-            augmented[column], augmented[pivot_row] = augmented[pivot_row], augmented[column]
-        inverse_pivot = 1.0 / augmented[column][column]
-        for index in range(column, size + 1):
-            augmented[column][index] *= inverse_pivot
-        for row in range(size):
-            if row == column:
-                continue
-            factor = augmented[row][column]
-            if factor == 0.0:
-                continue
-            for index in range(column, size + 1):
-                augmented[row][index] -= factor * augmented[column][index]
-    return [augmented[row][size] for row in range(size)]
-
-
-def _invert_positive_definite_matrix(matrix: list[list[float]]) -> list[list[float]]:
-    size = len(matrix)
-    columns: list[list[float]] = []
-    for column in range(size):
-        unit = [0.0] * size
-        unit[column] = 1.0
-        columns.append(_solve_linear_system(matrix, unit))
-    return [
-        [columns[column][row] for column in range(size)]
-        for row in range(size)
-    ]
 
 def _model_cost_summary(
     runs: tuple[_BenchmarkRunRecord, ...],
     *,
     best_run: _BenchmarkRunRecord,
-    competition_inference_compute: float | None = None,
 ) -> dict[str, object]:
     cost_summary = _run_cost_summary(best_run)
     cost_summary.pop("parameter_count", None)
     cost_summary.pop("inference_compute", None)
     inference_compute = _model_measured_inference_compute(
         runs,
-        competition_inference_compute=competition_inference_compute,
     )
     if inference_compute is not None:
         cost_summary["inference_compute"] = inference_compute
@@ -2257,16 +1556,12 @@ def _model_cost_summary(
 
 def _model_measured_inference_compute(
     runs: tuple[_BenchmarkRunRecord, ...],
-    *,
-    competition_inference_compute: float | None,
 ) -> float | None:
     values = [
         value
         for run in runs
         if (value := _optional_cost_value(run.cost_summary, "inference_compute")) is not None
     ]
-    if competition_inference_compute is not None:
-        values.append(competition_inference_compute)
     if not values:
         return None
     return max(values)
@@ -2284,32 +1579,6 @@ def _throughput_max_inference_compute(
     if field not in record:
         return None
     return _as_nonnegative_number(record[field], field_path)
-
-
-def _competition_inference_compute_by_model(
-    competitions: tuple[Mapping[str, object], ...],
-) -> dict[str, float]:
-    values: dict[str, float] = {}
-    for competition in competitions:
-        throughput = competition.get("throughput")
-        if not isinstance(throughput, Mapping):
-            continue
-        throughput_record = cast(Mapping[str, object], throughput)
-        for model_field, compute_field in (
-            ("left_model_key", "left_max_inference_compute"),
-            ("right_model_key", "right_max_inference_compute"),
-        ):
-            model_key = competition.get(model_field)
-            if not isinstance(model_key, str) or not model_key:
-                continue
-            compute = _throughput_max_inference_compute(
-                throughput_record,
-                f"competition.throughput.{compute_field}",
-                field=compute_field,
-            )
-            if compute is not None:
-                values[model_key] = max(values.get(model_key, compute), compute)
-    return values
 
 
 def _run_training_compute_value(run: _BenchmarkRunRecord) -> float | None:
@@ -3269,7 +2538,6 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
             "benchmark_id",
             "complexity_axis",
             "cost_axes",
-            "score_axes",
             "leaderboard",
             "model_candidates",
             "frontiers",
@@ -3288,12 +2556,6 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
         _require_string_fields(
             _extract.mapping(axis, f"cost_axes.{index}"),
             f"cost_axes.{index}",
-            ("key", "label"),
-        )
-    for index, axis in enumerate(_as_sequence(record.get("score_axes", ()), "score_axes")):
-        _require_string_fields(
-            _extract.mapping(axis, f"score_axes.{index}"),
-            f"score_axes.{index}",
             ("key", "label"),
         )
     for index, model in enumerate(_record_sequence(record, "leaderboard")):
@@ -3394,17 +2656,6 @@ def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
             ),
             _field_path(prefix, "console_view_model"),
         )
-    if "score_views" in record:
-        for key, view in _extract.mapping(
-            record["score_views"],
-            _field_path(prefix, "score_views"),
-        ).items():
-            view_path = _field_path(prefix, f"score_views.{key}")
-            view_record = _extract.mapping(view, view_path)
-            _require_string_fields(view_record, view_path, ("key", "label"))
-            _as_nonnegative_number(view_record.get("score"), _field_path(view_path, "score"))
-            if "basis" in view_record:
-                _extract.mapping(view_record["basis"], _field_path(view_path, "basis"))
     if "training_estimate_comparison" in record:
         _validate_training_estimate_comparison(
             _extract.mapping(
@@ -3465,28 +2716,6 @@ def _validate_training_estimate_comparison(
                 point_record["score_delta"],
                 _field_path(point_path, "score_delta"),
             )
-
-
-def _validate_competition_summary_record(record: Mapping[str, object], prefix: str) -> None:
-    if record.get("format") != "leibniz.model-competition":
-        raise LocalResultImportError(f"{prefix}: unsupported format")
-    if record.get("format_version") != 1:
-        raise LocalResultImportError(f"{prefix}: unsupported format_version")
-    _require_string_fields(
-        record,
-        prefix,
-        (
-            "benchmark_id",
-            "competition_id",
-            "left_model_key",
-            "right_model_key",
-        ),
-    )
-    _as_positive_int(record.get("sample_count"), _field_path(prefix, "sample_count"))
-    _as_probability(record.get("left_score"), _field_path(prefix, "left_score"))
-    _as_probability(record.get("right_score"), _field_path(prefix, "right_score"))
-    if "throughput" in record:
-        _extract.mapping(record["throughput"], _field_path(prefix, "throughput"))
 
 
 def _validate_run_result(record: Mapping[str, object], prefix: str) -> None:

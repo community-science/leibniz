@@ -3,8 +3,6 @@ import {
   benchmarkCostAxis,
   benchmarkPlotModel,
   benchmarkResultsForTask,
-  benchmarkScoreAxes,
-  benchmarkScoreAxis,
   emptyFrontiersForCostAxes,
   modelComparisonRows,
   nextModelResultSort,
@@ -39,26 +37,11 @@ assertEqual(
   'inference_compute',
   'missing cost axis fallback',
 );
-assertEqual(
-  benchmarkScoreAxes(undefined).map((axis) => axis.key).join(','),
-  'absolute,relative',
-  'default score axes',
-);
-assertEqual(
-  benchmarkScoreAxis('missing_axis', benchmarkScoreAxes(undefined)),
-  'absolute',
-  'missing score axis fallback',
-);
-
 const result: BenchmarkResultRecord = {
   benchmark_id: targetBenchmark,
   cost_axes: [
     { key: 'inference_compute', label: 'Inference Compute' },
     { key: 'storage_bytes', label: 'Model Size' },
-  ],
-  score_axes: [
-    { key: 'absolute', label: 'Absolute Score' },
-    { key: 'relative', label: 'Relative Score' },
   ],
   frontiers: {
     storage_bytes: [
@@ -78,10 +61,6 @@ const result: BenchmarkResultRecord = {
         points: [],
         run_ids: ['run-a'],
         score: 0.75,
-        score_views: {
-          absolute: { key: 'absolute', label: 'Absolute Score', score: 0.75 },
-          relative: { key: 'relative', label: 'Relative Score', score: 1200 },
-        },
         source_kinds: ['local'],
       },
     ],
@@ -103,10 +82,6 @@ const result: BenchmarkResultRecord = {
       points: [],
       run_ids: ['run-a'],
       score: 0.75,
-      score_views: {
-        absolute: { key: 'absolute', label: 'Absolute Score', score: 0.75 },
-        relative: { key: 'relative', label: 'Relative Score', score: 1200 },
-      },
       source_kinds: ['local'],
     },
     {
@@ -125,10 +100,6 @@ const result: BenchmarkResultRecord = {
       points: [],
       run_ids: ['run-b'],
       score: 0.5,
-      score_views: {
-        absolute: { key: 'absolute', label: 'Absolute Score', score: 0.5 },
-        relative: { key: 'relative', label: 'Relative Score', score: 900 },
-      },
       source_kinds: ['local'],
     },
   ],
@@ -149,10 +120,6 @@ const result: BenchmarkResultRecord = {
       points: [],
       run_ids: ['run-a'],
       score: 0.75,
-      score_views: {
-        absolute: { key: 'absolute', label: 'Absolute Score', score: 0.75 },
-        relative: { key: 'relative', label: 'Relative Score', score: 1200 },
-      },
       source_kinds: ['local'],
     },
     {
@@ -171,10 +138,6 @@ const result: BenchmarkResultRecord = {
       points: [],
       run_ids: ['run-b'],
       score: 0.5,
-      score_views: {
-        absolute: { key: 'absolute', label: 'Absolute Score', score: 0.5 },
-        relative: { key: 'relative', label: 'Relative Score', score: 900 },
-      },
       source_kinds: ['local'],
     },
   ],
@@ -184,7 +147,7 @@ const result: BenchmarkResultRecord = {
       key: 'oracle_inference_compute',
       label: 'Oracle Reference',
       x_axis: 'inference_compute',
-      y_axis: 'absolute',
+      y_axis: 'score',
       points: [
         { complexity: 1, score: 1, cost: 16 },
         { complexity: 2, score: 2, cost: 64 },
@@ -435,12 +398,8 @@ assertEqual(
   'result-local model inspection match',
 );
 const plotModel = benchmarkPlotModel(result, 'storage_bytes');
-const relativePlotModel = benchmarkPlotModel(result, 'storage_bytes', 'relative');
 assertEqual(plotModel.points.length, 2, 'plot point count');
-assertEqual(benchmarkScoreAxes(result).map((axis) => axis.key).join(','), 'absolute,relative', 'result score axes');
-assertEqual(benchmarkScoreAxis('relative', benchmarkScoreAxes(result)), 'relative', 'relative score axis');
 assertEqual(plotModel.frontierPoints.length, 1, 'plot frontier count');
-assertEqual(relativePlotModel.points[0]?.score, 1200, 'relative plot score');
 assertEqual(plotModel.staircase.length, 1, 'plot staircase point count');
 const provisionalScalePlotModel = benchmarkPlotModel(
   {
@@ -453,10 +412,6 @@ const provisionalScalePlotModel = benchmarkPlotModel(
       {
         ...result.model_candidates[1]!,
         score: 6,
-        score_views: {
-          ...result.model_candidates[1]!.score_views,
-          absolute: { key: 'absolute', label: 'Absolute Score', score: 6 },
-        },
       },
     ],
     plot_runs: [
@@ -488,18 +443,12 @@ const repeatedArchitectureResult: BenchmarkResultRecord = {
       model_key: 'checkpoint-a',
       run_ids: ['run-a'],
       score: 8,
-      score_views: {
-        absolute: { key: 'absolute', label: 'Absolute Score', score: 8 },
-      },
     },
     {
       ...result.leaderboard[0]!,
       model_key: 'checkpoint-b',
       run_ids: ['run-b'],
       score: 9,
-      score_views: {
-        absolute: { key: 'absolute', label: 'Absolute Score', score: 9 },
-      },
     },
   ],
   model_candidates: [],
@@ -554,64 +503,41 @@ assertEqual(inferenceComputePlotModel.xDomain[1], 10, 'oracle reference does not
 assertEqual(inferenceComputePlotModel.yDomain[1], 1, 'oracle reference does not expand y domain');
 assertEqual(plotModel.referenceCurves.length, 0, 'model size omits inference oracle reference');
 assertEqual(plotModel.yDomain[0], 0, 'plot y starts at zero');
-assertEqual(plotModel.yDomain[1], 1, 'absolute plot y ceiling defaults to one');
-assertEqual(relativePlotModel.yDomain[0], 0, 'relative plot y starts at zero');
-assertEqual(relativePlotModel.yDomain[1], 2000, 'relative plot y ceiling defaults to two thousand');
-assertEqual(plotModel.yTicks.join(','), '0,0.2,0.4,0.6,0.8,1', 'absolute plot y ticks');
-assertEqual(relativePlotModel.yTicks.join(','), '0,500,1000,1500,2000', 'relative plot y ticks');
-assertEqual(scoreTickLabel(1200), '1,200', 'relative score tick label');
+assertEqual(plotModel.yDomain[1], 1, 'score plot y ceiling defaults to one');
+assertEqual(plotModel.yTicks.join(','), '0,0.2,0.4,0.6,0.8,1', 'score plot y ticks');
 assertEqual(scoreTickLabel(0.2), '0.2', 'fractional score tick label');
-const acceptedDominatedRelativeScaleResult: BenchmarkResultRecord = {
-  ...result,
-  plot_runs: [
-    {
-      ...result.plot_runs[1]!,
-    },
-  ],
-};
-assertEqual(
-  benchmarkPlotModel(acceptedDominatedRelativeScaleResult, 'storage_bytes', 'relative').yDomain[1],
-  2000,
-  'relative plot y ceiling uses default when accepted frontier points fit',
-);
-const expandedRelativeScaleResult: BenchmarkResultRecord = {
+const expandedScoreScaleResult: BenchmarkResultRecord = {
   ...result,
   frontiers: {
     ...result.frontiers,
     storage_bytes: [
       {
         ...result.frontiers.storage_bytes[0]!,
-        score_views: {
-          ...result.frontiers.storage_bytes[0]!.score_views,
-          relative: { key: 'relative', label: 'Relative Score', score: 2600 },
-        },
+        score: 2.6,
       },
     ],
   },
   leaderboard: [
     {
       ...result.leaderboard[0]!,
-      score_views: {
-        ...result.leaderboard[0]!.score_views,
-        relative: { key: 'relative', label: 'Relative Score', score: 2600 },
-      },
+      score: 2.6,
     },
     result.leaderboard[1]!,
   ],
 };
-const expandedRelativePlotModel = benchmarkPlotModel(expandedRelativeScaleResult, 'storage_bytes', 'relative');
+const expandedScorePlotModel = benchmarkPlotModel(expandedScoreScaleResult, 'storage_bytes');
 assertEqual(
-  expandedRelativePlotModel.yDomain[1],
-  5500,
-  'relative plot y ceiling expands to twice the maximum rounded to a grid tick',
+  expandedScorePlotModel.yDomain[1],
+  5.5,
+  'score plot y ceiling expands to twice the maximum rounded to a grid tick',
 );
 assertEqual(
-  expandedRelativePlotModel.yTicks.join(','),
-  '0,500,1000,1500,2000,2500,3000,3500,4000,4500,5000,5500',
-  'expanded relative plot y ticks',
+  expandedScorePlotModel.yTicks.join(','),
+  '0,1,2,3,4,5',
+  'expanded score plot y ticks',
 );
 assertEqual(
-  sortedModelResults(result.leaderboard, 'storage_bytes', 'absolute', {
+  sortedModelResults(result.leaderboard, 'storage_bytes', {
     key: 'cost',
     direction: 'descending',
   })[0]?.model_key,
@@ -619,12 +545,12 @@ assertEqual(
   'model cost sort',
 );
 assertEqual(
-  sortedModelResults(result.leaderboard, 'storage_bytes', 'relative', {
+  sortedModelResults(result.leaderboard, 'storage_bytes', {
     key: 'score',
     direction: 'ascending',
   })[0]?.model_key,
   'model-b',
-  'relative score sort',
+  'score sort',
 );
 assertEqual(
   nextModelResultSort({ key: 'score', direction: 'descending' }, 'score').direction,

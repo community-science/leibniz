@@ -60,7 +60,6 @@ def test_cli_validate_help_lists_expanded_artifacts(capsys: pytest.CaptureFixtur
     assert "architecture" in output
     assert "submission-registry" in output
     assert "evaluation-bundle" in output
-    assert "competition-bundle" in output
 
 
 def test_cli_benchmark_evaluate_keeps_checkpoint_artifact_contract(
@@ -424,7 +423,6 @@ def test_cli_validates_model_interface_with_outcome_space(
         "projection-record",
         "model-derivation",
         "evaluation-bundle",
-        "competition-bundle",
         "submission-registry",
     ],
 )
