@@ -274,7 +274,7 @@ assertEqual(
 );
 assertEqual(
   chessSample.image_overlay?.moves.some(
-    (move) => move.from.join(',') === '2,7' && move.to.join(',') === '1,6',
+    (move) => move.from.join(',') === '2,6' && move.to.join(',') === '1,7',
   ),
   true,
   'chess sample queen legal move overlay',
