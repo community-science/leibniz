@@ -230,7 +230,10 @@ function assertBenchmarkFrontierPlotStructure() {
   );
   const requiredDashboardMarkers = [
     'frontier-chart-legend',
+    'frontier-chart-reference-curve',
     'frontier-chart-tooltip-kicker',
+    '<clipPath id={plotClipId}>',
+    '<g clipPath={`url(#${plotClipId})`}>',
     'models={frontierModels}',
     'const renderedPoints = [...visiblePoints].sort(comparePlotPointRenderOrder)',
     'left.frontier ? 1 : -1',
@@ -266,6 +269,9 @@ function assertBenchmarkFrontierPlotStructure() {
     if (dashboard.includes(marker)) {
       throw new Error(`BenchmarkResultDashboard must not expose unsupported frontier summary UI: ${marker}`);
     }
+  }
+  if (dashboard.includes('No model results yet') || dashboard.includes('frontier-chart-empty-label')) {
+    throw new Error('BenchmarkResultDashboard must render reference-only plots instead of an empty state');
   }
 
   const requiredStyleMarkers = [

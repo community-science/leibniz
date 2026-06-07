@@ -271,7 +271,7 @@ function BenchmarkModelsPane({
   result: BenchmarkResultRecord | undefined;
   selectedModelKey: string;
 }) {
-  const costAxis = benchmarkCostAxes(result)[0]?.key ?? 'storage_bytes';
+  const costAxis = benchmarkCostAxes(result)[0]?.key ?? 'inference_compute';
   const selectedRow =
     rows.find(({ model }) => model.model_key === selectedModelKey) ?? rows[0];
 

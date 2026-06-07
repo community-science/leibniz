@@ -33,9 +33,22 @@ export type BenchmarkPlotModelPoint = {
   run?: RunResultRecord;
 };
 
+export type BenchmarkReferenceCurvePoint = {
+  cost: number;
+  logCost: number;
+  score: number;
+};
+
+export type BenchmarkReferenceCurve = {
+  key: string;
+  label: string;
+  points: BenchmarkReferenceCurvePoint[];
+};
+
 export type BenchmarkPlotModel = {
   points: BenchmarkPlotModelPoint[];
   frontierPoints: BenchmarkPlotModelPoint[];
+  referenceCurves: BenchmarkReferenceCurve[];
   xDomain: [number, number];
   xLogBase: number;
   yDomain: [number, number];
@@ -62,12 +75,12 @@ const standardScoreAxes: ScoreAxisRecord[] = [
 ];
 const standardCostAxisGroups: BenchmarkCostAxisGroup[] = [
   {
-    axes: [{ key: 'storage_bytes', label: 'Model Size' }],
-    key: 'model',
-  },
-  {
     axes: [{ key: 'inference_compute', label: 'Inference Compute' }],
     key: 'inference',
+  },
+  {
+    axes: [{ key: 'storage_bytes', label: 'Model Size' }],
+    key: 'model',
   },
   {
     axes: [{ key: 'training_compute', label: 'Training Compute' }],
@@ -216,6 +229,7 @@ export function benchmarkPlotModel(
     .map((model) => plotPoint(model, costAxis, scoreAxis, true))
     .filter((point): point is BenchmarkPlotModelPoint => point !== null)
     .sort((left, right) => left.cost - right.cost || right.score - left.score);
+  const referenceCurves = referenceCurvePlotModels(result, costAxis, scoreAxis);
   const xLogBase = costAxisLogBase();
   const costLogs = points.map((point) => point.logCost);
   const scores = [...points, ...frontierPoints].map((point) => point.score);
@@ -225,6 +239,7 @@ export function benchmarkPlotModel(
   return {
     points,
     frontierPoints,
+    referenceCurves,
     xDomain,
     xLogBase,
     yDomain,
@@ -234,6 +249,32 @@ export function benchmarkPlotModel(
     yTicks: scoreTicks(yDomain),
     staircase: staircasePoints(frontierPoints),
   };
+}
+
+function referenceCurvePlotModels(
+  result: BenchmarkResultRecord,
+  costAxis: string,
+  scoreAxis: string,
+): BenchmarkReferenceCurve[] {
+  return (result.reference_curves ?? [])
+    .filter((curve) => curve.x_axis === costAxis && curve.y_axis === scoreAxis)
+    .map((curve) => ({
+      key: curve.key,
+      label: curve.label,
+      points: curve.points
+        .filter((point) =>
+          Number.isFinite(point.cost) &&
+          point.cost > 0 &&
+          Number.isFinite(point.score),
+        )
+        .map((point) => ({
+          cost: point.cost,
+          logCost: logCost(point.cost),
+          score: point.score,
+        }))
+        .sort((left, right) => left.cost - right.cost || left.score - right.score),
+    }))
+    .filter((curve) => curve.points.length >= 2);
 }
 
 export function sortedModelResults(

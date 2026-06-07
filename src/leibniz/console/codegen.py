@@ -140,6 +140,7 @@ export type BenchmarkResultRecord = {
   leaderboard: ModelResultRecord[];
   model_candidates: ModelResultRecord[];
   frontiers: Record<string, ModelResultRecord[]>;
+  reference_curves?: ReferenceCurveRecord[];
   training_history: RunResultRecord[];
   plot_runs: RunResultRecord[];
   model_inspections: ModelInspectionRecord[];
@@ -153,6 +154,22 @@ export type CostAxisRecord = {
 export type ScoreAxisRecord = {
   key: string;
   label: string;
+};
+
+export type ReferenceCurvePointRecord = {
+  complexity: number;
+  score: number;
+  cost: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type ReferenceCurveRecord = {
+  kind: 'oracle-inference-compute-reference-v1';
+  key: string;
+  label: string;
+  x_axis: string;
+  y_axis: string;
+  points: ReferenceCurvePointRecord[];
 };
 
 export type ScoreViewRecord = {
@@ -356,9 +373,36 @@ function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultReco
     leaderboard: arrayOf(record.leaderboard, `${path}.leaderboard`, parseModelResult),
     model_candidates: arrayOf(record.model_candidates, `${path}.model_candidates`, parseModelResult),
     frontiers: parseFrontiers(record.frontiers, `${path}.frontiers`),
+    reference_curves: optional(record.reference_curves, `${path}.reference_curves`, (value, valuePath) => arrayOf(value, valuePath, parseReferenceCurve)),
     training_history: arrayOf(record.training_history, `${path}.training_history`, parseRunResult),
     plot_runs: arrayOf(record.plot_runs, `${path}.plot_runs`, parseRunResult),
     model_inspections: arrayOf(record.model_inspections ?? [], `${path}.model_inspections`, parseModelInspectionRecord),
+  };
+}
+
+function parseReferenceCurve(value: unknown, path: string): ReferenceCurveRecord {
+  const record = requireRecord(value, path, transportError);
+  requireStrings(record, path, ['kind', 'key', 'label', 'x_axis', 'y_axis']);
+  if (record.kind !== 'oracle-inference-compute-reference-v1') {
+    throw transportError(`${path}.kind is invalid`);
+  }
+  return {
+    kind: requireString(record.kind, `${path}.kind`, transportError) as 'oracle-inference-compute-reference-v1',
+    key: requireString(record.key, `${path}.key`, transportError),
+    label: requireString(record.label, `${path}.label`, transportError),
+    x_axis: requireString(record.x_axis, `${path}.x_axis`, transportError),
+    y_axis: requireString(record.y_axis, `${path}.y_axis`, transportError),
+    points: arrayOf(record.points, `${path}.points`, parseReferenceCurvePoint),
+  };
+}
+
+function parseReferenceCurvePoint(value: unknown, path: string): ReferenceCurvePointRecord {
+  const record = requireRecord(value, path, transportError);
+  return {
+    complexity: requireNumber(record.complexity, `${path}.complexity`, transportError),
+    score: requireNumber(record.score, `${path}.score`, transportError),
+    cost: requireNumber(record.cost, `${path}.cost`, transportError),
+    metadata: optional(record.metadata, `${path}.metadata`, parseScoreBasis),
   };
 }
 

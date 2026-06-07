@@ -154,9 +154,10 @@ def test_known_benchmark_manifests_loads_python_implementation_without_manifest_
         encoding="utf-8",
     )
 
-    manifests = cast(Any, local_results)._known_manifests(tmp_path)
+    benchmarks = cast(Any, local_results)._known_benchmarks(tmp_path)
 
-    assert ProtocolIdentifier.parse("benchmarks.digits@0.1.0") in manifests
+    benchmark = benchmarks[ProtocolIdentifier.parse("benchmarks.digits@0.1.0")]
+    assert str(benchmark.manifest.id) == "benchmarks.digits@0.1.0"
 
 
 def test_console_result_view_validates_embedded_model_inspections(tmp_path: Path) -> None:
@@ -628,13 +629,19 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
         results_root=results_root,
     )
 
-    assert summary.benchmark_count == 1
+    assert summary.benchmark_count == 2
     assert summary.model_count == 1
     assert summary.run_count == 1
     assert summary.view_file == (
         tmp_path / "results" / "views" / "digits" / "benchmark_results.json"
     )
-    assert summary.benchmark_view_files == (summary.view_file,)
+    assert {
+        path.relative_to(results_root).as_posix()
+        for path in summary.benchmark_view_files
+    } == {
+        "views/chess/benchmark_results.json",
+        "views/digits/benchmark_results.json",
+    }
 
     view = load_console_result_view(summary.view_file.read_bytes())
     assert view["format"] == "leibniz.console.benchmark-results"
@@ -649,6 +656,21 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert isinstance(cost_summary["inference_compute"], int | float)
     frontiers = cast(dict[str, object], result["frontiers"])
     assert len(cast(list[object], frontiers["inference_compute"])) == 1
+    assert cast(list[dict[str, str]], result["cost_axes"])[0] == {
+        "key": "inference_compute",
+        "label": "Inference Compute",
+    }
+    reference_curves = cast(list[dict[str, object]], result["reference_curves"])
+    assert len(reference_curves) == 1
+    oracle_curve = reference_curves[0]
+    assert oracle_curve["kind"] == "oracle-inference-compute-reference-v1"
+    assert oracle_curve["key"] == "oracle_inference_compute"
+    assert oracle_curve["x_axis"] == "inference_compute"
+    assert oracle_curve["y_axis"] == "absolute"
+    oracle_points = cast(list[dict[str, object]], oracle_curve["points"])
+    assert len(oracle_points) >= 2
+    assert all(cast(int | float, point["cost"]) > 0 for point in oracle_points)
+    assert max(cast(int | float, point["cost"]) for point in oracle_points) >= 10_000_000_000
     model_view = cast(dict[str, object], leaderboard[0]["console_view_model"])
     model_sections = cast(list[dict[str, object]], model_view["detail_sections"])
     assert [section["title"] for section in model_sections] == [
@@ -773,7 +795,7 @@ def test_cli_benchmark_evaluate_discovers_training_checkpoints(
     assert exit_code == 0
     assert captured.err == ""
     assert "completed benchmark absolute evaluation" in captured.out
-    assert "materialized 1 benchmark result view(s)" in captured.out
+    assert "materialized 2 benchmark result view(s)" in captured.out
     assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 1
     assert (results_root / "views" / "digits" / "benchmark_results.json").is_file()
 
@@ -793,7 +815,7 @@ def test_cli_benchmark_evaluate_discovers_training_checkpoints(
     ) == 0
     rerun = capsys.readouterr()
     assert "no unevaluated benchmark checkpoints found" in rerun.out
-    assert "materialized 1 benchmark result view(s)" in rerun.out
+    assert "materialized 2 benchmark result view(s)" in rerun.out
     assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 1
     assert (results_root / "views" / "digits" / "benchmark_results.json").is_file()
 
@@ -941,7 +963,7 @@ def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
     assert captured.err == ""
     assert "completed benchmark absolute evaluation" in captured.out
     assert "completed benchmark relative evaluation" in captured.out
-    assert "materialized 1 benchmark result view(s)" in captured.out
+    assert "materialized 2 benchmark result view(s)" in captured.out
     assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 2
     competition_paths = tuple(
         (results_root / "evaluations" / "digits" / "competitions").glob("*.json")
@@ -975,12 +997,34 @@ def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
             assert not Path(value).is_absolute()
 
 
-def test_materialize_benchmark_result_views_rejects_empty_results_root(tmp_path: Path) -> None:
-    with pytest.raises(LocalResultImportError, match="no benchmark result records"):
-        materialize_benchmark_result_views(
-            repository_root=_repository_root,
-            results_root=tmp_path / "results",
-        )
+def test_materialize_benchmark_result_views_projects_reference_curves_without_runs(
+    tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+
+    summary = materialize_benchmark_result_views(
+        repository_root=_repository_root,
+        results_root=results_root,
+    )
+
+    assert summary.benchmark_count == 2
+    assert summary.model_count == 0
+    assert summary.run_count == 0
+    assert {
+        path.relative_to(results_root).as_posix()
+        for path in summary.benchmark_view_files
+    } == {
+        "views/chess/benchmark_results.json",
+        "views/digits/benchmark_results.json",
+    }
+    for view_file in summary.benchmark_view_files:
+        view = load_console_result_view(view_file.read_bytes())
+        result = cast(list[dict[str, object]], view["benchmark_results"])[0]
+        assert result["leaderboard"] == []
+        assert result["plot_runs"] == []
+        reference_curves = cast(list[dict[str, object]], result["reference_curves"])
+        assert reference_curves
+        assert reference_curves[0]["x_axis"] == "inference_compute"
 
 
 def test_cli_publishes_local_benchmark_results(

@@ -329,6 +329,7 @@ class Generator:
         for cardinality in range(1, len(sorted_positions) + 1):
             positions = sorted_positions[:cardinality]
             complexity = math.log2(cardinality)
+            legal_move_counts = [position.legal_move_count for position in positions]
             candidates.append(
                 ComplexityCandidate(
                     request=ComplexityRequest(
@@ -341,9 +342,20 @@ class Generator:
                         "sample_cardinality": cardinality,
                         "target_policy": "mate-in-one",
                         "output_move_count": len(all_meaningful_uci_moves),
-                        "legal_move_counts": [
-                            position.legal_move_count for position in positions
-                        ],
+                        "legal_move_counts": legal_move_counts,
+                        "oracle_inference_compute": {
+                            "kind": "oracle-inference-compute-reference-v1",
+                            "unit": "abstract-ops",
+                            "aggregation": "max",
+                            "value": max(legal_move_counts),
+                            "components": {
+                                "legal_move_count_max": max(legal_move_counts),
+                                "legal_move_count_mean": (
+                                    sum(legal_move_counts) / len(legal_move_counts)
+                                ),
+                                "sample_cardinality": cardinality,
+                            },
+                        },
                         "representatives": [
                             dict(position.representative_metadata())
                             for position in positions

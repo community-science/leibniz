@@ -26,17 +26,17 @@ const architectureDigest = 'sha256:abcdef1234567890';
 
 const standardAxes = benchmarkCostAxes(undefined);
 assertEqual(standardAxes.map((axis) => axis.key).join(','),
-  'storage_bytes,inference_compute,training_compute',
+  'inference_compute,storage_bytes,training_compute',
   'standard cost axes',
 );
 assertEqual(
   Object.keys(emptyFrontiersForCostAxes(standardAxes)).join(','),
-  'storage_bytes,inference_compute,training_compute',
+  'inference_compute,storage_bytes,training_compute',
   'empty frontier axes',
 );
 assertEqual(
   benchmarkCostAxis('missing_axis', standardAxes),
-  'storage_bytes',
+  'inference_compute',
   'missing cost axis fallback',
 );
 assertEqual(
@@ -52,7 +52,10 @@ assertEqual(
 
 const result: BenchmarkResultRecord = {
   benchmark_id: targetBenchmark,
-  cost_axes: [{ key: 'storage_bytes', label: 'Model Size' }],
+  cost_axes: [
+    { key: 'inference_compute', label: 'Inference Compute' },
+    { key: 'storage_bytes', label: 'Model Size' },
+  ],
   score_axes: [
     { key: 'absolute', label: 'Absolute Score' },
     { key: 'relative', label: 'Relative Score' },
@@ -173,6 +176,19 @@ const result: BenchmarkResultRecord = {
         relative: { key: 'relative', label: 'Relative Score', score: 900 },
       },
       source_kinds: ['local'],
+    },
+  ],
+  reference_curves: [
+    {
+      kind: 'oracle-inference-compute-reference-v1',
+      key: 'oracle_inference_compute',
+      label: 'Oracle Reference',
+      x_axis: 'inference_compute',
+      y_axis: 'absolute',
+      points: [
+        { complexity: 1, score: 1, cost: 16 },
+        { complexity: 2, score: 2, cost: 64 },
+      ],
     },
   ],
   model_inspections: [],
@@ -532,6 +548,11 @@ assertEqual(trainingComputePlotModel.xMajorTicks.includes(16), false, 'training 
 const inferenceComputePlotModel = benchmarkPlotModel(result, 'inference_compute');
 assertEqual(inferenceComputePlotModel.xMajorTicks.includes(10), true, 'inference compute uses base-10 ticks');
 assertEqual(inferenceComputePlotModel.xMajorTicks.includes(16), false, 'inference compute omits base-2 ticks');
+assertEqual(inferenceComputePlotModel.referenceCurves.length, 1, 'inference compute shows oracle reference');
+assertEqual(inferenceComputePlotModel.referenceCurves[0]?.points.length, 2, 'oracle reference point count');
+assertEqual(inferenceComputePlotModel.xDomain[1], 10, 'oracle reference does not expand x domain');
+assertEqual(inferenceComputePlotModel.yDomain[1], 1, 'oracle reference does not expand y domain');
+assertEqual(plotModel.referenceCurves.length, 0, 'model size omits inference oracle reference');
 assertEqual(plotModel.yDomain[0], 0, 'plot y starts at zero');
 assertEqual(plotModel.yDomain[1], 1, 'absolute plot y ceiling defaults to one');
 assertEqual(relativePlotModel.yDomain[0], 0, 'relative plot y starts at zero');
@@ -626,6 +647,21 @@ const emptyPlotModel = benchmarkPlotModel(
 assertEqual(emptyPlotModel.points.length, 0, 'empty plot point count');
 assertEqual(emptyPlotModel.xTicks.length > 0, true, 'empty plot has x ticks');
 assertEqual(emptyPlotModel.yTicks.length > 0, true, 'empty plot has y ticks');
+const referenceOnlyPlotModel = benchmarkPlotModel(
+  {
+    ...result,
+    frontiers: {},
+    leaderboard: [],
+    model_candidates: [],
+    plot_runs: [],
+    training_history: [],
+  },
+  'inference_compute',
+);
+assertEqual(referenceOnlyPlotModel.points.length, 0, 'reference-only plot has no model points');
+assertEqual(referenceOnlyPlotModel.referenceCurves.length, 1, 'reference-only plot keeps oracle curve');
+assertEqual(referenceOnlyPlotModel.xDomain[1], 10, 'reference-only plot uses measured-data x default');
+assertEqual(referenceOnlyPlotModel.yDomain[1], 1, 'reference-only plot uses measured-data y default');
 const expandedPlotModel = benchmarkPlotModel(
   {
     ...result,

@@ -111,11 +111,11 @@ def test_digits_generator_is_deterministic() -> None:
     )
     field_record = left.samples[0].field_record()
     assert sample_component_index(first_sample) == field_record.component_index
-    assert first_sample.outcome_id == "digit-7"
+    assert first_sample.outcome_id == "digit-8"
     assert _coordinate(first_sample.latent_coordinates, role="content")["values"] == {
         "digit_index": field_record.component_index,
         "digit_variant_index": 0,
-            "outcome_id": "digit-7",
+            "outcome_id": "digit-8",
     }
     assert first_sample.observable_state_id is None
     assert first_sample.available_outcome_ids == ()
@@ -419,6 +419,18 @@ def test_digits_generator_materializes_target_complexity_class_band() -> None:
     assert complexity_class.metadata["construction"] == (
         "symmetric-digits-over-finite-affine-product-grid"
     )
+    oracle_reference = cast(
+        dict[str, object],
+        complexity_class.metadata["oracle_inference_compute"],
+    )
+    assert oracle_reference["kind"] == "oracle-inference-compute-reference-v1"
+    assert oracle_reference["unit"] == "abstract-ops"
+    assert oracle_reference["value"] == 16 * 16
+    assert oracle_reference["components"] == {
+        "height": 16,
+        "width": 16,
+        "pixel_count": 16 * 16,
+    }
     assert complexity_class.metadata["affine_parameters"] == [
         "x_translation",
         "y_translation",
@@ -446,6 +458,30 @@ def test_digits_complexity_curriculum_uses_supported_finite_cardinalities() -> N
         assert candidate.cardinality is not None
         assert math.isclose(candidate.complexity, math.log2(candidate.cardinality))
         assert candidate.request.minimum == candidate.request.maximum
+
+
+def test_digits_oracle_inference_reference_spans_requested_cost() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+
+    points = cast(Any, generator).oracle_inference_reference_points(
+        maximum_cost=10_000_000_000
+    )
+
+    assert len(points) > 10
+    costs = [cast(int | float, point["cost"]) for point in points]
+    scores = [cast(int | float, point["score"]) for point in points]
+    assert costs == sorted(costs)
+    assert scores == sorted(scores)
+    assert costs[0] == 16 * 16
+    assert scores[0] == 0
+    first_metadata = cast(dict[str, object], points[0]["metadata"])
+    first_components = cast(dict[str, object], first_metadata["components"])
+    assert first_components["sample_cardinality"] == 1
+    assert costs[-1] >= 10_000_000_000
+    metadata = cast(dict[str, object], points[-1]["metadata"])
+    components = cast(dict[str, object], metadata["components"])
+    assert components["height"] == components["width"]
+    assert components["pixel_count"] == costs[-1]
 
 
 def test_digits_generator_high_cardinality_request_has_one_representative() -> None:

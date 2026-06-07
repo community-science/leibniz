@@ -10,6 +10,8 @@ export type {
   CostAxisRecord,
   CostSummaryRecord,
   ModelResultRecord,
+  ReferenceCurvePointRecord,
+  ReferenceCurveRecord,
   ResultViewRecord,
   RunDetailEntryRecord,
   RunDetailSectionRecord,
