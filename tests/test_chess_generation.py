@@ -1,4 +1,5 @@
 import math
+from base64 import b64decode
 from pathlib import Path
 from typing import Any, cast
 
@@ -253,7 +254,7 @@ def test_chess_generator_can_return_metadata_free_tensors() -> None:
     assert tuple(targets.shape) == (3, len(outcome_ids))
 
 
-def test_chess_console_preview_uses_text_samples() -> None:
+def test_chess_console_preview_uses_board_images_and_text_metadata() -> None:
     generator = load_generator(_chess_benchmark_root)
     atom_count = len(generator.manifest.outcome_space.outcomes)
 
@@ -267,7 +268,24 @@ def test_chess_console_preview_uses_text_samples() -> None:
     assert sample["observable_state_id"] == (
         "fen:8/8/8/8/8/8/k1K5/2Q5 w - - 0 1"
     )
-    assert "image_data_url" not in sample
+    image_data_url = cast(str, sample["image_data_url"])
+    assert image_data_url.startswith("data:image/svg+xml;base64,")
+    svg = _decode_svg_data_url(image_data_url)
+    assert 'viewBox="0 0 512 512"' in svg
+    assert 'aria-label="Q"' in svg
+    assert 'aria-label="K"' in svg
+    assert 'aria-label="k"' in svg
+    overlay = cast(dict[str, object], sample["image_overlay"])
+    assert overlay["kind"] == "grid-move-highlights"
+    assert overlay["columns"] == 8
+    assert overlay["rows"] == 8
+    moves = cast(list[dict[str, object]], overlay["moves"])
+    assert any(move["from"] == [2, 7] and move["to"] == [1, 6] for move in moves)
+    target_moves = [
+        move for move in moves if cast(float, move["target_probability"]) > 0.0
+    ]
+    assert len(target_moves) == len(cast(list[object], sample["target_distribution"]))
+    assert cast(float, target_moves[0]["target_probability"]) == 1.0
     assert "target_distribution" in sample
     assert "available_outcome_ids" in sample
 
@@ -295,3 +313,9 @@ def _is_checkmate_after_move(board: chess.Board, move: chess.Move) -> bool:
         return board.is_checkmate()
     finally:
         board.pop()
+
+
+def _decode_svg_data_url(data_url: str) -> str:
+    prefix = "data:image/svg+xml;base64,"
+    assert data_url.startswith(prefix)
+    return b64decode(data_url.removeprefix(prefix)).decode("utf-8")

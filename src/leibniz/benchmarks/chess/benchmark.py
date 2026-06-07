@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import random
+from base64 import b64encode
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,8 @@ _outcome_space_id = ProtocolIdentifier.parse("benchmarks.chess.uci-moves@0.1.0")
 _console_preview_limit = 12
 _complexity_rung_size = 0.1
 _tensor_shape = (18, 8, 8)
+_board_preview_size = 512
+_board_preview_square_size = _board_preview_size // 8
 
 _mate_in_one_fens = (
     "8/8/8/8/8/8/k1K5/2Q5 w - - 0 1",
@@ -419,7 +422,7 @@ def _latent_coordinates(position: _MateInOnePosition) -> tuple[Mapping[str, obje
 
 
 def _sample_preview_record(sample: GeneratedSample) -> Mapping[str, object]:
-    return {
+    record: dict[str, object] = {
         "index": sample.index,
         "outcome_id": sample.outcome_id,
         "complexity": sample.complexity,
@@ -438,6 +441,185 @@ def _sample_preview_record(sample: GeneratedSample) -> Mapping[str, object]:
             dict(coordinate) for coordinate in sample.latent_coordinates
         ],
     }
+    image_data_url = _sample_board_image_data_url(sample)
+    if image_data_url is not None:
+        record["image_data_url"] = image_data_url
+        record["image_overlay"] = _sample_board_image_overlay(sample)
+    return record
+
+
+def _sample_board_image_data_url(sample: GeneratedSample) -> str | None:
+    observable_state_id = sample.observable_state_id
+    if observable_state_id is None or not observable_state_id.startswith("fen:"):
+        return None
+    fen = observable_state_id.removeprefix("fen:")
+    return _board_svg_data_url(fen)
+
+
+def _board_svg_data_url(fen: str) -> str:
+    board = chess.Board(fen)
+    elements = [
+        (
+            f'<svg xmlns="http://www.w3.org/2000/svg" '
+            f'viewBox="0 0 {_board_preview_size} {_board_preview_size}" '
+            f'width="{_board_preview_size}" height="{_board_preview_size}" '
+            f'role="img" aria-label="Chess board">'
+        ),
+        f'<rect width="{_board_preview_size}" height="{_board_preview_size}" fill="#f0d9b5"/>',
+    ]
+    for rank in range(8):
+        for file_index in range(8):
+            x = file_index * _board_preview_square_size
+            y = (7 - rank) * _board_preview_square_size
+            fill = "#b58863" if (rank + file_index) % 2 else "#f0d9b5"
+            elements.append(
+                f'<rect x="{x}" y="{y}" width="{_board_preview_square_size}" '
+                f'height="{_board_preview_square_size}" fill="{fill}"/>'
+            )
+    for square, piece in sorted(board.piece_map().items()):
+        file_index = chess.square_file(square)
+        rank = chess.square_rank(square)
+        center_x = file_index * _board_preview_square_size + _board_preview_square_size / 2
+        center_y = (7 - rank) * _board_preview_square_size + _board_preview_square_size / 2
+        elements.append(_piece_svg_shape(piece, center_x=center_x, center_y=center_y))
+    elements.append("</svg>")
+    svg = "".join(elements)
+    encoded = b64encode(svg.encode("utf-8")).decode("ascii")
+    return f"data:image/svg+xml;base64,{encoded}"
+
+
+def _sample_board_image_overlay(sample: GeneratedSample) -> Mapping[str, object]:
+    moves: list[dict[str, object]] = []
+    target_probabilities = sample.target_distribution_or_one_hot()
+    for outcome_id in sample.available_outcome_ids:
+        if len(outcome_id) < 4:
+            continue
+        from_square = chess.parse_square(outcome_id[:2])
+        to_square = chess.parse_square(outcome_id[2:4])
+        moves.append(
+            {
+                "from": _square_grid_coordinate(from_square),
+                "to": _square_grid_coordinate(to_square),
+                "target_probability": target_probabilities.get(outcome_id, 0.0),
+            }
+        )
+    return {
+        "kind": "grid-move-highlights",
+        "columns": 8,
+        "rows": 8,
+        "moves": moves,
+    }
+
+
+def _square_grid_coordinate(square: chess.Square) -> list[int]:
+    return [chess.square_file(square), 7 - chess.square_rank(square)]
+
+
+def _piece_svg_shape(piece: chess.Piece, *, center_x: float, center_y: float) -> str:
+    fill = "#f8f8f8" if piece.color == chess.WHITE else "#202020"
+    stroke = "#202020" if piece.color == chess.WHITE else "#f8f8f8"
+    highlight = "#ffffff" if piece.color == chess.WHITE else "#4a4a4a"
+    scale = _board_preview_square_size / 32
+    group_start = (
+        f'<g aria-label="{piece.symbol()}" fill="{fill}" stroke="{stroke}" '
+        f'stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" '
+        f'transform="translate({center_x:.1f} {center_y:.1f}) scale({scale:.3f}) '
+        f'translate({-center_x:.1f} {-center_y:.1f})">'
+    )
+    base = (
+        f'<path d="M {center_x - 11:.1f} {center_y + 12:.1f} '
+        f'H {center_x + 11:.1f} '
+        f'Q {center_x + 9:.1f} {center_y + 8:.1f} {center_x + 5:.1f} {center_y + 7:.1f} '
+        f'H {center_x - 5:.1f} '
+        f'Q {center_x - 9:.1f} {center_y + 8:.1f} {center_x - 11:.1f} {center_y + 12:.1f} Z"/>'
+    )
+    collar = (
+        f'<path d="M {center_x - 7:.1f} {center_y + 5:.1f} '
+        f'H {center_x + 7:.1f} '
+        f'Q {center_x + 5:.1f} {center_y + 1:.1f} {center_x:.1f} {center_y + 1:.1f} '
+        f'Q {center_x - 5:.1f} {center_y + 1:.1f} {center_x - 7:.1f} {center_y + 5:.1f} Z"/>'
+    )
+    stem = (
+        f'<path d="M {center_x - 4:.1f} {center_y + 7:.1f} '
+        f'C {center_x - 2:.1f} {center_y + 1:.1f} '
+        f'{center_x - 2:.1f} {center_y - 4:.1f} '
+        f'{center_x:.1f} {center_y - 8:.1f} '
+        f'C {center_x + 2:.1f} {center_y - 4:.1f} '
+        f'{center_x + 2:.1f} {center_y + 1:.1f} '
+        f'{center_x + 4:.1f} {center_y + 7:.1f} Z"/>'
+    )
+    gleam = (
+        f'<path d="M {center_x - 4:.1f} {center_y + 8:.1f} '
+        f'C {center_x - 7:.1f} {center_y + 5:.1f} '
+        f'{center_x - 7:.1f} {center_y:.1f} '
+        f'{center_x - 3:.1f} {center_y - 6:.1f}" '
+        f'fill="none" stroke="{highlight}" stroke-opacity="0.55" stroke-width="1"/>'
+    )
+    if piece.piece_type == chess.KING:
+        return (
+            f"{group_start}{base}{collar}{stem}"
+            f'<circle cx="{center_x:.1f}" cy="{center_y - 8:.1f}" r="5.2"/>'
+            f'<path d="M {center_x:.1f} {center_y - 7:.1f} '
+            f'V {center_y - 18:.1f} M {center_x - 4:.1f} {center_y - 14:.1f} '
+            f'H {center_x + 4:.1f}" fill="none"/>'
+            f"{gleam}</g>"
+        )
+    if piece.piece_type == chess.QUEEN:
+        return (
+            f"{group_start}{base}{collar}"
+            f'<path d="M {center_x - 9:.1f} {center_y - 4:.1f} '
+            f'L {center_x - 6:.1f} {center_y - 15:.1f} '
+            f'L {center_x - 2:.1f} {center_y - 6:.1f} '
+            f'L {center_x:.1f} {center_y - 17:.1f} '
+            f'L {center_x + 2:.1f} {center_y - 6:.1f} '
+            f'L {center_x + 6:.1f} {center_y - 15:.1f} '
+            f'L {center_x + 9:.1f} {center_y - 4:.1f} Z"/>'
+            f'<circle cx="{center_x - 6:.1f}" cy="{center_y - 15:.1f}" r="2.0"/>'
+            f'<circle cx="{center_x:.1f}" cy="{center_y - 17:.1f}" r="2.0"/>'
+            f'<circle cx="{center_x + 6:.1f}" cy="{center_y - 15:.1f}" r="2.0"/>'
+            f"{gleam}</g>"
+        )
+    if piece.piece_type == chess.ROOK:
+        return (
+            f"{group_start}{base}{collar}"
+            f'<path d="M {center_x - 8:.1f} {center_y + 1:.1f} '
+            f'V {center_y - 13:.1f} H {center_x - 5:.1f} V {center_y - 9:.1f} '
+            f'H {center_x - 1.5:.1f} V {center_y - 13:.1f} H {center_x + 1.5:.1f} '
+            f'V {center_y - 9:.1f} H {center_x + 5:.1f} V {center_y - 13:.1f} '
+            f'H {center_x + 8:.1f} V {center_y + 1:.1f} Z"/>'
+            f"{gleam}</g>"
+        )
+    if piece.piece_type == chess.BISHOP:
+        return (
+            f"{group_start}{base}{collar}{stem}"
+            f'<ellipse cx="{center_x:.1f}" cy="{center_y - 8:.1f}" rx="6.5" ry="8.5"/>'
+            f'<path d="M {center_x - 3:.1f} {center_y - 2:.1f} '
+            f'L {center_x + 4:.1f} {center_y - 12:.1f}" fill="none"/>'
+            f"{gleam}</g>"
+        )
+    if piece.piece_type == chess.KNIGHT:
+        return (
+            f"{group_start}{base}"
+            f'<path d="M {center_x - 5:.1f} {center_y + 7:.1f} '
+            f'C {center_x - 7:.1f} {center_y + 1:.1f} '
+            f'{center_x - 5:.1f} {center_y - 7:.1f} '
+            f'{center_x + 3:.1f} {center_y - 15:.1f} '
+            f'C {center_x + 1:.1f} {center_y - 9:.1f} '
+            f'{center_x + 7:.1f} {center_y - 7:.1f} '
+            f'{center_x + 8:.1f} {center_y - 2:.1f} '
+            f'C {center_x + 6:.1f} {center_y - 1:.1f} '
+            f'{center_x + 4:.1f} {center_y:.1f} '
+            f'{center_x + 3:.1f} {center_y + 2:.1f} '
+            f'L {center_x + 6:.1f} {center_y + 7:.1f} Z"/>'
+            f'<circle cx="{center_x + 2:.1f}" cy="{center_y - 8:.1f}" '
+            f'r="0.9" fill="{stroke}" stroke="none"/>'
+            f"{gleam}</g>"
+        )
+    return (
+        f"{group_start}{base}{collar}{stem}"
+        f'<circle cx="{center_x:.1f}" cy="{center_y - 9:.1f}" r="5.8"/>'
+        f"{gleam}</g>"
+    )
 
 
 def _tensor_batch(

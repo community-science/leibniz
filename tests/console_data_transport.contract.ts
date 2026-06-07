@@ -263,9 +263,26 @@ assertEqual(
   'chess sample legal move count',
 );
 assertEqual(
-  chessSample.image_data_url,
-  undefined,
-  'chess sample omits image data url',
+  chessSample.image_data_url?.startsWith('data:image/svg+xml;base64,'),
+  true,
+  'chess sample image data url',
+);
+assertEqual(
+  chessSample.image_overlay?.kind,
+  'grid-move-highlights',
+  'chess sample image overlay kind',
+);
+assertEqual(
+  chessSample.image_overlay?.moves.some(
+    (move) => move.from.join(',') === '2,7' && move.to.join(',') === '1,6',
+  ),
+  true,
+  'chess sample queen legal move overlay',
+);
+assertEqual(
+  chessSample.image_overlay?.moves.some((move) => (move.target_probability ?? 0) > 0),
+  true,
+  'chess sample target move overlay',
 );
 assertEqual(
   chessSample.field_shape,

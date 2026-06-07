@@ -317,6 +317,10 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert [
         batch["complexity_cardinalities"] for batch in chess_batches
     ] == [[18], [23], [24], [28], [32], [33]]
+    chess_sample = cast(list[dict[str, object]], chess_batches[0]["samples"])[0]
+    assert str(chess_sample["image_data_url"]).startswith(
+        "data:image/svg+xml;base64,"
+    )
 
     task = next(
         task
