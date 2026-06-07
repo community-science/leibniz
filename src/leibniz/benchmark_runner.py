@@ -230,8 +230,6 @@ class ModelCheckpointArtifact:
             "validation_check": self.validation_check,
             "validation_loss": self.validation_loss,
         }
-        if self.score_estimate is not None:
-            record["score_estimate"] = dict(self.score_estimate)
         return record
 
 
@@ -909,6 +907,12 @@ def run_benchmark(
                 ),
                 model_checkpoints=progress_checkpoint_records,
                 selected_model_checkpoint=selected_checkpoint_record,
+                selected_model_checkpoint_score_estimate=(
+                    None
+                    if selected_checkpoint is None
+                    or selected_checkpoint.score_estimate is None
+                    else selected_checkpoint.score_estimate
+                ),
             )
         with progress_timings.span("training_progress.write"):
             _write_document_atomic(progress_path, progress_record)
@@ -955,8 +959,11 @@ def run_benchmark(
         )
         for checkpoint in checkpoint_artifacts
     )
-    for record in full_checkpoint_records:
-        _write_document(Path(_required_string(record.get("record_path"), "record_path")), record)
+    for checkpoint, record in zip(checkpoint_artifacts, full_checkpoint_records, strict=True):
+        _write_document(
+            checkpoint.path.with_suffix(".checkpoint" + _document_suffix),
+            record,
+        )
     checkpoint_records = tuple(
         _compact_model_checkpoint_summary_record(record)
         for record in full_checkpoint_records
@@ -1004,6 +1011,11 @@ def run_benchmark(
         ),
         "model_checkpoints": [dict(record) for record in checkpoint_records],
         "selected_model_checkpoint": selected_checkpoint_record,
+        "selected_model_checkpoint_score_estimate": (
+            None
+            if selected_checkpoint.score_estimate is None
+            else dict(selected_checkpoint.score_estimate)
+        ),
         "selected_model_checkpoint_policy": "highest-training-score-estimate",
         "evaluation_model_artifact": selected_checkpoint_record,
     }
@@ -2624,6 +2636,10 @@ def _model_checkpoint_artifact_record(
     record["model_manifest"] = checkpoint.manifest.to_record()
     if training_compute is not None:
         record["training_compute"] = training_compute
+    if checkpoint.score_estimate is not None:
+        record["score"] = _checkpoint_score_estimate_selection_score(
+            checkpoint.score_estimate
+        )
     return record
 
 
@@ -2649,6 +2665,10 @@ def _compact_model_checkpoint_summary_record(
     if isinstance(score_estimate, Mapping):
         score_estimate_record = cast(Mapping[str, object], score_estimate)
         score = score_estimate_record.get("score")
+        if isinstance(score, int | float):
+            compact["score"] = float(score)
+    else:
+        score = record.get("score")
         if isinstance(score, int | float):
             compact["score"] = float(score)
     return compact
@@ -3672,6 +3692,7 @@ def _training_progress_record(
     throughput: Mapping[str, object],
     model_checkpoints: tuple[Mapping[str, object], ...],
     selected_model_checkpoint: Mapping[str, object] | None,
+    selected_model_checkpoint_score_estimate: Mapping[str, object] | None,
 ) -> Mapping[str, object]:
     training_estimate = _training_estimate_record(
         summary=summary,
@@ -3714,6 +3735,11 @@ def _training_progress_record(
         "model_checkpoints": [dict(checkpoint) for checkpoint in model_checkpoints],
         "selected_model_checkpoint": (
             None if selected_model_checkpoint is None else dict(selected_model_checkpoint)
+        ),
+        "selected_model_checkpoint_score_estimate": (
+            None
+            if selected_model_checkpoint_score_estimate is None
+            else dict(selected_model_checkpoint_score_estimate)
         ),
         "selected_model_checkpoint_policy": "highest-training-score-estimate",
     }

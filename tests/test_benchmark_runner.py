@@ -1138,11 +1138,17 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert all("model_manifest" not in checkpoint for checkpoint in checkpoints)
     selected_checkpoint = cast(dict[str, object], training_summary["selected_model_checkpoint"])
     assert "evaluation_rung_count" not in selected_checkpoint
-    assert "score_estimate" in selected_checkpoint
+    assert "score_estimate" not in selected_checkpoint
+    assert "selected_model_checkpoint_score_estimate" in training_summary
     assert all(
         (tmp_path / cast(str, checkpoint["path"])).is_file()
         for checkpoint in checkpoints
     )
+    checkpoint_record = load_object_document(
+        (tmp_path / cast(str, checkpoints[0]["record_path"])).read_bytes(),
+        description="checkpoint record",
+    )
+    assert "score_estimate" not in checkpoint_record
 
 
 def test_windowed_plateau_uses_current_rung_competence() -> None:

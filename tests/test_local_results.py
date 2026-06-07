@@ -511,7 +511,11 @@ def test_training_estimate_comparison_uses_selected_checkpoint_estimate(
         dict[str, object],
         training_summary["selected_model_checkpoint"],
     )
-    selected_estimate = cast(dict[str, object], selected_checkpoint["score_estimate"])
+    assert "score_estimate" not in selected_checkpoint
+    selected_estimate = cast(
+        dict[str, object],
+        training_summary["selected_model_checkpoint_score_estimate"],
+    )
     terminal_estimate = dict(selected_estimate)
     terminal_estimate["score"] = cast(float, selected_estimate["score"]) + 1.0
     training_summary["training_estimate"] = terminal_estimate

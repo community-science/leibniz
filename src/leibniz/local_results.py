@@ -2312,17 +2312,12 @@ def _training_estimate_comparison_record(
 def _selected_checkpoint_training_estimate(
     training_summary: Mapping[str, object],
 ) -> Mapping[str, object] | None:
-    selected_checkpoint = _extract.optional_mapping(
-        training_summary.get("selected_model_checkpoint"),
-        "selected_model_checkpoint",
+    selected_estimate = _extract.optional_mapping(
+        training_summary.get("selected_model_checkpoint_score_estimate"),
+        "selected_model_checkpoint_score_estimate",
     )
-    if selected_checkpoint is not None:
-        checkpoint_estimate = _extract.optional_mapping(
-            selected_checkpoint.get("score_estimate"),
-            "selected_model_checkpoint.score_estimate",
-        )
-        if checkpoint_estimate is not None:
-            return checkpoint_estimate
+    if selected_estimate is not None:
+        return selected_estimate
     return _extract.optional_mapping(
         training_summary.get("training_estimate"),
         "training_estimate",
