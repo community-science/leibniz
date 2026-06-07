@@ -130,6 +130,25 @@ class _MateInOnePosition:
         probability = 1.0 / len(self.mate_moves)
         return dict.fromkeys(self.mate_moves, probability)
 
+    @property
+    def legal_move_piece_symbols(self) -> tuple[str, ...]:
+        return _move_piece_symbols(fen=self.fen, moves=self.legal_moves)
+
+    @property
+    def mate_move_piece_symbols(self) -> tuple[str, ...]:
+        return _move_piece_symbols(fen=self.fen, moves=self.mate_moves)
+
+    def representative_metadata(self) -> Mapping[str, object]:
+        return {
+            "kind": "chess-mate-in-one-cardinality-representative",
+            "fen": self.fen,
+            "target_policy": "mate-in-one",
+            "legal_move_count": self.legal_move_count,
+            "legal_move_piece_symbols": list(self.legal_move_piece_symbols),
+            "mate_move_piece_symbols": list(self.mate_move_piece_symbols),
+            "mate_move_count": len(self.mate_moves),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class Generator:
@@ -296,6 +315,7 @@ class Generator:
                     metadata={
                         "kind": "chess-legal-move-cardinality",
                         "legal_move_count": position.legal_move_count,
+                        "representative": dict(position.representative_metadata()),
                     },
                 )
             )
@@ -386,7 +406,43 @@ def _mate_in_one_positions() -> tuple[_MateInOnePosition, ...]:
     positions = tuple(_mate_in_one_position(fen) for fen in _mate_in_one_fens)
     if not positions:
         raise ObservationGenerationError("Chess benchmark must declare at least one position")
+    _validate_representative_ladder(positions)
     return positions
+
+
+def _validate_representative_ladder(positions: Sequence[_MateInOnePosition]) -> None:
+    seen_counts: set[int] = set()
+    duplicate_counts: set[int] = set()
+    for position in positions:
+        if position.legal_move_count in seen_counts:
+            duplicate_counts.add(position.legal_move_count)
+        seen_counts.add(position.legal_move_count)
+    if duplicate_counts:
+        duplicate = min(duplicate_counts)
+        raise ObservationGenerationError(
+            f"Chess benchmark has multiple representatives for {duplicate} legal moves"
+        )
+    legal_piece_symbols = {
+        symbol
+        for position in positions
+        for symbol in position.legal_move_piece_symbols
+    }
+    required_legal_piece_symbols = frozenset({"B", "K", "N", "Q", "R"})
+    missing = required_legal_piece_symbols - legal_piece_symbols
+    if missing:
+        raise ObservationGenerationError(
+            "Chess representative ladder is missing legal moves by: "
+            + ", ".join(sorted(missing))
+        )
+    mate_piece_symbols = {
+        symbol
+        for position in positions
+        for symbol in position.mate_move_piece_symbols
+    }
+    if mate_piece_symbols == {"Q"}:
+        raise ObservationGenerationError(
+            "Chess representative ladder must include a non-queen mate motif"
+        )
 
 
 def _mate_in_one_position(fen: str) -> _MateInOnePosition:
@@ -417,6 +473,20 @@ def _mate_in_one_position(fen: str) -> _MateInOnePosition:
         legal_moves=legal_moves,
         mate_moves=mate_moves,
     )
+
+
+def _move_piece_symbols(*, fen: str, moves: Sequence[str]) -> tuple[str, ...]:
+    board = chess.Board(fen)
+    symbols: set[str] = set()
+    for move_uci in moves:
+        move = chess.Move.from_uci(move_uci)
+        piece = board.piece_at(move.from_square)
+        if piece is None:
+            raise ObservationGenerationError(
+                f"Chess move has no piece on its source square: {move_uci}"
+            )
+        symbols.add(piece.symbol().upper())
+    return tuple(sorted(symbols))
 
 
 def _is_checkmate_after_move(board: chess.Board, move: chess.Move) -> bool:
@@ -465,6 +535,19 @@ def _latent_coordinates(position: _MateInOnePosition) -> tuple[Mapping[str, obje
             },
             "multiplicity": len(position.mate_moves),
             "values": list(position.mate_moves),
+        },
+        {
+            "name": "benchmarks.chess.position.representative-piece-coverage",
+            "role": "content",
+            "degree_measure": {
+                "kind": "finite-set",
+                "count": len(position.legal_move_piece_symbols),
+            },
+            "multiplicity": len(position.legal_move_piece_symbols),
+            "values": {
+                "legal_move_piece_symbols": list(position.legal_move_piece_symbols),
+                "mate_move_piece_symbols": list(position.mate_move_piece_symbols),
+            },
         },
     )
 
