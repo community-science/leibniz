@@ -2136,7 +2136,7 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
     assert len(stage_result.validation_history) == 2
 
 
-def test_training_plateau_above_rung_competence_threshold_refines_before_advancing(
+def test_training_plateau_above_rung_competence_threshold_advances_frontier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_batch(_index: int) -> tuple[object, object]:
@@ -2198,10 +2198,11 @@ def test_training_plateau_above_rung_competence_threshold_refines_before_advanci
     def fake_batch_max_compute(**_kwargs: object) -> int:
         return 10
 
-    def fail_if_advancing(_history: object) -> bool:
-        raise AssertionError(
-            "frontier should not advance immediately at the trainability threshold"
-        )
+    plateau_history_lengths: list[int] = []
+
+    def advance_frontier(history: object) -> bool:
+        plateau_history_lengths.append(len(cast(tuple[object, ...], history)))
+        return True
 
     benchmark = load_digits_benchmark(_digits_benchmark_root)
     outcome_ids = tuple(
@@ -2248,11 +2249,12 @@ def test_training_plateau_above_rung_competence_threshold_refines_before_advanci
         training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
         validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         phase_timings=benchmark_runner.TimingCollector(),
-        on_plateau=fail_if_advancing,
+        on_plateau=advance_frontier,
     )
 
     assert stage_result.stop_reason == "max-steps"
     assert len(stage_result.validation_history) == 3
+    assert plateau_history_lengths == [2]
 
 
 def test_evaluation_curriculum_uses_benchmark_owned_complexity_schedule() -> None:
@@ -2689,7 +2691,10 @@ def _selected_checkpoint_artifact_path(training_summary_path: Path) -> Path:
         description="training summary",
     )
     checkpoint = cast(dict[str, object], training_summary["selected_model_checkpoint"])
-    return Path(cast(str, checkpoint["record_path"]))
+    path = Path(cast(str, checkpoint["record_path"]))
+    if path.parts[:1] == ("results",):
+        return training_summary_path.parents[2] / path.relative_to("results")
+    return path
 
 
 def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(

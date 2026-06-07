@@ -825,7 +825,12 @@ def _evaluation_checkpoint_artifacts(
     benchmark_selectors: tuple[str, ...],
 ) -> tuple[Path, ...]:
     if checkpoint_artifact is not None:
-        return (checkpoint_artifact,)
+        return (
+            _resolve_result_artifact_path(
+                checkpoint_artifact,
+                results_root=results_root,
+            ),
+        )
     training_root = results_root / "training"
     if not training_root.is_dir():
         return ()
@@ -853,8 +858,18 @@ def _evaluation_checkpoint_artifacts(
         record_path = artifact.get("record_path")
         if not isinstance(record_path, str) or not record_path:
             continue
-        checkpoint_paths.append(Path(record_path))
+        checkpoint_paths.append(
+            _resolve_result_artifact_path(Path(record_path), results_root=results_root)
+        )
     return tuple(dict.fromkeys(checkpoint_paths))
+
+
+def _resolve_result_artifact_path(path: Path, *, results_root: Path) -> Path:
+    if path.is_absolute():
+        return path
+    if path.parts[:1] == (results_root.name,):
+        return results_root.parent / path
+    return path
 
 
 def _evaluation_bundle_paths(

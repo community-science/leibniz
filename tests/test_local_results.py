@@ -1024,7 +1024,10 @@ def _selected_checkpoint_artifact_path(training_summary_path: Path) -> Path:
         description="training summary",
     )
     checkpoint = cast(dict[str, object], training_summary["selected_model_checkpoint"])
-    return Path(cast(str, checkpoint["record_path"]))
+    path = Path(cast(str, checkpoint["record_path"]))
+    if path.parts[:1] == ("results",):
+        return training_summary_path.parents[2] / path.relative_to("results")
+    return path
 
 
 def _string_values(value: object) -> tuple[str, ...]:

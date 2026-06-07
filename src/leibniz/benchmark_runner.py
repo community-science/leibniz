@@ -1226,8 +1226,9 @@ def _evaluation_input_from_plan(
     *,
     generator: BenchmarkGenerator,
 ) -> _EvaluationInput:
+    checkpoint_artifact_path = _evaluation_checkpoint_artifact_path(plan)
     checkpoint_record = _load_object_record(
-        plan.checkpoint_artifact_path,
+        checkpoint_artifact_path,
         description="checkpoint artifact",
     )
     architecture = ArchitectureManifest.from_record(
@@ -1266,6 +1267,27 @@ def _evaluation_input_from_plan(
         benchmark_id=checkpoint_benchmark_id,
         training_compute=training_compute,
     )
+
+
+def _evaluation_checkpoint_artifact_path(plan: BenchmarkEvaluationPlan) -> Path:
+    path = plan.checkpoint_artifact_path
+    if path.is_absolute():
+        return path
+    if path.parts[:1] == (plan.results_root.name,):
+        return _resolve_artifact_record_path(
+            path.as_posix(),
+            results_root=plan.results_root,
+        )
+    if path.exists():
+        return path
+    try:
+        resolved = _resolve_artifact_record_path(
+            path.as_posix(),
+            results_root=plan.results_root,
+        )
+    except BenchmarkRunnerError:
+        return path
+    return resolved if resolved.exists() else path
 
 
 def _evaluation_curriculum_rung(
