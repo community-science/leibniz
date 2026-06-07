@@ -5,6 +5,7 @@ import { delimiter, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   consoleDataPayloadPath,
+  consoleDataPayloadMaxBuffer,
   consoleBasePath,
   consoleResultWatchIgnoredPaths,
   consoleResultRoots,
@@ -548,6 +549,8 @@ function run(command, args, options = {}) {
       PATH: [consoleWebBinPath, process.env.PATH].filter(Boolean).join(delimiter),
       ...options.env,
     },
+    maxBuffer:
+      options.captureOutput === true ? consoleDataPayloadMaxBuffer : undefined,
     stdio: options.captureOutput === true ? ['ignore', 'pipe', 'inherit'] : 'inherit',
   });
   if (result.error !== undefined) {
