@@ -6,7 +6,6 @@ import {
   type ModelResultRecord,
   type ResultViewRecord,
   type RunResultRecord,
-  type ScoreAxisRecord,
 } from './resultViews.ts';
 
 export type BenchmarkResultEntry = {
@@ -64,15 +63,9 @@ export type BenchmarkCostAxisGroup = {
 };
 
 const fallbackLogCostDomain: [number, number] = [0, 10];
-const defaultAbsoluteScoreMaximum = 1;
-const defaultRelativeScoreMaximum = 2000;
+const defaultScoreMaximum = 1;
 const denseLogTickThreshold = 14;
 const targetScoreTickCount = 8;
-const expandedRelativeScoreTickCount = 12;
-const standardScoreAxes: ScoreAxisRecord[] = [
-  { key: 'absolute', label: 'Absolute Score' },
-  { key: 'relative', label: 'Relative Score' },
-];
 const standardCostAxisGroups: BenchmarkCostAxisGroup[] = [
   {
     axes: [{ key: 'inference_compute', label: 'Inference Compute' }],
@@ -142,27 +135,6 @@ export function benchmarkCostAxis(
   return axes[0]?.key ?? standardCostAxes[0]!.key;
 }
 
-export function benchmarkScoreAxes(
-  result: BenchmarkResultRecord | undefined,
-): ScoreAxisRecord[] {
-  const axes = result?.score_axes ?? [];
-  const seen = new Set(axes.map((axis) => axis.key));
-  return [
-    ...axes,
-    ...standardScoreAxes.filter((axis) => !seen.has(axis.key)),
-  ];
-}
-
-export function benchmarkScoreAxis(
-  selectedAxis: string,
-  axes: ScoreAxisRecord[],
-): string {
-  if (axes.some((axis) => axis.key === selectedAxis)) {
-    return selectedAxis;
-  }
-  return axes[0]?.key ?? standardScoreAxes[0]!.key;
-}
-
 export function emptyFrontiersForCostAxes(
   axes: CostAxisRecord[],
 ): Record<string, ModelResultRecord[]> {
@@ -215,26 +187,25 @@ export function modelComparisonRows(
 export function benchmarkPlotModel(
   result: BenchmarkResultRecord,
   costAxis: string,
-  scoreAxis = 'absolute',
 ): BenchmarkPlotModel {
-  const frontierModels = frontierModelResults(result.leaderboard, costAxis, scoreAxis);
+  const frontierModels = frontierModelResults(result.leaderboard, costAxis);
   const frontierKeys = new Set(frontierModels.map((model) => model.model_key));
   const leaderboardModels = modelLookup(result.leaderboard);
   const candidateModels = modelLookup(result.model_candidates);
   const points = result.plot_runs
-    .map((run) => plotRunPoint(run, leaderboardModels, candidateModels, costAxis, scoreAxis, frontierKeys))
+    .map((run) => plotRunPoint(run, leaderboardModels, candidateModels, costAxis, frontierKeys))
     .filter((point): point is BenchmarkPlotModelPoint => point !== null)
     .sort((left, right) => left.cost - right.cost || right.score - left.score);
   const frontierPoints = frontierModels
-    .map((model) => plotPoint(model, costAxis, scoreAxis, true))
+    .map((model) => plotPoint(model, costAxis, true))
     .filter((point): point is BenchmarkPlotModelPoint => point !== null)
     .sort((left, right) => left.cost - right.cost || right.score - left.score);
-  const referenceCurves = referenceCurvePlotModels(result, costAxis, scoreAxis);
+  const referenceCurves = referenceCurvePlotModels(result, costAxis);
   const xLogBase = costAxisLogBase();
   const costLogs = points.map((point) => point.logCost);
   const scores = [...points, ...frontierPoints].map((point) => point.score);
   const xDomain = logCostDomain(costLogs);
-  const yDomain = scoreDomain(scores, scoreAxis);
+  const yDomain = scoreDomain(scores);
   const xTicks = logCostTicks(xDomain, xLogBase);
   return {
     points,
@@ -254,10 +225,9 @@ export function benchmarkPlotModel(
 function referenceCurvePlotModels(
   result: BenchmarkResultRecord,
   costAxis: string,
-  scoreAxis: string,
 ): BenchmarkReferenceCurve[] {
   return (result.reference_curves ?? [])
-    .filter((curve) => curve.x_axis === costAxis && curve.y_axis === scoreAxis)
+    .filter((curve) => curve.x_axis === costAxis && curve.y_axis === 'score')
     .map((curve) => ({
       key: curve.key,
       label: curve.label,
@@ -280,10 +250,9 @@ function referenceCurvePlotModels(
 export function sortedModelResults(
   models: ModelResultRecord[],
   costAxis: string,
-  scoreAxis: string,
   sort: ModelResultSort,
 ): ModelResultRecord[] {
-  return [...models].sort((left, right) => compareModelResults(left, right, costAxis, scoreAxis, sort));
+  return [...models].sort((left, right) => compareModelResults(left, right, costAxis, sort));
 }
 
 export function nextModelResultSort(
@@ -319,12 +288,8 @@ export function costValue(costSummary: Record<string, unknown>, costAxis: string
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-export function scoreValue(model: ModelResultRecord, scoreAxis: string): number {
-  const viewScore = model.score_views?.[scoreAxis]?.score;
-  if (typeof viewScore === 'number' && Number.isFinite(viewScore)) {
-    return viewScore;
-  }
-  return scoreAxis === 'absolute' ? model.score : Number.NaN;
+export function scoreValue(model: ModelResultRecord): number {
+  return model.score;
 }
 
 export function formatCost(value: number): string {
@@ -366,16 +331,15 @@ function compareModelResults(
   left: ModelResultRecord,
   right: ModelResultRecord,
   costAxis: string,
-  scoreAxis: string,
   sort: ModelResultSort,
 ): number {
   const direction = sort.direction === 'ascending' ? 1 : -1;
-  const result = compareBySortKey(left, right, costAxis, scoreAxis, sort.key);
+  const result = compareBySortKey(left, right, costAxis, sort.key);
   if (result !== 0) {
     return result * direction;
   }
   return (
-    sortableScoreValue(right, scoreAxis) - sortableScoreValue(left, scoreAxis) ||
+    sortableScoreValue(right) - sortableScoreValue(left) ||
     costValue(left.cost_summary, costAxis) - costValue(right.cost_summary, costAxis)
   );
 }
@@ -384,11 +348,10 @@ function compareBySortKey(
   left: ModelResultRecord,
   right: ModelResultRecord,
   costAxis: string,
-  scoreAxis: string,
   key: ModelResultSortKey,
 ): number {
   if (key === 'score') {
-    return sortableScoreValue(left, scoreAxis) - sortableScoreValue(right, scoreAxis);
+    return sortableScoreValue(left) - sortableScoreValue(right);
   }
   if (key === 'cost') {
     return costValue(left.cost_summary, costAxis) - costValue(right.cost_summary, costAxis);
@@ -402,8 +365,8 @@ function compareBySortKey(
   return left.model_key.localeCompare(right.model_key);
 }
 
-function sortableScoreValue(model: ModelResultRecord, scoreAxis: string): number {
-  const value = scoreValue(model, scoreAxis);
+function sortableScoreValue(model: ModelResultRecord): number {
+  const value = scoreValue(model);
   return Number.isFinite(value) ? value : -Infinity;
 }
 
@@ -414,11 +377,10 @@ function defaultSortDirection(key: ModelResultSortKey): SortDirection {
 function plotPoint(
   model: ModelResultRecord,
   costAxis: string,
-  scoreAxis: string,
   frontier: boolean,
 ): BenchmarkPlotModelPoint | null {
   const cost = costValue(model.cost_summary, costAxis);
-  const score = scoreValue(model, scoreAxis);
+  const score = scoreValue(model);
   if (!Number.isFinite(cost) || cost <= 0 || !Number.isFinite(score)) {
     return null;
   }
@@ -439,7 +401,6 @@ function plotRunPoint(
   leaderboardModels: ReturnType<typeof modelLookup>,
   candidateModels: ReturnType<typeof modelLookup>,
   costAxis: string,
-  scoreAxis: string,
   frontierKeys: Set<string>,
 ): BenchmarkPlotModelPoint | null {
   const leaderboardModel = leaderboardModels.byModelKey.get(run.model_key);
@@ -449,10 +410,8 @@ function plotRunPoint(
     : leaderboardModel;
   const cost = costValue(run.cost_summary, costAxis);
   const score = model === undefined
-    ? run.result_status === 'provisional' && scoreAxis === 'absolute'
-      ? run.score
-      : Number.NaN
-    : scoreValue(model, scoreAxis);
+    ? run.result_status === 'provisional' ? run.score : Number.NaN
+    : scoreValue(model);
   if (!Number.isFinite(cost) || cost <= 0 || !Number.isFinite(score)) {
     return null;
   }
@@ -472,21 +431,20 @@ function plotRunPoint(
 function frontierModelResults(
   models: ModelResultRecord[],
   costAxis: string,
-  scoreAxis: string,
 ): ModelResultRecord[] {
   const ordered = [...models]
     .filter((model) => {
       const cost = costValue(model.cost_summary, costAxis);
-      return cost > 0 && Number.isFinite(cost) && Number.isFinite(scoreValue(model, scoreAxis));
+      return cost > 0 && Number.isFinite(cost) && Number.isFinite(scoreValue(model));
     })
     .sort((left, right) =>
       costValue(left.cost_summary, costAxis) - costValue(right.cost_summary, costAxis) ||
-      scoreValue(right, scoreAxis) - scoreValue(left, scoreAxis),
+      scoreValue(right) - scoreValue(left),
     );
   const frontier: ModelResultRecord[] = [];
   let bestScore = -Infinity;
   for (const model of ordered) {
-    const score = scoreValue(model, scoreAxis);
+    const score = scoreValue(model);
     if (score > bestScore) {
       frontier.push(model);
       bestScore = score;
@@ -513,8 +471,8 @@ function logCost(cost: number): number {
   return Math.log(cost) / Math.log(costAxisLogBase());
 }
 
-function scoreDomain(values: number[], scoreAxis: string): [number, number] {
-  const defaultMaximum = defaultScoreMaximum(scoreAxis);
+function scoreDomain(values: number[]): [number, number] {
+  const defaultMaximum = defaultScoreMaximum;
   const finite = values.filter(Number.isFinite);
   if (finite.length === 0) {
     return [0, defaultMaximum];
@@ -529,19 +487,12 @@ function scoreDomain(values: number[], scoreAxis: string): [number, number] {
   return [min, normalizedTick(Math.ceil(expandedMaximum / step) * step)];
 }
 
-function defaultScoreMaximum(scoreAxis: string): number {
-  return scoreAxis === 'relative' ? defaultRelativeScoreMaximum : defaultAbsoluteScoreMaximum;
-}
-
 function scoreTicks([min, max]: [number, number]): number[] {
   const span = max - min;
   if (!Number.isFinite(span) || span <= 0) {
     return [min];
   }
-  const targetTickCount = max > defaultRelativeScoreMaximum
-    ? expandedRelativeScoreTickCount
-    : targetScoreTickCount;
-  const step = niceScoreTickStep(span / Math.max(1, targetTickCount - 1));
+  const step = niceScoreTickStep(span / Math.max(1, targetScoreTickCount - 1));
   const first = Math.ceil(min / step) * step;
   const last = Math.floor(max / step) * step;
   const ticks: number[] = [];

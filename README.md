@@ -180,8 +180,8 @@ the identity-preserving affine nuisance envelope as perceived on the sampled
 canvas. Larger canvases can therefore expose more distinguishable affine states;
 sampled canvas shape is not counted as extra score-bearing difficulty by itself
 unless it changes what nuisance states can be distinguished. This keeps the
-model output fixed at a 10-way probability measure while allowing absolute
-score to grow as formation rules add real distinguishable observation states.
+model output fixed at a 10-way probability measure while allowing score to grow
+as formation rules add real distinguishable observation states.
 
 While a benchmark run is training, gate-check progress may be written under
 `results/training/` as the current training-run record. The console may
@@ -199,24 +199,18 @@ evaluation is a self-contained benchmark evaluation bundle: it embeds the
 benchmark manifest, architecture manifest, model manifest, checkpoint artifact
 record, model inspection, measurement dataset, score view, sampled competence
 record, evaluation protocol, evaluation curriculum, seed, and throughput.
-Pairwise relative-score evidence is generated as an accepted benchmark
-competition bundle under `results/evaluations/<benchmark>/competitions/`, using
-two evaluation bundles and their checkpoint artifacts as the handoff surface.
 `benchmark evaluate` accepts an explicit `--checkpoint-artifact`; when omitted,
 it discovers selected checkpoint artifact sidecars from local training summaries
 under `results/training/` and evaluates completed training runs whose matching
-checkpoints do not already have accepted evaluation bundles, then completes
-missing relative pairwise evaluations among the accepted bundles. Pending queue
+checkpoints do not already have accepted evaluation bundles. Pending queue
 manifests and in-progress training records are ignored by evaluation discovery.
-`benchmark evaluate digits` narrows both phases to the Digits benchmark, and
-omitting the benchmark name scans all local benchmarks. Use
-`benchmark evaluate absolute` or
-`benchmark evaluate relative` to run only one phase. Relative evaluation also
-accepts explicit `--left-evaluation` and `--right-evaluation` paths for a
-single pair. The command accepts repeated `--benchmark-root` arguments and
-otherwise resolves packaged benchmark roots by benchmark id. Materialized
-console views are refreshed by evaluation and written per benchmark under
-`results/views/<benchmark>/benchmark_results.json`.
+`benchmark evaluate digits` narrows evaluation to the Digits benchmark, and
+omitting the benchmark name scans all local benchmarks. The command accepts
+repeated `--benchmark-root` arguments and otherwise resolves packaged benchmark
+roots by benchmark id. Materialized console views are refreshed by evaluation
+and written per benchmark under
+`results/views/<benchmark>/benchmark_results.json`. The console exposes a
+single vertical `Score` axis, accepted directly from the evaluation harness.
 
 Commit and push the existing local result checkout:
 

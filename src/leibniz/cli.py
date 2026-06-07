@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import itertools
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -23,21 +21,14 @@ from leibniz.benchmark_implementations import (
     load_benchmark,
 )
 from leibniz.benchmark_runner import (
-    BenchmarkCompetitionPlan,
-    BenchmarkCompetitionSummary,
     BenchmarkEvaluationPlan,
     BenchmarkEvaluationSummary,
     BenchmarkRunPlan,
     BenchmarkRunSummary,
-    compete_benchmark_checkpoints,
     evaluate_benchmark_checkpoint,
     run_benchmark,
 )
 from leibniz.benchmarks import BenchmarkManifest, BenchmarkManifestDocument
-from leibniz.competition_bundles import (
-    BenchmarkCompetitionBundleDocument,
-    BenchmarkCompetitionBundleSummary,
-)
 from leibniz.documents import (
     canonical_document_bytes,
     document_filename_suffix,
@@ -50,7 +41,6 @@ from leibniz.local_results import (
     initialize_result_checkout,
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
-    relative_frontier_competition_requests,
 )
 from leibniz.measurements import (
     MeasurementDataset,
@@ -67,24 +57,10 @@ from leibniz.outcomes import OutcomeSpace
 from leibniz.projection_records import ProjectionRecordDocument
 from leibniz.resources import ResourceReportDocument, ResourceReportSetDocument
 from leibniz.submission_registries import SubmissionRegistryDocument
-from leibniz.tensor_runtime import TensorRuntimeDevice, tensor_runtime_device_choices
+from leibniz.tensor_runtime import tensor_runtime_device_choices
 from leibniz.view_manifests import ViewManifestDocument
 
 __all__ = ["main"]
-
-
-@dataclass(frozen=True, slots=True)
-class _CompetitionEvaluationPair:
-    left_path: Path
-    right_path: Path
-    repeat_existing: bool
-
-
-@dataclass(frozen=True, slots=True)
-class _CompetitionPairKey:
-    benchmark_id: str
-    left_model_key: str
-    right_model_key: str
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -219,12 +195,6 @@ def _parser() -> argparse.ArgumentParser:
         help="validate a benchmark evaluation bundle document",
     )
     evaluation_bundle.add_argument("path", type=Path)
-
-    competition_bundle = validate_subcommands.add_parser(
-        "competition-bundle",
-        help="validate a benchmark competition bundle document",
-    )
-    competition_bundle.add_argument("path", type=Path)
 
     submission_registry = validate_subcommands.add_parser(
         "submission-registry",
@@ -369,8 +339,6 @@ def _parser() -> argparse.ArgumentParser:
         help="evaluate saved checkpoints",
     )
     evaluate.add_argument("--checkpoint-artifact", type=Path)
-    evaluate.add_argument("--left-evaluation", type=Path)
-    evaluate.add_argument("--right-evaluation", type=Path)
     evaluate.add_argument(
         "--benchmark-root",
         type=Path,
@@ -381,10 +349,7 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "benchmarks",
         nargs="*",
-        help=(
-            "optional phase (absolute or relative) followed by benchmark ids or names; "
-            "defaults to both phases for all local benchmarks"
-        ),
+        help="optional benchmark ids or names; defaults to all local benchmarks",
     )
     evaluate.add_argument(
         "--results-root",
@@ -524,16 +489,7 @@ def _benchmark(args: argparse.Namespace) -> int:
                 print(f"moved {moved} completed benchmark training manifest(s) out of pending")
             return 0
         if str(args.benchmark_command) == "evaluate":
-            evaluation_phase, benchmark_selectors = _evaluation_phase_and_selectors(
-                tuple(args.benchmarks)
-            )
-            if args.checkpoint_artifact is not None and evaluation_phase == "relative":
-                raise ValueError("checkpoint-artifact can only be used for absolute evaluation")
-            explicit_relative_pair = (
-                args.left_evaluation is not None or args.right_evaluation is not None
-            )
-            if explicit_relative_pair and evaluation_phase == "absolute":
-                raise ValueError("left-evaluation and right-evaluation require relative evaluation")
+            benchmark_selectors = tuple(args.benchmarks)
             evaluation_summaries: list[BenchmarkEvaluationSummary] = []
             benchmark_roots = dict(
                 _selected_benchmark_roots_by_id(
@@ -541,56 +497,39 @@ def _benchmark(args: argparse.Namespace) -> int:
                     benchmark_selectors=benchmark_selectors,
                 )
             )
-            if evaluation_phase in {"all", "absolute"}:
-                for checkpoint_artifact in _evaluation_checkpoint_artifacts(
-                    results_root=args.results_root,
-                    checkpoint_artifact=args.checkpoint_artifact,
-                    benchmark_selectors=benchmark_selectors,
-                ):
-                    checkpoint_record = _load_object_record(
-                        checkpoint_artifact,
-                        description="checkpoint artifact",
-                    )
-                    benchmark_root = _benchmark_root_for_record(
-                        checkpoint_record,
-                        benchmark_roots=benchmark_roots,
-                        description="checkpoint_artifact",
-                    )
-                    summary = evaluate_benchmark_checkpoint(
-                        BenchmarkEvaluationPlan(
-                            checkpoint_artifact_path=checkpoint_artifact,
-                            benchmark_root=benchmark_root,
-                            results_root=args.results_root,
-                            tensor_device=args.device,
-                        )
-                    )
-                    evaluation_summaries.append(summary)
-                    print(
-                        f"completed benchmark absolute evaluation {summary.run_slug} "
-                        f"({summary.measurement_count} measurement(s))"
-                    )
-                    print(f"evaluation bundle: {summary.evaluation_bundle_path}")
-                if not evaluation_summaries and args.checkpoint_artifact is not None:
-                    raise ValueError("no checkpoint artifacts matched benchmark evaluation inputs")
-                if not evaluation_summaries:
-                    print("no unevaluated benchmark checkpoints found")
-            competition_summaries: list[BenchmarkCompetitionSummary] = []
-            if evaluation_phase in {"all", "relative"}:
-                competition_summaries, skipped = _run_benchmark_competitions(
-                    results_root=args.results_root,
-                    left_evaluation=args.left_evaluation,
-                    right_evaluation=args.right_evaluation,
+            for checkpoint_artifact in _evaluation_checkpoint_artifacts(
+                results_root=args.results_root,
+                checkpoint_artifact=args.checkpoint_artifact,
+                benchmark_selectors=benchmark_selectors,
+            ):
+                checkpoint_record = _load_object_record(
+                    checkpoint_artifact,
+                    description="checkpoint artifact",
+                )
+                benchmark_root = _benchmark_root_for_record(
+                    checkpoint_record,
                     benchmark_roots=benchmark_roots,
-                    benchmark_selectors=benchmark_selectors,
-                    tensor_device=args.device,
+                    description="checkpoint_artifact",
                 )
-                _print_competition_summaries(
-                    summaries=competition_summaries,
-                    skipped=skipped,
+                summary = evaluate_benchmark_checkpoint(
+                    BenchmarkEvaluationPlan(
+                        checkpoint_artifact_path=checkpoint_artifact,
+                        benchmark_root=benchmark_root,
+                        results_root=args.results_root,
+                        tensor_device=args.device,
+                    )
                 )
-                if not competition_summaries and not skipped:
-                    print("no missing benchmark relative evaluations found")
-            if evaluation_summaries or competition_summaries or not _benchmark_views_present(
+                evaluation_summaries.append(summary)
+                print(
+                    f"completed benchmark evaluation {summary.run_slug} "
+                    f"({summary.measurement_count} measurement(s))"
+                )
+                print(f"evaluation bundle: {summary.evaluation_bundle_path}")
+            if not evaluation_summaries and args.checkpoint_artifact is not None:
+                raise ValueError("no checkpoint artifacts matched benchmark evaluation inputs")
+            if not evaluation_summaries:
+                print("no unevaluated benchmark checkpoints found")
+            if evaluation_summaries or not _benchmark_views_present(
                 results_root=args.results_root,
                 benchmark_selectors=benchmark_selectors,
             ):
@@ -918,155 +857,6 @@ def _evaluation_checkpoint_artifacts(
     return tuple(dict.fromkeys(checkpoint_paths))
 
 
-def _evaluation_phase_and_selectors(
-    values: tuple[str, ...],
-) -> tuple[str, tuple[str, ...]]:
-    if values and values[0] in {"absolute", "relative"}:
-        return values[0], values[1:]
-    return "all", values
-
-
-def _run_benchmark_competitions(
-    *,
-    results_root: Path,
-    left_evaluation: Path | None,
-    right_evaluation: Path | None,
-    benchmark_roots: Mapping[str, Path],
-    benchmark_selectors: tuple[str, ...],
-    tensor_device: TensorRuntimeDevice,
-) -> tuple[list[BenchmarkCompetitionSummary], int]:
-    competition_summaries: list[BenchmarkCompetitionSummary] = []
-    skipped = 0
-    while True:
-        pairs = _competition_evaluation_pairs(
-            results_root=results_root,
-            left_evaluation=left_evaluation,
-            right_evaluation=right_evaluation,
-            benchmark_selectors=benchmark_selectors,
-        )
-        if not pairs:
-            break
-        completed_this_round = 0
-        for pair in pairs:
-            left_path = pair.left_path
-            right_path = pair.right_path
-            left_record = _load_evaluation_summary_record(left_path)
-            right_record = _load_evaluation_summary_record(right_path)
-            benchmark_root = _benchmark_root_for_record(
-                left_record,
-                benchmark_roots=benchmark_roots,
-                description="left_evaluation",
-            )
-            right_benchmark_root = _benchmark_root_for_record(
-                right_record,
-                benchmark_roots=benchmark_roots,
-                description="right_evaluation",
-            )
-            if right_benchmark_root != benchmark_root:
-                raise ValueError("benchmark relative evaluation requires matching benchmark roots")
-            competition_summaries.append(
-                compete_benchmark_checkpoints(
-                    BenchmarkCompetitionPlan(
-                        left_evaluation_path=left_path,
-                        right_evaluation_path=right_path,
-                        benchmark_root=benchmark_root,
-                        results_root=results_root,
-                        tensor_device=tensor_device,
-                    )
-                )
-            )
-            completed_this_round += 1
-        if left_evaluation is not None or right_evaluation is not None:
-            break
-        if completed_this_round == 0:
-            break
-    return competition_summaries, skipped
-
-
-def _print_competition_summaries(
-    *,
-    summaries: Sequence[BenchmarkCompetitionSummary],
-    skipped: int,
-) -> None:
-    for summary in summaries:
-        print(
-            f"completed benchmark relative evaluation {summary.competition_id} "
-            f"({summary.sample_count} sample(s))"
-        )
-        print(f"left model: {summary.left_model_key}")
-        print(f"right model: {summary.right_model_key}")
-        print(f"competition bundle: {summary.competition_bundle_path}")
-    if skipped:
-        print(f"skipped {skipped} existing benchmark relative evaluation(s)")
-
-
-def _competition_evaluation_pairs(
-    *,
-    results_root: Path,
-    left_evaluation: Path | None,
-    right_evaluation: Path | None,
-    benchmark_selectors: tuple[str, ...],
-) -> tuple[_CompetitionEvaluationPair, ...]:
-    if left_evaluation is not None or right_evaluation is not None:
-        if left_evaluation is None or right_evaluation is None:
-            raise ValueError("left-evaluation and right-evaluation must be provided together")
-        return (
-            _CompetitionEvaluationPair(
-                left_path=left_evaluation,
-                right_path=right_evaluation,
-                repeat_existing=True,
-            ),
-        )
-    evaluations = _evaluation_bundle_paths(
-        results_root=results_root,
-        benchmark_selectors=benchmark_selectors,
-    )
-    existing_pairs = _competition_pair_index(results_root=results_root)
-    by_benchmark: dict[str, list[Path]] = {}
-    evaluation_records: dict[Path, dict[str, object]] = {}
-    for path in evaluations:
-        record = _load_evaluation_summary_record(path)
-        evaluation_records[path] = record
-        benchmark_id = _benchmark_id_from_record(record, description="evaluation")
-        by_benchmark.setdefault(benchmark_id, []).append(path)
-    missing_pairs: list[_CompetitionEvaluationPair] = []
-    evaluation_paths_by_model_key: dict[str, Path] = {}
-    for paths in by_benchmark.values():
-        for path in paths:
-            model_key = _model_key_from_evaluation(evaluation_records[path])
-            evaluation_paths_by_model_key[model_key] = path
-        for left_path, right_path in itertools.combinations(paths, 2):
-            left_record = evaluation_records[left_path]
-            right_record = evaluation_records[right_path]
-            if _competition_pair_key(left_record, right_record) not in existing_pairs:
-                missing_pairs.append(
-                    _CompetitionEvaluationPair(
-                        left_path=left_path,
-                        right_path=right_path,
-                        repeat_existing=False,
-                    )
-                )
-    if missing_pairs:
-        return tuple(missing_pairs)
-    confidence_pairs: list[_CompetitionEvaluationPair] = []
-    for left_key, right_key in relative_frontier_competition_requests(
-        results_root=results_root,
-        benchmark_selectors=benchmark_selectors,
-    ):
-        left_path = evaluation_paths_by_model_key.get(left_key)
-        right_path = evaluation_paths_by_model_key.get(right_key)
-        if left_path is None or right_path is None:
-            continue
-        confidence_pairs.append(
-            _CompetitionEvaluationPair(
-                left_path=left_path,
-                right_path=right_path,
-                repeat_existing=True,
-            )
-        )
-    return tuple(confidence_pairs)
-
-
 def _evaluation_bundle_paths(
     *,
     results_root: Path,
@@ -1077,60 +867,12 @@ def _evaluation_bundle_paths(
         return ()
     paths: list[Path] = []
     for path in sorted(evaluation_root.rglob("*" + document_filename_suffix())):
-        if "competitions" in path.relative_to(evaluation_root).parts:
-            continue
         record = _load_evaluation_summary_record(path)
         benchmark_id = _benchmark_id_from_record(record, description="evaluation")
         if not _benchmark_selected(benchmark_id, benchmark_selectors):
             continue
         paths.append(path)
     return tuple(paths)
-
-
-def _competition_pair_index(*, results_root: Path) -> set[_CompetitionPairKey]:
-    pairs: set[_CompetitionPairKey] = set()
-    competition_paths = (results_root / "evaluations").rglob(
-        "competitions/*" + document_filename_suffix()
-    )
-    for path in sorted(competition_paths):
-        record = _load_object_record(path, description="benchmark competition bundle")
-        if record.get("format") != "leibniz.benchmark-competition":
-            continue
-        summary = BenchmarkCompetitionBundleSummary.from_record(record)
-        pairs.add(
-            _normalized_competition_pair_key(
-                benchmark_id=summary.benchmark_id,
-                left_model_key=summary.left_model_key,
-                right_model_key=summary.right_model_key,
-            )
-        )
-    return pairs
-
-
-def _competition_pair_key(
-    left_evaluation: Mapping[str, object],
-    right_evaluation: Mapping[str, object],
-) -> _CompetitionPairKey:
-    return _normalized_competition_pair_key(
-        benchmark_id=_benchmark_id_from_record(left_evaluation, description="left_evaluation"),
-        left_model_key=_model_key_from_evaluation(left_evaluation),
-        right_model_key=_model_key_from_evaluation(right_evaluation),
-    )
-
-
-def _normalized_competition_pair_key(
-    *,
-    benchmark_id: str,
-    left_model_key: str,
-    right_model_key: str,
-) -> _CompetitionPairKey:
-    if right_model_key < left_model_key:
-        left_model_key, right_model_key = right_model_key, left_model_key
-    return _CompetitionPairKey(
-        benchmark_id=benchmark_id,
-        left_model_key=left_model_key,
-        right_model_key=right_model_key,
-    )
 
 
 def _evaluation_bundle_exists(
@@ -1202,14 +944,6 @@ def _load_object_record(path: Path, *, description: str) -> dict[str, object]:
     return dict(record)
 
 
-def _model_key_from_evaluation(record: Mapping[str, object]) -> str:
-    raw_checkpoint = record.get("model_checkpoint")
-    if not isinstance(raw_checkpoint, Mapping):
-        raise ValueError("evaluation.model_checkpoint must be a record")
-    checkpoint = cast(Mapping[str, object], raw_checkpoint)
-    return _required_string(checkpoint.get("digest"), "evaluation.model_checkpoint.digest")
-
-
 def _benchmark_id_from_record(record: Mapping[str, object], *, description: str) -> str:
     benchmark_id = record.get("benchmark_id")
     if isinstance(benchmark_id, str) and benchmark_id:
@@ -1227,12 +961,6 @@ def _benchmark_id_from_record(record: Mapping[str, object], *, description: str)
         if isinstance(checkpoint_benchmark_id, str) and checkpoint_benchmark_id:
             return checkpoint_benchmark_id
     raise ValueError(f"{description}.benchmark_id must be a non-empty string")
-
-
-def _required_string(value: object, description: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{description} must be a non-empty string")
-    return value
 
 
 def _validate(args: argparse.Namespace) -> int:
@@ -1316,10 +1044,6 @@ def _validate(args: argparse.Namespace) -> int:
         if artifact == "evaluation-bundle":
             document = BenchmarkEvaluationBundleDocument.from_bytes(args.path.read_bytes())
             print(f"valid evaluation bundle {document.bundle.id}")
-            return 0
-        if artifact == "competition-bundle":
-            document = BenchmarkCompetitionBundleDocument.from_bytes(args.path.read_bytes())
-            print(f"valid competition bundle {document.bundle.id}")
             return 0
         if artifact == "submission-registry":
             document = SubmissionRegistryDocument.from_bytes(args.path.read_bytes())

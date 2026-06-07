@@ -80,30 +80,6 @@ def test_view_manifest_parses_evaluation_bundle_subject() -> None:
     assert evaluation.subject_kind == "evaluation-bundle"
 
 
-def test_view_manifest_parses_competition_bundle_subject() -> None:
-    competition = ViewManifest.from_record(
-        {
-            "id": "view-manifests.competitions@0.1.0",
-            "subject_kind": "competition-bundle",
-            "subject": _protocol_reference(
-                "competition-bundle",
-                "benchmark-competitions.boolean@0.1.0",
-            ).to_record(),
-            "projection_kind": "summary",
-            "source_artifacts": [
-                _protocol_reference(
-                    "competition-bundle",
-                    "benchmark-competitions.boolean@0.1.0",
-                ).to_record()
-            ],
-            "metric_name": "relative_score",
-            "score_direction": "higher",
-        }
-    )
-
-    assert competition.subject_kind == "competition-bundle"
-
-
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [

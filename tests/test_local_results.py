@@ -5,10 +5,8 @@ from textwrap import dedent
 from typing import Any, cast
 
 import pytest
-from benchmark_typing import load_digits_benchmark
 
 import leibniz.local_results as local_results
-from leibniz.architectures import ArchitectureManifestDocument
 from leibniz.benchmark_runner import (
     BenchmarkEvaluationPlan,
     BenchmarkRunPlan,
@@ -16,7 +14,6 @@ from leibniz.benchmark_runner import (
     run_benchmark,
 )
 from leibniz.cli import main
-from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import (
@@ -27,7 +24,6 @@ from leibniz.local_results import (
     publish_local_benchmark_results,
     push_result_checkout,
 )
-from leibniz.measurements import MeasurementDataset, MeasurementDocument
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -195,312 +191,6 @@ def test_console_result_view_validates_benchmark_leaderboard_models(tmp_path: Pa
         load_console_result_view(canonical_document_bytes(view))
 
 
-def test_relative_competition_does_not_read_absolute_measurements() -> None:
-    run_a = _benchmark_run_record_for_competition(
-        model_key="model-a",
-        run_id="run-a",
-    )
-    run_b = _benchmark_run_record_for_competition(
-        model_key="model-b",
-        run_id="run-b",
-    )
-
-    assert cast(Any, local_results)._pairwise_competition_outcomes(
-        {"model-a": run_a, "model-b": run_b},
-        (),
-    ) == ()
-
-    outcomes = cast(Any, local_results)._pairwise_competition_outcomes(
-        {"model-a": run_a, "model-b": run_b},
-        (_competition_record(left_model_key="model-a", right_model_key="model-b"),),
-    )
-
-    assert len(outcomes) == 1
-    assert outcomes[0].left_model_key == "model-a"
-    assert outcomes[0].right_model_key == "model-b"
-    assert outcomes[0].left_score == 1.0
-    assert outcomes[0].right_score == 0.0
-
-
-def test_relative_competition_scores_rank_undefeated_model_first() -> None:
-    best_runs = {
-        "model-a": _benchmark_run_record_for_competition(
-            model_key="model-a",
-            run_id="run-a",
-        ),
-        "model-b": _benchmark_run_record_for_competition(
-            model_key="model-b",
-            run_id="run-b",
-        ),
-        "model-c": _benchmark_run_record_for_competition(
-            model_key="model-c",
-            run_id="run-c",
-        ),
-    }
-    outcomes = (
-        cast(Any, local_results)._ModelCompetitionOutcome(
-            left_model_key="model-a",
-            right_model_key="model-b",
-            left_score=0.64,
-            right_score=0.36,
-            sample_count=512,
-        ),
-        cast(Any, local_results)._ModelCompetitionOutcome(
-            left_model_key="model-a",
-            right_model_key="model-c",
-            left_score=0.71,
-            right_score=0.29,
-            sample_count=512,
-        ),
-        cast(Any, local_results)._ModelCompetitionOutcome(
-            left_model_key="model-b",
-            right_model_key="model-c",
-            left_score=0.87,
-            right_score=0.13,
-            sample_count=512,
-        ),
-    )
-
-    ratings = cast(Any, local_results)._relative_rating_fit(
-        best_runs,
-        outcomes=outcomes,
-    ).ratings
-
-    assert ratings["model-a"].score > ratings["model-b"].score
-    assert ratings["model-b"].score > ratings["model-c"].score
-
-
-def test_relative_competition_batch_fit_aggregates_reversed_pairs() -> None:
-    best_runs = {
-        "model-a": _benchmark_run_record_for_competition(
-            model_key="model-a",
-            run_id="run-a",
-        ),
-        "model-b": _benchmark_run_record_for_competition(
-            model_key="model-b",
-            run_id="run-b",
-        ),
-    }
-    outcome_type = cast(Any, local_results)._ModelCompetitionOutcome
-    ratings = cast(Any, local_results)._relative_rating_fit(
-        best_runs,
-        outcomes=(
-            outcome_type(
-                left_model_key="model-a",
-                right_model_key="model-b",
-                left_score=0.75,
-                right_score=0.25,
-                sample_count=40,
-            ),
-            outcome_type(
-                left_model_key="model-b",
-                right_model_key="model-a",
-                left_score=0.25,
-                right_score=0.75,
-                sample_count=24,
-            ),
-        ),
-    ).ratings
-
-    assert ratings["model-a"].score > ratings["model-b"].score
-    assert ratings["model-a"].sample_count == 64
-    assert ratings["model-a"].opponent_count == 1
-    assert ratings["model-a"].competition_count == 2
-    assert ratings["model-a"].provisional
-    assert ratings["model-a"].uncertainty > 0.0
-
-
-def test_relative_competition_batch_fit_uses_transitive_evidence() -> None:
-    best_runs = {
-        "model-a": _benchmark_run_record_for_competition(
-            model_key="model-a",
-            run_id="run-a",
-        ),
-        "model-b": _benchmark_run_record_for_competition(
-            model_key="model-b",
-            run_id="run-b",
-        ),
-        "model-c": _benchmark_run_record_for_competition(
-            model_key="model-c",
-            run_id="run-c",
-        ),
-    }
-    outcome_type = cast(Any, local_results)._ModelCompetitionOutcome
-    ratings = cast(Any, local_results)._relative_rating_fit(
-        best_runs,
-        outcomes=(
-            outcome_type(
-                left_model_key="model-a",
-                right_model_key="model-b",
-                left_score=0.60,
-                right_score=0.40,
-                sample_count=128,
-            ),
-            outcome_type(
-                left_model_key="model-b",
-                right_model_key="model-c",
-                left_score=0.60,
-                right_score=0.40,
-                sample_count=128,
-            ),
-            outcome_type(
-                left_model_key="model-a",
-                right_model_key="model-c",
-                left_score=0.70,
-                right_score=0.30,
-                sample_count=128,
-            ),
-        ),
-    ).ratings
-
-    assert ratings["model-a"].score > ratings["model-b"].score
-    assert ratings["model-b"].score > ratings["model-c"].score
-    assert not ratings["model-a"].provisional
-    assert not ratings["model-b"].provisional
-    assert not ratings["model-c"].provisional
-
-
-def test_relative_score_view_exposes_batch_rating_evidence() -> None:
-    best_runs = {
-        "model-a": _benchmark_run_record_for_competition(
-            model_key="model-a",
-            run_id="run-a",
-        ),
-        "model-b": _benchmark_run_record_for_competition(
-            model_key="model-b",
-            run_id="run-b",
-        ),
-    }
-    cost_summary = {
-        "component_count": 1,
-        "parameter_count": 1,
-        "storage_bytes": 1,
-        "inference_compute": 1,
-        "training_compute": 1,
-    }
-    records: list[dict[str, object]] = [
-        {
-            "model_key": "model-a",
-            "score_views": {},
-            "cost_summary": cost_summary,
-        },
-        {
-            "model_key": "model-b",
-            "score_views": {},
-            "cost_summary": cost_summary,
-        },
-    ]
-
-    cast(Any, local_results)._add_relative_score_views(
-        records,
-        best_runs=best_runs,
-        competitions=(
-            _competition_record(left_model_key="model-a", right_model_key="model-b"),
-        ),
-    )
-
-    score_views = cast(dict[str, object], records[0]["score_views"])
-    relative = cast(dict[str, object], score_views["relative"])
-    basis = cast(dict[str, object], relative["basis"])
-    assert basis["kind"] == "model-competition-bradley-terry-batch-v1"
-    assert basis["competition_count"] == 1
-    assert basis["sample_count"] == 1
-    assert basis["opponent_count"] == 1
-    assert basis["provisional"] is True
-    assert cast(float, basis["rating_uncertainty"]) > 0.0
-    confidence = cast(dict[str, object], basis["frontier_confidence"])
-    size_confidence = cast(dict[str, object], confidence["storage_bytes"])
-    assert size_confidence["risk_threshold"] == 0.05
-
-
-def test_local_competition_records_use_compact_bundle_summaries(tmp_path: Path) -> None:
-    results_root = tmp_path / "results"
-    competition_path = (
-        results_root
-        / "evaluations"
-        / "digits"
-        / "competitions"
-        / "models-a-b.json"
-    )
-    competition_path.parent.mkdir(parents=True)
-    competition_path.write_bytes(
-        canonical_document_bytes(
-            _competition_bundle_record(
-                left_model_key="model-a",
-                right_model_key="model-b",
-            )
-        )
-    )
-
-    records = cast(Any, local_results)._local_competition_records(results_root)
-
-    assert len(records) == 1
-    assert records[0]["left_model_key"] == "model-a"
-    assert records[0]["right_model_key"] == "model-b"
-    assert records[0]["sample_count"] == 1
-
-
-def test_cli_competition_pair_index_uses_compact_bundle_summaries(tmp_path: Path) -> None:
-    import leibniz.cli as cli
-
-    results_root = tmp_path / "results"
-    competition_path = (
-        results_root
-        / "evaluations"
-        / "digits"
-        / "competitions"
-        / "models-a-b.json"
-    )
-    competition_path.parent.mkdir(parents=True)
-    competition_path.write_bytes(
-        canonical_document_bytes(
-            _competition_bundle_record(
-                left_model_key="model-b",
-                right_model_key="model-a",
-            )
-        )
-    )
-
-    pairs = cast(Any, cli)._competition_pair_index(results_root=results_root)
-
-    assert pairs == {
-        cast(Any, cli)._CompetitionPairKey(
-            benchmark_id="benchmarks.digits@0.1.0",
-            left_model_key="model-a",
-            right_model_key="model-b",
-        )
-    }
-
-
-def test_relative_frontier_confidence_requests_uncertain_nearest_competition() -> None:
-    best_runs = {
-        "model-a": _benchmark_run_record_for_competition(
-            model_key="model-a",
-            run_id="run-a",
-        ),
-        "model-b": _benchmark_run_record_for_competition(
-            model_key="model-b",
-            run_id="run-b",
-        ),
-    }
-    outcome_type = cast(Any, local_results)._ModelCompetitionOutcome
-
-    requests = cast(Any, local_results)._relative_frontier_competition_requests(
-        best_runs,
-        outcomes=(
-            outcome_type(
-                left_model_key="model-a",
-                right_model_key="model-b",
-                left_score=0.55,
-                right_score=0.45,
-                sample_count=8,
-            ),
-        ),
-    )
-
-    assert requests == (("model-a", "model-b"),)
-
-
 def test_console_result_view_validates_model_detail_tables(tmp_path: Path) -> None:
     _run_and_evaluate_digits_benchmark(tmp_path / "results")
     summary = materialize_benchmark_result_views(
@@ -666,7 +356,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert oracle_curve["kind"] == "oracle-inference-compute-reference-v1"
     assert oracle_curve["key"] == "oracle_inference_compute"
     assert oracle_curve["x_axis"] == "inference_compute"
-    assert oracle_curve["y_axis"] == "absolute"
+    assert oracle_curve["y_axis"] == "score"
     oracle_points = cast(list[dict[str, object]], oracle_curve["points"])
     assert len(oracle_points) >= 2
     assert all(cast(int | float, point["cost"]) > 0 for point in oracle_points)
@@ -794,7 +484,7 @@ def test_cli_benchmark_evaluate_discovers_training_checkpoints(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert "completed benchmark absolute evaluation" in captured.out
+    assert "completed benchmark evaluation" in captured.out
     assert "materialized 2 benchmark result view(s)" in captured.out
     assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 1
     assert (results_root / "views" / "digits" / "benchmark_results.json").is_file()
@@ -916,21 +606,10 @@ def test_cli_benchmark_train_discovers_uncompleted_architecture_manifests(
     assert "no uncompleted benchmark training manifests found" in rerun.out
 
 
-def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
+def test_cli_benchmark_evaluate_runs_checkpoint_evaluations_only(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import leibniz.cli as cli
-
-    def no_confidence_requests(
-        *,
-        results_root: Path,
-        benchmark_selectors: tuple[str, ...],
-    ) -> tuple[tuple[str, str], ...]:
-        return ()
-
-    monkeypatch.setattr(cli, "relative_frontier_competition_requests", no_confidence_requests)
     results_root = tmp_path / "results"
     for seed in (101, 202):
         run_benchmark(
@@ -961,14 +640,9 @@ def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.err == ""
-    assert "completed benchmark absolute evaluation" in captured.out
-    assert "completed benchmark relative evaluation" in captured.out
+    assert "completed benchmark evaluation" in captured.out
     assert "materialized 2 benchmark result view(s)" in captured.out
     assert len(tuple((results_root / "evaluations" / "digits").glob("*.json"))) == 2
-    competition_paths = tuple(
-        (results_root / "evaluations" / "digits" / "competitions").glob("*.json")
-    )
-    assert len(competition_paths) == 1
 
     assert main(
         [
@@ -985,12 +659,7 @@ def test_cli_benchmark_evaluate_runs_absolute_and_relative_phases(
     ) == 0
     rerun = capsys.readouterr()
     assert "no unevaluated benchmark checkpoints found" in rerun.out
-    assert "no missing benchmark relative evaluations found" in rerun.out
     assert "benchmark result views already current" in rerun.out
-    competition_paths = tuple(
-        (results_root / "evaluations" / "digits" / "competitions").glob("*.json")
-    )
-    assert len(competition_paths) == 1
     for path in results_root.rglob("*.json"):
         record = load_object_document(path.read_bytes(), description="result record")
         for value in _string_values(record):
@@ -1264,10 +933,6 @@ def test_cli_initializes_local_result_checkout_with_default_results_root(
     assert (tmp_path / "results" / "evaluations" / ".gitkeep").is_file()
 
 
-def _digits_dataset() -> MeasurementDataset:
-    return MeasurementDataset.from_record({"measurements": [_digits_measurement().to_record()]})
-
-
 def _selected_checkpoint_artifact_path(training_summary_path: Path) -> Path:
     training_summary = load_object_document(
         training_summary_path.read_bytes(),
@@ -1275,92 +940,6 @@ def _selected_checkpoint_artifact_path(training_summary_path: Path) -> Path:
     )
     checkpoint = cast(dict[str, object], training_summary["selected_model_checkpoint"])
     return Path(cast(str, checkpoint["record_path"]))
-
-
-def _benchmark_run_record_for_competition(
-    *,
-    model_key: str,
-    run_id: str,
-) -> object:
-    dataset = _digits_dataset()
-    architecture = _architecture().manifest
-    digest = ContentDigest.from_value({"model": model_key})
-    return cast(Any, local_results)._BenchmarkRunRecord(
-        source_kind="test",
-        result_status="accepted",
-        source_path=Path(f"results/training/{run_id}.json"),
-        run_id=run_id,
-        run_slug=run_id,
-        benchmark_id=ProtocolIdentifier.parse("benchmarks.digits@0.1.0"),
-        architecture_digest=digest,
-        model_key=model_key,
-        complexity=1.0,
-        measurement_count=len(dataset.measurements),
-        score=1.0,
-        cost_summary={"component_count": 1, "storage_bytes": 1},
-        architecture=architecture.to_record(),
-        model_inspection={},
-        model_inspection_digest=digest,
-        model_inspection_path=None,
-        measurement_dataset=dataset,
-        measurement_dataset_digest=dataset.digest,
-    )
-
-
-def _competition_record(*, left_model_key: str, right_model_key: str) -> dict[str, object]:
-    return {
-        "format": "leibniz.model-competition",
-        "format_version": 1,
-        "benchmark_id": "benchmarks.digits@0.1.0",
-        "competition_id": "model-a-vs-model-b",
-        "mechanic": "paired-prediction-accepted-mass",
-        "seed": 9000110,
-        "sample_count": 1,
-        "outcome_space_id": "benchmarks.digits.outcomes@0.1.0",
-        "left_model_key": left_model_key,
-        "right_model_key": right_model_key,
-        "left_score": 1.0,
-        "right_score": 0.0,
-        "left_wins": 1,
-        "right_wins": 0,
-        "ties": 0,
-        "entries": [
-            {
-                "id": "benchmarks.digits.competition.model-a-vs-model-b.sample-0@0.1.0",
-                "observation_id": "benchmarks.digits.observations.competition.sample-0@0.1.0",
-                "accepted_outcome_id": "digit-7",
-                "left_score": 0.9,
-                "right_score": 0.1,
-                "winner": "left",
-            }
-        ],
-    }
-
-
-def _competition_bundle_record(*, left_model_key: str, right_model_key: str) -> dict[str, object]:
-    return {
-        "format": "leibniz.benchmark-competition",
-        "format_version": 1,
-        "id": "benchmark-competitions.models-a-b@0.1.0",
-        "benchmark_manifest": {"id": "benchmarks.digits@0.1.0"},
-        "left_evaluation_bundle": {"invalid": "not read by compact summary"},
-        "right_evaluation_bundle": {"invalid": "not read by compact summary"},
-        "competition_result": _competition_record(
-            left_model_key=left_model_key,
-            right_model_key=right_model_key,
-        ),
-        "competition_protocol": {
-            "kind": "checkpoint-benchmark-competition",
-            "sample_count": 1,
-        },
-        "competition_seed": 9000110,
-        "throughput": {
-            "kind": "checkpoint-competition-throughput",
-            "sample_count": 2,
-            "left_max_inference_compute": 20,
-            "right_max_inference_compute": 30,
-        },
-    }
 
 
 def _string_values(value: object) -> tuple[str, ...]:
@@ -1394,52 +973,3 @@ def _init_git(path: Path, *, configure_identity: bool = True) -> None:
     if configure_identity:
         _git(path, "config", "user.email", "operator@example.test")
         _git(path, "config", "user.name", "Leibniz Operator")
-
-
-def _digits_measurement():
-    return MeasurementDocument.from_bytes(
-        canonical_document_bytes(_digits_measurement_record())
-    ).measurement
-
-
-def _digits_measurement_record() -> dict[str, object]:
-    outcome_space = _digits_benchmark().resolve_outcome_space()
-    return {
-        "benchmark_id": "benchmarks.digits@0.1.0",
-        "outcome_space": outcome_space.to_record(),
-        "accepted_event": {
-            "id": "benchmarks.digits.accepted.digit-7@0.1.0",
-            "outcome_space_id": str(outcome_space.id),
-            "outcomes": ["digit-7"],
-        },
-        "probability_measure": {
-            "id": "benchmarks.digits.prediction.digit-7@0.1.0",
-            "outcome_space_id": str(outcome_space.id),
-            "probabilities": [
-                {"outcome_id": f"digit-{digit}", "probability": 1.0 if digit == 7 else 0.0}
-                for digit in range(10)
-            ],
-        },
-        "raw_scoring_evidence": {
-            "id": "benchmarks.digits.measurements.digit-7@0.1.0",
-            "observation_id": "digits-l1-seed-7",
-            "outcome_space_id": str(outcome_space.id),
-            "accepted_event_id": "benchmarks.digits.accepted.digit-7@0.1.0",
-            "probability_measure_id": "benchmarks.digits.prediction.digit-7@0.1.0",
-            "accepted_mass": 1.0,
-            "negative_log_score": 0.0,
-        },
-    }
-
-
-def _digits_benchmark():
-    return load_digits_benchmark(_digits_benchmark_root).manifest
-
-
-def _architecture() -> ArchitectureManifestDocument:
-    manifest_path = (
-        _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool.json"
-    )
-    return ArchitectureManifestDocument.from_bytes(
-        manifest_path.read_bytes()
-    )
