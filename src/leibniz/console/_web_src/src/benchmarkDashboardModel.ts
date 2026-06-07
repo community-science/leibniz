@@ -2,7 +2,6 @@ import type { ModelInspectionRecord } from './modelInspections.ts';
 import {
   isBenchmarkResultView,
   type BenchmarkResultRecord,
-  type CostAxisRecord,
   type ModelResultRecord,
   type ResultViewRecord,
   type RunResultRecord,
@@ -57,30 +56,12 @@ export type BenchmarkPlotModel = {
   yTicks: number[];
   staircase: [number, number][];
 };
-export type BenchmarkCostAxisGroup = {
-  axes: CostAxisRecord[];
-  key: string;
-};
-
 const fallbackLogCostDomain: [number, number] = [0, 10];
 const defaultScoreMaximum = 1;
 const denseLogTickThreshold = 14;
 const targetScoreTickCount = 8;
-const standardCostAxisGroups: BenchmarkCostAxisGroup[] = [
-  {
-    axes: [{ key: 'inference_compute', label: 'Inference Compute' }],
-    key: 'inference',
-  },
-  {
-    axes: [{ key: 'storage_bytes', label: 'Model Size' }],
-    key: 'model',
-  },
-  {
-    axes: [{ key: 'training_compute', label: 'Training Compute' }],
-    key: 'training',
-  },
-];
-const standardCostAxes = standardCostAxisGroups.flatMap((group) => group.axes);
+export const benchmarkCostAxisKey = 'inference_compute';
+export const benchmarkCostAxisLabel = 'Cost';
 
 export type ModelResultSortKey = 'score' | 'cost' | 'model' | 'runs' | 'measurements';
 export type SortDirection = 'ascending' | 'descending';
@@ -95,50 +76,8 @@ export type BenchmarkSelection = {
   selectedRun?: RunResultRecord;
 };
 
-export function benchmarkCostAxes(
-  result: BenchmarkResultRecord | undefined,
-): CostAxisRecord[] {
-  const axes = result?.cost_axes ?? [];
-  const seen = new Set(axes.map((axis) => axis.key));
-  return [
-    ...axes,
-    ...standardCostAxes.filter((axis) => !seen.has(axis.key)),
-  ];
-}
-
-export function benchmarkCostAxisGroups(costAxes: CostAxisRecord[]): BenchmarkCostAxisGroup[] {
-  const axesByKey = new Map(costAxes.map((axis) => [axis.key, axis]));
-  const standardKeys = new Set(standardCostAxes.map((axis) => axis.key));
-  const groups = standardCostAxisGroups.map((group) => ({
-    ...group,
-    axes: group.axes
-      .map((axis) => axesByKey.get(axis.key))
-      .filter((axis): axis is CostAxisRecord => axis !== undefined),
-  }));
-  const customAxes = costAxes.filter((axis) => !standardKeys.has(axis.key));
-  if (customAxes.length > 0) {
-    groups[0] = {
-      ...groups[0]!,
-      axes: [...groups[0]!.axes, ...customAxes],
-    };
-  }
-  return groups.filter((group) => group.axes.length > 0);
-}
-
-export function benchmarkCostAxis(
-  selectedAxis: string,
-  axes: CostAxisRecord[],
-): string {
-  if (axes.some((axis) => axis.key === selectedAxis)) {
-    return selectedAxis;
-  }
-  return axes[0]?.key ?? standardCostAxes[0]!.key;
-}
-
-export function emptyFrontiersForCostAxes(
-  axes: CostAxisRecord[],
-): Record<string, ModelResultRecord[]> {
-  return Object.fromEntries(axes.map((axis) => [axis.key, []]));
+export function emptyFrontiersForCostAxis(): Record<string, ModelResultRecord[]> {
+  return { [benchmarkCostAxisKey]: [] };
 }
 
 export function benchmarkResultsForTask(
@@ -186,21 +125,20 @@ export function modelComparisonRows(
 
 export function benchmarkPlotModel(
   result: BenchmarkResultRecord,
-  costAxis: string,
 ): BenchmarkPlotModel {
-  const frontierModels = frontierModelResults(result.leaderboard, costAxis);
+  const frontierModels = frontierModelResults(result.leaderboard);
   const frontierKeys = new Set(frontierModels.map((model) => model.model_key));
   const leaderboardModels = modelLookup(result.leaderboard);
   const candidateModels = modelLookup(result.model_candidates);
   const points = result.plot_runs
-    .map((run) => plotRunPoint(run, leaderboardModels, candidateModels, costAxis, frontierKeys))
+    .map((run) => plotRunPoint(run, leaderboardModels, candidateModels, frontierKeys))
     .filter((point): point is BenchmarkPlotModelPoint => point !== null)
     .sort((left, right) => left.cost - right.cost || right.score - left.score);
   const frontierPoints = frontierModels
-    .map((model) => plotPoint(model, costAxis, true))
+    .map((model) => plotPoint(model, true))
     .filter((point): point is BenchmarkPlotModelPoint => point !== null)
     .sort((left, right) => left.cost - right.cost || right.score - left.score);
-  const referenceCurves = referenceCurvePlotModels(result, costAxis);
+  const referenceCurves = referenceCurvePlotModels(result);
   const xLogBase = costAxisLogBase();
   const costLogs = points.map((point) => point.logCost);
   const scores = [...points, ...frontierPoints].map((point) => point.score);
@@ -224,10 +162,9 @@ export function benchmarkPlotModel(
 
 function referenceCurvePlotModels(
   result: BenchmarkResultRecord,
-  costAxis: string,
 ): BenchmarkReferenceCurve[] {
   return (result.reference_curves ?? [])
-    .filter((curve) => curve.x_axis === costAxis && curve.y_axis === 'score')
+    .filter((curve) => curve.x_axis === benchmarkCostAxisKey && curve.y_axis === 'score')
     .map((curve) => ({
       key: curve.key,
       label: curve.label,
@@ -249,10 +186,9 @@ function referenceCurvePlotModels(
 
 export function sortedModelResults(
   models: ModelResultRecord[],
-  costAxis: string,
   sort: ModelResultSort,
 ): ModelResultRecord[] {
-  return [...models].sort((left, right) => compareModelResults(left, right, costAxis, sort));
+  return [...models].sort((left, right) => compareModelResults(left, right, sort));
 }
 
 export function nextModelResultSort(
@@ -283,8 +219,8 @@ export function selectionForId(
   };
 }
 
-export function costValue(costSummary: Record<string, unknown>, costAxis: string): number {
-  const value = costSummary[costAxis];
+export function costValue(costSummary: Record<string, unknown>): number {
+  const value = costSummary[benchmarkCostAxisKey];
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
@@ -330,31 +266,29 @@ function modelLookup(models: ModelResultRecord[]): {
 function compareModelResults(
   left: ModelResultRecord,
   right: ModelResultRecord,
-  costAxis: string,
   sort: ModelResultSort,
 ): number {
   const direction = sort.direction === 'ascending' ? 1 : -1;
-  const result = compareBySortKey(left, right, costAxis, sort.key);
+  const result = compareBySortKey(left, right, sort.key);
   if (result !== 0) {
     return result * direction;
   }
   return (
     sortableScoreValue(right) - sortableScoreValue(left) ||
-    costValue(left.cost_summary, costAxis) - costValue(right.cost_summary, costAxis)
+    costValue(left.cost_summary) - costValue(right.cost_summary)
   );
 }
 
 function compareBySortKey(
   left: ModelResultRecord,
   right: ModelResultRecord,
-  costAxis: string,
   key: ModelResultSortKey,
 ): number {
   if (key === 'score') {
     return sortableScoreValue(left) - sortableScoreValue(right);
   }
   if (key === 'cost') {
-    return costValue(left.cost_summary, costAxis) - costValue(right.cost_summary, costAxis);
+    return costValue(left.cost_summary) - costValue(right.cost_summary);
   }
   if (key === 'runs') {
     return left.run_ids.length - right.run_ids.length;
@@ -376,10 +310,9 @@ function defaultSortDirection(key: ModelResultSortKey): SortDirection {
 
 function plotPoint(
   model: ModelResultRecord,
-  costAxis: string,
   frontier: boolean,
 ): BenchmarkPlotModelPoint | null {
-  const cost = costValue(model.cost_summary, costAxis);
+  const cost = costValue(model.cost_summary);
   const score = scoreValue(model);
   if (!Number.isFinite(cost) || cost <= 0 || !Number.isFinite(score)) {
     return null;
@@ -400,7 +333,6 @@ function plotRunPoint(
   run: RunResultRecord,
   leaderboardModels: ReturnType<typeof modelLookup>,
   candidateModels: ReturnType<typeof modelLookup>,
-  costAxis: string,
   frontierKeys: Set<string>,
 ): BenchmarkPlotModelPoint | null {
   const leaderboardModel = leaderboardModels.byModelKey.get(run.model_key);
@@ -408,7 +340,7 @@ function plotRunPoint(
   const model = run.result_status === 'provisional'
     ? candidateModel ?? leaderboardModel
     : leaderboardModel;
-  const cost = costValue(run.cost_summary, costAxis);
+  const cost = costValue(run.cost_summary);
   const score = model === undefined
     ? run.result_status === 'provisional' ? run.score : Number.NaN
     : scoreValue(model);
@@ -430,15 +362,14 @@ function plotRunPoint(
 
 function frontierModelResults(
   models: ModelResultRecord[],
-  costAxis: string,
 ): ModelResultRecord[] {
   const ordered = [...models]
     .filter((model) => {
-      const cost = costValue(model.cost_summary, costAxis);
+      const cost = costValue(model.cost_summary);
       return cost > 0 && Number.isFinite(cost) && Number.isFinite(scoreValue(model));
     })
     .sort((left, right) =>
-      costValue(left.cost_summary, costAxis) - costValue(right.cost_summary, costAxis) ||
+      costValue(left.cost_summary) - costValue(right.cost_summary) ||
       scoreValue(right) - scoreValue(left),
     );
   const frontier: ModelResultRecord[] = [];

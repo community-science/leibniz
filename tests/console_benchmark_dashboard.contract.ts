@@ -1,9 +1,9 @@
 import {
-  benchmarkCostAxes,
-  benchmarkCostAxis,
+  benchmarkCostAxisKey,
+  benchmarkCostAxisLabel,
   benchmarkPlotModel,
   benchmarkResultsForTask,
-  emptyFrontiersForCostAxes,
+  emptyFrontiersForCostAxis,
   modelComparisonRows,
   nextModelResultSort,
   runSelectionId,
@@ -22,29 +22,21 @@ const targetBenchmark = 'benchmarks.target@0.1.0';
 const otherBenchmark = 'benchmarks.other@0.1.0';
 const architectureDigest = 'sha256:abcdef1234567890';
 
-const standardAxes = benchmarkCostAxes(undefined);
-assertEqual(standardAxes.map((axis) => axis.key).join(','),
-  'inference_compute,storage_bytes,training_compute',
-  'standard cost axes',
-);
 assertEqual(
-  Object.keys(emptyFrontiersForCostAxes(standardAxes)).join(','),
-  'inference_compute,storage_bytes,training_compute',
-  'empty frontier axes',
-);
-assertEqual(
-  benchmarkCostAxis('missing_axis', standardAxes),
+  benchmarkCostAxisKey,
   'inference_compute',
-  'missing cost axis fallback',
+  'cost axis key',
+);
+assertEqual(benchmarkCostAxisLabel, 'Cost', 'cost axis label');
+assertEqual(
+  Object.keys(emptyFrontiersForCostAxis()).join(','),
+  'inference_compute',
+  'empty frontier axis',
 );
 const result: BenchmarkResultRecord = {
   benchmark_id: targetBenchmark,
-  cost_axes: [
-    { key: 'inference_compute', label: 'Inference Compute' },
-    { key: 'storage_bytes', label: 'Model Size' },
-  ],
   frontiers: {
-    storage_bytes: [
+    inference_compute: [
       {
         architecture_digest: architectureDigest,
         benchmark_id: targetBenchmark,
@@ -397,7 +389,7 @@ assertEqual(
   'inspection-a',
   'result-local model inspection match',
 );
-const plotModel = benchmarkPlotModel(result, 'storage_bytes');
+const plotModel = benchmarkPlotModel(result);
 assertEqual(plotModel.points.length, 2, 'plot point count');
 assertEqual(plotModel.frontierPoints.length, 1, 'plot frontier count');
 assertEqual(plotModel.staircase.length, 1, 'plot staircase point count');
@@ -423,7 +415,6 @@ const provisionalScalePlotModel = benchmarkPlotModel(
       },
     ],
   },
-  'storage_bytes',
 );
 assertEqual(
   provisionalScalePlotModel.points.find((point) => point.resultStatus === 'provisional')?.score,
@@ -469,7 +460,7 @@ const repeatedArchitectureResult: BenchmarkResultRecord = {
     },
   ],
 };
-const repeatedArchitecturePlotModel = benchmarkPlotModel(repeatedArchitectureResult, 'storage_bytes');
+const repeatedArchitecturePlotModel = benchmarkPlotModel(repeatedArchitectureResult);
 assertEqual(
   repeatedArchitecturePlotModel.points.find((point) => point.run?.run_id === 'run-a')?.score,
   8,
@@ -489,19 +480,16 @@ assertEqual(plotModel.xTicks.includes(10), true, 'plot log ticks');
 assertEqual(plotModel.xDomain[0], 0, 'plot default x minimum');
 assertEqual(plotModel.xDomain[1], 10, 'plot default x maximum');
 assertEqual(plotModel.xMajorTicks.includes(1), true, 'plot major x ticks');
-assertEqual(plotModel.xMajorTicks.includes(10), true, 'model size uses base-10 ticks');
-assertEqual(plotModel.xMajorTicks.includes(16), false, 'model size omits base-2 ticks');
-const trainingComputePlotModel = benchmarkPlotModel(result, 'training_compute');
-assertEqual(trainingComputePlotModel.xMajorTicks.includes(10), true, 'training compute uses base-10 ticks');
-assertEqual(trainingComputePlotModel.xMajorTicks.includes(16), false, 'training compute omits base-2 ticks');
-const inferenceComputePlotModel = benchmarkPlotModel(result, 'inference_compute');
+assertEqual(plotModel.xMajorTicks.includes(10), true, 'cost uses base-10 ticks');
+assertEqual(plotModel.xMajorTicks.includes(16), false, 'cost omits base-2 ticks');
+const inferenceComputePlotModel = benchmarkPlotModel(result);
 assertEqual(inferenceComputePlotModel.xMajorTicks.includes(10), true, 'inference compute uses base-10 ticks');
 assertEqual(inferenceComputePlotModel.xMajorTicks.includes(16), false, 'inference compute omits base-2 ticks');
 assertEqual(inferenceComputePlotModel.referenceCurves.length, 1, 'inference compute shows oracle reference');
 assertEqual(inferenceComputePlotModel.referenceCurves[0]?.points.length, 2, 'oracle reference point count');
 assertEqual(inferenceComputePlotModel.xDomain[1], 10, 'oracle reference does not expand x domain');
 assertEqual(inferenceComputePlotModel.yDomain[1], 1, 'oracle reference does not expand y domain');
-assertEqual(plotModel.referenceCurves.length, 0, 'model size omits inference oracle reference');
+assertEqual(plotModel.referenceCurves.length, 1, 'cost axis shows inference oracle reference');
 assertEqual(plotModel.yDomain[0], 0, 'plot y starts at zero');
 assertEqual(plotModel.yDomain[1], 1, 'score plot y ceiling defaults to one');
 assertEqual(plotModel.yTicks.join(','), '0,0.2,0.4,0.6,0.8,1', 'score plot y ticks');
@@ -510,9 +498,9 @@ const expandedScoreScaleResult: BenchmarkResultRecord = {
   ...result,
   frontiers: {
     ...result.frontiers,
-    storage_bytes: [
+    inference_compute: [
       {
-        ...result.frontiers.storage_bytes[0]!,
+        ...result.frontiers.inference_compute[0]!,
         score: 2.6,
       },
     ],
@@ -525,7 +513,7 @@ const expandedScoreScaleResult: BenchmarkResultRecord = {
     result.leaderboard[1]!,
   ],
 };
-const expandedScorePlotModel = benchmarkPlotModel(expandedScoreScaleResult, 'storage_bytes');
+const expandedScorePlotModel = benchmarkPlotModel(expandedScoreScaleResult);
 assertEqual(
   expandedScorePlotModel.yDomain[1],
   5.5,
@@ -537,7 +525,7 @@ assertEqual(
   'expanded score plot y ticks',
 );
 assertEqual(
-  sortedModelResults(result.leaderboard, 'storage_bytes', {
+  sortedModelResults(result.leaderboard, {
     key: 'cost',
     direction: 'descending',
   })[0]?.model_key,
@@ -545,7 +533,7 @@ assertEqual(
   'model cost sort',
 );
 assertEqual(
-  sortedModelResults(result.leaderboard, 'storage_bytes', {
+  sortedModelResults(result.leaderboard, {
     key: 'score',
     direction: 'ascending',
   })[0]?.model_key,
@@ -568,7 +556,6 @@ const emptyPlotModel = benchmarkPlotModel(
     frontiers: {},
     leaderboard: [],
   },
-  'storage_bytes',
 );
 assertEqual(emptyPlotModel.points.length, 0, 'empty plot point count');
 assertEqual(emptyPlotModel.xTicks.length > 0, true, 'empty plot has x ticks');
@@ -582,7 +569,6 @@ const referenceOnlyPlotModel = benchmarkPlotModel(
     plot_runs: [],
     training_history: [],
   },
-  'inference_compute',
 );
 assertEqual(referenceOnlyPlotModel.points.length, 0, 'reference-only plot has no model points');
 assertEqual(referenceOnlyPlotModel.referenceCurves.length, 1, 'reference-only plot keeps oracle curve');
@@ -597,7 +583,7 @@ const expandedPlotModel = benchmarkPlotModel(
         ...result.leaderboard[1]!,
         cost_summary: {
           ...result.leaderboard[1]!.cost_summary,
-          storage_bytes: 10 ** 22,
+          inference_compute: 10 ** 22,
         },
         model_key: 'model-c',
       },
@@ -608,7 +594,7 @@ const expandedPlotModel = benchmarkPlotModel(
         ...result.plot_runs[1]!,
         cost_summary: {
           ...result.plot_runs[1]!.cost_summary,
-          storage_bytes: 10 ** 22,
+          inference_compute: 10 ** 22,
         },
         model_key: 'model-c',
         run_id: 'run-c',
@@ -616,7 +602,6 @@ const expandedPlotModel = benchmarkPlotModel(
       },
     ],
   },
-  'storage_bytes',
 );
 assertEqual(expandedPlotModel.xDomain[1], 22, 'plot x maximum expands by log10 step');
 

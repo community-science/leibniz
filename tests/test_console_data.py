@@ -476,7 +476,6 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
     {
       "benchmark_id": "benchmarks.digits@0.1.0",
       "complexity_axis": "C",
-      "cost_axes": [{"key": "storage_bytes", "label": "Model Size"}],
           "leaderboard": [
             {
               "model_key": "sha256:model",
@@ -499,9 +498,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
         }
       ],
       "frontiers": {
-        "storage_bytes": [],
-        "inference_compute": [],
-        "training_compute": []
+        "inference_compute": []
       },
           "training_history": [
             {
@@ -606,13 +603,10 @@ def test_console_data_discovers_materialized_result_root_views(tmp_path: Path) -
   "benchmark_results": [
     {
       "benchmark_id": "benchmarks.digits@0.1.0",
-      "cost_axes": [{"key": "storage_bytes", "label": "Model Size"}],
       "leaderboard": [],
       "model_candidates": [],
       "frontiers": {
-        "storage_bytes": [],
-        "inference_compute": [],
-        "training_compute": []
+        "inference_compute": []
       },
       "training_history": [],
       "plot_runs": []

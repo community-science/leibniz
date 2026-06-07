@@ -135,7 +135,6 @@ export type BenchmarkResultViewRecord = ResultViewBaseRecord & {
 export type BenchmarkResultRecord = {
   benchmark_id: string;
   complexity_axis?: string;
-  cost_axes: CostAxisRecord[];
   leaderboard: ModelResultRecord[];
   model_candidates: ModelResultRecord[];
   frontiers: Record<string, ModelResultRecord[]>;
@@ -143,11 +142,6 @@ export type BenchmarkResultRecord = {
   training_history: RunResultRecord[];
   plot_runs: RunResultRecord[];
   model_inspections: ModelInspectionRecord[];
-};
-
-export type CostAxisRecord = {
-  key: string;
-  label: string;
 };
 
 export type ReferenceCurvePointRecord = {
@@ -354,7 +348,6 @@ function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultReco
   return {
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     complexity_axis: optional(record.complexity_axis, `${path}.complexity_axis`, (item, itemPath) => requireString(item, itemPath, transportError)),
-    cost_axes: arrayOf(record.cost_axes, `${path}.cost_axes`, parseCostAxis),
     leaderboard: arrayOf(record.leaderboard, `${path}.leaderboard`, parseModelResult),
     model_candidates: arrayOf(record.model_candidates, `${path}.model_candidates`, parseModelResult),
     frontiers: parseFrontiers(record.frontiers, `${path}.frontiers`),
@@ -477,12 +470,6 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
     training_diagnostics: optional(record.training_diagnostics, `${path}.training_diagnostics`, parseTrainingDiagnostics),
     console_view_model: optional(record.console_view_model, `${path}.console_view_model`, parseRunDetailViewModel),
   }) as RunResultRecord;
-}
-
-function parseCostAxis(value: unknown, path: string): CostAxisRecord {
-  const record = requireRecord(value, path, transportError);
-  requireStrings(record, path, ['key', 'label']);
-  return record as CostAxisRecord;
 }
 
 function parseCompetencePoint(value: unknown, path: string): CompetencePointRecord {
