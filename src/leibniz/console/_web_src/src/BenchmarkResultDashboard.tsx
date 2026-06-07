@@ -65,6 +65,7 @@ const plotZoomOutFactor = 1.28;
 const plotPanFraction = 0.18;
 const plotTickOffset = 18;
 const plotYTickLabelOffset = 10;
+const plotYAxisLabelOffset = 52;
 const plotTickLabelBaselineOffset = 4;
 const plotAxisSelectorTopOffset = 20;
 const plotAxisSelectorHeight = 28;
@@ -299,6 +300,13 @@ function BenchmarkFrontierPlot({
             x={plotMargin.left}
             y={plotMargin.top}
           />
+          <text
+            className="frontier-chart-axis-label"
+            textAnchor="middle"
+            transform={`translate(${plotMargin.left - plotYAxisLabelOffset} ${plotMargin.top + plotBodyHeight / 2}) rotate(-90)`}
+          >
+            Score
+          </text>
           {model.xMinorTicks.map((tick) => {
             const logTick = Math.log(tick) / Math.log(model.xLogBase);
             if (logTick < view.xDomain[0] || logTick > view.xDomain[1]) {

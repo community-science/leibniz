@@ -316,6 +316,12 @@ p {
   font-size: var(--font-control);
 }
 
+.frontier-chart-axis-label {
+  fill: var(--text-secondary);
+  font-size: var(--font-label);
+  font-weight: 600;
+}
+
 .frontier-chart-staircase {
   stroke: var(--frontier-accent);
   stroke-linecap: round;
