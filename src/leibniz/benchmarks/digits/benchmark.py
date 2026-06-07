@@ -186,7 +186,7 @@ class _DigitsComplexityClass:
         return _complexity_value(self.complexity)
 
     def metadata(self) -> dict[str, object]:
-        return {
+        metadata: dict[str, object] = {
             "kind": "digits-requested-finite-complexity-class",
             "digit_count": self.digit_count,
             "output_digit_count": _complexity_class_digit_count,
@@ -202,6 +202,20 @@ class _DigitsComplexityClass:
             "affine_bounds": self.affine_grid.bounds_record(),
             "affine_parameters": list(_constructed_affine_axis_names),
         }
+        if self.resolution_assignment is not None:
+            width = self.resolution_assignment.require_axis("W")
+            height = self.resolution_assignment.require_axis("H")
+            metadata["oracle_inference_compute"] = {
+                "kind": "oracle-inference-compute-reference-v1",
+                "unit": "abstract-ops",
+                "value": width * height,
+                "components": {
+                    "height": height,
+                    "width": width,
+                    "pixel_count": width * height,
+                },
+            }
+        return metadata
 
     def candidate(self) -> ComplexityCandidate:
         return ComplexityCandidate(
@@ -1489,6 +1503,38 @@ class Generator:
             candidates.append(complexity_class.candidate())
         return tuple(candidates)
 
+    def oracle_inference_reference_points(
+        self,
+        *,
+        maximum_cost: float,
+    ) -> tuple[dict[str, object], ...]:
+        """Return deterministic Digits oracle-reference points across inference cost."""
+
+        if not math.isfinite(maximum_cost) or maximum_cost <= 0.0:
+            raise ObservationGenerationError("maximum_cost must be positive and finite")
+        sides = _oracle_reference_canvas_sides(maximum_cost=maximum_cost)
+        points: list[dict[str, object]] = [
+            _oracle_reference_point_for_cardinality(
+                cardinality=1,
+                side=_complexity_class_canvas_minimum_side,
+            )
+        ]
+        for side in sides:
+            bounds = _constructed_affine_bounds_for_canvas_side(side)
+            capacities = _constructed_affine_axis_capacities(
+                bounds=bounds,
+                side=side,
+            )
+            sample_cardinality = _complexity_class_digit_count * math.prod(capacities)
+            points.append(
+                _oracle_reference_point_for_cardinality(
+                    cardinality=sample_cardinality,
+                    side=side,
+                    affine_axis_capacities=capacities,
+                )
+            )
+        return tuple(points)
+
     def _default_complexity_class(
         self,
         *,
@@ -2191,6 +2237,69 @@ def _complexity_class_canvas_side_for_cardinality_range(
             ) is not None:
                 return side
         side += _complexity_class_canvas_side_step
+
+
+def _oracle_reference_canvas_sides(*, maximum_cost: float) -> tuple[int, ...]:
+    if not math.isfinite(maximum_cost) or maximum_cost <= 0.0:
+        raise ObservationGenerationError("maximum_cost must be positive and finite")
+    sides = {_complexity_class_canvas_minimum_side}
+    exponent = 0
+    while 10**exponent <= maximum_cost:
+        for multiplier in (1, 2, 5):
+            target_cost = multiplier * 10**exponent
+            side = _complexity_class_canvas_side_for_cost(target_cost)
+            sides.add(side)
+            if side * side >= maximum_cost:
+                return tuple(sorted(sides))
+        exponent += 1
+    sides.add(_complexity_class_canvas_side_for_cost(maximum_cost))
+    return tuple(sorted(sides))
+
+
+def _oracle_reference_point_for_cardinality(
+    *,
+    cardinality: int,
+    side: int,
+    affine_axis_capacities: tuple[int, int, int, int, int] | None = None,
+) -> dict[str, object]:
+    _require_generation_positive_integer(cardinality, "cardinality")
+    _require_generation_positive_integer(side, "side")
+    complexity = math.log2(cardinality)
+    cost = side * side
+    components: dict[str, object] = {
+        "height": side,
+        "width": side,
+        "pixel_count": cost,
+        "sample_cardinality": cardinality,
+    }
+    if affine_axis_capacities is not None:
+        components["affine_axis_capacities"] = {
+            "x_translation": affine_axis_capacities[0],
+            "y_translation": affine_axis_capacities[1],
+            "scale": affine_axis_capacities[2],
+            "rotation": affine_axis_capacities[3],
+            "x_shear": affine_axis_capacities[4],
+        }
+    return {
+        "complexity": complexity,
+        "score": complexity,
+        "cost": cost,
+        "metadata": {
+            "kind": "oracle-inference-compute-reference-v1",
+            "unit": "abstract-ops",
+            "value": cost,
+            "components": components,
+        },
+    }
+
+
+def _complexity_class_canvas_side_for_cost(cost: float) -> int:
+    if not math.isfinite(cost) or cost <= 0.0:
+        raise ObservationGenerationError("cost must be positive and finite")
+    side = max(_complexity_class_canvas_minimum_side, math.ceil(math.sqrt(cost)))
+    offset = max(0, side - _complexity_class_canvas_minimum_side)
+    steps = math.ceil(offset / _complexity_class_canvas_side_step)
+    return _complexity_class_canvas_minimum_side + steps * _complexity_class_canvas_side_step
 
 
 def _ceil_complexity_class_cardinality(complexity: float) -> int:

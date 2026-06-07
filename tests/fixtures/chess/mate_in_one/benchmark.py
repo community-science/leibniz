@@ -161,6 +161,7 @@ class Generator:
                 "fen": _fen,
                 "sample_cardinality": 1,
                 "valid_move_count": len(_valid_moves),
+                "oracle_inference_compute": _oracle_inference_compute(),
             },
         )
 
@@ -202,6 +203,7 @@ class Generator:
                     "fen": _fen,
                     "sample_cardinality": 1,
                     "valid_move_count": len(_valid_moves),
+                    "oracle_inference_compute": _oracle_inference_compute(),
                 },
             ),
         )
@@ -223,6 +225,20 @@ def _complexity_value() -> ComplexityValue:
     return ComplexityValue(
         value=0.0,
     )
+
+
+def _oracle_inference_compute() -> dict[str, object]:
+    return {
+        "kind": "oracle-inference-compute-reference-v1",
+        "unit": "abstract-ops",
+        "aggregation": "max",
+        "value": len(_valid_moves),
+        "components": {
+            "legal_move_count_max": len(_valid_moves),
+            "legal_move_count_mean": len(_valid_moves),
+            "sample_cardinality": 1,
+        },
+    }
 
 
 def _latent_coordinates() -> tuple[dict[str, object], ...]:

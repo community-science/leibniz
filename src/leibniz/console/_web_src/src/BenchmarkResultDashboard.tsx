@@ -8,7 +8,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 
 import {
   benchmarkPlotModel,
@@ -93,7 +93,7 @@ export function BenchmarkResultDashboard({
   const stateKeyPrefix = `leibniz.console.benchmarks.${result.benchmark_id}.performance`;
   const [selectedCostAxis, setSelectedCostAxis] = usePersistentState(
     `${stateKeyPrefix}.costAxis`,
-    costAxes[0]?.key ?? 'storage_bytes',
+    costAxes[0]?.key ?? 'inference_compute',
   );
   const costAxis = benchmarkCostAxis(selectedCostAxis, costAxes);
   const costAxisLabel = costAxes.find((axis) => axis.key === costAxis)?.label ?? 'Cost';
@@ -232,6 +232,7 @@ function BenchmarkFrontierPlot({
   const selectedPoint = model.points.find((point) => point.id === selectedId);
   const hoveredPoint = model.points.find((point) => point.id === hoveredId);
   const activePoint = hoveredPoint ?? selectedPoint;
+  const plotClipId = `frontier-plot-clip-${useId().replaceAll(':', '')}`;
   const costAxisGroups = benchmarkCostAxisGroups(costAxes);
   const axisButtonCount = costAxisGroups.reduce(
     (count, group) => count + group.axes.length,
@@ -302,6 +303,9 @@ function BenchmarkFrontierPlot({
           <span><i className="frontier" />Frontier</span>
           <span><i className="measured" />Measured</span>
           <span><i className="provisional" />Provisional</span>
+          {model.referenceCurves.length > 0 ? (
+            <span><i className="reference" />Oracle Reference</span>
+          ) : null}
         </div>
         <svg
           aria-label={`Measurements by ${costAxis}`}
@@ -310,95 +314,106 @@ function BenchmarkFrontierPlot({
           viewBox={`0 0 ${plotWidth} ${plotHeight}`}
           onClick={() => onSelect(null)}
         >
-            <rect
-              className="frontier-chart-frame"
-              height={plotBodyHeight}
-              width={plotBodyWidth}
-              x={plotMargin.left}
-              y={plotMargin.top}
-            />
-            {model.xMinorTicks.map((tick) => {
-              const logTick = Math.log(tick) / Math.log(model.xLogBase);
-              if (logTick < view.xDomain[0] || logTick > view.xDomain[1]) {
-                return null;
-              }
-              const tickX = x(logTick);
-              return (
+          <defs>
+            <clipPath id={plotClipId}>
+              <rect
+                height={plotBodyHeight}
+                width={plotBodyWidth}
+                x={plotMargin.left}
+                y={plotMargin.top}
+              />
+            </clipPath>
+          </defs>
+          <rect
+            className="frontier-chart-frame"
+            height={plotBodyHeight}
+            width={plotBodyWidth}
+            x={plotMargin.left}
+            y={plotMargin.top}
+          />
+          {model.xMinorTicks.map((tick) => {
+            const logTick = Math.log(tick) / Math.log(model.xLogBase);
+            if (logTick < view.xDomain[0] || logTick > view.xDomain[1]) {
+              return null;
+            }
+            const tickX = x(logTick);
+            return (
+              <line
+                className="frontier-chart-grid frontier-chart-grid-minor"
+                key={`x-minor-${tick}`}
+                x1={tickX}
+                x2={tickX}
+                y1={plotMargin.top}
+                y2={plotMargin.top + plotBodyHeight}
+              />
+            );
+          })}
+          {model.xMajorTicks.map((tick) => {
+            const logTick = Math.log(tick) / Math.log(model.xLogBase);
+            if (logTick < view.xDomain[0] || logTick > view.xDomain[1]) {
+              return null;
+            }
+            const tickX = x(logTick);
+            return (
+              <g key={`x-major-${tick}`}>
                 <line
-                  className="frontier-chart-grid frontier-chart-grid-minor"
-                  key={`x-minor-${tick}`}
+                  className="frontier-chart-grid"
                   x1={tickX}
                   x2={tickX}
                   y1={plotMargin.top}
                   y2={plotMargin.top + plotBodyHeight}
                 />
-              );
-            })}
-            {model.xMajorTicks.map((tick) => {
-              const logTick = Math.log(tick) / Math.log(model.xLogBase);
-              if (logTick < view.xDomain[0] || logTick > view.xDomain[1]) {
-                return null;
-              }
-              const tickX = x(logTick);
-              return (
-                <g key={`x-major-${tick}`}>
-                  <line
-                    className="frontier-chart-grid"
-                    x1={tickX}
-                    x2={tickX}
-                    y1={plotMargin.top}
-                    y2={plotMargin.top + plotBodyHeight}
-                  />
-                  <line
-                    className="frontier-chart-axis-tick"
-                    x1={tickX}
-                    x2={tickX}
-                    y1={plotMargin.top + plotBodyHeight}
-                    y2={plotMargin.top + plotBodyHeight + 5}
-                  />
-                  <text
-                    className="frontier-chart-tick"
-                    textAnchor="middle"
-                    x={tickX}
-                    y={plotMargin.top + plotBodyHeight + plotTickOffset}
-                  >
-                    {model.xLogBase}<tspan dy="-5" fontSize="0.72em">{Math.round(logTick)}</tspan><tspan dy="5"> </tspan>
-                  </text>
-                </g>
-              );
-            })}
-            {model.yTicks.map((tick) => {
-              if (tick < view.yDomain[0] || tick > view.yDomain[1]) {
-                return null;
-              }
-              const tickY = y(tick);
-              return (
-                <g key={`y-${tick}`}>
-                  <line
-                    className="frontier-chart-grid"
-                    x1={plotMargin.left}
-                    x2={plotMargin.left + plotBodyWidth}
-                    y1={tickY}
-                    y2={tickY}
-                  />
-                  <line
-                    className="frontier-chart-axis-tick"
-                    x1={plotMargin.left - 4}
-                    x2={plotMargin.left}
-                    y1={tickY}
-                    y2={tickY}
-                  />
-                  <text
-                    className="frontier-chart-tick"
-                    textAnchor="end"
-                    x={plotMargin.left - plotYTickLabelOffset}
-                    y={tickY + plotTickLabelBaselineOffset}
-                  >
-                    {scoreTickLabel(tick)}
-                  </text>
-                </g>
-              );
-            })}
+                <line
+                  className="frontier-chart-axis-tick"
+                  x1={tickX}
+                  x2={tickX}
+                  y1={plotMargin.top + plotBodyHeight}
+                  y2={plotMargin.top + plotBodyHeight + 5}
+                />
+                <text
+                  className="frontier-chart-tick"
+                  textAnchor="middle"
+                  x={tickX}
+                  y={plotMargin.top + plotBodyHeight + plotTickOffset}
+                >
+                  {model.xLogBase}<tspan dy="-5" fontSize="0.72em">{Math.round(logTick)}</tspan><tspan dy="5"> </tspan>
+                </text>
+              </g>
+            );
+          })}
+          {model.yTicks.map((tick) => {
+            if (tick < view.yDomain[0] || tick > view.yDomain[1]) {
+              return null;
+            }
+            const tickY = y(tick);
+            return (
+              <g key={`y-${tick}`}>
+                <line
+                  className="frontier-chart-grid"
+                  x1={plotMargin.left}
+                  x2={plotMargin.left + plotBodyWidth}
+                  y1={tickY}
+                  y2={tickY}
+                />
+                <line
+                  className="frontier-chart-axis-tick"
+                  x1={plotMargin.left - 4}
+                  x2={plotMargin.left}
+                  y1={tickY}
+                  y2={tickY}
+                />
+                <text
+                  className="frontier-chart-tick"
+                  textAnchor="end"
+                  x={plotMargin.left - plotYTickLabelOffset}
+                  y={tickY + plotTickLabelBaselineOffset}
+                >
+                  {scoreTickLabel(tick)}
+                </text>
+              </g>
+            );
+          })}
+          <g clipPath={`url(#${plotClipId})`}>
             {model.staircase.length > 0 ? (
               <polyline
                 className="frontier-chart-staircase"
@@ -406,6 +421,14 @@ function BenchmarkFrontierPlot({
                 points={model.staircase.map(([logCost, score]) => `${x(logCost)},${y(score)}`).join(' ')}
               />
             ) : null}
+            {model.referenceCurves.map((curve) => (
+              <polyline
+                className="frontier-chart-reference-curve"
+                fill="none"
+                key={curve.key}
+                points={curve.points.map((point) => `${x(point.logCost)},${y(point.score)}`).join(' ')}
+              />
+            ))}
             {renderedPoints.map((point) => (
               <circle
                 className={[
@@ -427,6 +450,7 @@ function BenchmarkFrontierPlot({
                 r={point.frontier ? 5 : 3}
               />
             ))}
+            </g>
             <foreignObject
               height={plotAxisSelectorHeight}
               width={axisSelectorWidth}
@@ -459,16 +483,6 @@ function BenchmarkFrontierPlot({
                 />
               </div>
             </foreignObject>
-            {model.points.length === 0 ? (
-              <text
-                className="frontier-chart-empty-label"
-                textAnchor="middle"
-                x={plotMargin.left + plotBodyWidth / 2}
-                y={plotMargin.top + plotBodyHeight / 2}
-              >
-                No model results yet
-              </text>
-            ) : null}
         </svg>
         {activePoint === undefined ? null : (
           <div className="frontier-chart-tooltip">

@@ -630,10 +630,13 @@ def test_console_data_discovers_materialized_result_root_views(tmp_path: Path) -
     record = data.to_record()
     result_views = cast(list[dict[str, object]], record["result_views"])
 
-    assert len(result_views) == 1
-    assert result_views[0]["source_path"] == (
-        view_root / "digits" / "benchmark_results.json"
-    ).as_posix()
+    assert {
+        cast(str, view["source_path"])
+        for view in result_views
+    } == {
+        (view_root / "chess" / "benchmark_results.json").as_posix(),
+        (view_root / "digits" / "benchmark_results.json").as_posix(),
+    }
 
 
 def test_console_data_rejects_local_state_roots() -> None:

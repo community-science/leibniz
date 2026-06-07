@@ -17,6 +17,7 @@ from leibniz.benchmark_evaluation import (
     sampled_competence_frontier_score,
 )
 from leibniz.benchmark_implementations import (
+    Benchmark,
     discover_benchmark_roots,
     load_benchmark,
 )
@@ -39,6 +40,7 @@ from leibniz.measurements import (
 from leibniz.model_inspection import (
     ModelInspectionRecord,
 )
+from leibniz.observation_generation import ComplexityCandidate, ComplexityRequest
 from leibniz.records import RecordExtractor
 from leibniz.training_runs import TrainingRunRecord
 
@@ -70,11 +72,13 @@ _result_directories = (
     "views",
 )
 _benchmark_cost_axes: tuple[tuple[str, str], ...] = (
-    ("storage_bytes", "Model Size"),
     ("inference_compute", "Inference Compute"),
+    ("storage_bytes", "Model Size"),
     ("training_compute", "Training Compute"),
 )
 _benchmark_cost_axis_keys = tuple(axis for axis, _label in _benchmark_cost_axes)
+_reference_curve_default_maximum_cost = 10_000_000_000
+_reference_curve_initial_curriculum_count = 16
 _component_count = 1
 _reference_baseline_complexity = 1.0
 
@@ -301,7 +305,7 @@ def materialize_benchmark_result_views(
 
     repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
     results_root = _resolve_output_root(repository_root, results_root)
-    manifests = _known_manifests(repository_root)
+    benchmarks = _known_benchmarks(repository_root)
     local_runs = _local_run_records(results_root)
     local_training_estimates = _local_training_estimate_records(
         results_root,
@@ -314,17 +318,20 @@ def materialize_benchmark_result_views(
             key=_run_sort_key,
         )
     )
-    if not runs:
-        raise LocalResultImportError("no benchmark result records found")
-
+    unknown_benchmark_ids = sorted(
+        {run.benchmark_id for run in runs if run.benchmark_id not in benchmarks},
+        key=str,
+    )
+    if unknown_benchmark_ids:
+        raise LocalResultImportError(
+            f"unknown benchmark id in local results: {unknown_benchmark_ids[0]}"
+        )
     benchmark_records: list[Mapping[str, object]] = []
     benchmark_view_files: list[Path] = []
+    primary_view_file: Path | None = None
     view_root = results_root / "views"
     view_root.mkdir(parents=True, exist_ok=True)
-    for benchmark_id in sorted({run.benchmark_id for run in runs}, key=str):
-        manifest = manifests.get(benchmark_id)
-        if manifest is None:
-            raise LocalResultImportError(f"unknown benchmark id in local results: {benchmark_id}")
+    for benchmark_id, benchmark in sorted(benchmarks.items(), key=lambda item: str(item[0])):
         benchmark_runs = tuple(run for run in runs if run.benchmark_id == benchmark_id)
         benchmark_competitions = tuple(
             competition
@@ -332,7 +339,7 @@ def materialize_benchmark_result_views(
             if competition.get("benchmark_id") == str(benchmark_id)
         )
         benchmark_record = _benchmark_result_record(
-            manifest=manifest,
+            benchmark=benchmark,
             repository_root=repository_root,
             runs=benchmark_runs,
             competitions=benchmark_competitions,
@@ -352,10 +359,12 @@ def materialize_benchmark_result_views(
             + b"\n"
         )
         benchmark_view_files.append(benchmark_view_file)
+        if primary_view_file is None or benchmark_runs:
+            primary_view_file = benchmark_view_file
 
     return LocalBenchmarkResultViewSummary(
         source_files=tuple(run.source_path for run in runs),
-        view_file=benchmark_view_files[0],
+        view_file=primary_view_file if primary_view_file is not None else benchmark_view_files[0],
         benchmark_view_files=tuple(benchmark_view_files),
         benchmark_count=len(benchmark_records),
         model_count=len({(run.benchmark_id, run.model_key) for run in runs}),
@@ -540,17 +549,17 @@ class _RelativeFrontierConfidence:
     certified: bool
 
 
-def _known_manifests(
+def _known_benchmarks(
     repository_root: Path,
-) -> dict[ProtocolIdentifier, BenchmarkManifest]:
+) -> dict[ProtocolIdentifier, Benchmark]:
     benchmark_root = repository_root / "src" / "leibniz" / "benchmarks"
-    manifests: dict[ProtocolIdentifier, BenchmarkManifest] = {}
+    benchmarks: dict[ProtocolIdentifier, Benchmark] = {}
     for path in discover_benchmark_roots(benchmark_root):
-        manifest = load_benchmark(path).manifest
-        manifests[manifest.id] = manifest
-    if not manifests:
+        benchmark = load_benchmark(path)
+        benchmarks[benchmark.manifest.id] = benchmark
+    if not benchmarks:
         raise LocalResultImportError("no known benchmark manifests found")
-    return manifests
+    return benchmarks
 
 
 def _local_run_records(
@@ -1326,11 +1335,12 @@ def _inspection_from_architecture(architecture: ArchitectureManifest) -> ModelIn
 
 def _benchmark_result_record(
     *,
-    manifest: BenchmarkManifest,
+    benchmark: Benchmark,
     repository_root: Path,
     runs: tuple[_BenchmarkRunRecord, ...],
     competitions: tuple[Mapping[str, object], ...],
 ) -> dict[str, object]:
+    manifest = benchmark.manifest
     accepted_runs = tuple(run for run in runs if run.result_status == "accepted")
     models = tuple(
         _model_result_records(
@@ -1349,7 +1359,7 @@ def _benchmark_result_record(
         )
     )
     record: dict[str, object] = {
-        "benchmark_id": str(runs[0].benchmark_id),
+        "benchmark_id": str(manifest.id),
         "cost_axes": _benchmark_cost_axis_records(),
         "score_axes": _benchmark_score_axis_records(models),
         "leaderboard": list(models),
@@ -1358,6 +1368,10 @@ def _benchmark_result_record(
             axis: _frontier_records(models, cost_axis=axis)
             for axis in _benchmark_cost_axis_keys
         },
+        "reference_curves": _benchmark_reference_curve_records(
+            generator=benchmark.generator,
+            runs=runs,
+        ),
         "training_history": [run.to_record(complexity_axis=None) for run in runs],
         "plot_runs": [run.to_record(complexity_axis=None) for run in runs],
         "model_inspections": _model_inspection_records(accepted_runs),
@@ -1385,6 +1399,190 @@ def _benchmark_score_axis_records(
     ):
         axes.append({"key": "relative", "label": "Relative Score"})
     return axes
+
+
+def _benchmark_reference_curve_records(
+    *,
+    generator: Any,
+    runs: tuple[_BenchmarkRunRecord, ...],
+) -> list[dict[str, object]]:
+    points = _generator_oracle_inference_reference_points(generator)
+    if not points:
+        points = _oracle_inference_reference_points(
+            generator=generator,
+            runs=runs,
+        )
+    if not points:
+        return []
+    return [
+        {
+            "kind": "oracle-inference-compute-reference-v1",
+            "key": "oracle_inference_compute",
+            "label": "Oracle Reference",
+            "x_axis": "inference_compute",
+            "y_axis": "absolute",
+            "points": points,
+        }
+    ]
+
+
+def _generator_oracle_inference_reference_points(
+    generator: Any,
+) -> list[dict[str, object]]:
+    if not hasattr(generator, "oracle_inference_reference_points"):
+        return []
+    raw_points = generator.oracle_inference_reference_points(
+        maximum_cost=_reference_curve_default_maximum_cost
+    )
+    points: list[tuple[float, float, dict[str, object]]] = []
+    for index, raw_point in enumerate(
+        _as_sequence(raw_points, "oracle_inference_reference_points")
+    ):
+        point = _extract.mapping(raw_point, f"oracle_inference_reference_points.{index}")
+        complexity = _as_nonnegative_number(
+            point.get("complexity"),
+            f"oracle_inference_reference_points.{index}.complexity",
+        )
+        score = _as_nonnegative_number(
+            point.get("score"),
+            f"oracle_inference_reference_points.{index}.score",
+        )
+        cost = _as_nonnegative_number(
+            point.get("cost"),
+            f"oracle_inference_reference_points.{index}.cost",
+        )
+        if cost <= 0:
+            raise LocalResultImportError(
+                f"oracle_inference_reference_points.{index}.cost must be positive"
+            )
+        metadata = _extract.mapping(
+            point.get("metadata"),
+            f"oracle_inference_reference_points.{index}.metadata",
+        )
+        points.append(
+            (
+                score,
+                cost,
+                {
+                    "complexity": complexity,
+                    "score": score,
+                    "cost": cost,
+                    "metadata": dict(metadata),
+                },
+            )
+        )
+    return [point for _score, _cost, point in sorted(points, key=lambda item: item[:2])]
+
+
+def _reference_curve_candidates(
+    *,
+    generator: Any,
+    runs: tuple[_BenchmarkRunRecord, ...],
+) -> tuple[ComplexityCandidate, ...]:
+    candidates: list[ComplexityCandidate] = []
+    seen_complexities: set[float] = set()
+
+    def append_candidate(candidate: ComplexityCandidate | None) -> None:
+        if candidate is None:
+            return
+        if candidate.complexity in seen_complexities:
+            return
+        seen_complexities.add(candidate.complexity)
+        candidates.append(candidate)
+
+    for candidate in _generator_curriculum_candidates(
+        generator=generator,
+        count=_reference_curve_initial_curriculum_count,
+    ):
+        append_candidate(candidate)
+    for run in runs:
+        if run.sampled_competence is None:
+            continue
+        for point in _as_sequence(
+            run.sampled_competence.get("points", ()),
+            "sampled_competence.points",
+        ):
+            point_record = _extract.mapping(point, "sampled_competence.points")
+            append_candidate(
+                _candidate_for_complexity(
+                    generator=generator,
+                    complexity=_as_nonnegative_number(
+                        point_record.get("complexity"),
+                        "sampled_competence.points.complexity",
+                    ),
+                )
+            )
+    return tuple(candidates)
+
+
+def _generator_curriculum_candidates(
+    *,
+    generator: Any,
+    count: int,
+) -> tuple[ComplexityCandidate, ...]:
+    if not hasattr(generator, "complexity_curriculum_candidates"):
+        return ()
+    candidates = generator.complexity_curriculum_candidates(start_index=0, count=count)
+    return tuple(
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, ComplexityCandidate)
+    )
+
+
+def _oracle_inference_reference_points(
+    *,
+    generator: Any,
+    runs: tuple[_BenchmarkRunRecord, ...],
+) -> list[dict[str, object]]:
+    points: list[tuple[float, float, dict[str, object]]] = []
+    for candidate in _reference_curve_candidates(generator=generator, runs=runs):
+        reference = _candidate_oracle_inference_compute(candidate)
+        if reference is None:
+            continue
+        score = candidate.complexity
+        cost = cast(float, reference["value"])
+        point: dict[str, object] = {
+            "complexity": score,
+            "score": score,
+            "cost": cost,
+            "metadata": reference,
+        }
+        points.append((score, cost, point))
+    return [point for _score, _cost, point in sorted(points, key=lambda item: item[:2])]
+
+
+def _candidate_for_complexity(
+    *,
+    generator: Any,
+    complexity: float,
+) -> ComplexityCandidate | None:
+    if not hasattr(generator, "complexity_candidate_for_request"):
+        return None
+    candidate = generator.complexity_candidate_for_request(
+        request=ComplexityRequest(minimum=complexity, maximum=complexity)
+    )
+    return candidate if isinstance(candidate, ComplexityCandidate) else None
+
+
+def _candidate_oracle_inference_compute(
+    candidate: ComplexityCandidate,
+) -> dict[str, object] | None:
+    reference_value = candidate.metadata.get("oracle_inference_compute")
+    if not isinstance(reference_value, Mapping):
+        return None
+    reference: dict[str, object] = {
+        key: value
+        for key, value in cast(Mapping[object, object], reference_value).items()
+        if isinstance(key, str)
+    }
+    if reference.get("kind") != "oracle-inference-compute-reference-v1":
+        return None
+    value = reference.get("value")
+    if not isinstance(value, int | float) or not math.isfinite(value) or value <= 0:
+        return None
+    reference["value"] = float(value)
+    return reference
 
 
 def _model_inspection_records(
@@ -3075,6 +3273,7 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
             "leaderboard",
             "model_candidates",
             "frontiers",
+            "reference_curves",
             "training_history",
             "plot_runs",
             "model_inspections",
@@ -3108,6 +3307,13 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
         for index, model in enumerate(_as_sequence(frontiers.get(axis), f"frontiers.{axis}")):
             field = f"frontiers.{axis}.{index}"
             _validate_model_result(_extract.mapping(model, field), field)
+    for index, curve in enumerate(
+        _as_sequence(record.get("reference_curves", ()), "reference_curves")
+    ):
+        _validate_reference_curve(
+            _extract.mapping(curve, f"reference_curves.{index}"),
+            f"reference_curves.{index}",
+        )
     for index, run in enumerate(_record_sequence(record, "training_history")):
         _validate_run_result(run, f"training_history.{index}")
     for index, run in enumerate(_record_sequence(record, "plot_runs")):
@@ -3138,6 +3344,27 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
             raise LocalResultImportError(
                 f"{field}: invalid model inspection: {error}"
             ) from error
+
+
+def _validate_reference_curve(record: Mapping[str, object], field: str) -> None:
+    _require_string_fields(
+        record,
+        field,
+        ("kind", "key", "label", "x_axis", "y_axis"),
+    )
+    if record.get("kind") != "oracle-inference-compute-reference-v1":
+        raise LocalResultImportError(f"{field}.kind is invalid")
+    points = _as_sequence(record.get("points"), f"{field}.points")
+    for index, point in enumerate(points):
+        point_field = f"{field}.points.{index}"
+        point_record = _extract.mapping(point, point_field)
+        _as_nonnegative_number(point_record.get("complexity"), f"{point_field}.complexity")
+        _as_nonnegative_number(point_record.get("score"), f"{point_field}.score")
+        cost = _as_nonnegative_number(point_record.get("cost"), f"{point_field}.cost")
+        if cost <= 0:
+            raise LocalResultImportError(f"{point_field}.cost must be positive")
+        if "metadata" in point_record:
+            _extract.mapping(point_record["metadata"], f"{point_field}.metadata")
 
 
 def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:

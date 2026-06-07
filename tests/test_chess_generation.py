@@ -187,6 +187,15 @@ def test_chess_complexity_candidates_are_sample_space_cardinalities() -> None:
         assert len(cast(list[object], candidate.metadata["legal_move_counts"])) == (
             candidate.cardinality
         )
+        oracle_reference = cast(
+            dict[str, object],
+            candidate.metadata["oracle_inference_compute"],
+        )
+        legal_move_counts = cast(list[int], candidate.metadata["legal_move_counts"])
+        assert oracle_reference["kind"] == "oracle-inference-compute-reference-v1"
+        assert oracle_reference["unit"] == "abstract-ops"
+        assert oracle_reference["aggregation"] == "max"
+        assert oracle_reference["value"] == max(legal_move_counts)
 
 
 def test_chess_complexity_curriculum_uses_supported_sample_cardinalities() -> None:

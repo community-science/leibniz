@@ -316,16 +316,20 @@ p {
   font-size: var(--font-control);
 }
 
-.frontier-chart-empty-label {
-  fill: var(--text-muted);
-  font-size: var(--font-body);
-}
-
 .frontier-chart-staircase {
   stroke: var(--frontier-accent);
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.8;
+}
+
+.frontier-chart-reference-curve {
+  opacity: 0.78;
+  stroke: var(--text-muted);
+  stroke-dasharray: 7 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
 }
 
 .frontier-chart-point {
@@ -396,6 +400,12 @@ p {
 
 .frontier-chart-legend i.provisional {
   background: var(--provisional-accent);
+}
+
+.frontier-chart-legend i.reference {
+  height: var(--line-accent);
+  border-radius: 0;
+  background: var(--text-muted);
 }
 
 .frontier-chart-axis-selector {
