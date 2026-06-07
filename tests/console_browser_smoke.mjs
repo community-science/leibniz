@@ -60,6 +60,8 @@ try {
     if (browserFailures.length > 0) {
       throw new Error(browserFailures.join('\n'));
     }
+    await assertSelectBackgroundsMatchContainingElements(page);
+    await assertSelectOptionsUseConsoleTheme(page);
     const samplesToggle = page.getByRole('button', { name: 'Samples' }).first();
     await samplesToggle.waitFor({ state: 'visible' });
     await samplesToggle.click();
@@ -177,4 +179,89 @@ async function waitForHttp(url) {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`timed out waiting for ${url}: ${lastError}`);
+}
+
+async function assertSelectBackgroundsMatchContainingElements(page) {
+  const mismatches = await page.locator('select').evaluateAll((selects) =>
+    selects.flatMap((select) => {
+      const parent = select.parentElement;
+      if (parent === null) {
+        return [];
+      }
+      const selectBackground = getComputedStyle(select).backgroundColor;
+      const parentBackground = getComputedStyle(parent).backgroundColor;
+      if (selectBackground === parentBackground) {
+        return [];
+      }
+      return [
+        {
+          select: select.className || select.id || select.getAttribute('aria-label') || 'select',
+          parent: parent.className || parent.id || parent.getAttribute('aria-label') || parent.tagName,
+          selectBackground,
+          parentBackground,
+        },
+      ];
+    }),
+  );
+  if (mismatches.length > 0) {
+    throw new Error(
+      [
+        'console dropdown menus must use the same background color as their containing element',
+        ...mismatches.map(
+          (mismatch) =>
+            `${mismatch.select} in ${mismatch.parent}: ` +
+            `${mismatch.selectBackground} !== ${mismatch.parentBackground}`,
+        ),
+      ].join('\n'),
+    );
+  }
+}
+
+async function assertSelectOptionsUseConsoleTheme(page) {
+  const mismatches = await page.locator('select option').evaluateAll((options) =>
+    options.flatMap((option) => {
+      const root = document.documentElement;
+      const optionStyle = getComputedStyle(option);
+      const expectedBackground = getComputedStyle(root)
+        .getPropertyValue('--bg-dark')
+        .trim();
+      const expectedColor = getComputedStyle(root)
+        .getPropertyValue('--text-primary')
+        .trim();
+      const probe = document.createElement('span');
+      probe.style.backgroundColor = expectedBackground;
+      probe.style.color = expectedColor;
+      document.body.appendChild(probe);
+      const expectedBackgroundColor = getComputedStyle(probe).backgroundColor;
+      const expectedTextColor = getComputedStyle(probe).color;
+      probe.remove();
+      if (
+        optionStyle.backgroundColor === expectedBackgroundColor &&
+        optionStyle.color === expectedTextColor
+      ) {
+        return [];
+      }
+      return [
+        {
+          option: option.textContent ?? 'option',
+          background: optionStyle.backgroundColor,
+          color: optionStyle.color,
+          expectedBackground: expectedBackgroundColor,
+          expectedColor: expectedTextColor,
+        },
+      ];
+    }),
+  );
+  if (mismatches.length > 0) {
+    throw new Error(
+      [
+        'console dropdown menu items must use the console theme colors',
+        ...mismatches.map(
+          (mismatch) =>
+            `${mismatch.option}: ${mismatch.background} / ${mismatch.color} !== ` +
+            `${mismatch.expectedBackground} / ${mismatch.expectedColor}`,
+        ),
+      ].join('\n'),
+    );
+  }
 }

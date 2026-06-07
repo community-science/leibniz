@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useMemo } from 'react';
+import { useState } from 'react';
 
 import { BenchmarkResultDashboard } from './BenchmarkResultDashboard.tsx';
 import {
@@ -1061,6 +1062,9 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
     selectedSample === undefined
       ? null
       : sampleKey(selectedSample.batch, selectedSample.sample);
+  const hasInteractiveImageOverlay = selectedBatch.samples.some(
+    (sample) => sample.image_overlay?.kind === 'grid-move-highlights',
+  );
 
   return (
     <div className="benchmark-task">
@@ -1081,7 +1085,11 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
         {selectedBatch.samples.length === 0 ? (
           <p className="artifact-detail-note">No generated samples in this range.</p>
         ) : (
-          <div className={`benchmark-sample-grid ${selectedBatch.presentation.sample_card_density}`}>
+          <div
+            className={`benchmark-sample-grid ${
+              selectedBatch.presentation.sample_card_density
+            } ${hasInteractiveImageOverlay ? 'interactive-image-overlay' : ''}`}
+          >
             {selectedBatch.samples.map((sample) => (
               <BenchmarkSampleCard
                 density={selectedBatch.presentation.sample_card_density}
@@ -1154,9 +1162,13 @@ function BenchmarkSampleCard({
   selected: boolean;
 }) {
   const imageUrl = sample.image_data_url;
+  const overlay = sample.image_overlay;
+  const [hoveredSource, setHoveredSource] = useState<string | null>(null);
   return (
     <button
-      className={`benchmark-sample-card ${density} ${selected ? 'selected' : ''}`}
+      className={`benchmark-sample-card ${density} ${
+        overlay?.kind === 'grid-move-highlights' ? 'interactive-image-overlay' : ''
+      } ${selected ? 'selected' : ''}`}
       onClick={onSelect}
       type="button"
     >
@@ -1171,11 +1183,91 @@ function BenchmarkSampleCard({
         <div className="benchmark-image-shell">
           <div className="benchmark-image-fit">
             <img alt={sample.outcome_id} src={imageUrl} />
+            {overlay?.kind === 'grid-move-highlights' ? (
+              <BenchmarkGridMoveOverlay
+                hoveredSource={hoveredSource}
+                onHoverSource={setHoveredSource}
+                overlay={overlay}
+              />
+            ) : null}
           </div>
         </div>
       )}
     </button>
   );
+}
+
+function BenchmarkGridMoveOverlay({
+  hoveredSource,
+  onHoverSource,
+  overlay,
+}: {
+  hoveredSource: string | null;
+  onHoverSource: (source: string | null) => void;
+  overlay: NonNullable<GeneratedObservationSampleRecord['image_overlay']>;
+}) {
+  const sourceKeys = new Set(overlay.moves.map((move) => gridCoordinateKey(move.from)));
+  const destinationKeys = new Set(
+    overlay.moves
+      .filter((move) => gridCoordinateKey(move.from) === hoveredSource)
+      .map((move) => gridCoordinateKey(move.to)),
+  );
+  const targetDestinationKeys = new Set(
+    overlay.moves
+      .filter(
+        (move) =>
+          gridCoordinateKey(move.from) === hoveredSource &&
+          (move.target_probability ?? 0) > 0,
+      )
+      .map((move) => gridCoordinateKey(move.to)),
+  );
+  const cells = [];
+  for (let row = 0; row < overlay.rows; row += 1) {
+    for (let column = 0; column < overlay.columns; column += 1) {
+      const key = `${column},${row}`;
+      const isSource = sourceKeys.has(key);
+      const isDestination = destinationKeys.has(key);
+      const isTargetDestination = targetDestinationKeys.has(key);
+      const className = [
+        'benchmark-grid-move-cell',
+        isSource ? 'source' : '',
+        isDestination ? 'destination' : '',
+        isTargetDestination ? 'target-destination' : '',
+      ].filter(Boolean).join(' ');
+      cells.push(
+        <div
+          aria-hidden="true"
+          className={className}
+          key={key}
+          onMouseEnter={() => {
+            if (isSource) {
+              onHoverSource(key);
+            }
+          }}
+          onMouseLeave={() => {
+            if (isSource) {
+              onHoverSource(null);
+            }
+          }}
+        />,
+      );
+    }
+  }
+  return (
+    <div
+      className="benchmark-grid-move-overlay"
+      style={{
+        gridTemplateColumns: `repeat(${overlay.columns}, 1fr)`,
+        gridTemplateRows: `repeat(${overlay.rows}, 1fr)`,
+      }}
+    >
+      {cells}
+    </div>
+  );
+}
+
+function gridCoordinateKey(coordinate: [number, number]): string {
+  return `${coordinate[0]},${coordinate[1]}`;
 }
 
 function BenchmarkSampleCoordinateInspector({

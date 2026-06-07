@@ -54,10 +54,24 @@ export type GeneratedObservationSampleRecord = {
   available_outcome_ids?: string[];
   field_shape?: number[];
   image_data_url?: string;
+  image_overlay?: GeneratedImageOverlayRecord;
   materialization_plan?: Record<string, unknown>;
   observable_state_id?: string;
   target_distribution?: GeneratedTargetProbabilityRecord[];
   latent_coordinates: GeneratedLatentCoordinateRecord[];
+};
+
+export type GeneratedImageOverlayRecord = {
+  kind: 'grid-move-highlights';
+  columns: number;
+  rows: number;
+  moves: GeneratedGridMoveHighlightRecord[];
+};
+
+export type GeneratedGridMoveHighlightRecord = {
+  from: [number, number];
+  target_probability?: number;
+  to: [number, number];
 };
 
 export type GeneratedTargetProbabilityRecord = {

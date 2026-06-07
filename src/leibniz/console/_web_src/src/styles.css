@@ -107,6 +107,11 @@ select {
   font: inherit;
 }
 
+select option {
+  background: var(--bg-dark);
+  color: var(--text-primary);
+}
+
 #root {
   height: 100vh;
 }
@@ -658,7 +663,7 @@ p {
   max-width: min(100%, var(--performance-source-min));
   border: var(--line-thin) solid var(--border-color-strong);
   border-radius: var(--radius-sm);
-  background: var(--bg-dark);
+  background: transparent;
   color: white;
   cursor: pointer;
   padding: var(--space-sm);
@@ -858,7 +863,7 @@ p {
   min-width: 180px;
   border: var(--line-thin) solid var(--border-color);
   border-radius: var(--radius-xs);
-  background: var(--control-bg);
+  background: transparent;
   color: var(--text-primary);
   font: inherit;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -883,6 +888,12 @@ p {
 
 .benchmark-sample-grid.compact {
   grid-template-columns: repeat(auto-fill, var(--benchmark-sample-tile-size));
+}
+
+.benchmark-sample-grid.interactive-image-overlay {
+  grid-template-columns: minmax(0, min(512px, 100%));
+  justify-content: center;
+  overflow-x: visible;
 }
 
 .benchmark-sample-card {
@@ -919,6 +930,11 @@ p {
   justify-items: center;
   gap: 0;
   padding: 0;
+}
+
+.benchmark-sample-card.interactive-image-overlay {
+  grid-template-rows: min(512px, calc(100vw - (2 * var(--space-lg))));
+  width: min(512px, 100%);
 }
 
 .benchmark-image-shell {
@@ -960,6 +976,12 @@ p {
   height: var(--benchmark-compact-preview-size);
 }
 
+.benchmark-sample-card.interactive-image-overlay .benchmark-image-shell {
+  width: min(512px, 100%);
+  height: min(512px, calc(100vw - (2 * var(--space-lg))));
+  padding: 0;
+}
+
 .benchmark-image-fit img {
   display: block;
   position: absolute;
@@ -968,6 +990,35 @@ p {
   height: 100%;
   object-fit: contain;
   image-rendering: auto;
+}
+
+.benchmark-grid-move-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.benchmark-grid-move-cell {
+  min-width: 0;
+  min-height: 0;
+}
+
+.benchmark-grid-move-cell.source {
+  pointer-events: auto;
+}
+
+.benchmark-grid-move-cell.destination {
+  background: rgb(34 197 94 / 0.38);
+  box-shadow: inset 0 0 0 2px rgb(22 101 52 / 0.75);
+}
+
+.benchmark-grid-move-cell.target-destination {
+  background: rgb(34 197 94 / 0.58);
+  box-shadow:
+    inset 0 0 0 3px rgb(22 101 52 / 0.95),
+    inset 0 0 0 10px rgb(250 204 21 / 0.72);
 }
 
 .benchmark-text-sample-shell {
