@@ -69,12 +69,8 @@ _result_directories = (
     "training",
     "views",
 )
-_benchmark_cost_axes: tuple[tuple[str, str], ...] = (
-    ("inference_compute", "Inference Compute"),
-    ("storage_bytes", "Model Size"),
-    ("training_compute", "Training Compute"),
-)
-_benchmark_cost_axis_keys = tuple(axis for axis, _label in _benchmark_cost_axes)
+_benchmark_cost_axis_key = "inference_compute"
+_benchmark_cost_axis_keys = (_benchmark_cost_axis_key,)
 _reference_curve_default_maximum_cost = 10_000_000_000
 _reference_curve_initial_curriculum_count = 16
 _component_count = 1
@@ -1238,7 +1234,6 @@ def _benchmark_result_record(
     )
     record: dict[str, object] = {
         "benchmark_id": str(manifest.id),
-        "cost_axes": _benchmark_cost_axis_records(),
         "leaderboard": list(models),
         "model_candidates": list(model_candidates),
         "frontiers": {
@@ -1254,16 +1249,6 @@ def _benchmark_result_record(
         "model_inspections": _model_inspection_records(accepted_runs),
     }
     return record
-
-
-def _benchmark_cost_axis_records() -> list[dict[str, object]]:
-    return [
-        {
-            "key": key,
-            "label": label,
-        }
-        for key, label in _benchmark_cost_axes
-    ]
 
 
 def _benchmark_reference_curve_records(
@@ -2537,7 +2522,6 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
         {
             "benchmark_id",
             "complexity_axis",
-            "cost_axes",
             "leaderboard",
             "model_candidates",
             "frontiers",
@@ -2549,15 +2533,6 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
         prefix="benchmark_results",
     )
     _extract.non_empty_string(record.get("benchmark_id"), "benchmark_id")
-    cost_axes = _as_sequence(record.get("cost_axes"), "cost_axes")
-    if not cost_axes:
-        raise LocalResultImportError("cost_axes must not be empty")
-    for index, axis in enumerate(cost_axes):
-        _require_string_fields(
-            _extract.mapping(axis, f"cost_axes.{index}"),
-            f"cost_axes.{index}",
-            ("key", "label"),
-        )
     for index, model in enumerate(_record_sequence(record, "leaderboard")):
         _validate_model_result(model, f"leaderboard.{index}")
         if model.get("result_status") != "accepted":

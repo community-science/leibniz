@@ -346,10 +346,6 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert isinstance(cost_summary["inference_compute"], int | float)
     frontiers = cast(dict[str, object], result["frontiers"])
     assert len(cast(list[object], frontiers["inference_compute"])) == 1
-    assert cast(list[dict[str, str]], result["cost_axes"])[0] == {
-        "key": "inference_compute",
-        "label": "Inference Compute",
-    }
     reference_curves = cast(list[dict[str, object]], result["reference_curves"])
     assert len(reference_curves) == 1
     oracle_curve = reference_curves[0]
@@ -393,7 +389,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert "parameter_count" not in cost_summary
     assert cost_summary["storage_bytes"] == 200
     frontiers = cast(dict[str, object], result["frontiers"])
-    assert len(cast(list[dict[str, object]], frontiers["storage_bytes"])) == 1
+    assert len(cast(list[dict[str, object]], frontiers["inference_compute"])) == 1
     history = cast(list[dict[str, object]], result["training_history"])
     assert history[0]["source_kind"] == "local-run"
     diagnostics = cast(dict[str, object], history[0]["training_diagnostics"])

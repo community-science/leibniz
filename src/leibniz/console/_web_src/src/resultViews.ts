@@ -7,7 +7,6 @@ export type {
   BenchmarkResultRecord,
   BenchmarkResultViewRecord,
   CompetencePointRecord,
-  CostAxisRecord,
   CostSummaryRecord,
   ModelResultRecord,
   ReferenceCurvePointRecord,

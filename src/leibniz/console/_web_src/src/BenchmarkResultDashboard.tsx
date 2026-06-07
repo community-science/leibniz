@@ -12,9 +12,7 @@ import { useEffect, useId, useState } from 'react';
 
 import {
   benchmarkPlotModel,
-  benchmarkCostAxisGroups,
-  benchmarkCostAxes,
-  benchmarkCostAxis,
+  benchmarkCostAxisLabel,
   costValue,
   formatCost,
   nextModelResultSort,
@@ -30,7 +28,6 @@ import {
 } from './benchmarkDashboardModel.ts';
 import type {
   BenchmarkResultRecord,
-  CostAxisRecord,
   ModelResultRecord,
 } from './resultViews.ts';
 import { usePersistentState } from './persistentState.ts';
@@ -40,20 +37,10 @@ type PlotView = {
   yDomain: [number, number];
 };
 
-type PlotAxisSelectorAxis = {
-  key: string;
-  label: string;
-};
-
-type PlotAxisSelectorGroup = {
-  axes: PlotAxisSelectorAxis[];
-  key: string;
-};
-
 const plotWidth = 960;
 const plotHeight = 440;
 const plotMargin = {
-  bottom: 78,
+  bottom: 58,
   left: 92,
   right: 26,
   top: 36,
@@ -64,13 +51,10 @@ const plotZoomInFactor = 0.72;
 const plotZoomOutFactor = 1.28;
 const plotPanFraction = 0.18;
 const plotTickOffset = 18;
+const plotXAxisLabelOffset = 44;
 const plotYTickLabelOffset = 10;
 const plotYAxisLabelOffset = 52;
 const plotTickLabelBaselineOffset = 4;
-const plotAxisSelectorTopOffset = 20;
-const plotAxisSelectorHeight = 28;
-const plotAxisSelectorMinWidth = 720;
-const plotAxisSelectorButtonWidth = 118;
 const defaultLeaderboardSort: ModelResultSort = {
   key: 'score',
   direction: 'descending',
@@ -85,14 +69,7 @@ export function BenchmarkResultDashboard({
   result: BenchmarkResultRecord;
   selectedModelKey: string;
 }) {
-  const costAxes = benchmarkCostAxes(result);
   const stateKeyPrefix = `leibniz.console.benchmarks.${result.benchmark_id}.performance`;
-  const [selectedCostAxis, setSelectedCostAxis] = usePersistentState(
-    `${stateKeyPrefix}.costAxis`,
-    costAxes[0]?.key ?? 'inference_compute',
-  );
-  const costAxis = benchmarkCostAxis(selectedCostAxis, costAxes);
-  const costAxisLabel = costAxes.find((axis) => axis.key === costAxis)?.label ?? 'Cost';
   const [plotView, setPlotView] = usePersistentState<PlotView | null>(
     `${stateKeyPrefix}.plotView`,
     null,
@@ -106,7 +83,7 @@ export function BenchmarkResultDashboard({
     `${stateKeyPrefix}.leaderboardSort`,
     defaultLeaderboardSort,
   );
-  const plot = benchmarkPlotModel(result, costAxis);
+  const plot = benchmarkPlotModel(result);
   const frontierModels = plot.frontierPoints
     .map((point) => point.model)
     .filter((model): model is ModelResultRecord => model !== undefined);
@@ -132,14 +109,7 @@ export function BenchmarkResultDashboard({
   return (
     <section className="performance-section benchmark-result-dashboard">
       <BenchmarkFrontierPlot
-        costAxes={costAxes}
-        costAxis={costAxis}
         model={plot}
-        onCostAxisChange={(axis) => {
-          setSelectedCostAxis(axis);
-          setPlotView(null);
-          setHoveredId(null);
-        }}
         onHover={setHoveredId}
         onPan={(direction) => setPlotView(pannedView(activeView, direction, plot))}
         onReset={() => setPlotView(null)}
@@ -150,8 +120,7 @@ export function BenchmarkResultDashboard({
         hoveredId={hoveredId}
       />
       <ModelResultTable
-        costAxis={costAxis}
-        costAxisLabel={costAxisLabel}
+        costAxisLabel={benchmarkCostAxisLabel}
         models={frontierModels}
         onSelect={setSelectedId}
         onSort={(key) => setLeaderboardSort((current) => nextModelResultSort(current, key))}
@@ -165,11 +134,8 @@ export function BenchmarkResultDashboard({
 }
 
 function BenchmarkFrontierPlot({
-  costAxes,
-  costAxis,
   hoveredId,
   model,
-  onCostAxisChange,
   onHover,
   onPan,
   onReset,
@@ -178,11 +144,8 @@ function BenchmarkFrontierPlot({
   selectedId,
   view,
 }: {
-  costAxes: CostAxisRecord[];
-  costAxis: string;
   hoveredId: string | null;
   model: ReturnType<typeof benchmarkPlotModel>;
-  onCostAxisChange: (axis: string) => void;
   onHover: (id: string | null) => void;
   onPan: (direction: 'left' | 'right') => void;
   onReset: () => void;
@@ -209,17 +172,6 @@ function BenchmarkFrontierPlot({
   const hoveredPoint = model.points.find((point) => point.id === hoveredId);
   const activePoint = hoveredPoint ?? selectedPoint;
   const plotClipId = `frontier-plot-clip-${useId().replaceAll(':', '')}`;
-  const costAxisGroups = benchmarkCostAxisGroups(costAxes);
-  const axisButtonCount = costAxisGroups.reduce(
-    (count, group) => count + group.axes.length,
-    0,
-  );
-  const axisSelectorWidth = Math.min(
-    plotBodyWidth,
-    Math.max(plotAxisSelectorMinWidth, axisButtonCount * plotAxisSelectorButtonWidth),
-  );
-  const axisSelectorX = plotMargin.left + plotBodyWidth / 2 - axisSelectorWidth / 2;
-  const axisSelectorY = plotMargin.top + plotBodyHeight + plotAxisSelectorTopOffset;
 
   return (
     <section className="benchmark-result-table-section">
@@ -277,7 +229,7 @@ function BenchmarkFrontierPlot({
           ) : null}
         </div>
         <svg
-          aria-label={`Measurements by ${costAxis}`}
+          aria-label={`Measurements by ${benchmarkCostAxisLabel}`}
           className="frontier-chart-svg"
           role="img"
           viewBox={`0 0 ${plotWidth} ${plotHeight}`}
@@ -389,6 +341,14 @@ function BenchmarkFrontierPlot({
               </g>
             );
           })}
+          <text
+            className="frontier-chart-axis-label"
+            textAnchor="middle"
+            x={plotMargin.left + plotBodyWidth / 2}
+            y={plotMargin.top + plotBodyHeight + plotXAxisLabelOffset}
+          >
+            {benchmarkCostAxisLabel}
+          </text>
           <g clipPath={`url(#${plotClipId})`}>
             {model.staircase.length > 0 ? (
               <polyline
@@ -427,20 +387,6 @@ function BenchmarkFrontierPlot({
               />
             ))}
             </g>
-            <foreignObject
-              height={plotAxisSelectorHeight}
-              width={axisSelectorWidth}
-              x={axisSelectorX}
-              y={axisSelectorY}
-            >
-              <div className="frontier-chart-axis-selector">
-                <PlotAxisSelector
-                  activeAxis={costAxis}
-                  groups={costAxisGroups}
-                  onAxisChange={onCostAxisChange}
-                />
-              </div>
-            </foreignObject>
         </svg>
         {activePoint === undefined ? null : (
           <div className="frontier-chart-tooltip">
@@ -459,46 +405,6 @@ function BenchmarkFrontierPlot({
   );
 }
 
-function PlotAxisSelector({
-  activeAxis,
-  groups,
-  onAxisChange,
-}: {
-  activeAxis: string;
-  groups: PlotAxisSelectorGroup[];
-  onAxisChange: (axis: string) => void;
-}) {
-  return (
-    <>
-      {groups.map((group) => (
-        <div
-          className="frontier-chart-axis-group"
-          key={group.key}
-          style={{ flexGrow: group.axes.length }}
-        >
-          <div>
-            {group.axes.map((axis) => (
-              <button
-                aria-pressed={axis.key === activeAxis}
-                className={axis.key === activeAxis ? 'active' : ''}
-                key={axis.key}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onAxisChange(axis.key);
-                }}
-                onPointerDown={(event) => event.stopPropagation()}
-                type="button"
-              >
-                {axis.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
-    </>
-  );
-}
-
 function comparePlotPointRenderOrder(
   left: BenchmarkPlotModelPoint,
   right: BenchmarkPlotModelPoint,
@@ -510,7 +416,6 @@ function comparePlotPointRenderOrder(
 }
 
 function ModelResultTable({
-  costAxis,
   costAxisLabel,
   models,
   onSelect,
@@ -520,7 +425,6 @@ function ModelResultTable({
   sort,
   title,
 }: {
-  costAxis: string;
   costAxisLabel: string;
   models: ModelResultRecord[];
   onSelect: (id: string) => void;
@@ -557,7 +461,7 @@ function ModelResultTable({
             onClick={() => onSort('cost')}
           />
         </div>
-        {sortedModelResults(models, costAxis, sort).map((model) => (
+        {sortedModelResults(models, sort).map((model) => (
           <button
             className={[
               'benchmark-result-row',
@@ -571,7 +475,7 @@ function ModelResultTable({
           >
             <span role="cell">{shortDigest(model.architecture_digest)}</span>
             <span role="cell">{scoreLabel(scoreValue(model))}</span>
-            <span role="cell">{formatCost(costValue(model.cost_summary, costAxis))}</span>
+            <span role="cell">{formatCost(costValue(model.cost_summary))}</span>
           </button>
         ))}
       </div>

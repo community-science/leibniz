@@ -921,7 +921,7 @@ def test_checkpoint_evaluation_stops_at_runtime_capacity(
     view = load_console_result_view(view_summary.view_file.read_bytes())
     result = cast(list[dict[str, object]], view["benchmark_results"])[0]
     assert cast(list[dict[str, object]], result["leaderboard"]) == []
-    assert cast(dict[str, object], result["frontiers"])["storage_bytes"] == []
+    assert cast(dict[str, object], result["frontiers"])["inference_compute"] == []
     plot_runs = cast(list[dict[str, object]], result["plot_runs"])
     assert [run["result_status"] for run in plot_runs] == ["provisional"]
     assert cast(list[dict[str, object]], result["model_candidates"])[0][
@@ -2661,7 +2661,7 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     progress_view = load_console_result_view(progress_view_summary.view_file.read_bytes())
     progress_result = cast(list[dict[str, object]], progress_view["benchmark_results"])[0]
     assert cast(list[dict[str, object]], progress_result["leaderboard"]) == []
-    assert cast(dict[str, object], progress_result["frontiers"])["storage_bytes"] == []
+    assert cast(dict[str, object], progress_result["frontiers"])["inference_compute"] == []
     progress_plot_runs = cast(list[dict[str, object]], progress_result["plot_runs"])
     assert len(progress_plot_runs) == 1
     assert progress_plot_runs[0]["result_status"] == "provisional"

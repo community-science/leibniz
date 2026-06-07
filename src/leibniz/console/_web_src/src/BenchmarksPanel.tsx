@@ -14,10 +14,9 @@ import { useState } from 'react';
 import { BenchmarkResultDashboard } from './BenchmarkResultDashboard.tsx';
 import {
   type BenchmarkResultEntry,
-  benchmarkCostAxes,
   benchmarkResultsForTask,
   costValue,
-  emptyFrontiersForCostAxes,
+  emptyFrontiersForCostAxis,
   formatCost,
   modelComparisonRows,
   shortDigest,
@@ -246,12 +245,10 @@ function BenchmarkPerformancePane({
 }
 
 function emptyBenchmarkResult(benchmark: BenchmarkTaskRecord): BenchmarkResultRecord {
-  const costAxes = benchmarkCostAxes(undefined);
   return {
     benchmark_id: benchmark.benchmark_id,
     complexity_axis: benchmark.complexity_axis,
-    cost_axes: costAxes,
-    frontiers: emptyFrontiersForCostAxes(costAxes),
+    frontiers: emptyFrontiersForCostAxis(),
     leaderboard: [],
     model_candidates: [],
     model_inspections: [],
@@ -271,7 +268,6 @@ function BenchmarkModelsPane({
   result: BenchmarkResultRecord | undefined;
   selectedModelKey: string;
 }) {
-  const costAxis = benchmarkCostAxes(result)[0]?.key ?? 'inference_compute';
   const selectedRow =
     rows.find(({ model }) => model.model_key === selectedModelKey) ?? rows[0];
 
@@ -284,7 +280,6 @@ function BenchmarkModelsPane({
           ) : (
             <BenchmarkModelInspector
               complexityAxis={result?.complexity_axis}
-              costAxis={costAxis}
               inspection={selectedRow.inspection}
               model={selectedRow.model}
               operatorVocabulary={operatorVocabulary}
@@ -299,14 +294,12 @@ function BenchmarkModelsPane({
 
 function BenchmarkModelInspector({
   complexityAxis,
-  costAxis,
   inspection,
   model,
   operatorVocabulary,
   runs,
 }: {
   complexityAxis: string | undefined;
-  costAxis: string;
   inspection: ModelInspectionRecord | undefined;
   model: BenchmarkModelCandidate;
   operatorVocabulary: OperatorVocabularyRecord;
@@ -342,7 +335,7 @@ function BenchmarkModelInspector({
         </div>
         <div>
           <dt>Cost</dt>
-          <dd>{formatCost(costValue(model.cost_summary, costAxis))}</dd>
+          <dd>{formatCost(costValue(model.cost_summary))}</dd>
         </div>
         <div>
           <dt>Measurements</dt>
