@@ -970,6 +970,59 @@ p {
   image-rendering: auto;
 }
 
+.benchmark-text-sample-shell {
+  box-sizing: border-box;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: var(--space-2xs);
+  width: var(--benchmark-preview-size);
+  height: var(--benchmark-preview-size);
+  border: var(--line-thin) solid var(--border-color-strong);
+  background: var(--preview-bg);
+  overflow: hidden;
+  padding: var(--space-xs);
+}
+
+.benchmark-sample-card.compact .benchmark-text-sample-shell {
+  width: var(--benchmark-compact-preview-size);
+  height: var(--benchmark-compact-preview-size);
+}
+
+.benchmark-sample-card.selected .benchmark-text-sample-shell {
+  border-color: var(--frontier-accent);
+  box-shadow: 0 0 0 var(--line-thin) var(--frontier-accent);
+}
+
+.benchmark-sample-card:hover .benchmark-text-sample-shell {
+  border-color: var(--frontier-accent-border);
+}
+
+.benchmark-text-sample-outcome {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: var(--font-meta);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.benchmark-text-sample-state {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: var(--font-label);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
 .benchmark-sample-coordinate-inspector {
   display: flex;
   align-items: center;

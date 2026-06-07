@@ -48,13 +48,21 @@ export type GeneratedObservationBatchPresentationRecord = {
 export type GeneratedObservationSampleRecord = {
   index: number;
   outcome_id: string;
-  component_index: number;
+  component_index?: number;
   complexity: number;
   complexity_value?: GeneratedComplexityValueRecord | null;
-  field_shape: number[];
-  image_data_url: string;
-  materialization_plan: Record<string, unknown>;
+  available_outcome_ids?: string[];
+  field_shape?: number[];
+  image_data_url?: string;
+  materialization_plan?: Record<string, unknown>;
+  observable_state_id?: string;
+  target_distribution?: GeneratedTargetProbabilityRecord[];
   latent_coordinates: GeneratedLatentCoordinateRecord[];
+};
+
+export type GeneratedTargetProbabilityRecord = {
+  outcome_id: string;
+  probability: number;
 };
 
 export type GeneratedComplexityValueRecord = {

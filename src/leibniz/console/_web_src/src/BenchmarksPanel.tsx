@@ -1153,17 +1153,27 @@ function BenchmarkSampleCard({
   sample: GeneratedObservationSampleRecord;
   selected: boolean;
 }) {
+  const imageUrl = sample.image_data_url;
   return (
     <button
       className={`benchmark-sample-card ${density} ${selected ? 'selected' : ''}`}
       onClick={onSelect}
       type="button"
     >
-      <div className="benchmark-image-shell">
-        <div className="benchmark-image-fit">
-          <img alt={sample.outcome_id} src={sample.image_data_url} />
+      {imageUrl === undefined ? (
+        <div className="benchmark-text-sample-shell">
+          <div className="benchmark-text-sample-outcome">{sample.outcome_id}</div>
+          {sample.observable_state_id === undefined ? null : (
+            <div className="benchmark-text-sample-state">{sample.observable_state_id}</div>
+          )}
         </div>
-      </div>
+      ) : (
+        <div className="benchmark-image-shell">
+          <div className="benchmark-image-fit">
+            <img alt={sample.outcome_id} src={imageUrl} />
+          </div>
+        </div>
+      )}
     </button>
   );
 }
@@ -1182,13 +1192,22 @@ function BenchmarkSampleCoordinateInspector({
   const complexityCardinalities = realizedComplexityCardinalities(selectedBatch);
   const entries: [string, string][] = [
     ['Complexity Classes', complexityCardinalities.length === 0 ? 'null set' : complexityCardinalities.join(', ')],
-    ...(sample
-      ? [
-          ['Component', String(sample.component_index)] as [string, string],
-          ['Field', sample.field_shape.join(' x ')] as [string, string],
-        ]
-      : []),
   ];
+  if (sample !== undefined) {
+    entries.push(['Outcome', sample.outcome_id]);
+    if (sample.component_index !== undefined) {
+      entries.push(['Component', String(sample.component_index)]);
+    }
+    if (sample.field_shape !== undefined) {
+      entries.push(['Field', sample.field_shape.join(' x ')]);
+    }
+    if (sample.available_outcome_ids !== undefined) {
+      entries.push(['Available Outcomes', String(sample.available_outcome_ids.length)]);
+    }
+    if (sample.observable_state_id !== undefined) {
+      entries.push(['State', sample.observable_state_id]);
+    }
+  }
   return (
     <section
       className="benchmark-sample-coordinate-inspector"

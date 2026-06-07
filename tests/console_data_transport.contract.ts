@@ -32,7 +32,7 @@ assertEqual(
 );
 assertEqual(parsed.result_views.length, 0, 'result view count');
 assertEqual(parsed.model_inspections.length, 2, 'model inspection count');
-assertEqual(parsed.benchmark_tasks.length, 1, 'benchmark task count');
+assertEqual(parsed.benchmark_tasks.length, 2, 'benchmark task count');
 assertEqual(
   parsed.operator_vocabulary.operators.map((operator) => operator.kind).join(','),
   'local-aggregation,local-affine,fixed-support-affine,rank-collapse,affine-readout',
@@ -144,9 +144,17 @@ assertEqual(
   'local-window',
   'model architecture trace support axis',
 );
-const benchmarkTask = parsed.benchmark_tasks[0];
+const benchmarkTask = parsed.benchmark_tasks.find(
+  (task) => task.benchmark_id === 'benchmarks.digits@0.1.0',
+);
 if (benchmarkTask === undefined) {
-  throw new Error('expected benchmark task');
+  throw new Error('expected digits benchmark task');
+}
+const chessBenchmarkTask = parsed.benchmark_tasks.find(
+  (task) => task.benchmark_id === 'benchmarks.chess@0.1.0',
+);
+if (chessBenchmarkTask === undefined) {
+  throw new Error('expected chess benchmark task');
 }
 assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind');
 assertEqual(benchmarkTask?.batches.length, 3, 'benchmark batch count');
@@ -157,12 +165,12 @@ assertEqual(
 );
 const generatedSamples = benchmarkTask?.batches[0]?.samples ?? [];
 assertEqual(
-  digitCounts(generatedSamples).join(','),
+  digitCounts(generatedSamples.map(requiredComponentIndex)).join(','),
   '1,1,1,1,1,1,1,1,1,1',
   'canonical digit counts',
 );
 assertEqual(
-  new Set(generatedSamples.map((sample) => sample.field_shape.join('x'))).size,
+  new Set(generatedSamples.map((sample) => requiredFieldShape(sample).join('x'))).size,
   1,
   'canonical sample canvas shape',
 );
@@ -181,7 +189,7 @@ if (generatedSample === undefined) {
   throw new Error('expected generated sample');
 }
 assertEqual(generatedSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
-assertEqual(generatedSample.field_shape.join('x'), '1x16x16', 'sample field shape');
+assertEqual(requiredFieldShape(generatedSample).join('x'), '1x16x16', 'sample field shape');
 assertEqual(
   Object.hasOwn(generatedSample, 'preview_crop'),
   false,
@@ -245,6 +253,30 @@ assertEqual(
   'H=16,W=16',
   'sample resolution assignment',
 );
+const chessSample = chessBenchmarkTask.batches[0]?.samples[0];
+if (chessSample === undefined) {
+  throw new Error('expected chess generated sample');
+}
+assertEqual(
+  chessSample.available_outcome_ids?.length,
+  chessBenchmarkTask.batches[0]?.complexity_cardinalities?.[0],
+  'chess sample legal move count',
+);
+assertEqual(
+  chessSample.image_data_url,
+  undefined,
+  'chess sample omits image data url',
+);
+assertEqual(
+  chessSample.field_shape,
+  undefined,
+  'chess sample omits field shape',
+);
+assertEqual(
+  chessSample.observable_state_id?.startsWith('fen:'),
+  true,
+  'chess sample observable state id',
+);
 assertDataError(
   () => parseConsoleDataRecord({ ...parsed, format_version: 2 }),
   'format_version: expected 1',
@@ -277,6 +309,20 @@ function assertEqual(actual: unknown, expected: unknown, label: string) {
   if (actual !== expected) {
     throw new Error(`${label}: expected ${String(expected)}, got ${String(actual)}`);
   }
+}
+
+function requiredFieldShape(sample: { field_shape?: number[] }): number[] {
+  if (sample.field_shape === undefined) {
+    throw new Error('expected generated field shape');
+  }
+  return sample.field_shape;
+}
+
+function requiredComponentIndex(sample: { component_index?: number }): { component_index: number } {
+  if (sample.component_index === undefined) {
+    throw new Error('expected generated component index');
+  }
+  return { component_index: sample.component_index };
 }
 
 function assertDataError(callback: () => void, expectedMessage: string) {
