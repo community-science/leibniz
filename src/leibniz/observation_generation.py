@@ -33,7 +33,7 @@ __all__ = [
 
 _core_complexity_measure_id = "log2_complexity_class_size"
 _core_complexity_measure_ids = frozenset({_core_complexity_measure_id})
-_minimum_complexity_value = 1.0
+_minimum_complexity_value = 0.0
 
 
 def _empty_metadata() -> Mapping[str, object]:
@@ -63,7 +63,7 @@ class ComplexityRequest:
             raise ObservationGenerationError("complexity maximum must be finite")
         if self.minimum < _minimum_complexity_value:
             raise ObservationGenerationError(
-                "complexity minimum must be at least 1"
+                "complexity minimum must be nonnegative"
             )
         if self.maximum < self.minimum:
             raise ObservationGenerationError(
@@ -103,7 +103,7 @@ class ComplexityValue:
             raise ObservationGenerationError("complexity value must be finite")
         if self.value < _minimum_complexity_value:
             raise ObservationGenerationError(
-                "complexity value must be at least 1"
+                "complexity value must be nonnegative"
             )
 
     def to_record(self) -> dict[str, object]:

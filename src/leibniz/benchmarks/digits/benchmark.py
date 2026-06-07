@@ -168,7 +168,7 @@ class _DigitsComplexityClass:
 
     @property
     def digit_count(self) -> int:
-        return _complexity_class_digit_count
+        return min(_complexity_class_digit_count, self.requested_cardinality)
 
     @property
     def affine_transform_count(self) -> int:
@@ -176,7 +176,7 @@ class _DigitsComplexityClass:
 
     @property
     def cardinality(self) -> int:
-        return self.digit_count * self.affine_transform_count
+        return self.requested_cardinality
 
     @property
     def complexity(self) -> float:
@@ -189,10 +189,14 @@ class _DigitsComplexityClass:
         return {
             "kind": "digits-requested-finite-complexity-class",
             "digit_count": self.digit_count,
+            "output_digit_count": _complexity_class_digit_count,
             "affine_transform_count": self.affine_transform_count,
             "latent_cardinality": self.cardinality,
             "requested_cardinality": self.requested_cardinality,
             "realized_cardinality": self.cardinality,
+            "affine_product_cardinality": (
+                self.digit_count * self.affine_transform_count
+            ),
             "construction": "symmetric-digits-over-finite-affine-product-grid",
             "affine_grid": self.affine_grid.to_record(),
             "affine_bounds": self.affine_grid.bounds_record(),
@@ -378,14 +382,33 @@ class Generator:
             raise ObservationGenerationError("sample_count must be a positive integer")
         if type(seed) is not int or seed < 0:
             raise ObservationGenerationError("seed must be a nonnegative integer")
-        component_index_samples = self._sample_component_indices(
-            sample_count=sample_count,
-            seed=seed,
-            component_indices=component_indices,
-            component_count=complexity_class.digit_count,
-            timing=timing,
-            timing_prefix=timing_prefix,
-        )
+        if component_indices is None and transform_indices is None:
+            component_index_samples, transform_index_samples = (
+                self._sample_state_coordinates(
+                    sample_count=sample_count,
+                    seed=seed,
+                    complexity_class=complexity_class,
+                    timing=timing,
+                    timing_prefix=timing_prefix,
+                )
+            )
+        else:
+            component_index_samples = self._sample_component_indices(
+                sample_count=sample_count,
+                seed=seed,
+                component_indices=component_indices,
+                component_count=complexity_class.digit_count,
+                timing=timing,
+                timing_prefix=timing_prefix,
+            )
+            transform_index_samples = self._sample_transform_indices(
+                sample_count=sample_count,
+                seed=seed,
+                transform_indices=transform_indices,
+                complexity_class=complexity_class,
+                timing=timing,
+                timing_prefix=timing_prefix,
+            )
         resolved_resolution_assignment = self._generation_resolution_assignment(
             sample_count=sample_count,
             seed=seed,
@@ -401,15 +424,6 @@ class Generator:
             protocol_id=self.materialization.id,
             record_digest=self.materialization.digest,
         )
-        transform_index_samples = self._sample_transform_indices(
-            sample_count=sample_count,
-            seed=seed,
-            transform_indices=transform_indices,
-            complexity_class=complexity_class,
-            timing=timing,
-            timing_prefix=timing_prefix,
-        )
-
         with _timing_span(
             timing,
             f"{timing_prefix}materialization_plan",
@@ -681,6 +695,31 @@ class Generator:
                 for _index in range(sample_count)
             )
 
+    def _sample_state_coordinates(
+        self,
+        *,
+        sample_count: int,
+        seed: int,
+        complexity_class: _DigitsComplexityClass,
+        timing: TimingCollector | None,
+        timing_prefix: str,
+    ) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        generator = random.Random(
+            f"{seed}:sample-state:{ContentDigest.from_value(complexity_class.metadata())}"
+        )
+        component_indices: list[int] = []
+        transform_indices: list[int] = []
+        with _timing_span(timing, f"{timing_prefix}sample_state", samples=sample_count):
+            for _index in range(sample_count):
+                state_index = generator.randrange(complexity_class.cardinality)
+                component_index, transform_index = _digits_state_coordinate(
+                    state_index=state_index,
+                    complexity_class=complexity_class,
+                )
+                component_indices.append(component_index)
+                transform_indices.append(transform_index)
+        return (tuple(component_indices), tuple(transform_indices))
+
     def _component_index_tensor(
         self,
         *,
@@ -768,6 +807,43 @@ class Generator:
                 generator=generator,
             )
 
+    def _state_coordinate_tensors(
+        self,
+        *,
+        sample_count: int,
+        seed: int,
+        complexity_class: _DigitsComplexityClass,
+        runtime: TensorRuntime,
+        timing: TimingCollector | None,
+        timing_prefix: str,
+    ) -> tuple[Any, Any]:
+        backend = tensor_runtime_backend(runtime)
+        generator = _runtime_generator(
+            runtime=runtime,
+            seed=(
+                f"{seed}:sample-state:"
+                f"{ContentDigest.from_value(complexity_class.metadata())}"
+            ),
+        )
+        with _timing_span(timing, f"{timing_prefix}sample_state", samples=sample_count):
+            state_indices = backend.randint(
+                low=0,
+                high=complexity_class.cardinality,
+                size=(sample_count,),
+                dtype=backend.long,
+                device=runtime.device,
+                generator=generator,
+            )
+            digit_count = max(1, complexity_class.digit_count)
+            component_indices = state_indices.remainder(digit_count)
+            transform_indices = backend.div(
+                state_indices,
+                digit_count,
+                rounding_mode="floor",
+            )
+        return component_indices, transform_indices
+
+
     def _generate_tensors(
         self,
         *,
@@ -788,24 +864,36 @@ class Generator:
         if not outcome_ids:
             raise ObservationGenerationError("tensor generation requires outcome_ids")
         sample_count = _sample_count(sample_shape)
-        component_index_samples = self._component_index_tensor(
-            sample_count=sample_count,
-            seed=seed,
-            component_indices=component_indices,
-            component_count=complexity_class.digit_count,
-            runtime=runtime,
-            timing=timing,
-            timing_prefix=timing_prefix,
-        )
-        transform_index_samples = self._transform_index_tensor(
-            sample_count=sample_count,
-            seed=seed,
-            transform_indices=transform_indices,
-            complexity_class=complexity_class,
-            runtime=runtime,
-            timing=timing,
-            timing_prefix=timing_prefix,
-        )
+        if component_indices is None and transform_indices is None:
+            component_index_samples, transform_index_samples = (
+                self._state_coordinate_tensors(
+                    sample_count=sample_count,
+                    seed=seed,
+                    complexity_class=complexity_class,
+                    runtime=runtime,
+                    timing=timing,
+                    timing_prefix=timing_prefix,
+                )
+            )
+        else:
+            component_index_samples = self._component_index_tensor(
+                sample_count=sample_count,
+                seed=seed,
+                component_indices=component_indices,
+                component_count=complexity_class.digit_count,
+                runtime=runtime,
+                timing=timing,
+                timing_prefix=timing_prefix,
+            )
+            transform_index_samples = self._transform_index_tensor(
+                sample_count=sample_count,
+                seed=seed,
+                transform_indices=transform_indices,
+                complexity_class=complexity_class,
+                runtime=runtime,
+                timing=timing,
+                timing_prefix=timing_prefix,
+            )
         backend = tensor_runtime_backend(runtime)
         fields = self._generate_tensor_fields(
             sample_shape=sample_shape,
@@ -1330,7 +1418,7 @@ class Generator:
     def minimum_complexity(self) -> ComplexityValue:
         """Return the smallest score-bearing Digits complexity."""
 
-        return _complexity_value(math.log2(_canonical_digits_cardinality))
+        return _complexity_value(0.0)
 
     def complexity_candidate_for_request(
         self,
@@ -1351,11 +1439,10 @@ class Generator:
     ) -> tuple[ComplexityCandidate, ...]:
         """Return symmetric Digits candidates inside a complexity request band."""
 
-        minimum_complexity = self.minimum_complexity().value
-        if request.maximum < minimum_complexity:
+        if request.maximum < self.minimum_complexity().value:
             return ()
         minimum_cardinality = _ceil_complexity_class_cardinality(
-            max(request.minimum, minimum_complexity)
+            max(request.minimum, self.minimum_complexity().value)
         )
         maximum_cardinality = _floor_complexity_class_cardinality(request.maximum)
         if maximum_cardinality < minimum_cardinality:
@@ -1364,13 +1451,17 @@ class Generator:
             request
         )
         candidates: list[ComplexityCandidate] = []
-        for complexity_class in self._symmetric_complexity_classes_in_cardinality_range(
-            minimum_cardinality=minimum_cardinality,
-            maximum_cardinality=maximum_cardinality,
-            resolution_assignment=resolution_assignment,
+        for requested_cardinality in range(
+            minimum_cardinality,
+            maximum_cardinality + 1,
         ):
-            measure = complexity_class.measure()
-            if request.contains(measure):
+            if len(candidates) >= _maximum_complexity_class_candidates_per_request:
+                break
+            complexity_class = self._complexity_candidate_for_requested_cardinality(
+                requested_cardinality=requested_cardinality,
+                resolution_assignment=resolution_assignment,
+            )
+            if request.contains(complexity_class.measure()):
                 candidates.append(complexity_class.candidate())
         return tuple(candidates)
 
@@ -1389,25 +1480,14 @@ class Generator:
         if count == 0:
             return ()
 
-        target_count = start_index + count
         candidates: list[ComplexityCandidate] = []
-        affine_transform_count = 1
-        max_transform_count = max(1024, target_count * 128)
-        while (
-            len(candidates) < target_count
-            and affine_transform_count <= max_transform_count
-        ):
-            complexity = math.log2(
-                _complexity_class_digit_count * affine_transform_count
+        for offset in range(count):
+            requested_cardinality = start_index + offset + 1
+            complexity_class = self._complexity_candidate_for_requested_cardinality(
+                requested_cardinality=requested_cardinality,
             )
-            candidate = self.complexity_candidate_for_request(
-                request=ComplexityRequest(minimum=complexity, maximum=complexity),
-            )
-            affine_transform_count += 1
-            if candidate is None:
-                continue
-            candidates.append(candidate)
-        return tuple(candidates[start_index:target_count])
+            candidates.append(complexity_class.candidate())
+        return tuple(candidates)
 
     def _default_complexity_class(
         self,
@@ -1443,17 +1523,25 @@ class Generator:
             requested_cardinality,
             "requested_cardinality",
         )
-        if affine_transform_count is None:
-            affine_transform_count = max(
-                1,
-                math.ceil(requested_cardinality / _complexity_class_digit_count),
+        if resolution_assignment is None:
+            resolution_assignment = self._resolution_assignment_for_requested_cardinality(
+                requested_cardinality
             )
-        requested_cardinality = _complexity_class_digit_count * affine_transform_count
-        return _DigitsComplexityClass(
-            affine_grid=_constructed_affine_grid(
+        if affine_transform_count is None:
+            affine_transform_count = _affine_transform_count_for_sample_cardinality(
+                requested_cardinality
+            )
+            affine_grid = _constructed_affine_grid_for_minimum_transform_count(
+                minimum_transform_count=affine_transform_count,
+                resolution_assignment=resolution_assignment,
+            )
+        else:
+            affine_grid = _constructed_affine_grid(
                 affine_transform_count,
                 resolution_assignment=resolution_assignment,
-            ),
+            )
+        return _DigitsComplexityClass(
+            affine_grid=affine_grid,
             requested_cardinality=requested_cardinality,
             resolution_assignment=resolution_assignment,
         )
@@ -1510,44 +1598,24 @@ class Generator:
         *,
         request: ComplexityRequest,
     ) -> _DigitsComplexityClass | None:
-        minimum_complexity = self.minimum_complexity().value
-        if request.maximum < minimum_complexity:
+        if request.maximum < self.minimum_complexity().value:
             return None
         minimum_cardinality = _ceil_complexity_class_cardinality(
-            max(request.minimum, minimum_complexity)
+            max(request.minimum, self.minimum_complexity().value)
         )
         maximum_cardinality = _floor_complexity_class_cardinality(request.maximum)
-        minimum_transform_count = max(
-            1,
-            math.ceil(minimum_cardinality / _complexity_class_digit_count),
-        )
-        maximum_transform_count = max(
-            1,
-            maximum_cardinality // _complexity_class_digit_count,
-        )
-        if maximum_transform_count < minimum_transform_count:
+        if maximum_cardinality < minimum_cardinality:
             return None
         resolution_assignment = self._resolution_assignment_for_complexity_request(
             request
         )
-        affine_grid = _constructed_affine_grid_in_transform_count_range(
-            minimum_transform_count=minimum_transform_count,
-            maximum_transform_count=maximum_transform_count,
+        complexity_class = self._complexity_candidate_for_requested_cardinality(
+            requested_cardinality=minimum_cardinality,
             resolution_assignment=resolution_assignment,
         )
-        if affine_grid is not None:
-            complexity_class = _DigitsComplexityClass(
-                affine_grid=affine_grid,
-                requested_cardinality=_complexity_class_digit_count
-                * affine_grid.transform_count,
-                resolution_assignment=resolution_assignment,
-            )
-            if request.contains(complexity_class.measure()):
-                return complexity_class
-        candidates = self.complexity_candidates_for_request(request=request)
-        if not candidates:
-            return None
-        return self._complexity_class_for_candidate(candidates[0])
+        if request.contains(complexity_class.measure()):
+            return complexity_class
+        return None
 
     def _materialization_plan(
         self,
@@ -1787,21 +1855,23 @@ class Generator:
         shared_transform_indices: tuple[int, ...] | None = None
         if runtime is not None and include_metadata:
             if shared_component_indices is None:
-                shared_component_indices = self._sample_component_indices(
+                shared_component_indices, shared_transform_indices = (
+                    self._sample_state_coordinates(
+                        sample_count=sample_count,
+                        seed=seed,
+                        complexity_class=complexity_class,
+                        timing=timing,
+                        timing_prefix=timing_prefix,
+                    )
+                )
+            else:
+                shared_transform_indices = self._sample_transform_indices(
                     sample_count=sample_count,
                     seed=seed,
-                    component_indices=None,
-                    component_count=complexity_class.digit_count,
+                    complexity_class=complexity_class,
                     timing=timing,
                     timing_prefix=timing_prefix,
                 )
-            shared_transform_indices = self._sample_transform_indices(
-                sample_count=sample_count,
-                seed=seed,
-                complexity_class=complexity_class,
-                timing=timing,
-                timing_prefix=timing_prefix,
-            )
         fields = None
         targets = None
         if runtime is not None and outcome_ids is not None:
@@ -2099,18 +2169,12 @@ def _complexity_class_canvas_side_for_cardinality_range(
         raise ObservationGenerationError(
             "complexity cardinality range maximum is below minimum"
         )
-    minimum_transform_count = max(
-        1,
-        math.ceil(minimum_cardinality / _complexity_class_digit_count),
+    minimum_transform_count = _affine_transform_count_for_sample_cardinality(
+        minimum_cardinality
     )
-    maximum_transform_count = max(
-        1,
-        maximum_cardinality // _complexity_class_digit_count,
+    maximum_transform_count = _affine_transform_count_for_sample_cardinality(
+        maximum_cardinality
     )
-    if maximum_transform_count < minimum_transform_count:
-        raise ObservationGenerationError(
-            "complexity cardinality range contains no symmetric Digits complexity class"
-        )
     side = _complexity_class_canvas_minimum_side
     while True:
         bounds = _constructed_affine_bounds_for_canvas_side(side)
@@ -2119,7 +2183,10 @@ def _complexity_class_canvas_side_for_cardinality_range(
             assignment = AxisAssignment(values={"H": side, "W": side})
             if _constructed_affine_grid_in_transform_count_range(
                 minimum_transform_count=minimum_transform_count,
-                maximum_transform_count=maximum_transform_count,
+                maximum_transform_count=max(
+                    maximum_transform_count,
+                    minimum_transform_count * 2,
+                ),
                 resolution_assignment=assignment,
             ) is not None:
                 return side
@@ -2129,19 +2196,70 @@ def _complexity_class_canvas_side_for_cardinality_range(
 def _ceil_complexity_class_cardinality(complexity: float) -> int:
     value = _complexity_class_cardinality_float(complexity)
     tolerance = max(1.0, abs(value)) * _complexity_class_cardinality_relative_tolerance
-    return max(2, math.ceil(value - tolerance))
+    return max(1, math.ceil(value - tolerance))
 
 
 def _floor_complexity_class_cardinality(complexity: float) -> int:
     value = _complexity_class_cardinality_float(complexity)
     tolerance = max(1.0, abs(value)) * _complexity_class_cardinality_relative_tolerance
-    return max(2, math.floor(value + tolerance))
+    return max(1, math.floor(value + tolerance))
 
 
 def _complexity_class_cardinality_float(complexity: float) -> float:
     if not math.isfinite(float(complexity)):
         raise ObservationGenerationError("complexity must be finite")
     return 2.0**complexity
+
+
+def _affine_transform_count_for_sample_cardinality(cardinality: int) -> int:
+    _require_generation_positive_integer(cardinality, "cardinality")
+    digit_count = min(_complexity_class_digit_count, cardinality)
+    return max(1, math.ceil(cardinality / digit_count))
+
+
+def _constructed_affine_grid_for_minimum_transform_count(
+    *,
+    minimum_transform_count: int,
+    resolution_assignment: AxisAssignment | None,
+) -> _ConstructedAffineGrid:
+    _require_generation_positive_integer(
+        minimum_transform_count,
+        "minimum_transform_count",
+    )
+    assignment = (
+        resolution_assignment
+        if resolution_assignment is not None
+        else AxisAssignment(
+            values={
+                "H": _complexity_class_canvas_minimum_side,
+                "W": _complexity_class_canvas_minimum_side,
+            }
+        )
+    )
+    maximum_transform_count = max(minimum_transform_count, minimum_transform_count * 2)
+    grid = _constructed_affine_grid_in_transform_count_range(
+        minimum_transform_count=minimum_transform_count,
+        maximum_transform_count=maximum_transform_count,
+        resolution_assignment=assignment,
+    )
+    if grid is None:
+        raise ObservationGenerationError(
+            "requested sample cardinality exceeds resolution-aware affine grid capacity"
+        )
+    return grid
+
+
+def _digits_state_coordinate(
+    *,
+    state_index: int,
+    complexity_class: _DigitsComplexityClass,
+) -> tuple[int, int]:
+    if type(state_index) is not int or state_index < 0:
+        raise ObservationGenerationError("state_index must be a nonnegative integer")
+    if state_index >= complexity_class.cardinality:
+        raise ObservationGenerationError("state_index must be below cardinality")
+    digit_count = max(1, complexity_class.digit_count)
+    return (state_index % digit_count, state_index // digit_count)
 
 
 def _complexity_class_canvas_side_from_assignment(
@@ -2313,32 +2431,34 @@ def _preview_sample_coordinates(
     *,
     limit: int,
 ) -> tuple[tuple[int, int, int], ...]:
-    full_count = sum(
-        complexity_class.digit_count * complexity_class.affine_transform_count
-        for complexity_class in complexity_classes
-    )
+    full_count = sum(complexity_class.cardinality for complexity_class in complexity_classes)
     if full_count <= limit:
-        return tuple(
-            (complexity_class_index, component_index, transform_index)
-            for complexity_class_index, complexity_class in enumerate(complexity_classes)
-            for component_index in range(complexity_class.digit_count)
-            for transform_index in range(complexity_class.affine_transform_count)
-        )
+        coordinates: list[tuple[int, int, int]] = []
+        for complexity_class_index, complexity_class in enumerate(complexity_classes):
+            for state_index in range(complexity_class.cardinality):
+                component_index, transform_index = _digits_state_coordinate(
+                    state_index=state_index,
+                    complexity_class=complexity_class,
+                )
+                coordinates.append(
+                    (complexity_class_index, component_index, transform_index)
+                )
+        return tuple(coordinates)
     coordinates: list[tuple[int, int, int]] = []
     offset = 0
     selected_offsets = set(_preview_index_selection(full_count, limit=limit))
     for complexity_class_index, complexity_class in enumerate(complexity_classes):
-        complexity_class_count = (
-            complexity_class.digit_count * complexity_class.affine_transform_count
-        )
+        complexity_class_count = complexity_class.cardinality
         for selected_offset in sorted(
             value
             for value in selected_offsets
             if offset <= value < offset + complexity_class_count
         ):
             local_offset = selected_offset - offset
-            component_index = local_offset // complexity_class.affine_transform_count
-            transform_index = local_offset % complexity_class.affine_transform_count
+            component_index, transform_index = _digits_state_coordinate(
+                state_index=local_offset,
+                complexity_class=complexity_class,
+            )
             coordinates.append((complexity_class_index, component_index, transform_index))
         offset += complexity_class_count
     return tuple(coordinates)

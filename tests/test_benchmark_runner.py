@@ -622,13 +622,9 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     timing_phases = cast(dict[str, object], phase_timing["phases"])
     tensor_batch_timing = cast(dict[str, object], timing_phases["training_tensor_batch"])
     forward_timing = cast(dict[str, object], timing_phases["training_forward_loss"])
-    component_timing = cast(
+    sample_state_timing = cast(
         dict[str, object],
-        timing_phases["training_formation_generation.component_index"],
-    )
-    transform_timing = cast(
-        dict[str, object],
-        timing_phases["training_formation_generation.transform_index"],
+        timing_phases["training_formation_generation.sample_state"],
     )
     render_timing = cast(
         dict[str, object],
@@ -643,8 +639,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert phase_timing["kind"] == "benchmark-phase-timing"
     assert tensor_batch_timing["sample_count"] == 2
     assert cast(float, tensor_batch_timing["seconds"]) > 0
-    assert component_timing["sample_count"] == 2
-    assert transform_timing["sample_count"] == 2
+    assert sample_state_timing["sample_count"] == 2
     assert cast(float, render_timing["seconds"]) > 0
     assert cast(int, forward_timing["sample_count"]) >= 2
     assert cast(float, forward_timing["seconds"]) > 0
@@ -2208,14 +2203,14 @@ def test_evaluation_curriculum_uses_benchmark_owned_complexity_schedule() -> Non
     assert candidates[0].complexity_class.resolution_assignment is not None
     assert candidates[0].complexity_class.resolution_assignment.values == {"W": 16, "H": 16}
     assert [candidate.complexity_class.cardinality for candidate in candidates[:8]] == [
-        10,
-        20,
-        30,
-        40,
-        50,
-        60,
-        70,
-        80,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
     ]
     for candidate in candidates[:8]:
         assert candidate.complexity_request.minimum >= minimum
@@ -2237,14 +2232,14 @@ def test_training_curriculum_uses_benchmark_owned_complexity_schedule() -> None:
     )
 
     assert [candidate.complexity_class.cardinality for candidate in candidates[:8]] == [
-        10,
-        20,
-        30,
-        40,
-        50,
-        60,
-        70,
-        80,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
     ]
     for candidate in candidates[:8]:
         assert candidate.complexity_request.minimum >= minimum
@@ -2264,7 +2259,7 @@ def test_training_curriculum_representative_window_rematerializes() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
         generator=generator,
-        start_index=30,
+        start_index=352,
     )
     candidate = next(
         candidate for candidate in candidates if candidate.complexity_class.cardinality == 360
@@ -2294,12 +2289,11 @@ def test_training_curriculum_representative_window_rematerializes() -> None:
 
 def test_digits_complexity_candidate_for_request_materializes_constructed_affine_grid() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
-    minimum = generator.minimum_complexity().value
 
     complexity_class = generator.complexity_candidate_for_request(
         request=ComplexityRequest(
-            minimum=minimum + 5.0,
-            maximum=minimum + 6.0,
+            minimum=math.log2(360),
+            maximum=math.log2(360),
         )
     )
 
@@ -2613,7 +2607,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     )
     assert math.isclose(cast(float, score_basis["chance_mass"]), 0.1)
     observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    assert math.isclose(observed_complexities[0], math.log2(10))
+    assert math.isclose(observed_complexities[0], 0.0)
     assert observed_complexities == sorted(observed_complexities)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
     assert points[0]["sample_count"] == 64

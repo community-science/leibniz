@@ -119,7 +119,7 @@ class _MateInOnePosition:
 
     @property
     def complexity(self) -> float:
-        return math.log2(self.legal_move_count)
+        return math.log2(1)
 
     @property
     def complexity_value(self) -> ComplexityValue:
@@ -138,21 +138,45 @@ class _MateInOnePosition:
     def mate_move_piece_symbols(self) -> tuple[str, ...]:
         return _move_piece_symbols(fen=self.fen, moves=self.mate_moves)
 
+    def representative_analysis(self) -> Mapping[str, object]:
+        board = chess.Board(self.fen)
+        piece_map = board.piece_map()
+        white_piece_count = sum(
+            1 for piece in piece_map.values() if piece.color == chess.WHITE
+        )
+        black_piece_count = len(piece_map) - white_piece_count
+        mate_sources = tuple(sorted(move[:2] for move in self.mate_moves))
+        mate_targets = tuple(sorted(move[2:4] for move in self.mate_moves))
+        return {
+            "kind": "chess-mate-in-one-representative-analysis",
+            "piece_count": len(piece_map),
+            "white_piece_count": white_piece_count,
+            "black_piece_count": black_piece_count,
+            "board_piece_symbols": list(_board_piece_symbols(board)),
+            "legal_move_piece_symbols": list(self.legal_move_piece_symbols),
+            "mate_move_piece_symbols": list(self.mate_move_piece_symbols),
+            "mate_move_count": len(self.mate_moves),
+            "mate_source_square_count": len(frozenset(mate_sources)),
+            "mate_target_square_count": len(frozenset(mate_targets)),
+            "quality_flags": list(_representative_quality_flags(self)),
+        }
+
     def representative_metadata(self) -> Mapping[str, object]:
         return {
-            "kind": "chess-mate-in-one-cardinality-representative",
+            "kind": "chess-mate-in-one-sample-representative",
             "fen": self.fen,
             "target_policy": "mate-in-one",
             "legal_move_count": self.legal_move_count,
             "legal_move_piece_symbols": list(self.legal_move_piece_symbols),
             "mate_move_piece_symbols": list(self.mate_move_piece_symbols),
             "mate_move_count": len(self.mate_moves),
+            "analysis": dict(self.representative_analysis()),
         }
 
 
 @dataclass(frozen=True, slots=True)
 class Generator:
-    """Generate Chess mate-in-one positions by legal-move-count complexity."""
+    """Generate Chess mate-in-one positions by sample-space complexity."""
 
     manifest: BenchmarkManifest
     positions: tuple[_MateInOnePosition, ...]
@@ -212,12 +236,16 @@ class Generator:
 
         rng = random.Random(seed)
         sample_count = _sample_count(sample_shape)
+        sample_space_cardinality = len(positions)
+        complexity = math.log2(sample_space_cardinality)
         selected_positions = tuple(rng.choice(positions) for _index in range(sample_count))
         samples = (
             tuple(
                 self._sample(
                     index=index,
                     position=position,
+                    sample_space_cardinality=sample_space_cardinality,
+                    complexity=complexity,
                 )
                 for index, position in enumerate(selected_positions)
             )
@@ -243,16 +271,16 @@ class Generator:
         )
 
     def minimum_complexity(self) -> ComplexityValue:
-        """Return the smallest known legal-move-count complexity."""
+        """Return the smallest supported Chess sample-space complexity."""
 
-        return min(self.positions, key=lambda position: position.complexity).complexity_value
+        return ComplexityValue(value=0.0)
 
     def complexity_candidate_for_request(
         self,
         *,
         request: ComplexityRequest,
     ) -> ComplexityCandidate | None:
-        """Return the first legal-move-count class inside a complexity band."""
+        """Return the first sample-space-cardinality class inside a complexity band."""
 
         candidates = self.complexity_candidates_for_request(request=request)
         if not candidates:
@@ -264,11 +292,11 @@ class Generator:
         *,
         request: ComplexityRequest,
     ) -> tuple[ComplexityCandidate, ...]:
-        """Return exact legal-move-count candidates inside a complexity band."""
+        """Return exact sample-space-cardinality candidates inside a complexity band."""
 
         return tuple(
             candidate
-            for candidate in self._legal_move_count_candidates()
+            for candidate in self._sample_space_cardinality_candidates()
             if request.contains(
                 ComplexityValue(
                     measure_id=candidate.request.measure_id,
@@ -283,7 +311,7 @@ class Generator:
         start_index: int,
         count: int,
     ) -> tuple[ComplexityCandidate, ...]:
-        """Return Chess' ordered exact legal-move-cardinality schedule."""
+        """Return Chess' ordered exact sample-space-cardinality schedule."""
 
         if start_index < 0:
             raise ObservationGenerationError("start_index must be non-negative")
@@ -292,30 +320,34 @@ class Generator:
         if count == 0:
             return ()
 
-        candidates = self._legal_move_count_candidates()
+        candidates = self._sample_space_cardinality_candidates()
         return candidates[start_index : start_index + count]
 
-    def _legal_move_count_candidates(self) -> tuple[ComplexityCandidate, ...]:
+    def _sample_space_cardinality_candidates(self) -> tuple[ComplexityCandidate, ...]:
         candidates: list[ComplexityCandidate] = []
-        seen_counts: set[int] = set()
-        for position in sorted(
-            self.positions,
-            key=lambda item: (item.legal_move_count, item.fen),
-        ):
-            if position.legal_move_count in seen_counts:
-                continue
-            seen_counts.add(position.legal_move_count)
+        sorted_positions = _sorted_positions(self.positions)
+        for cardinality in range(1, len(sorted_positions) + 1):
+            positions = sorted_positions[:cardinality]
+            complexity = math.log2(cardinality)
             candidates.append(
                 ComplexityCandidate(
                     request=ComplexityRequest(
-                        minimum=position.complexity,
-                        maximum=position.complexity,
+                        minimum=complexity,
+                        maximum=complexity,
                     ),
-                    cardinality=position.legal_move_count,
+                    cardinality=cardinality,
                     metadata={
-                        "kind": "chess-legal-move-cardinality",
-                        "legal_move_count": position.legal_move_count,
-                        "representative": dict(position.representative_metadata()),
+                        "kind": "chess-sample-space-cardinality",
+                        "sample_cardinality": cardinality,
+                        "target_policy": "mate-in-one",
+                        "output_move_count": len(all_meaningful_uci_moves),
+                        "legal_move_counts": [
+                            position.legal_move_count for position in positions
+                        ],
+                        "representatives": [
+                            dict(position.representative_metadata())
+                            for position in positions
+                        ],
                     },
                 )
             )
@@ -331,17 +363,20 @@ class Generator:
         if atom_count != len(self.manifest.outcome_space.outcomes):
             raise ObservationGenerationError("atom_count does not match outcome space")
         batches: list[Mapping[str, object]] = []
-        for position in sorted(
-            self.positions,
-            key=lambda item: (item.legal_move_count, item.fen),
-        ):
+        for candidate in self._sample_space_cardinality_candidates():
+            if candidate.cardinality is None:
+                continue
+            positions = _positions_for_sample_cardinality(
+                self.positions,
+                cardinality=candidate.cardinality,
+            )
             request = ComplexityRequest(
-                minimum=position.complexity,
-                maximum=position.complexity,
+                minimum=candidate.complexity,
+                maximum=candidate.complexity,
             )
             sample_set = self(
                 seed=401 + len(batches),
-                shape=1,
+                shape=min(candidate.cardinality, _console_preview_limit),
                 complexity_request=request,
             )
             samples = [
@@ -351,11 +386,14 @@ class Generator:
             batches.append(
                 {
                     "mode": "complexity-window",
-                    "label": f"{position.legal_move_count} legal moves",
+                    "label": f"{candidate.cardinality} puzzle states",
                     "seed": sample_set.seed,
                     "sample_count": len(samples),
                     "complexity_window": request.to_record(),
-                    "complexity_cardinalities": [position.legal_move_count],
+                    "complexity_cardinalities": [candidate.cardinality],
+                    "legal_move_counts": [
+                        position.legal_move_count for position in positions
+                    ],
                     "presentation": {
                         "sample_card_density": "standard",
                         "aggregate_mode": False,
@@ -370,23 +408,38 @@ class Generator:
         request: ComplexityRequest | None,
     ) -> tuple[_MateInOnePosition, ...]:
         if request is None:
-            return self.positions
-        return tuple(
-            position
-            for position in self.positions
-            if request.contains(position.complexity_value)
+            return _sorted_positions(self.positions)
+        candidates = self.complexity_candidates_for_request(request=request)
+        if not candidates:
+            return ()
+        cardinality = candidates[0].cardinality
+        if cardinality is None:
+            return ()
+        return _positions_for_sample_cardinality(
+            self.positions,
+            cardinality=cardinality,
         )
 
-    def _sample(self, *, index: int, position: _MateInOnePosition) -> GeneratedSample:
+    def _sample(
+        self,
+        *,
+        index: int,
+        position: _MateInOnePosition,
+        sample_space_cardinality: int,
+        complexity: float,
+    ) -> GeneratedSample:
         return GeneratedSample(
             index=index,
             outcome_id=position.mate_moves[0],
-            complexity=position.complexity,
-            complexity_value=position.complexity_value,
+            complexity=complexity,
+            complexity_value=ComplexityValue(value=complexity),
             available_outcome_ids=position.legal_moves,
             observable_state_id=position.observation_id,
             target_distribution=position.target_distribution,
-            latent_coordinates=_latent_coordinates(position),
+            latent_coordinates=_latent_coordinates(
+                position,
+                sample_space_cardinality=sample_space_cardinality,
+            ),
         )
 
 
@@ -408,6 +461,27 @@ def _mate_in_one_positions() -> tuple[_MateInOnePosition, ...]:
         raise ObservationGenerationError("Chess benchmark must declare at least one position")
     _validate_representative_ladder(positions)
     return positions
+
+
+def _sorted_positions(
+    positions: Sequence[_MateInOnePosition],
+) -> tuple[_MateInOnePosition, ...]:
+    return tuple(sorted(positions, key=lambda item: (item.legal_move_count, item.fen)))
+
+
+def _positions_for_sample_cardinality(
+    positions: Sequence[_MateInOnePosition],
+    *,
+    cardinality: int,
+) -> tuple[_MateInOnePosition, ...]:
+    if type(cardinality) is not int or cardinality < 1:
+        raise ObservationGenerationError("Chess sample cardinality must be positive")
+    sorted_positions = _sorted_positions(positions)
+    if cardinality > len(sorted_positions):
+        raise ObservationGenerationError(
+            "Chess sample cardinality exceeds representative corpus size"
+        )
+    return sorted_positions[:cardinality]
 
 
 def _validate_representative_ladder(positions: Sequence[_MateInOnePosition]) -> None:
@@ -489,6 +563,23 @@ def _move_piece_symbols(*, fen: str, moves: Sequence[str]) -> tuple[str, ...]:
     return tuple(sorted(symbols))
 
 
+def _board_piece_symbols(board: chess.Board) -> tuple[str, ...]:
+    return tuple(sorted({piece.symbol().upper() for piece in board.piece_map().values()}))
+
+
+def _representative_quality_flags(position: _MateInOnePosition) -> tuple[str, ...]:
+    flags: list[str] = []
+    if len(chess.Board(position.fen).piece_map()) <= 4:
+        flags.append("minimal-material")
+    if len(position.mate_moves) == 1:
+        flags.append("single-mate-move")
+    if position.mate_move_piece_symbols == ("Q",):
+        flags.append("queen-only-mate")
+    if len(position.legal_move_piece_symbols) == 1:
+        flags.append("single-legal-piece-type")
+    return tuple(flags)
+
+
 def _is_checkmate_after_move(board: chess.Board, move: chess.Move) -> bool:
     board.push(move)
     try:
@@ -497,8 +588,22 @@ def _is_checkmate_after_move(board: chess.Board, move: chess.Move) -> bool:
         board.pop()
 
 
-def _latent_coordinates(position: _MateInOnePosition) -> tuple[Mapping[str, object], ...]:
+def _latent_coordinates(
+    position: _MateInOnePosition,
+    *,
+    sample_space_cardinality: int,
+) -> tuple[Mapping[str, object], ...]:
     return (
+        {
+            "name": "benchmarks.chess.sample-space.cardinality",
+            "role": "complexity",
+            "degree_measure": {
+                "kind": "discrete-log2-count",
+                "count": sample_space_cardinality,
+            },
+            "multiplicity": 1,
+            "values": sample_space_cardinality,
+        },
         {
             "name": "benchmarks.chess.position.fen",
             "role": "content",
@@ -508,9 +613,9 @@ def _latent_coordinates(position: _MateInOnePosition) -> tuple[Mapping[str, obje
         },
         {
             "name": "benchmarks.chess.position.legal-move-count",
-            "role": "complexity",
+            "role": "content",
             "degree_measure": {
-                "kind": "discrete-log2-count",
+                "kind": "finite-set",
                 "count": position.legal_move_count,
             },
             "multiplicity": 1,
@@ -547,6 +652,7 @@ def _latent_coordinates(position: _MateInOnePosition) -> tuple[Mapping[str, obje
             "values": {
                 "legal_move_piece_symbols": list(position.legal_move_piece_symbols),
                 "mate_move_piece_symbols": list(position.mate_move_piece_symbols),
+                "analysis": dict(position.representative_analysis()),
             },
         },
     )

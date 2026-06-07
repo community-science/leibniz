@@ -720,7 +720,7 @@ def test_training_estimate_comparison_uses_selected_checkpoint_estimate(
     )
     selected_estimate = cast(dict[str, object], selected_checkpoint["score_estimate"])
     terminal_estimate = dict(selected_estimate)
-    terminal_estimate["score"] = 0.0
+    terminal_estimate["score"] = cast(float, selected_estimate["score"]) + 1.0
     training_summary["training_estimate"] = terminal_estimate
     training_summary_path.write_bytes(canonical_document_bytes(training_summary))
 
