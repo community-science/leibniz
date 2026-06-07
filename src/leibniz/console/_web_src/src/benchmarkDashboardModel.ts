@@ -60,7 +60,7 @@ const fallbackLogCostDomain: [number, number] = [0, 10];
 const defaultScoreMaximum = 1;
 const denseLogTickThreshold = 14;
 const targetScoreTickCount = 8;
-export const benchmarkCostAxisKey = 'inference_compute';
+export const benchmarkCostAxisKey = 'cost';
 export const benchmarkCostAxisLabel = 'Cost';
 
 export type ModelResultSortKey = 'score' | 'cost' | 'model' | 'runs' | 'measurements';

@@ -754,6 +754,10 @@ function ModelCostDetail({
           <dd>{optionalNumberLabel(summary.storage_bytes)}</dd>
         </div>
         <div>
+          <dt>Cost</dt>
+          <dd>{optionalNumberLabel(summary.cost)}</dd>
+        </div>
+        <div>
           <dt>Inference Compute</dt>
           <dd>{optionalNumberLabel(summary.inference_compute)}</dd>
         </div>

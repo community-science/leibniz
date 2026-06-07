@@ -196,6 +196,7 @@ export type TrainingEstimateComparisonRecord = {
 export type CostSummaryRecord = {
   component_count: number;
   parameter_count?: number;
+  cost?: number;
   storage_bytes?: number;
   inference_compute?: number;
   training_compute_per_sample?: number;
@@ -210,6 +211,7 @@ export type ModelResultRecord = {
   benchmark_id: string;
   score: number;
   score_basis?: Record<string, unknown>;
+  cost_basis?: Record<string, unknown>;
   observed_complexities: number[];
   points: CompetencePointRecord[];
   cost_summary: CostSummaryRecord;
@@ -397,6 +399,7 @@ function parseModelResult(value: unknown, path: string): ModelResultRecord {
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
     score_basis: optional(record.score_basis, `${path}.score_basis`, parseScoreBasis),
+    cost_basis: optional(record.cost_basis, `${path}.cost_basis`, parseScoreBasis),
     observed_complexities: numberArray(record.observed_complexities, `${path}.observed_complexities`),
     points: arrayOf(record.points, `${path}.points`, parseCompetencePoint),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
@@ -552,6 +555,7 @@ function parseCostSummary(value: unknown, path: string): CostSummaryRecord {
     ...record,
     component_count: requireNumber(record.component_count, `${path}.component_count`, transportError),
     parameter_count: optionalNumber(record.parameter_count, `${path}.parameter_count`, transportError),
+    cost: optionalNumber(record.cost, `${path}.cost`, transportError),
     storage_bytes: optionalNumber(record.storage_bytes, `${path}.storage_bytes`, transportError),
     inference_compute: optionalNumber(record.inference_compute, `${path}.inference_compute`, transportError),
     training_compute_per_sample: optionalNumber(record.training_compute_per_sample, `${path}.training_compute_per_sample`, transportError),

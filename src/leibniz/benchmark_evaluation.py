@@ -15,7 +15,9 @@ from leibniz.prediction_spaces import FiniteOutcomeSpace
 
 __all__ = [
     "CompetencePoint",
+    "ComputeCostPoint",
     "finite_measurements_for_predictions",
+    "integrated_compute_cost",
     "sampled_competence_curriculum_record",
     "sampled_competence_record",
     "sampled_competence_frontier_score",
@@ -34,6 +36,17 @@ class CompetencePoint:
     accepted_mass: float
     sample_count: int = 1
     seed: int = 0
+    complexity_minimum: float | None = None
+    complexity_maximum: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ComputeCostPoint:
+    """A measured per-sample compute density over a complexity interval."""
+
+    complexity: float
+    compute_per_sample: float
+    bit_length_per_op: float
     complexity_minimum: float | None = None
     complexity_maximum: float | None = None
 
@@ -242,22 +255,48 @@ def sampled_competence_frontier_score(
     return area
 
 
+def integrated_compute_cost(points: Sequence[ComputeCostPoint]) -> float:
+    """Return bit-op cost integrated over observed complexity intervals."""
+
+    total = 0.0
+    for point in points:
+        lower, upper = _complexity_point_interval(point)
+        if upper <= lower:
+            continue
+        compute_per_sample = _finite_nonnegative_number(
+            point.compute_per_sample,
+            field="compute_cost.compute_per_sample",
+        )
+        bit_length_per_op = _finite_nonnegative_number(
+            point.bit_length_per_op,
+            field="compute_cost.bit_length_per_op",
+        )
+        total += (upper - lower) * compute_per_sample * bit_length_per_op
+    return total
+
+
 def _competence_point_interval_sort_key(point: CompetencePoint) -> tuple[float, float]:
-    lower, upper = _competence_point_interval(point)
+    lower, upper = _complexity_point_interval(point)
     return (lower, upper)
 
 
 def _competence_point_interval(point: CompetencePoint) -> tuple[float, float]:
+    return _complexity_point_interval(point)
+
+
+def _complexity_point_interval(
+    point: CompetencePoint | ComputeCostPoint,
+) -> tuple[float, float]:
     complexity = _finite_nonnegative_number(
         point.complexity,
-        field="competence_frontier.complexity",
+        field="complexity_interval.complexity",
     )
     lower = (
         max(0.0, complexity - 1.0)
         if point.complexity_minimum is None
         else _finite_nonnegative_number(
             point.complexity_minimum,
-            field="competence_frontier.complexity_minimum",
+            field="complexity_interval.complexity_minimum",
         )
     )
     upper = (
@@ -265,11 +304,11 @@ def _competence_point_interval(point: CompetencePoint) -> tuple[float, float]:
         if point.complexity_maximum is None
         else _finite_nonnegative_number(
             point.complexity_maximum,
-            field="competence_frontier.complexity_maximum",
+            field="complexity_interval.complexity_maximum",
         )
     )
     if upper < lower:
-        raise ValueError("competence frontier interval maximum is below minimum")
+        raise ValueError("complexity interval maximum is below minimum")
     return (lower, upper)
 
 
