@@ -24,24 +24,25 @@ const architectureDigest = 'sha256:abcdef1234567890';
 
 assertEqual(
   benchmarkCostAxisKey,
-  'inference_compute',
+  'cost',
   'cost axis key',
 );
 assertEqual(benchmarkCostAxisLabel, 'Cost', 'cost axis label');
 assertEqual(
   Object.keys(emptyFrontiersForCostAxis()).join(','),
-  'inference_compute',
+  'cost',
   'empty frontier axis',
 );
 const result: BenchmarkResultRecord = {
   benchmark_id: targetBenchmark,
   frontiers: {
-    inference_compute: [
+    cost: [
       {
         architecture_digest: architectureDigest,
         benchmark_id: targetBenchmark,
         cost_summary: {
           component_count: 1,
+          cost: 640,
           inference_compute: 20,
           storage_bytes: 40,
           training_compute: 360,
@@ -63,6 +64,7 @@ const result: BenchmarkResultRecord = {
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 1,
+        cost: 640,
         inference_compute: 20,
         storage_bytes: 40,
         training_compute: 360,
@@ -81,6 +83,7 @@ const result: BenchmarkResultRecord = {
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 2,
+        cost: 2560,
         inference_compute: 80,
         storage_bytes: 160,
         training_compute: 1440,
@@ -101,6 +104,7 @@ const result: BenchmarkResultRecord = {
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 1,
+        cost: 640,
         inference_compute: 20,
         storage_bytes: 40,
         training_compute: 360,
@@ -119,6 +123,7 @@ const result: BenchmarkResultRecord = {
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 2,
+        cost: 2560,
         inference_compute: 80,
         storage_bytes: 160,
         training_compute: 1440,
@@ -138,7 +143,7 @@ const result: BenchmarkResultRecord = {
       kind: 'oracle-inference-compute-reference-v1',
       key: 'oracle_inference_compute',
       label: 'Oracle Reference',
-      x_axis: 'inference_compute',
+      x_axis: 'cost',
       y_axis: 'score',
       points: [
         { complexity: 1, score: 1, cost: 16 },
@@ -154,6 +159,7 @@ const result: BenchmarkResultRecord = {
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 1,
+        cost: 640,
         inference_compute: 20,
         storage_bytes: 40,
         training_compute: 360,
@@ -221,6 +227,7 @@ const result: BenchmarkResultRecord = {
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 1,
+        cost: 640,
         inference_compute: 20,
         storage_bytes: 40,
         training_compute: 360,
@@ -242,6 +249,7 @@ const result: BenchmarkResultRecord = {
       benchmark_id: targetBenchmark,
       cost_summary: {
         component_count: 2,
+        cost: 2560,
         inference_compute: 80,
         storage_bytes: 160,
         training_compute: 1440,
@@ -498,9 +506,9 @@ const expandedScoreScaleResult: BenchmarkResultRecord = {
   ...result,
   frontiers: {
     ...result.frontiers,
-    inference_compute: [
+    cost: [
       {
-        ...result.frontiers.inference_compute[0]!,
+        ...result.frontiers.cost[0]!,
         score: 2.6,
       },
     ],
@@ -583,7 +591,7 @@ const expandedPlotModel = benchmarkPlotModel(
         ...result.leaderboard[1]!,
         cost_summary: {
           ...result.leaderboard[1]!.cost_summary,
-          inference_compute: 10 ** 22,
+          cost: 10 ** 22,
         },
         model_key: 'model-c',
       },
@@ -594,7 +602,7 @@ const expandedPlotModel = benchmarkPlotModel(
         ...result.plot_runs[1]!,
         cost_summary: {
           ...result.plot_runs[1]!.cost_summary,
-          inference_compute: 10 ** 22,
+          cost: 10 ** 22,
         },
         model_key: 'model-c',
         run_id: 'run-c',

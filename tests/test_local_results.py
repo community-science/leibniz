@@ -344,18 +344,31 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert measurement_count % 64 == 0
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     assert isinstance(cost_summary["inference_compute"], int | float)
+    assert isinstance(cost_summary["cost"], int | float)
+    assert cost_summary["cost"] >= 0
+    assert cast(dict[str, object], leaderboard[0]["cost_basis"]) == {
+        "kind": "compute-integral-over-observed-complexity-v1",
+        "cost_unit": "bit-ops-per-sample complexity-bits",
+        "complexity_axis": "log2-distinguishable-states",
+        "density_source": "inference_compute",
+        "density_unit": "ops-per-sample",
+        "bit_length_per_op": 32.0,
+        "integration": "observed-complexity-intervals",
+        "competence_weighted": False,
+    }
     frontiers = cast(dict[str, object], result["frontiers"])
-    assert len(cast(list[object], frontiers["inference_compute"])) == 1
+    assert len(cast(list[object], frontiers["cost"])) == 1
     reference_curves = cast(list[dict[str, object]], result["reference_curves"])
     assert len(reference_curves) == 1
     oracle_curve = reference_curves[0]
     assert oracle_curve["kind"] == "oracle-inference-compute-reference-v1"
     assert oracle_curve["key"] == "oracle_inference_compute"
-    assert oracle_curve["x_axis"] == "inference_compute"
+    assert oracle_curve["x_axis"] == "cost"
     assert oracle_curve["y_axis"] == "score"
     oracle_points = cast(list[dict[str, object]], oracle_curve["points"])
     assert len(oracle_points) >= 2
-    assert all(cast(int | float, point["cost"]) > 0 for point in oracle_points)
+    assert all(cast(int | float, point["cost"]) >= 0 for point in oracle_points)
+    assert any(cast(int | float, point["cost"]) > 0 for point in oracle_points)
     assert max(cast(int | float, point["cost"]) for point in oracle_points) >= 10_000_000_000
     model_view = cast(dict[str, object], leaderboard[0]["console_view_model"])
     model_sections = cast(list[dict[str, object]], model_view["detail_sections"])
@@ -389,7 +402,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert "parameter_count" not in cost_summary
     assert cost_summary["storage_bytes"] == 200
     frontiers = cast(dict[str, object], result["frontiers"])
-    assert len(cast(list[dict[str, object]], frontiers["inference_compute"])) == 1
+    assert len(cast(list[dict[str, object]], frontiers["cost"])) == 1
     history = cast(list[dict[str, object]], result["training_history"])
     assert history[0]["source_kind"] == "local-run"
     diagnostics = cast(dict[str, object], history[0]["training_diagnostics"])
@@ -689,7 +702,7 @@ def test_materialize_benchmark_result_views_projects_reference_curves_without_ru
         assert result["plot_runs"] == []
         reference_curves = cast(list[dict[str, object]], result["reference_curves"])
         assert reference_curves
-        assert reference_curves[0]["x_axis"] == "inference_compute"
+        assert reference_curves[0]["x_axis"] == "cost"
 
 
 def test_cli_publishes_local_benchmark_results(

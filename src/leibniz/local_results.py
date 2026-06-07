@@ -14,6 +14,8 @@ from typing import Any, cast
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
+    ComputeCostPoint,
+    integrated_compute_cost,
     sampled_competence_frontier_score,
 )
 from leibniz.benchmark_implementations import (
@@ -69,8 +71,10 @@ _result_directories = (
     "training",
     "views",
 )
-_benchmark_cost_axis_key = "inference_compute"
+_benchmark_cost_axis_key = "cost"
 _benchmark_cost_axis_keys = (_benchmark_cost_axis_key,)
+_cost_density_source_key = "inference_compute"
+_default_bit_length_per_op = 32.0
 _reference_curve_default_maximum_cost = 10_000_000_000
 _reference_curve_initial_curriculum_count = 16
 _component_count = 1
@@ -1269,7 +1273,7 @@ def _benchmark_reference_curve_records(
             "kind": "oracle-inference-compute-reference-v1",
             "key": "oracle_inference_compute",
             "label": "Oracle Reference",
-            "x_axis": "inference_compute",
+            "x_axis": _benchmark_cost_axis_key,
             "y_axis": "score",
             "points": points,
         }
@@ -1284,7 +1288,7 @@ def _generator_oracle_inference_reference_points(
     raw_points = generator.oracle_inference_reference_points(
         maximum_cost=_reference_curve_default_maximum_cost
     )
-    points: list[tuple[float, float, dict[str, object]]] = []
+    reference_points: list[dict[str, object]] = []
     for index, raw_point in enumerate(
         _as_sequence(raw_points, "oracle_inference_reference_points")
     ):
@@ -1309,19 +1313,15 @@ def _generator_oracle_inference_reference_points(
             point.get("metadata"),
             f"oracle_inference_reference_points.{index}.metadata",
         )
-        points.append(
-            (
-                score,
-                cost,
-                {
-                    "complexity": complexity,
-                    "score": score,
-                    "cost": cost,
-                    "metadata": dict(metadata),
-                },
-            )
+        reference_points.append(
+            {
+                "complexity": complexity,
+                "score": score,
+                "cost_density": cost,
+                "metadata": dict(metadata),
+            }
         )
-    return [point for _score, _cost, point in sorted(points, key=lambda item: item[:2])]
+    return _integrated_reference_curve_points(reference_points)
 
 
 def _reference_curve_candidates(
@@ -1385,21 +1385,67 @@ def _oracle_inference_reference_points(
     generator: Any,
     runs: tuple[_BenchmarkRunRecord, ...],
 ) -> list[dict[str, object]]:
-    points: list[tuple[float, float, dict[str, object]]] = []
+    reference_points: list[dict[str, object]] = []
     for candidate in _reference_curve_candidates(generator=generator, runs=runs):
         reference = _candidate_oracle_inference_compute(candidate)
         if reference is None:
             continue
         score = candidate.complexity
-        cost = cast(float, reference["value"])
-        point: dict[str, object] = {
-            "complexity": score,
-            "score": score,
-            "cost": cost,
-            "metadata": reference,
-        }
-        points.append((score, cost, point))
-    return [point for _score, _cost, point in sorted(points, key=lambda item: item[:2])]
+        reference_points.append(
+            {
+                "complexity": score,
+                "score": score,
+                "cost_density": cast(float, reference["value"]),
+                "metadata": reference,
+            }
+        )
+    return _integrated_reference_curve_points(reference_points)
+
+
+def _integrated_reference_curve_points(
+    points: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    ordered = sorted(
+        points,
+        key=lambda point: (
+            _as_nonnegative_number(point.get("complexity"), "reference_curve.complexity"),
+            _as_nonnegative_number(point.get("cost_density"), "reference_curve.cost_density"),
+        ),
+    )
+    integrated_points: list[dict[str, object]] = []
+    previous_complexity = 0.0
+    cumulative_cost = 0.0
+    for point in ordered:
+        complexity = _as_nonnegative_number(
+            point.get("complexity"),
+            "reference_curve.complexity",
+        )
+        if complexity < previous_complexity:
+            raise LocalResultImportError("reference curve complexities must be ordered")
+        cost_density = _as_nonnegative_number(
+            point.get("cost_density"),
+            "reference_curve.cost_density",
+        )
+        cumulative_cost += _integrated_compute_cost_from_points(
+            points=(
+                {
+                    "complexity": complexity,
+                    "complexity_minimum": previous_complexity,
+                    "complexity_maximum": complexity,
+                },
+            ),
+            compute_per_sample=cost_density,
+        )
+        integrated_points.append(
+            {
+                "complexity": complexity,
+                "score": _as_nonnegative_number(point.get("score"), "reference_curve.score"),
+                "cost": cumulative_cost,
+                "metadata": _extract.mapping(point.get("metadata"), "reference_curve.metadata"),
+            }
+        )
+        previous_complexity = complexity
+    return integrated_points
 
 
 def _candidate_for_complexity(
@@ -1495,7 +1541,9 @@ def _model_result_records(
             "cost_summary": _model_cost_summary(
                 ordered_runs,
                 best_run=best_run,
+                points=points,
             ),
+            "cost_basis": _integrated_compute_cost_basis(),
             "run_ids": [run.run_id for run in ordered_runs],
             "measurement_count": sum(run.measurement_count for run in ordered_runs),
             "source_kinds": sorted({run.source_kind for run in ordered_runs}),
@@ -1521,15 +1569,21 @@ def _model_cost_summary(
     runs: tuple[_BenchmarkRunRecord, ...],
     *,
     best_run: _BenchmarkRunRecord,
+    points: tuple[dict[str, object], ...],
 ) -> dict[str, object]:
     cost_summary = _run_cost_summary(best_run)
     cost_summary.pop("parameter_count", None)
+    cost_summary.pop("cost", None)
     cost_summary.pop("inference_compute", None)
     inference_compute = _model_measured_inference_compute(
         runs,
     )
     if inference_compute is not None:
         cost_summary["inference_compute"] = inference_compute
+        cost_summary["cost"] = _integrated_compute_cost_from_points(
+            points=points,
+            compute_per_sample=inference_compute,
+        )
     training_values = tuple(_run_training_compute_value(run) for run in runs)
     if any(value is None for value in training_values):
         raise LocalResultImportError(
@@ -1577,16 +1631,59 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
     cost_summary = dict(run.cost_summary)
     cost_summary.pop("parameter_count", None)
     cost_summary.pop("training_compute_per_sample", None)
+    cost_summary.pop("cost", None)
     if run.source_kind in {"local-run", "local-training-estimate"}:
         inference_compute = _optional_cost_value(cost_summary, "inference_compute")
         if inference_compute is not None:
             cost_summary["inference_compute"] = inference_compute
+            cost_summary["cost"] = _integrated_compute_cost_from_points(
+                points=_run_competence_points(run),
+                compute_per_sample=inference_compute,
+            )
     else:
         cost_summary.pop("inference_compute", None)
     training_compute = _run_training_compute(run)
     if training_compute is not None:
         cost_summary["training_compute"] = training_compute
     return cost_summary
+
+
+def _integrated_compute_cost_from_points(
+    *,
+    points: tuple[dict[str, object], ...],
+    compute_per_sample: float,
+) -> float:
+    return integrated_compute_cost(
+        tuple(
+            ComputeCostPoint(
+                complexity=_point_complexity(point),
+                compute_per_sample=compute_per_sample,
+                bit_length_per_op=_default_bit_length_per_op,
+                complexity_minimum=_optional_nonnegative_number(
+                    point.get("complexity_minimum"),
+                    "compute_cost_point.complexity_minimum",
+                ),
+                complexity_maximum=_optional_nonnegative_number(
+                    point.get("complexity_maximum"),
+                    "compute_cost_point.complexity_maximum",
+                ),
+            )
+            for point in points
+        )
+    )
+
+
+def _integrated_compute_cost_basis() -> dict[str, object]:
+    return {
+        "kind": "compute-integral-over-observed-complexity-v1",
+        "cost_unit": "bit-ops-per-sample complexity-bits",
+        "complexity_axis": "log2-distinguishable-states",
+        "density_source": _cost_density_source_key,
+        "density_unit": "ops-per-sample",
+        "bit_length_per_op": _default_bit_length_per_op,
+        "integration": "observed-complexity-intervals",
+        "competence_weighted": False,
+    }
 
 
 def _run_training_compute(run: _BenchmarkRunRecord) -> float | None:
@@ -1687,6 +1784,7 @@ def _model_console_view_model(
         _console_detail_entries_section(
             title="Resources",
             entries=(
+                ("Cost", _console_number_value(cost_summary.get("cost"))),
                 ("Model Size", _console_number_value(cost_summary.get("storage_bytes"))),
                 (
                     "Inference Compute",
@@ -2597,9 +2695,7 @@ def _validate_reference_curve(record: Mapping[str, object], field: str) -> None:
         point_record = _extract.mapping(point, point_field)
         _as_nonnegative_number(point_record.get("complexity"), f"{point_field}.complexity")
         _as_nonnegative_number(point_record.get("score"), f"{point_field}.score")
-        cost = _as_nonnegative_number(point_record.get("cost"), f"{point_field}.cost")
-        if cost <= 0:
-            raise LocalResultImportError(f"{point_field}.cost must be positive")
+        _as_nonnegative_number(point_record.get("cost"), f"{point_field}.cost")
         if "metadata" in point_record:
             _extract.mapping(point_record["metadata"], f"{point_field}.metadata")
 
@@ -2619,6 +2715,8 @@ def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
         ("observed_complexities", "points", "run_ids", "source_kinds"),
     )
     _require_mapping_fields(record, prefix, ("cost_summary",))
+    if "cost_basis" in record:
+        _extract.mapping(record["cost_basis"], _field_path(prefix, "cost_basis"))
     _as_nonnegative_number(
         record.get("measurement_count"),
         _field_path(prefix, "measurement_count"),

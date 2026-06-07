@@ -487,6 +487,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
           "points": [{"complexity": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
           "cost_summary": {
             "component_count": 1,
+            "cost": 640,
             "storage_bytes": 40,
             "inference_compute": 20,
             "training_compute": 60,
@@ -498,7 +499,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
         }
       ],
       "frontiers": {
-        "inference_compute": []
+        "cost": []
       },
           "training_history": [
             {
@@ -515,6 +516,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
           "score": 1.0,
           "cost_summary": {
             "component_count": 1,
+            "cost": 640,
             "storage_bytes": 40,
             "inference_compute": 20,
             "training_compute": 60,
@@ -535,6 +537,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
               "points": [{"complexity": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
               "cost_summary": {
                 "component_count": 1,
+                "cost": 640,
                 "storage_bytes": 40,
                 "inference_compute": 20,
                 "training_compute": 60,
@@ -560,6 +563,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
               "score": 1.0,
               "cost_summary": {
                 "component_count": 1,
+                "cost": 640,
                 "storage_bytes": 40,
                 "inference_compute": 20,
                 "training_compute": 60,
@@ -606,7 +610,7 @@ def test_console_data_discovers_materialized_result_root_views(tmp_path: Path) -
       "leaderboard": [],
       "model_candidates": [],
       "frontiers": {
-        "inference_compute": []
+        "cost": []
       },
       "training_history": [],
       "plot_runs": []
