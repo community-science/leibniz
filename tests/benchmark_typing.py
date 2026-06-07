@@ -71,6 +71,13 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         request: ComplexityRequest,
     ) -> Sequence[ComplexityCandidate]: ...
 
+    def complexity_curriculum_candidates(
+        self,
+        *,
+        start_index: int,
+        count: int,
+    ) -> Sequence[ComplexityCandidate]: ...
+
     def __call__(
         self,
         *,

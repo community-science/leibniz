@@ -66,10 +66,6 @@ class Generator(Protocol):
 
     def minimum_complexity(self) -> ComplexityValue: ...
 
-    def complexity_rung_size(self) -> float:
-        """Return the log2 complexity width for curriculum rungs."""
-        ...
-
     def complexity_candidate_for_request(
         self,
         *,
@@ -82,6 +78,15 @@ class Generator(Protocol):
         request: ComplexityRequest,
     ) -> Sequence[ComplexityCandidate]:
         """Return concrete benchmark candidates inside a complexity request band."""
+        ...
+
+    def complexity_curriculum_candidates(
+        self,
+        *,
+        start_index: int,
+        count: int,
+    ) -> Sequence[ComplexityCandidate]:
+        """Return the benchmark-owned ordered complexity schedule."""
         ...
 
 

@@ -106,8 +106,6 @@ _console_preview_complexity_windows = (
     (8.0, 9.0),
 )
 _console_preview_sample_limit = 50
-_complexity_rung_size = 0.1
-
 _CurvePoints: TypeAlias = tuple[tuple[float, float], ...]
 
 
@@ -1334,11 +1332,6 @@ class Generator:
 
         return _complexity_value(math.log2(_canonical_digits_cardinality))
 
-    def complexity_rung_size(self) -> float:
-        """Return the log2 complexity window size for curriculum rungs."""
-
-        return _complexity_rung_size
-
     def complexity_candidate_for_request(
         self,
         *,
@@ -1380,6 +1373,41 @@ class Generator:
             if request.contains(measure):
                 candidates.append(complexity_class.candidate())
         return tuple(candidates)
+
+    def complexity_curriculum_candidates(
+        self,
+        *,
+        start_index: int,
+        count: int,
+    ) -> tuple[ComplexityCandidate, ...]:
+        """Return Digits' dense benchmark-owned complexity schedule."""
+
+        if start_index < 0:
+            raise ObservationGenerationError("start_index must be non-negative")
+        if count < 0:
+            raise ObservationGenerationError("count must be non-negative")
+        if count == 0:
+            return ()
+
+        target_count = start_index + count
+        candidates: list[ComplexityCandidate] = []
+        affine_transform_count = 1
+        max_transform_count = max(1024, target_count * 128)
+        while (
+            len(candidates) < target_count
+            and affine_transform_count <= max_transform_count
+        ):
+            complexity = math.log2(
+                _complexity_class_digit_count * affine_transform_count
+            )
+            candidate = self.complexity_candidate_for_request(
+                request=ComplexityRequest(minimum=complexity, maximum=complexity),
+            )
+            affine_transform_count += 1
+            if candidate is None:
+                continue
+            candidates.append(candidate)
+        return tuple(candidates[start_index:target_count])
 
     def _default_complexity_class(
         self,

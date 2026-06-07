@@ -137,7 +137,6 @@ _legal_uncapped_training_stage_stop_reasons = frozenset(
 )
 _minimum_plateau_lr_reductions = 3
 _minimum_plateau_refinement_windows = 3
-_default_complexity_rung_size = 1.0
 _full_variation_extent = 1.0
 
 
@@ -145,10 +144,6 @@ class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
     """Internal contract for tensor-backed benchmark training."""
 
     def minimum_complexity(self) -> ComplexityValue: ...
-
-    def complexity_rung_size(self) -> float:
-        """Return the log2 complexity width for curriculum rungs."""
-        ...
 
     def complexity_candidate_for_request(
         self,
@@ -162,6 +157,15 @@ class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
         request: ComplexityRequest,
     ) -> Sequence[ComplexityCandidate]:
         """Return concrete benchmark candidates inside a complexity request band."""
+        ...
+
+    def complexity_curriculum_candidates(
+        self,
+        *,
+        start_index: int,
+        count: int,
+    ) -> Sequence[ComplexityCandidate]:
+        """Return the benchmark-owned ordered complexity schedule."""
         ...
 
     def __call__(
@@ -1438,9 +1442,7 @@ def _training_curriculum_rung(
             start_index=index,
             phase_timings=phase_timings,
         )
-    for candidate_index, candidate in enumerate(candidates):
-        if candidate_index < index:
-            continue
+    for candidate in candidates:
         resolution_assignment = candidate.complexity_class.resolution_assignment
         with _optional_timing_span(
             phase_timings,
@@ -1515,9 +1517,7 @@ def _curriculum_rung_from_candidates(
     outcome_ids: tuple[str, ...] | None = None,
     candidates: Sequence[_CurriculumCandidate],
 ) -> _CurriculumRung:
-    for candidate_index, candidate in enumerate(candidates):
-        if candidate_index < index:
-            continue
+    for candidate in candidates:
         rung_seed = seed if index == 0 else seed + 2_000_003 * index
         sample_set = generator(
             shape=sample_count,
@@ -1559,12 +1559,9 @@ def _curriculum_rung_from_candidates(
 @dataclass(frozen=True, slots=True)
 class _CurriculumCandidate:
     complexity_class: ComplexityCandidate
-    source_request: ComplexityRequest | None = None
 
     @property
     def complexity_request(self) -> ComplexityRequest:
-        if self.source_request is not None:
-            return self.source_request
         return self.complexity_class.request
 
     @property
@@ -1610,46 +1607,27 @@ def _benchmark_complexity_candidates(
     start_index: int,
     phase_timings: TimingCollector | None = None,
 ) -> Sequence[_CurriculumCandidate]:
-    target_candidate_count = start_index + 8
-    minimum = generator.minimum_complexity().value
-    complexity_rung_size = _benchmark_complexity_rung_size(generator)
-    candidates: list[_CurriculumCandidate] = []
+    candidate_count = 8
     seen_complexities: set[float] = set()
-    window_index = 0
-    max_window_count = max(1024, 128 * target_candidate_count)
-    while len(candidates) < target_candidate_count and window_index < max_window_count:
-        complexity_minimum = minimum + window_index * complexity_rung_size
-        complexity_request = ComplexityRequest(
-            minimum=complexity_minimum,
-            maximum=complexity_minimum + complexity_rung_size,
+    with _optional_timing_span(
+        phase_timings,
+        "training_frontier.complexity_schedule",
+    ):
+        complexity_classes = generator.complexity_curriculum_candidates(
+            start_index=start_index,
+            count=candidate_count,
         )
-        window_index += 1
-        with _optional_timing_span(
-            phase_timings,
-            "training_frontier.complexity_request",
-        ):
-            complexity_class = generator.complexity_candidate_for_request(
-                request=complexity_request,
-            )
-        if complexity_class is None or complexity_class.complexity in seen_complexities:
+    candidates: list[_CurriculumCandidate] = []
+    for complexity_class in complexity_classes:
+        if complexity_class.complexity in seen_complexities:
             continue
         seen_complexities.add(complexity_class.complexity)
         candidates.append(
             _CurriculumCandidate(
                 complexity_class=complexity_class,
-                source_request=complexity_request,
             )
         )
     return tuple(candidates)
-
-
-def _benchmark_complexity_rung_size(generator: _TensorBenchmarkGenerator) -> float:
-    """Return the benchmark-owned width of each complexity request window."""
-
-    value = float(generator.complexity_rung_size())
-    if not math.isfinite(value) or value <= 0.0:
-        raise BenchmarkRunnerError("benchmark complexity_rung_size must be positive")
-    return value
 
 
 def _curriculum_record(
@@ -1672,8 +1650,7 @@ def _curriculum_record(
             "scale": "log2",
         },
         "candidate_policy": {
-            "kind": "benchmark-owned-complexity-window",
-            "complexity_rung_size": _curriculum_complexity_rung_size(rungs),
+            "kind": "benchmark-owned-complexity-schedule",
         },
         "gating_metric": "monotone-frontier-validation-competence",
         "rung_policy": "unbounded-competence-frontier",
@@ -1701,15 +1678,6 @@ def _curriculum_record(
     if rung_competence_threshold is not None:
         record["rung_competence_threshold"] = rung_competence_threshold
     return record
-
-
-def _curriculum_complexity_rung_size(rungs: Sequence[_CurriculumRung]) -> float:
-    for rung in rungs:
-        request = rung.batch.complexity_request
-        if request is not None and request.maximum > request.minimum:
-            return request.maximum - request.minimum
-    return _default_complexity_rung_size
-
 
 def _validate_architecture_for_batch(
     *,
