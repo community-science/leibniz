@@ -356,6 +356,8 @@ def _sample_observation_id(
     batch: GeneratedSampleSet,
     sample: GeneratedSample,
 ) -> str:
+    if sample.observable_state_id is not None:
+        return sample.observable_state_id
     return f"{batch.generator_id}.seed-{batch.seed}.sample-{sample.index}"
 
 

@@ -2,8 +2,10 @@ import math
 from pathlib import Path
 from typing import Any, cast
 
+import chess
 import pytest
 
+from leibniz.benchmark_evaluation import finite_measurements_for_predictions
 from leibniz.benchmark_implementations import discover_benchmark_roots, load_benchmark
 from leibniz.observation_generation import (
     ComplexityRequest,
@@ -34,9 +36,10 @@ def test_chess_generator_exposes_python_manifest() -> None:
     generator = load_generator(_chess_benchmark_root)
 
     assert str(generator.manifest.id) == "benchmarks.chess@0.1.0"
-    assert generator.manifest.observation_ids == frozenset(
-        {"fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"}
-    )
+    observation_ids = generator.manifest.observation_ids
+    assert observation_ids is not None
+    assert len(observation_ids) >= 6
+    assert "fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1" in observation_ids
     outcome_ids = tuple(outcome.id for outcome in generator.manifest.outcome_space.outcomes)
     assert outcome_ids == tuple(sorted(outcome_ids))
     assert "e2e4" in outcome_ids
@@ -48,7 +51,14 @@ def test_chess_generator_exposes_python_manifest() -> None:
 
 def test_chess_generator_returns_complexity_valued_samples_without_fields() -> None:
     generator = load_generator(_chess_benchmark_root)
-    sample_set = generator(seed=47, shape=3, include_fields=True)
+    complexity = generator.minimum_complexity().value
+    request = ComplexityRequest(minimum=complexity, maximum=complexity)
+    sample_set = generator(
+        seed=47,
+        shape=3,
+        include_fields=True,
+        complexity_request=request,
+    )
 
     assert sample_set.shape == (3,)
     assert sample_set.sample_count == 3
@@ -68,9 +78,7 @@ def test_chess_generator_returns_complexity_valued_samples_without_fields() -> N
     assert sum(sample.target_distribution.values()) == 1.0
     assert len(sample.available_outcome_ids) == legal_move_count
     assert sample.outcome_id in sample.available_outcome_ids
-    assert sample.latent_coordinates[0]["values"] == (
-        "7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"
-    )
+    assert sample.latent_coordinates[0]["values"] == "8/8/8/8/8/8/k1K5/2Q5 w - - 0 1"
     assert sample.latent_coordinates[1]["values"] == legal_move_count
     assert len(cast(list[object], sample.latent_coordinates[2]["values"])) == legal_move_count
     with pytest.raises(ObservationGenerationError, match="does not include generated field"):
@@ -103,6 +111,29 @@ def test_chess_sample_record_does_not_invent_image_surface_fields() -> None:
     assert "field" not in record
 
 
+def test_chess_measurements_use_declared_fen_observation_ids() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    outcome_space = generator.manifest.resolve_outcome_space()
+    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    sample_set = generator(seed=47, shape=3)
+    probabilities = tuple(
+        tuple(1.0 if outcome_id == sample.outcome_id else 0.0 for outcome_id in outcome_ids)
+        for sample in sample_set.samples
+    )
+
+    measurements = finite_measurements_for_predictions(
+        batch=sample_set,
+        outcome_space=outcome_space,
+        probabilities=probabilities,
+        run_slug="chess-fen-observation-test",
+    )
+
+    assert [
+        measurement.raw_scoring_evidence.observation_id
+        for measurement in measurements
+    ] == [sample.observable_state_id for sample in sample_set.samples]
+
+
 def test_chess_complexity_request_returns_empty_set_for_unexpressible_interval() -> None:
     generator = load_generator(_chess_benchmark_root)
     request = ComplexityRequest(
@@ -133,17 +164,44 @@ def test_chess_complexity_request_accepts_matching_interval() -> None:
 
 def test_chess_complexity_candidates_are_legal_move_cardinalities() -> None:
     generator = load_generator(_chess_benchmark_root)
-    complexity = generator.minimum_complexity().value
-    request = ComplexityRequest(minimum=complexity, maximum=complexity)
+    request = ComplexityRequest(minimum=1.0, maximum=6.0)
 
     candidates = tuple(generator.complexity_candidates_for_request(request=request))
 
-    assert len(candidates) == 1
-    candidate = candidates[0]
-    assert candidate.cardinality is not None
-    assert candidate.complexity == math.log2(candidate.cardinality)
-    assert candidate.metadata["kind"] == "chess-legal-move-cardinality"
-    assert candidate.metadata["legal_move_count"] == candidate.cardinality
+    cardinalities = tuple(candidate.cardinality for candidate in candidates)
+    assert cardinalities == (18, 23, 24, 28, 32, 33)
+    for candidate in candidates:
+        assert candidate.cardinality is not None
+        assert candidate.complexity == math.log2(candidate.cardinality)
+        assert candidate.metadata["kind"] == "chess-legal-move-cardinality"
+        assert candidate.metadata["legal_move_count"] == candidate.cardinality
+
+
+def test_chess_corpus_targets_are_rules_validated_mate_in_one_moves() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    sample_set = generator(seed=47, shape=128)
+    seen_fens = {
+        cast(str, sample.latent_coordinates[0]["values"])
+        for sample in sample_set.samples
+    }
+    observation_ids = generator.manifest.observation_ids
+    assert observation_ids is not None
+
+    assert seen_fens == {
+        observation_id.removeprefix("fen:")
+        for observation_id in observation_ids
+    }
+    for sample in sample_set.samples:
+        fen = cast(str, sample.latent_coordinates[0]["values"])
+        board = chess.Board(fen)
+        legal_moves = {move.uci() for move in board.legal_moves}
+        mate_moves = {
+            move.uci()
+            for move in board.legal_moves
+            if _is_checkmate_after_move(board, move)
+        }
+        assert set(sample.available_outcome_ids) == legal_moves
+        assert set(sample.target_distribution_or_one_hot()) == mate_moves
 
 
 def test_chess_generator_returns_board_tensors_and_move_targets() -> None:
@@ -166,9 +224,9 @@ def test_chess_generator_returns_board_tensors_and_move_targets() -> None:
     assert tuple(targets.shape) == (2, len(outcome_ids))
     field_values = tensor_value_to_host(fields).tolist()
     target_values = tensor_value_to_host(targets).tolist()
-    assert field_values[0][4][6][6] == 1.0
-    assert field_values[0][5][5][6] == 1.0
-    assert field_values[0][11][7][7] == 1.0
+    assert field_values[0][4][0][2] == 1.0
+    assert field_values[0][5][1][2] == 1.0
+    assert field_values[0][11][1][0] == 1.0
     assert field_values[0][12][0][0] == 1.0
     assert math.isclose(sum(target_values[0]), 1.0, rel_tol=0.0, abs_tol=1e-6)
     assert sample_set.samples[0].outcome_id in outcome_ids
@@ -201,13 +259,13 @@ def test_chess_console_preview_uses_text_samples() -> None:
 
     batches = tuple(cast(Any, generator).console_preview_batches(atom_count=atom_count))
 
-    assert len(batches) == 1
+    assert len(batches) == 6
     batch = batches[0]
     assert batch["mode"] == "complexity-window"
     assert batch["sample_count"] == 1
     sample = cast(list[dict[str, object]], batch["samples"])[0]
     assert sample["observable_state_id"] == (
-        "fen:7k/6Q1/6K1/8/8/8/8/8 w - - 0 1"
+        "fen:8/8/8/8/8/8/k1K5/2Q5 w - - 0 1"
     )
     assert "image_data_url" not in sample
     assert "target_distribution" in sample
@@ -229,3 +287,11 @@ def _legal_move_count_complexity_cardinality(record: dict[str, object]) -> int:
     legal_count = coordinates[1]["values"]
     assert isinstance(legal_count, int)
     return legal_count
+
+
+def _is_checkmate_after_move(board: chess.Board, move: chess.Move) -> bool:
+    board.push(move)
+    try:
+        return board.is_checkmate()
+    finally:
+        board.pop()
