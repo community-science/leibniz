@@ -66,7 +66,7 @@ def test_console_data_reuses_persistent_generated_observation_batch_cache(
         canonical_document_bytes(
             {
                 "format": "leibniz.console.generated-sample-set-cache",
-                "format_version": 1,
+                "format_version": 2,
                 "batches": {
                     "\0".join(cache_key): list(cached_batches),
                 },
@@ -316,7 +316,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     chess_batches = cast(list[dict[str, object]], chess_task["batches"])
     assert [
         batch["complexity_cardinalities"] for batch in chess_batches
-    ] == [[cardinality] for cardinality in range(1, 65)]
+    ] == [[cardinality] for cardinality in (1, 2, 4, 8, 16, 32, 64)]
     chess_sample = cast(list[dict[str, object]], chess_batches[0]["samples"])[0]
     assert str(chess_sample["image_data_url"]).startswith(
         "data:image/svg+xml;base64,"

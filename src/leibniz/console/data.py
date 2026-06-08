@@ -56,7 +56,7 @@ _format = _protocol_formats.console_data
 _format_version = _protocol_format_versions.console_data
 _document_suffix = document_filename_suffix()
 _generated_batch_cache_format = "leibniz.console.generated-sample-set-cache"
-_generated_batch_cache_format_version = 1
+_generated_batch_cache_format_version = 2
 _generated_batch_cache_path = (
     Path(__file__).parent
     / "_web_src"
