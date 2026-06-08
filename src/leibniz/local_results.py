@@ -1143,20 +1143,12 @@ def _run_console_view_model(
                         else ()
                     ),
                     ("Steps", _console_number_value(protocol.get("max_steps"))),
-                    (
-                        "Training Batch Target",
-                        _console_number_value(protocol.get("training_batch_target")),
-                    ),
                     ("Gate Check", _console_number_value(protocol.get("gate_check_interval"))),
                     (
                         "Checkpoint Gate",
                         _console_number_value(
                             run.training_summary.get("model_checkpoint_gate_interval")
                         ),
-                    ),
-                    (
-                        "Gate Batch Target",
-                        _console_number_value(protocol.get("gate_batch_target")),
                     ),
                     ("Gate Rule", _console_string_value(protocol.get("gate_decision_rule"))),
                     ("Validation", _console_string_value(protocol.get("validation_source"))),
@@ -1674,6 +1666,7 @@ def _model_result_records(
             run=best_run,
             accepted_points=points,
             accepted_score=score,
+            accepted_cost=None if cost_integral is None else cost_integral.value,
         )
         if training_estimate_comparison is not None:
             record["training_estimate_comparison"] = training_estimate_comparison
@@ -1813,11 +1806,17 @@ def _compact_training_record(training_summary: Mapping[str, object]) -> dict[str
     keys = (
         "run_slug",
         "run_status",
-        "selected_checkpoint_step",
-        "step_count",
         "benchmark_id",
     )
     record = {key: training_summary[key] for key in keys if key in training_summary}
+    selected_checkpoint = _extract.optional_mapping(
+        training_summary.get("selected_model_checkpoint"),
+        "selected_model_checkpoint",
+    )
+    if selected_checkpoint is not None:
+        record["selected_checkpoint"] = _compact_selected_checkpoint_record(
+            selected_checkpoint
+        )
     estimate = _extract.optional_mapping(
         training_summary.get("training_estimate"),
         "training_estimate",
@@ -1838,6 +1837,25 @@ def _compact_training_record(training_summary: Mapping[str, object]) -> dict[str
             )
         record["training_estimate"] = estimate_record
     return record
+
+
+def _compact_selected_checkpoint_record(
+    checkpoint: Mapping[str, object],
+) -> dict[str, object]:
+    keys = (
+        "kind",
+        "record_path",
+        "path",
+        "digest",
+        "manifest_path",
+        "manifest_digest",
+        "step",
+        "validation_check",
+        "validation_loss",
+        "score",
+        "training_compute",
+    )
+    return {key: checkpoint[key] for key in keys if key in checkpoint}
 
 
 def _model_cost_summary(
@@ -2319,6 +2337,7 @@ def _training_estimate_comparison_record(
     run: _BenchmarkRunRecord,
     accepted_points: tuple[dict[str, object], ...],
     accepted_score: float,
+    accepted_cost: float | None,
 ) -> dict[str, object] | None:
     if run.result_status != "accepted" or run.training_summary is None:
         return None
@@ -2333,6 +2352,11 @@ def _training_estimate_comparison_record(
     training_score = _as_nonnegative_number(
         estimate.get("score"),
         "training_estimate.score",
+    )
+    training_cost = _selected_checkpoint_training_cost(
+        estimate=estimate,
+        training_points=training_points,
+        architecture=_run_architecture_manifest(run),
     )
     accepted_by_interval = {
         _comparison_interval_key(point): point for point in accepted_points
@@ -2373,7 +2397,7 @@ def _training_estimate_comparison_record(
         comparison_points.append(comparison_point)
     accepted_sample_count = sum(_point_sample_count(point) for point in accepted_points)
     training_sample_count = sum(_point_sample_count(point) for point in training_points)
-    return {
+    record: dict[str, object] = {
         "kind": "training-vs-accepted-sampled-competence-v1",
         "accepted_score": accepted_score,
         "training_score": training_score,
@@ -2386,21 +2410,41 @@ def _training_estimate_comparison_record(
         ),
         "points": comparison_points,
     }
+    if accepted_cost is not None:
+        record["accepted_cost"] = accepted_cost
+    if training_cost is not None:
+        record["training_cost"] = training_cost
+    if accepted_cost is not None and training_cost is not None:
+        record["cost_delta"] = training_cost - accepted_cost
+    return record
 
 
 def _selected_checkpoint_training_estimate(
     training_summary: Mapping[str, object],
 ) -> Mapping[str, object] | None:
-    selected_estimate = _extract.optional_mapping(
+    return _extract.optional_mapping(
         training_summary.get("selected_model_checkpoint_score_estimate"),
         "selected_model_checkpoint_score_estimate",
     )
-    if selected_estimate is not None:
-        return selected_estimate
-    return _extract.optional_mapping(
-        training_summary.get("training_estimate"),
-        "training_estimate",
-    )
+
+
+def _selected_checkpoint_training_cost(
+    *,
+    estimate: Mapping[str, object],
+    training_points: tuple[dict[str, object], ...],
+    architecture: ArchitectureManifest,
+) -> float | None:
+    cost = _optional_cost_value(estimate, "cost")
+    if cost is not None:
+        return cost
+    if not training_points:
+        return None
+    return sampled_competence_compute_cost_integral(
+        points=training_points,
+        architecture=architecture,
+        error_type=LocalResultImportError,
+        field_prefix="training_estimate.cost_point",
+    ).value
 
 
 def _training_estimate_competence_points(
@@ -3218,12 +3262,7 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
             f"{prefix}.protocol.learning_rate",
         )
     _as_nonnegative_number(protocol.get("min_delta"), f"{prefix}.protocol.min_delta")
-    protocol_positive_ints = (
-        "seed",
-        "training_batch_target",
-        "gate_check_interval",
-        "gate_batch_target",
-    )
+    protocol_positive_ints = ("seed", "gate_check_interval")
     for field in protocol_positive_ints:
         _as_positive_int(protocol.get(field), f"{prefix}.protocol.{field}")
     _as_nonnegative_number(protocol.get("patience"), f"{prefix}.protocol.patience")

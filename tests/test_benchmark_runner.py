@@ -276,7 +276,6 @@ def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
 def test_capacity_limited_training_run_is_budget_exhausted() -> None:
     training_run = cast(Any, benchmark_runner)._training_run_record(
         seed=101,
-        training_batch_target=512,
         max_steps=None,
         learning_rate=0.01,
         optimizer_name="adam",
@@ -611,7 +610,6 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert training_run.protocol.tensor_runtime == "pytorch"
     assert training_run.protocol.tensor_device == "cpu"
     assert training_run.protocol.max_steps == 1
-    assert training_run.protocol.gate_batch_target == 512
     assert training_run.protocol.rung_competence_threshold == 0.5
     assert training_summary["tensor_runtime"] == "pytorch"
     assert training_summary["tensor_device"] == "cpu"
@@ -1063,7 +1061,6 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
         progress_callback = cast(Any, kwargs["progress_callback"])
         training_run = cast(Any, benchmark_runner)._training_run_record(
             seed=101,
-            training_batch_target=2,
             max_steps=1,
             learning_rate=0.01,
             optimizer_name="adam",
@@ -1165,7 +1162,6 @@ def test_digits_benchmark_runner_records_convergence_protocol_controls(
     assert training_run.protocol.schedule == "cosine"
     assert training_run.protocol.learning_rate == 0.005
     assert training_run.protocol.gate_check_interval == 1
-    assert training_run.protocol.gate_batch_target == 512
     assert training_run.protocol.gate_decision_rule == "score-estimate-plateau"
     assert training_run.protocol.patience == 2
     assert training_run.protocol.min_delta == 0.001
@@ -1448,7 +1444,6 @@ def test_training_stage_records_current_validation_loss_without_global_best(
         patience=1,
         min_delta=0.0,
         rung_competence_threshold=0.9,
-        training_batch_target=1,
         architecture=ArchitectureManifestDocument.from_bytes(
             _digits_architecture.read_bytes()
         ).manifest,
@@ -1469,7 +1464,6 @@ def test_training_stage_records_current_validation_loss_without_global_best(
 def test_training_run_artifact_record_omits_historical_score_estimates() -> None:
     training_run = cast(Any, benchmark_runner)._training_run_record(
         seed=101,
-        training_batch_target=512,
         max_steps=None,
         learning_rate=None,
         optimizer_name="loss-search",
@@ -1767,7 +1761,6 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
         patience=10,
         min_delta=0.001,
         rung_competence_threshold=0.9,
-        training_batch_target=4,
         architecture=ArchitectureManifestDocument.from_bytes(
             _digits_architecture.read_bytes()
         ).manifest,
@@ -2150,7 +2143,6 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
         patience=1,
         min_delta=0.001,
         rung_competence_threshold=0.9,
-        training_batch_target=1,
         architecture=ArchitectureManifestDocument.from_bytes(
             _digits_architecture.read_bytes()
         ).manifest,
@@ -2270,7 +2262,6 @@ def test_training_plateau_above_rung_competence_threshold_advances_frontier(
         patience=1,
         min_delta=0.001,
         rung_competence_threshold=0.5,
-        training_batch_target=1,
         architecture=ArchitectureManifestDocument.from_bytes(
             _digits_architecture.read_bytes()
         ).manifest,
