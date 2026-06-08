@@ -154,14 +154,6 @@ class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
         request: ComplexityRequest,
     ) -> ComplexityCandidate | None: ...
 
-    def complexity_candidates_for_request(
-        self,
-        *,
-        request: ComplexityRequest,
-    ) -> Sequence[ComplexityCandidate]:
-        """Return concrete benchmark candidates inside a complexity request band."""
-        ...
-
     def complexity_curriculum_candidates(
         self,
         *,
@@ -1114,91 +1106,108 @@ def _training_progress_path(summary: BenchmarkRunSummary) -> Path:
 def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEvaluationSummary:
     """Generate benchmark evidence from a saved training checkpoint artifact."""
 
-    generator = _require_tensor_generator(load_generator(plan.benchmark_root))
-    evaluation_input = _evaluation_input_from_plan(plan, generator=generator)
-    outcome_space = generator.manifest.resolve_outcome_space()
-    architecture = evaluation_input.architecture
-    selected_checkpoint = evaluation_input.checkpoint
-    run_slug = evaluation_input.run_slug
-    benchmark_id = evaluation_input.benchmark_id
-    benchmark_atom = _identifier_atom(benchmark_id)
-    evaluation_bundle_path = (
-        plan.results_root / "evaluations" / benchmark_atom / f"{run_slug}{_document_suffix}"
-    )
-    evaluation_seed = _unpredictable_evaluation_seed()
-    (
-        evaluation_results,
-        final_evaluation_batch,
-        final_evaluation_probabilities,
-        checkpoint_evaluation_throughput,
-    ) = evaluate_model_checkpoint_artifact(
-        architecture=architecture,
-        generator=generator,
-        outcome_space=outcome_space,
-        seed=evaluation_seed,
-        tensor_device=plan.tensor_device,
-        checkpoint=selected_checkpoint,
-    )
-    evaluation_frontier_index = _evaluation_result_frontier_index(
-        evaluation_results=evaluation_results,
-        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
-    )
-    evaluation_integration = _evaluation_integration_evidence(
-        evaluation_results=evaluation_results,
-        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
-    )
-    measurement_groups = (
-        finite_measurements_for_predictions(
-            batch=final_evaluation_batch,
+    workflow_timings = TimingCollector()
+    with workflow_timings.span("evaluation_workflow.load_generator"):
+        generator = _require_tensor_generator(load_generator(plan.benchmark_root))
+    with workflow_timings.span("evaluation_workflow.load_checkpoint_input"):
+        evaluation_input = _evaluation_input_from_plan(plan, generator=generator)
+        outcome_space = generator.manifest.resolve_outcome_space()
+        architecture = evaluation_input.architecture
+        selected_checkpoint = evaluation_input.checkpoint
+        run_slug = evaluation_input.run_slug
+        benchmark_id = evaluation_input.benchmark_id
+        benchmark_atom = _identifier_atom(benchmark_id)
+        evaluation_bundle_path = (
+            plan.results_root / "evaluations" / benchmark_atom / f"{run_slug}{_document_suffix}"
+        )
+        evaluation_seed = _unpredictable_evaluation_seed()
+    with workflow_timings.span("evaluation_workflow.checkpoint_evaluation"):
+        (
+            evaluation_results,
+            final_evaluation_batch,
+            final_evaluation_probabilities,
+            checkpoint_evaluation_throughput,
+        ) = evaluate_model_checkpoint_artifact(
+            architecture=architecture,
+            generator=generator,
             outcome_space=outcome_space,
-            probabilities=final_evaluation_probabilities,
-            run_slug=f"{run_slug}.final",
-        ),
-    )
-    frontier_rung = evaluation_results[evaluation_frontier_index].rung
-    final_scored_batch = replace(
-        final_evaluation_batch,
-        complexity_request=_rung_score_complexity_request(frontier_rung),
-    )
-    final_sampled_competence = sampled_competence_record(
-        batch=final_scored_batch,
-        measurements=measurement_groups[0],
-        complexity_axis=None,
-        input_shape=evaluation_results[evaluation_frontier_index].input_shape,
-    )
-    sampled_competence = _evaluation_sampled_competence_record(
-        benchmark_id=benchmark_id,
-        evaluation_results=evaluation_results,
-        frontier_point=final_sampled_competence,
-        frontier_index=evaluation_frontier_index,
-    )
-    measurements = tuple(
-        measurement
-        for group in measurement_groups
-        for measurement in group
-    )
-    dataset = MeasurementDataset(measurements=measurements)
-    dataset.validate_manifest(generator.manifest)
-    model_inspection = ModelInspectionRecord.from_model_manifest(
-        id=ProtocolIdentifier.parse(
-            f"model-inspections.{benchmark_atom}.{run_slug}@0.1.0"
-        ),
-        model_manifest=selected_checkpoint.manifest,
-        architecture_manifest=architecture,
-    )
-    evaluation_curriculum = _curriculum_record(
-        kind="checkpoint-benchmark-evaluation-curriculum",
-        rungs=tuple(result.rung for result in evaluation_results),
-        frontier_index=evaluation_frontier_index,
-    )
-    evaluation_curriculum_rungs = cast(list[dict[str, object]], evaluation_curriculum["rungs"])
-    for rung_record, result in zip(
-        evaluation_curriculum_rungs,
-        evaluation_results,
-        strict=True,
+            seed=evaluation_seed,
+            tensor_device=plan.tensor_device,
+            checkpoint=selected_checkpoint,
+        )
+    with workflow_timings.span("evaluation_workflow.integration_evidence"):
+        outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+        evaluation_frontier_index = _evaluation_result_frontier_index(
+            evaluation_results=evaluation_results,
+            outcome_ids=outcome_ids,
+        )
+        evaluation_integration = _evaluation_integration_evidence(
+            evaluation_results=evaluation_results,
+            outcome_ids=outcome_ids,
+        )
+    with workflow_timings.span(
+        "evaluation_workflow.final_measurement_records",
+        samples=final_evaluation_batch.sample_count,
     ):
-        rung_record["mean_accepted_mass"] = result.mean_accepted_mass
-        rung_record["confidence_half_width"] = result.confidence_half_width
+        measurement_groups = (
+            finite_measurements_for_predictions(
+                batch=final_evaluation_batch,
+                outcome_space=outcome_space,
+                probabilities=final_evaluation_probabilities,
+                run_slug=f"{run_slug}.final",
+            ),
+        )
+    with workflow_timings.span("evaluation_workflow.sampled_competence"):
+        frontier_rung = evaluation_results[evaluation_frontier_index].rung
+        final_scored_batch = replace(
+            final_evaluation_batch,
+            complexity_request=_rung_score_complexity_request(frontier_rung),
+        )
+        final_sampled_competence = sampled_competence_record(
+            batch=final_scored_batch,
+            measurements=measurement_groups[0],
+            complexity_axis=None,
+            input_shape=evaluation_results[evaluation_frontier_index].input_shape,
+        )
+        sampled_competence = _evaluation_sampled_competence_record(
+            benchmark_id=benchmark_id,
+            evaluation_results=evaluation_results,
+            frontier_point=final_sampled_competence,
+            frontier_index=evaluation_frontier_index,
+        )
+    with workflow_timings.span("evaluation_workflow.measurement_dataset"):
+        measurements = tuple(
+            measurement
+            for group in measurement_groups
+            for measurement in group
+        )
+        dataset = MeasurementDataset(measurements=measurements)
+        dataset.validate_manifest(generator.manifest)
+    with workflow_timings.span("evaluation_workflow.model_inspection"):
+        model_inspection = ModelInspectionRecord.from_model_manifest(
+            id=ProtocolIdentifier.parse(
+                f"model-inspections.{benchmark_atom}.{run_slug}@0.1.0"
+            ),
+            model_manifest=selected_checkpoint.manifest,
+            architecture_manifest=architecture,
+        )
+    with workflow_timings.span("evaluation_workflow.curriculum_record"):
+        evaluation_curriculum = _curriculum_record(
+            kind="checkpoint-benchmark-evaluation-curriculum",
+            rungs=tuple(result.rung for result in evaluation_results),
+            frontier_index=evaluation_frontier_index,
+        )
+        evaluation_curriculum_rungs = cast(
+            list[dict[str, object]],
+            evaluation_curriculum["rungs"],
+        )
+        for rung_record, result in zip(
+            evaluation_curriculum_rungs,
+            evaluation_results,
+            strict=True,
+        ):
+            rung_record["mean_accepted_mass"] = result.mean_accepted_mass
+            rung_record["confidence_half_width"] = result.confidence_half_width
     throughput = {
         "kind": "benchmark-evaluation-throughput",
         "evaluation": dict(checkpoint_evaluation_throughput),
@@ -1260,28 +1269,35 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         training_compute=evaluation_input.training_compute,
         results_root=plan.results_root,
     )
-    bundle = BenchmarkEvaluationBundle(
-        id=ProtocolIdentifier.parse(f"benchmark-evaluations.{identifier_stem}@0.1.0"),
-        run_slug=run_slug,
-        benchmark_manifest=generator.manifest,
-        architecture_manifest=architecture,
-        model_manifest=selected_checkpoint.manifest,
-        model_checkpoint=checkpoint_record,
-        model_inspection=model_inspection,
-        measurement_dataset=dataset,
-        measurement_score_view=MeasurementScoreView.from_dataset(
-            id=ProtocolIdentifier.parse(
-                f"views.measurement-scores.{identifier_stem}@0.1.0"
+    with workflow_timings.span("evaluation_workflow.bundle_construction"):
+        bundle = BenchmarkEvaluationBundle(
+            id=ProtocolIdentifier.parse(f"benchmark-evaluations.{identifier_stem}@0.1.0"),
+            run_slug=run_slug,
+            benchmark_manifest=generator.manifest,
+            architecture_manifest=architecture,
+            model_manifest=selected_checkpoint.manifest,
+            model_checkpoint=checkpoint_record,
+            model_inspection=model_inspection,
+            measurement_dataset=dataset,
+            measurement_score_view=MeasurementScoreView.from_dataset(
+                id=ProtocolIdentifier.parse(
+                    f"views.measurement-scores.{identifier_stem}@0.1.0"
+                ),
+                dataset=dataset,
             ),
-            dataset=dataset,
-        ),
-        sampled_competence=sampled_competence,
-        evaluation_protocol=evaluation_protocol,
-        evaluation_seed=evaluation_seed,
-        evaluation_curriculum=evaluation_curriculum,
-        throughput=throughput,
+            sampled_competence=sampled_competence,
+            evaluation_protocol=evaluation_protocol,
+            evaluation_seed=evaluation_seed,
+            evaluation_curriculum=evaluation_curriculum,
+            throughput=throughput,
+        )
+    with workflow_timings.span("evaluation_workflow.bundle_record"):
+        bundle_record = bundle.to_record()
+    throughput["workflow_phase_timing"] = workflow_timings.to_record(
+        kind="benchmark-evaluation-workflow-phase-timing"
     )
-    _write_document(evaluation_bundle_path, bundle.to_record())
+    bundle_record["throughput"] = throughput
+    _write_document(evaluation_bundle_path, bundle_record)
     return BenchmarkEvaluationSummary(
         run_slug=run_slug,
         benchmark_id=benchmark_id,
@@ -2274,14 +2290,15 @@ def evaluate_model_checkpoint_artifact(
 ]:
     """Generate benchmark evaluation evidence from a saved checkpoint artifact."""
 
-    predictor = load_model_checkpoint_predictor(
-        architecture=architecture,
-        outcome_space=outcome_space,
-        checkpoint=checkpoint,
-        tensor_device=tensor_device,
-    )
     evaluation_counter = _ThroughputCounter()
     phase_timings = TimingCollector()
+    with phase_timings.span("checkpoint_evaluation.predictor_load"):
+        predictor = load_model_checkpoint_predictor(
+            architecture=architecture,
+            outcome_space=outcome_space,
+            checkpoint=checkpoint,
+            tensor_device=tensor_device,
+        )
     max_inference_compute: int | None = None
     results: list[_CheckpointEvaluationRungEvidence] = []
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
@@ -2289,32 +2306,34 @@ def evaluate_model_checkpoint_artifact(
     curriculum_exhausted = False
     planner = _ComplexityCurriculumPlanner(generator)
     while True:
+        with phase_timings.span("checkpoint_evaluation.rung_planning"):
+            try:
+                rung = _evaluation_curriculum_rung(
+                    architecture=architecture,
+                    generator=generator,
+                    sample_count=1,
+                    seed=seed,
+                    index=len(results),
+                    planner=planner,
+                    runtime=predictor.runtime,
+                    outcome_ids=outcome_ids,
+                )
+            except _CurriculumExhausted:
+                if not results:
+                    raise
+                curriculum_exhausted = True
+                break
         try:
-            rung = _evaluation_curriculum_rung(
-                architecture=architecture,
-                generator=generator,
-                sample_count=1,
-                seed=seed,
-                index=len(results),
-                planner=planner,
-                runtime=predictor.runtime,
-                outcome_ids=outcome_ids,
-            )
-        except _CurriculumExhausted:
-            if not results:
-                raise
-            curriculum_exhausted = True
-            break
-        try:
-            rung_evidence, batch_max_inference_compute = _evaluate_checkpoint_rung(
-                predictor=predictor,
-                architecture=architecture,
-                generator=generator,
-                rung=rung,
-                outcome_ids=outcome_ids,
-                evaluation_counter=evaluation_counter,
-                phase_timings=phase_timings,
-            )
+            with phase_timings.span("checkpoint_evaluation.rung_evaluation"):
+                rung_evidence, batch_max_inference_compute = _evaluate_checkpoint_rung(
+                    predictor=predictor,
+                    architecture=architecture,
+                    generator=generator,
+                    rung=rung,
+                    outcome_ids=outcome_ids,
+                    evaluation_counter=evaluation_counter,
+                    phase_timings=phase_timings,
+                )
         except _RuntimeCapacityReached:
             if not results:
                 raise BenchmarkRunnerError(
@@ -2327,30 +2346,33 @@ def evaluate_model_checkpoint_artifact(
             batch_max_inference_compute,
         )
         results.append(rung_evidence)
-        integration_evidence = _evaluation_integration_evidence(
-            evaluation_results=results,
-            outcome_ids=outcome_ids,
-        )
+        with phase_timings.span("checkpoint_evaluation.integration_check"):
+            integration_evidence = _evaluation_integration_evidence(
+                evaluation_results=results,
+                outcome_ids=outcome_ids,
+            )
         if integration_evidence.converged:
             break
     if not results:
         raise BenchmarkRunnerError("checkpoint evaluation did not produce any results")
-    evaluation_frontier_index = _evaluation_result_frontier_index(
-        evaluation_results=results,
-        outcome_ids=outcome_ids,
-    )
-    final_batch, final_probabilities, final_max_inference_compute = (
-        _evaluate_checkpoint_rung_measurements(
-            predictor=predictor,
-            architecture=architecture,
-            generator=generator,
-            rung=results[evaluation_frontier_index].rung,
+    with phase_timings.span("checkpoint_evaluation.frontier_selection"):
+        evaluation_frontier_index = _evaluation_result_frontier_index(
+            evaluation_results=results,
             outcome_ids=outcome_ids,
-            requested_sample_count=results[evaluation_frontier_index].sample_count,
-            evaluation_counter=evaluation_counter,
-            phase_timings=phase_timings,
         )
-    )
+    with phase_timings.span("checkpoint_evaluation.final_measurements"):
+        final_batch, final_probabilities, final_max_inference_compute = (
+            _evaluate_checkpoint_rung_measurements(
+                predictor=predictor,
+                architecture=architecture,
+                generator=generator,
+                rung=results[evaluation_frontier_index].rung,
+                outcome_ids=outcome_ids,
+                requested_sample_count=results[evaluation_frontier_index].sample_count,
+                evaluation_counter=evaluation_counter,
+                phase_timings=phase_timings,
+            )
+        )
     max_inference_compute = _max_optional_int(
         max_inference_compute,
         final_max_inference_compute,
@@ -2643,19 +2665,24 @@ def _checkpoint_evaluation_chunks(
             seconds=time.perf_counter() - prediction_started,
             samples=batch.sample_count,
         )
-        batch_max_inference_compute = _batch_max_inference_compute(
-            architecture=architecture,
-            batch=batch,
-        )
+        with phase_timings.span(f"checkpoint_evaluation_{purpose}_compute_cost"):
+            batch_max_inference_compute = _batch_max_inference_compute(
+                architecture=architecture,
+                batch=batch,
+            )
         if batch_max_inference_compute is None:
             raise BenchmarkRunnerError(
                 "checkpoint evaluation could not measure max_inference_compute"
             )
-        accepted_mass = _batch_prediction_accepted_mass(
-            batch=batch,
-            probabilities=predictions,
-            outcome_ids=outcome_ids,
-        )
+        with phase_timings.span(
+            f"checkpoint_evaluation_{purpose}_accepted_mass",
+            samples=batch.sample_count,
+        ):
+            accepted_mass = _batch_prediction_accepted_mass(
+                batch=batch,
+                probabilities=predictions,
+                outcome_ids=outcome_ids,
+            )
         yield _CheckpointEvaluationChunk(
             batch=batch,
             probabilities=predictions,

@@ -161,35 +161,31 @@ def test_chess_complexity_request_accepts_matching_interval() -> None:
     assert all(sample.complexity_value is not None for sample in sample_set.samples)
 
 
-def test_chess_complexity_candidates_are_sample_space_cardinalities() -> None:
+def test_chess_direct_complexity_candidate_is_first_representative_cardinality() -> None:
     generator = load_generator(_chess_benchmark_root)
     request = ComplexityRequest(minimum=0.0, maximum=5.0)
 
-    candidates = tuple(generator.complexity_candidates_for_request(request=request))
+    candidate = generator.complexity_candidate_for_request(request=request)
 
-    cardinalities = tuple(candidate.cardinality for candidate in candidates)
-    assert cardinalities == tuple(range(1, 33))
-    for candidate in candidates:
-        assert candidate.cardinality is not None
-        assert candidate.complexity == math.log2(candidate.cardinality)
-        assert candidate.metadata["kind"] == "chess-sample-space-cardinality"
-        assert candidate.metadata["family"] == "corner-net-indexed-family"
-        assert candidate.metadata["sample_cardinality"] == candidate.cardinality
-        assert candidate.metadata["target_policy"] == "mate-in-one"
-        assert candidate.metadata["transform_count"] == _expected_transform_count
-        assert cast(int, candidate.metadata["spectator_square_count"]) > 50
-        assert len(cast(list[object], candidate.metadata["representatives"])) == min(
-            candidate.cardinality,
-            _expected_preview_limit,
-        )
-        oracle_reference = cast(
-            dict[str, object],
-            candidate.metadata["oracle_inference_compute"],
-        )
-        assert oracle_reference["kind"] == "oracle-inference-compute-reference-v1"
-        assert oracle_reference["unit"] == "abstract-ops"
-        assert oracle_reference["aggregation"] == "analytic-upper-bound"
-        assert cast(int, oracle_reference["value"]) >= 1
+    assert candidate is not None
+    assert candidate.cardinality == 1
+    assert candidate.complexity == 0.0
+    assert candidate.metadata["kind"] == "chess-sample-space-cardinality"
+    assert candidate.metadata["family"] == "corner-net-indexed-family"
+    assert candidate.metadata["sample_cardinality"] == candidate.cardinality
+    assert candidate.metadata["target_policy"] == "mate-in-one"
+    assert candidate.metadata["transform_count"] == _expected_transform_count
+    assert cast(int, candidate.metadata["spectator_square_count"]) > 50
+    assert len(cast(list[object], candidate.metadata["representatives"])) == 1
+    oracle_reference = cast(
+        dict[str, object],
+        candidate.metadata["oracle_inference_compute"],
+    )
+    assert oracle_reference["kind"] == "oracle-inference-compute-reference-v1"
+    assert oracle_reference["unit"] == "abstract-ops"
+    assert oracle_reference["aggregation"] == "analytic-upper-bound"
+    assert cast(int, oracle_reference["value"]) >= 1
+    assert not hasattr(generator, "complexity_candidates_for_request")
 
 
 def test_chess_complexity_curriculum_uses_supported_sample_cardinalities() -> None:

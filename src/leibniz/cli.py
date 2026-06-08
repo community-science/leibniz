@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
@@ -779,10 +780,12 @@ def _portable_record_path(path: Path, *, results_root: Path) -> str:
 
 def _materialize_benchmark_views_if_present(*, results_root: Path) -> None:
     try:
+        started = time.perf_counter()
         summary = materialize_benchmark_result_views(
             repository_root=Path.cwd(),
             results_root=results_root,
         )
+        seconds = time.perf_counter() - started
     except LocalResultImportError as error:
         if "no benchmark result records found" in str(error):
             return
@@ -791,7 +794,8 @@ def _materialize_benchmark_views_if_present(*, results_root: Path) -> None:
         "materialized "
         f"{summary.benchmark_count} benchmark result view(s), "
         f"{summary.model_count} model(s), "
-        f"{summary.run_count} run(s)"
+        f"{summary.run_count} run(s) "
+        f"in {seconds:.3f}s"
     )
     for view_file in summary.benchmark_view_files or (summary.view_file,):
         print(f"view: {view_file}")
