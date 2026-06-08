@@ -54,7 +54,8 @@ from leibniz.observation_showcases import (
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.tensor_runtime import (
-    TensorElementCoordinates,
+    TensorElementParameter,
+    TensorElementProgram,
     TensorElementRecipe,
     TensorRuntime,
     TensorRuntimeError,
@@ -809,12 +810,11 @@ class Generator:
                     if sample_shape
                     else (len(outcome_ids),),
                     dtype="float32",
-                    element=_target_tensor_element,
-                    parameters={
-                        "component_indices": component_index_samples,
-                        "component_to_outcome": component_to_outcome,
-                        "outcome_count": len(outcome_ids),
-                    },
+                    program=_target_tensor_program(
+                        component_indices=component_index_samples,
+                        component_to_outcome=component_to_outcome,
+                        outcome_count=len(outcome_ids),
+                    ),
                 ),
             )
         return fields, labels
@@ -958,12 +958,9 @@ class Generator:
                 recipe=TensorElementRecipe(
                     shape=(sample_count, 1, height, width),
                     dtype="float32",
-                    element=_zero_tensor_element,
+                    program=_constant_tensor_program(0.0),
                 ),
             )
-        max_component_mark_count = max(
-            stop - start for start, stop in zip(mark_offsets, mark_offsets[1:], strict=False)
-        )
         matrices = _constructed_affine_matrix_values(
             transform=transform,
             grid=grid,
@@ -974,18 +971,16 @@ class Generator:
             recipe=TensorElementRecipe(
                 shape=(sample_count, 1, height, width),
                 dtype="float32",
-                element=_digits_tensor_element,
-                parameters={
-                    "component_indices": component_indices,
-                    "matrices": matrices,
-                    "mark_offsets": tuple(mark_offsets),
-                    "mark_values": tuple(mark_values),
-                    "mark_widths": tuple(mark_widths),
-                    "curve_points": tuple(curve_points),
-                    "max_component_mark_count": max_component_mark_count,
-                    "height": height,
-                    "width": width,
-                },
+                program=_digits_tensor_program(
+                    component_indices=component_indices,
+                    matrices=matrices,
+                    mark_offsets=tuple(mark_offsets),
+                    mark_values=tuple(mark_values),
+                    mark_widths=tuple(mark_widths),
+                    curve_points=tuple(curve_points),
+                    height=height,
+                    width=width,
+                ),
             ),
         )
 
@@ -2824,9 +2819,58 @@ def _sampled_quadratic_points(
     return tuple(points)
 
 
-def _digits_tensor_element(
+def _constant_tensor_program(value: float) -> TensorElementProgram:
+    def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
+        _ = flat_indices
+        return coordinates[0] * 0.0 + value
+
+    return TensorElementProgram(
+        kernel=element_function,
+        parameters={},
+        cache_key=("constant", value),
+    )
+
+
+def _target_tensor_program(
     *,
-    coordinates: TensorElementCoordinates,
+    component_indices: tuple[int, ...],
+    component_to_outcome: tuple[int, ...],
+    outcome_count: int,
+) -> TensorElementProgram:
+    def element_function(
+        coordinates: tuple[Any, ...],
+        flat_indices: Any,
+        *,
+        component_indices: Any,
+        component_to_outcome: Any,
+    ) -> Any:
+        _ = coordinates
+        sample_index = flat_indices.div(outcome_count, rounding_mode="floor")
+        outcome_index = flat_indices.remainder(outcome_count)
+        component_index = component_indices[sample_index]
+        target_index = component_to_outcome[component_index]
+        return (target_index == outcome_index).to(dtype=target_index.dtype)
+
+    return TensorElementProgram(
+        kernel=element_function,
+        parameters={
+            "component_indices": TensorElementParameter(
+                dtype="int64",
+                shape=(len(component_indices),),
+                values=component_indices,
+            ),
+            "component_to_outcome": TensorElementParameter(
+                dtype="int64",
+                shape=(len(component_to_outcome),),
+                values=component_to_outcome,
+            ),
+        },
+        cache_key=("target", outcome_count),
+    )
+
+
+def _digits_tensor_program(
+    *,
     component_indices: tuple[int, ...],
     matrices: tuple[
         tuple[float, ...],
@@ -2841,89 +2885,104 @@ def _digits_tensor_element(
     mark_values: tuple[float, ...],
     mark_widths: tuple[float, ...],
     curve_points: tuple[tuple[tuple[float, float], ...], ...],
-    max_component_mark_count: int,
     height: int,
     width: int,
-) -> float:
-    sample_index, channel_index, y_index, x_index = coordinates.require_rank(4)
-    if channel_index != 0:
-        return 0.0
-    x_center = x_index + 0.5
-    y_center = y_index + 0.5
-    component_index = component_indices[sample_index]
-    mark_index = mark_offsets[component_index]
-    mark_stop = mark_offsets[component_index + 1]
-    m00, m01, m02, m10, m11, m12, width_scale = (
-        matrix[sample_index] for matrix in matrices
+) -> TensorElementProgram:
+    def element_function(
+        coordinates: tuple[Any, ...],
+        flat_indices: Any,
+        *,
+        component_indices: Any,
+        matrices: Any,
+    ) -> Any:
+        _ = flat_indices
+        sample_index, channel_index, y_index, x_index = coordinates
+        x_center = x_index + 0.5
+        y_center = y_index + 0.5
+        component_index = component_indices[sample_index]
+        m00 = matrices[0, sample_index]
+        m01 = matrices[1, sample_index]
+        m02 = matrices[2, sample_index]
+        m10 = matrices[3, sample_index]
+        m11 = matrices[4, sample_index]
+        m12 = matrices[5, sample_index]
+        width_scale = matrices[6, sample_index]
+        value = x_center * 0.0
+        for expected_component_index in range(len(mark_offsets) - 1):
+            mark_start = mark_offsets[expected_component_index]
+            mark_stop = mark_offsets[expected_component_index + 1]
+            active_component = (component_index == expected_component_index) & (
+                channel_index == 0
+            )
+            for mark_index in range(mark_start, mark_stop):
+                distance_squared = x_center * 0.0 + 1.0e30
+                mark_points = curve_points[mark_index]
+                for segment_index in range(len(mark_points) - 1):
+                    raw_sx, raw_sy = mark_points[segment_index]
+                    raw_ex, raw_ey = mark_points[segment_index + 1]
+                    sx = (0.5 + m00 * (raw_sx - 0.5) + m01 * (raw_sy - 0.5) + m02) * width
+                    sy = (0.5 + m10 * (raw_sx - 0.5) + m11 * (raw_sy - 0.5) + m12) * height
+                    ex = (0.5 + m00 * (raw_ex - 0.5) + m01 * (raw_ey - 0.5) + m02) * width
+                    ey = (0.5 + m10 * (raw_ex - 0.5) + m11 * (raw_ey - 0.5) + m12) * height
+                    dx = ex - sx
+                    dy = ey - sy
+                    length_squared = dx * dx + dy * dy
+                    safe_length_squared = length_squared.where(
+                        length_squared != 0.0,
+                        length_squared * 0.0 + 1.0,
+                    )
+                    segment_t = (
+                        (x_center - sx) * dx + (y_center - sy) * dy
+                    ) / safe_length_squared
+                    segment_t = segment_t.clamp(0.0, 1.0)
+                    closest_x = sx + segment_t * dx
+                    closest_y = sy + segment_t * dy
+                    segment_distance_squared = (
+                        (x_center - closest_x) * (x_center - closest_x)
+                        + (y_center - closest_y) * (y_center - closest_y)
+                    )
+                    point_distance_squared = (
+                        (x_center - sx) * (x_center - sx)
+                        + (y_center - sy) * (y_center - sy)
+                    )
+                    segment_distance_squared = segment_distance_squared.where(
+                        length_squared != 0.0,
+                        point_distance_squared,
+                    )
+                    distance_squared = distance_squared.minimum(segment_distance_squared)
+                threshold = (width_scale * mark_widths[mark_index] / 2.0) * (
+                    width_scale * mark_widths[mark_index] / 2.0
+                )
+                contribution = (active_component & (distance_squared <= threshold)) * mark_values[
+                    mark_index
+                ]
+                value = value.maximum(contribution)
+        return value
+
+    return TensorElementProgram(
+        kernel=element_function,
+        parameters={
+            "component_indices": TensorElementParameter(
+                dtype="int64",
+                shape=(len(component_indices),),
+                values=component_indices,
+            ),
+            "matrices": TensorElementParameter(
+                dtype="float32",
+                shape=(7, len(component_indices)),
+                values=tuple(value for row in matrices for value in row),
+            ),
+        },
+        cache_key=(
+            "digits-field",
+            mark_offsets,
+            mark_values,
+            mark_widths,
+            curve_points,
+            height,
+            width,
+        ),
     )
-    value = 0.0
-
-    for mark_slot in range(max_component_mark_count):
-        current_mark = mark_index + mark_slot
-        if current_mark >= mark_stop:
-            continue
-        mark_value = mark_values[current_mark]
-        mark_width = mark_widths[current_mark]
-        threshold = (width_scale * mark_width / 2.0) * (width_scale * mark_width / 2.0)
-        distance_squared = float("inf")
-        mark_points = curve_points[current_mark]
-
-        for segment_index in range(_batch_render_curve_sample_count - 1):
-            raw_sx, raw_sy = mark_points[segment_index]
-            raw_ex, raw_ey = mark_points[segment_index + 1]
-            centered_sx = raw_sx - 0.5
-            centered_sy = raw_sy - 0.5
-            centered_ex = raw_ex - 0.5
-            centered_ey = raw_ey - 0.5
-            sx = (0.5 + m00 * centered_sx + m01 * centered_sy + m02) * width
-            sy = (0.5 + m10 * centered_sx + m11 * centered_sy + m12) * height
-            ex = (0.5 + m00 * centered_ex + m01 * centered_ey + m02) * width
-            ey = (0.5 + m10 * centered_ex + m11 * centered_ey + m12) * height
-            dx = ex - sx
-            dy = ey - sy
-            length_squared = dx * dx + dy * dy
-            safe_length_squared = 1.0 if length_squared == 0.0 else length_squared
-            segment_t = ((x_center - sx) * dx + (y_center - sy) * dy) / safe_length_squared
-            segment_t = min(max(segment_t, 0.0), 1.0)
-            closest_x = sx + segment_t * dx
-            closest_y = sy + segment_t * dy
-            segment_distance_squared = (
-                (x_center - closest_x) * (x_center - closest_x)
-                + (y_center - closest_y) * (y_center - closest_y)
-            )
-            point_distance_squared = (
-                (x_center - sx) * (x_center - sx)
-                + (y_center - sy) * (y_center - sy)
-            )
-            if length_squared == 0.0:
-                segment_distance_squared = point_distance_squared
-            distance_squared = min(distance_squared, segment_distance_squared)
-
-        if distance_squared <= threshold:
-            value = max(value, mark_value)
-    return value
-
-
-def _zero_tensor_element(*, coordinates: TensorElementCoordinates) -> float:
-    _ = coordinates
-    return 0.0
-
-
-def _target_tensor_element(
-    *,
-    coordinates: TensorElementCoordinates,
-    component_indices: tuple[int, ...],
-    component_to_outcome: tuple[int, ...],
-    outcome_count: int,
-) -> float:
-    if outcome_count < 1:
-        raise TensorRuntimeError("target tensor outcome count must be positive")
-    if not coordinates.indices:
-        raise TensorRuntimeError("target tensor element requires at least one axis")
-    sample_index = coordinates.flat_index // outcome_count
-    outcome_index = coordinates.indices[-1]
-    component_index = component_indices[sample_index]
-    return 1.0 if component_to_outcome[component_index] == outcome_index else 0.0
 
 
 def _identity_variation_coordinate_record(

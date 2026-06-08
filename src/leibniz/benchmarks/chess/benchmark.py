@@ -25,7 +25,8 @@ from leibniz.observation_generation import (
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.tensor_runtime import (
-    TensorElementCoordinates,
+    TensorElementParameter,
+    TensorElementProgram,
     TensorElementRecipe,
     TensorRuntime,
     tensor_runtime_construct_tensor,
@@ -1235,8 +1236,10 @@ def _tensor_batch_from_global_indices(
         recipe=TensorElementRecipe(
             shape=field_shape,
             dtype="float32",
-            element=_chess_field_tensor_element,
-            parameters={"pieces_by_sample": pieces_by_sample},
+            program=_chess_field_tensor_program(
+                pieces_by_sample=pieces_by_sample,
+                shape=field_shape,
+            ),
         ),
     )
     targets = tensor_runtime_construct_tensor(
@@ -1244,11 +1247,10 @@ def _tensor_batch_from_global_indices(
         recipe=TensorElementRecipe(
             shape=target_shape,
             dtype="float32",
-            element=_chess_target_tensor_element,
-            parameters={
-                "target_indices": target_indices,
-                "outcome_count": len(outcome_ids),
-            },
+            program=_chess_target_tensor_program(
+                target_indices=target_indices,
+                outcome_count=len(outcome_ids),
+            ),
         ),
     )
     return (
@@ -1281,31 +1283,86 @@ def _target_indices_for_global_indices(
     )
 
 
-def _chess_field_tensor_element(
+def _chess_field_tensor_program(
     *,
-    coordinates: TensorElementCoordinates,
     pieces_by_sample: tuple[tuple[tuple[int, int], ...], ...],
-) -> float:
-    sample_index, plane_index, rank_index, file_index = coordinates.require_rank(4)
-    if plane_index == 12:
-        return 1.0
-    square = rank_index * 8 + file_index
-    return 1.0 if (plane_index, square) in pieces_by_sample[sample_index] else 0.0
+    shape: tuple[int, int, int, int],
+) -> TensorElementProgram:
+    sample_count, _plane_count, _height, width = shape
+    max_piece_count = max((len(entries) for entries in pieces_by_sample), default=0)
+    plane_values: list[int] = []
+    square_values: list[int] = []
+    for entries in pieces_by_sample:
+        for plane_index, square in entries:
+            plane_values.append(plane_index)
+            square_values.append(square)
+        for _index in range(max_piece_count - len(entries)):
+            plane_values.append(-1)
+            square_values.append(-1)
+
+    def element_function(
+        coordinates: tuple[Any, ...],
+        flat_indices: Any,
+        *,
+        piece_planes: Any,
+        piece_squares: Any,
+    ) -> Any:
+        _ = flat_indices
+        sample_index, plane_index, rank_index, file_index = coordinates
+        square = rank_index * width + file_index
+        occupied = plane_index == 12
+        for piece_index in range(max_piece_count):
+            occupied = occupied | (
+                (piece_planes[sample_index, piece_index] == plane_index)
+                & (piece_squares[sample_index, piece_index] == square)
+            )
+        return occupied * 1.0
+
+    return TensorElementProgram(
+        kernel=element_function,
+        parameters={
+            "piece_planes": TensorElementParameter(
+                dtype="int64",
+                shape=(sample_count, max_piece_count),
+                values=tuple(plane_values),
+            ),
+            "piece_squares": TensorElementParameter(
+                dtype="int64",
+                shape=(sample_count, max_piece_count),
+                values=tuple(square_values),
+            ),
+        },
+        cache_key=("chess-field", shape, max_piece_count),
+    )
 
 
-def _chess_target_tensor_element(
+def _chess_target_tensor_program(
     *,
-    coordinates: TensorElementCoordinates,
     target_indices: tuple[int, ...],
     outcome_count: int,
-) -> float:
-    if outcome_count < 1:
-        raise ObservationGenerationError("target tensor outcome count must be positive")
-    if not coordinates.indices:
-        raise ObservationGenerationError("target tensor element requires at least one axis")
-    sample_index = coordinates.flat_index // outcome_count
-    outcome_index = coordinates.indices[-1]
-    return 1.0 if target_indices[sample_index] == outcome_index else 0.0
+) -> TensorElementProgram:
+    def element_function(
+        coordinates: tuple[Any, ...],
+        flat_indices: Any,
+        *,
+        target_indices: Any,
+    ) -> Any:
+        _ = coordinates
+        sample_index = flat_indices.div(outcome_count, rounding_mode="floor")
+        outcome_index = flat_indices.remainder(outcome_count)
+        return (target_indices[sample_index] == outcome_index) * 1.0
+
+    return TensorElementProgram(
+        kernel=element_function,
+        parameters={
+            "target_indices": TensorElementParameter(
+                dtype="int64",
+                shape=(len(target_indices),),
+                values=target_indices,
+            )
+        },
+        cache_key=("chess-target", outcome_count),
+    )
 
 
 def _base_target_indices(outcome_ids: tuple[str, ...]) -> tuple[int, ...]:

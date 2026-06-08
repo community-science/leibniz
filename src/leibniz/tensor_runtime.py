@@ -33,7 +33,8 @@ __all__ = [
     "softmax_target_masses",
     "synchronize_runtime",
     "TensorRuntime",
-    "TensorElementCoordinates",
+    "TensorElementParameter",
+    "TensorElementProgram",
     "TensorElementRecipe",
     "TensorRuntimeError",
     "TensorRuntimeDevice",
@@ -59,8 +60,10 @@ __all__ = [
 TensorRuntimeDevice = Literal["auto", "cpu", "cuda", "mps"]
 TensorRuntimeDeviceKind = Literal["cpu", "cuda", "mps"]
 TensorElementDType = Literal["float32", "int64"]
+TensorElementParameterDType = Literal["float32", "int64"]
 _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
 _roofline_cache: dict[str, dict[str, object]] = {}
+_tensor_element_kernel_cache: dict[tuple[object, ...], Any] = {}
 
 
 class TensorRuntimeError(ValueError):
@@ -77,27 +80,31 @@ class TensorRuntime:
 
 
 @dataclass(frozen=True, slots=True)
-class TensorElementCoordinates:
-    """Rank-generic flattened tensor coordinates supplied by the runtime."""
-
-    flat_index: int
-    indices: tuple[int, ...]
-    shape: tuple[int, ...]
-
-    def require_rank(self, rank: int) -> tuple[int, ...]:
-        if len(self.indices) != rank:
-            raise TensorRuntimeError(f"tensor element rank must be {rank}")
-        return self.indices
-
-
-@dataclass(frozen=True, slots=True)
 class TensorElementRecipe:
     """Elementwise tensor construction recipe supplied by benchmark implementations."""
 
     shape: tuple[int, ...]
     dtype: TensorElementDType
-    element: Callable[..., object]
-    parameters: Mapping[str, object] | None = None
+    program: TensorElementProgram
+
+
+@dataclass(frozen=True, slots=True)
+class TensorElementParameter:
+    """Numeric parameter buffer referenced by a tensor element program."""
+
+    dtype: TensorElementParameterDType
+    shape: tuple[int, ...]
+    values: Sequence[int | float]
+
+
+@dataclass(frozen=True, slots=True)
+class TensorElementProgram:
+    """Rank-agnostic vectorized element function to lift over a tensor extent."""
+
+    kernel: Callable[..., object]
+    parameters: Mapping[str, TensorElementParameter]
+    compile: bool = True
+    cache_key: object | None = None
 
 
 def tensor_runtime_construct_tensor(
@@ -111,19 +118,14 @@ def tensor_runtime_construct_tensor(
     resolved_shape = tuple(_positive_tensor_extent(size) for size in recipe.shape)
     dtype = _tensor_element_dtype(runtime=runtime, dtype=recipe.dtype)
     total_elements = math.prod(resolved_shape)
-    parameters = recipe.parameters or {}
-    optimized = _construct_known_tensor_recipe(
+    if total_elements == 0:
+        return torch.empty(resolved_shape, dtype=dtype, device=runtime.device)
+    return _construct_tensor_element_program(
         runtime=runtime,
         shape=resolved_shape,
         dtype=dtype,
-        recipe=recipe,
-        parameters=parameters,
+        program=recipe.program,
     )
-    if optimized is not None:
-        return optimized
-    if total_elements == 0:
-        return torch.empty(resolved_shape, dtype=dtype, device=runtime.device)
-    raise TensorRuntimeError("tensor element recipe has no runtime lowering")
 
 
 def tensor_runtime_device_choices() -> tuple[str, ...]:
@@ -957,352 +959,118 @@ def _tensor_element_dtype(*, runtime: TensorRuntime, dtype: TensorElementDType) 
     raise TensorRuntimeError(f"unsupported tensor element dtype: {dtype}")
 
 
-def _construct_known_tensor_recipe(
+def _construct_tensor_element_program(
     *,
     runtime: TensorRuntime,
     shape: tuple[int, ...],
     dtype: Any,
-    recipe: TensorElementRecipe,
-    parameters: Mapping[str, object],
-) -> Any | None:
-    if recipe.element.__name__ == "_zero_tensor_element":
-        return runtime.torch.zeros(shape, dtype=dtype, device=runtime.device)
-    if _is_indexed_one_hot_parameters(parameters):
-        return _construct_indexed_one_hot(
-            runtime=runtime,
-            shape=shape,
-            dtype=dtype,
-            parameters=parameters,
-        )
-    if _is_sparse_plane_parameters(parameters):
-        return _construct_sparse_plane_tensor(
-            runtime=runtime,
-            shape=shape,
-            dtype=dtype,
-            parameters=parameters,
-        )
-    if _is_curve_stroke_parameters(parameters):
-        return _construct_curve_stroke_tensor(
-            runtime=runtime,
-            shape=shape,
-            dtype=dtype,
-            parameters=parameters,
-        )
-    return None
+    program: TensorElementProgram,
+) -> Any:
+    parameter_tensors = {
+        name: _tensor_element_parameter(runtime=runtime, parameter=parameter)
+        for name, parameter in program.parameters.items()
+    }
+    backend = runtime.torch
+    total_elements = math.prod(shape)
+    flat_indices = backend.arange(total_elements, dtype=backend.long, device=runtime.device)
+    coordinate_tensors = _tensor_element_coordinate_tensors(
+        shape=shape,
+        flat_indices=flat_indices,
+    )
+    kernel = _compiled_tensor_element_kernel(
+        runtime=runtime,
+        program=program,
+        shape=shape,
+        parameter_tensors=parameter_tensors,
+    )
+    values = kernel(coordinate_tensors, flat_indices, **parameter_tensors)
+    return values.to(dtype=dtype).reshape(shape)
 
 
-def _is_indexed_one_hot_parameters(parameters: Mapping[str, object]) -> bool:
-    return (
-        {"target_indices", "outcome_count"} <= parameters.keys()
-        or {"component_indices", "component_to_outcome", "outcome_count"} <= parameters.keys()
+def _tensor_element_parameter(*, runtime: TensorRuntime, parameter: TensorElementParameter) -> Any:
+    expected_count = math.prod(tuple(_positive_tensor_extent(size) for size in parameter.shape))
+    if len(parameter.values) != expected_count:
+        raise TensorRuntimeError("tensor element parameter value count does not match shape")
+    dtype = _tensor_element_parameter_dtype(runtime=runtime, dtype=parameter.dtype)
+    return runtime.torch.tensor(parameter.values, dtype=dtype, device=runtime.device).reshape(
+        parameter.shape
     )
 
 
-def _construct_indexed_one_hot(
+def _tensor_element_parameter_dtype(
     *,
     runtime: TensorRuntime,
-    shape: tuple[int, ...],
-    dtype: Any,
-    parameters: Mapping[str, object],
+    dtype: TensorElementParameterDType,
 ) -> Any:
+    if dtype == "float32":
+        return runtime.torch.float32
+    if dtype == "int64":
+        return runtime.torch.long
+    raise TensorRuntimeError(f"unsupported tensor element parameter dtype: {dtype}")
+
+
+def _compiled_tensor_element_kernel(
+    *,
+    runtime: TensorRuntime,
+    program: TensorElementProgram,
+    shape: tuple[int, ...],
+    parameter_tensors: Mapping[str, Any],
+) -> Callable[..., Any]:
+    if runtime.device_kind != "cuda" or not program.compile:
+        return program.kernel
+    if not _tensor_runtime_compile_available():
+        return program.kernel
+    key = (
+        program.cache_key if program.cache_key is not None else id(program.kernel),
+        runtime.device_kind,
+        shape,
+        tuple(
+            (name, tuple(parameter_tensors[name].shape), str(parameter_tensors[name].dtype))
+            for name in sorted(parameter_tensors)
+        ),
+    )
+    cached = _tensor_element_kernel_cache.get(key)
+    if cached is not None:
+        return cast(Callable[..., Any], cached)
+    try:
+        compiled = runtime.torch.compile(program.kernel)
+    except Exception:
+        return program.kernel
+    _tensor_element_kernel_cache[key] = compiled
+    return cast(Callable[..., Any], compiled)
+
+
+def _tensor_runtime_compile_available() -> bool:
+    try:
+        compiler = importlib.import_module("triton.compiler.compiler")
+    except ImportError:
+        return False
+    return hasattr(compiler, "triton_key")
+
+
+def _tensor_element_coordinate_tensors(
+    *,
+    shape: tuple[int, ...],
+    flat_indices: Any,
+) -> tuple[Any, ...]:
+    coordinates: list[Any] = []
+    for stride in _tensor_element_shape_strides(shape):
+        coordinates.append(flat_indices.div(stride, rounding_mode="floor"))
+        flat_indices = flat_indices.remainder(stride)
+    return tuple(coordinates)
+
+
+def _tensor_element_shape_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
     if not shape:
-        raise TensorRuntimeError("indexed one-hot recipe requires at least one axis")
-    outcome_count = _positive_tensor_extent(parameters["outcome_count"])
-    if shape[-1] != outcome_count:
-        raise TensorRuntimeError("indexed one-hot outcome count does not match tensor shape")
-    sample_count = math.prod(shape[:-1])
-    if "target_indices" in parameters:
-        target_indices = _integer_sequence(parameters["target_indices"], "target_indices")
-    else:
-        component_indices = _integer_sequence(parameters["component_indices"], "component_indices")
-        component_to_outcome = _integer_sequence(
-            parameters["component_to_outcome"],
-            "component_to_outcome",
-        )
-        target_indices = tuple(component_to_outcome[index] for index in component_indices)
-    if len(target_indices) != sample_count:
-        raise TensorRuntimeError("indexed one-hot target count does not match tensor shape")
-    if any(index < 0 or index >= outcome_count for index in target_indices):
-        raise TensorRuntimeError("indexed one-hot target index outside outcome axis")
-    backend = runtime.torch
-    indices = backend.tensor(target_indices, dtype=backend.long, device=runtime.device)
-    one_hot = backend.nn.functional.one_hot(indices, num_classes=outcome_count)
-    return one_hot.to(dtype=dtype).reshape(shape)
-
-
-def _is_sparse_plane_parameters(parameters: Mapping[str, object]) -> bool:
-    return "pieces_by_sample" in parameters
-
-
-def _construct_sparse_plane_tensor(
-    *,
-    runtime: TensorRuntime,
-    shape: tuple[int, ...],
-    dtype: Any,
-    parameters: Mapping[str, object],
-) -> Any:
-    if len(shape) != 4:
-        raise TensorRuntimeError("sparse plane recipe requires rank 4")
-    sample_count, plane_count, height, width = shape
-    pieces_by_sample = _sparse_plane_entries(parameters["pieces_by_sample"])
-    if len(pieces_by_sample) != sample_count:
-        raise TensorRuntimeError("sparse plane sample count does not match tensor shape")
-    backend = runtime.torch
-    fields = backend.zeros(shape, dtype=dtype, device=runtime.device)
-    if plane_count > 12:
-        fields[:, 12, :, :] = 1.0
-    sample_indices: list[int] = []
-    plane_indices: list[int] = []
-    rank_indices: list[int] = []
-    file_indices: list[int] = []
-    for sample_index, entries in enumerate(pieces_by_sample):
-        for plane_index, square in entries:
-            if plane_index < 0 or plane_index >= plane_count:
-                raise TensorRuntimeError("sparse plane index outside tensor shape")
-            rank_index = square // width
-            file_index = square % width
-            if rank_index < 0 or rank_index >= height:
-                raise TensorRuntimeError("sparse plane square outside tensor shape")
-            sample_indices.append(sample_index)
-            plane_indices.append(plane_index)
-            rank_indices.append(rank_index)
-            file_indices.append(file_index)
-    if sample_indices:
-        fields[
-            backend.tensor(sample_indices, dtype=backend.long, device=runtime.device),
-            backend.tensor(plane_indices, dtype=backend.long, device=runtime.device),
-            backend.tensor(rank_indices, dtype=backend.long, device=runtime.device),
-            backend.tensor(file_indices, dtype=backend.long, device=runtime.device),
-        ] = 1.0
-    return fields
-
-
-def _is_curve_stroke_parameters(parameters: Mapping[str, object]) -> bool:
-    return {
-        "component_indices",
-        "matrices",
-        "mark_offsets",
-        "mark_values",
-        "mark_widths",
-        "curve_points",
-        "height",
-        "width",
-    } <= parameters.keys()
-
-
-def _construct_curve_stroke_tensor(
-    *,
-    runtime: TensorRuntime,
-    shape: tuple[int, ...],
-    dtype: Any,
-    parameters: Mapping[str, object],
-) -> Any:
-    if len(shape) != 4 or shape[1] != 1:
-        raise TensorRuntimeError("curve stroke recipe requires shape (sample, 1, height, width)")
-    sample_count, _channel_count, height, width = shape
-    if parameters["height"] != height or parameters["width"] != width:
-        raise TensorRuntimeError("curve stroke dimensions do not match tensor shape")
-    component_indices = _integer_sequence(parameters["component_indices"], "component_indices")
-    if len(component_indices) != sample_count:
-        raise TensorRuntimeError("curve stroke component count does not match tensor shape")
-    mark_offsets = _integer_sequence(parameters["mark_offsets"], "mark_offsets")
-    mark_values = _float_sequence(parameters["mark_values"], "mark_values")
-    mark_widths = _float_sequence(parameters["mark_widths"], "mark_widths")
-    curve_points = _curve_point_sequence(parameters["curve_points"])
-    matrices = _matrix_parameter_sequences(parameters["matrices"], sample_count=sample_count)
-    if len(mark_values) != len(mark_widths) or len(mark_values) != len(curve_points):
-        raise TensorRuntimeError("curve stroke mark parameter lengths must match")
-
-    backend = runtime.torch
-    values = backend.zeros(shape, dtype=dtype, device=runtime.device)
-    if sample_count == 0 or not mark_values:
-        return values
-    component_tensor = backend.tensor(component_indices, dtype=backend.long, device=runtime.device)
-    y_centers = (
-        backend.arange(height, dtype=dtype, device=runtime.device).reshape(1, height, 1) + 0.5
-    )
-    x_centers = (
-        backend.arange(width, dtype=dtype, device=runtime.device).reshape(1, 1, width) + 0.5
-    )
-    matrix_tensors = tuple(
-        backend.tensor(matrix, dtype=dtype, device=runtime.device).reshape(sample_count, 1, 1)
-        for matrix in matrices
-    )
-    m00, m01, m02, m10, m11, m12, width_scale = matrix_tensors
-
-    for component_index, (mark_start, mark_stop) in enumerate(
-        zip(mark_offsets, mark_offsets[1:], strict=False)
-    ):
-        sample_mask = (component_tensor == component_index).reshape(sample_count, 1, 1)
-        if not bool(sample_mask.any()):
-            continue
-        for mark_index in range(mark_start, mark_stop):
-            threshold = (width_scale * mark_widths[mark_index] / 2.0) ** 2
-            distance_squared = backend.full(
-                (sample_count, height, width),
-                float("inf"),
-                dtype=dtype,
-                device=runtime.device,
-            )
-            mark_points = curve_points[mark_index]
-            for segment_index in range(len(mark_points) - 1):
-                raw_sx, raw_sy = mark_points[segment_index]
-                raw_ex, raw_ey = mark_points[segment_index + 1]
-                sx = (0.5 + m00 * (raw_sx - 0.5) + m01 * (raw_sy - 0.5) + m02) * width
-                sy = (0.5 + m10 * (raw_sx - 0.5) + m11 * (raw_sy - 0.5) + m12) * height
-                ex = (0.5 + m00 * (raw_ex - 0.5) + m01 * (raw_ey - 0.5) + m02) * width
-                ey = (0.5 + m10 * (raw_ex - 0.5) + m11 * (raw_ey - 0.5) + m12) * height
-                dx = ex - sx
-                dy = ey - sy
-                length_squared = dx * dx + dy * dy
-                safe_length_squared = backend.where(
-                    length_squared == 0.0,
-                    backend.ones_like(length_squared),
-                    length_squared,
-                )
-                segment_t = ((x_centers - sx) * dx + (y_centers - sy) * dy) / safe_length_squared
-                segment_t = segment_t.clamp(0.0, 1.0)
-                closest_x = sx + segment_t * dx
-                closest_y = sy + segment_t * dy
-                segment_distance_squared = (
-                    (x_centers - closest_x) * (x_centers - closest_x)
-                    + (y_centers - closest_y) * (y_centers - closest_y)
-                )
-                point_distance_squared = (
-                    (x_centers - sx) * (x_centers - sx)
-                    + (y_centers - sy) * (y_centers - sy)
-                )
-                segment_distance_squared = backend.where(
-                    length_squared == 0.0,
-                    point_distance_squared,
-                    segment_distance_squared,
-                )
-                distance_squared = backend.minimum(distance_squared, segment_distance_squared)
-            mark_contribution = backend.where(
-                sample_mask & (distance_squared <= threshold),
-                backend.full_like(distance_squared, mark_values[mark_index]),
-                backend.zeros_like(distance_squared),
-            )
-            values[:, 0, :, :] = backend.maximum(values[:, 0, :, :], mark_contribution)
-    return values
-
-
-def _integer_sequence(value: object, label: str) -> tuple[int, ...]:
-    if not isinstance(value, Sequence) or isinstance(value, str):
-        raise TensorRuntimeError(f"{label} must be an integer sequence")
-    return tuple(_require_exact_integer(item, label) for item in cast(Sequence[object], value))
-
-
-def _float_sequence(value: object, label: str) -> tuple[float, ...]:
-    if not isinstance(value, Sequence) or isinstance(value, str):
-        raise TensorRuntimeError(f"{label} must be a numeric sequence")
-    return tuple(_require_float(item, label) for item in cast(Sequence[object], value))
-
-
-def _sparse_plane_entries(value: object) -> tuple[tuple[tuple[int, int], ...], ...]:
-    if not isinstance(value, Sequence) or isinstance(value, str):
-        raise TensorRuntimeError("sparse plane entries must be a sequence")
-    parsed_entries: list[tuple[tuple[int, int], ...]] = []
-    for entries in cast(Sequence[object], value):
-        if not isinstance(entries, Sequence) or isinstance(entries, str):
-            raise TensorRuntimeError("sparse plane entries must be nested sequences")
-        parsed_entries.append(
-            tuple(
-                _sparse_plane_entry(entry)
-                for entry in cast(Sequence[object], entries)
-            )
-        )
-    return tuple(parsed_entries)
-
-
-def _curve_point_sequence(value: object) -> tuple[tuple[tuple[float, float], ...], ...]:
-    if not isinstance(value, Sequence) or isinstance(value, str):
-        raise TensorRuntimeError("curve points must be a sequence")
-    parsed_marks: list[tuple[tuple[float, float], ...]] = []
-    for points in cast(Sequence[object], value):
-        if not isinstance(points, Sequence) or isinstance(points, str):
-            raise TensorRuntimeError("curve points must be nested sequences")
-        parsed_marks.append(
-            tuple(_curve_point(point) for point in cast(Sequence[object], points))
-        )
-    return tuple(parsed_marks)
-
-
-def _matrix_parameter_sequences(
-    value: object,
-    *,
-    sample_count: int,
-) -> tuple[
-    tuple[float, ...],
-    tuple[float, ...],
-    tuple[float, ...],
-    tuple[float, ...],
-    tuple[float, ...],
-    tuple[float, ...],
-    tuple[float, ...],
-]:
-    if not isinstance(value, Sequence) or isinstance(value, str):
-        raise TensorRuntimeError("curve stroke matrices must contain seven sequences")
-    matrix_values = cast(Sequence[object], value)
-    if len(matrix_values) != 7:
-        raise TensorRuntimeError("curve stroke matrices must contain seven sequences")
-    matrices = tuple(
-        _float_sequence(matrix, "curve stroke matrix")
-        for matrix in matrix_values
-    )
-    if any(len(matrix) != sample_count for matrix in matrices):
-        raise TensorRuntimeError("curve stroke matrix lengths must match sample count")
-    return cast(
-        tuple[
-            tuple[float, ...],
-            tuple[float, ...],
-            tuple[float, ...],
-            tuple[float, ...],
-            tuple[float, ...],
-            tuple[float, ...],
-            tuple[float, ...],
-        ],
-        matrices,
-    )
-
-
-def _require_exact_integer(value: object, label: str) -> int:
-    if type(value) is not int:
-        raise TensorRuntimeError(f"{label} must be an integer")
-    return value
-
-
-def _require_float(value: object, label: str) -> float:
-    if type(value) is int or type(value) is float:
-        return float(value)
-    else:
-        raise TensorRuntimeError(f"{label} must be numeric")
-
-
-def _sparse_plane_entry(value: object) -> tuple[int, int]:
-    if not isinstance(value, Sequence) or isinstance(value, str):
-        raise TensorRuntimeError("sparse plane entry must contain plane and square")
-    entry = cast(Sequence[object], value)
-    if len(entry) != 2:
-        raise TensorRuntimeError("sparse plane entry must contain plane and square")
-    plane_index, square = entry
-    return (
-        _require_exact_integer(plane_index, "sparse plane index"),
-        _require_exact_integer(square, "sparse plane square"),
-    )
-
-
-def _curve_point(value: object) -> tuple[float, float]:
-    if not isinstance(value, Sequence) or isinstance(value, str):
-        raise TensorRuntimeError("curve point must contain x and y")
-    point = cast(Sequence[object], value)
-    if len(point) != 2:
-        raise TensorRuntimeError("curve point must contain x and y")
-    x_value, y_value = point
-    return (
-        _require_float(x_value, "curve point"),
-        _require_float(y_value, "curve point"),
-    )
+        return ()
+    strides: list[int] = []
+    stride = 1
+    for extent in reversed(shape[1:]):
+        stride *= extent
+        strides.append(stride)
+    strides.reverse()
+    strides.append(1)
+    return tuple(strides)
 
 
 def _torch() -> Any:
