@@ -307,10 +307,8 @@ export type TrainingProtocolRecord = {
   learning_rate?: number;
   schedule: string;
   seed: number;
-  training_batch_target: number;
   max_steps?: number;
   gate_check_interval: number;
-  gate_batch_target: number;
   gate_decision_rule: string;
   min_delta: number;
   patience: number;

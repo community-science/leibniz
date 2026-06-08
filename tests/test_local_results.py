@@ -416,6 +416,11 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
         cast(float, comparison["training_score"])
         - cast(float, comparison["accepted_score"]),
     )
+    assert math.isclose(
+        cast(float, comparison["cost_delta"]),
+        cast(float, comparison["training_cost"])
+        - cast(float, comparison["accepted_cost"]),
+    )
     comparison_points = cast(list[dict[str, object]], comparison["points"])
     assert comparison_points
     assert 0 < cast(int, comparison["matched_point_count"]) <= len(comparison_points)
@@ -814,6 +819,14 @@ def test_benchmark_inspect_prints_compact_result_summary(
     assert models[0]["result_status"] == "accepted"
     assert runs[0]["result_status"] == "accepted"
     assert "term_count" in cast(dict[str, object], models[0]["score_integral"])
+    comparison = cast(dict[str, object], models[0]["training_estimate_comparison"])
+    assert "points" not in comparison
+    assert "cost_delta" in comparison
+    training = cast(dict[str, object], runs[0]["training"])
+    selected_checkpoint = cast(dict[str, object], training["selected_checkpoint"])
+    assert selected_checkpoint["kind"] == "model-checkpoint"
+    assert "record_path" in selected_checkpoint
+    assert "step" in selected_checkpoint
 
 
 def test_cli_publishes_local_benchmark_results(

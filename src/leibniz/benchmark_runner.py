@@ -1022,7 +1022,6 @@ def run_benchmark(
         **summary.to_record(),
         "dry_run": False,
         "run_status": "completed",
-        "training_batch_target": _default_training_batch_target,
         "training_curriculum": _curriculum_record(
             kind="competence-gated-training-curriculum",
             source="structured-training-curriculum",
@@ -1039,7 +1038,6 @@ def run_benchmark(
         "schedule": plan.schedule,
         "gate_check_interval": plan.gate_check_interval,
         "model_checkpoint_gate_interval": plan.model_checkpoint_gate_interval,
-        "gate_batch_target": _default_gate_batch_target,
         "gate_decision_rule": plan.gate_decision_rule,
         "convergence_patience": plan.convergence_patience,
         "convergence_min_delta": float(plan.convergence_min_delta),
@@ -2137,12 +2135,12 @@ def _train_and_predict_on_device(
         outcome_space=outcome_space,
         outcome_ids=outcome_ids,
         max_steps=train_steps,
+        training_batch_target=sample_count,
         gate_check_interval=gate_check_interval,
+        gate_batch_target=gate_sample_count,
         patience=convergence_patience,
         min_delta=convergence_min_delta,
         rung_competence_threshold=rung_competence_threshold,
-        training_batch_target=sample_count,
-        gate_batch_target=gate_sample_count,
         architecture=architecture,
         training_counter=training_counter,
         training_compute_counter=training_compute_counter,
@@ -2154,13 +2152,11 @@ def _train_and_predict_on_device(
             progress_callback(
                 _running_training_run_record(
                     seed=seed,
-                    training_batch_target=sample_count,
                     max_steps=train_steps,
                     learning_rate=learning_rate,
                     optimizer_name=optimizer_name,
                     schedule_name=schedule_name,
                     gate_check_interval=gate_check_interval,
-                    gate_batch_target=gate_sample_count,
                     gate_decision_rule=gate_decision_rule,
                     rung_competence_threshold=rung_competence_threshold,
                     convergence_patience=convergence_patience,
@@ -2216,13 +2212,11 @@ def _train_and_predict_on_device(
         raise BenchmarkRunnerError("uncapped training curriculum ended before convergence")
     training_run = _training_run_record(
         seed=seed,
-        training_batch_target=sample_count,
         max_steps=train_steps,
         learning_rate=learning_rate,
         optimizer_name=optimizer_name,
         schedule_name=schedule_name,
         gate_check_interval=gate_check_interval,
-        gate_batch_target=gate_sample_count,
         gate_decision_rule=gate_decision_rule,
         rung_competence_threshold=rung_competence_threshold,
         convergence_patience=convergence_patience,
@@ -2986,16 +2980,9 @@ def _compact_model_checkpoint_summary_record(
         "training_compute",
     )
     compact = {key: record[key] for key in summary_keys if key in record}
-    score_estimate = record.get("score_estimate")
-    if isinstance(score_estimate, Mapping):
-        score_estimate_record = cast(Mapping[str, object], score_estimate)
-        score = score_estimate_record.get("score")
-        if isinstance(score, int | float):
-            compact["score"] = float(score)
-    else:
-        score = record.get("score")
-        if isinstance(score, int | float):
-            compact["score"] = float(score)
+    score = record.get("score")
+    if isinstance(score, int | float):
+        compact["score"] = float(score)
     return compact
 
 
@@ -3082,13 +3069,13 @@ def _train_until_convergence(
     patience: int,
     min_delta: float,
     rung_competence_threshold: float,
-    training_batch_target: int,
-    gate_batch_target: int = _default_gate_batch_target,
     architecture: ArchitectureManifest,
     training_counter: _ThroughputCounter,
     training_compute_counter: _ComputeCounter,
     validation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
+    training_batch_target: int = _default_training_batch_target,
+    gate_batch_target: int = _default_gate_batch_target,
     start_step: int = 0,
     start_check: int = 0,
     on_plateau: Callable[[tuple[TrainingHistoryPoint, ...]], bool] | None = None,
@@ -3843,13 +3830,11 @@ def has_windowed_validation_plateau(
 def _training_run_record(
     *,
     seed: int,
-    training_batch_target: int,
     max_steps: int | None,
     learning_rate: float | None,
     optimizer_name: str,
     schedule_name: str,
     gate_check_interval: int,
-    gate_batch_target: int = _default_gate_batch_target,
     gate_decision_rule: str,
     rung_competence_threshold: float,
     convergence_patience: int,
@@ -3882,10 +3867,8 @@ def _training_run_record(
             learning_rate=learning_rate,
             schedule=cast(Any, schedule_name),
             seed=seed,
-            training_batch_target=training_batch_target,
             max_steps=max_steps,
             gate_check_interval=gate_check_interval,
-            gate_batch_target=gate_batch_target,
             gate_decision_rule=gate_decision_rule,
             rung_competence_threshold=rung_competence_threshold,
             min_delta=convergence_min_delta,
@@ -3902,13 +3885,11 @@ def _training_run_record(
 def _running_training_run_record(
     *,
     seed: int,
-    training_batch_target: int,
     max_steps: int | None,
     learning_rate: float | None,
     optimizer_name: str,
     schedule_name: str,
     gate_check_interval: int,
-    gate_batch_target: int,
     gate_decision_rule: str,
     rung_competence_threshold: float,
     convergence_patience: int,
@@ -3931,10 +3912,8 @@ def _running_training_run_record(
             learning_rate=learning_rate,
             schedule=cast(Any, schedule_name),
             seed=seed,
-            training_batch_target=training_batch_target,
             max_steps=max_steps,
             gate_check_interval=gate_check_interval,
-            gate_batch_target=gate_batch_target,
             gate_decision_rule=gate_decision_rule,
             rung_competence_threshold=rung_competence_threshold,
             min_delta=convergence_min_delta,
@@ -3974,14 +3953,12 @@ def _training_progress_record(
         "run_status": "running",
         "benchmark_id": str(summary.benchmark_id),
         "architecture_path": summary.architecture_path.as_posix(),
-        "training_batch_target": _default_training_batch_target,
         "seed": plan.seed,
         "train_steps": plan.train_steps,
         "optimizer": plan.optimizer,
         "schedule": plan.schedule,
         "gate_check_interval": plan.gate_check_interval,
         "model_checkpoint_gate_interval": plan.model_checkpoint_gate_interval,
-        "gate_batch_target": _default_gate_batch_target,
         "gate_decision_rule": plan.gate_decision_rule,
         "convergence_patience": plan.convergence_patience,
         "convergence_min_delta": float(plan.convergence_min_delta),
@@ -4000,7 +3977,6 @@ def _training_progress_record(
         "model_inspection": inspection.to_record(),
         "architecture_digest": str(architecture.digest),
         "model_inspection_digest": str(inspection.digest),
-        "provisional_score": training_estimate["score"],
         "training_estimate": training_estimate,
         "model_checkpoints": [dict(checkpoint) for checkpoint in model_checkpoints],
         "selected_model_checkpoint": (
