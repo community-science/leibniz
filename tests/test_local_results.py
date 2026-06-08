@@ -26,6 +26,7 @@ from leibniz.local_results import (
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
     push_result_checkout,
+    summarize_local_benchmark_results,
 )
 from leibniz.model_operators import (
     architecture_with_input_shape,
@@ -778,6 +779,43 @@ def test_materialize_benchmark_result_views_projects_reference_curves_without_ru
         assert reference_curves[0]["x_axis"] == "cost"
 
 
+def test_benchmark_inspect_prints_compact_result_summary(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    results_root = tmp_path / "results"
+    _run_and_evaluate_digits_benchmark(results_root)
+
+    direct_summary = summarize_local_benchmark_results(
+        repository_root=_repository_root,
+        results_root=results_root,
+    )
+    exit_code = main(["benchmark", "inspect", "--results-root", str(results_root)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    summary = load_object_document(captured.out.encode("utf-8"), description="summary")
+    assert summary == direct_summary
+    assert summary["format"] == "leibniz.local-benchmark-result-summary"
+    assert summary["model_count"] == 1
+    assert summary["run_count"] == 1
+    assert not _record_contains_key(summary, "points")
+    assert not _record_contains_key(summary, "console_view_model")
+    assert not _record_contains_key(summary, "model_inspection")
+    benchmarks = cast(list[dict[str, object]], summary["benchmarks"])
+    digits = next(
+        item
+        for item in benchmarks
+        if item["benchmark_id"] == "benchmarks.digits@0.1.0"
+    )
+    models = cast(list[dict[str, object]], digits["models"])
+    runs = cast(list[dict[str, object]], digits["runs"])
+    assert models[0]["result_status"] == "accepted"
+    assert runs[0]["result_status"] == "accepted"
+    assert "term_count" in cast(dict[str, object], models[0]["score_integral"])
+
+
 def test_cli_publishes_local_benchmark_results(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -1041,6 +1079,18 @@ def _string_values(value: object) -> tuple[str, ...]:
         sequence = cast(list[object] | tuple[object, ...], value)
         return tuple(string for item in sequence for string in _string_values(item))
     return ()
+
+
+def _record_contains_key(value: object, key: str) -> bool:
+    if isinstance(value, dict):
+        mapping = cast(dict[object, object], value)
+        return key in mapping or any(
+            _record_contains_key(item, key) for item in mapping.values()
+        )
+    if isinstance(value, list | tuple):
+        sequence = cast(list[object] | tuple[object, ...], value)
+        return any(_record_contains_key(item, key) for item in sequence)
+    return False
 
 
 def _git(path: Path, *args: str) -> subprocess.CompletedProcess[str]:

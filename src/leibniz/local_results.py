@@ -57,6 +57,7 @@ __all__ = [
     "materialize_benchmark_result_views",
     "publish_local_benchmark_results",
     "push_result_checkout",
+    "summarize_local_benchmark_results",
 ]
 
 _protocol_formats = console_protocol_formats()
@@ -361,6 +362,50 @@ def materialize_benchmark_result_views(
         model_count=len({(run.benchmark_id, run.model_key) for run in runs}),
         run_count=len(runs),
     )
+
+
+def summarize_local_benchmark_results(
+    *,
+    repository_root: Path | None = None,
+    results_root: Path = _default_results_root,
+) -> Mapping[str, object]:
+    """Return a compact local result summary without dense console payloads."""
+
+    repository_root = Path.cwd().resolve() if repository_root is None else repository_root.resolve()
+    results_root = _resolve_output_root(repository_root, results_root)
+    benchmarks = _known_benchmarks(repository_root)
+    local_runs = _local_run_records(results_root, include_model_details=False)
+    local_training_estimates = _local_training_estimate_records(
+        results_root,
+        repository_root=repository_root,
+        accepted_run_slugs={run.run_slug for run in local_runs},
+    )
+    runs = tuple(sorted((*local_runs, *local_training_estimates), key=_run_sort_key))
+    unknown_benchmark_ids = sorted(
+        {run.benchmark_id for run in runs if run.benchmark_id not in benchmarks},
+        key=str,
+    )
+    if unknown_benchmark_ids:
+        raise LocalResultImportError(
+            f"unknown benchmark id in local results: {unknown_benchmark_ids[0]}"
+        )
+    benchmark_records = [
+        _compact_benchmark_result_record(
+            benchmark=benchmark,
+            repository_root=repository_root,
+            runs=tuple(run for run in runs if run.benchmark_id == benchmark_id),
+        )
+        for benchmark_id, benchmark in sorted(benchmarks.items(), key=lambda item: str(item[0]))
+    ]
+    return {
+        "format": "leibniz.local-benchmark-result-summary",
+        "format_version": 1,
+        "results_root": results_root.as_posix(),
+        "benchmark_count": len(benchmark_records),
+        "model_count": len({(run.benchmark_id, run.model_key) for run in runs}),
+        "run_count": len(runs),
+        "benchmarks": benchmark_records,
+    }
 
 
 def load_console_result_view(data: bytes) -> Mapping[str, object]:
@@ -1565,6 +1610,7 @@ def _model_result_records(
     *,
     manifest: BenchmarkManifest,
     repository_root: Path,
+    include_console_view_model: bool = True,
 ) -> tuple[dict[str, object], ...]:
     grouped: dict[str, list[_BenchmarkRunRecord]] = {}
     for run in runs:
@@ -1631,14 +1677,167 @@ def _model_result_records(
         )
         if training_estimate_comparison is not None:
             record["training_estimate_comparison"] = training_estimate_comparison
-        record["console_view_model"] = _model_console_view_model(
-            manifest=manifest,
-            model=record,
-            runs=ordered_runs,
-            inspection=best_run.model_inspection,
-        )
+        if include_console_view_model:
+            record["console_view_model"] = _model_console_view_model(
+                manifest=manifest,
+                model=record,
+                runs=ordered_runs,
+                inspection=best_run.model_inspection,
+            )
         records.append(record)
     return tuple(sorted(records, key=_model_sort_key))
+
+
+def _compact_benchmark_result_record(
+    *,
+    benchmark: Benchmark,
+    repository_root: Path,
+    runs: tuple[_BenchmarkRunRecord, ...],
+) -> dict[str, object]:
+    manifest = benchmark.manifest
+    models = _model_result_records(
+        runs,
+        manifest=manifest,
+        repository_root=repository_root,
+        include_console_view_model=False,
+    )
+    return {
+        "benchmark_id": str(manifest.id),
+        "benchmark_name": str(manifest.name),
+        "model_count": len(models),
+        "run_count": len(runs),
+        "accepted_run_count": sum(run.result_status == "accepted" for run in runs),
+        "provisional_run_count": sum(run.result_status == "provisional" for run in runs),
+        "models": [_compact_model_result_record(model) for model in models],
+        "runs": [_compact_run_result_record(run) for run in runs],
+    }
+
+
+def _compact_model_result_record(model: Mapping[str, object]) -> dict[str, object]:
+    record: dict[str, object] = {
+        "model_key": model["model_key"],
+        "result_status": model["result_status"],
+        "architecture_digest": model["architecture_digest"],
+        "benchmark_id": model["benchmark_id"],
+        "score": model["score"],
+        "cost_summary": dict(_extract.mapping(model.get("cost_summary"), "cost_summary")),
+        "run_ids": list(cast(Sequence[object], model["run_ids"])),
+        "measurement_count": model["measurement_count"],
+        "source_kinds": list(cast(Sequence[object], model["source_kinds"])),
+    }
+    score_integral = _extract.mapping(model.get("score_integral"), "score_integral")
+    record["score_integral"] = _compact_integral_record(score_integral)
+    if "cost_integral" in model:
+        record["cost_integral"] = _compact_integral_record(
+            _extract.mapping(model.get("cost_integral"), "cost_integral")
+        )
+    if "training_estimate_comparison" in model:
+        record["training_estimate_comparison"] = _compact_training_estimate_comparison(
+            _extract.mapping(
+                model.get("training_estimate_comparison"),
+                "training_estimate_comparison",
+            )
+        )
+    return record
+
+
+def _compact_training_estimate_comparison(
+    comparison: Mapping[str, object],
+) -> dict[str, object]:
+    record = {
+        key: value
+        for key, value in comparison.items()
+        if key not in {"points", "samples"}
+    }
+    points = comparison.get("points")
+    if isinstance(points, Sequence) and not isinstance(points, str | bytes):
+        record["point_count"] = comparison.get(
+            "point_count",
+            len(cast(Sequence[object], points)),
+        )
+    return dict(record)
+
+
+def _compact_integral_record(integral: Mapping[str, object]) -> dict[str, object]:
+    record = {
+        key: value
+        for key, value in integral.items()
+        if key not in {"terms", "points", "samples"}
+    }
+    terms = integral.get("terms")
+    if isinstance(terms, Sequence) and not isinstance(terms, str | bytes):
+        record["term_count"] = len(cast(Sequence[object], terms))
+    return dict(record)
+
+
+def _compact_run_result_record(run: _BenchmarkRunRecord) -> dict[str, object]:
+    record: dict[str, object] = {
+        "source_kind": run.source_kind,
+        "result_status": run.result_status,
+        "source_path": run.source_path.as_posix(),
+        "run_id": run.run_id,
+        "run_slug": run.run_slug,
+        "benchmark_id": str(run.benchmark_id),
+        "architecture_digest": str(run.architecture_digest),
+        "model_key": run.model_key,
+        "measurement_count": run.measurement_count,
+        "score": run.score,
+        "cost_summary": _run_cost_summary(run),
+    }
+    if run.complexity is not None:
+        record["complexity"] = run.complexity
+    if run.sampled_competence is not None:
+        record["sampled_competence"] = _compact_sampled_competence_record(
+            run.sampled_competence
+        )
+    if run.training_summary is not None:
+        record["training"] = _compact_training_record(run.training_summary)
+    return record
+
+
+def _compact_sampled_competence_record(
+    sampled_competence: Mapping[str, object],
+) -> dict[str, object]:
+    keys = (
+        "complexity",
+        "sample_count",
+        "mean_accepted_mass",
+        "standard_error",
+        "confidence_half_width",
+        "converged",
+    )
+    return {key: sampled_competence[key] for key in keys if key in sampled_competence}
+
+
+def _compact_training_record(training_summary: Mapping[str, object]) -> dict[str, object]:
+    keys = (
+        "run_slug",
+        "run_status",
+        "selected_checkpoint_step",
+        "step_count",
+        "benchmark_id",
+    )
+    record = {key: training_summary[key] for key in keys if key in training_summary}
+    estimate = _extract.optional_mapping(
+        training_summary.get("training_estimate"),
+        "training_estimate",
+    )
+    if estimate is not None:
+        estimate_record = {
+            key: estimate[key]
+            for key in ("score", "cost", "measurement_count")
+            if key in estimate
+        }
+        sampled_competence = _extract.optional_mapping(
+            estimate.get("sampled_competence"),
+            "training_estimate.sampled_competence",
+        )
+        if sampled_competence is not None:
+            estimate_record["sampled_competence"] = _compact_sampled_competence_record(
+                sampled_competence
+            )
+        record["training_estimate"] = estimate_record
+    return record
 
 
 def _model_cost_summary(
