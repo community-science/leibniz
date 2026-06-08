@@ -1582,6 +1582,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
                 accepted_mass=1.0,
                 sample_count=64,
                 seed=202,
+                input_shape=(1, 16, 16),
             ),
         ),
         validation_check=1,
@@ -1600,7 +1601,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
     assert points[0]["sample_count"] == 64
     assert points[0]["seed"] == 202
     assert points[0]["mean_accepted_mass"] == 1.0
-    assert "input_shape" not in points[0]
+    assert points[0]["input_shape"] == [1, 16, 16]
     assert points[1]["input_shape"] == list(batch.samples[0].require_field().shape)
     assert math.isclose(
         cast(float, estimate["score"]),
@@ -2964,6 +2965,16 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     progress_cost = cast(dict[str, object], progress_plot_runs[0]["cost_summary"])
     assert isinstance(progress_cost["cost"], int | float)
     training_estimate = cast(dict[str, object], progress_records[0]["training_estimate"])
+    training_cost_integral = cast(dict[str, object], training_estimate["cost_integral"])
+    assert training_cost_integral["kind"] == "compute-cost-integral"
+    assert math.isclose(
+        cast(float, training_estimate["cost"]),
+        cast(float, training_cost_integral["value"]),
+    )
+    assert math.isclose(
+        cast(float, progress_cost["cost"]),
+        cast(float, training_estimate["cost"]),
+    )
     materialized_progress_record = load_object_document(
         summary.training_summary_path.read_bytes(),
         description="training progress",
@@ -3004,9 +3015,14 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
     assert len(final_plot_runs) == 1
     assert final_plot_runs[0]["result_status"] == "provisional"
     final_estimate = cast(dict[str, object], final_record["training_estimate"])
+    final_cost_summary = cast(dict[str, object], final_record["cost_summary"])
     assert math.isclose(
         cast(float, final_plot_runs[0]["score"]),
         cast(float, final_estimate["score"]),
+    )
+    assert math.isclose(
+        cast(float, final_cost_summary["cost"]),
+        cast(float, final_estimate["cost"]),
     )
 
 
@@ -3111,6 +3127,7 @@ def _score_estimate(
                 "seed": 101,
                 "sample_count": 2,
                 "mean_accepted_mass": accepted_mass,
+                "input_shape": [1, 16, 16],
             }
         ],
     }

@@ -46,11 +46,6 @@ _view_manifest_record = RecordSpec(
         ),
         "metric_name": FieldSpec(kind="string"),
         "score_direction": FieldSpec(kind="string"),
-        "cost_axes": FieldSpec(
-            kind="sequence",
-            item=FieldSpec(kind="string"),
-            required=False,
-        ),
     }
 )
 
@@ -73,7 +68,6 @@ class ViewManifest:
     source_artifacts: tuple[ArtifactReference, ...]
     metric_name: str
     score_direction: _ScoreDirection
-    cost_axes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         try:
@@ -106,11 +100,6 @@ class ViewManifest:
             raise ViewManifestValidationError(
                 f"duplicate source artifact reference: {duplicate_source}"
             )
-        for axis in self.cost_axes:
-            _validate_name(axis, field="cost_axes")
-        duplicate_axis = _first_duplicate(self.cost_axes)
-        if duplicate_axis is not None:
-            raise ViewManifestValidationError(f"duplicate cost axis: {duplicate_axis}")
         object.__setattr__(
             self,
             "source_artifacts",
@@ -127,10 +116,6 @@ class ViewManifest:
                     validated["source_artifacts"],
                     "source_artifacts",
                 )
-            )
-            cost_axes = tuple(
-                _extract.string(item, "cost_axes")
-                for item in _extract.sequence(validated.get("cost_axes", ()), "cost_axes")
             )
         except ValueError as error:
             raise ViewManifestValidationError(str(error)) from error
@@ -150,7 +135,6 @@ class ViewManifest:
                 _ScoreDirection,
                 _extract.string(validated["score_direction"], "score_direction"),
             ),
-            cost_axes=cost_axes,
         )
 
     @property
@@ -192,8 +176,6 @@ class ViewManifest:
             "metric_name": self.metric_name,
             "score_direction": self.score_direction,
         }
-        if self.cost_axes:
-            record["cost_axes"] = list(self.cost_axes)
         return record
 
 
@@ -236,15 +218,6 @@ def _first_duplicate_reference(
         if key in seen:
             return _reference_identity(reference)
         seen.add(key)
-    return None
-
-
-def _first_duplicate(values: tuple[str, ...]) -> str | None:
-    seen: set[str] = set()
-    for value in values:
-        if value in seen:
-            return value
-        seen.add(value)
     return None
 
 

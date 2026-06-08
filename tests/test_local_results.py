@@ -9,6 +9,7 @@ import pytest
 
 import leibniz.local_results as local_results
 from leibniz.architectures import ArchitectureManifestDocument
+from leibniz.benchmark_evaluation import sampled_competence_compute_cost_integral
 from leibniz.benchmark_runner import (
     BenchmarkEvaluationPlan,
     BenchmarkRunPlan,
@@ -470,7 +471,7 @@ def test_integrated_model_cost_reconstructs_point_density_from_input_shape() -> 
     assert first_compute is not None
     assert second_compute is not None
 
-    cost_integral = cast(Any, local_results)._model_compute_cost_integral(
+    cost_integral = sampled_competence_compute_cost_integral(
         points=(
             {
                 "complexity": 1.0,
@@ -484,6 +485,8 @@ def test_integrated_model_cost_reconstructs_point_density_from_input_shape() -> 
             },
         ),
         architecture=architecture,
+        error_type=local_results.LocalResultImportError,
+        field_prefix="compute_cost_point",
     )
 
     assert math.isclose(cost_integral.value, 32.0 * (first_compute + second_compute))

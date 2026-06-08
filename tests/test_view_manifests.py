@@ -19,7 +19,6 @@ def test_view_manifest_parses_and_canonicalizes_measurement_score_view() -> None
     assert manifest.projection_kind == "ranking"
     assert manifest.metric_name == "negative_log_score"
     assert manifest.score_direction == "lower"
-    assert manifest.cost_axes == ("parameter_count",)
     assert manifest.to_record() == _measurement_score_view_manifest_record()
     assert manifest.digest == ContentDigest.from_value(manifest.to_record())
 
@@ -88,7 +87,6 @@ def test_view_manifest_parses_evaluation_bundle_subject() -> None:
         ("metric_name", "Not A Metric", "metric_name must be"),
         ("score_direction", "middle", "unsupported score_direction"),
         ("source_artifacts", [], "source_artifacts must contain"),
-        ("cost_axes", ["parameter_count", "parameter_count"], "duplicate cost axis"),
     ],
 )
 def test_view_manifest_rejects_invalid_records(
@@ -139,7 +137,6 @@ def _measurement_score_view_manifest_record() -> dict[str, object]:
         ],
         "metric_name": "negative_log_score",
         "score_direction": "lower",
-        "cost_axes": ["parameter_count"],
     }
 
 
