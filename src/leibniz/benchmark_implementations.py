@@ -72,14 +72,6 @@ class Generator(Protocol):
         request: ComplexityRequest,
     ) -> ComplexityCandidate | None: ...
 
-    def complexity_candidates_for_request(
-        self,
-        *,
-        request: ComplexityRequest,
-    ) -> Sequence[ComplexityCandidate]:
-        """Return concrete benchmark candidates inside a complexity request band."""
-        ...
-
     def complexity_curriculum_candidates(
         self,
         *,

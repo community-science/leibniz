@@ -81,7 +81,6 @@ _default_generation_memory_limit_bytes = 32_768_000
 _complexity_class_digit_count = 10
 _complexity_class_canvas_minimum_side = 16
 _complexity_class_canvas_side_step = 4
-_maximum_complexity_class_candidates_per_request = 64
 _complexity_class_cardinality_relative_tolerance = 1e-12
 _default_constructed_affine_transform_count = 2
 _canonical_digits_cardinality = _complexity_class_digit_count
@@ -1439,45 +1438,25 @@ class Generator:
         *,
         request: ComplexityRequest,
     ) -> ComplexityCandidate | None:
-        """Return the smallest symmetric finite complexity class inside a request band."""
-
-        complexity_class = self._first_symmetric_complexity_class_in_request(request=request)
-        if complexity_class is None:
-            return None
-        return complexity_class.candidate()
-
-    def complexity_candidates_for_request(
-        self,
-        *,
-        request: ComplexityRequest,
-    ) -> tuple[ComplexityCandidate, ...]:
-        """Return symmetric Digits candidates inside a complexity request band."""
+        """Return the direct representative finite complexity class inside a request band."""
 
         if request.maximum < self.minimum_complexity().value:
-            return ()
-        minimum_cardinality = _ceil_complexity_class_cardinality(
+            return None
+        requested_cardinality = _ceil_complexity_class_cardinality(
             max(request.minimum, self.minimum_complexity().value)
         )
         maximum_cardinality = _floor_complexity_class_cardinality(request.maximum)
-        if maximum_cardinality < minimum_cardinality:
-            return ()
-        resolution_assignment = self._resolution_assignment_for_complexity_request(
-            request
+        if maximum_cardinality < requested_cardinality:
+            return None
+        complexity_class = self._complexity_candidate_for_requested_cardinality(
+            requested_cardinality=requested_cardinality,
+            resolution_assignment=self._resolution_assignment_for_complexity_request(
+                request
+            ),
         )
-        candidates: list[ComplexityCandidate] = []
-        for requested_cardinality in range(
-            minimum_cardinality,
-            maximum_cardinality + 1,
-        ):
-            if len(candidates) >= _maximum_complexity_class_candidates_per_request:
-                break
-            complexity_class = self._complexity_candidate_for_requested_cardinality(
-                requested_cardinality=requested_cardinality,
-                resolution_assignment=resolution_assignment,
-            )
-            if request.contains(complexity_class.measure()):
-                candidates.append(complexity_class.candidate())
-        return tuple(candidates)
+        if not request.contains(complexity_class.measure()):
+            return None
+        return complexity_class.candidate()
 
     def complexity_curriculum_candidates(
         self,
@@ -1591,77 +1570,6 @@ class Generator:
             requested_cardinality=requested_cardinality,
             resolution_assignment=resolution_assignment,
         )
-
-    def _symmetric_complexity_classes_in_cardinality_range(
-        self,
-        *,
-        minimum_cardinality: int,
-        maximum_cardinality: int,
-        resolution_assignment: AxisAssignment,
-    ) -> tuple[_DigitsComplexityClass, ...]:
-        _require_generation_positive_integer(minimum_cardinality, "minimum_cardinality")
-        _require_generation_positive_integer(maximum_cardinality, "maximum_cardinality")
-        if maximum_cardinality < minimum_cardinality:
-            return ()
-        complexity_classes: list[_DigitsComplexityClass] = []
-        minimum_transform_count = max(
-            1,
-            math.ceil(minimum_cardinality / _complexity_class_digit_count),
-        )
-        maximum_transform_count = max(
-            1,
-            maximum_cardinality // _complexity_class_digit_count,
-        )
-        for affine_grid in _constructed_affine_grids_in_transform_count_range(
-            minimum_transform_count=minimum_transform_count,
-            maximum_transform_count=maximum_transform_count,
-            resolution_assignment=resolution_assignment,
-        ):
-            if len(complexity_classes) >= _maximum_complexity_class_candidates_per_request:
-                break
-            complexity_classes.append(
-                _DigitsComplexityClass(
-                    affine_grid=affine_grid,
-                    requested_cardinality=(
-                        _complexity_class_digit_count * affine_grid.transform_count
-                    ),
-                    resolution_assignment=resolution_assignment,
-                )
-            )
-        return tuple(
-            sorted(
-                complexity_classes,
-                key=lambda complexity_class: (
-                    complexity_class.cardinality,
-                    complexity_class.digit_count,
-                    complexity_class.affine_transform_count,
-                ),
-            )
-        )
-
-    def _first_symmetric_complexity_class_in_request(
-        self,
-        *,
-        request: ComplexityRequest,
-    ) -> _DigitsComplexityClass | None:
-        if request.maximum < self.minimum_complexity().value:
-            return None
-        minimum_cardinality = _ceil_complexity_class_cardinality(
-            max(request.minimum, self.minimum_complexity().value)
-        )
-        maximum_cardinality = _floor_complexity_class_cardinality(request.maximum)
-        if maximum_cardinality < minimum_cardinality:
-            return None
-        resolution_assignment = self._resolution_assignment_for_complexity_request(
-            request
-        )
-        complexity_class = self._complexity_candidate_for_requested_cardinality(
-            requested_cardinality=minimum_cardinality,
-            resolution_assignment=resolution_assignment,
-        )
-        if request.contains(complexity_class.measure()):
-            return complexity_class
-        return None
 
     def _materialization_plan(
         self,
@@ -1999,7 +1907,7 @@ class Generator:
         seed: int,
     ) -> Mapping[str, object]:
         request = ComplexityRequest(minimum=minimum, maximum=maximum)
-        candidates = self.complexity_candidates_for_request(request=request)
+        complexity_classes = self._console_preview_complexity_classes(request=request)
         samples: list[Mapping[str, object]] = []
         materialization_declaration = ArtifactReference(
             kind="materialization-declaration",
@@ -2009,9 +1917,6 @@ class Generator:
         transform = self.formation.variation_transform
         transform_record = transform.to_record()
         scaled_factors = tuple(self.latent_factors.sample_factors)
-        complexity_classes = tuple(
-            self._complexity_class_for_candidate(candidate) for candidate in candidates
-        )
 
         for candidate_index, component_index, transform_index in _preview_sample_coordinates(
             complexity_classes,
@@ -2097,9 +2002,7 @@ class Generator:
                 "maximum": maximum,
             },
             "complexity_cardinalities": [
-                candidate.cardinality
-                for candidate in candidates
-                if candidate.cardinality is not None
+                complexity_class.cardinality for complexity_class in complexity_classes
             ],
             "presentation": {
                 "sample_card_density": "compact" if len(samples) > 80 else "standard",
@@ -2107,6 +2010,35 @@ class Generator:
             },
             "samples": samples,
         }
+
+    def _console_preview_complexity_classes(
+        self,
+        *,
+        request: ComplexityRequest,
+    ) -> tuple[_DigitsComplexityClass, ...]:
+        if request.maximum < self.minimum_complexity().value:
+            return ()
+        minimum_cardinality = _ceil_complexity_class_cardinality(
+            max(request.minimum, self.minimum_complexity().value)
+        )
+        maximum_cardinality = _floor_complexity_class_cardinality(request.maximum)
+        if maximum_cardinality < minimum_cardinality:
+            return ()
+        resolution_assignment = self._resolution_assignment_for_complexity_request(
+            request
+        )
+        complexity_classes: list[_DigitsComplexityClass] = []
+        for cardinality in range(minimum_cardinality, maximum_cardinality + 1):
+            try:
+                complexity_class = self._complexity_candidate_for_requested_cardinality(
+                    requested_cardinality=cardinality,
+                    resolution_assignment=resolution_assignment,
+                )
+            except ObservationGenerationError:
+                continue
+            if request.contains(complexity_class.measure()):
+                complexity_classes.append(complexity_class)
+        return tuple(complexity_classes)
 
     def _complexity_class_for_candidate(
         self,
@@ -2612,20 +2544,6 @@ def _constructed_affine_grid(
         rotation_bounds=bounds["rotation"],
         x_shear_bounds=bounds["x_shear"],
     )
-
-
-def _constructed_affine_grids_in_transform_count_range(
-    *,
-    minimum_transform_count: int,
-    maximum_transform_count: int,
-    resolution_assignment: AxisAssignment,
-) -> tuple[_ConstructedAffineGrid, ...]:
-    grid = _constructed_affine_grid_in_transform_count_range(
-        minimum_transform_count=minimum_transform_count,
-        maximum_transform_count=maximum_transform_count,
-        resolution_assignment=resolution_assignment,
-    )
-    return () if grid is None else (grid,)
 
 
 def _constructed_affine_grid_in_transform_count_range(

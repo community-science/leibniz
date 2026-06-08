@@ -275,29 +275,11 @@ class Generator:
     ) -> ComplexityCandidate | None:
         """Return the first sample-space-cardinality class inside a complexity band."""
 
-        candidates = self.complexity_candidates_for_request(request=request)
-        if not candidates:
-            return None
-        return candidates[0]
-
-    def complexity_candidates_for_request(
-        self,
-        *,
-        request: ComplexityRequest,
-    ) -> tuple[ComplexityCandidate, ...]:
-        """Return exact sample-space-cardinality candidates inside a complexity band."""
-
         minimum_cardinality = _ceil_cardinality(request.minimum)
         maximum_cardinality = min(_floor_cardinality(request.maximum), _family_capacity())
         if maximum_cardinality < minimum_cardinality:
-            return ()
-        return tuple(
-            self._candidate_for_cardinality(cardinality)
-            for cardinality in range(
-                minimum_cardinality,
-                min(maximum_cardinality, minimum_cardinality + 63) + 1,
-            )
-        )
+            return None
+        return self._candidate_for_cardinality(minimum_cardinality)
 
     def complexity_curriculum_candidates(
         self,

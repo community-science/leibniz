@@ -484,20 +484,20 @@ def test_digits_oracle_inference_reference_spans_requested_cost() -> None:
     assert components["pixel_count"] == costs[-1]
 
 
-def test_digits_generator_high_cardinality_request_has_one_representative() -> None:
+def test_digits_generator_high_cardinality_request_has_direct_representative() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
-    candidates = generator.complexity_candidates_for_request(
+    candidate = generator.complexity_candidate_for_request(
         request=ComplexityRequest(
             minimum=21.0,
             maximum=22.0,
         )
     )
 
-    assert len(candidates) >= 1
-    candidate = candidates[0]
+    assert candidate is not None
     assert candidate.cardinality is not None
     assert 21.0 <= math.log2(candidate.cardinality) <= 22.0
+    assert not hasattr(generator, "complexity_candidates_for_request")
 
 
 def test_digits_generator_materializes_large_target_complexity_class_directly() -> None:

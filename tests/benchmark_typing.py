@@ -65,12 +65,6 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         request: ComplexityRequest,
     ) -> ComplexityCandidate | None: ...
 
-    def complexity_candidates_for_request(
-        self,
-        *,
-        request: ComplexityRequest,
-    ) -> Sequence[ComplexityCandidate]: ...
-
     def complexity_curriculum_candidates(
         self,
         *,
