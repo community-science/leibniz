@@ -355,6 +355,27 @@ def test_chess_sampling_does_not_repeat_before_exhausting_cardinality() -> None:
     assert len(observable_state_ids) == len(frozenset(observable_state_ids))
 
 
+def test_chess_spectator_enabled_rungs_do_not_repeat_low_cardinality_boards() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    low_request = ComplexityRequest(minimum=2.0, maximum=2.0)
+    spectator_request = ComplexityRequest(minimum=4.0, maximum=4.0)
+
+    low_sample_set = generator(seed=404, shape=4, complexity_request=low_request)
+    spectator_sample_set = generator(
+        seed=416,
+        shape=4,
+        complexity_request=spectator_request,
+    )
+
+    low_observable_ids = {
+        sample.observable_state_id for sample in low_sample_set.samples
+    }
+    spectator_observable_ids = {
+        sample.observable_state_id for sample in spectator_sample_set.samples
+    }
+    assert not low_observable_ids & spectator_observable_ids
+
+
 @pytest.mark.parametrize("cardinality", [1, 2, 4, 8, 9, 16, 32, 64, 257, 1024])
 def test_chess_sample_mapping_has_no_repetition_within_cardinality(
     cardinality: int,

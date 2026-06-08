@@ -535,8 +535,9 @@ def _global_sample_index(*, cardinality: int, local_index: int) -> int:
     if cardinality == 1:
         return 0
     enabled_capacity = _enabled_family_capacity_for_cardinality(cardinality)
-    offset = (cardinality * (cardinality - 1) // 2) % (
-        enabled_capacity - cardinality + 1
+    lower_bound = _family_index_lower_bound_for_cardinality(cardinality)
+    offset = lower_bound + (cardinality * (cardinality - 1) // 2) % (
+        enabled_capacity - lower_bound - cardinality + 1
     )
     return offset + local_index
 
@@ -557,6 +558,14 @@ def _enabled_spectator_count_for_cardinality(cardinality: int) -> int:
         len(_spectator_squares()),
         math.ceil(math.log2(required_masks)),
     )
+
+
+def _family_index_lower_bound_for_cardinality(cardinality: int) -> int:
+    _require_sample_cardinality(cardinality)
+    spectator_count = _enabled_spectator_count_for_cardinality(cardinality)
+    if spectator_count == 0:
+        return 0
+    return len(_board_transforms()) * (1 << (spectator_count - 1))
 
 
 def _representative_local_indices(cardinality: int) -> tuple[int, ...]:
