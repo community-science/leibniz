@@ -14,7 +14,6 @@ from leibniz.architectures import ArchitectureManifest
 from leibniz.tensor_shapes import TensorShape
 
 __all__ = [
-    "apply_softmax_predictions",
     "architecture_tensor_runtime_issue",
     "architecture_supported_by_tensor_runtime",
     "build_architecture_modules",
@@ -31,6 +30,7 @@ __all__ = [
     "preferred_tensor_runtime_device_kind",
     "seed_runtime",
     "softmax_prediction_rows",
+    "softmax_target_masses",
     "synchronize_runtime",
     "TensorRuntime",
     "TensorRuntimeError",
@@ -536,16 +536,25 @@ def no_grad_context(runtime: TensorRuntime) -> Any:
     return _torch().no_grad()
 
 
-def apply_softmax_predictions(
-    runtime: TensorRuntime, module: Any, fields: Any
-) -> list[list[float]]:
-    _ = runtime
-    return _torch().softmax(module(fields), dim=1).tolist()
-
-
 def softmax_prediction_rows(runtime: TensorRuntime, logits: Any) -> list[list[float]]:
     _ = runtime
     return _torch().softmax(logits.detach(), dim=1).tolist()
+
+
+def softmax_target_masses(
+    runtime: TensorRuntime,
+    logits: Any,
+    targets: Any,
+) -> list[float]:
+    """Return each prediction row's probability mass assigned to its target."""
+
+    _ = runtime
+    torch = _torch()
+    probabilities = torch.softmax(logits.detach(), dim=1)
+    if targets.shape == probabilities.shape:
+        return (probabilities * targets).sum(dim=1).detach().tolist()
+    target_indexes = targets.reshape((-1, 1)).long()
+    return probabilities.gather(1, target_indexes).reshape((-1,)).detach().tolist()
 
 
 def build_optimizer(

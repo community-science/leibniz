@@ -14,6 +14,7 @@ from leibniz.tensor_runtime import (
     optimizer_step,
     resolve_tensor_runtime,
     runtime_roofline_record,
+    softmax_target_masses,
     tensor_runtime_device_kinds,
     validate_tensor_runtime_device,
 )
@@ -55,6 +56,24 @@ def test_resolve_tensor_runtime_rejects_unavailable_explicit_device() -> None:
     else:
         with pytest.raises(TensorRuntimeError, match="cuda is not available"):
             resolve_tensor_runtime("cuda")
+
+
+def test_softmax_target_masses_accepts_labels_and_distributions() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    logits = runtime.torch.tensor([[0.0, 2.0, 1.0], [3.0, 1.0, 0.0]])
+    labels = runtime.torch.tensor([1, 0])
+    distributions = runtime.torch.tensor([[0.0, 1.0, 0.0], [0.5, 0.5, 0.0]])
+
+    label_masses = softmax_target_masses(runtime, logits, labels)
+    distribution_masses = softmax_target_masses(runtime, logits, distributions)
+    probabilities = runtime.torch.softmax(logits, dim=1)
+
+    assert label_masses == pytest.approx(
+        probabilities.gather(1, labels.reshape((-1, 1))).reshape((-1,)).tolist()
+    )
+    assert distribution_masses == pytest.approx(
+        (probabilities * distributions).sum(dim=1).tolist()
+    )
 
 
 def test_loss_search_optimizer_decreases_loss_without_learning_rate() -> None:
