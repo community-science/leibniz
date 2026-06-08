@@ -193,6 +193,23 @@ export type TrainingEstimateComparisonRecord = {
   points: TrainingEstimateComparisonPointRecord[];
 };
 
+export type ComplexityIntegralTermRecord = {
+  kind: string;
+  complexity_minimum: number;
+  complexity_maximum: number;
+  complexity_width: number;
+  density: number;
+  contribution: number;
+  representative_complexity?: number;
+  sample_count?: number;
+};
+
+export type ComplexityIntegralRecord = {
+  kind: string;
+  value: number;
+  terms: ComplexityIntegralTermRecord[];
+};
+
 export type CostSummaryRecord = {
   component_count: number;
   parameter_count?: number;
@@ -210,9 +227,8 @@ export type ModelResultRecord = {
   architecture_digest: string;
   benchmark_id: string;
   score: number;
-  score_basis?: Record<string, unknown>;
-  cost_basis?: Record<string, unknown>;
-  observed_complexities: number[];
+  score_integral: ComplexityIntegralRecord;
+  cost_integral?: ComplexityIntegralRecord;
   points: CompetencePointRecord[];
   cost_summary: CostSummaryRecord;
   run_ids: string[];
@@ -385,7 +401,7 @@ function parseReferenceCurvePoint(value: unknown, path: string): ReferenceCurveP
     complexity: requireNumber(record.complexity, `${path}.complexity`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
     cost: requireNumber(record.cost, `${path}.cost`, transportError),
-    metadata: optional(record.metadata, `${path}.metadata`, parseScoreBasis),
+    metadata: optional(record.metadata, `${path}.metadata`, parseRecordMetadata),
   };
 }
 
@@ -401,9 +417,8 @@ function parseModelResult(value: unknown, path: string): ModelResultRecord {
     architecture_digest: requireString(record.architecture_digest, `${path}.architecture_digest`, transportError),
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
-    score_basis: optional(record.score_basis, `${path}.score_basis`, parseScoreBasis),
-    cost_basis: optional(record.cost_basis, `${path}.cost_basis`, parseScoreBasis),
-    observed_complexities: numberArray(record.observed_complexities, `${path}.observed_complexities`),
+    score_integral: parseComplexityIntegral(record.score_integral, `${path}.score_integral`),
+    cost_integral: optional(record.cost_integral, `${path}.cost_integral`, parseComplexityIntegral),
     points: arrayOf(record.points, `${path}.points`, parseCompetencePoint),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
     run_ids: stringArray(record.run_ids, `${path}.run_ids`),
@@ -431,6 +446,38 @@ function parseTrainingEstimateComparison(value: unknown, path: string): Training
     matched_point_count: requireNumber(record.matched_point_count, `${path}.matched_point_count`, transportError),
     points: arrayOf(record.points, `${path}.points`, parseTrainingEstimateComparisonPoint),
   }) as TrainingEstimateComparisonRecord;
+}
+
+function parseComplexityIntegral(value: unknown, path: string): ComplexityIntegralRecord {
+  const record = requireRecord(value, path, transportError);
+  requireStrings(record, path, ['kind']);
+  return {
+    kind: requireString(record.kind, `${path}.kind`, transportError),
+    value: requireNumber(record.value, `${path}.value`, transportError),
+    terms: arrayOf(record.terms, `${path}.terms`, parseComplexityIntegralTerm),
+  };
+}
+
+function parseComplexityIntegralTerm(value: unknown, path: string): ComplexityIntegralTermRecord {
+  const record = requireRecord(value, path, transportError);
+  requireStrings(record, path, ['kind']);
+  requireNumbers(record, path, [
+    'complexity_minimum',
+    'complexity_maximum',
+    'complexity_width',
+    'density',
+    'contribution',
+  ]);
+  return {
+    kind: requireString(record.kind, `${path}.kind`, transportError),
+    complexity_minimum: requireNumber(record.complexity_minimum, `${path}.complexity_minimum`, transportError),
+    complexity_maximum: requireNumber(record.complexity_maximum, `${path}.complexity_maximum`, transportError),
+    complexity_width: requireNumber(record.complexity_width, `${path}.complexity_width`, transportError),
+    density: requireNumber(record.density, `${path}.density`, transportError),
+    contribution: requireNumber(record.contribution, `${path}.contribution`, transportError),
+    representative_complexity: optionalNumber(record.representative_complexity, `${path}.representative_complexity`, transportError),
+    sample_count: optionalNumber(record.sample_count, `${path}.sample_count`, transportError),
+  };
 }
 
 function parseTrainingEstimateComparisonPoint(value: unknown, path: string): TrainingEstimateComparisonPointRecord {
@@ -573,7 +620,7 @@ function parseCostSummary(value: unknown, path: string): CostSummaryRecord {
   };
 }
 
-function parseScoreBasis(value: unknown, path: string): Record<string, unknown> {
+function parseRecordMetadata(value: unknown, path: string): Record<string, unknown> {
   return requireRecord(value, path, transportError);
 }
 

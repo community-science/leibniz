@@ -14,6 +14,7 @@ import {
 import type { ModelInspectionRecord } from '../src/leibniz/console/_web_src/src/modelInspections.ts';
 import type {
   BenchmarkResultRecord,
+  ModelResultRecord,
   ResultViewRecord,
 } from '../src/leibniz/console/_web_src/src/resultViews.ts';
 import { parseResultViewRecords } from '../src/leibniz/console/_web_src/src/resultViews.ts';
@@ -21,6 +22,106 @@ import { parseResultViewRecords } from '../src/leibniz/console/_web_src/src/resu
 const targetBenchmark = 'benchmarks.target@0.1.0';
 const otherBenchmark = 'benchmarks.other@0.1.0';
 const architectureDigest = 'sha256:abcdef1234567890';
+
+function modelResult({
+  architectureDigest,
+  cost,
+  inferenceCompute,
+  measurementCount,
+  modelKey,
+  runIds,
+  score,
+  storageBytes,
+  trainingCompute,
+}: {
+  architectureDigest: string;
+  cost: number;
+  inferenceCompute: number;
+  measurementCount: number;
+  modelKey: string;
+  runIds: string[];
+  score: number;
+  storageBytes: number;
+  trainingCompute: number;
+}): ModelResultRecord {
+  return {
+    architecture_digest: architectureDigest,
+    benchmark_id: targetBenchmark,
+    cost_integral: {
+      kind: 'compute-cost-integral',
+      value: cost,
+      terms: [
+        {
+          kind: 'measured-compute-cost',
+          complexity_minimum: 0,
+          complexity_maximum: score,
+          complexity_width: score,
+          density: cost / score,
+          contribution: cost,
+          representative_complexity: score,
+        },
+      ],
+    },
+    cost_summary: {
+      component_count: 1,
+      cost,
+      inference_compute: inferenceCompute,
+      storage_bytes: storageBytes,
+      training_compute: trainingCompute,
+    },
+    measurement_count: measurementCount,
+    model_key: modelKey,
+    points: [
+      {
+        complexity: score,
+        score,
+        run_ids: runIds,
+      },
+    ],
+    result_status: 'accepted',
+    run_ids: runIds,
+    score,
+    score_integral: {
+      kind: 'sampled-competence-integral',
+      value: score,
+      terms: [
+        {
+          kind: 'measured-competence',
+          complexity_minimum: 0,
+          complexity_maximum: score,
+          complexity_width: score,
+          density: 1,
+          contribution: score,
+          representative_complexity: score,
+        },
+      ],
+    },
+    source_kinds: ['local'],
+  };
+}
+
+const modelA = modelResult({
+  architectureDigest,
+  cost: 640,
+  inferenceCompute: 20,
+  measurementCount: 2,
+  modelKey: 'model-a',
+  runIds: ['run-a'],
+  score: 0.75,
+  storageBytes: 40,
+  trainingCompute: 360,
+});
+const modelB = modelResult({
+  architectureDigest: 'sha256:fedcba9876543210',
+  cost: 2560,
+  inferenceCompute: 80,
+  measurementCount: 1,
+  modelKey: 'model-b',
+  runIds: ['run-b'],
+  score: 0.5,
+  storageBytes: 160,
+  trainingCompute: 1440,
+});
 
 assertEqual(
   benchmarkCostAxisKey,
@@ -36,108 +137,10 @@ assertEqual(
 const result: BenchmarkResultRecord = {
   benchmark_id: targetBenchmark,
   frontiers: {
-    cost: [
-      {
-        architecture_digest: architectureDigest,
-        benchmark_id: targetBenchmark,
-        cost_summary: {
-          component_count: 1,
-          cost: 640,
-          inference_compute: 20,
-          storage_bytes: 40,
-          training_compute: 360,
-        },
-        measurement_count: 2,
-        model_key: 'model-a',
-        result_status: 'accepted',
-        observed_complexities: [1, 2],
-        points: [],
-        run_ids: ['run-a'],
-        score: 0.75,
-        source_kinds: ['local'],
-      },
-    ],
+    cost: [modelA],
   },
-  leaderboard: [
-    {
-      architecture_digest: architectureDigest,
-      benchmark_id: targetBenchmark,
-      cost_summary: {
-        component_count: 1,
-        cost: 640,
-        inference_compute: 20,
-        storage_bytes: 40,
-        training_compute: 360,
-      },
-      measurement_count: 2,
-      model_key: 'model-a',
-      result_status: 'accepted',
-      observed_complexities: [1, 2],
-      points: [],
-      run_ids: ['run-a'],
-      score: 0.75,
-      source_kinds: ['local'],
-    },
-    {
-      architecture_digest: 'sha256:fedcba9876543210',
-      benchmark_id: targetBenchmark,
-      cost_summary: {
-        component_count: 2,
-        cost: 2560,
-        inference_compute: 80,
-        storage_bytes: 160,
-        training_compute: 1440,
-      },
-      measurement_count: 1,
-      model_key: 'model-b',
-      result_status: 'accepted',
-      observed_complexities: [1],
-      points: [],
-      run_ids: ['run-b'],
-      score: 0.5,
-      source_kinds: ['local'],
-    },
-  ],
-  model_candidates: [
-    {
-      architecture_digest: architectureDigest,
-      benchmark_id: targetBenchmark,
-      cost_summary: {
-        component_count: 1,
-        cost: 640,
-        inference_compute: 20,
-        storage_bytes: 40,
-        training_compute: 360,
-      },
-      measurement_count: 2,
-      model_key: 'model-a',
-      result_status: 'accepted',
-      observed_complexities: [1, 2],
-      points: [],
-      run_ids: ['run-a'],
-      score: 0.75,
-      source_kinds: ['local'],
-    },
-    {
-      architecture_digest: 'sha256:fedcba9876543210',
-      benchmark_id: targetBenchmark,
-      cost_summary: {
-        component_count: 2,
-        cost: 2560,
-        inference_compute: 80,
-        storage_bytes: 160,
-        training_compute: 1440,
-      },
-      measurement_count: 1,
-      model_key: 'model-b',
-      result_status: 'accepted',
-      observed_complexities: [1],
-      points: [],
-      run_ids: ['run-b'],
-      score: 0.5,
-      source_kinds: ['local'],
-    },
-  ],
+  leaderboard: [modelA, modelB],
+  model_candidates: [modelA, modelB],
   reference_curves: [
     {
       kind: 'oracle-inference-compute-reference-v1',

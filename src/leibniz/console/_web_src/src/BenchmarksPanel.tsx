@@ -532,7 +532,7 @@ function ModelManifestDetail({
         <dt>Architecture</dt>
         <dd>{model.architecture_digest}</dd>
         <dt>Observed {complexityAxis ?? 'Complexity'}</dt>
-        <dd>{model.observed_complexities.join(', ') || 'none'}</dd>
+        <dd>{observedComplexityLabel(model)}</dd>
         <dt>Manifest</dt>
         <dd>{inspection?.model_manifest === undefined ? 'not recorded' : referenceLabel(inspection.model_manifest)}</dd>
       </dl>
@@ -580,7 +580,7 @@ function ModelArchitectureDetail({
         <dt>Output</dt>
         <dd>{inspection === undefined ? 'unknown' : shapeLabel(inspection.output_shape)}</dd>
         <dt>Observed {complexityAxis ?? 'Complexity'}</dt>
-        <dd>{model.observed_complexities.join(', ') || 'none'}</dd>
+        <dd>{observedComplexityLabel(model)}</dd>
         <dt>Sources</dt>
         <dd>{model.source_kinds.join(', ') || 'unknown'}</dd>
       </dl>
@@ -960,6 +960,11 @@ function trainingValidationHistory(run: RunResultRecord): ValidationHistoryPoint
 
 function shapeLabel(shape: number[]): string {
   return shape.join(' x ');
+}
+
+function observedComplexityLabel(model: BenchmarkModelCandidate): string {
+  const complexities = model.points.map((point) => point.complexity);
+  return complexities.length === 0 ? 'none' : complexities.join(', ');
 }
 
 function optionalNumberLabel(value: number | undefined): string {

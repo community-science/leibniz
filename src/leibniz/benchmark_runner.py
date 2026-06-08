@@ -20,7 +20,7 @@ from leibniz.benchmark_evaluation import (
     ValidationCompetencePoint,
     finite_measurements_for_predictions,
     sampled_competence_curriculum_record,
-    sampled_competence_frontier_score,
+    sampled_competence_frontier_integral,
     sampled_competence_record,
     validation_competence_frontier_advances,
 )
@@ -2037,7 +2037,7 @@ def _train_and_predict_on_device(
         chance_mass = _chance_accepted_mass(outcome_ids)
         frontier_point = _training_history_frontier_point(latest)
         with phase_timings.span("training_frontier.advance_decision"):
-            should_advance = _frontier_plateau_advances(
+            should_advance = validation_competence_frontier_advances(
                 frontier_point=frontier_point,
                 previous_frontier_points=tuple(frontier_plateau_points),
                 chance_mass=chance_mass,
@@ -3291,7 +3291,7 @@ def _training_gate_score_estimate(
     compact_sampled_competence = _compact_training_sampled_competence(sampled_competence)
     point_records = _training_score_estimate_points(compact_sampled_competence)
     chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
-    score = sampled_competence_frontier_score(
+    score_integral = sampled_competence_frontier_integral(
         tuple(
             CompetencePoint(
                 complexity=_required_float(
@@ -3320,6 +3320,7 @@ def _training_gate_score_estimate(
         ),
         chance_mass=chance_mass,
     )
+    score = score_integral.value
     record: dict[str, object] = {
         "kind": "training-running-score-estimate",
         "status": "provisional",
@@ -3332,6 +3333,7 @@ def _training_gate_score_estimate(
         "max_inference_compute": max_inference_compute,
         "running_max_inference_compute": running_max_inference_compute,
         "chance_mass": chance_mass,
+        "score_integral": score_integral.to_record(kind="sampled-competence-integral"),
         "sampled_competence": compact_sampled_competence,
     }
     if training_compute_per_sample is not None:
@@ -3713,19 +3715,6 @@ def _tensor_batch_size(fields: Any, *, fallback: int) -> int:
     return fallback
 
 
-def _frontier_plateau_advances(
-    *,
-    frontier_point: ValidationCompetencePoint,
-    previous_frontier_points: tuple[ValidationCompetencePoint, ...],
-    chance_mass: float,
-) -> bool:
-    return validation_competence_frontier_advances(
-        frontier_point=frontier_point,
-        previous_frontier_points=previous_frontier_points,
-        chance_mass=chance_mass,
-    )
-
-
 def _evaluation_result_frontier_index(
     *,
     evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
@@ -4007,12 +3996,15 @@ def _training_estimate_record(
     if not points:
         raise BenchmarkRunnerError("training estimate requires sampled competence point")
     seed = _required_int(points[0].get("seed"), "training_estimate.seed")
+    score_integral_value = score_estimate.get("score_integral")
+    if not isinstance(score_integral_value, Mapping):
+        raise BenchmarkRunnerError("training gate score estimate is missing score integral")
+    score_integral = cast(Mapping[str, object], score_integral_value)
     return {
         "kind": "training-running-score-estimate",
         "status": "provisional",
         "evidence_status": "not-accepted",
         "score_frame": "none",
-        "score_basis": "provisional-sampled-competence",
         "scoring_recipe": score_estimate.get("scoring_recipe", "sampled-competence-v1"),
         "benchmark_id": str(summary.benchmark_id),
         "complexity_axis": None,
@@ -4022,6 +4014,7 @@ def _training_estimate_record(
         "mean_accepted_mass": mean_accepted_mass,
         "chance_mass": score_estimate.get("chance_mass"),
         "score": _training_score_estimate_score(score_estimate),
+        "score_integral": dict(score_integral),
         "validation_check": latest.validation_check,
         "step": latest.step,
         "max_inference_compute": _required_int(
