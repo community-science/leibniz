@@ -373,7 +373,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert result["benchmark_id"] == "benchmarks.digits@0.1.0"
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     measurement_count = cast(int, leaderboard[0]["measurement_count"])
-    assert measurement_count >= 64 * 9
+    assert measurement_count >= 64 * 4
     assert measurement_count % 64 == 0
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     assert isinstance(cost_summary["inference_compute"], int | float)

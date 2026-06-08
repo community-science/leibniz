@@ -660,6 +660,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert training_run.validation_history[-1].step == 1
     evaluation_record = evaluation_bundle.to_record()
     evaluation_curriculum = cast(dict[str, object], evaluation_record["evaluation_curriculum"])
+    evaluation_protocol = cast(dict[str, object], evaluation_record["evaluation_protocol"])
     training_curriculum = cast(dict[str, object], training_summary["training_curriculum"])
     curriculum_rungs = cast(list[dict[str, object]], evaluation_curriculum["rungs"])
     assert evaluation_curriculum["kind"] == "checkpoint-benchmark-evaluation-curriculum"
@@ -676,17 +677,33 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         == "monotone-frontier-validation-competence"
     )
     evaluation_frontier_index = cast(int, evaluation_curriculum["frontier_index"])
-    evaluation_lookahead = cast(
-        int,
-        cast(Any, benchmark_runner)._default_evaluation_frontier_lookahead_rungs,
-    )
     assert evaluation_frontier_index >= 0
-    requested_evaluation_rung_count = evaluation_frontier_index + 1 + evaluation_lookahead
-    if checkpoint_evaluation_throughput["capacity_limited"] is True:
-        assert evaluation_frontier_index + 1 <= len(curriculum_rungs)
-        assert len(curriculum_rungs) <= requested_evaluation_rung_count
-    else:
-        assert len(curriculum_rungs) == requested_evaluation_rung_count
+    assert evaluation_frontier_index + 1 <= len(curriculum_rungs)
+    integration_convergence = cast(
+        dict[str, object],
+        evaluation_protocol["integration_convergence"],
+    )
+    assert integration_convergence["kind"] == "adaptive-score-integral-confidence"
+    assert cast(float, integration_convergence["score_integral"]) >= 0.0
+    assert cast(float, integration_convergence["score_integral_half_width"]) >= 0.0
+    assert (
+        integration_convergence["score_integral_relative_half_width_threshold"]
+        == cast(Any, benchmark_runner)._default_evaluation_integral_relative_half_width
+    )
+    assert (
+        integration_convergence["score_integral_minimum_half_width_threshold"]
+        == cast(Any, benchmark_runner)._default_evaluation_integral_minimum_half_width
+    )
+    assert cast(float, integration_convergence["score_integral_half_width_threshold"]) > 0.0
+    assert (
+        integration_convergence["terminal_failure_threshold"]
+        == cast(Any, benchmark_runner)._default_evaluation_terminal_failure_rungs
+    )
+    if checkpoint_evaluation_throughput["capacity_limited"] is not True:
+        assert (
+            cast(int, integration_convergence["terminal_failure_count"])
+            >= cast(Any, benchmark_runner)._default_evaluation_terminal_failure_rungs
+        )
     assert [rung["index"] for rung in curriculum_rungs] == list(range(len(curriculum_rungs)))
     assert {
         cast(str, rung["complexity_axis"])
@@ -981,16 +998,23 @@ def test_evaluation_frontier_requires_confidence_above_chance() -> None:
     )
 
 
-def test_evaluation_curriculum_target_depends_only_on_evaluation_evidence() -> None:
+def test_evaluation_integration_converges_after_confident_terminal_failures() -> None:
     rung_evidence = cast(Any, benchmark_runner)._CheckpointEvaluationRungEvidence
-    target_count = cast(Any, benchmark_runner)._evaluation_curriculum_target_rung_count
+    integration_evidence = cast(Any, benchmark_runner)._evaluation_integration_evidence
     outcome_ids = tuple(f"digit-{index}" for index in range(10))
 
-    assert target_count(evaluation_results=(), outcome_ids=outcome_ids) == 1
+    def rung(index: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            index=index,
+            complexity=float(index + 1),
+            seed=101 + index,
+            complexity_minimum=float(index),
+            complexity_maximum=float(index + 1),
+        )
 
     results = (
         rung_evidence(
-            rung=SimpleNamespace(index=0),
+            rung=rung(0),
             mean_accepted_mass=0.20,
             sample_count=100,
             confidence_half_width=0.01,
@@ -998,20 +1022,26 @@ def test_evaluation_curriculum_target_depends_only_on_evaluation_evidence() -> N
         ),
     )
 
-    assert target_count(evaluation_results=results, outcome_ids=outcome_ids) == 9
+    evidence = integration_evidence(evaluation_results=results, outcome_ids=outcome_ids)
+    assert evidence.frontier_index == 0
+    assert not evidence.converged
 
     results = tuple(
         rung_evidence(
-            rung=SimpleNamespace(index=index),
-            mean_accepted_mass=0.20,
+            rung=rung(index),
+            mean_accepted_mass=0.20 if index == 0 else 0.10,
             sample_count=100,
             confidence_half_width=0.01,
             input_shape=(1, 16, 16),
         )
-        for index in range(9)
+        for index in range(4)
     )
 
-    assert target_count(evaluation_results=results, outcome_ids=outcome_ids) == 17
+    evidence = integration_evidence(evaluation_results=results, outcome_ids=outcome_ids)
+    assert evidence.frontier_index == 0
+    assert evidence.terminal_failure_count == 3
+    assert math.isclose(evidence.score_integral_half_width, math.sqrt(4) * 0.01 / 0.9)
+    assert evidence.converged
 
 
 def test_benchmark_runner_reports_only_final_evaluation_rung(
