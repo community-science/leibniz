@@ -176,7 +176,7 @@ def finite_measurements_for_predictions(
                     )
                 ),
                 "outcome_space_id": str(outcome_space.id),
-                "outcomes": [sample.outcome_id],
+                "outcomes": list(sample.target_distribution_or_one_hot()),
             },
             outcome_space=outcome_space,
         )

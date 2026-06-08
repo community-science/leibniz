@@ -3,9 +3,51 @@ import math
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
     ValidationCompetencePoint,
+    finite_measurements_for_predictions,
     sampled_competence_frontier_integral,
     validation_competence_frontier_advances,
 )
+from leibniz.identifiers import ProtocolIdentifier
+from leibniz.observation_generation import GeneratedSample, GeneratedSampleSet
+from leibniz.outcomes import Outcome, OutcomeSpace
+
+
+def test_prediction_measurements_accept_declared_target_distribution() -> None:
+    outcome_space = OutcomeSpace(
+        id=ProtocolIdentifier.parse("tests.outcomes@0.1.0"),
+        outcomes=(
+            Outcome(id="first"),
+            Outcome(id="second"),
+            Outcome(id="third"),
+        ),
+    )
+    batch = GeneratedSampleSet(
+        benchmark_id=ProtocolIdentifier.parse("tests.benchmark@0.1.0"),
+        generator_id=ProtocolIdentifier.parse("tests.generator@0.1.0"),
+        generator_version="0",
+        seed=1,
+        shape=(1,),
+        samples=(
+            GeneratedSample(
+                index=0,
+                outcome_id="first",
+                complexity=0.0,
+                target_distribution={"first": 0.5, "second": 0.5},
+            ),
+        ),
+    )
+
+    measurements = finite_measurements_for_predictions(
+        batch=batch,
+        outcome_space=outcome_space,
+        probabilities=((0.25, 0.75, 0.0),),
+        run_slug="target-distribution-test",
+    )
+
+    event = measurements[0].accepted_event
+    evidence = measurements[0].raw_scoring_evidence
+    assert event.outcomes == frozenset({"first", "second"})
+    assert math.isclose(evidence.accepted_mass, 1.0)
 
 
 def test_sampled_competence_score_counts_exact_complexity_gaps_once() -> None:

@@ -39,6 +39,7 @@ _benchmark_id = ProtocolIdentifier.parse("benchmarks.chess@0.1.0")
 _generator_id = ProtocolIdentifier.parse("benchmarks.chess.generator@0.1.0")
 _outcome_space_id = ProtocolIdentifier.parse("benchmarks.chess.uci-moves@0.1.0")
 _console_preview_limit = 4
+_console_preview_cardinalities = (1, 2, 4, 8, 16, 32, 64)
 _tensor_shape = (18, 8, 8)
 _board_preview_size = 512
 _board_preview_square_size = _board_preview_size // 8
@@ -324,7 +325,8 @@ class Generator:
     def _sample_space_cardinality_candidates(self) -> tuple[ComplexityCandidate, ...]:
         return tuple(
             self._candidate_for_cardinality(cardinality)
-            for cardinality in range(1, min(_family_capacity(), 64) + 1)
+            for cardinality in _console_preview_cardinalities
+            if cardinality <= _family_capacity()
         )
 
     def _candidate_for_cardinality(self, cardinality: int) -> ComplexityCandidate:
@@ -998,7 +1000,6 @@ def _full_sample(
         complexity_value=ComplexityValue(value=complexity),
         available_outcome_ids=position.legal_moves,
         observable_state_id=position.observation_id,
-        target_distribution=position.target_distribution,
         latent_coordinates=_latent_coordinates(
             position,
             sample_space_cardinality=sample_space_cardinality,
@@ -1018,14 +1019,15 @@ def _sample_preview_record(sample: GeneratedSample) -> Mapping[str, object]:
         ),
         "observable_state_id": sample.observable_state_id,
         "available_outcome_ids": list(sample.available_outcome_ids),
-        "target_distribution": [
-            {"outcome_id": outcome_id, "probability": probability}
-            for outcome_id, probability in sample.target_distribution_or_one_hot().items()
-        ],
         "latent_coordinates": [
             dict(coordinate) for coordinate in sample.latent_coordinates
         ],
     }
+    if sample.target_distribution is not None:
+        record["target_distribution"] = [
+            {"outcome_id": outcome_id, "probability": probability}
+            for outcome_id, probability in sample.target_distribution.items()
+        ]
     image_data_url = _sample_board_image_data_url(sample)
     if image_data_url is not None:
         record["image_data_url"] = image_data_url

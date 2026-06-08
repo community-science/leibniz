@@ -23,7 +23,7 @@ _benchmark_parent = _repository_root / "src" / "leibniz" / "benchmarks"
 _chess_benchmark_root = _benchmark_parent / "chess"
 _expected_transform_count = 8
 _expected_preview_limit = 4
-_expected_preview_batch_count = 64
+_expected_preview_batch_count = 7
 _minimum_chess_fen = "8/8/8/8/8/8/2Q5/krK5 w - - 0 1"
 
 
@@ -78,9 +78,7 @@ def test_chess_generator_returns_complexity_valued_samples_without_fields() -> N
         maximum=0.0,
     ).measure_id
     assert sample.complexity_value.value == 0.0
-    assert sample.target_distribution is not None
-    assert sample.outcome_id in sample.target_distribution
-    assert sum(sample.target_distribution.values()) == 1.0
+    assert sample.target_distribution is None
     assert len(sample.available_outcome_ids) == legal_move_count
     assert sample.outcome_id in sample.available_outcome_ids
     assert sample.latent_coordinates[0]["values"] == 1
@@ -95,14 +93,9 @@ def test_chess_sample_record_does_not_invent_image_surface_fields() -> None:
     generator = load_generator(_chess_benchmark_root)
     record = generator(seed=47, shape=()).samples[0].to_record(include_field=True)
 
-    target_distribution = cast(list[dict[str, object]], record["target_distribution"])
-    target_outcomes = {
-        cast(str, entry["outcome_id"])
-        for entry in target_distribution
-    }
-    assert record["outcome_id"] in target_outcomes
     available_outcomes = cast(list[str], record["available_outcome_ids"])
     assert record["outcome_id"] in available_outcomes
+    assert "target_distribution" not in record
     assert len(available_outcomes) == _legal_move_count(record)
     assert record["complexity_value"] == {
         "measure_id": ComplexityRequest(minimum=0.0, maximum=0.0).measure_id,
@@ -643,11 +636,15 @@ def test_chess_console_preview_uses_board_images_and_text_metadata() -> None:
     target_moves = [
         move for move in moves if cast(float, move["target_probability"]) > 0.0
     ]
-    assert len(target_moves) == len(cast(list[object], sample["target_distribution"]))
+    assert len(target_moves) == 1
     assert cast(float, target_moves[0]["target_probability"]) == 1.0
-    assert "target_distribution" in sample
+    assert "target_distribution" not in sample
     assert "available_outcome_ids" in sample
-    cardinality_16_batch = cast(dict[str, object], batches[15])
+    cardinality_16_batch = next(
+        cast(dict[str, object], batch)
+        for batch in batches
+        if cast(list[int], batch["complexity_cardinalities"]) == [16]
+    )
     cardinality_16_samples = cast(list[dict[str, object]], cardinality_16_batch["samples"])
     cardinality_16_observable_ids = [
         cast(str, sample["observable_state_id"])
