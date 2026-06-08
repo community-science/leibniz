@@ -73,6 +73,7 @@ class _MateInOnePosition:
     fen: str
     legal_moves: tuple[str, ...]
     mate_moves: tuple[str, ...]
+    mechanism_name: str
     transform_name: str
     family_index: int
     spectator_count: int
@@ -118,6 +119,8 @@ class _MateInOnePosition:
         return {
             "kind": "chess-mate-in-one-representative-analysis",
             "family": _mate_in_one_family_id,
+            "mechanism": self.mechanism_name,
+            "mechanism_piece_count": len(piece_map) - self.spectator_count,
             "transform": self.transform_name,
             "family_index": self.family_index,
             "spectator_count": self.spectator_count,
@@ -137,6 +140,7 @@ class _MateInOnePosition:
         return {
             "kind": "chess-mate-in-one-sample-representative",
             "family": _mate_in_one_family_id,
+            "mechanism": self.mechanism_name,
             "transform": self.transform_name,
             "family_index": self.family_index,
             "spectator_count": self.spectator_count,
@@ -486,6 +490,36 @@ class _BoardTransform:
     square: Callable[[int, int], tuple[int, int]]
 
 
+@dataclass(frozen=True, slots=True)
+class _MateMechanism:
+    name: str
+    queen_square: chess.Square
+    support_pieces: tuple[tuple[chess.Square, chess.Piece], ...] = ()
+
+
+def _mate_mechanisms() -> tuple[_MateMechanism, ...]:
+    return (
+        _MateMechanism("queen-adjacent-capture", chess.C2),
+        _MateMechanism("queen-file-capture", chess.B3),
+        _MateMechanism("queen-diagonal-capture", chess.D3),
+        _MateMechanism(
+            "supported-queen-adjacent-capture",
+            chess.C2,
+            ((chess.D1, chess.Piece(chess.ROOK, chess.WHITE)),),
+        ),
+        _MateMechanism(
+            "supported-queen-file-capture",
+            chess.B3,
+            ((chess.D1, chess.Piece(chess.BISHOP, chess.WHITE)),),
+        ),
+        _MateMechanism(
+            "supported-queen-diagonal-capture",
+            chess.D3,
+            ((chess.D1, chess.Piece(chess.KNIGHT, chess.WHITE)),),
+        ),
+    )
+
+
 def _board_transforms() -> tuple[_BoardTransform, ...]:
     return (
         _BoardTransform("identity", lambda file_index, rank_index: (file_index, rank_index)),
@@ -506,17 +540,30 @@ def _board_transforms() -> tuple[_BoardTransform, ...]:
 
 
 def _spectator_squares() -> tuple[chess.Square, ...]:
-    occupied = frozenset({chess.A1, chess.B1, chess.C1, chess.C2})
-    unsafe = frozenset({chess.B3})
+    occupied = frozenset({chess.A1, chess.B1, chess.C1})
+    mechanism_squares = frozenset(mechanism.queen_square for mechanism in _mate_mechanisms())
+    support_squares = frozenset(
+        square
+        for mechanism in _mate_mechanisms()
+        for square, _piece in mechanism.support_pieces
+    )
+    unsafe = frozenset({chess.B2})
     return tuple(
         square
         for square in chess.SQUARES
-        if square not in occupied and square not in unsafe
+        if square not in occupied
+        and square not in mechanism_squares
+        and square not in support_squares
+        and square not in unsafe
     )
 
 
 def _family_capacity() -> int:
-    return len(_board_transforms()) * (1 << len(_spectator_squares()))
+    return (
+        len(_mate_mechanisms())
+        * len(_board_transforms())
+        * (1 << len(_spectator_squares()))
+    )
 
 
 def _max_spectator_count_for_cardinality(cardinality: int) -> int:
@@ -534,6 +581,8 @@ def _global_sample_index(*, cardinality: int, local_index: int) -> int:
         raise ObservationGenerationError("Chess local sample index is outside cardinality")
     enabled_capacity = _enabled_family_capacity_for_cardinality(cardinality)
     lower_bound = _family_index_lower_bound_for_cardinality(cardinality)
+    if cardinality > enabled_capacity - lower_bound:
+        lower_bound = 0
     offset = cardinality * (cardinality - 1) // 2
     if offset + cardinality > enabled_capacity:
         offset = lower_bound + offset % (enabled_capacity - lower_bound - cardinality + 1)
@@ -541,16 +590,16 @@ def _global_sample_index(*, cardinality: int, local_index: int) -> int:
 
 
 def _enabled_family_capacity_for_cardinality(cardinality: int) -> int:
-    return len(_board_transforms()) * (
+    return len(_mate_mechanisms()) * len(_board_transforms()) * (
         1 << _enabled_spectator_count_for_cardinality(cardinality)
     )
 
 
 def _enabled_spectator_count_for_cardinality(cardinality: int) -> int:
     _require_sample_cardinality(cardinality)
-    transform_count = len(_board_transforms())
+    base_count = len(_mate_mechanisms()) * len(_board_transforms())
     required_family_size = cardinality * (cardinality + 1) // 2
-    required_masks = math.ceil(required_family_size / transform_count)
+    required_masks = math.ceil(required_family_size / base_count)
     if required_masks <= 1:
         return 0
     return min(
@@ -564,7 +613,9 @@ def _family_index_lower_bound_for_cardinality(cardinality: int) -> int:
     spectator_count = _enabled_spectator_count_for_cardinality(cardinality)
     if spectator_count == 0:
         return 0
-    return len(_board_transforms()) * (1 << (spectator_count - 1))
+    return len(_mate_mechanisms()) * len(_board_transforms()) * (
+        1 << (spectator_count - 1)
+    )
 
 
 def _representative_local_indices(cardinality: int) -> tuple[int, ...]:
@@ -573,7 +624,7 @@ def _representative_local_indices(cardinality: int) -> tuple[int, ...]:
     if count == 1:
         return (0,)
     return tuple(
-        round(index * (cardinality - 1) / (count - 1))
+        index * (cardinality - 1) // (count - 1)
         for index in range(count)
     )
 
@@ -598,6 +649,48 @@ def _sample_local_indices(
     if remaining:
         indices.extend(rng.sample(range(cardinality), remaining))
     return tuple(indices)
+
+
+def _spectator_mask_for_combination_rank(rank: int) -> int:
+    if type(rank) is not int or rank < 0:
+        raise ObservationGenerationError("Chess spectator combination rank must be non-negative")
+    remaining_rank = rank
+    spectator_square_count = len(_spectator_squares())
+    for spectator_count in range(spectator_square_count + 1):
+        count_at_weight = math.comb(spectator_square_count, spectator_count)
+        if remaining_rank < count_at_weight:
+            return _spectator_mask_for_weight_rank(
+                spectator_count=spectator_count,
+                rank=remaining_rank,
+            )
+        remaining_rank -= count_at_weight
+    raise ObservationGenerationError("Chess spectator combination rank exceeds capacity")
+
+
+def _spectator_count_for_combination_rank(rank: int) -> int:
+    return _spectator_mask_for_combination_rank(rank).bit_count()
+
+
+def _spectator_mask_for_weight_rank(*, spectator_count: int, rank: int) -> int:
+    if spectator_count == 0:
+        if rank != 0:
+            raise ObservationGenerationError("Chess zero-spectator rank must be zero")
+        return 0
+    remaining_rank = rank
+    selected = spectator_count
+    mask = 0
+    for bit_index in range(len(_spectator_squares())):
+        if selected == 0:
+            break
+        skip_count = math.comb(len(_spectator_squares()) - bit_index - 1, selected)
+        if remaining_rank < skip_count:
+            continue
+        remaining_rank -= skip_count
+        mask |= 1 << bit_index
+        selected -= 1
+    if selected != 0 or remaining_rank != 0:
+        raise ObservationGenerationError("Chess spectator rank exceeds weight capacity")
+    return mask
 
 
 def _require_sample_cardinality(cardinality: int) -> None:
@@ -631,7 +724,11 @@ def _floor_cardinality(complexity: float) -> int:
     return min(_family_capacity(), math.floor(cardinality))
 
 
-def _base_mate_board(*, spectator_mask: int = 0) -> chess.Board:
+def _base_mate_board(
+    *,
+    mechanism: _MateMechanism,
+    spectator_combination_rank: int = 0,
+) -> chess.Board:
     board = chess.Board.empty()
     board.turn = chess.WHITE
     board.castling_rights = 0
@@ -641,7 +738,10 @@ def _base_mate_board(*, spectator_mask: int = 0) -> chess.Board:
     board.set_piece_at(chess.A1, chess.Piece(chess.KING, chess.BLACK))
     board.set_piece_at(chess.B1, chess.Piece(chess.ROOK, chess.BLACK))
     board.set_piece_at(chess.C1, chess.Piece(chess.KING, chess.WHITE))
-    board.set_piece_at(chess.C2, chess.Piece(chess.QUEEN, chess.WHITE))
+    board.set_piece_at(mechanism.queen_square, chess.Piece(chess.QUEEN, chess.WHITE))
+    for square, piece in mechanism.support_pieces:
+        board.set_piece_at(square, piece)
+    spectator_mask = _spectator_mask_for_combination_rank(spectator_combination_rank)
     for bit_index, square in enumerate(_spectator_squares()):
         if spectator_mask & (1 << bit_index):
             board.set_piece_at(square, chess.Piece(chess.KNIGHT, chess.WHITE))
@@ -669,26 +769,35 @@ def _transformed_board(board: chess.Board, *, transform: _BoardTransform) -> che
 def _position_for_sample_index(index: int) -> _MateInOnePosition:
     if type(index) is not int or index < 0:
         raise ObservationGenerationError("Chess sample index must be non-negative")
+    mechanisms = _mate_mechanisms()
     transforms = _board_transforms()
-    transform = transforms[index % len(transforms)]
-    spectator_mask = index // len(transforms)
-    if spectator_mask >= (1 << len(_spectator_squares())):
+    base_count = len(mechanisms) * len(transforms)
+    base_index = index % base_count
+    spectator_combination_rank = index // base_count
+    if spectator_combination_rank >= (1 << len(_spectator_squares())):
         raise ObservationGenerationError("Chess sample index exceeds generator capacity")
+    mechanism = mechanisms[base_index // len(transforms)]
+    transform = transforms[base_index % len(transforms)]
     board = _transformed_board(
-        _base_mate_board(spectator_mask=spectator_mask),
+        _base_mate_board(
+            mechanism=mechanism,
+            spectator_combination_rank=spectator_combination_rank,
+        ),
         transform=transform,
     )
     return _mate_in_one_position(
         board.fen(),
+        mechanism_name=mechanism.name,
         transform_name=transform.name,
         family_index=index,
-        spectator_count=spectator_mask.bit_count(),
+        spectator_count=_spectator_count_for_combination_rank(spectator_combination_rank),
     )
 
 
 def _mate_in_one_position(
     fen: str,
     *,
+    mechanism_name: str,
     transform_name: str,
     family_index: int,
     spectator_count: int,
@@ -719,6 +828,7 @@ def _mate_in_one_position(
         fen=fen,
         legal_moves=legal_moves,
         mate_moves=mate_moves,
+        mechanism_name=mechanism_name,
         transform_name=transform_name,
         family_index=family_index,
         spectator_count=spectator_count,

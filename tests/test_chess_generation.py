@@ -355,7 +355,7 @@ def test_chess_sampling_does_not_repeat_before_exhausting_cardinality() -> None:
     assert len(observable_state_ids) == len(frozenset(observable_state_ids))
 
 
-def test_chess_spectator_enabled_rungs_do_not_repeat_low_cardinality_boards() -> None:
+def test_chess_larger_rungs_do_not_repeat_low_cardinality_boards() -> None:
     generator = load_generator(_chess_benchmark_root)
     low_request = ComplexityRequest(minimum=2.0, maximum=2.0)
     spectator_request = ComplexityRequest(minimum=4.0, maximum=4.0)
@@ -374,6 +374,39 @@ def test_chess_spectator_enabled_rungs_do_not_repeat_low_cardinality_boards() ->
         sample.observable_state_id for sample in spectator_sample_set.samples
     }
     assert not low_observable_ids & spectator_observable_ids
+
+
+def test_chess_varies_mate_mechanism_before_adding_spectators() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    sparse_request = ComplexityRequest(minimum=2.0, maximum=2.0)
+    supported_request = ComplexityRequest(minimum=3.0, maximum=3.0)
+
+    sparse_sample_set = generator(seed=47, shape=4, complexity_request=sparse_request)
+    supported_sample_set = generator(
+        seed=47,
+        shape=8,
+        complexity_request=supported_request,
+    )
+    sparse_analyses = [_sample_analysis(sample) for sample in sparse_sample_set.samples]
+    supported_analyses = [
+        _sample_analysis(sample) for sample in supported_sample_set.samples
+    ]
+
+    assert {analysis["spectator_count"] for analysis in sparse_analyses} == {0}
+    assert {analysis["mechanism_piece_count"] for analysis in sparse_analyses} == {4}
+    assert len({analysis["mechanism"] for analysis in sparse_analyses}) > 1
+    assert {analysis["spectator_count"] for analysis in supported_analyses} == {0}
+    assert {analysis["mechanism_piece_count"] for analysis in supported_analyses} == {5}
+
+
+def test_chess_rotates_single_spectators_before_stacking_spectators() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    request = ComplexityRequest(minimum=5.0, maximum=5.0)
+
+    sample_set = generator(seed=47, shape=32, complexity_request=request)
+    analyses = [_sample_analysis(sample) for sample in sample_set.samples]
+
+    assert {analysis["spectator_count"] for analysis in analyses} == {1}
 
 
 def test_chess_complete_small_cardinality_rungs_do_not_overlap() -> None:
