@@ -18,8 +18,9 @@ from leibniz.tensor_runtime import resolve_tensor_runtime, tensor_value_to_host
 _repository_root = Path(__file__).parents[1]
 _benchmark_parent = _repository_root / "src" / "leibniz" / "benchmarks"
 _chess_benchmark_root = _benchmark_parent / "chess"
-_expected_legal_move_cardinalities = tuple(range(2, 34))
-_expected_sample_cardinalities = tuple(range(1, 33))
+_expected_transform_count = 8
+_expected_preview_limit = 4
+_expected_preview_batch_count = 64
 _minimum_chess_fen = "8/8/8/8/8/8/2Q5/krK5 w - - 0 1"
 
 
@@ -40,10 +41,7 @@ def test_chess_generator_exposes_python_manifest() -> None:
     generator = load_generator(_chess_benchmark_root)
 
     assert str(generator.manifest.id) == "benchmarks.chess@0.1.0"
-    observation_ids = generator.manifest.observation_ids
-    assert observation_ids is not None
-    assert len(observation_ids) == len(_expected_legal_move_cardinalities)
-    assert f"fen:{_minimum_chess_fen}" in observation_ids
+    assert generator.manifest.observation_ids is None
     outcome_ids = tuple(outcome.id for outcome in generator.manifest.outcome_space.outcomes)
     assert outcome_ids == tuple(sorted(outcome_ids))
     assert "e2e4" in outcome_ids
@@ -174,28 +172,28 @@ def test_chess_complexity_candidates_are_sample_space_cardinalities() -> None:
     candidates = tuple(generator.complexity_candidates_for_request(request=request))
 
     cardinalities = tuple(candidate.cardinality for candidate in candidates)
-    assert cardinalities == _expected_sample_cardinalities
+    assert cardinalities == tuple(range(1, 33))
     for candidate in candidates:
         assert candidate.cardinality is not None
         assert candidate.complexity == math.log2(candidate.cardinality)
         assert candidate.metadata["kind"] == "chess-sample-space-cardinality"
+        assert candidate.metadata["family"] == "corner-net-indexed-family"
         assert candidate.metadata["sample_cardinality"] == candidate.cardinality
         assert candidate.metadata["target_policy"] == "mate-in-one"
-        assert len(cast(list[object], candidate.metadata["representatives"])) == (
-            candidate.cardinality
-        )
-        assert len(cast(list[object], candidate.metadata["legal_move_counts"])) == (
-            candidate.cardinality
+        assert candidate.metadata["transform_count"] == _expected_transform_count
+        assert cast(int, candidate.metadata["spectator_square_count"]) > 50
+        assert len(cast(list[object], candidate.metadata["representatives"])) == min(
+            candidate.cardinality,
+            _expected_preview_limit,
         )
         oracle_reference = cast(
             dict[str, object],
             candidate.metadata["oracle_inference_compute"],
         )
-        legal_move_counts = cast(list[int], candidate.metadata["legal_move_counts"])
         assert oracle_reference["kind"] == "oracle-inference-compute-reference-v1"
         assert oracle_reference["unit"] == "abstract-ops"
-        assert oracle_reference["aggregation"] == "max"
-        assert oracle_reference["value"] == max(legal_move_counts)
+        assert oracle_reference["aggregation"] == "analytic-upper-bound"
+        assert cast(int, oracle_reference["value"]) >= 1
 
 
 def test_chess_complexity_curriculum_uses_supported_sample_cardinalities() -> None:
@@ -206,21 +204,50 @@ def test_chess_complexity_curriculum_uses_supported_sample_cardinalities() -> No
     )
 
     cardinalities = tuple(candidate.cardinality for candidate in candidates)
-    assert cardinalities == _expected_sample_cardinalities[:5]
+    assert cardinalities == (1, 2, 3, 4, 5)
     for candidate in candidates:
         assert candidate.cardinality is not None
         assert math.isclose(candidate.complexity, math.log2(candidate.cardinality))
         assert candidate.request.minimum == candidate.request.maximum
 
 
-def test_chess_corpus_targets_are_rules_validated_mate_in_one_moves() -> None:
+def test_chess_complexity_curriculum_supports_large_indexed_cardinalities() -> None:
     generator = load_generator(_chess_benchmark_root)
-    observation_ids = generator.manifest.observation_ids
-    assert observation_ids is not None
+    start_index = 2**20
 
-    legal_move_counts: list[int] = []
-    for observation_id in observation_ids:
-        fen = observation_id.removeprefix("fen:")
+    candidates = tuple(
+        generator.complexity_curriculum_candidates(start_index=start_index, count=3)
+    )
+
+    assert tuple(candidate.cardinality for candidate in candidates) == (
+        start_index + 1,
+        start_index + 2,
+        start_index + 3,
+    )
+    for candidate in candidates:
+        assert len(cast(list[object], candidate.metadata["representatives"])) == (
+            _expected_preview_limit
+        )
+
+
+def test_chess_indexed_family_samples_are_rules_validated_mate_in_one_moves() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    requests = (
+        ComplexityRequest(minimum=0.0, maximum=0.0),
+        ComplexityRequest(minimum=3.0, maximum=3.0),
+        ComplexityRequest(minimum=10.0, maximum=10.0),
+        ComplexityRequest(minimum=32.0, maximum=32.0),
+    )
+    samples = tuple(
+        sample
+        for request in requests
+        for sample in generator(seed=47, shape=8, complexity_request=request).samples
+    )
+
+    assert len(samples) == 32
+    for sample in samples:
+        assert sample.observable_state_id is not None
+        fen = sample.observable_state_id.removeprefix("fen:")
         board = chess.Board(fen)
         legal_moves = {move.uci() for move in board.legal_moves}
         mate_moves = {
@@ -230,22 +257,55 @@ def test_chess_corpus_targets_are_rules_validated_mate_in_one_moves() -> None:
         }
         assert legal_moves
         assert mate_moves
-        legal_move_counts.append(len(legal_moves))
-    assert tuple(sorted(legal_move_counts)) == _expected_legal_move_cardinalities
+        assert sample.outcome_id in mate_moves
+        assert set(sample.available_outcome_ids) == legal_moves
 
 
-def test_chess_representative_ladder_declares_piece_coverage() -> None:
+def test_chess_indexed_family_expands_by_sample_cardinality() -> None:
     generator = load_generator(_chess_benchmark_root)
     candidates = tuple(
         generator.complexity_curriculum_candidates(
             start_index=0,
-            count=len(_expected_legal_move_cardinalities),
+            count=16,
         )
     )
 
-    assert tuple(candidate.cardinality for candidate in candidates) == (
-        _expected_sample_cardinalities
+    assert tuple(candidate.cardinality for candidate in candidates) == tuple(range(1, 17))
+    first_representative_set = cast(
+        list[dict[str, object]],
+        candidates[0].metadata["representatives"],
     )
+    full_representative_set = cast(
+        list[dict[str, object]],
+        candidates[-1].metadata["representatives"],
+    )
+    assert len(first_representative_set) == 1
+    assert len(full_representative_set) == _expected_preview_limit
+
+    family_indexes = [
+        cast(int, representative["family_index"])
+        for representative in full_representative_set
+    ]
+    assert family_indexes == list(range(_expected_preview_limit))
+    transforms = {
+        cast(str, representative["transform"])
+        for representative in full_representative_set
+    }
+    assert transforms <= {
+        "identity",
+        "mirror-file",
+        "mirror-rank",
+        "rotate-180",
+        "transpose",
+        "anti-transpose",
+        "rotate-90",
+        "rotate-270",
+    }
+    assert all(
+        cast(int, representative["spectator_count"]) == 0
+        for representative in full_representative_set
+    )
+
     legal_piece_symbols = {
         symbol
         for candidate in candidates
@@ -265,22 +325,21 @@ def test_chess_representative_ladder_declares_piece_coverage() -> None:
         )
     }
 
-    assert {"B", "K", "N", "Q", "R"} <= legal_piece_symbols
+    assert {"K", "Q"} <= legal_piece_symbols
     assert "Q" in mate_piece_symbols
-    assert mate_piece_symbols != {"Q"}
 
 
-def test_chess_representative_analysis_exposes_deterministic_quality_flags() -> None:
+def test_chess_representative_analysis_exposes_indexed_family_metadata() -> None:
     generator = load_generator(_chess_benchmark_root)
     candidates = tuple(
         generator.complexity_curriculum_candidates(
             start_index=0,
-            count=len(_expected_legal_move_cardinalities),
+            count=16,
         )
     )
 
-    flags_by_legal_move_count = {
-        representative["legal_move_count"]: frozenset(
+    flags_by_family_index = {
+        representative["family_index"]: frozenset(
             flag
             for flag in cast(
                 list[str],
@@ -293,24 +352,28 @@ def test_chess_representative_analysis_exposes_deterministic_quality_flags() -> 
             candidate.metadata["representatives"],
         )
     }
+    analyses = [
+        cast(dict[str, object], representative["analysis"])
+        for candidate in candidates
+        for representative in cast(
+            list[dict[str, object]],
+            candidate.metadata["representatives"],
+        )
+    ]
 
-    assert flags_by_legal_move_count[2] == {
+    assert all(analysis["family"] == "corner-net-indexed-family" for analysis in analyses)
+    assert {analysis["transform"] for analysis in analyses} >= {
+        "identity",
+        "mirror-file",
+    }
+    assert flags_by_family_index[0] == {
         "minimal-material",
         "queen-only-mate",
         "single-mate-move",
     }
-    assert "single-legal-piece-type" in flags_by_legal_move_count[15]
-    assert any(
-        "queen-only-mate" not in flags
-        for flags in flags_by_legal_move_count.values()
-    )
     assert (
-        sum("minimal-material" in flags for flags in flags_by_legal_move_count.values())
-        >= 16
-    )
-    assert (
-        sum("queen-only-mate" in flags for flags in flags_by_legal_move_count.values())
-        >= 24
+        sum("minimal-material" in flags for flags in flags_by_family_index.values())
+        >= 4
     )
 
 
@@ -370,7 +433,7 @@ def test_chess_console_preview_uses_board_images_and_text_metadata() -> None:
 
     batches = tuple(cast(Any, generator).console_preview_batches(atom_count=atom_count))
 
-    assert len(batches) == len(_expected_legal_move_cardinalities)
+    assert len(batches) == _expected_preview_batch_count
     batch = batches[0]
     assert batch["mode"] == "complexity-window"
     assert batch["sample_count"] == 1

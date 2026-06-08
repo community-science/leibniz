@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import random
 from base64 import b64encode
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,45 +32,13 @@ __all__ = ["all_meaningful_uci_moves", "benchmark"]
 _benchmark_id = ProtocolIdentifier.parse("benchmarks.chess@0.1.0")
 _generator_id = ProtocolIdentifier.parse("benchmarks.chess.generator@0.1.0")
 _outcome_space_id = ProtocolIdentifier.parse("benchmarks.chess.uci-moves@0.1.0")
-_console_preview_limit = 12
+_console_preview_limit = 4
 _tensor_shape = (18, 8, 8)
 _board_preview_size = 512
 _board_preview_square_size = _board_preview_size // 8
 
-_mate_in_one_fens = (
-    "8/8/8/8/8/8/2Q5/krK5 w - - 0 1",
-    "8/8/8/8/8/1Q6/8/krK5 w - - 0 1",
-    "8/q5R1/8/k1K5/2n5/8/6Q1/6B1 w - - 0 1",
-    "Q3K3/p7/k3r1R1/7Q/8/8/8/8 w - - 0 1",
-    "1Q6/P7/8/8/1n6/2B3bk/5K2/8 w - - 0 1",
-    "8/7k/8/1Q4Qr/5N2/7K/8/3Q4 w - - 0 1",
-    "2N1K3/B7/8/k7/b1QQ4/8/2N5/8 w - - 0 1",
-    "8/8/8/8/6QP/4K3/2Q5/B2Qrk2 w - - 0 1",
-    "1r6/8/8/2B1K3/1Q6/1Q2r2k/4Q3/8 w - - 0 1",
-    "7R/3R1rk1/8/7R/2Q5/3B1K2/8/8 w - - 0 1",
-    "3Q4/K7/4P3/6Q1/2Q5/8/8/4k1bR w - - 0 1",
-    "8/8/8/8/8/8/k2r4/2KQ4 w - - 0 1",
-    "Q2n4/7q/5r2/n7/8/6K1/8/6kN w - - 0 1",
-    "8/8/8/8/8/8/k3r3/2KQ4 w - - 0 1",
-    "8/8/8/8/1r6/k7/8/KQ6 w - - 0 1",
-    "8/8/3r4/8/8/8/8/k1KQ4 w - - 0 1",
-    "8/8/8/8/r7/k7/8/1QK5 w - - 0 1",
-    "8/8/8/8/8/8/8/K1krQ3 w - - 0 1",
-    "8/8/8/8/r7/k7/8/KQ6 w - - 0 1",
-    "8/8/8/8/r7/k7/8/K3Q3 w - - 0 1",
-    "8/8/8/8/1r6/k7/3Q4/K7 w - - 0 1",
-    "6rk/8/8/8/8/8/8/K1Q5 w - - 0 1",
-    "8/8/8/8/r7/k7/2Q5/K7 w - - 0 1",
-    "8/8/8/5Q2/8/8/3r4/K1k5 w - - 0 1",
-    "6rk/8/8/8/8/8/3Q4/K7 w - - 0 1",
-    "8/8/8/8/3Q4/8/8/K1kr4 w - - 0 1",
-    "6rk/8/8/8/8/4Q3/8/K7 w - - 0 1",
-    "8/8/8/8/4Q3/8/8/1K1kr3 w - - 0 1",
-    "6rk/8/8/8/8/4Q3/8/1K6 w - - 0 1",
-    "8/8/8/8/r2Q4/k7/8/2K5 w - - 0 1",
-    "8/8/8/8/3Q4/8/k1K5/8 w - - 0 1",
-    "8/8/8/3Q4/8/8/2K5/k7 w - - 0 1",
-)
+_mate_in_one_family_id = "corner-net-indexed-family"
+_preview_representative_limit = 4
 
 
 def benchmark(root: Path) -> BenchmarkProtocol:
@@ -85,10 +53,7 @@ class Benchmark:
     def __init__(self, *, root: Path) -> None:
         self._root = root
         self._manifest = _manifest()
-        self._generator = Generator(
-            manifest=self._manifest,
-            positions=_mate_in_one_positions(),
-        )
+        self._generator = Generator(manifest=self._manifest)
 
     @property
     def root(self) -> Path:
@@ -108,6 +73,9 @@ class _MateInOnePosition:
     fen: str
     legal_moves: tuple[str, ...]
     mate_moves: tuple[str, ...]
+    transform_name: str
+    family_index: int
+    spectator_count: int
 
     @property
     def observation_id(self) -> str:
@@ -149,6 +117,10 @@ class _MateInOnePosition:
         mate_targets = tuple(sorted(move[2:4] for move in self.mate_moves))
         return {
             "kind": "chess-mate-in-one-representative-analysis",
+            "family": _mate_in_one_family_id,
+            "transform": self.transform_name,
+            "family_index": self.family_index,
+            "spectator_count": self.spectator_count,
             "piece_count": len(piece_map),
             "white_piece_count": white_piece_count,
             "black_piece_count": black_piece_count,
@@ -164,6 +136,10 @@ class _MateInOnePosition:
     def representative_metadata(self) -> Mapping[str, object]:
         return {
             "kind": "chess-mate-in-one-sample-representative",
+            "family": _mate_in_one_family_id,
+            "transform": self.transform_name,
+            "family_index": self.family_index,
+            "spectator_count": self.spectator_count,
             "fen": self.fen,
             "target_policy": "mate-in-one",
             "legal_move_count": self.legal_move_count,
@@ -179,7 +155,6 @@ class Generator:
     """Generate Chess mate-in-one positions by sample-space complexity."""
 
     manifest: BenchmarkManifest
-    positions: tuple[_MateInOnePosition, ...]
 
     @property
     def id(self) -> ProtocolIdentifier:
@@ -222,8 +197,8 @@ class Generator:
                 "Chess metadata-free generation requires a tensor runtime"
             )
         sample_shape = _sample_shape(shape)
-        positions = self._positions_for_request(complexity_request)
-        if not positions:
+        sample_space = self._sample_space_for_request(complexity_request)
+        if sample_space is None:
             return GeneratedSampleSet(
                 benchmark_id=self.manifest.id,
                 generator_id=self.id,
@@ -236,15 +211,19 @@ class Generator:
 
         rng = random.Random(seed)
         sample_count = _sample_count(sample_shape)
-        sample_space_cardinality = len(positions)
-        complexity = math.log2(sample_space_cardinality)
-        selected_positions = tuple(rng.choice(positions) for _index in range(sample_count))
+        complexity = math.log2(sample_space.cardinality)
+        selected_indices = tuple(
+            rng.randrange(sample_space.cardinality) for _index in range(sample_count)
+        )
+        selected_positions = tuple(
+            _position_for_sample_index(index) for index in selected_indices
+        )
         samples = (
             tuple(
                 self._sample(
                     index=index,
                     position=position,
-                    sample_space_cardinality=sample_space_cardinality,
+                    sample_space_cardinality=sample_space.cardinality,
                     complexity=complexity,
                 )
                 for index, position in enumerate(selected_positions)
@@ -294,14 +273,15 @@ class Generator:
     ) -> tuple[ComplexityCandidate, ...]:
         """Return exact sample-space-cardinality candidates inside a complexity band."""
 
+        minimum_cardinality = _ceil_cardinality(request.minimum)
+        maximum_cardinality = min(_floor_cardinality(request.maximum), _family_capacity())
+        if maximum_cardinality < minimum_cardinality:
+            return ()
         return tuple(
-            candidate
-            for candidate in self._sample_space_cardinality_candidates()
-            if request.contains(
-                ComplexityValue(
-                    measure_id=candidate.request.measure_id,
-                    value=candidate.complexity,
-                )
+            self._candidate_for_cardinality(cardinality)
+            for cardinality in range(
+                minimum_cardinality,
+                min(maximum_cardinality, minimum_cardinality + 63) + 1,
             )
         )
 
@@ -320,57 +300,72 @@ class Generator:
         if count == 0:
             return ()
 
-        candidates = self._sample_space_cardinality_candidates()
-        return candidates[start_index : start_index + count]
+        candidates: list[ComplexityCandidate] = []
+        for offset in range(count):
+            cardinality = start_index + offset + 1
+            if cardinality > _family_capacity():
+                break
+            candidates.append(self._candidate_for_cardinality(cardinality))
+        return tuple(candidates)
 
     def _sample_space_cardinality_candidates(self) -> tuple[ComplexityCandidate, ...]:
-        candidates: list[ComplexityCandidate] = []
-        sorted_positions = _sorted_positions(self.positions)
-        for cardinality in range(1, len(sorted_positions) + 1):
-            positions = sorted_positions[:cardinality]
-            complexity = math.log2(cardinality)
-            legal_move_counts = [position.legal_move_count for position in positions]
-            candidates.append(
-                ComplexityCandidate(
-                    request=ComplexityRequest(
-                        minimum=complexity,
-                        maximum=complexity,
-                    ),
-                    cardinality=cardinality,
-                    metadata={
-                        "kind": "chess-sample-space-cardinality",
+        return tuple(
+            self._candidate_for_cardinality(cardinality)
+            for cardinality in range(1, min(_family_capacity(), 64) + 1)
+        )
+
+    def _candidate_for_cardinality(self, cardinality: int) -> ComplexityCandidate:
+        _require_sample_cardinality(cardinality)
+        complexity = math.log2(cardinality)
+        representative_indices = tuple(range(min(cardinality, _preview_representative_limit)))
+        representatives = [
+            dict(_position_for_sample_index(index).representative_metadata())
+            for index in representative_indices
+        ]
+        legal_move_counts = [
+            _position_for_sample_index(index).legal_move_count
+            for index in representative_indices
+        ]
+        preview_legal_move_count_max = max(legal_move_counts) if legal_move_counts else 0
+        oracle_compute = _oracle_inference_compute_for_cardinality(cardinality)
+        return ComplexityCandidate(
+            request=ComplexityRequest(
+                minimum=complexity,
+                maximum=complexity,
+            ),
+            cardinality=cardinality,
+            metadata={
+                "kind": "chess-sample-space-cardinality",
+                "family": _mate_in_one_family_id,
+                "sample_cardinality": cardinality,
+                "target_policy": "mate-in-one",
+                "transform_count": len(_board_transforms()),
+                "spectator_square_count": len(_spectator_squares()),
+                "output_move_count": len(all_meaningful_uci_moves),
+                "representative_preview_count": len(representatives),
+                "representatives": representatives,
+                "oracle_inference_compute": {
+                    "kind": "oracle-inference-compute-reference-v1",
+                    "unit": "abstract-ops",
+                    "aggregation": "analytic-upper-bound",
+                    "value": oracle_compute,
+                    "components": {
+                        "preview_legal_move_count_max": preview_legal_move_count_max,
+                        "max_spectator_count": _max_spectator_count_for_cardinality(
+                            cardinality
+                        ),
                         "sample_cardinality": cardinality,
-                        "target_policy": "mate-in-one",
-                        "output_move_count": len(all_meaningful_uci_moves),
-                        "legal_move_counts": legal_move_counts,
-                        "oracle_inference_compute": {
-                            "kind": "oracle-inference-compute-reference-v1",
-                            "unit": "abstract-ops",
-                            "aggregation": "max",
-                            "value": max(legal_move_counts),
-                            "components": {
-                                "legal_move_count_max": max(legal_move_counts),
-                                "legal_move_count_mean": (
-                                    sum(legal_move_counts) / len(legal_move_counts)
-                                ),
-                                "sample_cardinality": cardinality,
-                            },
-                        },
-                        "representatives": [
-                            dict(position.representative_metadata())
-                            for position in positions
-                        ],
                     },
-                )
-            )
-        return tuple(candidates)
+                },
+            },
+        )
 
     def console_preview_batches(
         self,
         *,
         atom_count: int,
     ) -> tuple[Mapping[str, object], ...]:
-        """Return browser-preview batches for known legal-move-count classes."""
+        """Return browser-preview batches for sample-space cardinality classes."""
 
         if atom_count != len(self.manifest.outcome_space.outcomes):
             raise ObservationGenerationError("atom_count does not match outcome space")
@@ -378,10 +373,6 @@ class Generator:
         for candidate in self._sample_space_cardinality_candidates():
             if candidate.cardinality is None:
                 continue
-            positions = _positions_for_sample_cardinality(
-                self.positions,
-                cardinality=candidate.cardinality,
-            )
             request = ComplexityRequest(
                 minimum=candidate.complexity,
                 maximum=candidate.complexity,
@@ -403,9 +394,6 @@ class Generator:
                     "sample_count": len(samples),
                     "complexity_window": request.to_record(),
                     "complexity_cardinalities": [candidate.cardinality],
-                    "legal_move_counts": [
-                        position.legal_move_count for position in positions
-                    ],
                     "presentation": {
                         "sample_card_density": "standard",
                         "aggregate_mode": False,
@@ -415,22 +403,19 @@ class Generator:
             )
         return tuple(batches)
 
-    def _positions_for_request(
+    def _sample_space_for_request(
         self,
         request: ComplexityRequest | None,
-    ) -> tuple[_MateInOnePosition, ...]:
+    ) -> _ChessSampleSpace | None:
         if request is None:
-            return _sorted_positions(self.positions)
-        candidates = self.complexity_candidates_for_request(request=request)
-        if not candidates:
-            return ()
-        cardinality = candidates[0].cardinality
-        if cardinality is None:
-            return ()
-        return _positions_for_sample_cardinality(
-            self.positions,
-            cardinality=cardinality,
-        )
+            return _ChessSampleSpace(cardinality=1)
+        minimum_cardinality = _ceil_cardinality(request.minimum)
+        maximum_cardinality = _floor_cardinality(request.maximum)
+        if maximum_cardinality < minimum_cardinality:
+            return None
+        if minimum_cardinality > _family_capacity():
+            return None
+        return _ChessSampleSpace(cardinality=minimum_cardinality)
 
     def _sample(
         self,
@@ -463,75 +448,162 @@ def _manifest() -> BenchmarkManifest:
             id=_outcome_space_id,
             outcomes=tuple(Outcome(id=move) for move in all_meaningful_uci_moves),
         ),
-        observation_ids=frozenset(position.observation_id for position in _mate_in_one_positions()),
+        observation_ids=None,
     )
 
 
-def _mate_in_one_positions() -> tuple[_MateInOnePosition, ...]:
-    positions = tuple(_mate_in_one_position(fen) for fen in _mate_in_one_fens)
-    if not positions:
-        raise ObservationGenerationError("Chess benchmark must declare at least one position")
-    _validate_representative_ladder(positions)
-    return positions
+@dataclass(frozen=True, slots=True)
+class _ChessSampleSpace:
+    cardinality: int
+
+    def __post_init__(self) -> None:
+        _require_sample_cardinality(self.cardinality)
 
 
-def _sorted_positions(
-    positions: Sequence[_MateInOnePosition],
-) -> tuple[_MateInOnePosition, ...]:
-    return tuple(sorted(positions, key=lambda item: (item.legal_move_count, item.fen)))
+@dataclass(frozen=True, slots=True)
+class _BoardTransform:
+    name: str
+    square: Callable[[int, int], tuple[int, int]]
 
 
-def _positions_for_sample_cardinality(
-    positions: Sequence[_MateInOnePosition],
-    *,
-    cardinality: int,
-) -> tuple[_MateInOnePosition, ...]:
+def _board_transforms() -> tuple[_BoardTransform, ...]:
+    return (
+        _BoardTransform("identity", lambda file_index, rank_index: (file_index, rank_index)),
+        _BoardTransform("mirror-file", lambda file_index, rank_index: (7 - file_index, rank_index)),
+        _BoardTransform("mirror-rank", lambda file_index, rank_index: (file_index, 7 - rank_index)),
+        _BoardTransform(
+            "rotate-180",
+            lambda file_index, rank_index: (7 - file_index, 7 - rank_index),
+        ),
+        _BoardTransform("transpose", lambda file_index, rank_index: (rank_index, file_index)),
+        _BoardTransform(
+            "anti-transpose",
+            lambda file_index, rank_index: (7 - rank_index, 7 - file_index),
+        ),
+        _BoardTransform("rotate-90", lambda file_index, rank_index: (rank_index, 7 - file_index)),
+        _BoardTransform("rotate-270", lambda file_index, rank_index: (7 - rank_index, file_index)),
+    )
+
+
+def _spectator_squares() -> tuple[chess.Square, ...]:
+    occupied = frozenset({chess.A1, chess.B1, chess.C1, chess.C2})
+    unsafe = frozenset({chess.B3})
+    return tuple(
+        square
+        for square in chess.SQUARES
+        if square not in occupied and square not in unsafe
+    )
+
+
+def _family_capacity() -> int:
+    return len(_board_transforms()) * (1 << len(_spectator_squares()))
+
+
+def _max_spectator_count_for_cardinality(cardinality: int) -> int:
+    _require_sample_cardinality(cardinality)
+    max_mask = (cardinality - 1) // len(_board_transforms())
+    if max_mask == 0:
+        return 0
+    return min(len(_spectator_squares()), (max_mask + 1).bit_length() - 1)
+
+
+def _oracle_inference_compute_for_cardinality(cardinality: int) -> int:
+    return 2 + 8 * _max_spectator_count_for_cardinality(cardinality)
+
+
+def _require_sample_cardinality(cardinality: int) -> None:
     if type(cardinality) is not int or cardinality < 1:
         raise ObservationGenerationError("Chess sample cardinality must be positive")
-    sorted_positions = _sorted_positions(positions)
-    if cardinality > len(sorted_positions):
-        raise ObservationGenerationError(
-            "Chess sample cardinality exceeds representative corpus size"
-        )
-    return sorted_positions[:cardinality]
+    if cardinality > _family_capacity():
+        raise ObservationGenerationError("Chess sample cardinality exceeds generator capacity")
 
 
-def _validate_representative_ladder(positions: Sequence[_MateInOnePosition]) -> None:
-    seen_counts: set[int] = set()
-    duplicate_counts: set[int] = set()
-    for position in positions:
-        if position.legal_move_count in seen_counts:
-            duplicate_counts.add(position.legal_move_count)
-        seen_counts.add(position.legal_move_count)
-    if duplicate_counts:
-        duplicate = min(duplicate_counts)
-        raise ObservationGenerationError(
-            f"Chess benchmark has multiple representatives for {duplicate} legal moves"
-        )
-    legal_piece_symbols = {
-        symbol
-        for position in positions
-        for symbol in position.legal_move_piece_symbols
-    }
-    required_legal_piece_symbols = frozenset({"B", "K", "N", "Q", "R"})
-    missing = required_legal_piece_symbols - legal_piece_symbols
-    if missing:
-        raise ObservationGenerationError(
-            "Chess representative ladder is missing legal moves by: "
-            + ", ".join(sorted(missing))
-        )
-    mate_piece_symbols = {
-        symbol
-        for position in positions
-        for symbol in position.mate_move_piece_symbols
-    }
-    if mate_piece_symbols == {"Q"}:
-        raise ObservationGenerationError(
-            "Chess representative ladder must include a non-queen mate motif"
-        )
+def _ceil_cardinality(complexity: float) -> int:
+    if not math.isfinite(complexity):
+        raise ObservationGenerationError("complexity must be finite")
+    if complexity <= 0.0:
+        return 1
+    cardinality = 2**complexity
+    rounded = round(cardinality)
+    if math.isclose(cardinality, rounded, rel_tol=1e-12, abs_tol=1e-9):
+        return max(1, rounded)
+    return max(1, math.ceil(cardinality))
 
 
-def _mate_in_one_position(fen: str) -> _MateInOnePosition:
+def _floor_cardinality(complexity: float) -> int:
+    if not math.isfinite(complexity):
+        raise ObservationGenerationError("complexity must be finite")
+    if complexity < 0.0:
+        return 0
+    cardinality = 2**complexity
+    rounded = round(cardinality)
+    if math.isclose(cardinality, rounded, rel_tol=1e-12, abs_tol=1e-9):
+        return min(_family_capacity(), rounded)
+    return min(_family_capacity(), math.floor(cardinality))
+
+
+def _base_mate_board(*, spectator_mask: int = 0) -> chess.Board:
+    board = chess.Board.empty()
+    board.turn = chess.WHITE
+    board.castling_rights = 0
+    board.ep_square = None
+    board.halfmove_clock = 0
+    board.fullmove_number = 1
+    board.set_piece_at(chess.A1, chess.Piece(chess.KING, chess.BLACK))
+    board.set_piece_at(chess.B1, chess.Piece(chess.ROOK, chess.BLACK))
+    board.set_piece_at(chess.C1, chess.Piece(chess.KING, chess.WHITE))
+    board.set_piece_at(chess.C2, chess.Piece(chess.QUEEN, chess.WHITE))
+    for bit_index, square in enumerate(_spectator_squares()):
+        if spectator_mask & (1 << bit_index):
+            board.set_piece_at(square, chess.Piece(chess.KNIGHT, chess.WHITE))
+    return board
+
+
+def _transformed_board(board: chess.Board, *, transform: _BoardTransform) -> chess.Board:
+    transformed = chess.Board.empty()
+    transformed.turn = board.turn
+    transformed.castling_rights = 0
+    transformed.ep_square = None
+    transformed.halfmove_clock = 0
+    transformed.fullmove_number = 1
+    for square, piece in board.piece_map().items():
+        file_index = chess.square_file(square)
+        rank_index = chess.square_rank(square)
+        transformed_file, transformed_rank = transform.square(file_index, rank_index)
+        transformed.set_piece_at(
+            chess.square(transformed_file, transformed_rank),
+            piece,
+        )
+    return transformed
+
+
+def _position_for_sample_index(index: int) -> _MateInOnePosition:
+    if type(index) is not int or index < 0:
+        raise ObservationGenerationError("Chess sample index must be non-negative")
+    transforms = _board_transforms()
+    transform = transforms[index % len(transforms)]
+    spectator_mask = index // len(transforms)
+    if spectator_mask >= (1 << len(_spectator_squares())):
+        raise ObservationGenerationError("Chess sample index exceeds generator capacity")
+    board = _transformed_board(
+        _base_mate_board(spectator_mask=spectator_mask),
+        transform=transform,
+    )
+    return _mate_in_one_position(
+        board.fen(),
+        transform_name=transform.name,
+        family_index=index,
+        spectator_count=spectator_mask.bit_count(),
+    )
+
+
+def _mate_in_one_position(
+    fen: str,
+    *,
+    transform_name: str,
+    family_index: int,
+    spectator_count: int,
+) -> _MateInOnePosition:
     board = chess.Board(fen)
     legal_moves = tuple(sorted(move.uci() for move in board.legal_moves))
     mate_moves = tuple(
@@ -558,6 +630,9 @@ def _mate_in_one_position(fen: str) -> _MateInOnePosition:
         fen=fen,
         legal_moves=legal_moves,
         mate_moves=mate_moves,
+        transform_name=transform_name,
+        family_index=family_index,
+        spectator_count=spectator_count,
     )
 
 
