@@ -19,6 +19,7 @@ from leibniz.benchmark_evaluation import (
     CompetencePoint,
     ValidationCompetencePoint,
     finite_measurements_for_predictions,
+    sampled_competence_compute_cost_integral,
     sampled_competence_curriculum_record,
     sampled_competence_frontier_integral,
     sampled_competence_record,
@@ -1012,6 +1013,11 @@ def run_benchmark(
         selected_checkpoint,
         training_compute=training_result.training_run.training_compute,
     )
+    completed_training_estimate = _training_estimate_record(
+        architecture=architecture,
+        summary=summary,
+        training_run=training_result.training_run,
+    )
     completed_record = {
         **summary.to_record(),
         "dry_run": False,
@@ -1026,10 +1032,7 @@ def run_benchmark(
             rungs=training_result.training_rungs,
             frontier_index=training_result.training_frontier_index,
         ),
-        "training_estimate": _training_estimate_record(
-            summary=summary,
-            training_run=training_result.training_run,
-        ),
+        "training_estimate": completed_training_estimate,
         "seed": plan.seed,
         "train_steps": plan.train_steps,
         "optimizer": plan.optimizer,
@@ -1047,6 +1050,7 @@ def run_benchmark(
         "architecture": model_inspection.architecture.to_record(),
         "cost_summary": _training_cost_summary(
             inspection=model_inspection,
+            training_estimate=completed_training_estimate,
             training_run=training_result.training_run,
         ),
         "model_checkpoints": [dict(record) for record in checkpoint_records],
@@ -3050,22 +3054,6 @@ def _optional_nonnegative_float(value: object, field: str) -> float | None:
     return result
 
 
-def _optional_point_input_shape(point: Mapping[str, object]) -> tuple[int, ...] | None:
-    if "input_shape" not in point:
-        return None
-    value = point.get("input_shape")
-    if not isinstance(value, list | tuple):
-        raise BenchmarkRunnerError("score_estimate.input_shape must be a shape")
-    shape: list[int] = []
-    for axis in cast(Sequence[object], value):
-        if type(axis) is not int or axis < 1:
-            raise BenchmarkRunnerError(
-                "score_estimate.input_shape must be a positive integer shape"
-            )
-        shape.append(axis)
-    return tuple(shape)
-
-
 def _unpredictable_evaluation_seed() -> int:
     return secrets.randbelow(2**63)
 
@@ -3295,13 +3283,15 @@ def _train_until_convergence(
                         _renormalized_probabilities(row)
                         for row in softmax_prediction_rows(runtime, first_logits)
                     )
-                    replay_point = _validation_competence_point_from_sampled_record(
+                    replay_point = ValidationCompetencePoint.from_sampled_record(
                         _sampled_competence_record_for_predictions(
                             batch=training_batch.sample_set,
                             probabilities=probabilities,
                             outcome_ids=outcome_ids,
                             complexity_axis=None,
-                        )
+                        ),
+                        field_prefix="score_estimate",
+                        error_type=BenchmarkRunnerError,
                     )
                     _accumulate_replay_frontier_point(
                         replay_frontier_points,
@@ -3422,9 +3412,13 @@ def _training_gate_score_estimate(
     point_records = _training_score_estimate_points(compact_sampled_competence)
     chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
     score_integral = sampled_competence_frontier_integral(
-        _competence_points_from_sampled_records(
-            point_records,
-            field_prefix="score_estimate",
+        tuple(
+            CompetencePoint.from_sampled_record(
+                point,
+                field_prefix="score_estimate",
+                error_type=BenchmarkRunnerError,
+            )
+            for point in point_records
         ),
         chance_mass=chance_mass,
     )
@@ -3670,39 +3664,6 @@ def _training_score_estimate_points(
     return (record,)
 
 
-def _competence_points_from_sampled_records(
-    points: Sequence[Mapping[str, object]],
-    *,
-    field_prefix: str,
-) -> tuple[CompetencePoint, ...]:
-    return tuple(
-        CompetencePoint(
-            complexity=_required_float(
-                point.get("complexity"),
-                f"{field_prefix}.complexity",
-            ),
-            accepted_mass=_required_float(
-                point.get("mean_accepted_mass"),
-                f"{field_prefix}.mean_accepted_mass",
-            ),
-            sample_count=_required_int(
-                point.get("sample_count"),
-                f"{field_prefix}.sample_count",
-            ),
-            input_shape=_optional_point_input_shape(point),
-            complexity_minimum=_optional_nonnegative_float(
-                point.get("complexity_minimum"),
-                f"{field_prefix}.complexity_minimum",
-            ),
-            complexity_maximum=_optional_nonnegative_float(
-                point.get("complexity_maximum"),
-                f"{field_prefix}.complexity_maximum",
-            ),
-        )
-        for point in points
-    )
-
-
 def _training_score_estimate_score(score_estimate: Mapping[str, object]) -> float:
     return _required_float(score_estimate.get("score"), "score_estimate.score")
 
@@ -3780,7 +3741,11 @@ def _training_history_frontier_point(point: TrainingHistoryPoint) -> ValidationC
     if not points:
         raise BenchmarkRunnerError("training gate score estimate has no competence point")
     latest_point = points[-1]
-    return _validation_competence_point_from_sampled_record(latest_point)
+    return ValidationCompetencePoint.from_sampled_record(
+        latest_point,
+        field_prefix="score_estimate",
+        error_type=BenchmarkRunnerError,
+    )
 
 
 def _training_rung_index_for_step(*, step: int, frontier_index: int) -> int:
@@ -3789,35 +3754,6 @@ def _training_rung_index_for_step(*, step: int, frontier_index: int) -> int:
     if step % 2 == 0:
         return frontier_index
     return (step // 2) % frontier_index
-
-
-def _validation_competence_point_from_sampled_record(
-    point: Mapping[str, object],
-) -> ValidationCompetencePoint:
-    return ValidationCompetencePoint(
-        complexity=_required_float(point.get("complexity"), "score_estimate.complexity"),
-        accepted_mass=_required_float(
-            point.get("mean_accepted_mass"),
-            "score_estimate.mean_accepted_mass",
-        ),
-        sample_count=_required_int(
-            point.get("sample_count"),
-            "score_estimate.sample_count",
-        ),
-        seed=_required_int(
-            point.get("seed"),
-            "score_estimate.seed",
-        ),
-        complexity_minimum=_optional_nonnegative_float(
-            point.get("complexity_minimum"),
-            "score_estimate.complexity_minimum",
-        ),
-        complexity_maximum=_optional_nonnegative_float(
-            point.get("complexity_maximum"),
-            "score_estimate.complexity_maximum",
-        ),
-        input_shape=_optional_point_input_shape(point),
-    )
 
 
 def _training_history_best_competence_fraction(
@@ -4027,6 +3963,7 @@ def _training_progress_record(
     selected_model_checkpoint_score_estimate: Mapping[str, object] | None,
 ) -> Mapping[str, object]:
     training_estimate = _training_estimate_record(
+        architecture=architecture,
         summary=summary,
         training_run=training_run,
     )
@@ -4057,6 +3994,7 @@ def _training_progress_record(
         "architecture": inspection.architecture.to_record(),
         "cost_summary": _training_cost_summary(
             inspection=inspection,
+            training_estimate=training_estimate,
             training_run=training_run,
         ),
         "model_inspection": inspection.to_record(),
@@ -4108,6 +4046,7 @@ def _training_history_artifact_point_record(
 
 def _training_estimate_record(
     *,
+    architecture: ArchitectureManifest,
     summary: BenchmarkRunSummary,
     training_run: TrainingRunRecord,
 ) -> dict[str, object]:
@@ -4141,6 +4080,12 @@ def _training_estimate_record(
     if not isinstance(score_integral_value, Mapping):
         raise BenchmarkRunnerError("training gate score estimate is missing score integral")
     score_integral = cast(Mapping[str, object], score_integral_value)
+    cost_integral = sampled_competence_compute_cost_integral(
+        points=points,
+        architecture=architecture,
+        error_type=BenchmarkRunnerError,
+        field_prefix="training_estimate.cost_point",
+    )
     return {
         "kind": "training-running-score-estimate",
         "status": "provisional",
@@ -4156,6 +4101,8 @@ def _training_estimate_record(
         "chance_mass": score_estimate.get("chance_mass"),
         "score": _training_score_estimate_score(score_estimate),
         "score_integral": dict(score_integral),
+        "cost": cost_integral.value,
+        "cost_integral": cost_integral.to_record(kind="compute-cost-integral"),
         "validation_check": latest.validation_check,
         "step": latest.step,
         "max_inference_compute": _required_int(
@@ -4169,11 +4116,18 @@ def _training_estimate_record(
 def _training_cost_summary(
     *,
     inspection: ModelInspectionRecord,
+    training_estimate: Mapping[str, object],
     training_run: TrainingRunRecord,
 ) -> dict[str, object]:
     cost_summary = inspection.cost_summary.to_record()
     cost_summary.pop("inference_compute", None)
     cost_summary.pop("training_compute_per_sample", None)
+    cost = _optional_nonnegative_float(
+        training_estimate.get("cost"),
+        "training_estimate.cost",
+    )
+    if cost is not None:
+        cost_summary["cost"] = cost
     max_inference_compute = _training_history_max_inference_compute(
         training_run.validation_history
     )

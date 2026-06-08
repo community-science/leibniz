@@ -15,8 +15,7 @@ from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocu
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
     ComplexityIntegral,
-    ComputeCostPoint,
-    integrated_compute_cost_integral,
+    sampled_competence_compute_cost_integral,
     sampled_competence_frontier_integral,
 )
 from leibniz.benchmark_implementations import (
@@ -41,10 +40,6 @@ from leibniz.measurements import (
 )
 from leibniz.model_inspection import (
     ModelInspectionRecord,
-)
-from leibniz.model_operators import (
-    architecture_with_input_shape,
-    summarize_architecture_operators,
 )
 from leibniz.observation_generation import ComplexityCandidate, ComplexityRequest
 from leibniz.records import RecordExtractor
@@ -1508,17 +1503,9 @@ def _integrated_reference_curve_points(
             point.get("cost_density"),
             "reference_curve.cost_density",
         )
-        cumulative_cost += integrated_compute_cost_integral(
-            (
-                ComputeCostPoint(
-                    complexity=complexity,
-                    compute_per_sample=cost_density,
-                    bit_length_per_op=_default_bit_length_per_op,
-                    complexity_minimum=previous_complexity,
-                    complexity_maximum=complexity,
-                ),
-            )
-        ).value
+        cumulative_cost += (complexity - previous_complexity) * (
+            cost_density * _default_bit_length_per_op
+        )
         integrated_points.append(
             {
                 "complexity": complexity,
@@ -1606,9 +1593,11 @@ def _model_result_records(
         cost_integral = (
             None
             if inference_compute is None
-            else _model_compute_cost_integral(
+            else sampled_competence_compute_cost_integral(
                 points=points,
                 architecture=_run_architecture_manifest(best_run),
+                error_type=LocalResultImportError,
+                field_prefix="compute_cost_point",
             )
         )
         record: dict[str, object] = {
@@ -1723,9 +1712,11 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
         inference_compute = _optional_cost_value(cost_summary, "inference_compute")
         if inference_compute is not None:
             cost_summary["inference_compute"] = inference_compute
-            cost_summary["cost"] = _model_compute_cost_integral(
+            cost_summary["cost"] = sampled_competence_compute_cost_integral(
                 points=_run_competence_points(run),
                 architecture=_run_architecture_manifest(run),
+                error_type=LocalResultImportError,
+                field_prefix="compute_cost_point",
             ).value
     else:
         cost_summary.pop("inference_compute", None)
@@ -1733,87 +1724,6 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
     if training_compute is not None:
         cost_summary["training_compute"] = training_compute
     return cost_summary
-
-
-def _model_compute_cost_integral(
-    *,
-    points: tuple[dict[str, object], ...],
-    architecture: ArchitectureManifest,
-) -> ComplexityIntegral:
-    return integrated_compute_cost_integral(
-        _compute_cost_points_from_sampled_competence(
-            points=points,
-            architecture=architecture,
-        )
-    )
-
-
-def _compute_cost_points_from_sampled_competence(
-    *,
-    points: tuple[dict[str, object], ...],
-    architecture: ArchitectureManifest,
-) -> tuple[ComputeCostPoint, ...]:
-    ordered = sorted(points, key=lambda point: _point_complexity(point))
-    cursor = 0.0
-    cost_points: list[ComputeCostPoint] = []
-    for point in ordered:
-        complexity = _point_complexity(point)
-        minimum = _optional_nonnegative_number(
-            point.get("complexity_minimum"),
-            "compute_cost_point.complexity_minimum",
-        )
-        maximum = _optional_nonnegative_number(
-            point.get("complexity_maximum"),
-            "compute_cost_point.complexity_maximum",
-        )
-        if minimum is None:
-            minimum = cursor
-        if maximum is None:
-            maximum = complexity
-        if maximum <= minimum:
-            minimum = cursor
-            maximum = complexity
-        cost_points.append(
-            ComputeCostPoint(
-                complexity=complexity,
-                compute_per_sample=_point_inference_compute(
-                    point,
-                    architecture=architecture,
-                ),
-                bit_length_per_op=_default_bit_length_per_op,
-                complexity_minimum=minimum,
-                complexity_maximum=maximum,
-            )
-        )
-        cursor = max(cursor, maximum)
-    return tuple(cost_points)
-
-
-def _point_inference_compute(
-    point: Mapping[str, object],
-    *,
-    architecture: ArchitectureManifest,
-) -> float:
-    plan = summarize_architecture_operators(
-        architecture_with_input_shape(architecture, _point_input_shape(point))
-    )
-    if plan.inference_compute is None:
-        raise LocalResultImportError("compute_cost_point input_shape has unknown inference compute")
-    return float(plan.inference_compute)
-
-
-def _point_input_shape(point: Mapping[str, object]) -> tuple[int, ...]:
-    value = point.get("input_shape")
-    if not isinstance(value, list | tuple):
-        raise LocalResultImportError("compute_cost_point.input_shape: expected shape")
-    shape: list[int] = []
-    for axis in cast(Sequence[object], value):
-        if type(axis) is not int or axis < 1:
-            raise LocalResultImportError(
-                "compute_cost_point.input_shape: expected positive integer shape"
-            )
-        shape.append(axis)
-    return tuple(shape)
 
 
 def _optional_point_input_shape(
@@ -2161,38 +2071,22 @@ def _run_competence_points(run: _BenchmarkRunRecord) -> tuple[dict[str, object],
 
 
 def _competence_point_from_sampled_record(point: Mapping[str, object]) -> dict[str, object]:
-    record: dict[str, object] = {
-        "complexity": _as_nonnegative_number(
-            point.get("complexity"),
-            "sampled_competence.point.complexity",
-        ),
-        "score": _as_nonnegative_number(
-            point.get("mean_accepted_mass"),
-            "sampled_competence.point.mean_accepted_mass",
-        ),
-        "sample_count": _as_positive_int(
-            point.get("sample_count"),
-            "sampled_competence.point.sample_count",
-        ),
-    }
-    minimum = _optional_nonnegative_number(
-        point.get("complexity_minimum"),
-        "sampled_competence.point.complexity_minimum",
-    )
-    maximum = _optional_nonnegative_number(
-        point.get("complexity_maximum"),
-        "sampled_competence.point.complexity_maximum",
-    )
-    input_shape = _optional_point_input_shape(
+    competence = CompetencePoint.from_sampled_record(
         point,
-        "sampled_competence.point.input_shape",
+        field_prefix="sampled_competence.point",
+        error_type=LocalResultImportError,
     )
-    if input_shape is not None:
-        record["input_shape"] = list(input_shape)
-    if minimum is not None:
-        record["complexity_minimum"] = minimum
-    if maximum is not None:
-        record["complexity_maximum"] = maximum
+    record: dict[str, object] = {
+        "complexity": competence.complexity,
+        "score": competence.accepted_mass,
+        "sample_count": competence.sample_count,
+    }
+    if competence.input_shape is not None:
+        record["input_shape"] = list(competence.input_shape)
+    if competence.complexity_minimum is not None:
+        record["complexity_minimum"] = competence.complexity_minimum
+    if competence.complexity_maximum is not None:
+        record["complexity_maximum"] = competence.complexity_maximum
     return record
 
 

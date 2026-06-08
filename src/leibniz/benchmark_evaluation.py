@@ -5,9 +5,15 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Self, TypeVar, cast
 
+from leibniz.architectures import ArchitectureManifest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementRecord
+from leibniz.model_operators import (
+    architecture_with_input_shape,
+    summarize_architecture_operators,
+)
 from leibniz.observation_generation import GeneratedSample, GeneratedSampleSet
 from leibniz.outcomes import AcceptedEvent, OutcomeSpace, RawScoringEvidence
 from leibniz.prediction_results import DirectFiniteProbabilityPrediction
@@ -15,18 +21,21 @@ from leibniz.prediction_spaces import FiniteOutcomeSpace
 
 __all__ = [
     "CompetencePoint",
-    "ComputeCostPoint",
     "ComplexityIntegral",
     "ComplexityIntegralTerm",
     "finite_measurements_for_predictions",
-    "integrated_compute_cost_integral",
     "sampled_competence_curriculum_record",
+    "sampled_competence_compute_cost_integral",
     "sampled_competence_record",
     "sampled_competence_frontier_integral",
     "ValidationCompetencePoint",
     "validation_competence",
     "validation_competence_frontier_advances",
 ]
+
+_ErrorT = TypeVar("_ErrorT", bound=ValueError)
+
+_default_bit_length_per_op = 32.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,16 +50,48 @@ class CompetencePoint:
     complexity_maximum: float | None = None
     input_shape: tuple[int, ...] | None = None
 
-
-@dataclass(frozen=True, slots=True)
-class ComputeCostPoint:
-    """A measured per-sample compute density over a complexity interval."""
-
-    complexity: float
-    compute_per_sample: float
-    bit_length_per_op: float
-    complexity_minimum: float | None = None
-    complexity_maximum: float | None = None
+    @classmethod
+    def from_sampled_record(
+        cls,
+        record: Mapping[str, object],
+        *,
+        field_prefix: str,
+        error_type: type[_ErrorT] = ValueError,
+    ) -> Self:
+        seed = record.get("seed")
+        return cls(
+            complexity=_record_nonnegative_number(
+                record.get("complexity"),
+                field=f"{field_prefix}.complexity",
+                error_type=error_type,
+            ),
+            accepted_mass=_record_nonnegative_number(
+                record.get("mean_accepted_mass"),
+                field=f"{field_prefix}.mean_accepted_mass",
+                error_type=error_type,
+            ),
+            sample_count=_record_positive_int(
+                record.get("sample_count"),
+                field=f"{field_prefix}.sample_count",
+                error_type=error_type,
+            ),
+            seed=seed if type(seed) is int else 0,
+            complexity_minimum=_record_optional_nonnegative_number(
+                record.get("complexity_minimum"),
+                field=f"{field_prefix}.complexity_minimum",
+                error_type=error_type,
+            ),
+            complexity_maximum=_record_optional_nonnegative_number(
+                record.get("complexity_maximum"),
+                field=f"{field_prefix}.complexity_maximum",
+                error_type=error_type,
+            ),
+            input_shape=_record_optional_input_shape(
+                record,
+                field=f"{field_prefix}.input_shape",
+                error_type=error_type,
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,32 +389,67 @@ def sampled_competence_frontier_integral(
     return ComplexityIntegral(terms=tuple(terms))
 
 
-def integrated_compute_cost_integral(
-    points: Sequence[ComputeCostPoint],
+def sampled_competence_compute_cost_integral(
+    *,
+    points: Sequence[Mapping[str, object]],
+    architecture: ArchitectureManifest,
+    error_type: type[_ErrorT] = ValueError,
+    field_prefix: str = "compute_cost_point",
 ) -> ComplexityIntegral:
-    """Return the explicit bit-op cost integral over measured intervals."""
+    """Return the compute-cost integral for sampled competence intervals."""
 
+    ordered = sorted(
+        points,
+        key=lambda point: _record_nonnegative_number(
+            point.get("complexity"),
+            field=f"{field_prefix}.complexity",
+            error_type=error_type,
+        ),
+    )
+    cursor = 0.0
     terms: list[ComplexityIntegralTerm] = []
-    for point in sorted(points, key=_compute_cost_point_interval_sort_key):
-        lower, upper = _complexity_point_interval(point)
-        if upper <= lower:
-            continue
-        density = _finite_nonnegative_number(
-            point.compute_per_sample,
-            field="compute_cost.compute_per_sample",
-        ) * _finite_nonnegative_number(
-            point.bit_length_per_op,
-            field="compute_cost.bit_length_per_op",
+    for point in ordered:
+        complexity = _record_nonnegative_number(
+            point.get("complexity"),
+            field=f"{field_prefix}.complexity",
+            error_type=error_type,
         )
-        terms.append(
-            ComplexityIntegralTerm(
-                lower=lower,
-                upper=upper,
-                density=density,
-                kind="measured-compute-cost",
-                representative_complexity=point.complexity,
+        minimum = _record_optional_nonnegative_number(
+            point.get("complexity_minimum"),
+            field=f"{field_prefix}.complexity_minimum",
+            error_type=error_type,
+        )
+        maximum = _record_optional_nonnegative_number(
+            point.get("complexity_maximum"),
+            field=f"{field_prefix}.complexity_maximum",
+            error_type=error_type,
+        )
+        if minimum is None:
+            minimum = cursor
+        if maximum is None:
+            maximum = complexity
+        if maximum <= minimum:
+            minimum = cursor
+            maximum = complexity
+        if maximum > minimum:
+            terms.append(
+                ComplexityIntegralTerm(
+                    lower=minimum,
+                    upper=maximum,
+                    density=(
+                        _sampled_point_inference_compute(
+                            point,
+                            architecture=architecture,
+                            error_type=error_type,
+                            field_prefix=field_prefix,
+                        )
+                        * _default_bit_length_per_op
+                    ),
+                    kind="measured-compute-cost",
+                    representative_complexity=complexity,
+                )
             )
-        )
+        cursor = max(cursor, maximum)
     return ComplexityIntegral(terms=tuple(terms))
 
 
@@ -382,13 +458,96 @@ def _competence_point_interval_sort_key(point: CompetencePoint) -> tuple[float, 
     return (lower, upper)
 
 
-def _compute_cost_point_interval_sort_key(point: ComputeCostPoint) -> tuple[float, float]:
-    lower, upper = _complexity_point_interval(point)
-    return (lower, upper)
+def _sampled_point_inference_compute(
+    point: Mapping[str, object],
+    *,
+    architecture: ArchitectureManifest,
+    error_type: type[_ErrorT],
+    field_prefix: str,
+) -> float:
+    plan = summarize_architecture_operators(
+        architecture_with_input_shape(
+            architecture,
+            _sampled_point_input_shape(
+                point,
+                error_type=error_type,
+                field=f"{field_prefix}.input_shape",
+            ),
+        )
+    )
+    if plan.inference_compute is None:
+        raise error_type(f"{field_prefix} input_shape has unknown inference compute")
+    return float(plan.inference_compute)
+
+
+def _sampled_point_input_shape(
+    point: Mapping[str, object],
+    *,
+    error_type: type[_ErrorT],
+    field: str,
+) -> tuple[int, ...]:
+    value = point.get("input_shape")
+    if not isinstance(value, list | tuple):
+        raise error_type(f"{field}: expected shape")
+    shape: list[int] = []
+    for axis in cast(Sequence[object], value):
+        if type(axis) is not int or axis < 1:
+            raise error_type(f"{field}: expected positive integer shape")
+        shape.append(axis)
+    if not shape:
+        raise error_type(f"{field}: expected nonempty shape")
+    return tuple(shape)
+
+
+def _record_optional_nonnegative_number(
+    value: object,
+    *,
+    field: str,
+    error_type: type[_ErrorT],
+) -> float | None:
+    if value is None:
+        return None
+    return _record_nonnegative_number(value, field=field, error_type=error_type)
+
+
+def _record_positive_int(
+    value: object,
+    *,
+    field: str,
+    error_type: type[_ErrorT],
+) -> int:
+    if type(value) is not int or value < 1:
+        raise error_type(f"{field}: expected positive integer")
+    return value
+
+
+def _record_nonnegative_number(
+    value: object,
+    *,
+    field: str,
+    error_type: type[_ErrorT],
+) -> float:
+    if not isinstance(value, int | float):
+        raise error_type(f"{field}: expected number")
+    result = float(value)
+    if not math.isfinite(result) or result < 0.0:
+        raise error_type(f"{field}: expected finite nonnegative number")
+    return result
+
+
+def _record_optional_input_shape(
+    point: Mapping[str, object],
+    *,
+    field: str,
+    error_type: type[_ErrorT],
+) -> tuple[int, ...] | None:
+    if "input_shape" not in point:
+        return None
+    return _sampled_point_input_shape(point, field=field, error_type=error_type)
 
 
 def _complexity_point_interval(
-    point: CompetencePoint | ComputeCostPoint,
+    point: CompetencePoint,
 ) -> tuple[float, float]:
     complexity = _finite_nonnegative_number(
         point.complexity,
