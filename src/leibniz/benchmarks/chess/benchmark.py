@@ -228,27 +228,17 @@ class Generator:
             cardinality=sample_space.cardinality,
             sample_count=sample_count,
         )
-        selected_global_indices = tuple(
-            _global_sample_index(
-                cardinality=sample_space.cardinality,
-                local_index=index,
-            )
-            for index in selected_local_indices
-        )
-        selected_positions = (
-            tuple(_position_for_sample_index(index) for index in selected_global_indices)
-            if include_metadata
-            else ()
+        selected_global_indices = _global_sample_indices(
+            cardinality=sample_space.cardinality,
+            local_indices=selected_local_indices,
         )
         samples = (
-            tuple(
-                self._sample(
-                    index=index,
-                    position=position,
-                    sample_space_cardinality=sample_space.cardinality,
-                    complexity=complexity,
-                )
-                for index, position in enumerate(selected_positions)
+            _samples_for_global_indices(
+                global_indices=selected_global_indices,
+                outcome_ids=outcome_ids,
+                sample_space_cardinality=sample_space.cardinality,
+                complexity=complexity,
+                full_metadata=runtime is None,
             )
             if include_metadata
             else ()
@@ -452,29 +442,6 @@ class Generator:
             return None
         return _ChessSampleSpace(cardinality=minimum_cardinality)
 
-    def _sample(
-        self,
-        *,
-        index: int,
-        position: _MateInOnePosition,
-        sample_space_cardinality: int,
-        complexity: float,
-    ) -> GeneratedSample:
-        return GeneratedSample(
-            index=index,
-            outcome_id=position.mate_moves[0],
-            complexity=complexity,
-            complexity_value=ComplexityValue(value=complexity),
-            available_outcome_ids=position.legal_moves,
-            observable_state_id=position.observation_id,
-            target_distribution=position.target_distribution,
-            latent_coordinates=_latent_coordinates(
-                position,
-                sample_space_cardinality=sample_space_cardinality,
-            ),
-        )
-
-
 def _manifest() -> BenchmarkManifest:
     return BenchmarkManifest(
         id=_benchmark_id,
@@ -590,6 +557,22 @@ def _global_sample_index(*, cardinality: int, local_index: int) -> int:
     _require_sample_cardinality(cardinality)
     if type(local_index) is not int or local_index < 0 or local_index >= cardinality:
         raise ObservationGenerationError("Chess local sample index is outside cardinality")
+    return _global_sample_indices(cardinality=cardinality, local_indices=(local_index,))[0]
+
+
+def _global_sample_indices(
+    *,
+    cardinality: int,
+    local_indices: Sequence[int],
+) -> tuple[int, ...]:
+    _require_sample_cardinality(cardinality)
+    invalid_indices = tuple(
+        local_index
+        for local_index in local_indices
+        if type(local_index) is not int or local_index < 0 or local_index >= cardinality
+    )
+    if invalid_indices:
+        raise ObservationGenerationError("Chess local sample index is outside cardinality")
     enabled_capacity = _enabled_family_capacity_for_cardinality(cardinality)
     lower_bound = _family_index_lower_bound_for_cardinality(cardinality)
     if cardinality > enabled_capacity - lower_bound:
@@ -597,7 +580,7 @@ def _global_sample_index(*, cardinality: int, local_index: int) -> int:
     offset = cardinality * (cardinality - 1) // 2
     if offset + cardinality > enabled_capacity:
         offset = lower_bound + offset % (enabled_capacity - lower_bound - cardinality + 1)
-    return offset + local_index
+    return tuple(offset + local_index for local_index in local_indices)
 
 
 def _enabled_family_capacity_for_cardinality(cardinality: int) -> int:
@@ -964,6 +947,62 @@ def _latent_coordinates(
                 "analysis": dict(position.representative_analysis()),
             },
         },
+    )
+
+
+def _samples_for_global_indices(
+    *,
+    global_indices: Sequence[int],
+    outcome_ids: tuple[str, ...] | None,
+    sample_space_cardinality: int,
+    complexity: float,
+    full_metadata: bool,
+) -> tuple[GeneratedSample, ...]:
+    if full_metadata:
+        return tuple(
+            _full_sample(
+                index=index,
+                position=_position_for_sample_index(global_index),
+                sample_space_cardinality=sample_space_cardinality,
+                complexity=complexity,
+            )
+            for index, global_index in enumerate(global_indices)
+        )
+    if outcome_ids is None:
+        raise ObservationGenerationError("lightweight Chess samples require outcome_ids")
+    base_count = len(_mate_mechanisms()) * len(_board_transforms())
+    target_indices_by_base = _base_target_indices(outcome_ids)
+    complexity_value = ComplexityValue(value=complexity)
+    return tuple(
+        GeneratedSample(
+            index=index,
+            outcome_id=outcome_ids[target_indices_by_base[global_index % base_count]],
+            complexity=complexity,
+            complexity_value=complexity_value,
+        )
+        for index, global_index in enumerate(global_indices)
+    )
+
+
+def _full_sample(
+    *,
+    index: int,
+    position: _MateInOnePosition,
+    sample_space_cardinality: int,
+    complexity: float,
+) -> GeneratedSample:
+    return GeneratedSample(
+        index=index,
+        outcome_id=position.mate_moves[0],
+        complexity=complexity,
+        complexity_value=ComplexityValue(value=complexity),
+        available_outcome_ids=position.legal_moves,
+        observable_state_id=position.observation_id,
+        target_distribution=position.target_distribution,
+        latent_coordinates=_latent_coordinates(
+            position,
+            sample_space_cardinality=sample_space_cardinality,
+        ),
     )
 
 
