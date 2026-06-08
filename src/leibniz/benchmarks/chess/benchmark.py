@@ -24,7 +24,7 @@ from leibniz.observation_generation import (
     ObservationGenerationError,
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
-from leibniz.tensor_runtime import TensorRuntime, make_float_tensor
+from leibniz.tensor_runtime import TensorRuntime, tensor_runtime_backend
 from leibniz.timing import TimingCollector
 
 __all__ = ["all_meaningful_uci_moves", "benchmark"]
@@ -221,14 +221,17 @@ class Generator:
             cardinality=sample_space.cardinality,
             sample_count=sample_count,
         )
-        selected_positions = tuple(
-            _position_for_sample_index(
-                _global_sample_index(
-                    cardinality=sample_space.cardinality,
-                    local_index=index,
-                )
+        selected_global_indices = tuple(
+            _global_sample_index(
+                cardinality=sample_space.cardinality,
+                local_index=index,
             )
             for index in selected_local_indices
+        )
+        selected_positions = (
+            tuple(_position_for_sample_index(index) for index in selected_global_indices)
+            if include_metadata
+            else ()
         )
         samples = (
             tuple(
@@ -243,9 +246,10 @@ class Generator:
             if include_metadata
             else ()
         )
-        fields, targets = _tensor_batch(
+        fields, targets = _tensor_batch_for_global_indices(
             runtime=runtime,
-            positions=selected_positions,
+            global_indices=selected_global_indices,
+            cardinality=sample_space.cardinality,
             outcome_ids=outcome_ids,
             sample_shape=sample_shape,
         )
@@ -724,46 +728,56 @@ def _floor_cardinality(complexity: float) -> int:
     return min(_family_capacity(), math.floor(cardinality))
 
 
-def _base_mate_board(
+def _base_mate_pieces(
     *,
     mechanism: _MateMechanism,
     spectator_combination_rank: int = 0,
-) -> chess.Board:
+) -> tuple[tuple[chess.Square, chess.Piece], ...]:
+    pieces: list[tuple[chess.Square, chess.Piece]] = [
+        (chess.A1, chess.Piece(chess.KING, chess.BLACK)),
+        (chess.B1, chess.Piece(chess.ROOK, chess.BLACK)),
+        (chess.C1, chess.Piece(chess.KING, chess.WHITE)),
+        (mechanism.queen_square, chess.Piece(chess.QUEEN, chess.WHITE)),
+        *mechanism.support_pieces,
+    ]
+    spectator_mask = _spectator_mask_for_combination_rank(spectator_combination_rank)
+    pieces.extend(
+        (square, chess.Piece(chess.KNIGHT, chess.WHITE))
+        for bit_index, square in enumerate(_spectator_squares())
+        if spectator_mask & (1 << bit_index)
+    )
+    return tuple(pieces)
+
+
+def _board_from_pieces(pieces: Sequence[tuple[chess.Square, chess.Piece]]) -> chess.Board:
     board = chess.Board.empty()
     board.turn = chess.WHITE
     board.castling_rights = 0
     board.ep_square = None
     board.halfmove_clock = 0
     board.fullmove_number = 1
-    board.set_piece_at(chess.A1, chess.Piece(chess.KING, chess.BLACK))
-    board.set_piece_at(chess.B1, chess.Piece(chess.ROOK, chess.BLACK))
-    board.set_piece_at(chess.C1, chess.Piece(chess.KING, chess.WHITE))
-    board.set_piece_at(mechanism.queen_square, chess.Piece(chess.QUEEN, chess.WHITE))
-    for square, piece in mechanism.support_pieces:
+    for square, piece in pieces:
         board.set_piece_at(square, piece)
-    spectator_mask = _spectator_mask_for_combination_rank(spectator_combination_rank)
-    for bit_index, square in enumerate(_spectator_squares()):
-        if spectator_mask & (1 << bit_index):
-            board.set_piece_at(square, chess.Piece(chess.KNIGHT, chess.WHITE))
     return board
 
 
-def _transformed_board(board: chess.Board, *, transform: _BoardTransform) -> chess.Board:
-    transformed = chess.Board.empty()
-    transformed.turn = board.turn
-    transformed.castling_rights = 0
-    transformed.ep_square = None
-    transformed.halfmove_clock = 0
-    transformed.fullmove_number = 1
-    for square, piece in board.piece_map().items():
-        file_index = chess.square_file(square)
-        rank_index = chess.square_rank(square)
-        transformed_file, transformed_rank = transform.square(file_index, rank_index)
-        transformed.set_piece_at(
-            chess.square(transformed_file, transformed_rank),
-            piece,
-        )
-    return transformed
+def _transformed_square(square: chess.Square, *, transform: _BoardTransform) -> chess.Square:
+    file_index = chess.square_file(square)
+    rank_index = chess.square_rank(square)
+    transformed_file, transformed_rank = transform.square(file_index, rank_index)
+    return chess.square(transformed_file, transformed_rank)
+
+
+def _transformed_move_uci(
+    *,
+    from_square: chess.Square,
+    to_square: chess.Square,
+    transform: _BoardTransform,
+) -> str:
+    return (
+        chess.square_name(_transformed_square(from_square, transform=transform))
+        + chess.square_name(_transformed_square(to_square, transform=transform))
+    )
 
 
 def _position_for_sample_index(index: int) -> _MateInOnePosition:
@@ -778,13 +792,15 @@ def _position_for_sample_index(index: int) -> _MateInOnePosition:
         raise ObservationGenerationError("Chess sample index exceeds generator capacity")
     mechanism = mechanisms[base_index // len(transforms)]
     transform = transforms[base_index % len(transforms)]
-    board = _transformed_board(
-        _base_mate_board(
-            mechanism=mechanism,
-            spectator_combination_rank=spectator_combination_rank,
-        ),
-        transform=transform,
+    base_pieces = _base_mate_pieces(
+        mechanism=mechanism,
+        spectator_combination_rank=spectator_combination_rank,
     )
+    board_pieces = tuple(
+        (_transformed_square(square, transform=transform), piece)
+        for square, piece in base_pieces
+    )
+    board = _board_from_pieces(board_pieces)
     return _mate_in_one_position(
         board.fen(),
         mechanism_name=mechanism.name,
@@ -1145,10 +1161,11 @@ def _piece_svg_shape(piece: chess.Piece, *, center_x: float, center_y: float) ->
     )
 
 
-def _tensor_batch(
+def _tensor_batch_for_global_indices(
     *,
     runtime: TensorRuntime | None,
-    positions: Sequence[_MateInOnePosition],
+    global_indices: Sequence[int],
+    cardinality: int,
     outcome_ids: tuple[str, ...] | None,
     sample_shape: tuple[int, ...],
 ) -> tuple[Any | None, Any | None]:
@@ -1156,59 +1173,258 @@ def _tensor_batch(
         return None, None
     if outcome_ids is None:
         raise ObservationGenerationError("tensor generation requires outcome_ids")
-    unknown_outcomes = tuple(
-        outcome_id
-        for position in positions
-        for outcome_id in (*position.legal_moves, *position.mate_moves)
-        if outcome_id not in outcome_ids
+    return _tensor_batch_from_global_indices(
+        runtime=runtime,
+        global_indices=global_indices,
+        cardinality=cardinality,
+        outcome_ids=outcome_ids,
+        sample_shape=sample_shape,
     )
-    if unknown_outcomes:
-        raise ObservationGenerationError(
-            "tensor generation outcome_ids do not cover generated Chess moves"
+
+
+def _tensor_batch_from_global_indices(
+    *,
+    runtime: TensorRuntime,
+    global_indices: Sequence[int],
+    cardinality: int,
+    outcome_ids: tuple[str, ...],
+    sample_shape: tuple[int, ...],
+) -> tuple[Any, Any]:
+    backend = tensor_runtime_backend(runtime)
+    sample_count = len(global_indices)
+    fields = backend.zeros(
+        (sample_count, *_tensor_shape),
+        dtype=backend.float32,
+        device=runtime.device,
+    )
+    targets = backend.zeros(
+        (sample_count, len(outcome_ids)),
+        dtype=backend.float32,
+        device=runtime.device,
+    )
+    fields[:, 12, :, :] = 1.0
+    if sample_count == 0:
+        return (
+            fields.reshape((*sample_shape, *_tensor_shape)),
+            targets.reshape((*sample_shape, len(outcome_ids))),
         )
-    fields = make_float_tensor(
-        runtime,
-        [_board_tensor(position.fen) for position in positions],
-        device=runtime.device,
+
+    indices = backend.tensor(global_indices, dtype=backend.long, device=runtime.device)
+    sample_indices = backend.arange(sample_count, dtype=backend.long, device=runtime.device)
+    mechanism_count = len(_mate_mechanisms())
+    transform_count = len(_board_transforms())
+    base_count = mechanism_count * transform_count
+    base_indices = indices.remainder(base_count)
+    mechanism_indices = backend.div(base_indices, transform_count, rounding_mode="floor")
+    transform_indices = base_indices.remainder(transform_count)
+    spectator_combination_ranks = backend.div(
+        indices,
+        base_count,
+        rounding_mode="floor",
     )
-    targets = make_float_tensor(
+
+    transform_table = _device_long_tensor(
         runtime,
-        [
-            _target_row(position.target_distribution, outcome_ids=outcome_ids)
-            for position in positions
-        ],
-        device=runtime.device,
+        _transform_square_table(),
     )
+    queen_squares = _device_long_tensor(runtime, _queen_squares())
+    support_squares = _device_long_tensor(runtime, _support_squares())
+    support_planes = _device_long_tensor(runtime, _support_planes())
+    target_indices_by_base = _device_long_tensor(
+        runtime,
+        _base_target_indices(outcome_ids),
+    )
+
+    black_king_squares = transform_table[transform_indices, chess.A1]
+    black_rook_squares = transform_table[transform_indices, chess.B1]
+    white_king_squares = transform_table[transform_indices, chess.C1]
+    queen_source_squares = queen_squares[mechanism_indices]
+    queen_squares_transformed = transform_table[transform_indices, queen_source_squares]
+    black_king_plane = _piece_plane(chess.Piece(chess.KING, chess.BLACK))
+    black_rook_plane = _piece_plane(chess.Piece(chess.ROOK, chess.BLACK))
+    white_king_plane = _piece_plane(chess.Piece(chess.KING, chess.WHITE))
+    white_queen_plane = _piece_plane(chess.Piece(chess.QUEEN, chess.WHITE))
+    _scatter_piece_squares(
+        fields=fields,
+        sample_indices=sample_indices,
+        planes=backend.full_like(sample_indices, black_king_plane),
+        squares=black_king_squares,
+    )
+    _scatter_piece_squares(
+        fields=fields,
+        sample_indices=sample_indices,
+        planes=backend.full_like(sample_indices, black_rook_plane),
+        squares=black_rook_squares,
+    )
+    _scatter_piece_squares(
+        fields=fields,
+        sample_indices=sample_indices,
+        planes=backend.full_like(sample_indices, white_king_plane),
+        squares=white_king_squares,
+    )
+    _scatter_piece_squares(
+        fields=fields,
+        sample_indices=sample_indices,
+        planes=backend.full_like(sample_indices, white_queen_plane),
+        squares=queen_squares_transformed,
+    )
+
+    support_source_squares = support_squares[mechanism_indices]
+    support_mask = support_source_squares >= 0
+    support_sample_indices = sample_indices[support_mask]
+    support_transforms = transform_indices[support_mask]
+    support_square_values = support_source_squares[support_mask]
+    _scatter_piece_squares(
+        fields=fields,
+        sample_indices=support_sample_indices,
+        planes=support_planes[mechanism_indices][support_mask],
+        squares=transform_table[support_transforms, support_square_values],
+    )
+
+    if _enabled_spectator_count_for_cardinality(cardinality) > 0:
+        spectator_squares = _device_long_tensor(
+            runtime,
+            _spectator_squares(),
+        )
+        combination_table = _device_long_tensor(
+            runtime,
+            _spectator_combination_table(),
+        )
+        combination_starts = _device_long_tensor(
+            runtime,
+            _spectator_combination_starts(),
+        )
+        spectator_square_count = len(_spectator_squares())
+        selected_counts = backend.bucketize(
+            spectator_combination_ranks,
+            combination_starts[1:],
+        )
+        ranks_within_count = spectator_combination_ranks - combination_starts[selected_counts]
+
+        remaining_selected = selected_counts
+        remaining_rank = ranks_within_count
+        spectator_choices: list[Any] = []
+        for bit_index in range(spectator_square_count):
+            remaining_slots = spectator_square_count - bit_index - 1
+            skip_counts = combination_table[remaining_slots, remaining_selected]
+            choose = (remaining_selected > 0) & (remaining_rank >= skip_counts)
+            spectator_choices.append(choose)
+            remaining_rank = backend.where(choose, remaining_rank - skip_counts, remaining_rank)
+            remaining_selected = backend.where(
+                choose,
+                remaining_selected - backend.ones_like(remaining_selected),
+                remaining_selected,
+            )
+        chosen_spectators = backend.stack(spectator_choices, dim=1).nonzero()
+        chosen_sample_indices = chosen_spectators[:, 0]
+        chosen_spectator_indices = chosen_spectators[:, 1]
+        spectator_plane = _piece_plane(chess.Piece(chess.KNIGHT, chess.WHITE))
+        _scatter_piece_squares(
+            fields=fields,
+            sample_indices=chosen_sample_indices,
+            planes=backend.full_like(chosen_sample_indices, spectator_plane),
+            squares=transform_table[
+                transform_indices[chosen_sample_indices],
+                spectator_squares[chosen_spectator_indices],
+            ],
+        )
+
+    target_indices = target_indices_by_base[base_indices]
+    targets[sample_indices, target_indices] = 1.0
     return (
         fields.reshape((*sample_shape, *_tensor_shape)),
         targets.reshape((*sample_shape, len(outcome_ids))),
     )
 
 
-def _board_tensor(fen: str) -> list[list[list[float]]]:
-    board = chess.Board(fen)
-    planes = [
-        [[0.0 for _file in range(8)] for _rank in range(8)]
-        for _plane in range(_tensor_shape[0])
-    ]
-    for square, piece in board.piece_map().items():
-        plane = _piece_plane(piece)
-        planes[plane][chess.square_rank(square)][chess.square_file(square)] = 1.0
-    if board.turn == chess.WHITE:
-        _fill_plane(planes[12], 1.0)
-    if board.has_kingside_castling_rights(chess.WHITE):
-        _fill_plane(planes[13], 1.0)
-    if board.has_queenside_castling_rights(chess.WHITE):
-        _fill_plane(planes[14], 1.0)
-    if board.has_kingside_castling_rights(chess.BLACK):
-        _fill_plane(planes[15], 1.0)
-    if board.has_queenside_castling_rights(chess.BLACK):
-        _fill_plane(planes[16], 1.0)
-    if board.ep_square is not None:
-        planes[17][chess.square_rank(board.ep_square)][
-            chess.square_file(board.ep_square)
-        ] = 1.0
-    return planes
+def _device_long_tensor(
+    runtime: TensorRuntime,
+    values: object,
+) -> Any:
+    backend = tensor_runtime_backend(runtime)
+    return backend.tensor(values, dtype=backend.long, device=runtime.device)
+
+
+def _scatter_piece_squares(
+    *,
+    fields: Any,
+    sample_indices: Any,
+    planes: Any,
+    squares: Any,
+) -> None:
+    ranks = squares.div(8, rounding_mode="floor")
+    files = squares.remainder(8)
+    fields[sample_indices, planes, ranks, files] = 1.0
+
+
+def _transform_square_table() -> tuple[tuple[int, ...], ...]:
+    return tuple(
+        tuple(_transformed_square(square, transform=transform) for square in chess.SQUARES)
+        for transform in _board_transforms()
+    )
+
+
+def _queen_squares() -> tuple[int, ...]:
+    return tuple(mechanism.queen_square for mechanism in _mate_mechanisms())
+
+
+def _support_squares() -> tuple[int, ...]:
+    support_squares: list[int] = []
+    for mechanism in _mate_mechanisms():
+        if len(mechanism.support_pieces) > 1:
+            raise ObservationGenerationError("Chess GPU renderer expects at most one support piece")
+        support_squares.append(
+            -1 if not mechanism.support_pieces else mechanism.support_pieces[0][0]
+        )
+    return tuple(support_squares)
+
+
+def _support_planes() -> tuple[int, ...]:
+    support_planes: list[int] = []
+    for mechanism in _mate_mechanisms():
+        support_planes.append(
+            -1
+            if not mechanism.support_pieces
+            else _piece_plane(mechanism.support_pieces[0][1])
+        )
+    return tuple(support_planes)
+
+
+def _spectator_combination_table() -> tuple[tuple[int, ...], ...]:
+    square_count = len(_spectator_squares())
+    return tuple(
+        tuple(math.comb(remaining_slots, selected) for selected in range(square_count + 1))
+        for remaining_slots in range(square_count + 1)
+    )
+
+
+def _spectator_combination_starts() -> tuple[int, ...]:
+    square_count = len(_spectator_squares())
+    starts: list[int] = []
+    next_start = 0
+    for selected in range(square_count + 1):
+        starts.append(next_start)
+        next_start += math.comb(square_count, selected)
+    return tuple(starts)
+
+
+def _base_target_indices(outcome_ids: tuple[str, ...]) -> tuple[int, ...]:
+    outcome_index_by_id = {outcome_id: index for index, outcome_id in enumerate(outcome_ids)}
+    target_indices: list[int] = []
+    for mechanism in _mate_mechanisms():
+        for transform in _board_transforms():
+            target_move = _transformed_move_uci(
+                from_square=mechanism.queen_square,
+                to_square=chess.B1,
+                transform=transform,
+            )
+            try:
+                target_indices.append(outcome_index_by_id[target_move])
+            except KeyError as error:
+                raise ObservationGenerationError(
+                    "tensor generation outcome_ids do not cover generated Chess moves"
+                ) from error
+    return tuple(target_indices)
 
 
 def _piece_plane(piece: chess.Piece) -> int:
@@ -1222,20 +1438,6 @@ def _piece_plane(piece: chess.Piece) -> int:
     }
     color_offset = 0 if piece.color == chess.WHITE else 6
     return color_offset + piece_offsets[piece.piece_type]
-
-
-def _fill_plane(plane: list[list[float]], value: float) -> None:
-    for rank in plane:
-        for file_index in range(len(rank)):
-            rank[file_index] = value
-
-
-def _target_row(
-    distribution: Mapping[str, float],
-    *,
-    outcome_ids: tuple[str, ...],
-) -> list[float]:
-    return [float(distribution.get(outcome_id, 0.0)) for outcome_id in outcome_ids]
 
 
 def _all_meaningful_uci_moves() -> tuple[str, ...]:
