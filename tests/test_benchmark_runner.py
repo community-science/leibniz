@@ -33,6 +33,7 @@ from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
 from leibniz.materialization import AxisAssignment
 from leibniz.observation_generation import (
+    ComplexityCandidate,
     ComplexityRequest,
     GeneratedSampleSet,
     load_generator,
@@ -704,6 +705,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         "seed",
         "complexity_value",
         "complexity_request",
+        "score_interval",
         "status",
     }
     assert all(set(rung) == expected_evaluation_rung_keys for rung in curriculum_rungs)
@@ -730,6 +732,9 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         assert request_minimum <= rung_complexity
         assert rung_complexity <= request_maximum
         assert math.isclose(request_minimum, request_maximum)
+        score_interval = cast(dict[str, object], rung["score_interval"])
+        assert cast(float, score_interval["complexity_minimum"]) <= rung_complexity
+        assert rung_complexity <= cast(float, score_interval["complexity_maximum"])
     assert [rung["sample_count"] for rung in curriculum_rungs] == [64] * len(curriculum_rungs)
     assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
         cast(float, rung["complexity"]) for rung in curriculum_rungs
@@ -777,6 +782,16 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert [cast(float, point["complexity"]) for point in points] == sorted(
         cast(float, point["complexity"]) for point in points
     )
+    assert [
+        (point["complexity_minimum"], point["complexity_maximum"])
+        for point in points
+    ] == [
+        (
+            cast(dict[str, object], rung["score_interval"])["complexity_minimum"],
+            cast(dict[str, object], rung["score_interval"])["complexity_maximum"],
+        )
+        for rung in curriculum_rungs
+    ]
 
 
 def test_benchmark_evaluation_rejects_checkpoint_artifact_for_wrong_benchmark(
@@ -2322,6 +2337,200 @@ def test_training_curriculum_uses_benchmark_owned_complexity_schedule() -> None:
         )
         assert candidate.complexity_request.minimum <= candidate.complexity
         assert candidate.complexity <= candidate.complexity_request.maximum
+
+
+def test_adaptive_curriculum_planner_charges_only_skipped_representable_candidates() -> None:
+    class SparseGenerator:
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, int]] = []
+            self.candidates = (
+                ComplexityCandidate(
+                    request=ComplexityRequest(minimum=0.0, maximum=0.0),
+                    cardinality=1,
+                ),
+                ComplexityCandidate(
+                    request=ComplexityRequest(minimum=0.5, maximum=0.5),
+                ),
+                ComplexityCandidate(
+                    request=ComplexityRequest(minimum=1.0, maximum=1.0),
+                    cardinality=2,
+                ),
+                ComplexityCandidate(
+                    request=ComplexityRequest(minimum=4.0, maximum=4.0),
+                    cardinality=16,
+                ),
+            )
+
+        def complexity_curriculum_candidates(
+            self,
+            *,
+            start_index: int,
+            count: int,
+        ) -> tuple[ComplexityCandidate, ...]:
+            self.calls.append((start_index, count))
+            return self.candidates[start_index : start_index + count]
+
+        def complexity_candidate_for_request(
+            self,
+            *,
+            request: ComplexityRequest,
+        ) -> ComplexityCandidate | None:
+            return None
+
+    generator = SparseGenerator()
+    planner = cast(Any, benchmark_runner)._ComplexityCurriculumPlanner(
+        cast(Any, generator),
+        interval_width=1.0,
+        chunk_size=2,
+        allow_schedule_scan_fallback=True,
+    )
+
+    first = planner.next()
+    second = planner.next()
+    third = planner.next()
+
+    assert (first.complexity, first.complexity_minimum, first.complexity_maximum) == (
+        0.0,
+        0.0,
+        0.0,
+    )
+    assert (second.complexity, second.complexity_minimum, second.complexity_maximum) == (
+        1.0,
+        0.0,
+        1.0,
+    )
+    assert (third.complexity, third.complexity_minimum, third.complexity_maximum) == (
+        4.0,
+        4.0,
+        4.0,
+    )
+    assert all(count == 2 for _, count in generator.calls)
+
+
+def test_adaptive_curriculum_planner_keeps_initial_unrepresentable_gap_free() -> None:
+    class ShiftedGenerator:
+        def complexity_candidate_for_request(
+            self,
+            *,
+            request: ComplexityRequest,
+        ) -> ComplexityCandidate | None:
+            return None
+
+        def complexity_curriculum_candidates(
+            self,
+            *,
+            start_index: int,
+            count: int,
+        ) -> tuple[ComplexityCandidate, ...]:
+            candidates = (
+                ComplexityCandidate(
+                    request=ComplexityRequest(minimum=2.0, maximum=2.0),
+                    cardinality=4,
+                ),
+            )
+            return candidates[start_index : start_index + count]
+
+    planner = cast(Any, benchmark_runner)._ComplexityCurriculumPlanner(
+        cast(Any, ShiftedGenerator()),
+        interval_width=1.0,
+        allow_schedule_scan_fallback=True,
+    )
+
+    candidate = planner.next()
+
+    assert (candidate.complexity, candidate.complexity_minimum, candidate.complexity_maximum) == (
+        2.0,
+        2.0,
+        2.0,
+    )
+
+
+def test_adaptive_curriculum_planner_jumps_by_complexity_request_when_available() -> None:
+    class DirectGenerator:
+        def __init__(self) -> None:
+            self.schedule_calls = 0
+
+        def complexity_candidate_for_request(
+            self,
+            *,
+            request: ComplexityRequest,
+        ) -> ComplexityCandidate | None:
+            cardinality = max(1, math.ceil(2**request.minimum))
+            complexity = math.log2(cardinality)
+            if complexity > request.maximum:
+                return None
+            return ComplexityCandidate(
+                request=ComplexityRequest(minimum=complexity, maximum=complexity),
+                cardinality=cardinality,
+            )
+
+        def complexity_curriculum_candidates(
+            self,
+            *,
+            start_index: int,
+            count: int,
+        ) -> tuple[ComplexityCandidate, ...]:
+            del start_index, count
+            self.schedule_calls += 1
+            return ()
+
+    generator = DirectGenerator()
+    planner = cast(Any, benchmark_runner)._ComplexityCurriculumPlanner(
+        cast(Any, generator),
+        interval_width=1.0,
+    )
+
+    candidates = [planner.next() for _ in range(5)]
+
+    assert [candidate.complexity_class.cardinality for candidate in candidates] == [
+        1,
+        2,
+        4,
+        8,
+        16,
+    ]
+    assert generator.schedule_calls == 0
+
+
+def test_training_curriculum_uses_finer_representative_interval_than_evaluation() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    training_planner = cast(Any, benchmark_runner)._ComplexityCurriculumPlanner(
+        generator,
+        interval_width=cast(
+            float,
+            cast(Any, benchmark_runner)._default_training_complexity_integration_interval_width,
+        ),
+    )
+    evaluation_planner = cast(Any, benchmark_runner)._ComplexityCurriculumPlanner(
+        generator,
+        interval_width=cast(
+            float,
+            cast(Any, benchmark_runner)._default_complexity_integration_interval_width,
+        ),
+    )
+
+    training_candidates = [training_planner.next() for _ in range(4)]
+    evaluation_candidates = [evaluation_planner.next() for _ in range(4)]
+
+    assert [candidate.complexity_class.cardinality for candidate in evaluation_candidates] == [
+        1,
+        2,
+        4,
+        8,
+    ]
+    assert [candidate.complexity_class.cardinality for candidate in training_candidates] == [
+        1,
+        2,
+        3,
+        4,
+    ]
+    assert (
+        cast(
+            float,
+            cast(Any, benchmark_runner)._default_training_complexity_integration_interval_width,
+        )
+        < cast(float, cast(Any, benchmark_runner)._default_complexity_integration_interval_width)
+    )
 
 
 def test_training_curriculum_representative_window_rematerializes() -> None:
