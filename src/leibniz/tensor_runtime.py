@@ -6,7 +6,7 @@ import importlib
 import math
 import os
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -33,16 +33,17 @@ __all__ = [
     "softmax_target_masses",
     "synchronize_runtime",
     "TensorRuntime",
+    "TensorElementCoordinates",
     "TensorRuntimeError",
     "TensorRuntimeDevice",
     "TensorRuntimeDeviceKind",
     "tensor_runtime_available_memory_bytes",
     "tensor_runtime_backend",
+    "tensor_runtime_construct_tensor",
     "tensor_runtime_default_device",
     "tensor_runtime_device_choices",
     "tensor_runtime_device_kinds",
     "tensor_runtime_has_fixed_device_memory",
-    "tensor_runtime_prefers_compiled_renderer",
     "tensor_runtime_total_memory_bytes",
     "tensor_runtime_used_memory_bytes",
     "tensor_value_to_host",
@@ -74,10 +75,52 @@ class TensorRuntime:
     device_kind: Literal["cpu", "cuda", "mps"]
 
 
+@dataclass(frozen=True, slots=True)
+class TensorElementCoordinates:
+    """Rank-generic flattened tensor coordinates supplied by the runtime."""
+
+    flat_index: int
+    indices: tuple[int, ...]
+    shape: tuple[int, ...]
+
+    def require_rank(self, rank: int) -> tuple[int, ...]:
+        if len(self.indices) != rank:
+            raise TensorRuntimeError(f"tensor element rank must be {rank}")
+        return self.indices
+
+
 def tensor_runtime_backend(runtime: TensorRuntime) -> Any:
     """Return the tensor backend module for code that needs backend-native APIs."""
 
     return runtime.torch
+
+
+def tensor_runtime_construct_tensor(
+    runtime: TensorRuntime,
+    *,
+    shape: Sequence[int],
+    dtype: Any,
+    element: Callable[[TensorElementCoordinates], Any],
+) -> Any:
+    """Construct a tensor by lifting benchmark element semantics over runtime coordinates."""
+
+    torch = runtime.torch
+    resolved_shape = tuple(_positive_tensor_extent(size) for size in shape)
+    total_elements = math.prod(resolved_shape)
+    if total_elements == 0:
+        return torch.empty(resolved_shape, dtype=dtype, device=runtime.device)
+
+    values = [
+        element(
+            TensorElementCoordinates(
+                flat_index=flat_index,
+                indices=_flat_tensor_indices(flat_index=flat_index, shape=resolved_shape),
+                shape=resolved_shape,
+            ),
+        )
+        for flat_index in range(total_elements)
+    ]
+    return torch.tensor(values, dtype=dtype, device=runtime.device).reshape(resolved_shape)
 
 
 def tensor_runtime_device_choices() -> tuple[str, ...]:
@@ -112,12 +155,6 @@ def tensor_value_to_host(value: Any) -> Any:
 
 def tensor_runtime_has_fixed_device_memory(runtime: TensorRuntime) -> bool:
     """Return whether the runtime exposes a fixed device memory budget."""
-
-    return runtime.device_kind == "cuda"
-
-
-def tensor_runtime_prefers_compiled_renderer(runtime: TensorRuntime) -> bool:
-    """Return whether benchmark renderers should prefer compiled device kernels."""
 
     return runtime.device_kind == "cuda"
 
@@ -899,6 +936,36 @@ def _mps_available(torch: Any) -> bool:
     mps = getattr(backends, "mps", None)
     is_available = getattr(mps, "is_available", None)
     return bool(callable(is_available) and is_available())
+
+
+def _positive_tensor_extent(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TensorRuntimeError("tensor shape extents must be integers")
+    if value < 0:
+        raise TensorRuntimeError("tensor shape extents must be nonnegative")
+    return value
+
+
+def _flat_tensor_indices(*, flat_index: int, shape: tuple[int, ...]) -> tuple[int, ...]:
+    remaining = flat_index
+    indices: list[int] = []
+    for stride in _tensor_shape_strides(shape):
+        indices.append(remaining // stride)
+        remaining = remaining % stride
+    return tuple(indices)
+
+
+def _tensor_shape_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
+    if not shape:
+        return ()
+    strides: list[int] = []
+    stride = 1
+    for extent in reversed(shape[1:]):
+        stride *= extent
+        strides.append(stride)
+    strides.reverse()
+    strides.append(1)
+    return tuple(strides)
 
 
 def _torch() -> Any:

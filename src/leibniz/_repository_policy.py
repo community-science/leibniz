@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from collections.abc import Iterable, Sequence
@@ -28,6 +29,9 @@ _forbidden_suffixes = (".pyc", ".pyo")
 _forbidden_env_files = frozenset({".env"})
 _benchmark_artifact_root = PurePosixPath("src/leibniz/benchmarks")
 _benchmark_implementation_filename = "benchmark.py"
+_source_root = PurePosixPath("src/leibniz")
+_backend_term_exemptions = frozenset({"tensor_runtime.py", "_repository_policy.py"})
+_backend_terms = ("torch", "cuda", "cpu", "triton")
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +51,14 @@ class RepositoryPolicy:
     @staticmethod
     def validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]:
         return _validate_tracked_paths(paths)
+
+    @staticmethod
+    def validate_repository(root: Path) -> tuple[PolicyViolation, ...]:
+        tracked_paths = _tracked_paths(root)
+        return (
+            *_validate_tracked_paths(tracked_paths),
+            *_validate_source_backend_terms(root=root, paths=tracked_paths),
+        )
 
 
 def _validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]:
@@ -87,6 +99,37 @@ def _validate_tracked_paths(paths: Iterable[str]) -> tuple[PolicyViolation, ...]
     return tuple(violations)
 
 
+def _validate_source_backend_terms(
+    *,
+    root: Path,
+    paths: Iterable[str],
+) -> tuple[PolicyViolation, ...]:
+    violations: list[PolicyViolation] = []
+    for raw_path in paths:
+        path = PurePosixPath(raw_path)
+        if path.suffix != ".py" or not path.is_relative_to(_source_root):
+            continue
+        if path.relative_to(_source_root).as_posix() in _backend_term_exemptions:
+            continue
+        try:
+            lines = (root / path).read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            continue
+        for line_number, line in enumerate(lines, start=1):
+            for term in _backend_terms:
+                if re.search(rf"\b{re.escape(term)}", line, flags=re.IGNORECASE):
+                    violations.append(
+                        PolicyViolation(
+                            path=path,
+                            message=(
+                                "backend implementation term outside tensor runtime "
+                                f"at line {line_number}: {term}"
+                            ),
+                        )
+                    )
+    return tuple(violations)
+
+
 def _tracked_paths(root: Path) -> tuple[str, ...]:
     result = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-z"],
@@ -110,7 +153,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
-    violations = _validate_tracked_paths(_tracked_paths(root))
+    violations = RepositoryPolicy.validate_repository(root)
     if not violations:
         return 0
 

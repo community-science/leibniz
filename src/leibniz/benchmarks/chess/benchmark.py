@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
-import linecache
 import math
 import random
 from base64 import b64encode
@@ -29,7 +27,6 @@ from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.tensor_runtime import (
     TensorRuntime,
     tensor_runtime_backend,
-    tensor_runtime_prefers_compiled_renderer,
 )
 from leibniz.timing import TimingCollector
 
@@ -46,7 +43,6 @@ _board_preview_square_size = _board_preview_size // 8
 
 _mate_in_one_family_id = "corner-net-indexed-family"
 _preview_representative_limit = 4
-_chess_sparse_renderer_bundle: tuple[Any, Any] | None = None
 
 
 def benchmark(root: Path) -> BenchmarkProtocol:
@@ -1260,12 +1256,7 @@ def _tensor_batch_from_global_indices(
         runtime,
         _spectator_combination_table() if enabled_spectator_count > 0 else ((1,),),
     )
-    render = (
-        _render_tensor_batch_compiled
-        if tensor_runtime_prefers_compiled_renderer(runtime)
-        else _render_tensor_batch_portable
-    )
-    render(
+    _render_tensor_batch_portable(
         runtime=runtime,
         fields=fields,
         targets=targets,
@@ -1283,50 +1274,6 @@ def _tensor_batch_from_global_indices(
     return (
         fields.reshape((*sample_shape, *_tensor_shape)),
         targets.reshape((*sample_shape, len(outcome_ids))),
-    )
-
-
-def _render_tensor_batch_compiled(
-    *,
-    runtime: TensorRuntime,
-    fields: Any,
-    targets: Any,
-    indices: Any,
-    transform_table: Any,
-    queen_squares: Any,
-    support_squares: Any,
-    support_planes: Any,
-    target_indices_by_base: Any,
-    spectator_squares: Any,
-    combination_table: Any,
-    outcome_count: int,
-    enabled_spectator_count: int,
-) -> None:
-    sample_count = int(indices.numel())
-    piece_slot_count = 5 + enabled_spectator_count
-    total_slots = sample_count * piece_slot_count
-    kernel, triton = _chess_sparse_renderer_kernel()
-    block_size = 256
-    grid_shape = (triton.cdiv(total_slots, block_size),)
-    kernel[grid_shape](
-        fields,
-        targets,
-        indices,
-        transform_table,
-        queen_squares,
-        support_squares,
-        support_planes,
-        target_indices_by_base,
-        spectator_squares,
-        combination_table,
-        total_slots,
-        outcome_count,
-        len(_mate_mechanisms()) * len(_board_transforms()),
-        len(_board_transforms()),
-        len(_spectator_squares()),
-        enabled_spectator_count,
-        piece_slot_count,
-        block_size,
     )
 
 
@@ -1483,161 +1430,6 @@ def _render_tensor_batch_portable(
         + transformed_squares
     )
     fields.reshape(-1)[field_offsets[write_mask]] = 1.0
-
-
-def _chess_sparse_renderer_kernel() -> tuple[Any, Any]:
-    global _chess_sparse_renderer_bundle
-    if _chess_sparse_renderer_bundle is not None:
-        return _chess_sparse_renderer_bundle
-    triton = importlib.import_module("triton")
-    tl = importlib.import_module("triton.language")
-    namespace = {"triton": triton, "tl": tl}
-    source = """
-@triton.jit
-def kernel(
-    fields,
-    targets,
-    indices,
-    transform_table,
-    queen_squares,
-    support_squares,
-    support_planes,
-    target_indices_by_base,
-    spectator_squares,
-    combination_table,
-    total_slots,
-    outcome_count,
-    base_count: tl.constexpr,
-    transform_count: tl.constexpr,
-    spectator_square_count: tl.constexpr,
-    enabled_spectator_count: tl.constexpr,
-    piece_slot_count: tl.constexpr,
-    block_size: tl.constexpr,
-):
-    offsets = tl.program_id(0) * block_size + tl.arange(0, block_size)
-    active = offsets < total_slots
-    sample_index = offsets // piece_slot_count
-    piece_slot = offsets % piece_slot_count
-
-    global_index = tl.load(indices + sample_index, mask=active, other=0)
-    base_index = global_index % base_count
-    mechanism_index = base_index // transform_count
-    transform_index = base_index % transform_count
-    spectator_combination_rank = global_index // base_count
-
-    target_index = tl.load(target_indices_by_base + base_index, mask=active, other=0)
-    tl.store(
-        targets + sample_index * outcome_count + target_index,
-        1.0,
-        mask=active & (piece_slot == 0),
-    )
-
-    black_king_plane = 11
-    black_rook_plane = 9
-    white_king_plane = 5
-    white_queen_plane = 4
-    white_knight_plane = 1
-
-    queen_square = tl.load(queen_squares + mechanism_index, mask=active, other=10)
-    support_square = tl.load(support_squares + mechanism_index, mask=active, other=-1)
-    support_plane = tl.load(support_planes + mechanism_index, mask=active, other=-1)
-
-    source_square = tl.full((block_size,), 1, tl.int64)
-    source_square = tl.where(piece_slot == 0, 0, source_square)
-    source_square = tl.where(piece_slot == 2, 2, source_square)
-    source_square = tl.where(piece_slot == 3, queen_square, source_square)
-    source_square = tl.where(piece_slot == 4, support_square, source_square)
-
-    field_plane = tl.full((block_size,), black_rook_plane, tl.int64)
-    field_plane = tl.where(piece_slot == 0, black_king_plane, field_plane)
-    field_plane = tl.where(piece_slot == 2, white_king_plane, field_plane)
-    field_plane = tl.where(piece_slot == 3, white_queen_plane, field_plane)
-    field_plane = tl.where(piece_slot == 4, support_plane, field_plane)
-    write_piece = (piece_slot < 4) | ((piece_slot == 4) & (support_square >= 0))
-
-    if enabled_spectator_count > 0:
-        selected_count_value = tl.full((block_size,), 0, tl.int64)
-        rank_within_count = spectator_combination_rank
-        unresolved = tl.full((block_size,), True, tl.int1)
-        selected_count = 0
-        while selected_count <= enabled_spectator_count:
-            count_offset = (
-                combination_table
-                + spectator_square_count * (spectator_square_count + 1)
-                + selected_count
-            )
-            count_at_weight = tl.load(
-                count_offset,
-            )
-            selected = unresolved & (rank_within_count < count_at_weight)
-            selected_count_value = tl.where(selected, selected_count, selected_count_value)
-            unresolved = unresolved & ~selected
-            rank_within_count = tl.where(
-                unresolved,
-                rank_within_count - count_at_weight,
-                rank_within_count,
-            )
-            selected_count += 1
-
-        spectator_ordinal = piece_slot - 5
-        remaining_selected = selected_count_value
-        remaining_rank = rank_within_count
-        chosen_so_far = tl.full((block_size,), 0, tl.int64)
-        selected_spectator_square = tl.full((block_size,), 0, tl.int64)
-        selected_spectator_found = tl.full((block_size,), False, tl.int1)
-        bit_index = 0
-        while bit_index < spectator_square_count:
-            remaining_slots = spectator_square_count - bit_index - 1
-            skip_offset = (
-                combination_table
-                + remaining_slots * (spectator_square_count + 1)
-                + remaining_selected
-            )
-            skip_count = tl.load(
-                skip_offset,
-                mask=active,
-                other=0,
-            )
-            choose = (remaining_selected > 0) & (remaining_rank >= skip_count)
-            use_square = choose & (chosen_so_far == spectator_ordinal)
-            selected_spectator_square = tl.where(
-                use_square,
-                tl.load(spectator_squares + bit_index),
-                selected_spectator_square,
-            )
-            selected_spectator_found = selected_spectator_found | use_square
-            remaining_rank = tl.where(choose, remaining_rank - skip_count, remaining_rank)
-            remaining_selected = tl.where(choose, remaining_selected - 1, remaining_selected)
-            chosen_so_far = tl.where(choose, chosen_so_far + 1, chosen_so_far)
-            bit_index += 1
-
-        spectator_piece = (
-            (piece_slot >= 5)
-            & (spectator_ordinal < selected_count_value)
-            & selected_spectator_found
-        )
-        source_square = tl.where(spectator_piece, selected_spectator_square, source_square)
-        field_plane = tl.where(spectator_piece, white_knight_plane, field_plane)
-        write_piece = write_piece | spectator_piece
-
-    transformed_square = tl.load(
-        transform_table + transform_index * 64 + source_square,
-        mask=active & write_piece,
-        other=0,
-    )
-    field_offset = (sample_index * 18 + field_plane) * 64 + transformed_square
-    tl.store(fields + field_offset, 1.0, mask=active & write_piece)
-"""
-    filename = f"{__file__}::_chess_sparse_renderer_kernel"
-    linecache.cache[filename] = (
-        len(source),
-        None,
-        [line + "\n" for line in source.splitlines()],
-        filename,
-    )
-    exec(compile(source, filename, "exec"), namespace)
-    _chess_sparse_renderer_bundle = (namespace["kernel"], triton)
-    return _chess_sparse_renderer_bundle
 
 
 def _device_long_tensor(

@@ -672,6 +672,49 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
     assert cuda_runtime.torch.equal(cpu_fields, cuda_fields.detach().cpu())
 
 
+def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    generator_impl = cast(Any, generator)
+    cpu_runtime = resolve_tensor_runtime("cpu")
+    try:
+        mps_runtime = resolve_tensor_runtime("mps")
+    except TensorRuntimeError as error:
+        pytest.skip(str(error))
+    candidate = generator.complexity_candidate_for_request(
+        request=ComplexityRequest(
+            minimum=generator.minimum_complexity().value + 5.0,
+            maximum=generator.minimum_complexity().value + 6.0,
+        )
+    )
+    assert candidate is not None
+    complexity_class = generator_impl._complexity_class_for_candidate(candidate)
+    resolution_assignment = candidate.resolution_assignment
+    assert resolution_assignment is not None
+    width = resolution_assignment.require_axis(generator.formation.width_axis)
+    height = resolution_assignment.require_axis(generator.formation.height_axis)
+    component_indices = tuple(index % complexity_class.digit_count for index in range(64))
+    transform_indices = tuple(
+        index % complexity_class.affine_grid.transform_count for index in range(64)
+    )
+    render_kwargs: dict[str, Any] = {
+        "width": width,
+        "height": height,
+        "digit_count": complexity_class.digit_count,
+        "component_indices": component_indices,
+        "transform_indices": transform_indices,
+        "transform": generator.formation.variation_transform,
+        "grid": complexity_class.affine_grid,
+        "timing": None,
+        "timing_prefix": "",
+    }
+
+    cpu_fields = generator_impl._build_batch_tensor(runtime=cpu_runtime, **render_kwargs)
+    mps_fields = generator_impl._build_batch_tensor(runtime=mps_runtime, **render_kwargs)
+    mps_runtime.torch.mps.synchronize()
+
+    assert cpu_runtime.torch.equal(cpu_fields, mps_fields.detach().cpu())
+
+
 def test_digits_tensor_generation_rejects_unmatched_complexity_requests() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
@@ -724,6 +767,10 @@ def test_digits_benchmark_uses_single_tensor_render_path() -> None:
     assert "field_tensor_gather" not in source
     assert "_FormationTensorCache" not in source
     assert "_constructed_affine_count_products" not in source
+    assert "_build_batch_tensor_triton" not in source
+    assert "tensor_runtime_prefers_compiled_renderer" not in source
+    assert "tl.load" not in source
+    assert "def kernel(" not in source
 
 
 def test_digits_console_preview_png_encoding_is_deterministic() -> None:

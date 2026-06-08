@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import importlib
-import itertools
-import linecache
 import math
 import random
 import struct
@@ -58,11 +55,12 @@ from leibniz.observation_showcases import (
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.tensor_runtime import (
+    TensorElementCoordinates,
     TensorRuntime,
     TensorRuntimeError,
     resolve_host_tensor_runtime,
     tensor_runtime_backend,
-    tensor_runtime_prefers_compiled_renderer,
+    tensor_runtime_construct_tensor,
     tensor_value_to_host,
 )
 from leibniz.timing import TimingCollector
@@ -226,8 +224,6 @@ class _DigitsComplexityClass:
             resolution_assignment=self.resolution_assignment,
             metadata=self.metadata(),
         )
-
-_SegmentWindow: TypeAlias = tuple[int, int, int, int]
 
 _digit_strokes: tuple[tuple[_CurvePoints, ...], ...] = (
     (
@@ -1076,248 +1072,14 @@ class Generator:
         if int(component_index_tensor.numel()) != int(transform_index_tensor.numel()):
             raise TensorRuntimeError("component and transform index counts must match")
         sample_count = int(component_index_tensor.numel())
-        fields = backend.zeros(
-            (sample_count, self.formation.channel_count, height, width),
-            dtype=backend.float32,
-            device=runtime.device,
-        )
+        if self.formation.channel_count != 1:
+            raise TensorRuntimeError("Digits tensor renderer requires one channel")
         if sample_count == 0:
-            return fields
-        if tensor_runtime_prefers_compiled_renderer(runtime) and self.formation.channel_count == 1:
-            return self._build_batch_tensor_triton(
-                width=width,
-                height=height,
-                digit_count=digit_count,
-                component_index_tensor=component_index_tensor,
-                transform_index_tensor=transform_index_tensor,
-                transform=transform,
-                grid=grid,
-                runtime=runtime,
-            )
-        matrices = _constructed_affine_matrix_tensors(
-            transform=transform,
-            grid=grid,
-            transform_indices=transform_index_tensor,
-            runtime=runtime,
-        )
-        t = backend.linspace(
-            0.0,
-            1.0,
-            _batch_render_curve_sample_count,
-            dtype=backend.float32,
-            device=runtime.device,
-        ).reshape(1, _batch_render_curve_sample_count)
-        one_minus_t = 1.0 - t
-        with backend.profiler.record_function("digits.render.component_grouping"):
-            component_counts = tuple(
-                int(count)
-                for count in tensor_value_to_host(
-                    backend.bincount(
-                        component_index_tensor,
-                        minlength=digit_count,
-                    )
-                ).tolist()
-            )
-            sorted_sample_indices = component_index_tensor.argsort()
-        component_mark_offsets: list[int] = [0]
-        mark_channels: list[int] = []
-        mark_values: list[float] = []
-        mark_widths: list[float] = []
-        mark_controls: list[
-            tuple[tuple[float, float], tuple[float, float], tuple[float, float]]
-        ] = []
-        mark_segment_windows: list[tuple[_SegmentWindow, ...]] = []
-        for component_index in range(digit_count):
-            for mark in self.formation.components[component_index].marks:
-                mark_channels.append(mark.channel)
-                mark_values.append(float(mark.value))
-                mark_widths.append(float(mark.width))
-                mark_controls.append(_quadratic_control_points(mark))
-                mark_segment_windows.append(
-                    _mark_segment_windows(
-                        mark=mark,
-                        transform=transform,
-                        grid=grid,
-                        width=width,
-                        height=height,
-                    )
-                )
-            component_mark_offsets.append(len(mark_channels))
-        if not mark_channels:
-            return fields
-        with backend.profiler.record_function("digits.render.mark_tables"):
-            value_tensor = backend.tensor(
-                mark_values,
+            return backend.empty(
+                (0, 1, height, width),
                 dtype=backend.float32,
                 device=runtime.device,
             )
-            width_tensor = backend.tensor(
-                mark_widths,
-                dtype=backend.float32,
-                device=runtime.device,
-            )
-            control_tensor = backend.tensor(
-                mark_controls,
-                dtype=backend.float32,
-                device=runtime.device,
-            )
-        sample_offset = 0
-        for component_index in range(digit_count):
-            component_sample_count = component_counts[component_index]
-            if component_sample_count == 0:
-                continue
-            sample_indices = sorted_sample_indices[
-                sample_offset : sample_offset + component_sample_count
-            ]
-            sample_offset += component_sample_count
-            component_mark_start = component_mark_offsets[component_index]
-            component_mark_stop = component_mark_offsets[component_index + 1]
-            component_mark_count = component_mark_stop - component_mark_start
-            if component_mark_count == 0:
-                continue
-            component_matrices = tuple(
-                matrix.index_select(0, sample_indices) for matrix in matrices
-            )
-            m00, m01, m02, m10, m11, m12, width_scale = component_matrices
-            for mark_index in range(component_mark_start, component_mark_stop):
-                with _timing_span(
-                    timing,
-                    f"{timing_prefix}batch_tensor_render.mark",
-                    samples=component_sample_count,
-                ), backend.profiler.record_function("digits.render.mark"):
-                    controls = control_tensor[mark_index]
-                    control_x = controls[:, 0].reshape(1, 3) - 0.5
-                    control_y = controls[:, 1].reshape(1, 3) - 0.5
-                    transformed_x = (
-                        0.5
-                        + m00.reshape(component_sample_count, 1) * control_x
-                        + m01.reshape(component_sample_count, 1) * control_y
-                        + m02.reshape(component_sample_count, 1)
-                    )
-                    transformed_y = (
-                        0.5
-                        + m10.reshape(component_sample_count, 1) * control_x
-                        + m11.reshape(component_sample_count, 1) * control_y
-                        + m12.reshape(component_sample_count, 1)
-                    )
-                    curve_x = (
-                        one_minus_t * one_minus_t * transformed_x[:, 0:1]
-                        + 2.0 * one_minus_t * t * transformed_x[:, 1:2]
-                        + t * t * transformed_x[:, 2:3]
-                    ) * width
-                    curve_y = (
-                        one_minus_t * one_minus_t * transformed_y[:, 0:1]
-                        + 2.0 * one_minus_t * t * transformed_y[:, 1:2]
-                        + t * t * transformed_y[:, 2:3]
-                    ) * height
-                    threshold = (
-                        width_scale.reshape(component_sample_count, 1, 1)
-                        * width_tensor[mark_index]
-                        / 2.0
-                    ) ** 2
-                    mark_value = value_tensor[mark_index]
-                    channel = mark_channels[mark_index]
-                    x_start, x_stop, y_start, y_stop = _combined_segment_window(
-                        mark_segment_windows[mark_index]
-                    )
-                    window_width = x_stop - x_start
-                    window_height = y_stop - y_start
-                    if window_width <= 0 or window_height <= 0:
-                        continue
-                    xs = backend.arange(
-                        x_start,
-                        x_stop,
-                        dtype=backend.float32,
-                        device=runtime.device,
-                    ).reshape(1, 1, 1, window_width) + 0.5
-                    ys = backend.arange(
-                        y_start,
-                        y_stop,
-                        dtype=backend.float32,
-                        device=runtime.device,
-                    ).reshape(1, 1, window_height, 1) + 0.5
-                    sx = curve_x[:, :-1].reshape(
-                        component_sample_count,
-                        _batch_render_curve_sample_count - 1,
-                        1,
-                        1,
-                    )
-                    sy = curve_y[:, :-1].reshape(
-                        component_sample_count,
-                        _batch_render_curve_sample_count - 1,
-                        1,
-                        1,
-                    )
-                    ex = curve_x[:, 1:].reshape(
-                        component_sample_count,
-                        _batch_render_curve_sample_count - 1,
-                        1,
-                        1,
-                    )
-                    ey = curve_y[:, 1:].reshape(
-                        component_sample_count,
-                        _batch_render_curve_sample_count - 1,
-                        1,
-                        1,
-                    )
-                    dx = ex - sx
-                    dy = ey - sy
-                    length_squared = dx * dx + dy * dy
-                    safe_length_squared = backend.where(
-                        length_squared == 0.0,
-                        backend.ones_like(length_squared),
-                        length_squared,
-                    )
-                    segment_t = ((xs - sx) * dx + (ys - sy) * dy) / safe_length_squared
-                    segment_t = segment_t.clamp(0.0, 1.0)
-                    closest_x = sx + segment_t * dx
-                    closest_y = sy + segment_t * dy
-                    segment_distance_squared = (
-                        (xs - closest_x) ** 2 + (ys - closest_y) ** 2
-                    )
-                    point_distance_squared = (xs - sx) ** 2 + (ys - sy) ** 2
-                    segment_distance_squared = backend.where(
-                        length_squared == 0.0,
-                        point_distance_squared,
-                        segment_distance_squared,
-                    )
-                    distance_squared = segment_distance_squared.min(dim=1).values
-                    mark_values_tensor = (
-                        (distance_squared <= threshold).to(dtype=backend.float32)
-                        * mark_value
-                    )
-                    with backend.profiler.record_function("digits.render.field_update"):
-                        current_channel = fields.index_select(0, sample_indices)[
-                            :,
-                            channel,
-                            y_start:y_stop,
-                            x_start:x_stop,
-                        ]
-                        updated_channel = backend.maximum(
-                            current_channel,
-                            mark_values_tensor,
-                        )
-                        fields[:, channel, y_start:y_stop, x_start:x_stop].index_copy_(
-                            0,
-                            sample_indices,
-                            updated_channel,
-                        )
-        return fields
-
-    def _build_batch_tensor_triton(
-        self,
-        *,
-        width: int,
-        height: int,
-        digit_count: int,
-        component_index_tensor: Any,
-        transform_index_tensor: Any,
-        transform: VariationTransformDeclaration,
-        grid: _ConstructedAffineGrid,
-        runtime: TensorRuntime,
-    ) -> Any:
-        backend = tensor_runtime_backend(runtime)
-        sample_count = int(component_index_tensor.numel())
         mark_offsets: list[int] = [0]
         mark_values: list[float] = []
         mark_widths: list[float] = []
@@ -1325,21 +1087,19 @@ class Generator:
         for component_index in range(digit_count):
             for mark in self.formation.components[component_index].marks:
                 if mark.channel != 0:
-                    raise TensorRuntimeError("Triton Digits renderer requires single-channel marks")
+                    raise TensorRuntimeError("Digits tensor renderer requires single-channel marks")
                 mark_values.append(float(mark.value))
                 mark_widths.append(float(mark.width))
                 curve_points.append(
                     _sampled_quadratic_points(_quadratic_control_points(mark))
                 )
             mark_offsets.append(len(mark_values))
-        fields = backend.empty(
-            (sample_count, 1, height, width),
-            dtype=backend.float32,
-            device=runtime.device,
-        )
         if not mark_values:
-            fields.zero_()
-            return fields
+            return backend.zeros(
+                (sample_count, 1, height, width),
+                dtype=backend.float32,
+                device=runtime.device,
+            )
         max_component_mark_count = max(
             stop - start for start, stop in zip(mark_offsets, mark_offsets[1:], strict=False)
         )
@@ -1349,51 +1109,41 @@ class Generator:
             transform_indices=transform_index_tensor,
             runtime=runtime,
         )
-        mark_offsets_tensor = backend.tensor(
-            mark_offsets,
-            dtype=backend.int32,
-            device=runtime.device,
+        host_component_indices = tuple(
+            int(index) for index in tensor_value_to_host(component_index_tensor).tolist()
         )
-        mark_values_tensor = backend.tensor(
-            mark_values,
+        host_matrices = cast(
+            tuple[
+                tuple[float, ...],
+                tuple[float, ...],
+                tuple[float, ...],
+                tuple[float, ...],
+                tuple[float, ...],
+                tuple[float, ...],
+                tuple[float, ...],
+            ],
+            tuple(
+                tuple(float(value) for value in tensor_value_to_host(matrix).tolist())
+                for matrix in matrices
+            ),
+        )
+        return tensor_runtime_construct_tensor(
+            runtime,
+            shape=(sample_count, 1, height, width),
             dtype=backend.float32,
-            device=runtime.device,
+            element=lambda coordinates: _digits_tensor_element(
+                coordinates=coordinates,
+                component_indices=host_component_indices,
+                matrices=host_matrices,
+                mark_offsets=tuple(mark_offsets),
+                mark_values=tuple(mark_values),
+                mark_widths=tuple(mark_widths),
+                curve_points=tuple(curve_points),
+                max_component_mark_count=max_component_mark_count,
+                height=height,
+                width=width,
+            ),
         )
-        mark_widths_tensor = backend.tensor(
-            mark_widths,
-            dtype=backend.float32,
-            device=runtime.device,
-        )
-        curve_points_tensor = backend.tensor(
-            curve_points,
-            dtype=backend.float32,
-            device=runtime.device,
-        )
-        kernel, triton = _digits_triton_render_kernel()
-        block_size = 256
-        total_elements = sample_count * height * width
-        grid_shape = (triton.cdiv(total_elements, block_size),)
-        kernel[grid_shape](
-            fields,
-            component_index_tensor,
-            matrices[0],
-            matrices[1],
-            matrices[2],
-            matrices[3],
-            matrices[4],
-            matrices[5],
-            matrices[6],
-            mark_offsets_tensor,
-            mark_values_tensor,
-            mark_widths_tensor,
-            curve_points_tensor,
-            max_component_mark_count,
-            total_elements,
-            height,
-            width,
-            block_size,
-        )
-        return fields
 
     def distinguishable_state_complexity(
         self,
@@ -3182,52 +2932,6 @@ def _quadratic_control_points(
     raise TensorRuntimeError("Digits marks must be linear or quadratic curves")
 
 
-def _mark_segment_windows(
-    *,
-    mark: ComponentMark,
-    transform: VariationTransformDeclaration,
-    grid: _ConstructedAffineGrid,
-    width: int,
-    height: int,
-) -> tuple[_SegmentWindow, ...]:
-    curve_points = _sampled_quadratic_points(_quadratic_control_points(mark))
-    matrices = _constructed_affine_window_matrices(transform=transform, grid=grid)
-    windows: list[_SegmentWindow] = []
-    for start, stop in zip(curve_points, curve_points[1:], strict=False):
-        x_values: list[float] = []
-        y_values: list[float] = []
-        radii: list[float] = []
-        for m00, m01, m02, m10, m11, m12, width_scale in matrices:
-            radii.append(width_scale * float(mark.width) / 2.0)
-            for x_value, y_value in (start, stop):
-                centered_x = x_value - 0.5
-                centered_y = y_value - 0.5
-                x_values.append(
-                    (0.5 + m00 * centered_x + m01 * centered_y + m02) * width
-                )
-                y_values.append(
-                    (0.5 + m10 * centered_x + m11 * centered_y + m12) * height
-                )
-        radius = max(radii)
-        x_start = max(0, math.floor(min(x_values) - radius - 0.5))
-        x_stop = min(width, math.ceil(max(x_values) + radius + 0.5))
-        y_start = max(0, math.floor(min(y_values) - radius - 0.5))
-        y_stop = min(height, math.ceil(max(y_values) + radius + 0.5))
-        windows.append((x_start, x_stop, y_start, y_stop))
-    return tuple(windows)
-
-
-def _combined_segment_window(windows: tuple[_SegmentWindow, ...]) -> _SegmentWindow:
-    if not windows:
-        return (0, 0, 0, 0)
-    return (
-        min(window[0] for window in windows),
-        max(window[1] for window in windows),
-        min(window[2] for window in windows),
-        max(window[3] for window in windows),
-    )
-
-
 def _sampled_quadratic_points(
     controls: tuple[tuple[float, float], tuple[float, float], tuple[float, float]],
 ) -> tuple[tuple[float, float], ...]:
@@ -3249,183 +2953,53 @@ def _sampled_quadratic_points(
     return tuple(points)
 
 
-def _constructed_affine_window_matrices(
+def _digits_tensor_element(
     *,
-    transform: VariationTransformDeclaration,
-    grid: _ConstructedAffineGrid,
-) -> tuple[tuple[float, float, float, float, float, float, float], ...]:
-    if grid.transform_count == 1:
-        return ((1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0),)
-    spatial = transform.spatial_affine
-    if grid.preset_count is not None:
-        parameters = tuple(
-            _constructed_affine_preset_parameters(
-                spatial=spatial,
-                grid=grid,
-                preset_index=index,
-            )
-            for index in range(grid.preset_count)
-        )
-    else:
-        ranges = _constructed_affine_parameter_ranges(spatial=spatial, grid=grid)
-        parameters = tuple(
-            {
-                "x_translation": x_translation,
-                "y_translation": y_translation,
-                "scale": scale,
-                "rotation": rotation,
-                "x_shear": x_shear,
-            }
-            for x_translation, y_translation, scale, rotation, x_shear in itertools.product(
-                _range_endpoints(ranges["x_translation"]),
-                _range_endpoints(ranges["y_translation"]),
-                _range_endpoints(ranges["scale"]),
-                _range_endpoints(ranges["rotation"]),
-                _range_endpoints(ranges["x_shear"]),
-            )
-        )
-    return tuple(_constructed_affine_matrix_from_parameters(parameter) for parameter in parameters)
-
-
-def _constructed_affine_parameter_ranges(
-    *,
-    spatial: SpatialAffineVariation,
-    grid: _ConstructedAffineGrid,
-) -> dict[str, tuple[float, float]]:
-    return {
-        "x_translation": _bounded_interval(
-            grid.x_translation_bounds,
-            lower_bound=spatial.matrix[0][2][0],
-            upper_bound=spatial.matrix[0][2][1],
-        ),
-        "y_translation": _bounded_interval(
-            grid.y_translation_bounds,
-            lower_bound=spatial.matrix[1][2][0],
-            upper_bound=spatial.matrix[1][2][1],
-        ),
-        "scale": _bounded_interval(
-            grid.scale_bounds,
-            lower_bound=max(spatial.matrix[0][0][0], spatial.matrix[1][1][0]),
-            upper_bound=min(spatial.matrix[0][0][1], spatial.matrix[1][1][1]),
-        ),
-        "rotation": _bounded_interval(
-            grid.rotation_bounds,
-            lower_bound=spatial.matrix[1][0][0],
-            upper_bound=spatial.matrix[1][0][1],
-        ),
-        "x_shear": _bounded_interval(
-            grid.x_shear_bounds,
-            lower_bound=spatial.matrix[0][1][0],
-            upper_bound=spatial.matrix[0][1][1],
-        ),
-    }
-
-
-def _range_endpoints(bounds: tuple[float, float]) -> tuple[float, ...]:
-    if bounds[0] == bounds[1]:
-        return (bounds[0],)
-    return bounds
-
-
-def _constructed_affine_matrix_from_parameters(
-    parameters: Mapping[str, float],
-) -> tuple[float, float, float, float, float, float, float]:
-    scale = parameters["scale"]
-    rotation = parameters["rotation"]
-    shear = parameters["x_shear"]
-    cosine = math.cos(rotation)
-    sine = math.sin(rotation)
-    m00 = scale * cosine
-    m01 = shear - scale * sine
-    m10 = scale * sine
-    m11 = scale * cosine
-    width_scale = max(
-        math.sqrt(m00 * m00 + m10 * m10),
-        math.sqrt(m01 * m01 + m11 * m11),
+    coordinates: TensorElementCoordinates,
+    component_indices: tuple[int, ...],
+    matrices: tuple[
+        tuple[float, ...],
+        tuple[float, ...],
+        tuple[float, ...],
+        tuple[float, ...],
+        tuple[float, ...],
+        tuple[float, ...],
+        tuple[float, ...],
+    ],
+    mark_offsets: tuple[int, ...],
+    mark_values: tuple[float, ...],
+    mark_widths: tuple[float, ...],
+    curve_points: tuple[tuple[tuple[float, float], ...], ...],
+    max_component_mark_count: int,
+    height: int,
+    width: int,
+) -> float:
+    sample_index, channel_index, y_index, x_index = coordinates.require_rank(4)
+    if channel_index != 0:
+        return 0.0
+    x_center = x_index + 0.5
+    y_center = y_index + 0.5
+    component_index = component_indices[sample_index]
+    mark_index = mark_offsets[component_index]
+    mark_stop = mark_offsets[component_index + 1]
+    m00, m01, m02, m10, m11, m12, width_scale = (
+        matrix[sample_index] for matrix in matrices
     )
-    return (
-        m00,
-        m01,
-        parameters["x_translation"],
-        m10,
-        m11,
-        parameters["y_translation"],
-        width_scale,
-    )
+    value = 0.0
 
-
-_digits_triton_render_kernel_cache: tuple[Any, Any] | None = None
-
-
-def _digits_triton_render_kernel() -> tuple[Any, Any]:
-    global _digits_triton_render_kernel_cache
-    if _digits_triton_render_kernel_cache is not None:
-        return _digits_triton_render_kernel_cache
-    triton = importlib.import_module("triton")
-    tl = importlib.import_module("triton.language")
-    namespace = {"triton": triton, "tl": tl}
-    source = """
-@triton.jit
-def kernel(
-    fields,
-    component_indices,
-    m00_values,
-    m01_values,
-    m02_values,
-    m10_values,
-    m11_values,
-    m12_values,
-    width_scale_values,
-    mark_offsets,
-    mark_values,
-    mark_widths,
-    curve_points,
-    max_component_mark_count,
-    total_elements,
-    height,
-    width,
-    block_size: tl.constexpr,
-):
-    offsets = tl.program_id(0) * block_size + tl.arange(0, block_size)
-    active = offsets < total_elements
-    pixel_index = offsets % (height * width)
-    sample_index = offsets // (height * width)
-    y_index = pixel_index // width
-    x_index = pixel_index % width
-    x_center = x_index.to(tl.float32) + 0.5
-    y_center = y_index.to(tl.float32) + 0.5
-
-    component_index = tl.load(component_indices + sample_index, mask=active, other=0)
-    mark_index = tl.load(mark_offsets + component_index, mask=active, other=0)
-    mark_stop = tl.load(mark_offsets + component_index + 1, mask=active, other=0)
-
-    m00 = tl.load(m00_values + sample_index, mask=active, other=1.0)
-    m01 = tl.load(m01_values + sample_index, mask=active, other=0.0)
-    m02 = tl.load(m02_values + sample_index, mask=active, other=0.0)
-    m10 = tl.load(m10_values + sample_index, mask=active, other=0.0)
-    m11 = tl.load(m11_values + sample_index, mask=active, other=1.0)
-    m12 = tl.load(m12_values + sample_index, mask=active, other=0.0)
-    width_scale = tl.load(width_scale_values + sample_index, mask=active, other=1.0)
-    value = tl.full((block_size,), 0.0, tl.float32)
-
-    mark_slot = 0
-    while mark_slot < max_component_mark_count:
+    for mark_slot in range(max_component_mark_count):
         current_mark = mark_index + mark_slot
-        live_mark = active & (current_mark < mark_stop)
-        mark_value = tl.load(mark_values + current_mark, mask=live_mark, other=0.0)
-        mark_width = tl.load(mark_widths + current_mark, mask=live_mark, other=0.0)
+        if current_mark >= mark_stop:
+            continue
+        mark_value = mark_values[current_mark]
+        mark_width = mark_widths[current_mark]
         threshold = (width_scale * mark_width / 2.0) * (width_scale * mark_width / 2.0)
-        distance_squared = tl.full((block_size,), float("inf"), tl.float32)
+        distance_squared = float("inf")
+        mark_points = curve_points[current_mark]
 
-        segment_index = 0
-        while segment_index < 24:
-            start_offset = ((current_mark * 25 + segment_index) * 2)
-            stop_offset = start_offset + 2
-            raw_sx = tl.load(curve_points + start_offset, mask=live_mark, other=0.5)
-            raw_sy = tl.load(curve_points + start_offset + 1, mask=live_mark, other=0.5)
-            raw_ex = tl.load(curve_points + stop_offset, mask=live_mark, other=0.5)
-            raw_ey = tl.load(curve_points + stop_offset + 1, mask=live_mark, other=0.5)
-
+        for segment_index in range(_batch_render_curve_sample_count - 1):
+            raw_sx, raw_sy = mark_points[segment_index]
+            raw_ex, raw_ey = mark_points[segment_index + 1]
             centered_sx = raw_sx - 0.5
             centered_sy = raw_sy - 0.5
             centered_ex = raw_ex - 0.5
@@ -3437,9 +3011,9 @@ def kernel(
             dx = ex - sx
             dy = ey - sy
             length_squared = dx * dx + dy * dy
-            safe_length_squared = tl.where(length_squared == 0.0, 1.0, length_squared)
+            safe_length_squared = 1.0 if length_squared == 0.0 else length_squared
             segment_t = ((x_center - sx) * dx + (y_center - sy) * dy) / safe_length_squared
-            segment_t = tl.minimum(tl.maximum(segment_t, 0.0), 1.0)
+            segment_t = min(max(segment_t, 0.0), 1.0)
             closest_x = sx + segment_t * dx
             closest_y = sy + segment_t * dy
             segment_distance_squared = (
@@ -3450,32 +3024,13 @@ def kernel(
                 (x_center - sx) * (x_center - sx)
                 + (y_center - sy) * (y_center - sy)
             )
-            segment_distance_squared = tl.where(
-                length_squared == 0.0,
-                point_distance_squared,
-                segment_distance_squared,
-            )
-            distance_squared = tl.minimum(distance_squared, segment_distance_squared)
-            segment_index += 1
+            if length_squared == 0.0:
+                segment_distance_squared = point_distance_squared
+            distance_squared = min(distance_squared, segment_distance_squared)
 
-        value = tl.maximum(
-            value,
-            tl.where(live_mark & (distance_squared <= threshold), mark_value, 0.0),
-        )
-        mark_slot += 1
-    tl.store(fields + offsets, value, mask=active)
-"""
-    filename = f"{__file__}::_digits_triton_render_kernel"
-    linecache.cache[filename] = (
-        len(source),
-        None,
-        [line + "\n" for line in source.splitlines()],
-        filename,
-    )
-    exec(compile(source, filename, "exec"), namespace)
-    kernel = namespace["kernel"]
-    _digits_triton_render_kernel_cache = (kernel, triton)
-    return _digits_triton_render_kernel_cache
+        if distance_squared <= threshold:
+            value = max(value, mark_value)
+    return value
 
 
 def _identity_variation_coordinate_record(
