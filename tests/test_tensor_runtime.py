@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 from typing import Any, cast
 
@@ -68,11 +69,22 @@ def test_softmax_target_masses_accepts_labels_and_distributions() -> None:
     distribution_masses = softmax_target_masses(runtime, logits, distributions)
     probabilities = runtime.torch.softmax(logits, dim=1)
 
-    assert label_masses == pytest.approx(
-        probabilities.gather(1, labels.reshape((-1, 1))).reshape((-1,)).tolist()
+    expected_label_masses = probabilities.gather(
+        1, labels.reshape((-1, 1))
+    ).reshape((-1,)).tolist()
+    expected_distribution_masses = (probabilities * distributions).sum(dim=1).tolist()
+
+    assert all(
+        math.isclose(actual, expected, rel_tol=0.0, abs_tol=1e-7)
+        for actual, expected in zip(label_masses, expected_label_masses, strict=True)
     )
-    assert distribution_masses == pytest.approx(
-        (probabilities * distributions).sum(dim=1).tolist()
+    assert all(
+        math.isclose(actual, expected, rel_tol=0.0, abs_tol=1e-7)
+        for actual, expected in zip(
+            distribution_masses,
+            expected_distribution_masses,
+            strict=True,
+        )
     )
 
 
