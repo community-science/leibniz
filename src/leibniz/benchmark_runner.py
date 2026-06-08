@@ -118,7 +118,9 @@ _default_gate_batch_target = 512
 _default_evaluation_convergence_min_samples = 64
 _default_evaluation_convergence_half_width = 0.05
 _default_evaluation_convergence_confidence_z = 1.96
-_default_evaluation_frontier_lookahead_rungs = 8
+_default_evaluation_integral_relative_half_width = 0.05
+_default_evaluation_integral_minimum_half_width = 0.05
+_default_evaluation_terminal_failure_rungs = 3
 _default_complexity_integration_interval_width = 1.0
 _default_training_complexity_integration_interval_width = 0.1
 _complexity_schedule_candidate_chunk = 64
@@ -367,6 +369,28 @@ class _CheckpointEvaluationRungEvidence:
     sample_count: int
     confidence_half_width: float
     input_shape: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _EvaluationIntegrationEvidence:
+    frontier_index: int
+    score_integral_value: float
+    score_integral_half_width: float
+    terminal_failure_count: int
+
+    @property
+    def score_integral_half_width_threshold(self) -> float:
+        return max(
+            _default_evaluation_integral_minimum_half_width,
+            self.score_integral_value * _default_evaluation_integral_relative_half_width,
+        )
+
+    @property
+    def converged(self) -> bool:
+        return (
+            self.terminal_failure_count >= _default_evaluation_terminal_failure_rungs
+            and self.score_integral_half_width <= self.score_integral_half_width_threshold
+        )
 
 
 def _evaluation_sampled_competence_record(
@@ -1117,6 +1141,10 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         evaluation_results=evaluation_results,
         outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
     )
+    evaluation_integration = _evaluation_integration_evidence(
+        evaluation_results=evaluation_results,
+        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
+    )
     measurement_groups = (
         finite_measurements_for_predictions(
             batch=final_evaluation_batch,
@@ -1192,6 +1220,28 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             "minimum_sample_count": _default_evaluation_convergence_min_samples,
             "confidence_z": _default_evaluation_convergence_confidence_z,
             "half_width_threshold": _default_evaluation_convergence_half_width,
+        },
+        "integration_convergence": {
+            "kind": "adaptive-score-integral-confidence",
+            "score_integral": evaluation_integration.score_integral_value,
+            "score_integral_half_width": (
+                evaluation_integration.score_integral_half_width
+            ),
+            "score_integral_half_width_threshold": (
+                evaluation_integration.score_integral_half_width_threshold
+            ),
+            "score_integral_relative_half_width_threshold": (
+                _default_evaluation_integral_relative_half_width
+            ),
+            "score_integral_minimum_half_width_threshold": (
+                _default_evaluation_integral_minimum_half_width
+            ),
+            "terminal_failure_count": evaluation_integration.terminal_failure_count,
+            "terminal_failure_threshold": _default_evaluation_terminal_failure_rungs,
+            "converged": evaluation_integration.converged,
+            "curriculum_exhausted": (
+                checkpoint_evaluation_throughput.get("curriculum_exhausted") is True
+            ),
         },
         "evaluation_curriculum_rung_count": len(evaluation_results),
         "tensor_runtime": "pytorch",
@@ -2238,12 +2288,9 @@ def evaluate_model_checkpoint_artifact(
     results: list[_CheckpointEvaluationRungEvidence] = []
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     capacity_limited = False
-    target_rung_count = _evaluation_curriculum_target_rung_count(
-        evaluation_results=results,
-        outcome_ids=outcome_ids,
-    )
+    curriculum_exhausted = False
     planner = _ComplexityCurriculumPlanner(generator)
-    while len(results) < target_rung_count:
+    while True:
         try:
             rung = _evaluation_curriculum_rung(
                 architecture=architecture,
@@ -2258,6 +2305,7 @@ def evaluate_model_checkpoint_artifact(
         except _CurriculumExhausted:
             if not results:
                 raise
+            curriculum_exhausted = True
             break
         try:
             rung_evidence, batch_max_inference_compute = _evaluate_checkpoint_rung(
@@ -2281,10 +2329,12 @@ def evaluate_model_checkpoint_artifact(
             batch_max_inference_compute,
         )
         results.append(rung_evidence)
-        target_rung_count = _evaluation_curriculum_target_rung_count(
+        integration_evidence = _evaluation_integration_evidence(
             evaluation_results=results,
             outcome_ids=outcome_ids,
         )
+        if integration_evidence.converged:
+            break
     if not results:
         raise BenchmarkRunnerError("checkpoint evaluation did not produce any results")
     evaluation_frontier_index = _evaluation_result_frontier_index(
@@ -2312,6 +2362,7 @@ def evaluate_model_checkpoint_artifact(
     throughput["tensor_device"] = predictor.runtime.device_kind
     throughput["phase_timing"] = phase_timings.to_record()
     throughput["capacity_limited"] = capacity_limited
+    throughput["curriculum_exhausted"] = curriculum_exhausted
     if max_inference_compute is None:
         raise BenchmarkRunnerError(
             "checkpoint evaluation could not measure max_inference_compute"
@@ -2369,20 +2420,99 @@ def _evaluate_checkpoint_rung(
     )
 
 
-def _evaluation_curriculum_target_rung_count(
+def _evaluation_integration_evidence(
     *,
     evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
     outcome_ids: tuple[str, ...],
-) -> int:
-    """Return how many rungs accepted evaluation must inspect before stopping."""
+) -> _EvaluationIntegrationEvidence:
+    """Return the explicit score-integral state that controls evaluation."""
 
     if not evaluation_results:
-        return 1
+        return _EvaluationIntegrationEvidence(
+            frontier_index=0,
+            score_integral_value=0.0,
+            score_integral_half_width=math.inf,
+            terminal_failure_count=0,
+        )
+    chance_mass = _chance_accepted_mass(outcome_ids)
     frontier_index = _evaluation_result_frontier_index(
         evaluation_results=evaluation_results,
         outcome_ids=outcome_ids,
     )
-    return frontier_index + 1 + _default_evaluation_frontier_lookahead_rungs
+    score_integral = sampled_competence_frontier_integral(
+        _evaluation_competence_points(evaluation_results),
+        chance_mass=chance_mass,
+    )
+    return _EvaluationIntegrationEvidence(
+        frontier_index=frontier_index,
+        score_integral_value=score_integral.value,
+        score_integral_half_width=_evaluation_score_integral_half_width(
+            evaluation_results=evaluation_results,
+            chance_mass=chance_mass,
+        ),
+        terminal_failure_count=_evaluation_terminal_failure_count(
+            evaluation_results=evaluation_results,
+            frontier_index=frontier_index,
+            chance_mass=chance_mass,
+        ),
+    )
+
+
+def _evaluation_competence_points(
+    evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
+) -> tuple[CompetencePoint, ...]:
+    return tuple(
+        CompetencePoint(
+            complexity=result.rung.complexity,
+            accepted_mass=result.mean_accepted_mass,
+            sample_count=result.sample_count,
+            seed=result.rung.seed,
+            complexity_minimum=result.rung.complexity_minimum,
+            complexity_maximum=result.rung.complexity_maximum,
+            input_shape=result.input_shape,
+        )
+        for result in evaluation_results
+    )
+
+
+def _evaluation_score_integral_half_width(
+    *,
+    evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
+    chance_mass: float,
+) -> float:
+    if not evaluation_results:
+        return math.inf
+    scale = 1.0 if chance_mass >= 1.0 else 1.0 / (1.0 - chance_mass)
+    widths: list[float] = []
+    for result in evaluation_results:
+        lower, upper = _rung_complexity_interval(result.rung) or (
+            max(0.0, result.rung.complexity - 1.0),
+            result.rung.complexity,
+        )
+        widths.append(max(0.0, upper - lower))
+    variance_terms = (
+        (width * result.confidence_half_width * scale) ** 2
+        for width, result in zip(widths, evaluation_results, strict=True)
+    )
+    return math.sqrt(math.fsum(variance_terms))
+
+
+def _evaluation_terminal_failure_count(
+    *,
+    evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
+    frontier_index: int,
+    chance_mass: float,
+) -> int:
+    count = 0
+    for result in evaluation_results[frontier_index + 1 :]:
+        if _evaluation_rung_confidently_above_chance(
+            result,
+            chance_mass=chance_mass,
+        ):
+            count = 0
+        else:
+            count += 1
+    return count
 
 
 @dataclass(frozen=True, slots=True)
@@ -3292,31 +3422,9 @@ def _training_gate_score_estimate(
     point_records = _training_score_estimate_points(compact_sampled_competence)
     chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
     score_integral = sampled_competence_frontier_integral(
-        tuple(
-            CompetencePoint(
-                complexity=_required_float(
-                    point.get("complexity"),
-                    "score_estimate.complexity",
-                ),
-                accepted_mass=_required_float(
-                    point.get("mean_accepted_mass"),
-                    "score_estimate.mean_accepted_mass",
-                ),
-                sample_count=_required_int(
-                    point.get("sample_count"),
-                    "score_estimate.sample_count",
-                ),
-                input_shape=_optional_point_input_shape(point),
-                complexity_minimum=_optional_nonnegative_float(
-                    point.get("complexity_minimum"),
-                    "score_estimate.complexity_minimum",
-                ),
-                complexity_maximum=_optional_nonnegative_float(
-                    point.get("complexity_maximum"),
-                    "score_estimate.complexity_maximum",
-                ),
-            )
-            for point in point_records
+        _competence_points_from_sampled_records(
+            point_records,
+            field_prefix="score_estimate",
         ),
         chance_mass=chance_mass,
     )
@@ -3560,6 +3668,39 @@ def _training_score_estimate_points(
             if isinstance(point, Mapping)
         )
     return (record,)
+
+
+def _competence_points_from_sampled_records(
+    points: Sequence[Mapping[str, object]],
+    *,
+    field_prefix: str,
+) -> tuple[CompetencePoint, ...]:
+    return tuple(
+        CompetencePoint(
+            complexity=_required_float(
+                point.get("complexity"),
+                f"{field_prefix}.complexity",
+            ),
+            accepted_mass=_required_float(
+                point.get("mean_accepted_mass"),
+                f"{field_prefix}.mean_accepted_mass",
+            ),
+            sample_count=_required_int(
+                point.get("sample_count"),
+                f"{field_prefix}.sample_count",
+            ),
+            input_shape=_optional_point_input_shape(point),
+            complexity_minimum=_optional_nonnegative_float(
+                point.get("complexity_minimum"),
+                f"{field_prefix}.complexity_minimum",
+            ),
+            complexity_maximum=_optional_nonnegative_float(
+                point.get("complexity_maximum"),
+                f"{field_prefix}.complexity_maximum",
+            ),
+        )
+        for point in points
+    )
 
 
 def _training_score_estimate_score(score_estimate: Mapping[str, object]) -> float:
