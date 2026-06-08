@@ -333,11 +333,11 @@ def test_chess_indexed_family_expands_by_sample_cardinality() -> None:
     assert "Q" in mate_piece_symbols
 
 
-def test_chess_low_cardinality_keeps_canonical_family_simple() -> None:
+def test_chess_cardinality_two_keeps_canonical_family_simple() -> None:
     generator = load_generator(_chess_benchmark_root)
-    request = ComplexityRequest(minimum=2.0, maximum=2.0)
+    request = ComplexityRequest(minimum=1.0, maximum=1.0)
 
-    sample_set = generator(seed=47, shape=16, complexity_request=request)
+    sample_set = generator(seed=47, shape=2, complexity_request=request)
 
     spectator_counts = {
         _sample_analysis(sample)["spectator_count"] for sample in sample_set.samples
@@ -374,6 +374,61 @@ def test_chess_spectator_enabled_rungs_do_not_repeat_low_cardinality_boards() ->
         sample.observable_state_id for sample in spectator_sample_set.samples
     }
     assert not low_observable_ids & spectator_observable_ids
+
+
+def test_chess_complete_small_cardinality_rungs_do_not_overlap() -> None:
+    global_sample_index = _chess_global_sample_index()
+    family_index_sets = {
+        cardinality: {
+            global_sample_index(
+                cardinality=cardinality,
+                local_index=local_index,
+            )
+            for local_index in range(cardinality)
+        }
+        for cardinality in range(1, 17)
+    }
+
+    for lower_cardinality, lower_family_indices in family_index_sets.items():
+        for higher_cardinality, higher_family_indices in family_index_sets.items():
+            if lower_cardinality >= higher_cardinality:
+                continue
+            assert not lower_family_indices & higher_family_indices
+
+
+@pytest.mark.parametrize(
+    ("lower_cardinality", "higher_cardinality"),
+    [
+        (16, 17),
+        (31, 32),
+        (32, 33),
+        (63, 64),
+        (64, 65),
+        (127, 128),
+        (128, 129),
+    ],
+)
+def test_chess_complete_boundary_cardinality_rungs_do_not_overlap(
+    lower_cardinality: int,
+    higher_cardinality: int,
+) -> None:
+    global_sample_index = _chess_global_sample_index()
+    lower_family_indices = {
+        global_sample_index(
+            cardinality=lower_cardinality,
+            local_index=local_index,
+        )
+        for local_index in range(lower_cardinality)
+    }
+    higher_family_indices = {
+        global_sample_index(
+            cardinality=higher_cardinality,
+            local_index=local_index,
+        )
+        for local_index in range(higher_cardinality)
+    }
+
+    assert not lower_family_indices & higher_family_indices
 
 
 @pytest.mark.parametrize("cardinality", [1, 2, 4, 8, 9, 16, 32, 64, 257, 1024])

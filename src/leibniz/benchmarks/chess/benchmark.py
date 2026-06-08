@@ -532,13 +532,11 @@ def _global_sample_index(*, cardinality: int, local_index: int) -> int:
     _require_sample_cardinality(cardinality)
     if type(local_index) is not int or local_index < 0 or local_index >= cardinality:
         raise ObservationGenerationError("Chess local sample index is outside cardinality")
-    if cardinality == 1:
-        return 0
     enabled_capacity = _enabled_family_capacity_for_cardinality(cardinality)
     lower_bound = _family_index_lower_bound_for_cardinality(cardinality)
-    offset = lower_bound + (cardinality * (cardinality - 1) // 2) % (
-        enabled_capacity - lower_bound - cardinality + 1
-    )
+    offset = cardinality * (cardinality - 1) // 2
+    if offset + cardinality > enabled_capacity:
+        offset = lower_bound + offset % (enabled_capacity - lower_bound - cardinality + 1)
     return offset + local_index
 
 
@@ -551,9 +549,10 @@ def _enabled_family_capacity_for_cardinality(cardinality: int) -> int:
 def _enabled_spectator_count_for_cardinality(cardinality: int) -> int:
     _require_sample_cardinality(cardinality)
     transform_count = len(_board_transforms())
-    if cardinality <= transform_count:
+    required_family_size = cardinality * (cardinality + 1) // 2
+    required_masks = math.ceil(required_family_size / transform_count)
+    if required_masks <= 1:
         return 0
-    required_masks = math.ceil((2 * cardinality) / transform_count)
     return min(
         len(_spectator_squares()),
         math.ceil(math.log2(required_masks)),
