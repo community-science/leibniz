@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import math
 import random
 import struct
@@ -56,10 +55,10 @@ from leibniz.observation_showcases import (
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.tensor_runtime import (
     TensorElementCoordinates,
+    TensorElementRecipe,
     TensorRuntime,
     TensorRuntimeError,
     resolve_host_tensor_runtime,
-    tensor_runtime_backend,
     tensor_runtime_construct_tensor,
     tensor_value_to_host,
 )
@@ -729,130 +728,6 @@ class Generator:
                 transform_indices.append(transform_index)
         return (tuple(component_indices), tuple(transform_indices))
 
-    def _component_index_tensor(
-        self,
-        *,
-        sample_count: int,
-        seed: int,
-        component_indices: tuple[int, ...] | None,
-        component_count: int,
-        runtime: TensorRuntime,
-        timing: TimingCollector | None,
-        timing_prefix: str,
-    ) -> Any:
-        _require_generation_positive_integer(component_count, "component_count")
-        if component_count > len(self.formation.components):
-            raise ObservationGenerationError("component_count exceeds component vocabulary")
-        backend = tensor_runtime_backend(runtime)
-        with _timing_span(timing, f"{timing_prefix}component_index", samples=sample_count):
-            if component_indices is not None:
-                if len(component_indices) != sample_count:
-                    raise ObservationGenerationError(
-                        "component_indices length must match sample_count"
-                    )
-                if any(index < 0 or index >= component_count for index in component_indices):
-                    raise ObservationGenerationError(
-                        "component index is outside active component set"
-                    )
-                return backend.tensor(
-                    component_indices,
-                    dtype=backend.long,
-                    device=runtime.device,
-                )
-            generator = _runtime_generator(
-                runtime=runtime,
-                seed=f"{seed}:component-sequence",
-            )
-            return backend.randint(
-                low=0,
-                high=component_count,
-                size=(sample_count,),
-                dtype=backend.long,
-                device=runtime.device,
-                generator=generator,
-            )
-
-    def _transform_index_tensor(
-        self,
-        *,
-        sample_count: int,
-        seed: int,
-        transform_indices: tuple[int, ...] | None,
-        complexity_class: _DigitsComplexityClass,
-        runtime: TensorRuntime,
-        timing: TimingCollector | None,
-        timing_prefix: str,
-    ) -> Any:
-        backend = tensor_runtime_backend(runtime)
-        complexity_class_digest = str(ContentDigest.from_value(complexity_class.metadata()))
-        with _timing_span(timing, f"{timing_prefix}transform_index", samples=sample_count):
-            if transform_indices is not None:
-                if len(transform_indices) != sample_count:
-                    raise ObservationGenerationError(
-                        "transform_indices length must match sample_count"
-                    )
-                if any(
-                    index < 0 or index >= complexity_class.affine_transform_count
-                    for index in transform_indices
-                ):
-                    raise ObservationGenerationError(
-                        "transform index is outside active transform set"
-                    )
-                return backend.tensor(
-                    transform_indices,
-                    dtype=backend.long,
-                    device=runtime.device,
-                )
-            generator = _runtime_generator(
-                runtime=runtime,
-                seed=f"{seed}:variation:{complexity_class_digest}",
-            )
-            return backend.randint(
-                low=0,
-                high=complexity_class.affine_transform_count,
-                size=(sample_count,),
-                dtype=backend.long,
-                device=runtime.device,
-                generator=generator,
-            )
-
-    def _state_coordinate_tensors(
-        self,
-        *,
-        sample_count: int,
-        seed: int,
-        complexity_class: _DigitsComplexityClass,
-        runtime: TensorRuntime,
-        timing: TimingCollector | None,
-        timing_prefix: str,
-    ) -> tuple[Any, Any]:
-        backend = tensor_runtime_backend(runtime)
-        generator = _runtime_generator(
-            runtime=runtime,
-            seed=(
-                f"{seed}:sample-state:"
-                f"{ContentDigest.from_value(complexity_class.metadata())}"
-            ),
-        )
-        with _timing_span(timing, f"{timing_prefix}sample_state", samples=sample_count):
-            state_indices = backend.randint(
-                low=0,
-                high=complexity_class.cardinality,
-                size=(sample_count,),
-                dtype=backend.long,
-                device=runtime.device,
-                generator=generator,
-            )
-            digit_count = max(1, complexity_class.digit_count)
-            component_indices = state_indices.remainder(digit_count)
-            transform_indices = backend.div(
-                state_indices,
-                digit_count,
-                rounding_mode="floor",
-            )
-        return component_indices, transform_indices
-
-
     def _generate_tensors(
         self,
         *,
@@ -875,35 +750,31 @@ class Generator:
         sample_count = _sample_count(sample_shape)
         if component_indices is None and transform_indices is None:
             component_index_samples, transform_index_samples = (
-                self._state_coordinate_tensors(
+                self._sample_state_coordinates(
                     sample_count=sample_count,
                     seed=seed,
                     complexity_class=complexity_class,
-                    runtime=runtime,
                     timing=timing,
                     timing_prefix=timing_prefix,
                 )
             )
         else:
-            component_index_samples = self._component_index_tensor(
+            component_index_samples = self._sample_component_indices(
                 sample_count=sample_count,
                 seed=seed,
                 component_indices=component_indices,
                 component_count=complexity_class.digit_count,
-                runtime=runtime,
                 timing=timing,
                 timing_prefix=timing_prefix,
             )
-            transform_index_samples = self._transform_index_tensor(
+            transform_index_samples = self._sample_transform_indices(
                 sample_count=sample_count,
                 seed=seed,
                 transform_indices=transform_indices,
                 complexity_class=complexity_class,
-                runtime=runtime,
                 timing=timing,
                 timing_prefix=timing_prefix,
             )
-        backend = tensor_runtime_backend(runtime)
         fields = self._generate_tensor_fields(
             sample_shape=sample_shape,
             seed=seed,
@@ -927,23 +798,25 @@ class Generator:
             )
             if unknown:
                 raise TensorRuntimeError(f"unknown target outcome id: {unknown[0]}")
-            component_to_outcome = backend.tensor(
-                [
-                    outcome_ids.index(outcome_id)
-                    for outcome_id in component_outcome_ids[: complexity_class.digit_count]
-                ],
-                dtype=backend.long,
-                device=runtime.device,
+            component_to_outcome = tuple(
+                outcome_ids.index(outcome_id)
+                for outcome_id in component_outcome_ids[: complexity_class.digit_count]
             )
-            target_indices = component_to_outcome.index_select(0, component_index_samples)
-            labels = backend.nn.functional.one_hot(
-                target_indices,
-                num_classes=len(outcome_ids),
-            ).to(dtype=backend.float32)
-            if sample_shape:
-                labels = labels.reshape((*sample_shape, len(outcome_ids)))
-            else:
-                labels = labels.reshape((len(outcome_ids),))
+            labels = tensor_runtime_construct_tensor(
+                runtime,
+                recipe=TensorElementRecipe(
+                    shape=(*sample_shape, len(outcome_ids))
+                    if sample_shape
+                    else (len(outcome_ids),),
+                    dtype="float32",
+                    element=_target_tensor_element,
+                    parameters={
+                        "component_indices": component_index_samples,
+                        "component_to_outcome": component_to_outcome,
+                        "outcome_count": len(outcome_ids),
+                    },
+                ),
+            )
         return fields, labels
 
     def _generate_tensor_fields(
@@ -1047,8 +920,8 @@ class Generator:
         width: int,
         height: int,
         digit_count: int,
-        component_indices: Any,
-        transform_indices: Any,
+        component_indices: tuple[int, ...],
+        transform_indices: tuple[int, ...],
         transform: VariationTransformDeclaration,
         grid: _ConstructedAffineGrid,
         runtime: TensorRuntime,
@@ -1060,26 +933,11 @@ class Generator:
         _require_positive_integer(digit_count, "digit_count")
         if digit_count > len(self.formation.components):
             raise TensorRuntimeError("digit_count exceeds component vocabulary")
-        backend = tensor_runtime_backend(runtime)
-        component_index_tensor = _runtime_long_tensor(
-            runtime=runtime,
-            values=component_indices,
-        ).reshape(-1)
-        transform_index_tensor = _runtime_long_tensor(
-            runtime=runtime,
-            values=transform_indices,
-        ).reshape(-1)
-        if int(component_index_tensor.numel()) != int(transform_index_tensor.numel()):
+        if len(component_indices) != len(transform_indices):
             raise TensorRuntimeError("component and transform index counts must match")
-        sample_count = int(component_index_tensor.numel())
+        sample_count = len(component_indices)
         if self.formation.channel_count != 1:
             raise TensorRuntimeError("Digits tensor renderer requires one channel")
-        if sample_count == 0:
-            return backend.empty(
-                (0, 1, height, width),
-                dtype=backend.float32,
-                device=runtime.device,
-            )
         mark_offsets: list[int] = [0]
         mark_values: list[float] = []
         mark_widths: list[float] = []
@@ -1095,53 +953,39 @@ class Generator:
                 )
             mark_offsets.append(len(mark_values))
         if not mark_values:
-            return backend.zeros(
-                (sample_count, 1, height, width),
-                dtype=backend.float32,
-                device=runtime.device,
+            return tensor_runtime_construct_tensor(
+                runtime,
+                recipe=TensorElementRecipe(
+                    shape=(sample_count, 1, height, width),
+                    dtype="float32",
+                    element=_zero_tensor_element,
+                ),
             )
         max_component_mark_count = max(
             stop - start for start, stop in zip(mark_offsets, mark_offsets[1:], strict=False)
         )
-        matrices = _constructed_affine_matrix_tensors(
+        matrices = _constructed_affine_matrix_values(
             transform=transform,
             grid=grid,
-            transform_indices=transform_index_tensor,
-            runtime=runtime,
-        )
-        host_component_indices = tuple(
-            int(index) for index in tensor_value_to_host(component_index_tensor).tolist()
-        )
-        host_matrices = cast(
-            tuple[
-                tuple[float, ...],
-                tuple[float, ...],
-                tuple[float, ...],
-                tuple[float, ...],
-                tuple[float, ...],
-                tuple[float, ...],
-                tuple[float, ...],
-            ],
-            tuple(
-                tuple(float(value) for value in tensor_value_to_host(matrix).tolist())
-                for matrix in matrices
-            ),
+            transform_indices=transform_indices,
         )
         return tensor_runtime_construct_tensor(
             runtime,
-            shape=(sample_count, 1, height, width),
-            dtype=backend.float32,
-            element=lambda coordinates: _digits_tensor_element(
-                coordinates=coordinates,
-                component_indices=host_component_indices,
-                matrices=host_matrices,
-                mark_offsets=tuple(mark_offsets),
-                mark_values=tuple(mark_values),
-                mark_widths=tuple(mark_widths),
-                curve_points=tuple(curve_points),
-                max_component_mark_count=max_component_mark_count,
-                height=height,
-                width=width,
+            recipe=TensorElementRecipe(
+                shape=(sample_count, 1, height, width),
+                dtype="float32",
+                element=_digits_tensor_element,
+                parameters={
+                    "component_indices": component_indices,
+                    "matrices": matrices,
+                    "mark_offsets": tuple(mark_offsets),
+                    "mark_values": tuple(mark_values),
+                    "mark_widths": tuple(mark_widths),
+                    "curve_points": tuple(curve_points),
+                    "max_component_mark_count": max_component_mark_count,
+                    "height": height,
+                    "width": width,
+                },
             ),
         )
 
@@ -2751,170 +2595,197 @@ def _grid_value(bounds: tuple[float, float], *, index: int, count: int) -> float
     return lower + (upper - lower) * (index / (count - 1))
 
 
-def _runtime_long_tensor(*, runtime: TensorRuntime, values: Any) -> Any:
-    backend = tensor_runtime_backend(runtime)
-    if hasattr(values, "to") and hasattr(values, "dtype"):
-        return values.to(device=runtime.device, dtype=backend.long)
-    return backend.tensor(values, dtype=backend.long, device=runtime.device)
-
-
-def _constructed_affine_matrix_tensors(
+def _constructed_affine_matrix_values(
     *,
     transform: VariationTransformDeclaration,
     grid: _ConstructedAffineGrid,
-    transform_indices: Any,
-    runtime: TensorRuntime,
-) -> tuple[Any, Any, Any, Any, Any, Any, Any]:
-    backend = tensor_runtime_backend(runtime)
-    transform_indices = transform_indices.reshape(-1)
-    sample_count = int(transform_indices.numel())
+    transform_indices: tuple[int, ...],
+) -> tuple[
+    tuple[float, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+    tuple[float, ...],
+]:
+    sample_count = len(transform_indices)
     if grid.transform_count == 1:
-        ones = backend.ones(sample_count, dtype=backend.float32, device=runtime.device)
-        zeros = backend.zeros(sample_count, dtype=backend.float32, device=runtime.device)
+        ones = tuple(1.0 for _index in range(sample_count))
+        zeros = tuple(0.0 for _index in range(sample_count))
         return ones, zeros, zeros, zeros, ones, zeros, ones
     spatial = transform.spatial_affine
+    x_translation_values: list[float] = []
+    y_translation_values: list[float] = []
+    scale_values: list[float] = []
+    rotation_values: list[float] = []
+    x_shear_values: list[float] = []
     if grid.preset_count is not None:
-        preset_coordinates = backend.tensor(
-            [
-                _constructed_affine_preset_unit_coordinates(
-                    preset_index=index,
-                    preset_count=grid.preset_count,
+        for transform_index in transform_indices:
+            preset_coordinates = _constructed_affine_preset_unit_coordinates(
+                preset_index=transform_index,
+                preset_count=grid.preset_count,
+            )
+            x_translation_values.append(
+                _preset_grid_value(
+                    _bounded_interval(
+                        grid.x_translation_bounds,
+                        lower_bound=spatial.matrix[0][2][0],
+                        upper_bound=spatial.matrix[0][2][1],
+                    ),
+                    fraction=preset_coordinates[0],
                 )
-                for index in range(grid.preset_count)
-            ],
-            dtype=backend.float32,
-            device=runtime.device,
-        ).index_select(0, transform_indices)
-        x_translation = _tensor_preset_grid_value(
-            _bounded_interval(
-                grid.x_translation_bounds,
-                lower_bound=spatial.matrix[0][2][0],
-                upper_bound=spatial.matrix[0][2][1],
-            ),
-            fraction=preset_coordinates[:, 0],
-        )
-        y_translation = _tensor_preset_grid_value(
-            _bounded_interval(
-                grid.y_translation_bounds,
-                lower_bound=spatial.matrix[1][2][0],
-                upper_bound=spatial.matrix[1][2][1],
-            ),
-            fraction=preset_coordinates[:, 1],
-        )
-        scale = _tensor_preset_grid_value(
-            _bounded_interval(
-                grid.scale_bounds,
-                lower_bound=max(spatial.matrix[0][0][0], spatial.matrix[1][1][0]),
-                upper_bound=min(spatial.matrix[0][0][1], spatial.matrix[1][1][1]),
-            ),
-            fraction=preset_coordinates[:, 2],
-        )
-        rotation = _tensor_preset_grid_value(
-            _bounded_interval(
-                grid.rotation_bounds,
-                lower_bound=spatial.matrix[1][0][0],
-                upper_bound=spatial.matrix[1][0][1],
-            ),
-            fraction=preset_coordinates[:, 3],
-        )
-        x_shear = _tensor_preset_grid_value(
-            _bounded_interval(
-                grid.x_shear_bounds,
-                lower_bound=spatial.matrix[0][1][0],
-                upper_bound=spatial.matrix[0][1][1],
-            ),
-            fraction=preset_coordinates[:, 4],
-        )
+            )
+            y_translation_values.append(
+                _preset_grid_value(
+                    _bounded_interval(
+                        grid.y_translation_bounds,
+                        lower_bound=spatial.matrix[1][2][0],
+                        upper_bound=spatial.matrix[1][2][1],
+                    ),
+                    fraction=preset_coordinates[1],
+                )
+            )
+            scale_values.append(
+                _preset_grid_value(
+                    _bounded_interval(
+                        grid.scale_bounds,
+                        lower_bound=max(spatial.matrix[0][0][0], spatial.matrix[1][1][0]),
+                        upper_bound=min(spatial.matrix[0][0][1], spatial.matrix[1][1][1]),
+                    ),
+                    fraction=preset_coordinates[2],
+                )
+            )
+            rotation_values.append(
+                _preset_grid_value(
+                    _bounded_interval(
+                        grid.rotation_bounds,
+                        lower_bound=spatial.matrix[1][0][0],
+                        upper_bound=spatial.matrix[1][0][1],
+                    ),
+                    fraction=preset_coordinates[3],
+                )
+            )
+            x_shear_values.append(
+                _preset_grid_value(
+                    _bounded_interval(
+                        grid.x_shear_bounds,
+                        lower_bound=spatial.matrix[0][1][0],
+                        upper_bound=spatial.matrix[0][1][1],
+                    ),
+                    fraction=preset_coordinates[4],
+                )
+            )
     else:
-        affine_indices = _constructed_affine_index_tensors(
-            transform_indices=transform_indices,
-            grid=grid,
-            runtime=runtime,
+        for transform_index in transform_indices:
+            affine_indices = _constructed_affine_axis_indices(
+                transform_index=transform_index,
+                grid=grid,
+            )
+            x_translation_values.append(
+                _grid_value(
+                    _bounded_interval(
+                        grid.x_translation_bounds,
+                        lower_bound=spatial.matrix[0][2][0],
+                        upper_bound=spatial.matrix[0][2][1],
+                    ),
+                    index=affine_indices[0],
+                    count=grid.x_translation,
+                )
+            )
+            y_translation_values.append(
+                _grid_value(
+                    _bounded_interval(
+                        grid.y_translation_bounds,
+                        lower_bound=spatial.matrix[1][2][0],
+                        upper_bound=spatial.matrix[1][2][1],
+                    ),
+                    index=affine_indices[1],
+                    count=grid.y_translation,
+                )
+            )
+            scale_values.append(
+                _grid_value(
+                    _bounded_interval(
+                        grid.scale_bounds,
+                        lower_bound=max(spatial.matrix[0][0][0], spatial.matrix[1][1][0]),
+                        upper_bound=min(spatial.matrix[0][0][1], spatial.matrix[1][1][1]),
+                    ),
+                    index=affine_indices[2],
+                    count=grid.scale,
+                )
+            )
+            rotation_values.append(
+                _grid_value(
+                    _bounded_interval(
+                        grid.rotation_bounds,
+                        lower_bound=spatial.matrix[1][0][0],
+                        upper_bound=spatial.matrix[1][0][1],
+                    ),
+                    index=affine_indices[3],
+                    count=grid.rotation,
+                )
+            )
+            x_shear_values.append(
+                _grid_value(
+                    _bounded_interval(
+                        grid.x_shear_bounds,
+                        lower_bound=spatial.matrix[0][1][0],
+                        upper_bound=spatial.matrix[0][1][1],
+                    ),
+                    index=affine_indices[4],
+                    count=grid.x_shear,
+                )
+            )
+    m00_values: list[float] = []
+    m01_values: list[float] = []
+    m10_values: list[float] = []
+    m11_values: list[float] = []
+    width_scale_values: list[float] = []
+    for scale, rotation, x_shear in zip(
+        scale_values,
+        rotation_values,
+        x_shear_values,
+        strict=True,
+    ):
+        cosine = math.cos(rotation)
+        sine = math.sin(rotation)
+        m00 = scale * cosine
+        m01 = x_shear - scale * sine
+        m10 = scale * sine
+        m11 = scale * cosine
+        m00_values.append(m00)
+        m01_values.append(m01)
+        m10_values.append(m10)
+        m11_values.append(m11)
+        width_scale_values.append(
+            max(
+                math.sqrt(m00 * m00 + m10 * m10),
+                math.sqrt(m01 * m01 + m11 * m11),
+            )
         )
-        x_translation = _tensor_grid_value(
-            _bounded_interval(
-                grid.x_translation_bounds,
-                lower_bound=spatial.matrix[0][2][0],
-                upper_bound=spatial.matrix[0][2][1],
-            ),
-            indices=affine_indices[0],
-            count=grid.x_translation,
-        )
-        y_translation = _tensor_grid_value(
-            _bounded_interval(
-                grid.y_translation_bounds,
-                lower_bound=spatial.matrix[1][2][0],
-                upper_bound=spatial.matrix[1][2][1],
-            ),
-            indices=affine_indices[1],
-            count=grid.y_translation,
-        )
-        scale = _tensor_grid_value(
-            _bounded_interval(
-                grid.scale_bounds,
-                lower_bound=max(spatial.matrix[0][0][0], spatial.matrix[1][1][0]),
-                upper_bound=min(spatial.matrix[0][0][1], spatial.matrix[1][1][1]),
-            ),
-            indices=affine_indices[2],
-            count=grid.scale,
-        )
-        rotation = _tensor_grid_value(
-            _bounded_interval(
-                grid.rotation_bounds,
-                lower_bound=spatial.matrix[1][0][0],
-                upper_bound=spatial.matrix[1][0][1],
-            ),
-            indices=affine_indices[3],
-            count=grid.rotation,
-        )
-        x_shear = _tensor_grid_value(
-            _bounded_interval(
-                grid.x_shear_bounds,
-                lower_bound=spatial.matrix[0][1][0],
-                upper_bound=spatial.matrix[0][1][1],
-            ),
-            indices=affine_indices[4],
-            count=grid.x_shear,
-        )
-    cosine = backend.cos(rotation)
-    sine = backend.sin(rotation)
-    m00 = scale * cosine
-    m01 = x_shear - scale * sine
-    m10 = scale * sine
-    m11 = scale * cosine
-    width_scale = backend.maximum(
-        backend.sqrt(m00 * m00 + m10 * m10),
-        backend.sqrt(m01 * m01 + m11 * m11),
+    return (
+        tuple(m00_values),
+        tuple(m01_values),
+        tuple(x_translation_values),
+        tuple(m10_values),
+        tuple(m11_values),
+        tuple(y_translation_values),
+        tuple(width_scale_values),
     )
-    return m00, m01, x_translation, m10, m11, y_translation, width_scale
 
 
-def _constructed_affine_index_tensors(
+def _constructed_affine_axis_indices(
     *,
-    transform_indices: Any,
+    transform_index: int,
     grid: _ConstructedAffineGrid,
-    runtime: TensorRuntime,
-) -> tuple[Any, Any, Any, Any, Any]:
-    backend = tensor_runtime_backend(runtime)
-    remainder = transform_indices
-    indices: list[Any] = []
+) -> tuple[int, int, int, int, int]:
+    remainder = transform_index
+    indices: list[int] = []
     for axis_count in grid.counts:
-        indices.append(remainder.remainder(axis_count))
-        remainder = backend.div(remainder, axis_count, rounding_mode="floor")
+        indices.append(remainder % axis_count)
+        remainder = remainder // axis_count
     return (indices[0], indices[1], indices[2], indices[3], indices[4])
-
-
-def _tensor_grid_value(bounds: tuple[float, float], *, indices: Any, count: int) -> Any:
-    lower, upper = bounds
-    float_indices = indices.float()
-    if count <= 1:
-        return float_indices * 0.0 + ((lower + upper) / 2.0)
-    return lower + (upper - lower) * (float_indices / (count - 1))
-
-
-def _tensor_preset_grid_value(bounds: tuple[float, float], *, fraction: Any) -> Any:
-    lower, upper = bounds
-    return lower + (upper - lower) * fraction
 
 
 def _quadratic_control_points(
@@ -3031,6 +2902,28 @@ def _digits_tensor_element(
         if distance_squared <= threshold:
             value = max(value, mark_value)
     return value
+
+
+def _zero_tensor_element(*, coordinates: TensorElementCoordinates) -> float:
+    _ = coordinates
+    return 0.0
+
+
+def _target_tensor_element(
+    *,
+    coordinates: TensorElementCoordinates,
+    component_indices: tuple[int, ...],
+    component_to_outcome: tuple[int, ...],
+    outcome_count: int,
+) -> float:
+    if outcome_count < 1:
+        raise TensorRuntimeError("target tensor outcome count must be positive")
+    if not coordinates.indices:
+        raise TensorRuntimeError("target tensor element requires at least one axis")
+    sample_index = coordinates.flat_index // outcome_count
+    outcome_index = coordinates.indices[-1]
+    component_index = component_indices[sample_index]
+    return 1.0 if component_to_outcome[component_index] == outcome_index else 0.0
 
 
 def _identity_variation_coordinate_record(
@@ -3178,20 +3071,6 @@ def _uint8(value: float) -> int:
 def _require_positive_integer(value: int, name: str) -> None:
     if type(value) is not int or value <= 0:
         raise TensorRuntimeError(f"{name} must be a positive integer")
-
-
-def _runtime_generator(*, runtime: TensorRuntime, seed: str) -> Any:
-    backend = tensor_runtime_backend(runtime)
-    generator_seed = int.from_bytes(
-        hashlib.sha256(seed.encode("utf-8")).digest()[:8],
-        "big",
-    ) & ((1 << 63) - 1)
-    try:
-        generator = backend.Generator(device=runtime.device)
-    except (TypeError, RuntimeError):
-        generator = backend.Generator()
-    generator.manual_seed(generator_seed)
-    return generator
 
 
 def _sample_display_key(sample: Mapping[str, object], sample_count: int) -> int:

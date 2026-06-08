@@ -246,6 +246,25 @@ def test_backend_terms_are_used_only_in_tensor_runtime() -> None:
     assert offenders == ()
 
 
+def test_benchmark_implementations_do_not_use_runtime_backend_escape_hatches() -> None:
+    benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks"
+    banned_fragments = (
+        "tensor_runtime_backend",
+        "runtime.device",
+        "runtime.torch",
+    )
+
+    offenders = tuple(
+        f"{path.relative_to(_repository_root)}:{line_number}:{fragment}"
+        for path in sorted(benchmark_root.glob("*/benchmark.py"))
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        for fragment in banned_fragments
+        if fragment in line
+    )
+
+    assert offenders == ()
+
+
 def test_repository_policy_cli_scans_backend_terms() -> None:
     result = subprocess.run(
         ["python", "-m", "leibniz._repository_policy", str(_repository_root)],
