@@ -61,46 +61,46 @@ def _run_and_evaluate_digits_benchmark(results_root: Path, *, sample_count: int 
     )
 
 
-def test_competent_complexity_score_integrates_bits_above_chance() -> None:
+def test_competence_integral_integrates_bits_above_chance() -> None:
     complexity = 20.0
     chance_mass = 0.1
 
     assert math.isclose(
-        local_results.competent_complexity_score(
+        local_results.competence_integral(
             ({"complexity": complexity, "score": 1.0},),
             chance_mass=chance_mass,
-        ),
+        ).value,
         20.0,
     )
     assert math.isclose(
-        local_results.competent_complexity_score(
+        local_results.competence_integral(
             ({"complexity": complexity * 2.0, "score": 1.0},),
             chance_mass=chance_mass,
-        ),
+        ).value,
         40.0,
     )
     assert math.isclose(
-        local_results.competent_complexity_score(
+        local_results.competence_integral(
             ({"complexity": complexity, "score": 0.55},),
             chance_mass=chance_mass,
-        ),
+        ).value,
         19.5,
     )
     assert math.isclose(
-        local_results.competent_complexity_score(
+        local_results.competence_integral(
             ({"complexity": complexity * 4.0, "score": chance_mass},),
             chance_mass=chance_mass,
-        ),
+        ).value,
         79.0,
     )
     assert math.isclose(
-        local_results.competent_complexity_score(
+        local_results.competence_integral(
             (
                 {"complexity": complexity, "score": chance_mass},
                 {"complexity": complexity * 2.0, "score": 1.0},
             ),
             chance_mass=chance_mass,
-        ),
+        ).value,
         39.0,
     )
 
@@ -379,16 +379,10 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert isinstance(cost_summary["inference_compute"], int | float)
     assert isinstance(cost_summary["cost"], int | float)
     assert cost_summary["cost"] >= 0
-    assert cast(dict[str, object], leaderboard[0]["cost_basis"]) == {
-        "kind": "compute-integral-over-observed-complexity-v1",
-        "cost_unit": "bit-ops-per-sample complexity-bits",
-        "complexity_axis": "log2-distinguishable-states",
-        "density_source": "architecture+sampled_competence.points.input_shape",
-        "density_unit": "ops-per-sample",
-        "bit_length_per_op": 32.0,
-        "integration": "observed-complexity-intervals",
-        "competence_weighted": False,
-    }
+    cost_integral = cast(dict[str, object], leaderboard[0]["cost_integral"])
+    assert cost_integral["kind"] == "compute-cost-integral"
+    assert math.isclose(cast(float, cost_integral["value"]), cast(float, cost_summary["cost"]))
+    assert cast(list[dict[str, object]], cost_integral["terms"])
     frontiers = cast(dict[str, object], result["frontiers"])
     assert len(cast(list[object], frontiers["cost"])) == 1
     reference_curves = cast(list[dict[str, object]], result["reference_curves"])
@@ -476,7 +470,7 @@ def test_integrated_model_cost_reconstructs_point_density_from_input_shape() -> 
     assert first_compute is not None
     assert second_compute is not None
 
-    cost = cast(Any, local_results)._integrated_model_compute_cost_from_points(
+    cost_integral = cast(Any, local_results)._model_compute_cost_integral(
         points=(
             {
                 "complexity": 1.0,
@@ -492,7 +486,7 @@ def test_integrated_model_cost_reconstructs_point_density_from_input_shape() -> 
         architecture=architecture,
     )
 
-    assert math.isclose(cost, 32.0 * (first_compute + second_compute))
+    assert math.isclose(cost_integral.value, 32.0 * (first_compute + second_compute))
 
 
 def test_training_estimate_comparison_uses_selected_checkpoint_estimate(

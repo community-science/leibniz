@@ -14,9 +14,10 @@ from typing import Any, cast
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
+    ComplexityIntegral,
     ComputeCostPoint,
-    integrated_compute_cost,
-    sampled_competence_frontier_score,
+    integrated_compute_cost_integral,
+    sampled_competence_frontier_integral,
 )
 from leibniz.benchmark_implementations import (
     Benchmark,
@@ -55,7 +56,7 @@ __all__ = [
     "LocalResultPublishSummary",
     "LocalResultPushSummary",
     "LocalResultImportError",
-    "competent_complexity_score",
+    "competence_integral",
     "initialize_result_checkout",
     "load_console_result_view",
     "materialize_benchmark_result_views",
@@ -82,7 +83,6 @@ _console_validation_history_max_points = 512
 _reference_curve_default_maximum_cost = 10_000_000_000
 _reference_curve_initial_curriculum_count = 16
 _component_count = 1
-_reference_baseline_complexity = 1.0
 
 
 class _SummaryRecordMixin:
@@ -1508,8 +1508,8 @@ def _integrated_reference_curve_points(
             point.get("cost_density"),
             "reference_curve.cost_density",
         )
-        cumulative_cost += _integrated_compute_cost_from_points(
-            points=(
+        cumulative_cost += integrated_compute_cost_integral(
+            (
                 ComputeCostPoint(
                     complexity=complexity,
                     compute_per_sample=cost_density,
@@ -1518,7 +1518,7 @@ def _integrated_reference_curve_points(
                     complexity_maximum=complexity,
                 ),
             )
-        )
+        ).value
         integrated_points.append(
             {
                 "complexity": complexity,
@@ -1583,16 +1583,16 @@ def _model_result_records(
     for run in runs:
         grouped.setdefault(run.model_key, []).append(run)
 
-    reference_baseline_complexity = _reference_baseline_complexity
     chance_mass = _chance_mass(manifest)
     records: list[dict[str, object]] = []
     for model_key, model_runs in grouped.items():
         ordered_runs = tuple(sorted(model_runs, key=_run_sort_key))
         points = _competence_points(ordered_runs)
-        score = competent_complexity_score(
+        score_integral = competence_integral(
             points,
             chance_mass=chance_mass,
         )
+        score = score_integral.value
         best_run = max(
             ordered_runs,
             key=lambda run: (run.score, -_cost_value(run.cost_summary, "storage_bytes")),
@@ -1602,35 +1602,39 @@ def _model_result_records(
             if any(run.result_status == "accepted" for run in ordered_runs)
             else "provisional"
         )
-        score_basis = {
-            "kind": "competence-integral-over-complexity-v1",
-            "score_unit": "bits",
-            "complexity_axis": "log2-distinguishable-states",
-            "reference_baseline_complexity": reference_baseline_complexity,
-            "chance_mass": chance_mass,
-            "point_score": "accepted-mass",
-            "local_competence": "above-chance-accepted-mass",
-            "integration": "free-empty-rungs-then-first-observed-competence",
-        }
+        inference_compute = _model_measured_inference_compute(ordered_runs)
+        cost_integral = (
+            None
+            if inference_compute is None
+            else _model_compute_cost_integral(
+                points=points,
+                architecture=_run_architecture_manifest(best_run),
+            )
+        )
         record: dict[str, object] = {
             "model_key": model_key,
             "result_status": result_status,
             "architecture_digest": str(best_run.architecture_digest),
             "benchmark_id": str(best_run.benchmark_id),
             "score": score,
-            "score_basis": score_basis,
-            "observed_complexities": [point["complexity"] for point in points],
+            "score_integral": score_integral.to_record(
+                kind="sampled-competence-integral"
+            ),
             "points": list(points),
             "cost_summary": _model_cost_summary(
                 ordered_runs,
                 best_run=best_run,
-                points=points,
+                inference_compute=inference_compute,
+                cost=None if cost_integral is None else cost_integral.value,
             ),
-            "cost_basis": _integrated_compute_cost_basis(),
             "run_ids": [run.run_id for run in ordered_runs],
             "measurement_count": sum(run.measurement_count for run in ordered_runs),
             "source_kinds": sorted({run.source_kind for run in ordered_runs}),
         }
+        if cost_integral is not None:
+            record["cost_integral"] = cost_integral.to_record(
+                kind="compute-cost-integral"
+            )
         training_estimate_comparison = _training_estimate_comparison_record(
             run=best_run,
             accepted_points=points,
@@ -1652,19 +1656,17 @@ def _model_cost_summary(
     runs: tuple[_BenchmarkRunRecord, ...],
     *,
     best_run: _BenchmarkRunRecord,
-    points: tuple[dict[str, object], ...],
+    inference_compute: float | None,
+    cost: float | None,
 ) -> dict[str, object]:
     cost_summary = _run_cost_summary(best_run)
     cost_summary.pop("parameter_count", None)
     cost_summary.pop("cost", None)
     cost_summary.pop("inference_compute", None)
-    inference_compute = _model_measured_inference_compute(runs)
     if inference_compute is not None:
         cost_summary["inference_compute"] = inference_compute
-        cost_summary["cost"] = _integrated_model_compute_cost_from_points(
-            points=points,
-            architecture=_run_architecture_manifest(best_run),
-        )
+        if cost is not None:
+            cost_summary["cost"] = cost
     training_values = tuple(_run_training_compute_value(run) for run in runs)
     if any(value is None for value in training_values):
         raise LocalResultImportError(
@@ -1721,10 +1723,10 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
         inference_compute = _optional_cost_value(cost_summary, "inference_compute")
         if inference_compute is not None:
             cost_summary["inference_compute"] = inference_compute
-            cost_summary["cost"] = _integrated_model_compute_cost_from_points(
+            cost_summary["cost"] = _model_compute_cost_integral(
                 points=_run_competence_points(run),
                 architecture=_run_architecture_manifest(run),
-            )
+            ).value
     else:
         cost_summary.pop("inference_compute", None)
     training_compute = _run_training_compute(run)
@@ -1733,19 +1735,12 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
     return cost_summary
 
 
-def _integrated_compute_cost_from_points(
-    *,
-    points: tuple[ComputeCostPoint, ...],
-) -> float:
-    return integrated_compute_cost(points)
-
-
-def _integrated_model_compute_cost_from_points(
+def _model_compute_cost_integral(
     *,
     points: tuple[dict[str, object], ...],
     architecture: ArchitectureManifest,
-) -> float:
-    return integrated_compute_cost(
+) -> ComplexityIntegral:
+    return integrated_compute_cost_integral(
         _compute_cost_points_from_sampled_competence(
             points=points,
             architecture=architecture,
@@ -1838,19 +1833,6 @@ def _optional_point_input_shape(
     return tuple(shape)
 
 
-def _integrated_compute_cost_basis() -> dict[str, object]:
-    return {
-        "kind": "compute-integral-over-observed-complexity-v1",
-        "cost_unit": "bit-ops-per-sample complexity-bits",
-        "complexity_axis": "log2-distinguishable-states",
-        "density_source": "architecture+sampled_competence.points.input_shape",
-        "density_unit": "ops-per-sample",
-        "bit_length_per_op": _default_bit_length_per_op,
-        "integration": "observed-complexity-intervals",
-        "competence_weighted": False,
-    }
-
-
 def _run_training_compute(run: _BenchmarkRunRecord) -> float | None:
     if run.training_summary is None:
         return None
@@ -1901,10 +1883,7 @@ def _model_console_view_model(
                     "Observed " + _model_complexity_label(manifest),
                     ", ".join(
                         _console_number_value(value, precision=2)
-                        for value in _as_sequence(
-                            model.get("observed_complexities"),
-                            "model.observed_complexities",
-                        )
+                        for value in _model_complexities(model)
                     )
                     or "none",
                 ),
@@ -1963,6 +1942,13 @@ def _model_console_view_model(
         ),
     ]
     return {"detail_sections": sections}
+
+
+def _model_complexities(model: Mapping[str, object]) -> tuple[float, ...]:
+    return tuple(
+        _point_complexity(_extract.mapping(point, "model.points"))
+        for point in _as_sequence(model.get("points"), "model.points")
+    )
 
 
 def _model_training_estimate_comparison_sections(
@@ -2210,12 +2196,12 @@ def _competence_point_from_sampled_record(point: Mapping[str, object]) -> dict[s
     return record
 
 
-def competent_complexity_score(
+def competence_integral(
     points: tuple[dict[str, object], ...],
     *,
     chance_mass: float,
-) -> float:
-    return sampled_competence_frontier_score(
+) -> ComplexityIntegral:
+    return sampled_competence_frontier_integral(
         tuple(
             CompetencePoint(
                 complexity=_point_complexity(point),
@@ -2891,14 +2877,21 @@ def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
     if record.get("result_status") not in {"accepted", "provisional"}:
         raise LocalResultImportError(f"{_field_path(prefix, 'result_status')} is invalid")
     _as_nonnegative_number(record.get("score"), _field_path(prefix, "score"))
+    _validate_complexity_integral(
+        _extract.mapping(record.get("score_integral"), _field_path(prefix, "score_integral")),
+        _field_path(prefix, "score_integral"),
+    )
+    if "cost_integral" in record:
+        _validate_complexity_integral(
+            _extract.mapping(record["cost_integral"], _field_path(prefix, "cost_integral")),
+            _field_path(prefix, "cost_integral"),
+        )
     _require_sequence_fields(
         record,
         prefix,
-        ("observed_complexities", "points", "run_ids", "source_kinds"),
+        ("points", "run_ids", "source_kinds"),
     )
     _require_mapping_fields(record, prefix, ("cost_summary",))
-    if "cost_basis" in record:
-        _extract.mapping(record["cost_basis"], _field_path(prefix, "cost_basis"))
     _as_nonnegative_number(
         record.get("measurement_count"),
         _field_path(prefix, "measurement_count"),
@@ -2919,6 +2912,34 @@ def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
             ),
             _field_path(prefix, "training_estimate_comparison"),
         )
+
+
+def _validate_complexity_integral(record: Mapping[str, object], prefix: str) -> None:
+    _require_string_fields(record, prefix, ("kind",))
+    _as_nonnegative_number(record.get("value"), _field_path(prefix, "value"))
+    terms = _as_sequence(record.get("terms"), _field_path(prefix, "terms"))
+    for index, term in enumerate(terms):
+        term_prefix = f"{_field_path(prefix, 'terms')}.{index}"
+        term_record = _extract.mapping(term, term_prefix)
+        _require_string_fields(term_record, term_prefix, ("kind",))
+        for field in (
+            "complexity_minimum",
+            "complexity_maximum",
+            "complexity_width",
+            "density",
+            "contribution",
+        ):
+            _as_nonnegative_number(term_record.get(field), _field_path(term_prefix, field))
+        if "representative_complexity" in term_record:
+            _as_nonnegative_number(
+                term_record.get("representative_complexity"),
+                _field_path(term_prefix, "representative_complexity"),
+            )
+        if "sample_count" in term_record:
+            _as_positive_int(
+                term_record.get("sample_count"),
+                _field_path(term_prefix, "sample_count"),
+            )
 
 
 def _validate_training_estimate_comparison(

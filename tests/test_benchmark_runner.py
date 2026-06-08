@@ -1,4 +1,3 @@
-import inspect
 import math
 from collections.abc import Mapping
 from pathlib import Path
@@ -14,8 +13,9 @@ from leibniz.benchmark_evaluation import (
     CompetencePoint,
     ValidationCompetencePoint,
     finite_measurements_for_predictions,
-    sampled_competence_frontier_score,
+    sampled_competence_frontier_integral,
     sampled_competence_record,
+    validation_competence_frontier_advances,
 )
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.benchmark_runner import (
@@ -1490,10 +1490,9 @@ def test_training_curriculum_is_not_step_indexed() -> None:
 
 
 def test_training_curriculum_advances_on_current_rung_competence() -> None:
-    advances = cast(Any, benchmark_runner)._frontier_plateau_advances
     chance_mass = 0.1
 
-    assert advances(
+    assert validation_competence_frontier_advances(
         frontier_point=ValidationCompetencePoint(
             complexity=0.0,
             accepted_mass=1.0,
@@ -1503,14 +1502,14 @@ def test_training_curriculum_advances_on_current_rung_competence() -> None:
         previous_frontier_points=(),
         chance_mass=chance_mass,
     )
-    assert advances(
+    assert validation_competence_frontier_advances(
         frontier_point=ValidationCompetencePoint(complexity=10.0, accepted_mass=1.0),
         previous_frontier_points=(
             ValidationCompetencePoint(complexity=10.0, accepted_mass=1.0),
         ),
         chance_mass=chance_mass,
     )
-    assert not advances(
+    assert not validation_competence_frontier_advances(
         frontier_point=ValidationCompetencePoint(complexity=30.0, accepted_mass=chance_mass),
         previous_frontier_points=(
             ValidationCompetencePoint(complexity=10.0, accepted_mass=0.5),
@@ -1518,26 +1517,11 @@ def test_training_curriculum_advances_on_current_rung_competence() -> None:
         ),
         chance_mass=chance_mass,
     )
-    assert not advances(
+    assert not validation_competence_frontier_advances(
         frontier_point=ValidationCompetencePoint(complexity=10.0, accepted_mass=chance_mass),
         previous_frontier_points=(),
         chance_mass=chance_mass,
     )
-
-
-def test_training_curriculum_gate_delegates_frontier_scoring_to_benchmark_api() -> None:
-    source = inspect.getsource(cast(Any, benchmark_runner)._frontier_plateau_advances)
-
-    assert "validation_competence_frontier_advances" in source
-    for leaked_scoring_detail in (
-        "accepted_mass",
-        "complexity",
-        "local_competence",
-        "validation_loss",
-        "trapezoid",
-        "_above_chance",
-    ):
-        assert leaked_scoring_detail not in source
 
 
 def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
@@ -1590,7 +1574,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
     assert points[1]["input_shape"] == list(batch.samples[0].require_field().shape)
     assert math.isclose(
         cast(float, estimate["score"]),
-        sampled_competence_frontier_score(
+        sampled_competence_frontier_integral(
             tuple(
                 CompetencePoint(
                     complexity=cast(float, point["complexity"]),
@@ -1610,7 +1594,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
                 for point in points
             ),
             chance_mass=0.1,
-        ),
+        ).value,
     )
 
 
@@ -2017,7 +2001,6 @@ def test_training_rung_threshold_uses_current_rung_competence() -> None:
 
 
 def test_training_curriculum_can_advance_after_worse_loss_on_larger_rung() -> None:
-    advances = cast(Any, benchmark_runner)._frontier_plateau_advances
     first_rung_point = ValidationCompetencePoint(
         complexity=math.log2(10),
         accepted_mass=1.0,
@@ -2027,7 +2010,7 @@ def test_training_curriculum_can_advance_after_worse_loss_on_larger_rung() -> No
         accepted_mass=0.28,
     )
 
-    assert advances(
+    assert validation_competence_frontier_advances(
         frontier_point=larger_rung_point,
         previous_frontier_points=(first_rung_point,),
         chance_mass=0.1,
@@ -2875,19 +2858,17 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
         "model-manifest",
     }
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
-    score_basis = cast(dict[str, object], leaderboard[0]["score_basis"])
-    assert score_basis["kind"] == "competence-integral-over-complexity-v1"
-    assert score_basis["score_unit"] == "bits"
-    assert score_basis["complexity_axis"] == "log2-distinguishable-states"
+    score_integral = cast(dict[str, object], leaderboard[0]["score_integral"])
+    assert score_integral["kind"] == "sampled-competence-integral"
     assert math.isclose(
-        cast(float, score_basis["reference_baseline_complexity"]),
-        1.0,
+        cast(float, score_integral["value"]),
+        cast(float, leaderboard[0]["score"]),
     )
-    assert math.isclose(cast(float, score_basis["chance_mass"]), 0.1)
-    observed_complexities = cast(list[float], leaderboard[0]["observed_complexities"])
-    assert math.isclose(observed_complexities[0], 0.0)
-    assert observed_complexities == sorted(observed_complexities)
+    assert cast(list[dict[str, object]], score_integral["terms"])
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
+    complexities = [cast(float, point["complexity"]) for point in points]
+    assert math.isclose(complexities[0], 0.0)
+    assert complexities == sorted(complexities)
     assert points[0]["sample_count"] == 64
     assert len(inspections) == 1
     assert inspections[0]["source_path"] == history[0]["model_inspection_path"]
@@ -3116,5 +3097,21 @@ def _score_estimate(
         "running_max_inference_compute": 10,
         "training_compute_per_sample": 10,
         "chance_mass": 0.1,
+        "score_integral": {
+            "kind": "sampled-competence-integral",
+            "value": score,
+            "terms": [
+                {
+                    "kind": "measured-competence",
+                    "complexity_minimum": 0.0,
+                    "complexity_maximum": complexity,
+                    "complexity_width": complexity,
+                    "density": 0.0 if complexity == 0.0 else score / complexity,
+                    "contribution": score,
+                    "representative_complexity": complexity,
+                    "sample_count": 2,
+                }
+            ],
+        },
         "sampled_competence": sampled_competence,
     }

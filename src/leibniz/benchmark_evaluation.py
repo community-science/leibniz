@@ -16,15 +16,16 @@ from leibniz.prediction_spaces import FiniteOutcomeSpace
 __all__ = [
     "CompetencePoint",
     "ComputeCostPoint",
+    "ComplexityIntegral",
+    "ComplexityIntegralTerm",
     "finite_measurements_for_predictions",
-    "integrated_compute_cost",
+    "integrated_compute_cost_integral",
     "sampled_competence_curriculum_record",
     "sampled_competence_record",
-    "sampled_competence_frontier_score",
+    "sampled_competence_frontier_integral",
     "ValidationCompetencePoint",
     "validation_competence",
     "validation_competence_frontier_advances",
-    "validation_competence_frontier_score",
 ]
 
 
@@ -50,6 +51,59 @@ class ComputeCostPoint:
     bit_length_per_op: float
     complexity_minimum: float | None = None
     complexity_maximum: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ComplexityIntegralTerm:
+    """One explicit interval contribution to an integral over complexity."""
+
+    lower: float
+    upper: float
+    density: float
+    kind: str
+    representative_complexity: float | None = None
+    sample_count: int | None = None
+
+    @property
+    def width(self) -> float:
+        return self.upper - self.lower
+
+    @property
+    def contribution(self) -> float:
+        return self.width * self.density
+
+    def to_record(self) -> dict[str, object]:
+        record: dict[str, object] = {
+            "kind": self.kind,
+            "complexity_minimum": self.lower,
+            "complexity_maximum": self.upper,
+            "complexity_width": self.width,
+            "density": self.density,
+            "contribution": self.contribution,
+        }
+        if self.representative_complexity is not None:
+            record["representative_complexity"] = self.representative_complexity
+        if self.sample_count is not None:
+            record["sample_count"] = self.sample_count
+        return record
+
+
+@dataclass(frozen=True, slots=True)
+class ComplexityIntegral:
+    """A human-readable numerical integral over the complexity axis."""
+
+    terms: tuple[ComplexityIntegralTerm, ...]
+
+    @property
+    def value(self) -> float:
+        return math.fsum(term.contribution for term in self.terms)
+
+    def to_record(self, *, kind: str) -> dict[str, object]:
+        return {
+            "kind": kind,
+            "value": self.value,
+            "terms": [term.to_record() for term in self.terms],
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,52 +309,72 @@ def validation_competence(*, validation_loss: float, outcome_count: int) -> floa
     return max(0.0, min(1.0, 1.0 - validation_loss / reference_cross_entropy))
 
 
-def sampled_competence_frontier_score(
+def sampled_competence_frontier_integral(
     points: Sequence[CompetencePoint],
     *,
     chance_mass: float,
-) -> float:
-    """Return competence bits over the full frontier from zero complexity."""
+) -> ComplexityIntegral:
+    """Return the explicit competence integral over measured complexity intervals."""
 
-    if not points:
-        return 0.0
-    ordered = tuple(sorted(points, key=lambda point: point.complexity))
-    area = 0.0
+    terms: list[ComplexityIntegralTerm] = []
     cursor = 0.0
-    for point in sorted(ordered, key=_competence_point_interval_sort_key):
-        lower, upper = _competence_point_interval(point)
+    for point in sorted(points, key=_competence_point_interval_sort_key):
+        lower, upper = _complexity_point_interval(point)
         if lower > cursor:
-            area += lower - cursor
+            terms.append(
+                ComplexityIntegralTerm(
+                    lower=cursor,
+                    upper=lower,
+                    density=1.0,
+                    kind="unrepresentable-gap",
+                )
+            )
         measured_lower = max(lower, cursor)
-        if upper <= measured_lower:
-            cursor = max(cursor, lower, upper)
-            continue
-        area += (upper - measured_lower) * _above_chance_competence(
-            point.accepted_mass,
-            chance_mass=chance_mass,
-        )
-        cursor = upper
-    return area
+        if upper > measured_lower:
+            terms.append(
+                ComplexityIntegralTerm(
+                    lower=measured_lower,
+                    upper=upper,
+                    density=_above_chance_competence(
+                        point.accepted_mass,
+                        chance_mass=chance_mass,
+                    ),
+                    kind="measured-competence",
+                    representative_complexity=point.complexity,
+                    sample_count=point.sample_count,
+                )
+            )
+        cursor = max(cursor, lower, upper)
+    return ComplexityIntegral(terms=tuple(terms))
 
 
-def integrated_compute_cost(points: Sequence[ComputeCostPoint]) -> float:
-    """Return bit-op cost integrated over observed complexity intervals."""
+def integrated_compute_cost_integral(
+    points: Sequence[ComputeCostPoint],
+) -> ComplexityIntegral:
+    """Return the explicit bit-op cost integral over measured intervals."""
 
-    total = 0.0
-    for point in points:
+    terms: list[ComplexityIntegralTerm] = []
+    for point in sorted(points, key=_compute_cost_point_interval_sort_key):
         lower, upper = _complexity_point_interval(point)
         if upper <= lower:
             continue
-        compute_per_sample = _finite_nonnegative_number(
+        density = _finite_nonnegative_number(
             point.compute_per_sample,
             field="compute_cost.compute_per_sample",
-        )
-        bit_length_per_op = _finite_nonnegative_number(
+        ) * _finite_nonnegative_number(
             point.bit_length_per_op,
             field="compute_cost.bit_length_per_op",
         )
-        total += (upper - lower) * compute_per_sample * bit_length_per_op
-    return total
+        terms.append(
+            ComplexityIntegralTerm(
+                lower=lower,
+                upper=upper,
+                density=density,
+                kind="measured-compute-cost",
+                representative_complexity=point.complexity,
+            )
+        )
+    return ComplexityIntegral(terms=tuple(terms))
 
 
 def _competence_point_interval_sort_key(point: CompetencePoint) -> tuple[float, float]:
@@ -308,8 +382,9 @@ def _competence_point_interval_sort_key(point: CompetencePoint) -> tuple[float, 
     return (lower, upper)
 
 
-def _competence_point_interval(point: CompetencePoint) -> tuple[float, float]:
-    return _complexity_point_interval(point)
+def _compute_cost_point_interval_sort_key(point: ComputeCostPoint) -> tuple[float, float]:
+    lower, upper = _complexity_point_interval(point)
+    return (lower, upper)
 
 
 def _complexity_point_interval(
@@ -338,16 +413,6 @@ def _complexity_point_interval(
     if upper < lower:
         raise ValueError("complexity interval maximum is below minimum")
     return (lower, upper)
-
-
-def validation_competence_frontier_score(
-    points: Sequence[ValidationCompetencePoint],
-    *,
-    chance_mass: float,
-) -> float:
-    """Return the benchmark frontier score for validation-derived points."""
-
-    return sampled_competence_frontier_score(points, chance_mass=chance_mass)
 
 
 def validation_competence_frontier_advances(

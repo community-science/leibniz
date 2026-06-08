@@ -83,11 +83,10 @@ def test_generated_console_web_modules_are_npm_build_artifacts() -> None:
     prepare_console_data = (
         _console_package / "scripts" / "prepareConsoleData.mjs"
     ).read_text(encoding="utf-8")
-    assert "function isPrepared(fingerprint)" in prepare_console_data
-    assert (
-        "const metadataPath = `${consoleDataPayloadPath()}.metadata.json`"
-        in prepare_console_data
-    )
+    vite_config = (_console_package / "vite.config.mjs").read_text(encoding="utf-8")
+    assert "isConsoleDataPayloadCurrent()" in prepare_console_data
+    assert "export function isConsoleDataPayloadCurrent()" in vite_config
+    assert "function consoleDataInputFiles()" in vite_config
     assert "Leibniz console data is current" in prepare_console_data
     assert "headless console browser smoke test timed out" in browser_smoke
     assert "process.exit(0)" in browser_smoke

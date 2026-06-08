@@ -483,7 +483,21 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
               "architecture_digest": "sha256:model",
           "benchmark_id": "benchmarks.digits@0.1.0",
           "score": 1.0,
-          "observed_complexities": [1.0],
+          "score_integral": {
+            "kind": "sampled-competence-integral",
+            "value": 1.0,
+            "terms": [
+              {
+                "kind": "measured-competence",
+                "complexity_minimum": 0.0,
+                "complexity_maximum": 1.0,
+                "complexity_width": 1.0,
+                "density": 1.0,
+                "contribution": 1.0,
+                "representative_complexity": 1.0
+              }
+            ]
+          },
           "points": [{"complexity": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
           "cost_summary": {
             "component_count": 1,
@@ -533,7 +547,21 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
               "architecture_digest": "sha256:model",
               "benchmark_id": "benchmarks.digits@0.1.0",
               "score": 1.0,
-              "observed_complexities": [1.0],
+              "score_integral": {
+                "kind": "sampled-competence-integral",
+                "value": 1.0,
+                "terms": [
+                  {
+                    "kind": "measured-competence",
+                    "complexity_minimum": 0.0,
+                    "complexity_maximum": 1.0,
+                    "complexity_width": 1.0,
+                    "density": 1.0,
+                    "contribution": 1.0,
+                    "representative_complexity": 1.0
+                  }
+                ]
+              },
               "points": [{"complexity": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
               "cost_summary": {
                 "component_count": 1,

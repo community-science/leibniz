@@ -1,7 +1,8 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { execFile, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { delimiter, relative } from 'node:path';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +18,7 @@ const consoleDataCachePath = resolve(
   repositoryRoot,
   'src/leibniz/console/_web_src/src/generated/consoleDataPayload.json',
 );
+const consoleDataCacheMetadataPath = `${consoleDataCachePath}.metadata.json`;
 
 export default defineConfig({
   base: consoleBasePath(),
@@ -121,7 +123,7 @@ function leibnizConsoleData() {
 }
 
 function readConsoleDataPayload() {
-  if (!existsSync(consoleDataCachePath)) {
+  if (!isConsoleDataPayloadCurrent()) {
     return refreshConsoleDataPayload();
   }
   return readFileSync(consoleDataCachePath, 'utf8');
@@ -131,6 +133,7 @@ export function refreshConsoleDataPayload() {
   const payload = loadConsoleDataPayload();
   mkdirSync(dirname(consoleDataCachePath), { recursive: true });
   writeFileSync(consoleDataCachePath, payload);
+  writeConsoleDataPayloadMetadata();
   return payload;
 }
 
@@ -138,6 +141,7 @@ export function refreshConsoleDataPayloadAsync() {
   return loadConsoleDataPayloadAsync().then((payload) => {
     mkdirSync(dirname(consoleDataCachePath), { recursive: true });
     writeFileSync(consoleDataCachePath, payload);
+    writeConsoleDataPayloadMetadata();
     return payload;
   });
 }
@@ -193,6 +197,88 @@ export function loadConsoleDataPayloadAsync() {
 
 export function consoleDataPayloadPath() {
   return consoleDataCachePath;
+}
+
+export function consoleDataPayloadMetadataPath() {
+  return consoleDataCacheMetadataPath;
+}
+
+export function isConsoleDataPayloadCurrent() {
+  if (!existsSync(consoleDataCachePath) || !existsSync(consoleDataCacheMetadataPath)) {
+    return false;
+  }
+  try {
+    const metadata = JSON.parse(readFileSync(consoleDataCacheMetadataPath, 'utf8'));
+    return metadata.fingerprint === consoleDataInputFingerprint();
+  } catch (_error) {
+    return false;
+  }
+}
+
+export function consoleDataInputFingerprint() {
+  const hash = createHash('sha256');
+  for (const path of consoleDataInputFiles()) {
+    hash.update(relative(repositoryRoot, path));
+    hash.update('\0');
+    hash.update(readFileSync(path));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+function writeConsoleDataPayloadMetadata() {
+  writeFileSync(
+    consoleDataCacheMetadataPath,
+    `${JSON.stringify({ fingerprint: consoleDataInputFingerprint() }, null, 2)}\n`,
+  );
+}
+
+function consoleDataInputFiles() {
+  return Array.from(new Set([
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/package.json'),
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/vite.config.mjs'),
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/scripts/prepareConsoleData.mjs'),
+    ...sourceFiles(resolve(repositoryRoot, 'src/leibniz')),
+    ...sourceFiles(resolve(repositoryRoot, 'tests/fixtures')),
+    ...consoleResultRoots().flatMap((root) => sourceFiles(root)),
+  ])).sort();
+}
+
+function sourceFiles(root) {
+  if (!existsSync(root)) {
+    return [];
+  }
+  const stat = statSync(root);
+  if (stat.isFile()) {
+    return isFingerprintSource(root) ? [root] : [];
+  }
+  return readdirSync(root)
+    .flatMap((entry) => {
+      const path = resolve(root, entry);
+      if (ignoredSourcePath(path)) {
+        return [];
+      }
+      return sourceFiles(path);
+    })
+    .sort();
+}
+
+function ignoredSourcePath(path) {
+  const normalized = relative(repositoryRoot, path).replaceAll('\\', '/');
+  return (
+    normalized.includes('/__pycache__/') ||
+    normalized.includes('/node_modules/') ||
+    normalized.startsWith('src/leibniz/console/_web_src/src/generated/')
+  );
+}
+
+function isFingerprintSource(path) {
+  return (
+    path.endsWith('.py') ||
+    path.endsWith('.json') ||
+    path.endsWith('.mjs') ||
+    path.endsWith('.ts')
+  );
 }
 
 export function consoleResultWatchRoots(env = process.env, root = repositoryRoot) {
