@@ -345,6 +345,16 @@ def test_chess_low_cardinality_keeps_canonical_family_simple() -> None:
     assert spectator_counts == {0}
 
 
+def test_chess_sampling_does_not_repeat_before_exhausting_cardinality() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    request = ComplexityRequest(minimum=4.0, maximum=4.0)
+
+    sample_set = generator(seed=47, shape=16, complexity_request=request)
+
+    observable_state_ids = tuple(sample.observable_state_id for sample in sample_set.samples)
+    assert len(observable_state_ids) == len(frozenset(observable_state_ids))
+
+
 @pytest.mark.parametrize("cardinality", [1, 2, 4, 8, 9, 16, 32, 64, 257, 1024])
 def test_chess_sample_mapping_has_no_repetition_within_cardinality(
     cardinality: int,
@@ -528,6 +538,16 @@ def test_chess_console_preview_uses_board_images_and_text_metadata() -> None:
     assert cast(float, target_moves[0]["target_probability"]) == 1.0
     assert "target_distribution" in sample
     assert "available_outcome_ids" in sample
+    cardinality_16_batch = cast(dict[str, object], batches[15])
+    cardinality_16_samples = cast(list[dict[str, object]], cardinality_16_batch["samples"])
+    cardinality_16_observable_ids = [
+        cast(str, sample["observable_state_id"])
+        for sample in cardinality_16_samples
+    ]
+    assert len(cardinality_16_observable_ids) == _expected_preview_limit
+    assert len(cardinality_16_observable_ids) == len(
+        frozenset(cardinality_16_observable_ids)
+    )
 
 
 def _legal_move_count(record: dict[str, object]) -> int:

@@ -212,8 +212,10 @@ class Generator:
         rng = random.Random(seed)
         sample_count = _sample_count(sample_shape)
         complexity = math.log2(sample_space.cardinality)
-        selected_local_indices = tuple(
-            rng.randrange(sample_space.cardinality) for _index in range(sample_count)
+        selected_local_indices = _sample_local_indices(
+            rng=rng,
+            cardinality=sample_space.cardinality,
+            sample_count=sample_count,
         )
         selected_positions = tuple(
             _position_for_sample_index(
@@ -566,6 +568,28 @@ def _representative_local_indices(cardinality: int) -> tuple[int, ...]:
         round(index * (cardinality - 1) / (count - 1))
         for index in range(count)
     )
+
+
+def _sample_local_indices(
+    *,
+    rng: random.Random,
+    cardinality: int,
+    sample_count: int,
+) -> tuple[int, ...]:
+    _require_sample_cardinality(cardinality)
+    if type(sample_count) is not int or sample_count < 0:
+        raise ObservationGenerationError("Chess sample count must be non-negative")
+    if sample_count == 0:
+        return ()
+    indices: list[int] = []
+    while len(indices) + cardinality <= sample_count:
+        shuffled = list(range(cardinality))
+        rng.shuffle(shuffled)
+        indices.extend(shuffled)
+    remaining = sample_count - len(indices)
+    if remaining:
+        indices.extend(rng.sample(range(cardinality), remaining))
+    return tuple(indices)
 
 
 def _require_sample_cardinality(cardinality: int) -> None:
