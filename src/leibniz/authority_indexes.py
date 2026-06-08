@@ -17,9 +17,7 @@ from leibniz.artifacts import (
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import IdentifierSyntaxError, ProtocolIdentifier
-from leibniz.projection_records import ProjectionRecord
 from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
-from leibniz.view_manifests import ViewManifest
 
 __all__ = [
     "AuthorityDependency",
@@ -253,8 +251,6 @@ class AuthorityIndex:
         *,
         id: ProtocolIdentifier,
         artifact_indexes: tuple[ArtifactIndex, ...] = (),
-        projection_records: tuple[ProjectionRecord, ...] = (),
-        view_manifests: tuple[ViewManifest, ...] = (),
     ) -> AuthorityIndex:
         """Build an index from explicit already-loaded public records."""
 
@@ -275,20 +271,6 @@ class AuthorityIndex:
                 )
                 for artifact in index.artifacts
             )
-        for record in projection_records:
-            record_reference = reference_for_record(
-                kind="projection-record",
-                record=record.to_record(),
-            )
-            artifacts.append(record_reference)
-            dependencies.extend(_projection_dependencies(record_reference, record))
-        for manifest in view_manifests:
-            manifest_reference = reference_for_record(
-                kind="view-manifest",
-                record=manifest.to_record(),
-            )
-            artifacts.append(manifest_reference)
-            dependencies.extend(_view_manifest_dependencies(manifest_reference, manifest))
         return cls.from_artifacts(
             id=id,
             artifacts=tuple(artifacts),
@@ -329,39 +311,6 @@ class AuthorityIndexDocument:
             raise AuthorityIndexValidationError(str(error)) from error
         index = AuthorityIndex.from_record(record)
         return cls(index=index, digest=index.digest)
-
-
-def _projection_dependencies(
-    source: ArtifactReference,
-    record: ProjectionRecord,
-) -> tuple[AuthorityDependency, ...]:
-    references = (
-        (record.subject, "subject"),
-        (record.object, "object"),
-        *tuple((reference, "scope") for reference in record.scope),
-        *tuple((reference, "evidence") for reference in record.evidence),
-    )
-    return tuple(
-        AuthorityDependency(source=source, target=target, relation=relation)
-        for target, relation in references
-    )
-
-
-def _view_manifest_dependencies(
-    source: ArtifactReference,
-    manifest: ViewManifest,
-) -> tuple[AuthorityDependency, ...]:
-    return (
-        AuthorityDependency(source=source, target=manifest.subject, relation="subject"),
-        *tuple(
-            AuthorityDependency(
-                source=source,
-                target=artifact,
-                relation="source-artifact",
-            )
-            for artifact in manifest.source_artifacts
-        ),
-    )
 
 
 def _validation_entries_for(

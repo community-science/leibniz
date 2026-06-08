@@ -41,6 +41,7 @@ from leibniz.local_results import (
     initialize_result_checkout,
     materialize_benchmark_result_views,
     publish_local_benchmark_results,
+    summarize_local_benchmark_results,
 )
 from leibniz.measurements import (
     MeasurementDataset,
@@ -54,11 +55,9 @@ from leibniz.model_lineage import ModelLineageDocument
 from leibniz.model_manifests import ModelArtifactManifestDocument
 from leibniz.model_operations import ModelOperationDocument
 from leibniz.outcomes import OutcomeSpace
-from leibniz.projection_records import ProjectionRecordDocument
 from leibniz.resources import ResourceReportDocument, ResourceReportSetDocument
 from leibniz.submission_registries import SubmissionRegistryDocument
 from leibniz.tensor_runtime import tensor_runtime_device_choices
-from leibniz.view_manifests import ViewManifestDocument
 
 __all__ = ["main"]
 
@@ -172,18 +171,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     model_lineage.add_argument("path", type=Path)
 
-    view_manifest = validate_subcommands.add_parser(
-        "view-manifest",
-        help="validate a view manifest document",
-    )
-    view_manifest.add_argument("path", type=Path)
-
-    projection_record = validate_subcommands.add_parser(
-        "projection-record",
-        help="validate a projection record document",
-    )
-    projection_record.add_argument("path", type=Path)
-
     model_derivation = validate_subcommands.add_parser(
         "model-derivation",
         help="validate a model derivation compatibility report document",
@@ -284,6 +271,17 @@ def _parser() -> argparse.ArgumentParser:
         "--message",
         default="Publish Leibniz benchmark results",
         help="Git commit message used when publishing",
+    )
+    inspect_benchmark = benchmark_subcommands.add_parser(
+        "inspect",
+        description="print a compact summary of local benchmark result state",
+        help="inspect local result state",
+    )
+    inspect_benchmark.add_argument(
+        "--results-root",
+        default=Path("results"),
+        type=Path,
+        help="local result checkout; defaults to results",
     )
     train = benchmark_subcommands.add_parser(
         "train",
@@ -470,6 +468,16 @@ def _benchmark(args: argparse.Namespace) -> int:
             if summary.remote_commit is not None:
                 print(f"remote: {summary.remote}")
                 print(f"remote commit: {summary.remote_commit}")
+            return 0
+        if str(args.benchmark_command) == "inspect":
+            print(
+                canonical_document_bytes(
+                    summarize_local_benchmark_results(
+                        repository_root=Path.cwd(),
+                        results_root=args.results_root,
+                    )
+                ).decode("utf-8")
+            )
             return 0
         if str(args.benchmark_command) == "train":
             summaries, skipped, moved = _run_benchmark_training(args)
@@ -1043,14 +1051,6 @@ def _validate(args: argparse.Namespace) -> int:
         if artifact == "model-lineage":
             document = ModelLineageDocument.from_bytes(args.path.read_bytes())
             print(f"valid model lineage {document.lineage.id}")
-            return 0
-        if artifact == "view-manifest":
-            document = ViewManifestDocument.from_bytes(args.path.read_bytes())
-            print(f"valid view manifest {document.manifest.id}")
-            return 0
-        if artifact == "projection-record":
-            document = ProjectionRecordDocument.from_bytes(args.path.read_bytes())
-            print(f"valid projection record {document.record.id}")
             return 0
         if artifact == "model-derivation":
             document = ModelDerivationCompatibilityReportDocument.from_bytes(args.path.read_bytes())

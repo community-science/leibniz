@@ -11,27 +11,19 @@ from leibniz.authority_indexes import (
 from leibniz.content import ContentDigest
 from leibniz.documents import canonical_document_bytes
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.projection_records import ProjectionRecord
-from leibniz.view_manifests import ViewManifest
 
 
 def test_authority_index_from_records_reports_dangling_dependencies() -> None:
     artifact_index = ArtifactIndex.from_record(_artifact_index_record())
-    projection = ProjectionRecord.from_record(_projection_record())
-    view_manifest = ViewManifest.from_record(_view_manifest_record())
 
     index = AuthorityIndex.from_records(
         id=ProtocolIdentifier.parse("authority-indexes.review@0.1.0"),
         artifact_indexes=(artifact_index,),
-        projection_records=(projection,),
-        view_manifests=(view_manifest,),
     )
 
     assert index.id == ProtocolIdentifier.parse("authority-indexes.review@0.1.0")
-    assert any(dependency.relation == "evidence" for dependency in index.dependencies)
-    assert any(dependency.relation == "source-artifact" for dependency in index.dependencies)
+    assert any(dependency.relation == "contains" for dependency in index.dependencies)
     assert any(entry.status == "valid" for entry in index.validations)
-    assert any(entry.status == "dangling" for entry in index.validations)
     assert index.validations == tuple(
         sorted(
             index.validations,
@@ -59,8 +51,8 @@ def test_authority_index_document_loads_bytes_with_digest() -> None:
 
 
 def test_authority_index_from_artifacts_reports_dangling_dependency_target() -> None:
-    source = _protocol_reference("view-manifest", "view-manifests.review@0.1.0")
-    target = _protocol_reference("projection-record", "projection-records.review@0.1.0")
+    source = _protocol_reference("benchmark", "benchmarks.review@0.1.0")
+    target = _protocol_reference("metric", "metrics.review@0.1.0")
 
     index = AuthorityIndex.from_artifacts(
         id=ProtocolIdentifier.parse("authority-indexes.dangling@0.1.0"),
@@ -129,42 +121,6 @@ def _artifact_index_record() -> dict[str, object]:
     return {
         "id": "artifact-indexes.review@0.1.0",
         "artifacts": [_evaluation_bundle_reference().to_record()],
-    }
-
-
-def _projection_record() -> dict[str, object]:
-    return {
-        "id": "projection-records.review@0.1.0",
-        "subject": _protocol_reference(
-            "view-manifest",
-            "view-manifests.review@0.1.0",
-        ).to_record(),
-        "predicate": "declares_projection",
-        "object": _protocol_reference("metric", "metrics.review@0.1.0").to_record(),
-        "scope": [_evaluation_bundle_reference().to_record()],
-        "evidence": [
-            _protocol_reference(
-                "resource-report",
-                "resource-reports.review@0.1.0",
-            ).to_record()
-        ],
-        "modality": "measurement",
-        "status": "proposed",
-        "statement": "The referenced view manifest declares the reviewed projection.",
-        "assumptions": ["The referenced artifacts validate independently."],
-        "limitations": ["No verifier is executed by this record."],
-    }
-
-
-def _view_manifest_record() -> dict[str, object]:
-    return {
-        "id": "view-manifests.review@0.1.0",
-        "subject_kind": "evaluation-bundle",
-        "subject": _evaluation_bundle_reference().to_record(),
-        "projection_kind": "summary",
-        "source_artifacts": [_evaluation_bundle_reference().to_record()],
-        "metric_name": "accepted_mass",
-        "score_direction": "higher",
     }
 
 
