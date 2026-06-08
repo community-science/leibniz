@@ -212,11 +212,17 @@ class Generator:
         rng = random.Random(seed)
         sample_count = _sample_count(sample_shape)
         complexity = math.log2(sample_space.cardinality)
-        selected_indices = tuple(
+        selected_local_indices = tuple(
             rng.randrange(sample_space.cardinality) for _index in range(sample_count)
         )
         selected_positions = tuple(
-            _position_for_sample_index(index) for index in selected_indices
+            _position_for_sample_index(
+                _global_sample_index(
+                    cardinality=sample_space.cardinality,
+                    local_index=index,
+                )
+            )
+            for index in selected_local_indices
         )
         samples = (
             tuple(
@@ -317,13 +323,25 @@ class Generator:
     def _candidate_for_cardinality(self, cardinality: int) -> ComplexityCandidate:
         _require_sample_cardinality(cardinality)
         complexity = math.log2(cardinality)
-        representative_indices = tuple(range(min(cardinality, _preview_representative_limit)))
+        representative_indices = _representative_local_indices(cardinality)
         representatives = [
-            dict(_position_for_sample_index(index).representative_metadata())
+            dict(
+                _position_for_sample_index(
+                    _global_sample_index(
+                        cardinality=cardinality,
+                        local_index=index,
+                    )
+                ).representative_metadata()
+            )
             for index in representative_indices
         ]
         legal_move_counts = [
-            _position_for_sample_index(index).legal_move_count
+            _position_for_sample_index(
+                _global_sample_index(
+                    cardinality=cardinality,
+                    local_index=index,
+                )
+            ).legal_move_count
             for index in representative_indices
         ]
         preview_legal_move_count_max = max(legal_move_counts) if legal_move_counts else 0
@@ -501,14 +519,53 @@ def _family_capacity() -> int:
 
 def _max_spectator_count_for_cardinality(cardinality: int) -> int:
     _require_sample_cardinality(cardinality)
-    max_mask = (cardinality - 1) // len(_board_transforms())
-    if max_mask == 0:
-        return 0
-    return min(len(_spectator_squares()), (max_mask + 1).bit_length() - 1)
+    return _enabled_spectator_count_for_cardinality(cardinality)
 
 
 def _oracle_inference_compute_for_cardinality(cardinality: int) -> int:
     return 2 + 8 * _max_spectator_count_for_cardinality(cardinality)
+
+
+def _global_sample_index(*, cardinality: int, local_index: int) -> int:
+    _require_sample_cardinality(cardinality)
+    if type(local_index) is not int or local_index < 0 or local_index >= cardinality:
+        raise ObservationGenerationError("Chess local sample index is outside cardinality")
+    if cardinality == 1:
+        return 0
+    enabled_capacity = _enabled_family_capacity_for_cardinality(cardinality)
+    offset = (cardinality * (cardinality - 1) // 2) % (
+        enabled_capacity - cardinality + 1
+    )
+    return offset + local_index
+
+
+def _enabled_family_capacity_for_cardinality(cardinality: int) -> int:
+    return len(_board_transforms()) * (
+        1 << _enabled_spectator_count_for_cardinality(cardinality)
+    )
+
+
+def _enabled_spectator_count_for_cardinality(cardinality: int) -> int:
+    _require_sample_cardinality(cardinality)
+    transform_count = len(_board_transforms())
+    if cardinality <= transform_count:
+        return 0
+    required_masks = math.ceil((2 * cardinality) / transform_count)
+    return min(
+        len(_spectator_squares()),
+        math.ceil(math.log2(required_masks)),
+    )
+
+
+def _representative_local_indices(cardinality: int) -> tuple[int, ...]:
+    _require_sample_cardinality(cardinality)
+    count = min(cardinality, _preview_representative_limit)
+    if count == 1:
+        return (0,)
+    return tuple(
+        round(index * (cardinality - 1) / (count - 1))
+        for index in range(count)
+    )
 
 
 def _require_sample_cardinality(cardinality: int) -> None:

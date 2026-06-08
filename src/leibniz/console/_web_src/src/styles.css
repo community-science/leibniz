@@ -846,7 +846,7 @@ p {
 }
 
 .benchmark-sample-grid.interactive-image-overlay {
-  grid-template-columns: minmax(0, min(512px, 100%));
+  grid-template-columns: repeat(auto-fit, minmax(min(512px, 100%), 512px));
   justify-content: center;
   overflow-x: visible;
 }

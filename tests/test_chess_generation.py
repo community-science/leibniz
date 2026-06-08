@@ -1,5 +1,8 @@
+import importlib.util
 import math
+import sys
 from base64 import b64decode
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -286,7 +289,8 @@ def test_chess_indexed_family_expands_by_sample_cardinality() -> None:
         cast(int, representative["family_index"])
         for representative in full_representative_set
     ]
-    assert family_indexes == list(range(_expected_preview_limit))
+    assert len(family_indexes) == len(frozenset(family_indexes))
+    assert min(family_indexes) > 0
     transforms = {
         cast(str, representative["transform"])
         for representative in full_representative_set
@@ -301,8 +305,8 @@ def test_chess_indexed_family_expands_by_sample_cardinality() -> None:
         "rotate-90",
         "rotate-270",
     }
-    assert all(
-        cast(int, representative["spectator_count"]) == 0
+    assert any(
+        cast(int, representative["spectator_count"]) > 0
         for representative in full_representative_set
     )
 
@@ -327,6 +331,58 @@ def test_chess_indexed_family_expands_by_sample_cardinality() -> None:
 
     assert {"K", "Q"} <= legal_piece_symbols
     assert "Q" in mate_piece_symbols
+
+
+def test_chess_low_cardinality_keeps_canonical_family_simple() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    request = ComplexityRequest(minimum=2.0, maximum=2.0)
+
+    sample_set = generator(seed=47, shape=16, complexity_request=request)
+
+    spectator_counts = {
+        _sample_analysis(sample)["spectator_count"] for sample in sample_set.samples
+    }
+    assert spectator_counts == {0}
+
+
+@pytest.mark.parametrize("cardinality", [1, 2, 4, 8, 9, 16, 32, 64, 257, 1024])
+def test_chess_sample_mapping_has_no_repetition_within_cardinality(
+    cardinality: int,
+) -> None:
+    global_sample_index = _chess_global_sample_index()
+    family_indices = [
+        global_sample_index(
+            cardinality=cardinality,
+            local_index=local_index,
+        )
+        for local_index in range(cardinality)
+    ]
+
+    assert len(family_indices) == len(frozenset(family_indices))
+
+
+def test_chess_adjacent_cardinality_previews_mostly_avoid_repetition() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    candidates = tuple(
+        generator.complexity_curriculum_candidates(
+            start_index=31,
+            count=2,
+        )
+    )
+    preview_sets = [
+        {
+            cast(int, representative["family_index"])
+            for representative in cast(
+                list[dict[str, object]],
+                candidate.metadata["representatives"],
+            )
+        }
+        for candidate in candidates
+    ]
+
+    assert len(preview_sets[0]) == _expected_preview_limit
+    assert len(preview_sets[1]) == _expected_preview_limit
+    assert not preview_sets[0] & preview_sets[1]
 
 
 def test_chess_representative_analysis_exposes_indexed_family_metadata() -> None:
@@ -371,9 +427,9 @@ def test_chess_representative_analysis_exposes_indexed_family_metadata() -> None
         "queen-only-mate",
         "single-mate-move",
     }
-    assert (
-        sum("minimal-material" in flags for flags in flags_by_family_index.values())
-        >= 4
+    assert any(
+        cast(int, analysis["spectator_count"]) > 0
+        for analysis in analyses
     )
 
 
@@ -487,6 +543,24 @@ def _sample_legal_move_count(sample: Any) -> int:
     ]
     assert isinstance(legal_count, int)
     return legal_count
+
+
+def _sample_analysis(sample: Any) -> dict[str, object]:
+    coordinates = cast(tuple[dict[str, object], ...], sample.latent_coordinates)
+    analysis_coordinate = cast(dict[str, object], coordinates[5]["values"])
+    return cast(dict[str, object], analysis_coordinate["analysis"])
+
+
+def _chess_global_sample_index() -> Callable[..., int]:
+    module_name = "test_chess_benchmark"
+    entrypoint = _chess_benchmark_root / "benchmark.py"
+    spec = importlib.util.spec_from_file_location(module_name, entrypoint)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return cast(Callable[..., int], vars(module)["_global_sample_index"])
 
 
 def _sample_space_cardinality(record: dict[str, object]) -> int:
