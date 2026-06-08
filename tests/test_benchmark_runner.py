@@ -149,10 +149,9 @@ def test_training_sampled_competence_matches_measurement_scoring() -> None:
         measurements=measurements,
         complexity_axis=None,
     )
-    direct_record = cast(Any, benchmark_runner)._sampled_competence_record_for_predictions(
+    direct_record = cast(Any, benchmark_runner)._sampled_competence_record_from_accepted_mass(
         batch=batch,
-        probabilities=probabilities,
-        outcome_ids=outcome_ids,
+        accepted_mass=tuple(0.7 for _sample in batch.samples),
         complexity_axis=None,
     )
 
@@ -1393,8 +1392,12 @@ def test_training_stage_records_current_validation_loss_without_global_best(
     def fake_batch_tensors(**_kwargs: object) -> tuple[object, object]:
         return object(), object()
 
-    def fake_predictions(_runtime: object, _module: object, _fields: object) -> list[list[float]]:
-        return [[1.0]]
+    def fake_target_masses(
+        _runtime: object,
+        _logits: object,
+        _labels: object,
+    ) -> list[float]:
+        return [1.0]
 
     def fake_training_gate_score_estimate(**kwargs: object) -> dict[str, object]:
         return _score_estimate(
@@ -1409,7 +1412,7 @@ def test_training_stage_records_current_validation_loss_without_global_best(
         return 10
 
     monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
-    monkeypatch.setattr(benchmark_runner, "apply_softmax_predictions", fake_predictions)
+    monkeypatch.setattr(benchmark_runner, "softmax_target_masses", fake_target_masses)
     monkeypatch.setattr(
         benchmark_runner,
         "_batch_max_inference_compute",
@@ -1560,16 +1563,12 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
             maximum=5.321928094887362,
         ),
     )
-    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    probabilities = tuple(
-        tuple(1.0 if outcome_id == sample.outcome_id else 0.0 for outcome_id in outcome_ids)
-        for sample in batch.samples
-    )
+    accepted_mass = tuple(1.0 for _sample in batch.samples)
 
     estimate = cast(Any, benchmark_runner)._training_gate_score_estimate(
         batch=batch,
         outcome_space=outcome_space,
-        probabilities=probabilities,
+        accepted_mass=accepted_mass,
         previous_frontier_points=(
             ValidationCompetencePoint(
                 complexity=math.log2(10),
@@ -1706,13 +1705,6 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
     def fake_batch_tensors(**_kwargs: object) -> tuple[object, object]:
         return fields, labels
 
-    def fake_predictions(
-        _runtime: object,
-        _module: object,
-        _fields: object,
-    ) -> list[list[float]]:
-        return [[1.0, *([0.0] * (len(outcome_ids) - 1))] for _ in range(4)]
-
     def fake_training_gate_score_estimate(**kwargs: object) -> dict[str, object]:
         gate_prior_points.append(
             cast(tuple[ValidationCompetencePoint, ...], kwargs["previous_frontier_points"])
@@ -1729,7 +1721,6 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
         return 10
 
     monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
-    monkeypatch.setattr(benchmark_runner, "apply_softmax_predictions", fake_predictions)
     monkeypatch.setattr(
         benchmark_runner,
         "_batch_max_inference_compute",
@@ -2088,8 +2079,12 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
     def fake_batch_tensors(**_kwargs: object) -> tuple[object, object]:
         return object(), object()
 
-    def fake_predictions(_runtime: object, _module: object, _fields: object) -> list[list[float]]:
-        return [[1.0]]
+    def fake_target_masses(
+        _runtime: object,
+        _logits: object,
+        _labels: object,
+    ) -> list[float]:
+        return [1.0]
 
     def fake_training_gate_score_estimate(**kwargs: object) -> dict[str, object]:
         return _score_estimate(
@@ -2111,7 +2106,7 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
         outcome.id for outcome in benchmark.manifest.resolve_outcome_space().outcomes
     )
     monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
-    monkeypatch.setattr(benchmark_runner, "apply_softmax_predictions", fake_predictions)
+    monkeypatch.setattr(benchmark_runner, "softmax_target_masses", fake_target_masses)
     monkeypatch.setattr(
         benchmark_runner,
         "_batch_max_inference_compute",
@@ -2204,8 +2199,12 @@ def test_training_plateau_above_rung_competence_threshold_advances_frontier(
     def fake_batch_tensors(**_kwargs: object) -> tuple[object, object]:
         return object(), object()
 
-    def fake_predictions(_runtime: object, _module: object, _fields: object) -> list[list[float]]:
-        return [[1.0]]
+    def fake_target_masses(
+        _runtime: object,
+        _logits: object,
+        _labels: object,
+    ) -> list[float]:
+        return [1.0]
 
     def fake_training_gate_score_estimate(**kwargs: object) -> dict[str, object]:
         return _score_estimate(
@@ -2230,7 +2229,7 @@ def test_training_plateau_above_rung_competence_threshold_advances_frontier(
         outcome.id for outcome in benchmark.manifest.resolve_outcome_space().outcomes
     )
     monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
-    monkeypatch.setattr(benchmark_runner, "apply_softmax_predictions", fake_predictions)
+    monkeypatch.setattr(benchmark_runner, "softmax_target_masses", fake_target_masses)
     monkeypatch.setattr(
         benchmark_runner,
         "_batch_max_inference_compute",

@@ -67,7 +67,6 @@ from leibniz.tensor_runtime import (
     TensorRuntimeDevice,
     TensorRuntimeDeviceKind,
     TensorRuntimeError,
-    apply_softmax_predictions,
     build_cosine_lr_schedule,
     build_cross_entropy_loss,
     build_optimizer,
@@ -83,6 +82,7 @@ from leibniz.tensor_runtime import (
     save_tensor_runtime_state,
     seed_runtime,
     softmax_prediction_rows,
+    softmax_target_masses,
     tensor_runtime_device_kinds,
     tensor_runtime_has_fixed_device_memory,
     tensor_runtime_total_memory_bytes,
@@ -261,7 +261,7 @@ class CheckpointModelPredictor:
         with no_grad_context(self.runtime):
             return tuple(
                 _renormalized_probabilities(row)
-                for row in apply_softmax_predictions(self.runtime, self.module, fields)
+                for row in softmax_prediction_rows(self.runtime, self.module(fields))
             )
 
 
@@ -3129,18 +3129,16 @@ def _train_until_convergence(
             was_training = bool(module.training)
             module.eval()
             with no_grad_context(runtime):
-                validation_loss = float(loss_function(module(fields), labels).item())
-                probabilities = tuple(
-                    _renormalized_probabilities(row)
-                    for row in apply_softmax_predictions(runtime, module, fields)
-                )
+                logits = module(fields)
+                validation_loss = float(loss_function(logits, labels).item())
+                accepted_mass = tuple(softmax_target_masses(runtime, logits, labels))
             if was_training:
                 module.train()
         with phase_timings.span("validation_score_estimate", samples=batch.sample_count):
             score_estimate = _training_gate_score_estimate(
                 batch=batch,
                 outcome_space=outcome_space,
-                probabilities=probabilities,
+                accepted_mass=accepted_mass,
                 previous_frontier_points=_refreshed_frontier_points(
                     frontier_points(),
                     (rolling.point for rolling in replay_frontier_points.values()),
@@ -3266,15 +3264,13 @@ def _train_until_convergence(
                     "training_replay_score_update",
                     samples=training_batch.sample_set.sample_count,
                 ):
-                    probabilities = tuple(
-                        _renormalized_probabilities(row)
-                        for row in softmax_prediction_rows(runtime, first_logits)
+                    accepted_mass = tuple(
+                        softmax_target_masses(runtime, first_logits, labels)
                     )
                     replay_point = ValidationCompetencePoint.from_sampled_record(
-                        _sampled_competence_record_for_predictions(
+                        _sampled_competence_record_from_accepted_mass(
                             batch=training_batch.sample_set,
-                            probabilities=probabilities,
-                            outcome_ids=outcome_ids,
+                            accepted_mass=accepted_mass,
                             complexity_axis=None,
                         ),
                         field_prefix="score_estimate",
@@ -3376,7 +3372,7 @@ def _training_gate_score_estimate(
     *,
     batch: GeneratedSampleSet,
     outcome_space: OutcomeSpace,
-    probabilities: tuple[tuple[float, ...], ...],
+    accepted_mass: tuple[float, ...],
     previous_frontier_points: tuple[ValidationCompetencePoint, ...] = (),
     validation_check: int,
     step: int,
@@ -3384,10 +3380,9 @@ def _training_gate_score_estimate(
     running_max_inference_compute: int,
     training_compute_per_sample: int | None,
 ) -> dict[str, object]:
-    current_point = _sampled_competence_record_for_predictions(
+    current_point = _sampled_competence_record_from_accepted_mass(
         batch=batch,
-        probabilities=probabilities,
-        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
+        accepted_mass=accepted_mass,
         complexity_axis=None,
     )
     sampled_competence = _training_sampled_competence_record(
@@ -3430,28 +3425,19 @@ def _training_gate_score_estimate(
     return record
 
 
-def _sampled_competence_record_for_predictions(
+def _sampled_competence_record_from_accepted_mass(
     *,
     batch: GeneratedSampleSet,
-    probabilities: tuple[tuple[float, ...], ...],
-    outcome_ids: tuple[str, ...],
+    accepted_mass: tuple[float, ...],
     complexity_axis: str | None,
 ) -> dict[str, object]:
-    """Return sampled competence without materializing per-sample measurements."""
+    """Return sampled competence from target probability mass."""
 
-    if len(batch.samples) != len(probabilities):
-        raise BenchmarkRunnerError("sampled competence requires one prediction per sample")
+    if len(batch.samples) != len(accepted_mass):
+        raise BenchmarkRunnerError("sampled competence requires one mass per sample")
     complexities = {sample.complexity for sample in batch.samples}
     if len(complexities) != 1:
         raise BenchmarkRunnerError("sampled competence requires one complexity class")
-    accepted_mass = tuple(
-        _prediction_target_mass(
-            row,
-            target_distribution=sample.target_distribution_or_one_hot(),
-            outcome_ids=outcome_ids,
-        )
-        for sample, row in zip(batch.samples, probabilities, strict=True)
-    )
     finite_losses = tuple(-math.log(mass) for mass in accepted_mass if mass > 0.0)
     mean_negative_log_score: float | str
     if len(finite_losses) != len(accepted_mass):

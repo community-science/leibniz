@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import importlib
+import linecache
 import math
 import random
 from base64 import b64encode
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,7 +26,11 @@ from leibniz.observation_generation import (
     ObservationGenerationError,
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
-from leibniz.tensor_runtime import TensorRuntime, make_float_tensor
+from leibniz.tensor_runtime import (
+    TensorRuntime,
+    tensor_runtime_backend,
+    tensor_runtime_prefers_compiled_renderer,
+)
 from leibniz.timing import TimingCollector
 
 __all__ = ["all_meaningful_uci_moves", "benchmark"]
@@ -32,45 +38,14 @@ __all__ = ["all_meaningful_uci_moves", "benchmark"]
 _benchmark_id = ProtocolIdentifier.parse("benchmarks.chess@0.1.0")
 _generator_id = ProtocolIdentifier.parse("benchmarks.chess.generator@0.1.0")
 _outcome_space_id = ProtocolIdentifier.parse("benchmarks.chess.uci-moves@0.1.0")
-_console_preview_limit = 12
+_console_preview_limit = 4
 _tensor_shape = (18, 8, 8)
 _board_preview_size = 512
 _board_preview_square_size = _board_preview_size // 8
 
-_mate_in_one_fens = (
-    "8/8/8/8/8/8/2Q5/krK5 w - - 0 1",
-    "8/8/8/8/8/1Q6/8/krK5 w - - 0 1",
-    "8/q5R1/8/k1K5/2n5/8/6Q1/6B1 w - - 0 1",
-    "Q3K3/p7/k3r1R1/7Q/8/8/8/8 w - - 0 1",
-    "1Q6/P7/8/8/1n6/2B3bk/5K2/8 w - - 0 1",
-    "8/7k/8/1Q4Qr/5N2/7K/8/3Q4 w - - 0 1",
-    "2N1K3/B7/8/k7/b1QQ4/8/2N5/8 w - - 0 1",
-    "8/8/8/8/6QP/4K3/2Q5/B2Qrk2 w - - 0 1",
-    "1r6/8/8/2B1K3/1Q6/1Q2r2k/4Q3/8 w - - 0 1",
-    "7R/3R1rk1/8/7R/2Q5/3B1K2/8/8 w - - 0 1",
-    "3Q4/K7/4P3/6Q1/2Q5/8/8/4k1bR w - - 0 1",
-    "8/8/8/8/8/8/k2r4/2KQ4 w - - 0 1",
-    "Q2n4/7q/5r2/n7/8/6K1/8/6kN w - - 0 1",
-    "8/8/8/8/8/8/k3r3/2KQ4 w - - 0 1",
-    "8/8/8/8/1r6/k7/8/KQ6 w - - 0 1",
-    "8/8/3r4/8/8/8/8/k1KQ4 w - - 0 1",
-    "8/8/8/8/r7/k7/8/1QK5 w - - 0 1",
-    "8/8/8/8/8/8/8/K1krQ3 w - - 0 1",
-    "8/8/8/8/r7/k7/8/KQ6 w - - 0 1",
-    "8/8/8/8/r7/k7/8/K3Q3 w - - 0 1",
-    "8/8/8/8/1r6/k7/3Q4/K7 w - - 0 1",
-    "6rk/8/8/8/8/8/8/K1Q5 w - - 0 1",
-    "8/8/8/8/r7/k7/2Q5/K7 w - - 0 1",
-    "8/8/8/5Q2/8/8/3r4/K1k5 w - - 0 1",
-    "6rk/8/8/8/8/8/3Q4/K7 w - - 0 1",
-    "8/8/8/8/3Q4/8/8/K1kr4 w - - 0 1",
-    "6rk/8/8/8/8/4Q3/8/K7 w - - 0 1",
-    "8/8/8/8/4Q3/8/8/1K1kr3 w - - 0 1",
-    "6rk/8/8/8/8/4Q3/8/1K6 w - - 0 1",
-    "8/8/8/8/r2Q4/k7/8/2K5 w - - 0 1",
-    "8/8/8/8/3Q4/8/k1K5/8 w - - 0 1",
-    "8/8/8/3Q4/8/8/2K5/k7 w - - 0 1",
-)
+_mate_in_one_family_id = "corner-net-indexed-family"
+_preview_representative_limit = 4
+_chess_sparse_renderer_bundle: tuple[Any, Any] | None = None
 
 
 def benchmark(root: Path) -> BenchmarkProtocol:
@@ -85,10 +60,7 @@ class Benchmark:
     def __init__(self, *, root: Path) -> None:
         self._root = root
         self._manifest = _manifest()
-        self._generator = Generator(
-            manifest=self._manifest,
-            positions=_mate_in_one_positions(),
-        )
+        self._generator = Generator(manifest=self._manifest)
 
     @property
     def root(self) -> Path:
@@ -108,6 +80,10 @@ class _MateInOnePosition:
     fen: str
     legal_moves: tuple[str, ...]
     mate_moves: tuple[str, ...]
+    mechanism_name: str
+    transform_name: str
+    family_index: int
+    spectator_count: int
 
     @property
     def observation_id(self) -> str:
@@ -149,6 +125,12 @@ class _MateInOnePosition:
         mate_targets = tuple(sorted(move[2:4] for move in self.mate_moves))
         return {
             "kind": "chess-mate-in-one-representative-analysis",
+            "family": _mate_in_one_family_id,
+            "mechanism": self.mechanism_name,
+            "mechanism_piece_count": len(piece_map) - self.spectator_count,
+            "transform": self.transform_name,
+            "family_index": self.family_index,
+            "spectator_count": self.spectator_count,
             "piece_count": len(piece_map),
             "white_piece_count": white_piece_count,
             "black_piece_count": black_piece_count,
@@ -164,6 +146,11 @@ class _MateInOnePosition:
     def representative_metadata(self) -> Mapping[str, object]:
         return {
             "kind": "chess-mate-in-one-sample-representative",
+            "family": _mate_in_one_family_id,
+            "mechanism": self.mechanism_name,
+            "transform": self.transform_name,
+            "family_index": self.family_index,
+            "spectator_count": self.spectator_count,
             "fen": self.fen,
             "target_policy": "mate-in-one",
             "legal_move_count": self.legal_move_count,
@@ -179,7 +166,6 @@ class Generator:
     """Generate Chess mate-in-one positions by sample-space complexity."""
 
     manifest: BenchmarkManifest
-    positions: tuple[_MateInOnePosition, ...]
 
     @property
     def id(self) -> ProtocolIdentifier:
@@ -222,8 +208,8 @@ class Generator:
                 "Chess metadata-free generation requires a tensor runtime"
             )
         sample_shape = _sample_shape(shape)
-        positions = self._positions_for_request(complexity_request)
-        if not positions:
+        sample_space = self._sample_space_for_request(complexity_request)
+        if sample_space is None:
             return GeneratedSampleSet(
                 benchmark_id=self.manifest.id,
                 generator_id=self.id,
@@ -236,25 +222,31 @@ class Generator:
 
         rng = random.Random(seed)
         sample_count = _sample_count(sample_shape)
-        sample_space_cardinality = len(positions)
-        complexity = math.log2(sample_space_cardinality)
-        selected_positions = tuple(rng.choice(positions) for _index in range(sample_count))
+        complexity = math.log2(sample_space.cardinality)
+        selected_local_indices = _sample_local_indices(
+            rng=rng,
+            cardinality=sample_space.cardinality,
+            sample_count=sample_count,
+        )
+        selected_global_indices = _global_sample_indices(
+            cardinality=sample_space.cardinality,
+            local_indices=selected_local_indices,
+        )
         samples = (
-            tuple(
-                self._sample(
-                    index=index,
-                    position=position,
-                    sample_space_cardinality=sample_space_cardinality,
-                    complexity=complexity,
-                )
-                for index, position in enumerate(selected_positions)
+            _samples_for_global_indices(
+                global_indices=selected_global_indices,
+                outcome_ids=outcome_ids,
+                sample_space_cardinality=sample_space.cardinality,
+                complexity=complexity,
+                full_metadata=runtime is None,
             )
             if include_metadata
             else ()
         )
-        fields, targets = _tensor_batch(
+        fields, targets = _tensor_batch_for_global_indices(
             runtime=runtime,
-            positions=selected_positions,
+            global_indices=selected_global_indices,
+            cardinality=sample_space.cardinality,
             outcome_ids=outcome_ids,
             sample_shape=sample_shape,
         )
@@ -294,14 +286,15 @@ class Generator:
     ) -> tuple[ComplexityCandidate, ...]:
         """Return exact sample-space-cardinality candidates inside a complexity band."""
 
+        minimum_cardinality = _ceil_cardinality(request.minimum)
+        maximum_cardinality = min(_floor_cardinality(request.maximum), _family_capacity())
+        if maximum_cardinality < minimum_cardinality:
+            return ()
         return tuple(
-            candidate
-            for candidate in self._sample_space_cardinality_candidates()
-            if request.contains(
-                ComplexityValue(
-                    measure_id=candidate.request.measure_id,
-                    value=candidate.complexity,
-                )
+            self._candidate_for_cardinality(cardinality)
+            for cardinality in range(
+                minimum_cardinality,
+                min(maximum_cardinality, minimum_cardinality + 63) + 1,
             )
         )
 
@@ -320,57 +313,84 @@ class Generator:
         if count == 0:
             return ()
 
-        candidates = self._sample_space_cardinality_candidates()
-        return candidates[start_index : start_index + count]
+        candidates: list[ComplexityCandidate] = []
+        for offset in range(count):
+            cardinality = start_index + offset + 1
+            if cardinality > _family_capacity():
+                break
+            candidates.append(self._candidate_for_cardinality(cardinality))
+        return tuple(candidates)
 
     def _sample_space_cardinality_candidates(self) -> tuple[ComplexityCandidate, ...]:
-        candidates: list[ComplexityCandidate] = []
-        sorted_positions = _sorted_positions(self.positions)
-        for cardinality in range(1, len(sorted_positions) + 1):
-            positions = sorted_positions[:cardinality]
-            complexity = math.log2(cardinality)
-            legal_move_counts = [position.legal_move_count for position in positions]
-            candidates.append(
-                ComplexityCandidate(
-                    request=ComplexityRequest(
-                        minimum=complexity,
-                        maximum=complexity,
-                    ),
-                    cardinality=cardinality,
-                    metadata={
-                        "kind": "chess-sample-space-cardinality",
-                        "sample_cardinality": cardinality,
-                        "target_policy": "mate-in-one",
-                        "output_move_count": len(all_meaningful_uci_moves),
-                        "legal_move_counts": legal_move_counts,
-                        "oracle_inference_compute": {
-                            "kind": "oracle-inference-compute-reference-v1",
-                            "unit": "abstract-ops",
-                            "aggregation": "max",
-                            "value": max(legal_move_counts),
-                            "components": {
-                                "legal_move_count_max": max(legal_move_counts),
-                                "legal_move_count_mean": (
-                                    sum(legal_move_counts) / len(legal_move_counts)
-                                ),
-                                "sample_cardinality": cardinality,
-                            },
-                        },
-                        "representatives": [
-                            dict(position.representative_metadata())
-                            for position in positions
-                        ],
-                    },
-                )
+        return tuple(
+            self._candidate_for_cardinality(cardinality)
+            for cardinality in range(1, min(_family_capacity(), 64) + 1)
+        )
+
+    def _candidate_for_cardinality(self, cardinality: int) -> ComplexityCandidate:
+        _require_sample_cardinality(cardinality)
+        complexity = math.log2(cardinality)
+        representative_indices = _representative_local_indices(cardinality)
+        representatives = [
+            dict(
+                _position_for_sample_index(
+                    _global_sample_index(
+                        cardinality=cardinality,
+                        local_index=index,
+                    )
+                ).representative_metadata()
             )
-        return tuple(candidates)
+            for index in representative_indices
+        ]
+        legal_move_counts = [
+            _position_for_sample_index(
+                _global_sample_index(
+                    cardinality=cardinality,
+                    local_index=index,
+                )
+            ).legal_move_count
+            for index in representative_indices
+        ]
+        preview_legal_move_count_max = max(legal_move_counts) if legal_move_counts else 0
+        oracle_compute = _oracle_inference_compute_for_cardinality(cardinality)
+        return ComplexityCandidate(
+            request=ComplexityRequest(
+                minimum=complexity,
+                maximum=complexity,
+            ),
+            cardinality=cardinality,
+            metadata={
+                "kind": "chess-sample-space-cardinality",
+                "family": _mate_in_one_family_id,
+                "sample_cardinality": cardinality,
+                "target_policy": "mate-in-one",
+                "transform_count": len(_board_transforms()),
+                "spectator_square_count": len(_spectator_squares()),
+                "output_move_count": len(all_meaningful_uci_moves),
+                "representative_preview_count": len(representatives),
+                "representatives": representatives,
+                "oracle_inference_compute": {
+                    "kind": "oracle-inference-compute-reference-v1",
+                    "unit": "abstract-ops",
+                    "aggregation": "analytic-upper-bound",
+                    "value": oracle_compute,
+                    "components": {
+                        "preview_legal_move_count_max": preview_legal_move_count_max,
+                        "max_spectator_count": _max_spectator_count_for_cardinality(
+                            cardinality
+                        ),
+                        "sample_cardinality": cardinality,
+                    },
+                },
+            },
+        )
 
     def console_preview_batches(
         self,
         *,
         atom_count: int,
     ) -> tuple[Mapping[str, object], ...]:
-        """Return browser-preview batches for known legal-move-count classes."""
+        """Return browser-preview batches for sample-space cardinality classes."""
 
         if atom_count != len(self.manifest.outcome_space.outcomes):
             raise ObservationGenerationError("atom_count does not match outcome space")
@@ -378,10 +398,6 @@ class Generator:
         for candidate in self._sample_space_cardinality_candidates():
             if candidate.cardinality is None:
                 continue
-            positions = _positions_for_sample_cardinality(
-                self.positions,
-                cardinality=candidate.cardinality,
-            )
             request = ComplexityRequest(
                 minimum=candidate.complexity,
                 maximum=candidate.complexity,
@@ -403,9 +419,6 @@ class Generator:
                     "sample_count": len(samples),
                     "complexity_window": request.to_record(),
                     "complexity_cardinalities": [candidate.cardinality],
-                    "legal_move_counts": [
-                        position.legal_move_count for position in positions
-                    ],
                     "presentation": {
                         "sample_card_density": "standard",
                         "aggregate_mode": False,
@@ -415,45 +428,19 @@ class Generator:
             )
         return tuple(batches)
 
-    def _positions_for_request(
+    def _sample_space_for_request(
         self,
         request: ComplexityRequest | None,
-    ) -> tuple[_MateInOnePosition, ...]:
+    ) -> _ChessSampleSpace | None:
         if request is None:
-            return _sorted_positions(self.positions)
-        candidates = self.complexity_candidates_for_request(request=request)
-        if not candidates:
-            return ()
-        cardinality = candidates[0].cardinality
-        if cardinality is None:
-            return ()
-        return _positions_for_sample_cardinality(
-            self.positions,
-            cardinality=cardinality,
-        )
-
-    def _sample(
-        self,
-        *,
-        index: int,
-        position: _MateInOnePosition,
-        sample_space_cardinality: int,
-        complexity: float,
-    ) -> GeneratedSample:
-        return GeneratedSample(
-            index=index,
-            outcome_id=position.mate_moves[0],
-            complexity=complexity,
-            complexity_value=ComplexityValue(value=complexity),
-            available_outcome_ids=position.legal_moves,
-            observable_state_id=position.observation_id,
-            target_distribution=position.target_distribution,
-            latent_coordinates=_latent_coordinates(
-                position,
-                sample_space_cardinality=sample_space_cardinality,
-            ),
-        )
-
+            return _ChessSampleSpace(cardinality=1)
+        minimum_cardinality = _ceil_cardinality(request.minimum)
+        maximum_cardinality = _floor_cardinality(request.maximum)
+        if maximum_cardinality < minimum_cardinality:
+            return None
+        if minimum_cardinality > _family_capacity():
+            return None
+        return _ChessSampleSpace(cardinality=minimum_cardinality)
 
 def _manifest() -> BenchmarkManifest:
     return BenchmarkManifest(
@@ -463,75 +450,364 @@ def _manifest() -> BenchmarkManifest:
             id=_outcome_space_id,
             outcomes=tuple(Outcome(id=move) for move in all_meaningful_uci_moves),
         ),
-        observation_ids=frozenset(position.observation_id for position in _mate_in_one_positions()),
+        observation_ids=None,
     )
 
 
-def _mate_in_one_positions() -> tuple[_MateInOnePosition, ...]:
-    positions = tuple(_mate_in_one_position(fen) for fen in _mate_in_one_fens)
-    if not positions:
-        raise ObservationGenerationError("Chess benchmark must declare at least one position")
-    _validate_representative_ladder(positions)
-    return positions
+@dataclass(frozen=True, slots=True)
+class _ChessSampleSpace:
+    cardinality: int
+
+    def __post_init__(self) -> None:
+        _require_sample_cardinality(self.cardinality)
 
 
-def _sorted_positions(
-    positions: Sequence[_MateInOnePosition],
-) -> tuple[_MateInOnePosition, ...]:
-    return tuple(sorted(positions, key=lambda item: (item.legal_move_count, item.fen)))
+@dataclass(frozen=True, slots=True)
+class _BoardTransform:
+    name: str
+    square: Callable[[int, int], tuple[int, int]]
 
 
-def _positions_for_sample_cardinality(
-    positions: Sequence[_MateInOnePosition],
+@dataclass(frozen=True, slots=True)
+class _MateMechanism:
+    name: str
+    queen_square: chess.Square
+    support_pieces: tuple[tuple[chess.Square, chess.Piece], ...] = ()
+
+
+def _mate_mechanisms() -> tuple[_MateMechanism, ...]:
+    return (
+        _MateMechanism("queen-adjacent-capture", chess.C2),
+        _MateMechanism("queen-file-capture", chess.B3),
+        _MateMechanism("queen-diagonal-capture", chess.D3),
+        _MateMechanism(
+            "supported-queen-adjacent-capture",
+            chess.C2,
+            ((chess.D1, chess.Piece(chess.ROOK, chess.WHITE)),),
+        ),
+        _MateMechanism(
+            "supported-queen-file-capture",
+            chess.B3,
+            ((chess.D1, chess.Piece(chess.BISHOP, chess.WHITE)),),
+        ),
+        _MateMechanism(
+            "supported-queen-diagonal-capture",
+            chess.D3,
+            ((chess.D1, chess.Piece(chess.KNIGHT, chess.WHITE)),),
+        ),
+    )
+
+
+def _board_transforms() -> tuple[_BoardTransform, ...]:
+    return (
+        _BoardTransform("identity", lambda file_index, rank_index: (file_index, rank_index)),
+        _BoardTransform("mirror-file", lambda file_index, rank_index: (7 - file_index, rank_index)),
+        _BoardTransform("mirror-rank", lambda file_index, rank_index: (file_index, 7 - rank_index)),
+        _BoardTransform(
+            "rotate-180",
+            lambda file_index, rank_index: (7 - file_index, 7 - rank_index),
+        ),
+        _BoardTransform("transpose", lambda file_index, rank_index: (rank_index, file_index)),
+        _BoardTransform(
+            "anti-transpose",
+            lambda file_index, rank_index: (7 - rank_index, 7 - file_index),
+        ),
+        _BoardTransform("rotate-90", lambda file_index, rank_index: (rank_index, 7 - file_index)),
+        _BoardTransform("rotate-270", lambda file_index, rank_index: (7 - rank_index, file_index)),
+    )
+
+
+def _spectator_squares() -> tuple[chess.Square, ...]:
+    occupied = frozenset({chess.A1, chess.B1, chess.C1})
+    mechanism_squares = frozenset(mechanism.queen_square for mechanism in _mate_mechanisms())
+    support_squares = frozenset(
+        square
+        for mechanism in _mate_mechanisms()
+        for square, _piece in mechanism.support_pieces
+    )
+    unsafe = frozenset({chess.B2})
+    return tuple(
+        square
+        for square in chess.SQUARES
+        if square not in occupied
+        and square not in mechanism_squares
+        and square not in support_squares
+        and square not in unsafe
+    )
+
+
+def _family_capacity() -> int:
+    return (
+        len(_mate_mechanisms())
+        * len(_board_transforms())
+        * (1 << len(_spectator_squares()))
+    )
+
+
+def _max_spectator_count_for_cardinality(cardinality: int) -> int:
+    _require_sample_cardinality(cardinality)
+    return _enabled_spectator_count_for_cardinality(cardinality)
+
+
+def _oracle_inference_compute_for_cardinality(cardinality: int) -> int:
+    return 2 + 8 * _max_spectator_count_for_cardinality(cardinality)
+
+
+def _global_sample_index(*, cardinality: int, local_index: int) -> int:
+    _require_sample_cardinality(cardinality)
+    if type(local_index) is not int or local_index < 0 or local_index >= cardinality:
+        raise ObservationGenerationError("Chess local sample index is outside cardinality")
+    return _global_sample_indices(cardinality=cardinality, local_indices=(local_index,))[0]
+
+
+def _global_sample_indices(
     *,
     cardinality: int,
-) -> tuple[_MateInOnePosition, ...]:
+    local_indices: Sequence[int],
+) -> tuple[int, ...]:
+    _require_sample_cardinality(cardinality)
+    invalid_indices = tuple(
+        local_index
+        for local_index in local_indices
+        if type(local_index) is not int or local_index < 0 or local_index >= cardinality
+    )
+    if invalid_indices:
+        raise ObservationGenerationError("Chess local sample index is outside cardinality")
+    enabled_capacity = _enabled_family_capacity_for_cardinality(cardinality)
+    lower_bound = _family_index_lower_bound_for_cardinality(cardinality)
+    if cardinality > enabled_capacity - lower_bound:
+        lower_bound = 0
+    offset = cardinality * (cardinality - 1) // 2
+    if offset + cardinality > enabled_capacity:
+        offset = lower_bound + offset % (enabled_capacity - lower_bound - cardinality + 1)
+    return tuple(offset + local_index for local_index in local_indices)
+
+
+def _enabled_family_capacity_for_cardinality(cardinality: int) -> int:
+    return len(_mate_mechanisms()) * len(_board_transforms()) * (
+        1 << _enabled_spectator_count_for_cardinality(cardinality)
+    )
+
+
+def _enabled_spectator_count_for_cardinality(cardinality: int) -> int:
+    _require_sample_cardinality(cardinality)
+    base_count = len(_mate_mechanisms()) * len(_board_transforms())
+    required_family_size = cardinality * (cardinality + 1) // 2
+    required_masks = math.ceil(required_family_size / base_count)
+    if required_masks <= 1:
+        return 0
+    return min(
+        len(_spectator_squares()),
+        math.ceil(math.log2(required_masks)),
+    )
+
+
+def _family_index_lower_bound_for_cardinality(cardinality: int) -> int:
+    _require_sample_cardinality(cardinality)
+    spectator_count = _enabled_spectator_count_for_cardinality(cardinality)
+    if spectator_count == 0:
+        return 0
+    return len(_mate_mechanisms()) * len(_board_transforms()) * (
+        1 << (spectator_count - 1)
+    )
+
+
+def _representative_local_indices(cardinality: int) -> tuple[int, ...]:
+    _require_sample_cardinality(cardinality)
+    count = min(cardinality, _preview_representative_limit)
+    if count == 1:
+        return (0,)
+    return tuple(
+        index * (cardinality - 1) // (count - 1)
+        for index in range(count)
+    )
+
+
+def _sample_local_indices(
+    *,
+    rng: random.Random,
+    cardinality: int,
+    sample_count: int,
+) -> tuple[int, ...]:
+    _require_sample_cardinality(cardinality)
+    if type(sample_count) is not int or sample_count < 0:
+        raise ObservationGenerationError("Chess sample count must be non-negative")
+    if sample_count == 0:
+        return ()
+    indices: list[int] = []
+    while len(indices) + cardinality <= sample_count:
+        shuffled = list(range(cardinality))
+        rng.shuffle(shuffled)
+        indices.extend(shuffled)
+    remaining = sample_count - len(indices)
+    if remaining:
+        indices.extend(rng.sample(range(cardinality), remaining))
+    return tuple(indices)
+
+
+def _spectator_mask_for_combination_rank(rank: int) -> int:
+    if type(rank) is not int or rank < 0:
+        raise ObservationGenerationError("Chess spectator combination rank must be non-negative")
+    remaining_rank = rank
+    spectator_square_count = len(_spectator_squares())
+    for spectator_count in range(spectator_square_count + 1):
+        count_at_weight = math.comb(spectator_square_count, spectator_count)
+        if remaining_rank < count_at_weight:
+            return _spectator_mask_for_weight_rank(
+                spectator_count=spectator_count,
+                rank=remaining_rank,
+            )
+        remaining_rank -= count_at_weight
+    raise ObservationGenerationError("Chess spectator combination rank exceeds capacity")
+
+
+def _spectator_count_for_combination_rank(rank: int) -> int:
+    return _spectator_mask_for_combination_rank(rank).bit_count()
+
+
+def _spectator_mask_for_weight_rank(*, spectator_count: int, rank: int) -> int:
+    if spectator_count == 0:
+        if rank != 0:
+            raise ObservationGenerationError("Chess zero-spectator rank must be zero")
+        return 0
+    remaining_rank = rank
+    selected = spectator_count
+    mask = 0
+    for bit_index in range(len(_spectator_squares())):
+        if selected == 0:
+            break
+        skip_count = math.comb(len(_spectator_squares()) - bit_index - 1, selected)
+        if remaining_rank < skip_count:
+            continue
+        remaining_rank -= skip_count
+        mask |= 1 << bit_index
+        selected -= 1
+    if selected != 0 or remaining_rank != 0:
+        raise ObservationGenerationError("Chess spectator rank exceeds weight capacity")
+    return mask
+
+
+def _require_sample_cardinality(cardinality: int) -> None:
     if type(cardinality) is not int or cardinality < 1:
         raise ObservationGenerationError("Chess sample cardinality must be positive")
-    sorted_positions = _sorted_positions(positions)
-    if cardinality > len(sorted_positions):
-        raise ObservationGenerationError(
-            "Chess sample cardinality exceeds representative corpus size"
-        )
-    return sorted_positions[:cardinality]
+    if cardinality > _family_capacity():
+        raise ObservationGenerationError("Chess sample cardinality exceeds generator capacity")
 
 
-def _validate_representative_ladder(positions: Sequence[_MateInOnePosition]) -> None:
-    seen_counts: set[int] = set()
-    duplicate_counts: set[int] = set()
-    for position in positions:
-        if position.legal_move_count in seen_counts:
-            duplicate_counts.add(position.legal_move_count)
-        seen_counts.add(position.legal_move_count)
-    if duplicate_counts:
-        duplicate = min(duplicate_counts)
-        raise ObservationGenerationError(
-            f"Chess benchmark has multiple representatives for {duplicate} legal moves"
-        )
-    legal_piece_symbols = {
-        symbol
-        for position in positions
-        for symbol in position.legal_move_piece_symbols
-    }
-    required_legal_piece_symbols = frozenset({"B", "K", "N", "Q", "R"})
-    missing = required_legal_piece_symbols - legal_piece_symbols
-    if missing:
-        raise ObservationGenerationError(
-            "Chess representative ladder is missing legal moves by: "
-            + ", ".join(sorted(missing))
-        )
-    mate_piece_symbols = {
-        symbol
-        for position in positions
-        for symbol in position.mate_move_piece_symbols
-    }
-    if mate_piece_symbols == {"Q"}:
-        raise ObservationGenerationError(
-            "Chess representative ladder must include a non-queen mate motif"
-        )
+def _ceil_cardinality(complexity: float) -> int:
+    if not math.isfinite(complexity):
+        raise ObservationGenerationError("complexity must be finite")
+    if complexity <= 0.0:
+        return 1
+    cardinality = 2**complexity
+    rounded = round(cardinality)
+    if math.isclose(cardinality, rounded, rel_tol=1e-12, abs_tol=1e-9):
+        return max(1, rounded)
+    return max(1, math.ceil(cardinality))
 
 
-def _mate_in_one_position(fen: str) -> _MateInOnePosition:
+def _floor_cardinality(complexity: float) -> int:
+    if not math.isfinite(complexity):
+        raise ObservationGenerationError("complexity must be finite")
+    if complexity < 0.0:
+        return 0
+    cardinality = 2**complexity
+    rounded = round(cardinality)
+    if math.isclose(cardinality, rounded, rel_tol=1e-12, abs_tol=1e-9):
+        return min(_family_capacity(), rounded)
+    return min(_family_capacity(), math.floor(cardinality))
+
+
+def _base_mate_pieces(
+    *,
+    mechanism: _MateMechanism,
+    spectator_combination_rank: int = 0,
+) -> tuple[tuple[chess.Square, chess.Piece], ...]:
+    pieces: list[tuple[chess.Square, chess.Piece]] = [
+        (chess.A1, chess.Piece(chess.KING, chess.BLACK)),
+        (chess.B1, chess.Piece(chess.ROOK, chess.BLACK)),
+        (chess.C1, chess.Piece(chess.KING, chess.WHITE)),
+        (mechanism.queen_square, chess.Piece(chess.QUEEN, chess.WHITE)),
+        *mechanism.support_pieces,
+    ]
+    spectator_mask = _spectator_mask_for_combination_rank(spectator_combination_rank)
+    pieces.extend(
+        (square, chess.Piece(chess.KNIGHT, chess.WHITE))
+        for bit_index, square in enumerate(_spectator_squares())
+        if spectator_mask & (1 << bit_index)
+    )
+    return tuple(pieces)
+
+
+def _board_from_pieces(pieces: Sequence[tuple[chess.Square, chess.Piece]]) -> chess.Board:
+    board = chess.Board.empty()
+    board.turn = chess.WHITE
+    board.castling_rights = 0
+    board.ep_square = None
+    board.halfmove_clock = 0
+    board.fullmove_number = 1
+    for square, piece in pieces:
+        board.set_piece_at(square, piece)
+    return board
+
+
+def _transformed_square(square: chess.Square, *, transform: _BoardTransform) -> chess.Square:
+    file_index = chess.square_file(square)
+    rank_index = chess.square_rank(square)
+    transformed_file, transformed_rank = transform.square(file_index, rank_index)
+    return chess.square(transformed_file, transformed_rank)
+
+
+def _transformed_move_uci(
+    *,
+    from_square: chess.Square,
+    to_square: chess.Square,
+    transform: _BoardTransform,
+) -> str:
+    return (
+        chess.square_name(_transformed_square(from_square, transform=transform))
+        + chess.square_name(_transformed_square(to_square, transform=transform))
+    )
+
+
+def _position_for_sample_index(index: int) -> _MateInOnePosition:
+    if type(index) is not int or index < 0:
+        raise ObservationGenerationError("Chess sample index must be non-negative")
+    mechanisms = _mate_mechanisms()
+    transforms = _board_transforms()
+    base_count = len(mechanisms) * len(transforms)
+    base_index = index % base_count
+    spectator_combination_rank = index // base_count
+    if spectator_combination_rank >= (1 << len(_spectator_squares())):
+        raise ObservationGenerationError("Chess sample index exceeds generator capacity")
+    mechanism = mechanisms[base_index // len(transforms)]
+    transform = transforms[base_index % len(transforms)]
+    base_pieces = _base_mate_pieces(
+        mechanism=mechanism,
+        spectator_combination_rank=spectator_combination_rank,
+    )
+    board_pieces = tuple(
+        (_transformed_square(square, transform=transform), piece)
+        for square, piece in base_pieces
+    )
+    board = _board_from_pieces(board_pieces)
+    return _mate_in_one_position(
+        board.fen(),
+        mechanism_name=mechanism.name,
+        transform_name=transform.name,
+        family_index=index,
+        spectator_count=_spectator_count_for_combination_rank(spectator_combination_rank),
+    )
+
+
+def _mate_in_one_position(
+    fen: str,
+    *,
+    mechanism_name: str,
+    transform_name: str,
+    family_index: int,
+    spectator_count: int,
+) -> _MateInOnePosition:
     board = chess.Board(fen)
     legal_moves = tuple(sorted(move.uci() for move in board.legal_moves))
     mate_moves = tuple(
@@ -558,6 +834,10 @@ def _mate_in_one_position(fen: str) -> _MateInOnePosition:
         fen=fen,
         legal_moves=legal_moves,
         mate_moves=mate_moves,
+        mechanism_name=mechanism_name,
+        transform_name=transform_name,
+        family_index=family_index,
+        spectator_count=spectator_count,
     )
 
 
@@ -667,6 +947,62 @@ def _latent_coordinates(
                 "analysis": dict(position.representative_analysis()),
             },
         },
+    )
+
+
+def _samples_for_global_indices(
+    *,
+    global_indices: Sequence[int],
+    outcome_ids: tuple[str, ...] | None,
+    sample_space_cardinality: int,
+    complexity: float,
+    full_metadata: bool,
+) -> tuple[GeneratedSample, ...]:
+    if full_metadata:
+        return tuple(
+            _full_sample(
+                index=index,
+                position=_position_for_sample_index(global_index),
+                sample_space_cardinality=sample_space_cardinality,
+                complexity=complexity,
+            )
+            for index, global_index in enumerate(global_indices)
+        )
+    if outcome_ids is None:
+        raise ObservationGenerationError("lightweight Chess samples require outcome_ids")
+    base_count = len(_mate_mechanisms()) * len(_board_transforms())
+    target_indices_by_base = _base_target_indices(outcome_ids)
+    complexity_value = ComplexityValue(value=complexity)
+    return tuple(
+        GeneratedSample(
+            index=index,
+            outcome_id=outcome_ids[target_indices_by_base[global_index % base_count]],
+            complexity=complexity,
+            complexity_value=complexity_value,
+        )
+        for index, global_index in enumerate(global_indices)
+    )
+
+
+def _full_sample(
+    *,
+    index: int,
+    position: _MateInOnePosition,
+    sample_space_cardinality: int,
+    complexity: float,
+) -> GeneratedSample:
+    return GeneratedSample(
+        index=index,
+        outcome_id=position.mate_moves[0],
+        complexity=complexity,
+        complexity_value=ComplexityValue(value=complexity),
+        available_outcome_ids=position.legal_moves,
+        observable_state_id=position.observation_id,
+        target_distribution=position.target_distribution,
+        latent_coordinates=_latent_coordinates(
+            position,
+            sample_space_cardinality=sample_space_cardinality,
+        ),
     )
 
 
@@ -871,10 +1207,11 @@ def _piece_svg_shape(piece: chess.Piece, *, center_x: float, center_y: float) ->
     )
 
 
-def _tensor_batch(
+def _tensor_batch_for_global_indices(
     *,
     runtime: TensorRuntime | None,
-    positions: Sequence[_MateInOnePosition],
+    global_indices: Sequence[int],
+    cardinality: int,
     outcome_ids: tuple[str, ...] | None,
     sample_shape: tuple[int, ...],
 ) -> tuple[Any | None, Any | None]:
@@ -882,28 +1219,82 @@ def _tensor_batch(
         return None, None
     if outcome_ids is None:
         raise ObservationGenerationError("tensor generation requires outcome_ids")
-    unknown_outcomes = tuple(
-        outcome_id
-        for position in positions
-        for outcome_id in (*position.legal_moves, *position.mate_moves)
-        if outcome_id not in outcome_ids
+    return _tensor_batch_from_global_indices(
+        runtime=runtime,
+        global_indices=global_indices,
+        cardinality=cardinality,
+        outcome_ids=outcome_ids,
+        sample_shape=sample_shape,
     )
-    if unknown_outcomes:
-        raise ObservationGenerationError(
-            "tensor generation outcome_ids do not cover generated Chess moves"
+
+
+def _tensor_batch_from_global_indices(
+    *,
+    runtime: TensorRuntime,
+    global_indices: Sequence[int],
+    cardinality: int,
+    outcome_ids: tuple[str, ...],
+    sample_shape: tuple[int, ...],
+) -> tuple[Any, Any]:
+    backend = tensor_runtime_backend(runtime)
+    sample_count = len(global_indices)
+    fields = backend.zeros(
+        (sample_count, *_tensor_shape),
+        dtype=backend.float32,
+        device=runtime.device,
+    )
+    targets = backend.zeros(
+        (sample_count, len(outcome_ids)),
+        dtype=backend.float32,
+        device=runtime.device,
+    )
+    fields[:, 12, :, :] = 1.0
+    if sample_count == 0:
+        return (
+            fields.reshape((*sample_shape, *_tensor_shape)),
+            targets.reshape((*sample_shape, len(outcome_ids))),
         )
-    fields = make_float_tensor(
+
+    indices = backend.tensor(global_indices, dtype=backend.long, device=runtime.device)
+    enabled_spectator_count = _enabled_spectator_count_for_cardinality(cardinality)
+    transform_table = _device_long_tensor(
         runtime,
-        [_board_tensor(position.fen) for position in positions],
-        device=runtime.device,
+        _transform_square_table(),
     )
-    targets = make_float_tensor(
+    queen_squares = _device_long_tensor(runtime, _queen_squares())
+    support_squares = _device_long_tensor(runtime, _support_squares())
+    support_planes = _device_long_tensor(runtime, _support_planes())
+    target_indices_by_base = _device_long_tensor(
         runtime,
-        [
-            _target_row(position.target_distribution, outcome_ids=outcome_ids)
-            for position in positions
-        ],
-        device=runtime.device,
+        _base_target_indices(outcome_ids),
+    )
+    spectator_squares = _device_long_tensor(
+        runtime,
+        _spectator_squares() if enabled_spectator_count > 0 else (0,),
+    )
+    combination_table = _device_long_tensor(
+        runtime,
+        _spectator_combination_table() if enabled_spectator_count > 0 else ((1,),),
+    )
+    render = (
+        _render_tensor_batch_compiled
+        if tensor_runtime_prefers_compiled_renderer(runtime)
+        else _render_tensor_batch_portable
+    )
+    render(
+        runtime=runtime,
+        fields=fields,
+        targets=targets,
+        indices=indices,
+        transform_table=transform_table,
+        queen_squares=queen_squares,
+        support_squares=support_squares,
+        support_planes=support_planes,
+        target_indices_by_base=target_indices_by_base,
+        spectator_squares=spectator_squares,
+        combination_table=combination_table,
+        outcome_count=len(outcome_ids),
+        enabled_spectator_count=enabled_spectator_count,
     )
     return (
         fields.reshape((*sample_shape, *_tensor_shape)),
@@ -911,30 +1302,426 @@ def _tensor_batch(
     )
 
 
-def _board_tensor(fen: str) -> list[list[list[float]]]:
-    board = chess.Board(fen)
-    planes = [
-        [[0.0 for _file in range(8)] for _rank in range(8)]
-        for _plane in range(_tensor_shape[0])
-    ]
-    for square, piece in board.piece_map().items():
-        plane = _piece_plane(piece)
-        planes[plane][chess.square_rank(square)][chess.square_file(square)] = 1.0
-    if board.turn == chess.WHITE:
-        _fill_plane(planes[12], 1.0)
-    if board.has_kingside_castling_rights(chess.WHITE):
-        _fill_plane(planes[13], 1.0)
-    if board.has_queenside_castling_rights(chess.WHITE):
-        _fill_plane(planes[14], 1.0)
-    if board.has_kingside_castling_rights(chess.BLACK):
-        _fill_plane(planes[15], 1.0)
-    if board.has_queenside_castling_rights(chess.BLACK):
-        _fill_plane(planes[16], 1.0)
-    if board.ep_square is not None:
-        planes[17][chess.square_rank(board.ep_square)][
-            chess.square_file(board.ep_square)
-        ] = 1.0
-    return planes
+def _render_tensor_batch_compiled(
+    *,
+    runtime: TensorRuntime,
+    fields: Any,
+    targets: Any,
+    indices: Any,
+    transform_table: Any,
+    queen_squares: Any,
+    support_squares: Any,
+    support_planes: Any,
+    target_indices_by_base: Any,
+    spectator_squares: Any,
+    combination_table: Any,
+    outcome_count: int,
+    enabled_spectator_count: int,
+) -> None:
+    sample_count = int(indices.numel())
+    piece_slot_count = 5 + enabled_spectator_count
+    total_slots = sample_count * piece_slot_count
+    kernel, triton = _chess_sparse_renderer_kernel()
+    block_size = 256
+    grid_shape = (triton.cdiv(total_slots, block_size),)
+    kernel[grid_shape](
+        fields,
+        targets,
+        indices,
+        transform_table,
+        queen_squares,
+        support_squares,
+        support_planes,
+        target_indices_by_base,
+        spectator_squares,
+        combination_table,
+        total_slots,
+        outcome_count,
+        len(_mate_mechanisms()) * len(_board_transforms()),
+        len(_board_transforms()),
+        len(_spectator_squares()),
+        enabled_spectator_count,
+        piece_slot_count,
+        block_size,
+    )
+
+
+def _render_tensor_batch_portable(
+    *,
+    runtime: TensorRuntime,
+    fields: Any,
+    targets: Any,
+    indices: Any,
+    transform_table: Any,
+    queen_squares: Any,
+    support_squares: Any,
+    support_planes: Any,
+    target_indices_by_base: Any,
+    spectator_squares: Any,
+    combination_table: Any,
+    outcome_count: int,
+    enabled_spectator_count: int,
+) -> None:
+    _ = outcome_count
+    backend = tensor_runtime_backend(runtime)
+    sample_count = int(indices.numel())
+    mechanism_count = len(_mate_mechanisms())
+    transform_count = len(_board_transforms())
+    base_count = mechanism_count * transform_count
+    sample_indices = backend.arange(sample_count, dtype=backend.long, device=runtime.device)
+    sample_base_indices = indices.remainder(base_count)
+    sample_target_indices = target_indices_by_base[sample_base_indices]
+    targets[sample_indices, sample_target_indices] = 1.0
+
+    piece_slot_count = 5 + enabled_spectator_count
+    slot_offsets = backend.arange(
+        sample_count * piece_slot_count,
+        dtype=backend.long,
+        device=runtime.device,
+    )
+    slot_sample_indices = backend.div(
+        slot_offsets,
+        piece_slot_count,
+        rounding_mode="floor",
+    )
+    piece_slots = slot_offsets.remainder(piece_slot_count)
+    slot_global_indices = indices[slot_sample_indices]
+    base_indices = slot_global_indices.remainder(base_count)
+    mechanism_indices = backend.div(base_indices, transform_count, rounding_mode="floor")
+    transform_indices = base_indices.remainder(transform_count)
+    spectator_combination_ranks = backend.div(
+        slot_global_indices,
+        base_count,
+        rounding_mode="floor",
+    )
+
+    queen_source_squares = queen_squares[mechanism_indices]
+    support_source_squares = support_squares[mechanism_indices]
+    support_source_planes = support_planes[mechanism_indices]
+    black_king_plane = _piece_plane(chess.Piece(chess.KING, chess.BLACK))
+    black_rook_plane = _piece_plane(chess.Piece(chess.ROOK, chess.BLACK))
+    white_king_plane = _piece_plane(chess.Piece(chess.KING, chess.WHITE))
+    white_queen_plane = _piece_plane(chess.Piece(chess.QUEEN, chess.WHITE))
+    field_planes = backend.where(
+        piece_slots == 0,
+        backend.full_like(piece_slots, black_king_plane),
+        backend.full_like(piece_slots, black_rook_plane),
+    )
+    field_planes = backend.where(
+        piece_slots == 2,
+        backend.full_like(piece_slots, white_king_plane),
+        field_planes,
+    )
+    field_planes = backend.where(
+        piece_slots == 3,
+        backend.full_like(piece_slots, white_queen_plane),
+        field_planes,
+    )
+    field_planes = backend.where(piece_slots == 4, support_source_planes, field_planes)
+    source_squares = backend.where(
+        piece_slots == 0,
+        backend.full_like(piece_slots, chess.A1),
+        backend.full_like(piece_slots, chess.B1),
+    )
+    source_squares = backend.where(
+        piece_slots == 2,
+        backend.full_like(piece_slots, chess.C1),
+        source_squares,
+    )
+    source_squares = backend.where(piece_slots == 3, queen_source_squares, source_squares)
+    source_squares = backend.where(piece_slots == 4, support_source_squares, source_squares)
+    write_mask = (piece_slots < 4) | ((piece_slots == 4) & (support_source_squares >= 0))
+
+    spectator_square_count = len(_spectator_squares())
+    if enabled_spectator_count > 0:
+        selected_counts = backend.zeros_like(piece_slots)
+        ranks_within_count = spectator_combination_ranks
+        unresolved = backend.ones_like(piece_slots, dtype=backend.bool)
+        for selected_count in range(enabled_spectator_count + 1):
+            count_at_weight = combination_table[spectator_square_count, selected_count]
+            selected = unresolved & (ranks_within_count < count_at_weight)
+            selected_counts = backend.where(
+                selected,
+                backend.full_like(selected_counts, selected_count),
+                selected_counts,
+            )
+            unresolved = unresolved & ~selected
+            ranks_within_count = backend.where(
+                unresolved,
+                ranks_within_count - count_at_weight,
+                ranks_within_count,
+            )
+        spectator_ordinals = piece_slots - 5
+        remaining_selected = selected_counts
+        remaining_rank = ranks_within_count
+        chosen_so_far = backend.zeros_like(piece_slots)
+        selected_spectator_squares = backend.zeros_like(piece_slots)
+        selected_spectator_found = backend.zeros_like(piece_slots, dtype=backend.bool)
+        for bit_index in range(spectator_square_count):
+            remaining_slots = spectator_square_count - bit_index - 1
+            skip_counts = combination_table[remaining_slots, remaining_selected]
+            choose = (remaining_selected > 0) & (remaining_rank >= skip_counts)
+            use_square = choose & (chosen_so_far == spectator_ordinals)
+            selected_spectator_squares = backend.where(
+                use_square,
+                spectator_squares[bit_index],
+                selected_spectator_squares,
+            )
+            selected_spectator_found = selected_spectator_found | use_square
+            remaining_rank = backend.where(choose, remaining_rank - skip_counts, remaining_rank)
+            remaining_selected = backend.where(
+                choose,
+                remaining_selected - backend.ones_like(remaining_selected),
+                remaining_selected,
+            )
+            chosen_so_far = backend.where(
+                choose,
+                chosen_so_far + backend.ones_like(chosen_so_far),
+                chosen_so_far,
+            )
+        spectator_mask = (
+            (piece_slots >= 5)
+            & (spectator_ordinals < selected_counts)
+            & selected_spectator_found
+        )
+        source_squares = backend.where(spectator_mask, selected_spectator_squares, source_squares)
+        field_planes = backend.where(
+            spectator_mask,
+            backend.full_like(field_planes, _piece_plane(chess.Piece(chess.KNIGHT, chess.WHITE))),
+            field_planes,
+        )
+        write_mask = write_mask | spectator_mask
+
+    transformed_squares = transform_table[transform_indices, source_squares]
+    field_offsets = (
+        (slot_sample_indices * _tensor_shape[0] + field_planes)
+        * (_tensor_shape[1] * _tensor_shape[2])
+        + transformed_squares
+    )
+    fields.reshape(-1)[field_offsets[write_mask]] = 1.0
+
+
+def _chess_sparse_renderer_kernel() -> tuple[Any, Any]:
+    global _chess_sparse_renderer_bundle
+    if _chess_sparse_renderer_bundle is not None:
+        return _chess_sparse_renderer_bundle
+    triton = importlib.import_module("triton")
+    tl = importlib.import_module("triton.language")
+    namespace = {"triton": triton, "tl": tl}
+    source = """
+@triton.jit
+def kernel(
+    fields,
+    targets,
+    indices,
+    transform_table,
+    queen_squares,
+    support_squares,
+    support_planes,
+    target_indices_by_base,
+    spectator_squares,
+    combination_table,
+    total_slots,
+    outcome_count,
+    base_count: tl.constexpr,
+    transform_count: tl.constexpr,
+    spectator_square_count: tl.constexpr,
+    enabled_spectator_count: tl.constexpr,
+    piece_slot_count: tl.constexpr,
+    block_size: tl.constexpr,
+):
+    offsets = tl.program_id(0) * block_size + tl.arange(0, block_size)
+    active = offsets < total_slots
+    sample_index = offsets // piece_slot_count
+    piece_slot = offsets % piece_slot_count
+
+    global_index = tl.load(indices + sample_index, mask=active, other=0)
+    base_index = global_index % base_count
+    mechanism_index = base_index // transform_count
+    transform_index = base_index % transform_count
+    spectator_combination_rank = global_index // base_count
+
+    target_index = tl.load(target_indices_by_base + base_index, mask=active, other=0)
+    tl.store(
+        targets + sample_index * outcome_count + target_index,
+        1.0,
+        mask=active & (piece_slot == 0),
+    )
+
+    black_king_plane = 11
+    black_rook_plane = 9
+    white_king_plane = 5
+    white_queen_plane = 4
+    white_knight_plane = 1
+
+    queen_square = tl.load(queen_squares + mechanism_index, mask=active, other=10)
+    support_square = tl.load(support_squares + mechanism_index, mask=active, other=-1)
+    support_plane = tl.load(support_planes + mechanism_index, mask=active, other=-1)
+
+    source_square = tl.full((block_size,), 1, tl.int64)
+    source_square = tl.where(piece_slot == 0, 0, source_square)
+    source_square = tl.where(piece_slot == 2, 2, source_square)
+    source_square = tl.where(piece_slot == 3, queen_square, source_square)
+    source_square = tl.where(piece_slot == 4, support_square, source_square)
+
+    field_plane = tl.full((block_size,), black_rook_plane, tl.int64)
+    field_plane = tl.where(piece_slot == 0, black_king_plane, field_plane)
+    field_plane = tl.where(piece_slot == 2, white_king_plane, field_plane)
+    field_plane = tl.where(piece_slot == 3, white_queen_plane, field_plane)
+    field_plane = tl.where(piece_slot == 4, support_plane, field_plane)
+    write_piece = (piece_slot < 4) | ((piece_slot == 4) & (support_square >= 0))
+
+    if enabled_spectator_count > 0:
+        selected_count_value = tl.full((block_size,), 0, tl.int64)
+        rank_within_count = spectator_combination_rank
+        unresolved = tl.full((block_size,), True, tl.int1)
+        selected_count = 0
+        while selected_count <= enabled_spectator_count:
+            count_offset = (
+                combination_table
+                + spectator_square_count * (spectator_square_count + 1)
+                + selected_count
+            )
+            count_at_weight = tl.load(
+                count_offset,
+            )
+            selected = unresolved & (rank_within_count < count_at_weight)
+            selected_count_value = tl.where(selected, selected_count, selected_count_value)
+            unresolved = unresolved & ~selected
+            rank_within_count = tl.where(
+                unresolved,
+                rank_within_count - count_at_weight,
+                rank_within_count,
+            )
+            selected_count += 1
+
+        spectator_ordinal = piece_slot - 5
+        remaining_selected = selected_count_value
+        remaining_rank = rank_within_count
+        chosen_so_far = tl.full((block_size,), 0, tl.int64)
+        selected_spectator_square = tl.full((block_size,), 0, tl.int64)
+        selected_spectator_found = tl.full((block_size,), False, tl.int1)
+        bit_index = 0
+        while bit_index < spectator_square_count:
+            remaining_slots = spectator_square_count - bit_index - 1
+            skip_offset = (
+                combination_table
+                + remaining_slots * (spectator_square_count + 1)
+                + remaining_selected
+            )
+            skip_count = tl.load(
+                skip_offset,
+                mask=active,
+                other=0,
+            )
+            choose = (remaining_selected > 0) & (remaining_rank >= skip_count)
+            use_square = choose & (chosen_so_far == spectator_ordinal)
+            selected_spectator_square = tl.where(
+                use_square,
+                tl.load(spectator_squares + bit_index),
+                selected_spectator_square,
+            )
+            selected_spectator_found = selected_spectator_found | use_square
+            remaining_rank = tl.where(choose, remaining_rank - skip_count, remaining_rank)
+            remaining_selected = tl.where(choose, remaining_selected - 1, remaining_selected)
+            chosen_so_far = tl.where(choose, chosen_so_far + 1, chosen_so_far)
+            bit_index += 1
+
+        spectator_piece = (
+            (piece_slot >= 5)
+            & (spectator_ordinal < selected_count_value)
+            & selected_spectator_found
+        )
+        source_square = tl.where(spectator_piece, selected_spectator_square, source_square)
+        field_plane = tl.where(spectator_piece, white_knight_plane, field_plane)
+        write_piece = write_piece | spectator_piece
+
+    transformed_square = tl.load(
+        transform_table + transform_index * 64 + source_square,
+        mask=active & write_piece,
+        other=0,
+    )
+    field_offset = (sample_index * 18 + field_plane) * 64 + transformed_square
+    tl.store(fields + field_offset, 1.0, mask=active & write_piece)
+"""
+    filename = f"{__file__}::_chess_sparse_renderer_kernel"
+    linecache.cache[filename] = (
+        len(source),
+        None,
+        [line + "\n" for line in source.splitlines()],
+        filename,
+    )
+    exec(compile(source, filename, "exec"), namespace)
+    _chess_sparse_renderer_bundle = (namespace["kernel"], triton)
+    return _chess_sparse_renderer_bundle
+
+
+def _device_long_tensor(
+    runtime: TensorRuntime,
+    values: object,
+) -> Any:
+    backend = tensor_runtime_backend(runtime)
+    return backend.tensor(values, dtype=backend.long, device=runtime.device)
+
+
+def _transform_square_table() -> tuple[tuple[int, ...], ...]:
+    return tuple(
+        tuple(_transformed_square(square, transform=transform) for square in chess.SQUARES)
+        for transform in _board_transforms()
+    )
+
+
+def _queen_squares() -> tuple[int, ...]:
+    return tuple(mechanism.queen_square for mechanism in _mate_mechanisms())
+
+
+def _support_squares() -> tuple[int, ...]:
+    support_squares: list[int] = []
+    for mechanism in _mate_mechanisms():
+        if len(mechanism.support_pieces) > 1:
+            raise ObservationGenerationError("Chess GPU renderer expects at most one support piece")
+        support_squares.append(
+            -1 if not mechanism.support_pieces else mechanism.support_pieces[0][0]
+        )
+    return tuple(support_squares)
+
+
+def _support_planes() -> tuple[int, ...]:
+    support_planes: list[int] = []
+    for mechanism in _mate_mechanisms():
+        support_planes.append(
+            -1
+            if not mechanism.support_pieces
+            else _piece_plane(mechanism.support_pieces[0][1])
+        )
+    return tuple(support_planes)
+
+
+def _spectator_combination_table() -> tuple[tuple[int, ...], ...]:
+    square_count = len(_spectator_squares())
+    return tuple(
+        tuple(math.comb(remaining_slots, selected) for selected in range(square_count + 1))
+        for remaining_slots in range(square_count + 1)
+    )
+
+
+def _base_target_indices(outcome_ids: tuple[str, ...]) -> tuple[int, ...]:
+    outcome_index_by_id = {outcome_id: index for index, outcome_id in enumerate(outcome_ids)}
+    target_indices: list[int] = []
+    for mechanism in _mate_mechanisms():
+        for transform in _board_transforms():
+            target_move = _transformed_move_uci(
+                from_square=mechanism.queen_square,
+                to_square=chess.B1,
+                transform=transform,
+            )
+            try:
+                target_indices.append(outcome_index_by_id[target_move])
+            except KeyError as error:
+                raise ObservationGenerationError(
+                    "tensor generation outcome_ids do not cover generated Chess moves"
+                ) from error
+    return tuple(target_indices)
 
 
 def _piece_plane(piece: chess.Piece) -> int:
@@ -948,20 +1735,6 @@ def _piece_plane(piece: chess.Piece) -> int:
     }
     color_offset = 0 if piece.color == chess.WHITE else 6
     return color_offset + piece_offsets[piece.piece_type]
-
-
-def _fill_plane(plane: list[list[float]], value: float) -> None:
-    for rank in plane:
-        for file_index in range(len(rank)):
-            rank[file_index] = value
-
-
-def _target_row(
-    distribution: Mapping[str, float],
-    *,
-    outcome_ids: tuple[str, ...],
-) -> list[float]:
-    return [float(distribution.get(outcome_id, 0.0)) for outcome_id in outcome_ids]
 
 
 def _all_meaningful_uci_moves() -> tuple[str, ...]:
