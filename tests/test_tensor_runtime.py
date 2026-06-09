@@ -282,7 +282,14 @@ def test_tensor_element_compile_cache_is_not_extent_dependent(
     )
     compile_calls: list[bool | None] = []
 
-    monkeypatch.setattr(tensor_runtime_module, "_tensor_runtime_compile_available", lambda: True)
+    def compile_available(_runtime: TensorRuntime) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        tensor_runtime_module,
+        "_tensor_runtime_compile_available",
+        compile_available,
+    )
 
     def compile_kernel(kernel: Any, **kwargs: Any) -> Any:
         compile_calls.append(cast(bool | None, kwargs.get("dynamic")))
@@ -310,6 +317,49 @@ def test_tensor_element_compile_cache_is_not_extent_dependent(
     )
 
     assert compile_calls == [None]
+    assert first.tolist() == [0, 1]
+    assert second.tolist() == [0, 1, 2]
+
+
+def test_tensor_element_compile_path_includes_mps_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host_runtime = resolve_tensor_runtime("cpu")
+    runtime = TensorRuntime(
+        torch=host_runtime.torch,
+        device=host_runtime.device,
+        device_kind="mps",
+    )
+    compile_calls = 0
+
+    def compile_kernel(kernel: Any, **kwargs: Any) -> Any:
+        nonlocal compile_calls
+        _ = kwargs
+        compile_calls += 1
+        return kernel
+
+    monkeypatch.setattr(runtime.torch, "compile", compile_kernel)
+
+    def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
+        _ = flat_indices
+        return coordinates[0]
+
+    program = TensorElementProgram(
+        kernel=element_function,
+        parameters={},
+        cache_key=("mps-compile-test", id(element_function)),
+    )
+
+    first = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=program),
+    )
+    second = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(3,), dtype="int64", program=program),
+    )
+
+    assert compile_calls == 1
     assert first.tolist() == [0, 1]
     assert second.tolist() == [0, 1, 2]
 
@@ -381,7 +431,14 @@ def test_digits_tensor_generation_compiles_two_extent_independent_programs(
     )
     compile_calls: list[bool | None] = []
 
-    monkeypatch.setattr(tensor_runtime_module, "_tensor_runtime_compile_available", lambda: True)
+    def compile_available(_runtime: TensorRuntime) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        tensor_runtime_module,
+        "_tensor_runtime_compile_available",
+        compile_available,
+    )
 
     def compile_kernel(kernel: Any, **kwargs: Any) -> Any:
         compile_calls.append(cast(bool | None, kwargs.get("dynamic")))

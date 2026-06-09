@@ -982,9 +982,9 @@ def _construct_tensor_element_program(
         for name, parameter in program.parameters.items()
     }
     if (
-        runtime.device_kind == "cuda"
+        runtime.device_kind in {"cuda", "mps"}
         and program.compile
-        and _tensor_runtime_compile_available()
+        and _tensor_runtime_compile_available(runtime)
     ):
         return _construct_compiled_tensor_element_tiles(
             runtime=runtime,
@@ -1275,7 +1275,12 @@ def _mark_dynamic_tensor_element_parameters(
             mark_dynamic(tensor, axis)
 
 
-def _tensor_runtime_compile_available() -> bool:
+def _tensor_runtime_compile_available(runtime: TensorRuntime) -> bool:
+    compile_function = getattr(runtime.torch, "compile", None)
+    if not callable(compile_function):
+        return False
+    if runtime.device_kind == "mps":
+        return True
     try:
         compiler = importlib.import_module("triton.compiler.compiler")
     except ImportError:
