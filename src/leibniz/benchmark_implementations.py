@@ -15,7 +15,6 @@ from leibniz.timing import TimingCollector
 
 if TYPE_CHECKING:
     from leibniz.observation_generation import (
-        ComplexityCandidate,
         ComplexityRequest,
         ComplexityValue,
         GeneratedSampleSet,
@@ -57,7 +56,9 @@ class Generator(Protocol):
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
         include_metadata: bool = True,
+        include_artifacts: bool = False,
         complexity_request: ComplexityRequest | None = None,
+        sample_indices: Sequence[int] | None = None,
         runtime: TensorRuntime | None = None,
         outcome_ids: tuple[str, ...] | None = None,
         timing: TimingCollector | None = None,
@@ -65,21 +66,6 @@ class Generator(Protocol):
     ) -> GeneratedSampleSet: ...
 
     def minimum_complexity(self) -> ComplexityValue: ...
-
-    def complexity_candidate_for_request(
-        self,
-        *,
-        request: ComplexityRequest,
-    ) -> ComplexityCandidate | None: ...
-
-    def complexity_curriculum_candidates(
-        self,
-        *,
-        start_index: int,
-        count: int,
-    ) -> Sequence[ComplexityCandidate]:
-        """Return the benchmark-owned ordered complexity schedule."""
-        ...
 
 
 class Benchmark(Protocol):

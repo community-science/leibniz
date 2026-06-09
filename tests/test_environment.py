@@ -8,13 +8,12 @@ def test_miniforge_environment_declares_development_toolchain() -> None:
     lines = (_root / "environment.yml").read_text(encoding="utf-8").splitlines()
 
     assert "name: leibniz-dev" in lines
-    assert "  - pytorch" in lines
-    assert "  - nvidia" in lines
     assert "  - conda-forge" in lines
     assert "  - python=3.12" in lines
     assert "  - nodejs=24" in lines
     assert "  - pip>=24" in lines
-    assert "  - numpy" in lines
+    assert "      - numpy>=1.26" in lines
+    assert "      - torch>=2" in lines
     assert '      - "-e .[dev]"' in lines
 
 
@@ -63,7 +62,7 @@ def test_ci_uses_miniforge_environment_file() -> None:
 def test_miniforge_environment_declares_linux_cuda_pytorch_selector() -> None:
     lines = (_root / "environment.yml").read_text(encoding="utf-8").splitlines()
 
-    assert "  - sel(linux): pytorch-cuda=12.4" in lines
+    assert all("pytorch-cuda" not in line.lower() for line in lines)
     assert all("triton" not in line.lower() for line in lines)
 
 

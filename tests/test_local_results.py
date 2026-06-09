@@ -375,7 +375,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert result["benchmark_id"] == "benchmarks.digits@0.1.0"
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     measurement_count = cast(int, leaderboard[0]["measurement_count"])
-    assert measurement_count >= 64 * 4
+    assert measurement_count >= 64 * 3
     assert measurement_count % 64 == 0
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     assert isinstance(cost_summary["inference_compute"], int | float)
@@ -780,8 +780,11 @@ def test_materialize_benchmark_result_views_projects_reference_curves_without_ru
         assert result["leaderboard"] == []
         assert result["plot_runs"] == []
         reference_curves = cast(list[dict[str, object]], result["reference_curves"])
-        assert reference_curves
-        assert reference_curves[0]["x_axis"] == "cost"
+        if result["benchmark_id"] == "benchmarks.digits@0.1.0":
+            assert reference_curves
+            assert reference_curves[0]["x_axis"] == "cost"
+        else:
+            assert reference_curves == []
 
 
 def test_benchmark_inspect_prints_compact_result_summary(

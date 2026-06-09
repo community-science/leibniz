@@ -478,13 +478,16 @@ class DirectFiniteProbabilityPrediction:
             self.prediction_space.validate_outcome_space(outcome_space)
         except PredictionSpaceValidationError as error:
             raise PredictionResultValidationError(str(error)) from error
+        probabilities_by_index = {
+            mass.outcome_index: mass.probability for mass in self.probabilities
+        }
         return FiniteProbabilityMeasure(
             id=self.id,
             outcome_space_id=outcome_space.id,
             probabilities=tuple(
-                ProbabilityMass(outcome.id, self.probability_at(index))
+                ProbabilityMass(outcome.id, probability)
                 for index, outcome in enumerate(outcome_space.outcomes)
-                if self.probability_at(index) > 0
+                if (probability := probabilities_by_index.get(index, 0.0)) > 0
             ),
             normalization_tolerance=self.normalization_tolerance,
         )

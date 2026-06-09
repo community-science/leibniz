@@ -13,16 +13,15 @@ from benchmark_typing import (
     sample_width,
 )
 
-from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment, MaterializationPlan
 from leibniz.observation_formation import FieldObservation
 from leibniz.observation_generation import (
-    ComplexityCandidate,
     ComplexityRequest,
     ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
+    sample_indices_for_even_state_coverage,
 )
 from leibniz.tensor_runtime import TensorRuntimeError, resolve_tensor_runtime
 from leibniz.timing import TimingCollector
@@ -109,14 +108,13 @@ def test_digits_generator_is_deterministic() -> None:
             height=first_height,
         ),
     )
-    field_record = left.samples[0].field_record()
-    assert sample_component_index(first_sample) == field_record.component_index
-    assert first_sample.outcome_id == "digit-8"
+    assert sample_component_index(first_sample) == first_sample.component_index
+    assert first_sample.outcome_id == f"digit-{first_sample.component_index}"
     assert _coordinate(first_sample.latent_coordinates, role="content")["values"] == {
-        "digit_index": field_record.component_index,
-        "digit_variant_index": 0,
-            "outcome_id": "digit-8",
-    }
+            "digit_index": first_sample.component_index,
+            "digit_variant_index": 0,
+            "outcome_id": first_sample.outcome_id,
+        }
     assert first_sample.observable_state_id is None
     assert first_sample.available_outcome_ids == ()
     assert first_sample.target_distribution is None
@@ -132,7 +130,7 @@ def test_digits_generator_is_deterministic() -> None:
     )
     coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
     assert [coordinate["component_index"] for coordinate in coordinates] == [
-        field_record.component_index
+        first_sample.component_index
     ]
     assert len(coordinates) == 1
     constructed_parameters = cast(
@@ -178,7 +176,7 @@ def test_digits_generator_samples_formation_batch_without_fields() -> None:
         (sample.width, sample.height) for sample in observation_batch.samples
     ]
     assert [sample.component_index for sample in formation_batch.samples] == [
-        sample.field_record().component_index for sample in observation_batch.samples
+        sample.component_index for sample in observation_batch.samples
     ]
     assert [sample.outcome_id for sample in formation_batch.samples] == [
         sample.outcome_id for sample in observation_batch.samples
@@ -278,7 +276,6 @@ def test_digits_generator_samples_resolution_from_memory_bound() -> None:
     batch = _observation_payload(generator,
         sample_count=1,
         seed=202,
-        component_indices=(1,),
     )
     sample = batch.samples[0]
     width = sample_width(sample)
@@ -291,7 +288,7 @@ def test_digits_generator_samples_resolution_from_memory_bound() -> None:
         sample.complexity,
         generator.distinguishable_state_complexity(width=width, height=height),
     )
-    assert sample.outcome_id == "digit-1"
+    assert sample.outcome_id == f"digit-{sample.component_index}"
 
 
 def test_digits_generator_counts_constructed_finite_complexity_class() -> None:
@@ -398,9 +395,10 @@ def test_digits_generator_accepts_complexity_value_requests() -> None:
 
 def test_digits_generator_materializes_target_complexity_class_band() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
+    generator_impl = cast(Any, generator)
     target = generator.minimum_complexity().value + 3.0
 
-    complexity_class = generator.complexity_candidate_for_request(
+    complexity_class = generator_impl._complexity_class_for_request(
         request=ComplexityRequest(
             minimum=target,
             maximum=target + 1.0,
@@ -411,17 +409,20 @@ def test_digits_generator_materializes_target_complexity_class_band() -> None:
     assert complexity_class.cardinality == 8
     assert math.isclose(complexity_class.complexity, math.log2(8))
     assert complexity_class.resolution_assignment is not None
-    assert complexity_class.metadata["affine_transform_count"] == 1
-    assert complexity_class.metadata["digit_count"] == 8
-    assert complexity_class.metadata["output_digit_count"] == 10
-    assert complexity_class.metadata["requested_cardinality"] == 8
-    assert complexity_class.metadata["realized_cardinality"] == 8
-    assert complexity_class.metadata["construction"] == (
+    metadata = complexity_class.metadata()
+    assert metadata["affine_transform_count"] == 2
+    assert metadata["digit_count"] == 10
+    assert metadata["output_digit_count"] == 10
+    assert metadata["minimum_address"] == 7
+    assert metadata["maximum_address"] == 14
+    assert metadata["requested_cardinality"] == 8
+    assert metadata["realized_cardinality"] == 8
+    assert metadata["construction"] == (
         "symmetric-digits-over-finite-affine-product-grid"
     )
     oracle_reference = cast(
         dict[str, object],
-        complexity_class.metadata["oracle_inference_compute"],
+        metadata["oracle_inference_compute"],
     )
     assert oracle_reference["kind"] == "oracle-inference-compute-reference-v1"
     assert oracle_reference["unit"] == "abstract-ops"
@@ -431,7 +432,7 @@ def test_digits_generator_materializes_target_complexity_class_band() -> None:
         "width": 16,
         "pixel_count": 16 * 16,
     }
-    assert complexity_class.metadata["affine_parameters"] == [
+    assert metadata["affine_parameters"] == [
         "x_translation",
         "y_translation",
         "scale",
@@ -440,24 +441,26 @@ def test_digits_generator_materializes_target_complexity_class_band() -> None:
     ]
 
 
-def test_digits_complexity_curriculum_uses_supported_finite_cardinalities() -> None:
+def test_digits_integer_shells_decode_unique_latent_addresses() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
+    generator_impl = cast(Any, generator)
 
-    candidates = tuple(
-        generator.complexity_curriculum_candidates(start_index=0, count=4)
-    )
-
-    assert [candidate.cardinality for candidate in candidates] == [1, 2, 3, 4]
-    assert [candidate.metadata["affine_transform_count"] for candidate in candidates] == [
-        1,
-        1,
-        1,
-        1,
-    ]
-    for candidate in candidates:
-        assert candidate.cardinality is not None
-        assert math.isclose(candidate.complexity, math.log2(candidate.cardinality))
-        assert candidate.request.minimum == candidate.request.maximum
+    coordinates: set[tuple[int, int]] = set()
+    for shell in range(4):
+        complexity_class = generator_impl._complexity_class_for_request(
+            request=ComplexityRequest(
+                minimum=float(shell),
+                maximum=float(shell + 1),
+            )
+        )
+        assert complexity_class is not None
+        assert complexity_class.cardinality == 2**shell
+        assert complexity_class.minimum_address == 2**shell - 1
+        for state_index in range(complexity_class.cardinality):
+            sample_address = complexity_class.minimum_address + state_index
+            coordinate = (sample_address % 10, sample_address // 10)
+            assert coordinate not in coordinates
+            coordinates.add(coordinate)
 
 
 def test_digits_oracle_inference_reference_spans_requested_cost() -> None:
@@ -486,24 +489,26 @@ def test_digits_oracle_inference_reference_spans_requested_cost() -> None:
 
 def test_digits_generator_high_cardinality_request_has_direct_representative() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
+    generator_impl = cast(Any, generator)
 
-    candidate = generator.complexity_candidate_for_request(
+    complexity_class = generator_impl._complexity_class_for_request(
         request=ComplexityRequest(
             minimum=21.0,
             maximum=22.0,
         )
     )
 
-    assert candidate is not None
-    assert candidate.cardinality is not None
-    assert 21.0 <= math.log2(candidate.cardinality) <= 22.0
-    assert not hasattr(generator, "complexity_candidates_for_request")
+    assert complexity_class is not None
+    assert 21.0 <= math.log2(complexity_class.cardinality) <= 22.0
+    assert not hasattr(generator, "complexity_candidate_for_request")
+    assert not hasattr(generator, "complexity_curriculum_candidates")
 
 
 def test_digits_generator_materializes_large_target_complexity_class_directly() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
+    generator_impl = cast(Any, generator)
 
-    complexity_class = generator.complexity_candidate_for_request(
+    complexity_class = generator_impl._complexity_class_for_request(
         request=ComplexityRequest(minimum=20.0, maximum=21.0)
     )
 
@@ -511,22 +516,9 @@ def test_digits_generator_materializes_large_target_complexity_class_directly() 
     assert complexity_class.cardinality == 1_048_576
     assert 20.0 <= complexity_class.complexity <= 21.0
     assert complexity_class.resolution_assignment is not None
-    assert cast(int, complexity_class.metadata["affine_product_cardinality"]) >= (
-        complexity_class.cardinality
+    assert cast(int, complexity_class.metadata()["affine_product_cardinality"]) >= (
+        complexity_class.maximum_address + 1
     )
-
-
-def test_complexity_class_candidates_can_declare_exact_integer_cardinality() -> None:
-    candidate = ComplexityCandidate(
-        request=ComplexityRequest(
-            minimum=math.log2(17),
-            maximum=math.log2(17),
-        ),
-        cardinality=17,
-    )
-
-    assert candidate.complexity == math.log2(17)
-    assert candidate.to_record()["cardinality"] == 17
 
 
 def test_digits_generator_accepts_low_sample_cardinality_requests() -> None:
@@ -593,30 +585,25 @@ def test_digits_generator_applies_recorded_variation_coordinates() -> None:
     sample = _observation_payload(generator,
         sample_count=1,
         seed=909,
-        component_indices=(1,),
     ).samples[0]
     variation = _coordinate(sample.latent_coordinates, role="variation")
     variation_values = cast(dict[str, object], variation["values"])
     plan = sample_materialization_plan(sample)
     component_index = sample_component_index(sample)
-    direct = generator.formation.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.digits.observations.direct@0.1.0"),
-        plan=plan,
+    direct = generator.formation.component_field(
+        width=plan.resolution_assignment.require_axis("W"),
+        height=plan.resolution_assignment.require_axis("H"),
         component_index=component_index,
-        variation_coordinates=cast(
-            list[Mapping[str, object]],
-            variation_values["coordinates"],
-        ),
+        variation_coordinate=cast(list[Mapping[str, object]], variation_values["coordinates"])[0],
     )
-    untransformed = generator.formation.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.digits.observations.untransformed@0.1.0"),
-        plan=plan,
+    untransformed = generator.formation.component_field(
+        width=plan.resolution_assignment.require_axis("W"),
+        height=plan.resolution_assignment.require_axis("H"),
         component_index=component_index,
     )
 
-    field_record = sample.field_record()
-    assert field_record.field == direct.field
-    assert field_record.field != untransformed.field
+    assert sample.require_field() == direct
+    assert sample.require_field() != untransformed
     assert all(0.0 <= value <= 1.0 for value in sample.require_field().values)
 
 
@@ -631,9 +618,14 @@ def test_digits_tensor_fields_match_recorded_field_samples() -> None:
         runtime=runtime,
         outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
     )
+    host_batch = generator(
+        shape=4,
+        seed=909,
+        include_fields=True,
+    )
 
     fields = batch.require_tensors()[0].detach().cpu()
-    for index, sample in enumerate(batch.samples):
+    for index, sample in enumerate(host_batch.samples):
         assert tuple(fields[index].shape) == sample.require_field().shape
         assert fields[index].flatten().tolist() == list(sample.require_field().values)
 
@@ -680,30 +672,28 @@ def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
         mps_runtime = resolve_tensor_runtime("mps")
     except TensorRuntimeError as error:
         pytest.skip(str(error))
-    candidate = generator.complexity_candidate_for_request(
+    complexity_class = generator_impl._complexity_class_for_request(
         request=ComplexityRequest(
             minimum=generator.minimum_complexity().value + 5.0,
             maximum=generator.minimum_complexity().value + 6.0,
         )
     )
-    assert candidate is not None
-    complexity_class = generator_impl._complexity_class_for_candidate(candidate)
-    resolution_assignment = candidate.resolution_assignment
+    assert complexity_class is not None
+    resolution_assignment = complexity_class.resolution_assignment
     assert resolution_assignment is not None
     width = resolution_assignment.require_axis(generator.formation.width_axis)
     height = resolution_assignment.require_axis(generator.formation.height_axis)
-    component_indices = tuple(index % complexity_class.digit_count for index in range(64))
-    transform_indices = tuple(
-        index % complexity_class.affine_grid.transform_count for index in range(64)
-    )
     render_kwargs: dict[str, Any] = {
+        "sample_count": 64,
         "width": width,
         "height": height,
         "digit_count": complexity_class.digit_count,
-        "component_indices": component_indices,
-        "transform_indices": transform_indices,
         "transform": generator.formation.variation_transform,
         "grid": complexity_class.affine_grid,
+        "seed": 101,
+        "sample_indices": tuple(range(64)),
+        "cardinality": complexity_class.cardinality,
+        "minimum_address": complexity_class.minimum_address,
         "timing": None,
         "timing_prefix": "",
     }
@@ -715,23 +705,24 @@ def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
     assert cpu_runtime.torch.equal(cpu_fields, mps_fields.detach().cpu())
 
 
-def test_digits_tensor_generation_rejects_unmatched_complexity_requests() -> None:
+def test_digits_tensor_generation_returns_null_set_for_unmatched_complexity_requests() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
     outcome_space = generator.manifest.resolve_outcome_space()
     request = ComplexityRequest(minimum=0.5, maximum=0.5)
 
-    with pytest.raises(
-        ObservationGenerationError,
-        match="tensor generation complexity request matched no candidate",
-    ):
-        generator(
-            shape=1,
-            seed=910,
-            runtime=runtime,
-            outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
-            complexity_request=request,
-        )
+    sample_set = generator(
+        shape=1,
+        seed=910,
+        runtime=runtime,
+        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
+        complexity_request=request,
+    )
+
+    assert sample_set.sample_count == 0
+    assert sample_set.samples == ()
+    assert sample_set.fields is None
+    assert sample_set.targets is None
 
 
 def test_digits_generator_rejects_edge_clipped_affine_samples() -> None:
@@ -775,21 +766,32 @@ def test_digits_benchmark_uses_single_tensor_render_path() -> None:
 
 def test_digits_console_preview_png_encoding_is_deterministic() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
+    seed = 403
+    sample_indices = sample_indices_for_even_state_coverage(
+        state_count=256,
+        seed=seed,
+        sample_limit=50,
+    )
 
-    left = generator.console_preview_batches(atom_count=10)
-    right = generator.console_preview_batches(atom_count=10)
-    sample = cast(dict[str, object], cast(list[object], left[2]["samples"])[0])
+    left = generator(
+        seed=seed,
+        shape=len(sample_indices),
+        include_artifacts=True,
+        complexity_request=ComplexityRequest(minimum=8.0, maximum=9.0),
+        sample_indices=sample_indices,
+    )
+    right = generator(
+        seed=seed,
+        shape=len(sample_indices),
+        include_artifacts=True,
+        complexity_request=ComplexityRequest(minimum=8.0, maximum=9.0),
+        sample_indices=sample_indices,
+    )
+    sample = left.samples[0].to_record()
     data_url = cast(str, sample["image_data_url"])
 
-    assert left == right
-    assert [
-        (batch["label"], batch["sample_count"])
-        for batch in left
-        ] == [
-            ("[3, 4]", 50),
-            ("[5, 6]", 50),
-            ("[8, 9]", 50),
-        ]
+    assert left.to_record() == right.to_record()
+    assert len(left.samples) == 50
     assert data_url.startswith("data:image/png;base64,")
 
 
@@ -803,18 +805,6 @@ def test_generator_rejects_invalid_requests() -> None:
             )
         )
         == "sample shape axes must be positive integers"
-    )
-    assert (
-        str(
-            capture_generation_error(
-                lambda: _observation_payload(generator,
-                    sample_count=2,
-                    seed=1,
-                    component_indices=(1,),
-                )
-            )
-        )
-        == "component_indices length must match sample_count"
     )
     assert (
         str(

@@ -41,7 +41,6 @@ from leibniz.measurements import (
 from leibniz.model_inspection import (
     ModelInspectionRecord,
 )
-from leibniz.observation_generation import ComplexityCandidate, ComplexityRequest
 from leibniz.records import RecordExtractor
 from leibniz.training_runs import TrainingRunRecord
 
@@ -77,7 +76,6 @@ _benchmark_cost_axis_keys = (_benchmark_cost_axis_key,)
 _default_bit_length_per_op = 32.0
 _console_validation_history_max_points = 512
 _reference_curve_default_maximum_cost = 10_000_000_000
-_reference_curve_initial_curriculum_count = 16
 _component_count = 1
 
 
@@ -1360,7 +1358,6 @@ def _benchmark_result_record(
         },
         "reference_curves": _benchmark_reference_curve_records(
             generator=benchmark.generator,
-            runs=runs,
         ),
         "training_history": [run.to_record(complexity_axis=None) for run in runs],
         "plot_runs": [run.to_record(complexity_axis=None) for run in runs],
@@ -1372,14 +1369,8 @@ def _benchmark_result_record(
 def _benchmark_reference_curve_records(
     *,
     generator: Any,
-    runs: tuple[_BenchmarkRunRecord, ...],
 ) -> list[dict[str, object]]:
     points = _generator_oracle_inference_reference_points(generator)
-    if not points:
-        points = _oracle_inference_reference_points(
-            generator=generator,
-            runs=runs,
-        )
     if not points:
         return []
     return [
@@ -1438,84 +1429,6 @@ def _generator_oracle_inference_reference_points(
     return _integrated_reference_curve_points(reference_points)
 
 
-def _reference_curve_candidates(
-    *,
-    generator: Any,
-    runs: tuple[_BenchmarkRunRecord, ...],
-) -> tuple[ComplexityCandidate, ...]:
-    candidates: list[ComplexityCandidate] = []
-    seen_complexities: set[float] = set()
-
-    def append_candidate(candidate: ComplexityCandidate | None) -> None:
-        if candidate is None:
-            return
-        if candidate.complexity in seen_complexities:
-            return
-        seen_complexities.add(candidate.complexity)
-        candidates.append(candidate)
-
-    for candidate in _generator_curriculum_candidates(
-        generator=generator,
-        count=_reference_curve_initial_curriculum_count,
-    ):
-        append_candidate(candidate)
-    for run in runs:
-        if run.sampled_competence is None:
-            continue
-        for point in _as_sequence(
-            run.sampled_competence.get("points", ()),
-            "sampled_competence.points",
-        ):
-            point_record = _extract.mapping(point, "sampled_competence.points")
-            append_candidate(
-                _candidate_for_complexity(
-                    generator=generator,
-                    complexity=_as_nonnegative_number(
-                        point_record.get("complexity"),
-                        "sampled_competence.points.complexity",
-                    ),
-                )
-            )
-    return tuple(candidates)
-
-
-def _generator_curriculum_candidates(
-    *,
-    generator: Any,
-    count: int,
-) -> tuple[ComplexityCandidate, ...]:
-    if not hasattr(generator, "complexity_curriculum_candidates"):
-        return ()
-    candidates = generator.complexity_curriculum_candidates(start_index=0, count=count)
-    return tuple(
-        candidate
-        for candidate in candidates
-        if isinstance(candidate, ComplexityCandidate)
-    )
-
-
-def _oracle_inference_reference_points(
-    *,
-    generator: Any,
-    runs: tuple[_BenchmarkRunRecord, ...],
-) -> list[dict[str, object]]:
-    reference_points: list[dict[str, object]] = []
-    for candidate in _reference_curve_candidates(generator=generator, runs=runs):
-        reference = _candidate_oracle_inference_compute(candidate)
-        if reference is None:
-            continue
-        score = candidate.complexity
-        reference_points.append(
-            {
-                "complexity": score,
-                "score": score,
-                "cost_density": cast(float, reference["value"]),
-                "metadata": reference,
-            }
-        )
-    return _integrated_reference_curve_points(reference_points)
-
-
 def _integrated_reference_curve_points(
     points: list[dict[str, object]],
 ) -> list[dict[str, object]]:
@@ -1553,39 +1466,6 @@ def _integrated_reference_curve_points(
         )
         previous_complexity = complexity
     return integrated_points
-
-
-def _candidate_for_complexity(
-    *,
-    generator: Any,
-    complexity: float,
-) -> ComplexityCandidate | None:
-    if not hasattr(generator, "complexity_candidate_for_request"):
-        return None
-    candidate = generator.complexity_candidate_for_request(
-        request=ComplexityRequest(minimum=complexity, maximum=complexity)
-    )
-    return candidate if isinstance(candidate, ComplexityCandidate) else None
-
-
-def _candidate_oracle_inference_compute(
-    candidate: ComplexityCandidate,
-) -> dict[str, object] | None:
-    reference_value = candidate.metadata.get("oracle_inference_compute")
-    if not isinstance(reference_value, Mapping):
-        return None
-    reference: dict[str, object] = {
-        key: value
-        for key, value in cast(Mapping[object, object], reference_value).items()
-        if isinstance(key, str)
-    }
-    if reference.get("kind") != "oracle-inference-compute-reference-v1":
-        return None
-    value = reference.get("value")
-    if not isinstance(value, int | float) or not math.isfinite(value) or value <= 0:
-        return None
-    reference["value"] = float(value)
-    return reference
 
 
 def _model_inspection_records(

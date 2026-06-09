@@ -7,7 +7,6 @@ from benchmark_typing import load_digits_generator
 
 from leibniz import tensor_runtime as tensor_runtime_module
 from leibniz.architectures import ArchitectureManifest
-from leibniz.observation_generation import ObservationGenerationError
 from leibniz.tensor_runtime import (
     TensorElementParameter,
     TensorElementProgram,
@@ -386,19 +385,17 @@ def test_digits_tensor_generation_compiles_two_extent_independent_programs(
     assert compile_calls == [None, None]
 
 
-def test_digits_generator_call_tensors_match_pinned_canonical_metadata_batch() -> None:
+def test_digits_generator_call_tensors_match_metadata_batch() -> None:
     runtime = resolve_tensor_runtime("cpu")
     generator = load_digits_generator(_digits_benchmark_root)
     outcome_ids = tuple(
         outcome.id
         for outcome in generator.manifest.resolve_outcome_space().outcomes
     )
-    component_indices = (2, 5, 7)
     observation_batch = generator(
         shape=3,
         seed=515,
         include_fields=True,
-        component_indices=component_indices,
         variation_extent=0.0,
     )
 
@@ -406,7 +403,6 @@ def test_digits_generator_call_tensors_match_pinned_canonical_metadata_batch() -
         shape=3,
         seed=515,
         include_metadata=False,
-        component_indices=component_indices,
         variation_extent=0.0,
         runtime=runtime,
         outcome_ids=outcome_ids,
@@ -427,26 +423,6 @@ def test_digits_generator_call_tensors_match_pinned_canonical_metadata_batch() -
         ]
         for sample in observation_batch.samples
     ]
-
-
-def test_digits_generator_call_tensors_reject_invalid_component_requests() -> None:
-    runtime = resolve_tensor_runtime("cpu")
-    generator = load_digits_generator(_digits_benchmark_root)
-    outcome_ids = tuple(
-        outcome.id
-        for outcome in generator.manifest.resolve_outcome_space().outcomes
-    )
-
-    with pytest.raises(ObservationGenerationError, match="component index is outside"):
-        generator(
-            shape=1,
-            seed=515,
-            include_metadata=False,
-            component_indices=(len(generator.formation.components),),
-            runtime=runtime,
-            outcome_ids=outcome_ids,
-        )
-
 
 def _compile_counting_runtime(
     monkeypatch: pytest.MonkeyPatch,

@@ -160,19 +160,19 @@ assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind'
 assertEqual(benchmarkTask?.batches.length, 3, 'benchmark batch count');
 assertEqual(
   benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.sample_count}`).join('|'),
-  'complexity-window:50|complexity-window:50|complexity-window:50',
+  'complexity-window:8|complexity-window:32|complexity-window:50',
   'generated benchmark batches',
 );
 const generatedSamples = benchmarkTask?.batches[0]?.samples ?? [];
 const generatedComponentIndices = generatedSamples.map(requiredComponentIndex);
 assertEqual(
   generatedComponentIndices.length,
-  50,
+  8,
   'generated digit sample count',
 );
 assertEqual(
   new Set(generatedComponentIndices.map((sample) => sample.component_index)).size,
-  10,
+  generatedComponentIndices.length,
   'generated digit label coverage',
 );
 assertEqual(
@@ -265,7 +265,7 @@ if (chessSample === undefined) {
 }
 assertEqual(
   chessBenchmarkTask.batches[0]?.complexity_cardinalities?.[0],
-  1,
+  8,
   'chess sample cardinality',
 );
 assertEqual(
@@ -284,11 +284,16 @@ assertEqual(
   'chess sample image overlay kind',
 );
 assertEqual(
-  chessSample.image_overlay?.moves.some(
-    (move) => move.from.join(',') === '2,6' && move.to.join(',') === '1,7',
+  chessSample.image_overlay?.moves.length,
+  chessSample.available_outcome_ids?.length,
+  'chess sample legal move overlay count',
+);
+assertEqual(
+  chessSample.image_overlay?.moves.every(
+    (move) => move.from.length === 2 && move.to.length === 2,
   ),
   true,
-  'chess sample queen legal move overlay',
+  'chess sample legal move overlay coordinates',
 );
 assertEqual(
   chessSample.image_overlay?.moves.some((move) => (move.target_probability ?? 0) > 0),

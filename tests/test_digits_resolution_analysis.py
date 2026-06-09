@@ -62,7 +62,6 @@ def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> 
         generator,
         shape=1,
         seed=4703,
-        component_indices=(1,),
         resolution_assignment=AxisAssignment(values={"W": 24, "H": 24}),
     )
     sample = batch.samples[0]

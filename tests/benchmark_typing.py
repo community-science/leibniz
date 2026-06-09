@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -23,7 +23,6 @@ from leibniz.materialization import (
 )
 from leibniz.observation_formation import ObservationFormationDeclaration
 from leibniz.observation_generation import (
-    ComplexityCandidate,
     ComplexityRequest,
     ComplexityValue,
     GeneratedSample,
@@ -59,19 +58,6 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
 
     def minimum_complexity(self) -> ComplexityValue: ...
 
-    def complexity_candidate_for_request(
-        self,
-        *,
-        request: ComplexityRequest,
-    ) -> ComplexityCandidate | None: ...
-
-    def complexity_curriculum_candidates(
-        self,
-        *,
-        start_index: int,
-        count: int,
-    ) -> Sequence[ComplexityCandidate]: ...
-
     def __call__(
         self,
         *,
@@ -79,8 +65,9 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
         include_metadata: bool = True,
+        include_artifacts: bool = False,
         complexity_request: ComplexityRequest | None = None,
-        component_indices: Iterable[int] | None = None,
+        sample_indices: Sequence[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
@@ -89,8 +76,6 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...
-
-    def console_preview_batches(self, *, atom_count: int) -> Sequence[Mapping[str, object]]: ...
 
 
 class DigitsBenchmark(BenchmarkProtocol, Protocol):

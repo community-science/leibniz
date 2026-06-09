@@ -37,7 +37,6 @@ def test_digits_length_one_perfect_measurement_scores_full_accepted_mass() -> No
     assert [artifact.kind for artifact in measurement.evidence_artifacts] == [
         "observation-formation-declaration",
         "materialization-plan",
-        "formed-observation",
     ]
 
 
@@ -88,11 +87,6 @@ def _measurement_for_sequence(
     observation_id = ProtocolIdentifier.parse(
         f"benchmarks.digits.observations.l{scale}.digit-{sequence_label}@0.1.0"
     )
-    observation = declaration.form_observation(
-        id=observation_id,
-        plan=plan,
-        component_index=sequence[0],
-    )
     accepted_event = AcceptedEvent.from_record(
         {
             "id": f"benchmarks.digits.events.l{scale}.digit-{sequence_label}@0.1.0",
@@ -121,17 +115,20 @@ def _measurement_for_sequence(
             id=ProtocolIdentifier.parse(
                 f"benchmarks.digits.evidence.l{scale}.digit-{sequence_label}.{measure_kind}@0.1.0"
             ),
-            observation_id=str(observation.id),
+            observation_id=str(observation_id),
             event=accepted_event,
             measure=probability_measure,
         ),
         evidence_artifacts=(
-            observation.formation_declaration,
-            observation.materialization_plan,
             ArtifactReference(
-                kind="formed-observation",
-                protocol_id=observation.id,
-                record_digest=observation.digest,
+                kind="observation-formation-declaration",
+                protocol_id=declaration.id,
+                record_digest=declaration.digest,
+            ),
+            ArtifactReference(
+                kind="materialization-plan",
+                protocol_id=plan.id,
+                record_digest=plan.digest,
             ),
         ),
     )

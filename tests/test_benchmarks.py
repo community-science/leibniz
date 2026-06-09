@@ -272,15 +272,15 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
         "affine_minimum_projected_extent": 0.65,
         "affine_maximum_projected_extent": 1.35,
         "complexity_value": {
-            "kind": "constructed-finite-complexity-class",
+            "kind": "constructed-finite-complexity-shell",
             "measure_id": "log2_complexity_class_size",
             "formula": "log2(realized_cardinality)",
             "digit_count": 10,
             "affine_transform_family": "constructed-finite-affine-product-grid",
             "target_policy": "symmetric-realized-cardinalities-inside-request-band",
             "description": (
-                "Score-bearing Digits complexity classes are requested finite "
-                "single-digit slices. The minimum non-null request is the "
+                "Score-bearing Digits complexity shells are requested finite "
+                "single-digit windows. The minimum non-null request is the "
                 "canonical 10-way digit classification problem. Larger "
                 "requests add symmetric finite affine choices for every "
                 "digit, and the benchmark reports the realized cardinality "

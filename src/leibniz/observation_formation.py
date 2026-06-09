@@ -9,18 +9,15 @@ from dataclasses import dataclass, field
 from itertools import combinations, product
 from typing import cast
 
-from leibniz.artifacts import ArtifactReference
 from leibniz.content import ContentDigest
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import MaterializationPlan
 from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
     "AffineMatrix2D",
     "ComponentMark",
     "FieldObservation",
-    "FormedObservation",
     "ObservationComponentDiscriminabilityReport",
     "VariationTransformDeclaration",
     "ObservationComponent",
@@ -422,50 +419,6 @@ class FieldObservation:
 
 
 @dataclass(frozen=True, slots=True)
-class FormedObservation:
-    """A formed observation field and the provenance needed to reproduce it."""
-
-    id: ProtocolIdentifier
-    benchmark_id: ProtocolIdentifier
-    formation_declaration: ArtifactReference
-    materialization_plan: ArtifactReference
-    component_index: int
-    field: FieldObservation
-
-    def __post_init__(self) -> None:
-        try:
-            self.id.require_unreleased()
-            self.benchmark_id.require_unreleased()
-        except ValueError as error:
-            raise ObservationFormationValidationError(str(error)) from error
-        if self.formation_declaration.kind != "observation-formation-declaration":
-            raise ObservationFormationValidationError(
-                "formation_declaration reference must have kind observation-formation-declaration"
-            )
-        if self.materialization_plan.kind != "materialization-plan":
-            raise ObservationFormationValidationError(
-                "materialization_plan reference must have kind materialization-plan"
-            )
-        if self.component_index < 0:
-            raise ObservationFormationValidationError("component_index must be nonnegative")
-
-    @property
-    def digest(self) -> ContentDigest:
-        return ContentDigest.from_value(self.to_record())
-
-    def to_record(self) -> dict[str, object]:
-        return {
-            "id": str(self.id),
-            "benchmark_id": str(self.benchmark_id),
-            "formation_declaration": self.formation_declaration.to_record(),
-            "materialization_plan": self.materialization_plan.to_record(),
-            "component_index": self.component_index,
-            "field_shape": list(self.field.shape),
-            "field_digest": str(self.field.digest),
-        }
-
-
-@dataclass(frozen=True, slots=True)
 class ObservationComponentDiscriminabilityReport:
     """Pairwise discriminability report for one observation formation envelope."""
 
@@ -583,48 +536,6 @@ class ObservationFormationDeclaration:
             raise ObservationFormationValidationError("sample_index must be nonnegative")
         generator = random.Random(seed + sample_index)
         return generator.randrange(len(self.components))
-
-    def form_observation(
-        self,
-        *,
-        id: ProtocolIdentifier,
-        plan: MaterializationPlan,
-        component_index: int,
-        variation_coordinates: Sequence[Mapping[str, object]] | None = None,
-    ) -> FormedObservation:
-        if plan.benchmark_id != self.benchmark_id:
-            raise ObservationFormationValidationError(
-                f"plan benchmark_id {plan.benchmark_id} does not match {self.benchmark_id}"
-            )
-        width = plan.resolution_assignment.require_axis(self.width_axis)
-        height = plan.resolution_assignment.require_axis(self.height_axis)
-        if component_index < 0 or component_index >= len(self.components):
-            raise ObservationFormationValidationError(
-                "component_index is outside component vocabulary"
-            )
-        coordinates = self._variation_coordinates(variation_coordinates=variation_coordinates)
-        field = self._form_field(
-            component_index=component_index,
-            width=width,
-            height=height,
-            variation_coordinates=coordinates,
-        )
-        return FormedObservation(
-            id=id,
-            benchmark_id=self.benchmark_id,
-            formation_declaration=ArtifactReference(
-                kind="observation-formation-declaration",
-                protocol_id=self.id,
-                record_digest=self.digest,
-            ),
-            materialization_plan=ArtifactReference(
-                kind="materialization-plan",
-                protocol_id=plan.id,
-                record_digest=plan.digest,
-            ),
-            component_index=component_index,
-            field=field,
-        )
 
     def component_field(
         self,

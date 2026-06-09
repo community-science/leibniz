@@ -5,39 +5,28 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.benchmark_implementations import load_benchmark
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import (
-    AxisAssignment,
-    MaterializationPlan,
-)
-from leibniz.observation_formation import (
-    FieldObservation,
-    FormedObservation,
-)
+from leibniz.materialization import MaterializationPlan
+from leibniz.observation_formation import FieldObservation
 
 __all__ = [
     "GeneratedSample",
     "GeneratedSampleSet",
     "ObservationGenerationError",
-    "ComplexityCandidate",
     "ComplexityRequest",
     "ComplexityValue",
     "load_generator",
+    "sample_indices_for_even_state_coverage",
 ]
 
 _core_complexity_measure_id = "log2_complexity_class_size"
 _core_complexity_measure_ids = frozenset({_core_complexity_measure_id})
 _minimum_complexity_value = 0.0
-
-
-def _empty_metadata() -> Mapping[str, object]:
-    return {}
 
 
 class ObservationGenerationError(ValueError):
@@ -115,55 +104,36 @@ class ComplexityValue:
         }
 
 
-@dataclass(frozen=True, slots=True)
-class ComplexityCandidate:
-    """A benchmark-owned concrete complexity class for curriculum sampling."""
+def sample_indices_for_even_state_coverage(
+    *,
+    state_count: int,
+    seed: int,
+    sample_limit: int,
+) -> tuple[int, ...]:
+    """Return sample indices that evenly cover a finite indexed state space."""
 
-    request: ComplexityRequest
-    cardinality: int | None = None
-    resolution_assignment: AxisAssignment | None = None
-    metadata: Mapping[str, object] = dataclass_field(default_factory=_empty_metadata)
+    if type(state_count) is not int or state_count < 1:
+        raise ObservationGenerationError("state_count must be positive")
+    if type(seed) is not int or seed < 0:
+        raise ObservationGenerationError("seed must be nonnegative")
+    if type(sample_limit) is not int or sample_limit < 1:
+        raise ObservationGenerationError("sample_limit must be positive")
+    return tuple(
+        (state_index - seed) % state_count
+        for state_index in _even_state_indices(state_count, limit=sample_limit)
+    )
 
-    def __post_init__(self) -> None:
-        if self.request.minimum != self.request.maximum:
-            raise ObservationGenerationError(
-                "complexity candidate request must name one realized cardinality"
-            )
-        if self.cardinality is not None:
-            if type(self.cardinality) is not int or self.cardinality < 1:
-                raise ObservationGenerationError(
-                    "complexity candidate cardinality must be a positive integer"
-                )
-            if not math.isclose(
-                math.log2(self.cardinality),
-                self.complexity,
-                rel_tol=0.0,
-                abs_tol=1e-9,
-            ):
-                raise ObservationGenerationError(
-                    "complexity candidate cardinality must match log2 cardinality"
-                )
 
-    @property
-    def complexity(self) -> float:
-        """Return the candidate's realized log2 cardinality."""
-
-        return self.request.minimum
-
-    def to_record(self) -> dict[str, object]:
-        """Return a record for this benchmark-owned complexity candidate."""
-
-        record: dict[str, object] = {
-            "request": self.request.to_record(),
-            "complexity": self.complexity,
-        }
-        if self.cardinality is not None:
-            record["cardinality"] = self.cardinality
-        if self.resolution_assignment is not None:
-            record["resolution_assignment"] = self.resolution_assignment.to_record()
-        if self.metadata:
-            record["metadata"] = dict(self.metadata)
-        return record
+def _even_state_indices(state_count: int, *, limit: int) -> tuple[int, ...]:
+    if state_count <= limit:
+        return tuple(range(state_count))
+    if limit == 1:
+        return (0,)
+    indices = {
+        round(index * (state_count - 1) / (limit - 1))
+        for index in range(limit)
+    }
+    return tuple(sorted(indices))
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,11 +155,7 @@ class GeneratedSample:
     variation_coordinates: tuple[Mapping[str, object], ...] = ()
     variation_values: Mapping[str, object] | None = None
     field: FieldObservation | None = None
-    _field_record: FormedObservation | None = dataclass_field(
-        default=None,
-        compare=False,
-        repr=False,
-    )
+    artifacts: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not self.outcome_id:
@@ -202,6 +168,8 @@ class GeneratedSample:
             raise ObservationGenerationError("available_outcome_ids must be nonempty")
         if self.target_distribution is not None:
             _validate_target_distribution(self.target_distribution)
+        if self.artifacts is None:
+            object.__setattr__(self, "artifacts", {})
 
     def require_field(self) -> FieldObservation:
         """Return the generated field or fail with a domain error."""
@@ -216,13 +184,6 @@ class GeneratedSample:
         if self.target_distribution is not None:
             return self.target_distribution
         return {self.outcome_id: 1.0}
-
-    def field_record(self) -> FormedObservation:
-        """Return the backing generated-field record for evidence plumbing."""
-
-        if self._field_record is None:
-            raise ObservationGenerationError("sample does not include generated field data")
-        return self._field_record
 
     def to_record(self, *, include_field: bool = False) -> dict[str, object]:
         """Return a record for this generated sample."""
@@ -260,6 +221,8 @@ class GeneratedSample:
             record["complexity_value"] = self.complexity_value.to_record()
         if self.field is not None and include_field:
             record["field"] = self.field.to_record()
+        if self.artifacts:
+            record.update(self.artifacts)
         return record
 
 

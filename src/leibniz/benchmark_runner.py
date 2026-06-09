@@ -51,7 +51,6 @@ from leibniz.model_operators import (
     summarize_architecture_operators,
 )
 from leibniz.observation_generation import (
-    ComplexityCandidate,
     ComplexityRequest,
     ComplexityValue,
     GeneratedSample,
@@ -122,9 +121,6 @@ _default_evaluation_convergence_confidence_z = 1.96
 _default_evaluation_integral_relative_half_width = 0.05
 _default_evaluation_integral_minimum_half_width = 0.05
 _default_evaluation_terminal_failure_rungs = 3
-_default_complexity_integration_interval_width = 1.0
-_default_training_complexity_integration_interval_width = 0.1
-_complexity_schedule_candidate_chunk = 64
 _default_runtime_memory_budget_fraction = 0.1
 _runtime_batch_memory_safety_factor = 8
 _float32_bytes = 4
@@ -148,21 +144,6 @@ class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
 
     def minimum_complexity(self) -> ComplexityValue: ...
 
-    def complexity_candidate_for_request(
-        self,
-        *,
-        request: ComplexityRequest,
-    ) -> ComplexityCandidate | None: ...
-
-    def complexity_curriculum_candidates(
-        self,
-        *,
-        start_index: int,
-        count: int,
-    ) -> Sequence[ComplexityCandidate]:
-        """Return the benchmark-owned ordered complexity schedule."""
-        ...
-
     def __call__(
         self,
         *,
@@ -170,8 +151,9 @@ class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
         include_metadata: bool = True,
+        include_artifacts: bool = False,
         complexity_request: ComplexityRequest | None = None,
-        component_indices: Iterable[int] | None = None,
+        sample_indices: Sequence[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
@@ -400,10 +382,10 @@ def _evaluation_sampled_competence_record(
             continue
         points.append(
             {
-                "kind": "sampled-complexity-class",
+                "kind": "sampled-complexity-window",
                 "sampling_rule": "generator-uniform-component-index-v1",
                 "difficulty_assumption": (
-                    "approximately-uniform-within-complexity-class"
+                    "approximately-uniform-within-complexity-window"
                 ),
                 "benchmark_id": str(benchmark_id),
                 "complexity_axis": None,
@@ -491,22 +473,30 @@ def _evaluation_confidence_half_width(estimator: _RunningMeanEstimator) -> float
     )
 
 
-def _evaluation_estimate_converged(estimator: _RunningMeanEstimator) -> bool:
+def _evaluation_estimate_converged(
+    estimator: _RunningMeanEstimator,
+    *,
+    half_width_threshold: float = _default_evaluation_convergence_half_width,
+) -> bool:
     return (
         estimator.samples >= _default_evaluation_convergence_min_samples
         and _evaluation_confidence_half_width(estimator)
-        <= _default_evaluation_convergence_half_width
+        <= half_width_threshold
     )
 
 
-def _evaluation_next_sample_count(estimator: _RunningMeanEstimator) -> int:
+def _evaluation_next_sample_count(
+    estimator: _RunningMeanEstimator,
+    *,
+    half_width_threshold: float = _default_evaluation_convergence_half_width,
+) -> int:
     if estimator.samples < _default_evaluation_convergence_min_samples:
         return _default_evaluation_convergence_min_samples - estimator.samples
     target = math.ceil(
         estimator.sample_variance
         * (
             _default_evaluation_convergence_confidence_z
-            / _default_evaluation_convergence_half_width
+            / half_width_threshold
         )
         ** 2
     )
@@ -599,7 +589,7 @@ class BenchmarkRunnerError(ValueError):
 
 
 class _CurriculumExhausted(BenchmarkRunnerError):
-    """Raised when a finite benchmark has no further curriculum candidates."""
+    """Raised when a finite benchmark has no further curriculum windows."""
 
 
 _extract = RecordExtractor(error_type=BenchmarkRunnerError)
@@ -1390,18 +1380,8 @@ def _evaluation_curriculum_rung(
     runtime: TensorRuntime | None = None,
     outcome_ids: tuple[str, ...] | None = None,
 ) -> _CurriculumRung:
-    if planner is not None:
-        return _curriculum_rung_from_candidate(
-            architecture=architecture,
-            generator=generator,
-            sample_count=sample_count,
-            seed=seed,
-            index=index,
-            runtime=runtime,
-            outcome_ids=outcome_ids,
-            candidate=planner.next(),
-        )
-    return _curriculum_rung_from_candidates(
+    planner = _ComplexityCurriculumPlanner() if planner is None else planner
+    return _curriculum_rung_from_window(
         architecture=architecture,
         generator=generator,
         sample_count=sample_count,
@@ -1409,10 +1389,8 @@ def _evaluation_curriculum_rung(
         index=index,
         runtime=runtime,
         outcome_ids=outcome_ids,
-        candidates=_benchmark_complexity_curriculum_candidates(
-            generator=generator,
-            start_index=index,
-        ),
+        window=planner.next(),
+        include_fields=True,
     )
 
 
@@ -1426,97 +1404,34 @@ def _training_curriculum_rung(
     planner: _ComplexityCurriculumPlanner | None = None,
     phase_timings: TimingCollector | None = None,
 ) -> _CurriculumRung:
-    del architecture
-    if planner is not None:
-        with _optional_timing_span(
-            phase_timings,
-            "training_frontier.rung_candidate_generation",
-        ):
-            candidates = (planner.next(),)
-    else:
-        with _optional_timing_span(
-            phase_timings,
-            "training_frontier.rung_candidate_generation",
-        ):
-            candidates = _structured_training_curriculum_candidates(
-                generator=generator,
-                start_index=index,
-                phase_timings=phase_timings,
-            )
-    for candidate in candidates:
-        resolution_assignment = candidate.complexity_class.resolution_assignment
-        with _optional_timing_span(
-            phase_timings,
-            "training_frontier.rung_record_construction",
-        ):
-            rung_seed = seed if index == 0 else seed + 2_000_003 * index
-            outcome_space = generator.manifest.resolve_outcome_space()
-            if not outcome_space.outcomes:
-                raise BenchmarkRunnerError("benchmark outcome space is empty")
-            sample = GeneratedSample(
-                index=0,
-                outcome_id=outcome_space.outcomes[0].id,
-                complexity=candidate.complexity,
-                complexity_value=ComplexityValue(
-                    measure_id=_core_complexity_measure_id(),
-                    value=candidate.complexity,
-                ),
-            )
-            batch = GeneratedSampleSet(
-                benchmark_id=generator.manifest.id,
-                generator_id=cast(ProtocolIdentifier, generator.id),
-                generator_version=generator.version,
-                seed=rung_seed,
-                shape=(1,),
-                variation_extent=_full_variation_extent,
-                complexity_request=candidate.complexity_request,
-                samples=(sample,),
-            )
-            return _CurriculumRung(
-                index=index,
-                resolution_assignment=resolution_assignment,
-                seed=rung_seed,
-                batch=batch,
-                sample_count=sample_count,
-                complexity_minimum=candidate.complexity_minimum,
-                complexity_maximum=candidate.complexity_maximum,
-            )
-    raise BenchmarkRunnerError("training curriculum did not produce any rungs")
+    planner = _ComplexityCurriculumPlanner() if planner is None else planner
+    with _optional_timing_span(
+        phase_timings,
+        "training_frontier.rung_window_generation",
+    ):
+        window = planner.next()
+    with _optional_timing_span(
+        phase_timings,
+        "training_frontier.rung_record_construction",
+    ):
+        return _curriculum_rung_from_window(
+            architecture=architecture,
+            generator=generator,
+            sample_count=sample_count,
+            seed=seed,
+            index=index,
+            runtime=None,
+            outcome_ids=None,
+            window=window,
+            include_fields=False,
+        )
 
 
-def _curriculum_rung_from_candidates(
-    *,
-    architecture: ArchitectureManifest,
-    generator: _TensorBenchmarkGenerator,
-    sample_count: int,
-    seed: int,
-    index: int,
-    runtime: TensorRuntime | None = None,
-    outcome_ids: tuple[str, ...] | None = None,
-    candidates: Sequence[_CurriculumCandidate],
-) -> _CurriculumRung:
-    for candidate in candidates:
-        try:
-            return _curriculum_rung_from_candidate(
-                architecture=architecture,
-                generator=generator,
-                sample_count=sample_count,
-                seed=seed,
-                index=index,
-                runtime=runtime,
-                outcome_ids=outcome_ids,
-                candidate=candidate,
-            )
-        except _EmptyCurriculumCandidate:
-            continue
-    raise _CurriculumExhausted("evaluation curriculum did not produce any rungs")
+class _EmptyCurriculumWindow(Exception):
+    """Raised when a concrete curriculum window materializes no samples."""
 
 
-class _EmptyCurriculumCandidate(Exception):
-    """Raised when a concrete curriculum candidate materializes no samples."""
-
-
-def _curriculum_rung_from_candidate(
+def _curriculum_rung_from_window(
     *,
     architecture: ArchitectureManifest,
     generator: _TensorBenchmarkGenerator,
@@ -1525,33 +1440,35 @@ def _curriculum_rung_from_candidate(
     index: int,
     runtime: TensorRuntime | None,
     outcome_ids: tuple[str, ...] | None,
-    candidate: _CurriculumCandidate,
+    window: _CurriculumWindow,
+    include_fields: bool,
 ) -> _CurriculumRung:
     rung_seed = seed if index == 0 else seed + 2_000_003 * index
     sample_set = generator(
         shape=sample_count,
         seed=rung_seed,
-        include_fields=True,
-        complexity_request=candidate.complexity_request,
+        include_fields=include_fields,
+        complexity_request=window.request,
         variation_extent=_full_variation_extent,
         runtime=runtime,
         outcome_ids=outcome_ids,
     )
     batch = sample_set
     if not batch.samples:
-        raise _EmptyCurriculumCandidate()
-    sample_shape = _batch_sample_input_shape(batch=batch)
-    input_reason = _input_shape_boundary_reason(
-        architecture=architecture,
-        sample_shape=sample_shape,
-    )
-    if input_reason is not None:
-        if index == 0:
-            raise BenchmarkRunnerError(input_reason)
-        raise BenchmarkRunnerError(
-            "architecture scale contract rejected the next curriculum rung: "
-            f"{input_reason}"
+        raise _EmptyCurriculumWindow()
+    if include_fields or batch.fields is not None:
+        sample_shape = _batch_sample_input_shape(batch=batch)
+        input_reason = _input_shape_boundary_reason(
+            architecture=architecture,
+            sample_shape=sample_shape,
         )
+        if input_reason is not None:
+            if index == 0:
+                raise BenchmarkRunnerError(input_reason)
+            raise BenchmarkRunnerError(
+                "architecture scale contract rejected the next curriculum rung: "
+                f"{input_reason}"
+            )
     materialization_plan = batch.samples[0].materialization_plan
     return _CurriculumRung(
         index=index,
@@ -1561,163 +1478,47 @@ def _curriculum_rung_from_candidate(
         seed=batch.seed,
         batch=batch,
         sample_count=len(batch.samples),
-        complexity_minimum=candidate.complexity_minimum,
-        complexity_maximum=candidate.complexity_maximum,
+        complexity_minimum=window.minimum,
+        complexity_maximum=window.maximum,
     )
 
 
 @dataclass(frozen=True, slots=True)
-class _CurriculumCandidate:
-    complexity_class: ComplexityCandidate
-    complexity_minimum: float | None = None
-    complexity_maximum: float | None = None
+class _CurriculumWindow:
+    index: int
 
     @property
-    def complexity_request(self) -> ComplexityRequest:
-        return self.complexity_class.request
+    def minimum(self) -> float:
+        return float(self.index)
+
+    @property
+    def maximum(self) -> float:
+        return float(self.index + 1)
 
     @property
     def complexity(self) -> float:
-        return self.complexity_class.complexity
+        return self.maximum
+
+    @property
+    def request(self) -> ComplexityRequest:
+        return ComplexityRequest(minimum=self.minimum, maximum=self.maximum)
 
 
 @dataclass(slots=True)
 class _ComplexityCurriculumPlanner:
-    generator: _TensorBenchmarkGenerator
-    interval_width: float = _default_complexity_integration_interval_width
-    chunk_size: int = _complexity_schedule_candidate_chunk
-    allow_schedule_scan_fallback: bool = False
     next_index: int = 0
-    previous_selected_complexity: float = 0.0
-    has_selected: bool = False
 
-    def next(self) -> _CurriculumCandidate:
-        if self.interval_width <= 0.0:
-            raise BenchmarkRunnerError("complexity integration interval width must be positive")
-        target = (
-            self.previous_selected_complexity
-            if not self.has_selected
-            else self.previous_selected_complexity + self.interval_width
-        )
-        direct_candidate = self._direct_candidate_for_target(target)
-        if direct_candidate is not None:
-            complexity = direct_candidate.complexity
-            lower = complexity if not self.has_selected else self.previous_selected_complexity
-            self.previous_selected_complexity = complexity
-            self.has_selected = True
-            return _CurriculumCandidate(
-                complexity_class=direct_candidate,
-                complexity_minimum=lower,
-                complexity_maximum=complexity,
-            )
-        if not self.allow_schedule_scan_fallback:
-            raise _CurriculumExhausted(
-                "complexity curriculum produced no direct representative candidate"
-            )
-        first_seen_complexity: float | None = None
-        while True:
-            complexity_classes = self.generator.complexity_curriculum_candidates(
-                start_index=self.next_index,
-                count=self.chunk_size,
-            )
-            if not complexity_classes:
-                raise _CurriculumExhausted("complexity curriculum produced no candidates")
-            for offset, complexity_class in enumerate(complexity_classes):
-                complexity = complexity_class.complexity
-                if first_seen_complexity is None:
-                    first_seen_complexity = complexity
-                should_select = (not self.has_selected) or complexity >= target
-                if not should_select:
-                    continue
-                self.next_index += offset + 1
-                if not self.has_selected or first_seen_complexity > target:
-                    lower = complexity
-                else:
-                    lower = self.previous_selected_complexity
-                self.previous_selected_complexity = complexity
-                self.has_selected = True
-                return _CurriculumCandidate(
-                    complexity_class=complexity_class,
-                    complexity_minimum=lower,
-                    complexity_maximum=complexity,
-                )
-            self.next_index += len(complexity_classes)
-
-    def _direct_candidate_for_target(
-        self,
-        target: float,
-    ) -> ComplexityCandidate | None:
-        request = ComplexityRequest(
-            minimum=target,
-            maximum=target + max(self.interval_width, 1.0),
-        )
-        candidate = self.generator.complexity_candidate_for_request(request=request)
-        if candidate is None:
-            return None
-        if self.has_selected and candidate.complexity <= self.previous_selected_complexity:
-            return None
-        return candidate
-
+    def next(self) -> _CurriculumWindow:
+        if self.next_index < 0:
+            raise BenchmarkRunnerError("curriculum window index must be nonnegative")
+        window = _CurriculumWindow(index=self.next_index)
+        self.next_index += 1
+        return window
 
 def _optional_timing_span(timing: TimingCollector | None, phase: str) -> Any:
     if timing is None:
         return nullcontext()
     return timing.span(phase)
-
-
-def _benchmark_complexity_curriculum_candidates(
-    *,
-    generator: _TensorBenchmarkGenerator,
-    start_index: int,
-    phase_timings: TimingCollector | None = None,
-) -> Sequence[_CurriculumCandidate]:
-    return _benchmark_complexity_candidates(
-        generator=generator,
-        start_index=start_index,
-        phase_timings=phase_timings,
-    )
-
-
-def _structured_training_curriculum_candidates(
-    *,
-    generator: _TensorBenchmarkGenerator,
-    start_index: int,
-    phase_timings: TimingCollector | None = None,
-) -> Sequence[_CurriculumCandidate]:
-    return _benchmark_complexity_candidates(
-        generator=generator,
-        start_index=start_index,
-        phase_timings=phase_timings,
-    )
-
-
-def _benchmark_complexity_candidates(
-    *,
-    generator: _TensorBenchmarkGenerator,
-    start_index: int,
-    phase_timings: TimingCollector | None = None,
-) -> Sequence[_CurriculumCandidate]:
-    candidate_count = 8
-    seen_complexities: set[float] = set()
-    with _optional_timing_span(
-        phase_timings,
-        "training_frontier.complexity_schedule",
-    ):
-        complexity_classes = generator.complexity_curriculum_candidates(
-            start_index=start_index,
-            count=candidate_count,
-        )
-    candidates: list[_CurriculumCandidate] = []
-    for complexity_class in complexity_classes:
-        if complexity_class.complexity in seen_complexities:
-            continue
-        seen_complexities.add(complexity_class.complexity)
-        candidates.append(
-            _CurriculumCandidate(
-                complexity_class=complexity_class,
-            )
-        )
-    return tuple(candidates)
 
 
 def _curriculum_record(
@@ -1739,8 +1540,8 @@ def _curriculum_record(
             "measure_id": _core_complexity_measure_id(),
             "scale": "log2",
         },
-        "candidate_policy": {
-            "kind": "benchmark-owned-complexity-schedule",
+        "window_policy": {
+            "kind": "integer-complexity-shells",
         },
         "gating_metric": "monotone-frontier-validation-competence",
         "rung_policy": "unbounded-competence-frontier",
@@ -1966,10 +1767,7 @@ def _train_and_predict_on_device(
     validation_counter = _ThroughputCounter()
     evaluation_counter = _ThroughputCounter()
     phase_timings = TimingCollector()
-    training_curriculum_planner = _ComplexityCurriculumPlanner(
-        generator,
-        interval_width=_default_training_complexity_integration_interval_width,
-    )
+    training_curriculum_planner = _ComplexityCurriculumPlanner()
 
     def training_batch_for_seed(
         batch_seed: int,
@@ -2304,7 +2102,7 @@ def evaluate_model_checkpoint_artifact(
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     capacity_limited = False
     curriculum_exhausted = False
-    planner = _ComplexityCurriculumPlanner(generator)
+    planner = _ComplexityCurriculumPlanner()
     while True:
         with phase_timings.span("checkpoint_evaluation.rung_planning"):
             try:
@@ -2321,6 +2119,13 @@ def evaluate_model_checkpoint_artifact(
             except _CurriculumExhausted:
                 if not results:
                     raise
+                curriculum_exhausted = True
+                break
+            except _EmptyCurriculumWindow:
+                if not results:
+                    raise BenchmarkRunnerError(
+                        "checkpoint evaluation first curriculum rung materialized no samples"
+                    ) from None
                 curriculum_exhausted = True
                 break
         try:
@@ -2403,8 +2208,20 @@ def _evaluate_checkpoint_rung(
 ) -> tuple[_CheckpointEvaluationRungEvidence, int]:
     estimator = _RunningMeanEstimator()
     max_inference_compute: int | None = None
-    while not _evaluation_estimate_converged(estimator):
-        next_sample_count = _evaluation_next_sample_count(estimator)
+    chance_mass = _chance_accepted_mass(outcome_ids)
+    half_width_threshold = (
+        _default_evaluation_convergence_half_width
+        if chance_mass >= 1.0
+        else _default_evaluation_convergence_half_width * (1.0 - chance_mass)
+    )
+    while not _evaluation_estimate_converged(
+        estimator,
+        half_width_threshold=half_width_threshold,
+    ):
+        next_sample_count = _evaluation_next_sample_count(
+            estimator,
+            half_width_threshold=half_width_threshold,
+        )
         for chunk in _checkpoint_evaluation_chunks(
             predictor=predictor,
             architecture=architecture,
@@ -2468,6 +2285,7 @@ def _evaluation_integration_evidence(
         score_integral_value=score_integral.value,
         score_integral_half_width=_evaluation_score_integral_half_width(
             evaluation_results=evaluation_results,
+            frontier_index=frontier_index,
             chance_mass=chance_mass,
         ),
         terminal_failure_count=_evaluation_terminal_failure_count(
@@ -2498,13 +2316,15 @@ def _evaluation_competence_points(
 def _evaluation_score_integral_half_width(
     *,
     evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
+    frontier_index: int,
     chance_mass: float,
 ) -> float:
     if not evaluation_results:
         return math.inf
     scale = 1.0 if chance_mass >= 1.0 else 1.0 / (1.0 - chance_mass)
     widths: list[float] = []
-    for result in evaluation_results:
+    frontier_results = evaluation_results[: frontier_index + 1]
+    for result in frontier_results:
         lower, upper = _rung_complexity_interval(result.rung) or (
             max(0.0, result.rung.complexity - 1.0),
             result.rung.complexity,
@@ -2512,7 +2332,7 @@ def _evaluation_score_integral_half_width(
         widths.append(max(0.0, upper - lower))
     variance_terms = (
         (width * result.confidence_half_width * scale) ** 2
-        for width, result in zip(widths, evaluation_results, strict=True)
+        for width, result in zip(widths, frontier_results, strict=True)
     )
     return math.sqrt(math.fsum(variance_terms))
 
@@ -2523,16 +2343,17 @@ def _evaluation_terminal_failure_count(
     frontier_index: int,
     chance_mass: float,
 ) -> int:
-    count = 0
-    for result in evaluation_results[frontier_index + 1 :]:
+    if not evaluation_results:
+        return 0
+    failure_start = (
+        frontier_index + 1
         if _evaluation_rung_confidently_above_chance(
-            result,
+            evaluation_results[frontier_index],
             chance_mass=chance_mass,
-        ):
-            count = 0
-        else:
-            count += 1
-    return count
+        )
+        else frontier_index
+    )
+    return len(evaluation_results[failure_start:])
 
 
 @dataclass(frozen=True, slots=True)
@@ -3464,7 +3285,7 @@ def _sampled_competence_record_from_accepted_mass(
         raise BenchmarkRunnerError("sampled competence requires one mass per sample")
     complexities = {sample.complexity for sample in batch.samples}
     if len(complexities) != 1:
-        raise BenchmarkRunnerError("sampled competence requires one complexity class")
+        raise BenchmarkRunnerError("sampled competence requires one complexity window")
     finite_losses = tuple(-math.log(mass) for mass in accepted_mass if mass > 0.0)
     mean_negative_log_score: float | str
     if len(finite_losses) != len(accepted_mass):
@@ -3472,9 +3293,9 @@ def _sampled_competence_record_from_accepted_mass(
     else:
         mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
     record: dict[str, object] = {
-        "kind": "sampled-complexity-class",
+        "kind": "sampled-complexity-window",
         "sampling_rule": "generator-uniform-component-index-v1",
-        "difficulty_assumption": "approximately-uniform-within-complexity-class",
+        "difficulty_assumption": "approximately-uniform-within-complexity-window",
         "benchmark_id": str(batch.benchmark_id),
         "complexity_axis": complexity_axis,
         "complexity": next(iter(complexities)),
@@ -3561,9 +3382,9 @@ def _training_sampled_competence_record(
 ) -> dict[str, object]:
     points: list[Mapping[str, object]] = [
         {
-            "kind": "sampled-complexity-class",
+            "kind": "sampled-complexity-window",
             "sampling_rule": "generator-uniform-component-index-v1",
-            "difficulty_assumption": "approximately-uniform-within-complexity-class",
+            "difficulty_assumption": "approximately-uniform-within-complexity-window",
             "benchmark_id": str(benchmark_id),
             "complexity_axis": None,
             "complexity": point.complexity,
@@ -3807,6 +3628,8 @@ def _evaluation_result_frontier_index(
             chance_mass=chance_mass,
         ):
             frontier_index = index
+            continue
+        break
     return frontier_index
 
 
