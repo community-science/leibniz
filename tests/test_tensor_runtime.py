@@ -9,6 +9,7 @@ from leibniz import tensor_runtime as tensor_runtime_module
 from leibniz.architectures import ArchitectureManifest
 from leibniz.observation_generation import ObservationGenerationError
 from leibniz.tensor_runtime import (
+    TensorElementParameter,
     TensorElementProgram,
     TensorElementRecipe,
     TensorRuntime,
@@ -311,6 +312,62 @@ def test_tensor_element_compile_cache_is_not_extent_dependent(
     assert compile_calls == [None]
     assert first.tolist() == [0, 1]
     assert second.tolist() == [0, 1, 2]
+
+
+def test_tensor_element_parameter_cache_reuses_constant_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    tensor_calls = 0
+    original_tensor = runtime.torch.tensor
+
+    def tensor_with_count(*args: Any, **kwargs: Any) -> Any:
+        nonlocal tensor_calls
+        tensor_calls += 1
+        return original_tensor(*args, **kwargs)
+
+    monkeypatch.setattr(runtime.torch, "tensor", tensor_with_count)
+
+    def element_function(
+        coordinates: tuple[Any, ...],
+        flat_indices: Any,
+        *,
+        constant: Any,
+        dynamic: Any,
+    ) -> Any:
+        _ = flat_indices
+        return coordinates[0] + constant[0] + dynamic[coordinates[0]]
+
+    program = TensorElementProgram(
+        kernel=element_function,
+        parameters={
+            "constant": TensorElementParameter(
+                dtype="int64",
+                shape=(1,),
+                values=(7,),
+            ),
+            "dynamic": TensorElementParameter(
+                dtype="int64",
+                shape=(2,),
+                values=(1, 2),
+                dynamic_axes=(0,),
+            ),
+        },
+        cache_key=("parameter-cache-test",),
+    )
+
+    first = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=program),
+    )
+    second = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=program),
+    )
+
+    assert first.tolist() == [8, 10]
+    assert second.tolist() == [8, 10]
+    assert tensor_calls == 3
 
 
 def test_digits_tensor_generation_compiles_two_extent_independent_programs(

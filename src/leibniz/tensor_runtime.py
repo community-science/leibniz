@@ -6,6 +6,7 @@ import importlib
 import math
 import os
 import time
+from array import array
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -64,7 +65,8 @@ TensorElementParameterDType = Literal["float32", "int64"]
 _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
 _roofline_cache: dict[str, dict[str, object]] = {}
 _tensor_element_kernel_cache: dict[tuple[object, ...], Any] = {}
-_tensor_element_tile_size = 8192
+_tensor_element_parameter_cache: dict[tuple[object, ...], Any] = {}
+_tensor_element_tile_size = 131_072
 
 
 class TensorRuntimeError(ValueError):
@@ -969,7 +971,12 @@ def _construct_tensor_element_program(
     program: TensorElementProgram,
 ) -> Any:
     parameter_tensors = {
-        name: _tensor_element_parameter(runtime=runtime, parameter=parameter)
+        name: _tensor_element_parameter(
+            runtime=runtime,
+            program=program,
+            name=name,
+            parameter=parameter,
+        )
         for name, parameter in program.parameters.items()
     }
     if (
@@ -1061,14 +1068,61 @@ def _construct_compiled_tensor_element_tiles(
     return output.reshape(shape)
 
 
-def _tensor_element_parameter(*, runtime: TensorRuntime, parameter: TensorElementParameter) -> Any:
+def _tensor_element_parameter(
+    *,
+    runtime: TensorRuntime,
+    program: TensorElementProgram,
+    name: str,
+    parameter: TensorElementParameter,
+) -> Any:
     expected_count = math.prod(tuple(_positive_tensor_extent(size) for size in parameter.shape))
     if len(parameter.values) != expected_count:
         raise TensorRuntimeError("tensor element parameter value count does not match shape")
     dtype = _tensor_element_parameter_dtype(runtime=runtime, dtype=parameter.dtype)
-    return runtime.torch.tensor(parameter.values, dtype=dtype, device=runtime.device).reshape(
+    cache_key = _tensor_element_parameter_cache_key(
+        runtime=runtime,
+        program=program,
+        name=name,
+        parameter=parameter,
+    )
+    if cache_key is not None:
+        cached = _tensor_element_parameter_cache.get(cache_key)
+        if cached is not None:
+            return cached
+    tensor = runtime.torch.tensor(parameter.values, dtype=dtype, device=runtime.device).reshape(
         parameter.shape
     )
+    if cache_key is not None:
+        _tensor_element_parameter_cache[cache_key] = tensor
+    return tensor
+
+
+def _tensor_element_parameter_cache_key(
+    *,
+    runtime: TensorRuntime,
+    program: TensorElementProgram,
+    name: str,
+    parameter: TensorElementParameter,
+) -> tuple[object, ...] | None:
+    if parameter.dynamic_axes:
+        return None
+    return (
+        program.cache_key if program.cache_key is not None else id(program.kernel),
+        runtime.device_kind,
+        str(runtime.device),
+        name,
+        parameter.dtype,
+        parameter.shape,
+        _tensor_element_parameter_values_key(parameter),
+    )
+
+
+def _tensor_element_parameter_values_key(parameter: TensorElementParameter) -> bytes:
+    if parameter.dtype == "float32":
+        return array("f", (float(value) for value in parameter.values)).tobytes()
+    if parameter.dtype == "int64":
+        return array("q", (int(value) for value in parameter.values)).tobytes()
+    raise TensorRuntimeError(f"unsupported tensor element parameter dtype: {parameter.dtype}")
 
 
 def _tensor_element_parameter_dtype(
