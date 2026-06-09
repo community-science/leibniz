@@ -222,13 +222,13 @@ def sampled_competence_record(
     complexity_axis: str | None,
     input_shape: tuple[int, ...] | None = None,
 ) -> dict[str, object]:
-    """Return aggregate competence evidence for one sampled complexity class."""
+    """Return aggregate competence evidence for one sampled complexity window."""
 
     if len(batch.samples) != len(measurements):
         raise ValueError("sampled competence requires one measurement per sample")
     complexities = {sample.complexity for sample in batch.samples}
     if len(complexities) != 1:
-        raise ValueError("sampled competence requires one complexity class")
+        raise ValueError("sampled competence requires one complexity window")
     accepted_mass = tuple(
         measurement.raw_scoring_evidence.accepted_mass for measurement in measurements
     )
@@ -243,9 +243,9 @@ def sampled_competence_record(
     else:
         mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
     record: dict[str, object] = {
-        "kind": "sampled-complexity-class",
+        "kind": "sampled-complexity-window",
         "sampling_rule": "generator-uniform-component-index-v1",
-        "difficulty_assumption": "approximately-uniform-within-complexity-class",
+        "difficulty_assumption": "approximately-uniform-within-complexity-window",
         "benchmark_id": str(batch.benchmark_id),
         "complexity_axis": complexity_axis,
         "complexity": next(iter(complexities)),

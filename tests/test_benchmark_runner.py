@@ -33,7 +33,6 @@ from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
 from leibniz.materialization import AxisAssignment
 from leibniz.observation_generation import (
-    ComplexityCandidate,
     ComplexityRequest,
     GeneratedSampleSet,
     load_generator,
@@ -548,8 +547,10 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     manifest = load_digits_benchmark(_digits_benchmark_root).manifest
 
     evaluation_bundle.measurement_dataset.validate_manifest(manifest)
-    assert evaluation_summary.measurement_count == 64
-    assert len(evaluation_bundle.measurement_dataset.measurements) == 64
+    assert evaluation_summary.measurement_count > 0
+    assert len(evaluation_bundle.measurement_dataset.measurements) == (
+        evaluation_summary.measurement_count
+    )
     assert evaluation_bundle.measurement_score_view.source_dataset_digest == (
         evaluation_bundle.measurement_dataset.digest
     )
@@ -666,8 +667,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     complexity_value = cast(dict[str, object], evaluation_curriculum["complexity_value"])
     assert complexity_value["scale"] == "log2"
     assert evaluation_curriculum["complexity_axis"] == complexity_value["measure_id"]
-    candidate_policy = cast(dict[str, object], evaluation_curriculum["candidate_policy"])
-    assert candidate_policy == {"kind": "benchmark-owned-complexity-schedule"}
+    window_policy = cast(dict[str, object], evaluation_curriculum["window_policy"])
+    assert window_policy == {"kind": "integer-complexity-shells"}
     assert evaluation_curriculum["rung_policy"] == "unbounded-competence-frontier"
     assert (
         evaluation_curriculum["gating_metric"]
@@ -745,11 +746,11 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         rung_complexity = cast(float, rung["complexity"])
         assert request_minimum <= rung_complexity
         assert rung_complexity <= request_maximum
-        assert math.isclose(request_minimum, request_maximum)
+        assert math.isclose(request_maximum - request_minimum, 1.0)
         score_interval = cast(dict[str, object], rung["score_interval"])
         assert cast(float, score_interval["complexity_minimum"]) <= rung_complexity
         assert rung_complexity <= cast(float, score_interval["complexity_maximum"])
-    assert [rung["sample_count"] for rung in curriculum_rungs] == [64] * len(curriculum_rungs)
+    assert all(cast(int, rung["sample_count"]) > 0 for rung in curriculum_rungs)
     assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
         cast(float, rung["complexity"]) for rung in curriculum_rungs
     )
@@ -777,18 +778,22 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert sampled_competence["sampling_rule"] == "generator-uniform-component-index-v1"
     assert (
         sampled_competence["difficulty_assumption"]
-        == "approximately-uniform-within-complexity-class"
+        == "approximately-uniform-within-complexity-window"
     )
     assert sampled_competence["complexity_axis"] is None
     assert math.isclose(
         cast(float, sampled_competence["complexity"]),
         cast(float, curriculum_rungs[0]["complexity"]),
     )
-    assert sampled_competence["sample_count"] == 64 * len(curriculum_rungs)
+    assert sampled_competence["sample_count"] == sum(
+        cast(int, rung["sample_count"]) for rung in curriculum_rungs
+    )
     assert 0.0 <= cast(float, sampled_competence["mean_accepted_mass"]) <= 1.0
     points = cast(list[dict[str, object]], sampled_competence["points"])
     assert len(points) == len(curriculum_rungs)
-    assert [point["sample_count"] for point in points] == [64] * len(curriculum_rungs)
+    assert [point["sample_count"] for point in points] == [
+        rung["sample_count"] for rung in curriculum_rungs
+    ]
     assert all(isinstance(point["input_shape"], list) for point in points)
     assert [point["complexity"] for point in points] == [
         rung["complexity"] for rung in curriculum_rungs
@@ -1037,7 +1042,7 @@ def test_evaluation_integration_converges_after_confident_terminal_failures() ->
     evidence = integration_evidence(evaluation_results=results, outcome_ids=outcome_ids)
     assert evidence.frontier_index == 0
     assert evidence.terminal_failure_count == 3
-    assert math.isclose(evidence.score_integral_half_width, math.sqrt(4) * 0.01 / 0.9)
+    assert math.isclose(evidence.score_integral_half_width, 0.01 / 0.9)
     assert evidence.converged
 
 
@@ -1780,7 +1785,7 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
         replay_refreshed_points[0].complexity_maximum,
         replay_request.maximum,
     )
-    assert replay_refreshed_points[0].accepted_mass < 1e-6
+    assert math.isclose(replay_refreshed_points[0].accepted_mass, 0.25)
 
 
 def test_training_replay_frontier_points_are_sample_weighted_by_interval() -> None:
@@ -1951,9 +1956,9 @@ def test_training_plateau_signal_uses_current_rung_competence() -> None:
     points.insert(
         0,
         {
-            "kind": "sampled-complexity-class",
+            "kind": "sampled-complexity-window",
             "sampling_rule": "generator-uniform-component-index-v1",
-            "difficulty_assumption": "approximately-uniform-within-complexity-class",
+            "difficulty_assumption": "approximately-uniform-within-complexity-window",
             "benchmark_id": "benchmarks.digits@0.1.0",
             "complexity_axis": None,
             "complexity": math.log2(10),
@@ -1985,9 +1990,9 @@ def test_training_rung_threshold_uses_current_rung_competence() -> None:
     points.insert(
         0,
         {
-            "kind": "sampled-complexity-class",
+            "kind": "sampled-complexity-window",
             "sampling_rule": "generator-uniform-component-index-v1",
-            "difficulty_assumption": "approximately-uniform-within-complexity-class",
+            "difficulty_assumption": "approximately-uniform-within-complexity-window",
             "benchmark_id": "benchmarks.digits@0.1.0",
             "complexity_axis": None,
             "complexity": math.log2(10),
@@ -2276,285 +2281,28 @@ def test_training_plateau_above_rung_competence_threshold_advances_frontier(
     assert plateau_history_lengths == [2]
 
 
-def test_evaluation_curriculum_uses_benchmark_owned_complexity_schedule() -> None:
-    generator = load_generator(_digits_benchmark_root)
-    minimum = generator.minimum_complexity().value
+def test_complexity_curriculum_planner_emits_integer_windows() -> None:
+    planner = cast(Any, benchmark_runner)._ComplexityCurriculumPlanner()
 
-    candidates = cast(Any, benchmark_runner)._benchmark_complexity_curriculum_candidates(
-        generator=generator,
-        start_index=0,
-    )
+    windows = [planner.next() for _ in range(4)]
 
-    assert [candidate.complexity for candidate in candidates] == sorted(
-        candidate.complexity for candidate in candidates
-    )
-    assert candidates[0].complexity_class.resolution_assignment is not None
-    assert candidates[0].complexity_class.resolution_assignment.values == {"W": 16, "H": 16}
-    assert [candidate.complexity_class.cardinality for candidate in candidates[:8]] == [
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        8,
+    assert [(window.minimum, window.maximum, window.complexity) for window in windows] == [
+        (0.0, 1.0, 1.0),
+        (1.0, 2.0, 2.0),
+        (2.0, 3.0, 3.0),
+        (3.0, 4.0, 4.0),
     ]
-    for candidate in candidates[:8]:
-        assert candidate.complexity_request.minimum >= minimum
-        assert math.isclose(
-            candidate.complexity_request.minimum,
-            candidate.complexity_request.maximum,
-        )
-        assert candidate.complexity_request.minimum <= candidate.complexity
-        assert candidate.complexity <= candidate.complexity_request.maximum
+    assert [window.request.to_record() for window in windows] == [
+        ComplexityRequest(minimum=0.0, maximum=1.0).to_record(),
+        ComplexityRequest(minimum=1.0, maximum=2.0).to_record(),
+        ComplexityRequest(minimum=2.0, maximum=3.0).to_record(),
+        ComplexityRequest(minimum=3.0, maximum=4.0).to_record(),
+    ]
 
 
-def test_training_curriculum_uses_benchmark_owned_complexity_schedule() -> None:
+def test_training_curriculum_integer_window_rematerializes() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
-    minimum = generator.minimum_complexity().value
-
-    candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
-        generator=generator,
-        start_index=0,
-    )
-
-    assert [candidate.complexity_class.cardinality for candidate in candidates[:8]] == [
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        8,
-    ]
-    for candidate in candidates[:8]:
-        assert candidate.complexity_request.minimum >= minimum
-        assert math.isclose(
-            candidate.complexity_request.minimum,
-            candidate.complexity_request.maximum,
-        )
-        assert (
-            candidate.complexity_class.request.minimum
-            == candidate.complexity_class.request.maximum
-        )
-        assert candidate.complexity_request.minimum <= candidate.complexity
-        assert candidate.complexity <= candidate.complexity_request.maximum
-
-
-def test_adaptive_curriculum_planner_charges_only_skipped_representable_candidates() -> None:
-    class SparseGenerator:
-        def __init__(self) -> None:
-            self.calls: list[tuple[int, int]] = []
-            self.candidates = (
-                ComplexityCandidate(
-                    request=ComplexityRequest(minimum=0.0, maximum=0.0),
-                    cardinality=1,
-                ),
-                ComplexityCandidate(
-                    request=ComplexityRequest(minimum=0.5, maximum=0.5),
-                ),
-                ComplexityCandidate(
-                    request=ComplexityRequest(minimum=1.0, maximum=1.0),
-                    cardinality=2,
-                ),
-                ComplexityCandidate(
-                    request=ComplexityRequest(minimum=4.0, maximum=4.0),
-                    cardinality=16,
-                ),
-            )
-
-        def complexity_curriculum_candidates(
-            self,
-            *,
-            start_index: int,
-            count: int,
-        ) -> tuple[ComplexityCandidate, ...]:
-            self.calls.append((start_index, count))
-            return self.candidates[start_index : start_index + count]
-
-        def complexity_candidate_for_request(
-            self,
-            *,
-            request: ComplexityRequest,
-        ) -> ComplexityCandidate | None:
-            return None
-
-    generator = SparseGenerator()
-    planner = cast(Any, benchmark_runner)._ComplexityCurriculumPlanner(
-        cast(Any, generator),
-        interval_width=1.0,
-        chunk_size=2,
-        allow_schedule_scan_fallback=True,
-    )
-
-    first = planner.next()
-    second = planner.next()
-    third = planner.next()
-
-    assert (first.complexity, first.complexity_minimum, first.complexity_maximum) == (
-        0.0,
-        0.0,
-        0.0,
-    )
-    assert (second.complexity, second.complexity_minimum, second.complexity_maximum) == (
-        1.0,
-        0.0,
-        1.0,
-    )
-    assert (third.complexity, third.complexity_minimum, third.complexity_maximum) == (
-        4.0,
-        4.0,
-        4.0,
-    )
-    assert all(count == 2 for _, count in generator.calls)
-
-
-def test_adaptive_curriculum_planner_keeps_initial_unrepresentable_gap_free() -> None:
-    class ShiftedGenerator:
-        def complexity_candidate_for_request(
-            self,
-            *,
-            request: ComplexityRequest,
-        ) -> ComplexityCandidate | None:
-            return None
-
-        def complexity_curriculum_candidates(
-            self,
-            *,
-            start_index: int,
-            count: int,
-        ) -> tuple[ComplexityCandidate, ...]:
-            candidates = (
-                ComplexityCandidate(
-                    request=ComplexityRequest(minimum=2.0, maximum=2.0),
-                    cardinality=4,
-                ),
-            )
-            return candidates[start_index : start_index + count]
-
-    planner = cast(Any, benchmark_runner)._ComplexityCurriculumPlanner(
-        cast(Any, ShiftedGenerator()),
-        interval_width=1.0,
-        allow_schedule_scan_fallback=True,
-    )
-
-    candidate = planner.next()
-
-    assert (candidate.complexity, candidate.complexity_minimum, candidate.complexity_maximum) == (
-        2.0,
-        2.0,
-        2.0,
-    )
-
-
-def test_adaptive_curriculum_planner_jumps_by_complexity_request_when_available() -> None:
-    class DirectGenerator:
-        def __init__(self) -> None:
-            self.schedule_calls = 0
-
-        def complexity_candidate_for_request(
-            self,
-            *,
-            request: ComplexityRequest,
-        ) -> ComplexityCandidate | None:
-            cardinality = max(1, math.ceil(2**request.minimum))
-            complexity = math.log2(cardinality)
-            if complexity > request.maximum:
-                return None
-            return ComplexityCandidate(
-                request=ComplexityRequest(minimum=complexity, maximum=complexity),
-                cardinality=cardinality,
-            )
-
-        def complexity_curriculum_candidates(
-            self,
-            *,
-            start_index: int,
-            count: int,
-        ) -> tuple[ComplexityCandidate, ...]:
-            del start_index, count
-            self.schedule_calls += 1
-            return ()
-
-    generator = DirectGenerator()
-    planner = cast(Any, benchmark_runner)._ComplexityCurriculumPlanner(
-        cast(Any, generator),
-        interval_width=1.0,
-    )
-
-    candidates = [planner.next() for _ in range(5)]
-
-    assert [candidate.complexity_class.cardinality for candidate in candidates] == [
-        1,
-        2,
-        4,
-        8,
-        16,
-    ]
-    assert generator.schedule_calls == 0
-
-
-def test_training_curriculum_uses_finer_representative_interval_than_evaluation() -> None:
-    generator = load_digits_generator(_digits_benchmark_root)
-    training_planner = cast(Any, benchmark_runner)._ComplexityCurriculumPlanner(
-        generator,
-        interval_width=cast(
-            float,
-            cast(Any, benchmark_runner)._default_training_complexity_integration_interval_width,
-        ),
-    )
-    evaluation_planner = cast(Any, benchmark_runner)._ComplexityCurriculumPlanner(
-        generator,
-        interval_width=cast(
-            float,
-            cast(Any, benchmark_runner)._default_complexity_integration_interval_width,
-        ),
-    )
-
-    training_candidates = [training_planner.next() for _ in range(4)]
-    evaluation_candidates = [evaluation_planner.next() for _ in range(4)]
-
-    assert [candidate.complexity_class.cardinality for candidate in evaluation_candidates] == [
-        1,
-        2,
-        4,
-        8,
-    ]
-    assert [candidate.complexity_class.cardinality for candidate in training_candidates] == [
-        1,
-        2,
-        3,
-        4,
-    ]
-    assert (
-        cast(
-            float,
-            cast(Any, benchmark_runner)._default_training_complexity_integration_interval_width,
-        )
-        < cast(float, cast(Any, benchmark_runner)._default_complexity_integration_interval_width)
-    )
-
-
-def test_training_curriculum_representative_window_rematerializes() -> None:
-    generator = load_digits_generator(_digits_benchmark_root)
-    candidates = cast(Any, benchmark_runner)._structured_training_curriculum_candidates(
-        generator=generator,
-        start_index=352,
-    )
-    candidate = next(
-        candidate for candidate in candidates if candidate.complexity_class.cardinality == 360
-    )
-
-    exact_request = candidate.complexity_class.request
-    window_request = candidate.complexity_request
-    exact_sample = generator(
-        shape=1,
-        seed=123,
-        include_fields=True,
-        complexity_request=exact_request,
-    )
+    window_request = ComplexityRequest(minimum=8.0, maximum=9.0)
     window_sample = generator(
         shape=1,
         seed=123,
@@ -2562,40 +2310,43 @@ def test_training_curriculum_representative_window_rematerializes() -> None:
         complexity_request=window_request,
     )
 
-    assert candidate.complexity_class.cardinality == 360
-    assert exact_sample.sample_count == 1
     assert window_sample.sample_count == 1
-    assert exact_sample.samples[0].require_field().shape == (1, 20, 20)
-    assert window_sample.samples[0].require_field().shape == (1, 20, 20)
+    assert window_sample.complexity_request == window_request
+    assert window_sample.samples[0].complexity == 8.0
+    assert window_sample.samples[0].require_field().shape[1:] == (24, 24)
 
 
-def test_digits_complexity_candidate_for_request_materializes_constructed_affine_grid() -> None:
+def test_digits_integer_window_materializes_constructed_affine_grid() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
+    generator_impl = cast(Any, generator)
 
-    complexity_class = generator.complexity_candidate_for_request(
+    complexity_class = generator_impl._complexity_class_for_request(
         request=ComplexityRequest(
-            minimum=math.log2(360),
-            maximum=math.log2(360),
+            minimum=8.0,
+            maximum=9.0,
         )
     )
 
     assert complexity_class is not None
-    assert complexity_class.cardinality == 360
-    assert math.isclose(complexity_class.complexity, math.log2(360))
-    assert complexity_class.metadata["affine_transform_count"] == 36
-    assert complexity_class.metadata["requested_cardinality"] == 360
-    assert complexity_class.metadata["realized_cardinality"] == 360
-    assert complexity_class.metadata["construction"] == (
+    assert complexity_class.cardinality == 256
+    assert math.isclose(complexity_class.complexity, 8.0)
+    metadata = complexity_class.metadata()
+    assert metadata["affine_transform_count"] == 56
+    assert metadata["minimum_address"] == 255
+    assert metadata["maximum_address"] == 510
+    assert metadata["requested_cardinality"] == 256
+    assert metadata["realized_cardinality"] == 256
+    assert metadata["construction"] == (
         "symmetric-digits-over-finite-affine-product-grid"
     )
-    assert complexity_class.metadata["affine_grid"] == {
-        "x_translation": 6,
-        "y_translation": 6,
+    assert metadata["affine_grid"] == {
+        "x_translation": 8,
+        "y_translation": 7,
         "scale": 1,
         "rotation": 1,
         "x_shear": 1,
     }
-    assert complexity_class.metadata["affine_bounds"] == {
+    assert metadata["affine_bounds"] == {
         "x_translation": [-0.15, 0.15],
         "y_translation": [-0.15, 0.15],
         "scale": [0.92, 1.08],
@@ -2604,8 +2355,8 @@ def test_digits_complexity_candidate_for_request_materializes_constructed_affine
     }
     assert complexity_class.resolution_assignment is not None
     assert complexity_class.resolution_assignment.values == {
-        "W": 20,
-        "H": 20,
+        "W": 24,
+        "H": 24,
     }
 
 
@@ -3100,7 +2851,7 @@ def _score_estimate(
     sampled_competence = {
         "kind": "sampled-competence-curriculum",
         "sampling_rule": "generator-uniform-component-index-v1",
-        "difficulty_assumption": "approximately-uniform-within-complexity-class",
+        "difficulty_assumption": "approximately-uniform-within-complexity-window",
         "benchmark_id": "benchmarks.digits@0.1.0",
         "complexity_axis": None,
         "complexity": complexity,
@@ -3108,9 +2859,9 @@ def _score_estimate(
         "mean_accepted_mass": accepted_mass,
         "points": [
             {
-                "kind": "sampled-complexity-class",
+                "kind": "sampled-complexity-window",
                 "sampling_rule": "generator-uniform-component-index-v1",
-                "difficulty_assumption": "approximately-uniform-within-complexity-class",
+                "difficulty_assumption": "approximately-uniform-within-complexity-window",
                 "benchmark_id": "benchmarks.digits@0.1.0",
                 "complexity_axis": None,
                 "complexity": complexity,

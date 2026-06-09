@@ -16,7 +16,6 @@ from leibniz.benchmark_implementations import Benchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.observation_generation import (
-    ComplexityCandidate,
     ComplexityRequest,
     ComplexityValue,
     GeneratedSample,
@@ -267,107 +266,6 @@ class Generator:
 
         return ComplexityValue(value=0.0)
 
-    def complexity_candidate_for_request(
-        self,
-        *,
-        request: ComplexityRequest,
-    ) -> ComplexityCandidate | None:
-        """Return the first sample-space-cardinality class inside a complexity band."""
-
-        minimum_cardinality = _ceil_cardinality(request.minimum)
-        maximum_cardinality = min(_floor_cardinality(request.maximum), _family_capacity())
-        if maximum_cardinality < minimum_cardinality:
-            return None
-        return self._candidate_for_cardinality(minimum_cardinality)
-
-    def complexity_curriculum_candidates(
-        self,
-        *,
-        start_index: int,
-        count: int,
-    ) -> tuple[ComplexityCandidate, ...]:
-        """Return Chess' ordered exact sample-space-cardinality schedule."""
-
-        if start_index < 0:
-            raise ObservationGenerationError("start_index must be non-negative")
-        if count < 0:
-            raise ObservationGenerationError("count must be non-negative")
-        if count == 0:
-            return ()
-
-        candidates: list[ComplexityCandidate] = []
-        for offset in range(count):
-            cardinality = start_index + offset + 1
-            if cardinality > _family_capacity():
-                break
-            candidates.append(self._candidate_for_cardinality(cardinality))
-        return tuple(candidates)
-
-    def _sample_space_cardinality_candidates(self) -> tuple[ComplexityCandidate, ...]:
-        return tuple(
-            self._candidate_for_cardinality(cardinality)
-            for cardinality in _console_preview_cardinalities
-            if cardinality <= _family_capacity()
-        )
-
-    def _candidate_for_cardinality(self, cardinality: int) -> ComplexityCandidate:
-        _require_sample_cardinality(cardinality)
-        complexity = math.log2(cardinality)
-        representative_indices = _representative_local_indices(cardinality)
-        representatives = [
-            dict(
-                _position_for_sample_index(
-                    _global_sample_index(
-                        cardinality=cardinality,
-                        local_index=index,
-                    )
-                ).representative_metadata()
-            )
-            for index in representative_indices
-        ]
-        legal_move_counts = [
-            _position_for_sample_index(
-                _global_sample_index(
-                    cardinality=cardinality,
-                    local_index=index,
-                )
-            ).legal_move_count
-            for index in representative_indices
-        ]
-        preview_legal_move_count_max = max(legal_move_counts) if legal_move_counts else 0
-        oracle_compute = _oracle_inference_compute_for_cardinality(cardinality)
-        return ComplexityCandidate(
-            request=ComplexityRequest(
-                minimum=complexity,
-                maximum=complexity,
-            ),
-            cardinality=cardinality,
-            metadata={
-                "kind": "chess-sample-space-cardinality",
-                "family": _mate_in_one_family_id,
-                "sample_cardinality": cardinality,
-                "target_policy": "mate-in-one",
-                "transform_count": len(_board_transforms()),
-                "spectator_square_count": len(_spectator_squares()),
-                "output_move_count": len(all_meaningful_uci_moves),
-                "representative_preview_count": len(representatives),
-                "representatives": representatives,
-                "oracle_inference_compute": {
-                    "kind": "oracle-inference-compute-reference-v1",
-                    "unit": "abstract-ops",
-                    "aggregation": "analytic-upper-bound",
-                    "value": oracle_compute,
-                    "components": {
-                        "preview_legal_move_count_max": preview_legal_move_count_max,
-                        "max_spectator_count": _max_spectator_count_for_cardinality(
-                            cardinality
-                        ),
-                        "sample_cardinality": cardinality,
-                    },
-                },
-            },
-        )
-
     def console_preview_batches(
         self,
         *,
@@ -378,30 +276,37 @@ class Generator:
         if atom_count != len(self.manifest.outcome_space.outcomes):
             raise ObservationGenerationError("atom_count does not match outcome space")
         batches: list[Mapping[str, object]] = []
-        for candidate in self._sample_space_cardinality_candidates():
-            if candidate.cardinality is None:
+        for cardinality in _console_preview_cardinalities:
+            if cardinality > _family_capacity():
                 continue
+            complexity = math.log2(cardinality)
             request = ComplexityRequest(
-                minimum=candidate.complexity,
-                maximum=candidate.complexity,
+                minimum=complexity,
+                maximum=complexity + 1.0,
             )
-            sample_set = self(
-                seed=401 + len(batches),
-                shape=min(candidate.cardinality, _console_preview_limit),
-                complexity_request=request,
+            global_indices = _global_sample_indices(
+                cardinality=cardinality,
+                local_indices=_representative_local_indices(cardinality),
+            )
+            preview_samples = _samples_for_global_indices(
+                global_indices=global_indices,
+                outcome_ids=None,
+                sample_space_cardinality=cardinality,
+                complexity=complexity,
+                full_metadata=True,
             )
             samples = [
                 _sample_preview_record(sample)
-                for sample in sample_set.samples[:_console_preview_limit]
+                for sample in preview_samples
             ]
             batches.append(
                 {
                     "mode": "complexity-window",
-                    "label": f"{candidate.cardinality} puzzle states",
-                    "seed": sample_set.seed,
+                    "label": f"{cardinality} puzzle states",
+                    "seed": 401 + len(batches),
                     "sample_count": len(samples),
                     "complexity_window": request.to_record(),
-                    "complexity_cardinalities": [candidate.cardinality],
+                    "complexity_cardinalities": [cardinality],
                     "presentation": {
                         "sample_card_density": "standard",
                         "aggregate_mode": False,
@@ -527,34 +432,9 @@ def _family_capacity() -> int:
     )
 
 
-def _max_spectator_count_for_cardinality(cardinality: int) -> int:
-    _require_sample_cardinality(cardinality)
-    return _enabled_spectator_count_for_cardinality(cardinality)
-
-
-def _oracle_inference_compute_for_cardinality(cardinality: int) -> int:
-    return 2 + 8 * _max_spectator_count_for_cardinality(cardinality)
-
-
 def _global_sample_index(*, cardinality: int, local_index: int) -> int:
     _require_sample_cardinality(cardinality)
     if type(local_index) is not int or local_index < 0 or local_index >= cardinality:
-        raise ObservationGenerationError("Chess local sample index is outside cardinality")
-    return _global_sample_indices(cardinality=cardinality, local_indices=(local_index,))[0]
-
-
-def _global_sample_indices(
-    *,
-    cardinality: int,
-    local_indices: Sequence[int],
-) -> tuple[int, ...]:
-    _require_sample_cardinality(cardinality)
-    invalid_indices = tuple(
-        local_index
-        for local_index in local_indices
-        if type(local_index) is not int or local_index < 0 or local_index >= cardinality
-    )
-    if invalid_indices:
         raise ObservationGenerationError("Chess local sample index is outside cardinality")
     enabled_capacity = _enabled_family_capacity_for_cardinality(cardinality)
     lower_bound = _family_index_lower_bound_for_cardinality(cardinality)
@@ -563,7 +443,18 @@ def _global_sample_indices(
     offset = cardinality * (cardinality - 1) // 2
     if offset + cardinality > enabled_capacity:
         offset = lower_bound + offset % (enabled_capacity - lower_bound - cardinality + 1)
-    return tuple(offset + local_index for local_index in local_indices)
+    return offset + local_index
+
+
+def _global_sample_indices(
+    *,
+    cardinality: int,
+    local_indices: Sequence[int],
+) -> tuple[int, ...]:
+    return tuple(
+        _global_sample_index(cardinality=cardinality, local_index=local_index)
+        for local_index in local_indices
+    )
 
 
 def _enabled_family_capacity_for_cardinality(cardinality: int) -> int:

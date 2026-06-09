@@ -161,65 +161,46 @@ def test_chess_complexity_request_accepts_matching_interval() -> None:
     assert all(sample.complexity_value is not None for sample in sample_set.samples)
 
 
-def test_chess_direct_complexity_candidate_is_first_representative_cardinality() -> None:
+def test_chess_generator_does_not_expose_complexity_candidates() -> None:
     generator = load_generator(_chess_benchmark_root)
-    request = ComplexityRequest(minimum=0.0, maximum=5.0)
 
-    candidate = generator.complexity_candidate_for_request(request=request)
-
-    assert candidate is not None
-    assert candidate.cardinality == 1
-    assert candidate.complexity == 0.0
-    assert candidate.metadata["kind"] == "chess-sample-space-cardinality"
-    assert candidate.metadata["family"] == "corner-net-indexed-family"
-    assert candidate.metadata["sample_cardinality"] == candidate.cardinality
-    assert candidate.metadata["target_policy"] == "mate-in-one"
-    assert candidate.metadata["transform_count"] == _expected_transform_count
-    assert cast(int, candidate.metadata["spectator_square_count"]) > 50
-    assert len(cast(list[object], candidate.metadata["representatives"])) == 1
-    oracle_reference = cast(
-        dict[str, object],
-        candidate.metadata["oracle_inference_compute"],
-    )
-    assert oracle_reference["kind"] == "oracle-inference-compute-reference-v1"
-    assert oracle_reference["unit"] == "abstract-ops"
-    assert oracle_reference["aggregation"] == "analytic-upper-bound"
-    assert cast(int, oracle_reference["value"]) >= 1
+    assert not hasattr(generator, "complexity_candidate_for_request")
+    assert not hasattr(generator, "complexity_curriculum_candidates")
     assert not hasattr(generator, "complexity_candidates_for_request")
 
 
-def test_chess_complexity_curriculum_uses_supported_sample_cardinalities() -> None:
+def test_chess_integer_shell_requests_use_power_of_two_cardinalities() -> None:
     generator = load_generator(_chess_benchmark_root)
 
-    candidates = tuple(
-        generator.complexity_curriculum_candidates(start_index=0, count=5)
-    )
-
-    cardinalities = tuple(candidate.cardinality for candidate in candidates)
-    assert cardinalities == (1, 2, 3, 4, 5)
-    for candidate in candidates:
-        assert candidate.cardinality is not None
-        assert math.isclose(candidate.complexity, math.log2(candidate.cardinality))
-        assert candidate.request.minimum == candidate.request.maximum
-
-
-def test_chess_complexity_curriculum_supports_large_indexed_cardinalities() -> None:
-    generator = load_generator(_chess_benchmark_root)
-    start_index = 2**20
-
-    candidates = tuple(
-        generator.complexity_curriculum_candidates(start_index=start_index, count=3)
-    )
-
-    assert tuple(candidate.cardinality for candidate in candidates) == (
-        start_index + 1,
-        start_index + 2,
-        start_index + 3,
-    )
-    for candidate in candidates:
-        assert len(cast(list[object], candidate.metadata["representatives"])) == (
-            _expected_preview_limit
+    for shell in range(5):
+        sample_set = generator(
+            seed=47 + shell,
+            shape=2,
+            complexity_request=ComplexityRequest(
+                minimum=float(shell),
+                maximum=float(shell + 1),
+            ),
         )
+        assert sample_set.samples
+        assert {sample.complexity for sample in sample_set.samples} == {float(shell)}
+        assert {
+            _sample_space_cardinality(sample.to_record())
+            for sample in sample_set.samples
+        } == {2**shell}
+
+
+def test_chess_power_of_two_shells_do_not_reuse_global_positions() -> None:
+    global_sample_index = _chess_global_sample_index()
+    seen: set[int] = set()
+
+    for shell in range(8):
+        cardinality = 2**shell
+        shell_indices = {
+            global_sample_index(cardinality=cardinality, local_index=local_index)
+            for local_index in range(cardinality)
+        }
+        assert not seen & shell_indices
+        seen.update(shell_indices)
 
 
 def test_chess_indexed_family_samples_are_rules_validated_mate_in_one_moves() -> None:
@@ -254,23 +235,10 @@ def test_chess_indexed_family_samples_are_rules_validated_mate_in_one_moves() ->
 
 
 def test_chess_indexed_family_expands_by_sample_cardinality() -> None:
-    generator = load_generator(_chess_benchmark_root)
-    candidates = tuple(
-        generator.complexity_curriculum_candidates(
-            start_index=0,
-            count=16,
-        )
-    )
+    representatives_for_cardinality = _chess_representatives_for_cardinality()
 
-    assert tuple(candidate.cardinality for candidate in candidates) == tuple(range(1, 17))
-    first_representative_set = cast(
-        list[dict[str, object]],
-        candidates[0].metadata["representatives"],
-    )
-    full_representative_set = cast(
-        list[dict[str, object]],
-        candidates[-1].metadata["representatives"],
-    )
+    first_representative_set = representatives_for_cardinality(1)
+    full_representative_set = representatives_for_cardinality(16)
     assert len(first_representative_set) == 1
     assert len(full_representative_set) == _expected_preview_limit
 
@@ -301,8 +269,8 @@ def test_chess_indexed_family_expands_by_sample_cardinality() -> None:
 
     legal_piece_symbols = {
         symbol
-        for candidate in candidates
-        for representative in cast(list[dict[str, object]], candidate.metadata["representatives"])
+        for cardinality in range(1, 17)
+        for representative in representatives_for_cardinality(cardinality)
         for symbol in cast(
             list[str],
             representative["legal_move_piece_symbols"],
@@ -310,8 +278,8 @@ def test_chess_indexed_family_expands_by_sample_cardinality() -> None:
     }
     mate_piece_symbols = {
         symbol
-        for candidate in candidates
-        for representative in cast(list[dict[str, object]], candidate.metadata["representatives"])
+        for cardinality in range(1, 17)
+        for representative in representatives_for_cardinality(cardinality)
         for symbol in cast(
             list[str],
             representative["mate_move_piece_symbols"],
@@ -470,22 +438,13 @@ def test_chess_sample_mapping_has_no_repetition_within_cardinality(
 
 
 def test_chess_adjacent_cardinality_previews_mostly_avoid_repetition() -> None:
-    generator = load_generator(_chess_benchmark_root)
-    candidates = tuple(
-        generator.complexity_curriculum_candidates(
-            start_index=31,
-            count=2,
-        )
-    )
+    representatives_for_cardinality = _chess_representatives_for_cardinality()
     preview_sets = [
         {
             cast(int, representative["family_index"])
-            for representative in cast(
-                list[dict[str, object]],
-                candidate.metadata["representatives"],
-            )
+            for representative in representatives_for_cardinality(cardinality)
         }
-        for candidate in candidates
+        for cardinality in (32, 33)
     ]
 
     assert len(preview_sets[0]) == _expected_preview_limit
@@ -494,13 +453,7 @@ def test_chess_adjacent_cardinality_previews_mostly_avoid_repetition() -> None:
 
 
 def test_chess_representative_analysis_exposes_indexed_family_metadata() -> None:
-    generator = load_generator(_chess_benchmark_root)
-    candidates = tuple(
-        generator.complexity_curriculum_candidates(
-            start_index=0,
-            count=16,
-        )
-    )
+    representatives_for_cardinality = _chess_representatives_for_cardinality()
 
     flags_by_family_index = {
         representative["family_index"]: frozenset(
@@ -510,19 +463,13 @@ def test_chess_representative_analysis_exposes_indexed_family_metadata() -> None
                 cast(dict[str, object], representative["analysis"])["quality_flags"],
             )
         )
-        for candidate in candidates
-        for representative in cast(
-            list[dict[str, object]],
-            candidate.metadata["representatives"],
-        )
+        for cardinality in range(1, 17)
+        for representative in representatives_for_cardinality(cardinality)
     }
     analyses = [
         cast(dict[str, object], representative["analysis"])
-        for candidate in candidates
-        for representative in cast(
-            list[dict[str, object]],
-            candidate.metadata["representatives"],
-        )
+        for cardinality in range(1, 17)
+        for representative in representatives_for_cardinality(cardinality)
     ]
 
     assert all(analysis["family"] == "corner-net-indexed-family" for analysis in analyses)
@@ -674,6 +621,38 @@ def _sample_analysis(sample: Any) -> dict[str, object]:
 
 
 def _chess_global_sample_index() -> Callable[..., int]:
+    return cast(Callable[..., int], _chess_benchmark_module()["_global_sample_index"])
+
+
+def _chess_representatives_for_cardinality() -> Callable[[int], list[dict[str, object]]]:
+    module = _chess_benchmark_module()
+    global_sample_index = cast(Callable[..., int], module["_global_sample_index"])
+    representative_local_indices = cast(
+        Callable[[int], tuple[int, ...]],
+        module["_representative_local_indices"],
+    )
+    position_for_sample_index = cast(
+        Callable[[int], Any],
+        module["_position_for_sample_index"],
+    )
+
+    def representatives(cardinality: int) -> list[dict[str, object]]:
+        return [
+            dict(
+                position_for_sample_index(
+                    global_sample_index(
+                        cardinality=cardinality,
+                        local_index=index,
+                    )
+                ).representative_metadata()
+            )
+            for index in representative_local_indices(cardinality)
+        ]
+
+    return representatives
+
+
+def _chess_benchmark_module() -> dict[str, object]:
     module_name = "test_chess_benchmark"
     entrypoint = _chess_benchmark_root / "benchmark.py"
     spec = importlib.util.spec_from_file_location(module_name, entrypoint)
@@ -682,7 +661,7 @@ def _chess_global_sample_index() -> Callable[..., int]:
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
-    return cast(Callable[..., int], vars(module)["_global_sample_index"])
+    return vars(module)
 
 
 def _sample_space_cardinality(record: dict[str, object]) -> int:

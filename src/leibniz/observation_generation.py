@@ -12,10 +12,7 @@ from typing import Any
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.benchmark_implementations import load_benchmark
 from leibniz.identifiers import ProtocolIdentifier
-from leibniz.materialization import (
-    AxisAssignment,
-    MaterializationPlan,
-)
+from leibniz.materialization import MaterializationPlan
 from leibniz.observation_formation import (
     FieldObservation,
     FormedObservation,
@@ -25,7 +22,6 @@ __all__ = [
     "GeneratedSample",
     "GeneratedSampleSet",
     "ObservationGenerationError",
-    "ComplexityCandidate",
     "ComplexityRequest",
     "ComplexityValue",
     "load_generator",
@@ -34,10 +30,6 @@ __all__ = [
 _core_complexity_measure_id = "log2_complexity_class_size"
 _core_complexity_measure_ids = frozenset({_core_complexity_measure_id})
 _minimum_complexity_value = 0.0
-
-
-def _empty_metadata() -> Mapping[str, object]:
-    return {}
 
 
 class ObservationGenerationError(ValueError):
@@ -113,57 +105,6 @@ class ComplexityValue:
             "measure_id": self.measure_id,
             "value": self.value,
         }
-
-
-@dataclass(frozen=True, slots=True)
-class ComplexityCandidate:
-    """A benchmark-owned concrete complexity class for curriculum sampling."""
-
-    request: ComplexityRequest
-    cardinality: int | None = None
-    resolution_assignment: AxisAssignment | None = None
-    metadata: Mapping[str, object] = dataclass_field(default_factory=_empty_metadata)
-
-    def __post_init__(self) -> None:
-        if self.request.minimum != self.request.maximum:
-            raise ObservationGenerationError(
-                "complexity candidate request must name one realized cardinality"
-            )
-        if self.cardinality is not None:
-            if type(self.cardinality) is not int or self.cardinality < 1:
-                raise ObservationGenerationError(
-                    "complexity candidate cardinality must be a positive integer"
-                )
-            if not math.isclose(
-                math.log2(self.cardinality),
-                self.complexity,
-                rel_tol=0.0,
-                abs_tol=1e-9,
-            ):
-                raise ObservationGenerationError(
-                    "complexity candidate cardinality must match log2 cardinality"
-                )
-
-    @property
-    def complexity(self) -> float:
-        """Return the candidate's realized log2 cardinality."""
-
-        return self.request.minimum
-
-    def to_record(self) -> dict[str, object]:
-        """Return a record for this benchmark-owned complexity candidate."""
-
-        record: dict[str, object] = {
-            "request": self.request.to_record(),
-            "complexity": self.complexity,
-        }
-        if self.cardinality is not None:
-            record["cardinality"] = self.cardinality
-        if self.resolution_assignment is not None:
-            record["resolution_assignment"] = self.resolution_assignment.to_record()
-        if self.metadata:
-            record["metadata"] = dict(self.metadata)
-        return record
 
 
 @dataclass(frozen=True, slots=True)
