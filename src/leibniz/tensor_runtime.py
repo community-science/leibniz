@@ -70,6 +70,7 @@ TensorElementParameterDType = Literal["float32", "int64"]
 _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
 _roofline_cache: dict[str, dict[str, object]] = {}
 _tensor_element_kernel_cache: dict[tuple[object, ...], Any] = {}
+_tensor_element_compile_failure_cache: set[tuple[object, ...]] = set()
 _tensor_element_parameter_cache: dict[tuple[object, ...], Any] = {}
 _tensor_element_tile_metadata_cache: dict[tuple[object, ...], Any] = {}
 _tensor_element_tile_size = 131_072
@@ -115,6 +116,12 @@ class TensorElementProgram:
     parameters: Mapping[str, TensorElementParameter]
     compile: bool = True
     cache_key: object | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _CompiledTensorElementParameters:
+    tensors: Mapping[str, Any]
+    scalar_aliases: Mapping[str, tuple[str, int]]
 
 
 def tensor_runtime_construct_tensor(
@@ -1061,18 +1068,30 @@ def _construct_tensor_element_program(
         )
         for name, parameter in program.parameters.items()
     }
+    compile_cache_key = _tensor_element_kernel_cache_key(
+        runtime=runtime,
+        program=program,
+        rank=len(shape),
+        parameter_tensors=parameter_tensors,
+    )
     if (
         runtime.device_kind in {"cuda", "mps"}
         and program.compile
         and _tensor_runtime_compile_available(runtime)
+        and compile_cache_key not in _tensor_element_compile_failure_cache
     ):
-        return _construct_compiled_tensor_element_tiles(
-            runtime=runtime,
-            shape=shape,
-            dtype=dtype,
-            program=program,
-            parameter_tensors=parameter_tensors,
-        )
+        try:
+            return _construct_compiled_tensor_element_tiles(
+                runtime=runtime,
+                shape=shape,
+                dtype=dtype,
+                program=program,
+                parameter_tensors=parameter_tensors,
+                cache_key=compile_cache_key,
+            )
+        except Exception:
+            _tensor_element_compile_failure_cache.add(compile_cache_key)
+            _tensor_element_kernel_cache.pop(compile_cache_key, None)
     return _construct_eager_tensor_element_program(
         runtime=runtime,
         shape=shape,
@@ -1108,10 +1127,16 @@ def _construct_compiled_tensor_element_tiles(
     dtype: Any,
     program: TensorElementProgram,
     parameter_tensors: Mapping[str, Any],
+    cache_key: tuple[object, ...],
 ) -> Any:
     with _tensor_runtime_profile_span(runtime, "leibniz.tensor_construct.compiled_tiles"):
         backend = runtime.torch
         total_elements = math.prod(shape)
+        compiled_parameters = _compiled_tensor_element_parameters(
+            runtime=runtime,
+            declarations=program.parameters,
+            parameter_tensors=parameter_tensors,
+        )
         tile_positions = _tensor_element_tile_positions(runtime)
         extents, strides, total_tensor = _tensor_element_shape_metadata(
             runtime,
@@ -1121,14 +1146,16 @@ def _construct_compiled_tensor_element_tiles(
         _mark_dynamic_tensor_element_parameters(
             runtime=runtime,
             parameter_declarations=program.parameters,
-            parameter_tensors=parameter_tensors,
+            parameter_tensors=compiled_parameters.tensors,
         )
         output = backend.empty((total_elements,), dtype=dtype, device=runtime.device)
         kernel = _compiled_tensor_element_tile_kernel(
             runtime=runtime,
             program=program,
             rank=len(shape),
-            parameter_tensors=parameter_tensors,
+            parameter_tensors=compiled_parameters.tensors,
+            scalar_aliases=compiled_parameters.scalar_aliases,
+            cache_key=cache_key,
         )
         for offset in range(0, total_elements, _tensor_element_tile_size):
             valid_count = min(_tensor_element_tile_size, total_elements - offset)
@@ -1139,10 +1166,43 @@ def _construct_compiled_tensor_element_tiles(
                 extents,
                 strides,
                 total_tensor,
-                **parameter_tensors,
+                **compiled_parameters.tensors,
             ).to(dtype=dtype)
             output[offset : offset + valid_count] = values[:valid_count]
         return output.reshape(shape)
+
+
+def _compiled_tensor_element_parameters(
+    *,
+    runtime: TensorRuntime,
+    declarations: Mapping[str, TensorElementParameter],
+    parameter_tensors: Mapping[str, Any],
+) -> _CompiledTensorElementParameters:
+    packed_tensors: dict[str, Any] = {}
+    scalar_aliases: dict[str, tuple[str, int]] = {}
+    scalar_groups: dict[TensorElementParameterDType, list[tuple[str, Any]]] = {
+        "float32": [],
+        "int64": [],
+    }
+    for name, declaration in declarations.items():
+        tensor = parameter_tensors[name]
+        if declaration.shape == () and not declaration.dynamic_axes:
+            scalar_groups[declaration.dtype].append((name, tensor.reshape(())))
+        else:
+            packed_tensors[name] = tensor
+    for dtype, entries in scalar_groups.items():
+        if not entries:
+            continue
+        packed_name = f"__scalar_{dtype}_parameters"
+        packed_tensors[packed_name] = runtime.torch.stack(
+            tuple(tensor for _name, tensor in entries)
+        )
+        for index, (name, _tensor) in enumerate(entries):
+            scalar_aliases[name] = (packed_name, index)
+    return _CompiledTensorElementParameters(
+        tensors=packed_tensors,
+        scalar_aliases=scalar_aliases,
+    )
 
 
 def _tensor_element_parameter(
@@ -1291,20 +1351,10 @@ def _compiled_tensor_element_tile_kernel(
     program: TensorElementProgram,
     rank: int,
     parameter_tensors: Mapping[str, Any],
+    scalar_aliases: Mapping[str, tuple[str, int]],
+    cache_key: tuple[object, ...],
 ) -> Callable[..., Any]:
-    key = (
-        _tensor_element_program_scope_key(program.kernel),
-        program.cache_key if program.cache_key is not None else id(program.kernel),
-        runtime.device_kind,
-        "tile",
-        rank,
-        _tensor_element_tile_size,
-        tuple(
-            (name, str(parameter_tensors[name].dtype))
-            for name in sorted(parameter_tensors)
-        ),
-    )
-    cached = _tensor_element_kernel_cache.get(key)
+    cached = _tensor_element_kernel_cache.get(cache_key)
     if cached is not None:
         return cast(Callable[..., Any], cached)
 
@@ -1318,6 +1368,14 @@ def _compiled_tensor_element_tile_kernel(
             total_elements: Any,
             **parameters: Any,
         ) -> Any:
+            packed_names = {packed_name for packed_name, _index in scalar_aliases.values()}
+            kernel_parameters = {
+                name: value
+                for name, value in parameters.items()
+                if name not in packed_names
+            }
+            for name, (packed_name, index) in scalar_aliases.items():
+                kernel_parameters[name] = parameters[packed_name][index]
             flat_indices = tile_positions + offset
             active = flat_indices < total_elements
             safe_flat_indices = flat_indices.clamp(max=total_elements - 1)
@@ -1329,17 +1387,51 @@ def _compiled_tensor_element_tile_kernel(
                 remainder = remainder.remainder(stride)
             values = cast(
                 Any,
-                program.kernel(tuple(coordinates), safe_flat_indices, **parameters),
+                program.kernel(
+                    tuple(coordinates),
+                    safe_flat_indices,
+                    **kernel_parameters,
+                ),
             )
             return values.where(active, values * 0)
 
-        try:
-            _clear_stale_compile_module_alias(program.kernel)
-            compiled = runtime.torch.compile(tile_kernel)
-        except Exception:
-            compiled = tile_kernel
-    _tensor_element_kernel_cache[key] = compiled
+        _clear_stale_compile_module_alias(program.kernel)
+        compiled = runtime.torch.compile(
+            tile_kernel,
+            options=_tensor_element_compile_options(runtime),
+        )
+    _tensor_element_kernel_cache[cache_key] = compiled
     return cast(Callable[..., Any], compiled)
+
+
+def _tensor_element_compile_options(runtime: TensorRuntime) -> Mapping[str, object]:
+    if runtime.device_kind == "mps":
+        return {
+            "max_fusion_size": 16,
+            "max_fusion_unique_io_buffers": 16,
+        }
+    return {}
+
+
+def _tensor_element_kernel_cache_key(
+    *,
+    runtime: TensorRuntime,
+    program: TensorElementProgram,
+    rank: int,
+    parameter_tensors: Mapping[str, Any],
+) -> tuple[object, ...]:
+    return (
+        _tensor_element_program_scope_key(program.kernel),
+        program.cache_key if program.cache_key is not None else id(program.kernel),
+        runtime.device_kind,
+        "tile",
+        rank,
+        _tensor_element_tile_size,
+        tuple(
+            (name, str(parameter_tensors[name].dtype))
+            for name in sorted(parameter_tensors)
+        ),
+    )
 
 
 def _tensor_element_program_scope_key(kernel: Callable[..., object]) -> int:
@@ -1372,7 +1464,9 @@ def _mark_dynamic_tensor_element_parameters(
     if not callable(mark_dynamic):
         return
     for name, parameter in parameter_declarations.items():
-        tensor = parameter_tensors[name]
+        tensor = parameter_tensors.get(name)
+        if tensor is None:
+            continue
         for axis in parameter.dynamic_axes:
             mark_dynamic(tensor, axis)
 
