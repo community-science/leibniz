@@ -780,8 +780,11 @@ def test_materialize_benchmark_result_views_projects_reference_curves_without_ru
         assert result["leaderboard"] == []
         assert result["plot_runs"] == []
         reference_curves = cast(list[dict[str, object]], result["reference_curves"])
-        assert reference_curves
-        assert reference_curves[0]["x_axis"] == "cost"
+        if result["benchmark_id"] == "benchmarks.digits@0.1.0":
+            assert reference_curves
+            assert reference_curves[0]["x_axis"] == "cost"
+        else:
+            assert reference_curves == []
 
 
 def test_benchmark_inspect_prints_compact_result_summary(

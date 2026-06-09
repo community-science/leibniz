@@ -356,14 +356,14 @@ def test_chess_varies_mate_mechanism_before_adding_spectators() -> None:
     assert {analysis["mechanism_piece_count"] for analysis in supported_analyses} == {5}
 
 
-def test_chess_rotates_single_spectators_before_stacking_spectators() -> None:
+def test_chess_adds_spectator_material_as_cardinality_grows() -> None:
     generator = load_generator(_chess_benchmark_root)
     request = ComplexityRequest(minimum=5.0, maximum=5.0)
 
     sample_set = generator(seed=47, shape=32, complexity_request=request)
     analyses = [_sample_analysis(sample) for sample in sample_set.samples]
 
-    assert {analysis["spectator_count"] for analysis in analyses} == {1}
+    assert {analysis["spectator_count"] for analysis in analyses} == {2}
 
 
 def test_chess_complete_small_cardinality_rungs_do_not_overlap() -> None:
@@ -516,6 +516,40 @@ def test_chess_generator_returns_board_tensors_and_move_targets() -> None:
     assert math.isclose(sum(target_values[0]), 1.0, rel_tol=0.0, abs_tol=1e-6)
     assert sample_set.samples[0].outcome_id in outcome_ids
     assert target_values[0][outcome_ids.index(sample_set.samples[0].outcome_id)] > 0.0
+
+
+def test_chess_metadata_and_tensor_construction_share_sample_addresses() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    runtime = resolve_tensor_runtime("cpu")
+    outcome_ids = tuple(outcome.id for outcome in generator.manifest.outcome_space.outcomes)
+
+    metadata_sample_set = generator(
+        seed=47,
+        shape=3,
+        complexity_request=ComplexityRequest(minimum=5.0, maximum=5.0),
+    )
+    tensor_sample_set = generator(
+        seed=47,
+        shape=3,
+        include_metadata=False,
+        runtime=runtime,
+        outcome_ids=outcome_ids,
+        complexity_request=ComplexityRequest(minimum=5.0, maximum=5.0),
+    )
+    fields, targets = tensor_sample_set.require_tensors()
+    field_values = tensor_value_to_host(fields).tolist()
+    target_values = tensor_value_to_host(targets).tolist()
+    piece_plane = cast(Callable[[chess.Piece], int], _chess_benchmark_module()["_piece_plane"])
+
+    for sample_index, sample in enumerate(metadata_sample_set.samples):
+        assert sample.observable_state_id is not None
+        board = chess.Board(sample.observable_state_id.removeprefix("fen:"))
+        for square, piece in board.piece_map().items():
+            plane_index = piece_plane(piece)
+            rank_index = chess.square_rank(square)
+            file_index = chess.square_file(square)
+            assert field_values[sample_index][plane_index][rank_index][file_index] == 1.0
+        assert target_values[sample_index][outcome_ids.index(sample.outcome_id)] == 1.0
 
 
 def test_chess_generator_can_return_metadata_free_tensors() -> None:

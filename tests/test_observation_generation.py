@@ -110,11 +110,11 @@ def test_digits_generator_is_deterministic() -> None:
     )
     field_record = left.samples[0].field_record()
     assert sample_component_index(first_sample) == field_record.component_index
-    assert first_sample.outcome_id == "digit-0"
+    assert first_sample.outcome_id == f"digit-{field_record.component_index}"
     assert _coordinate(first_sample.latent_coordinates, role="content")["values"] == {
             "digit_index": field_record.component_index,
             "digit_variant_index": 0,
-            "outcome_id": "digit-0",
+            "outcome_id": first_sample.outcome_id,
         }
     assert first_sample.observable_state_id is None
     assert first_sample.available_outcome_ids == ()
@@ -277,7 +277,6 @@ def test_digits_generator_samples_resolution_from_memory_bound() -> None:
     batch = _observation_payload(generator,
         sample_count=1,
         seed=202,
-        component_indices=(1,),
     )
     sample = batch.samples[0]
     width = sample_width(sample)
@@ -290,7 +289,7 @@ def test_digits_generator_samples_resolution_from_memory_bound() -> None:
         sample.complexity,
         generator.distinguishable_state_complexity(width=width, height=height),
     )
-    assert sample.outcome_id == "digit-1"
+    assert sample.outcome_id == f"digit-{sample.component_index}"
 
 
 def test_digits_generator_counts_constructed_finite_complexity_class() -> None:
@@ -587,7 +586,6 @@ def test_digits_generator_applies_recorded_variation_coordinates() -> None:
     sample = _observation_payload(generator,
         sample_count=1,
         seed=909,
-        component_indices=(1,),
     ).samples[0]
     variation = _coordinate(sample.latent_coordinates, role="variation")
     variation_values = cast(dict[str, object], variation["values"])
@@ -685,18 +683,16 @@ def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
     assert resolution_assignment is not None
     width = resolution_assignment.require_axis(generator.formation.width_axis)
     height = resolution_assignment.require_axis(generator.formation.height_axis)
-    component_indices = tuple(index % complexity_class.digit_count for index in range(64))
-    transform_indices = tuple(
-        index % complexity_class.affine_grid.transform_count for index in range(64)
-    )
     render_kwargs: dict[str, Any] = {
+        "sample_count": 64,
         "width": width,
         "height": height,
         "digit_count": complexity_class.digit_count,
-        "component_indices": component_indices,
-        "transform_indices": transform_indices,
         "transform": generator.formation.variation_transform,
         "grid": complexity_class.affine_grid,
+        "seed": 101,
+        "cardinality": complexity_class.cardinality,
+        "minimum_address": complexity_class.minimum_address,
         "timing": None,
         "timing_prefix": "",
     }
@@ -796,18 +792,6 @@ def test_generator_rejects_invalid_requests() -> None:
             )
         )
         == "sample shape axes must be positive integers"
-    )
-    assert (
-        str(
-            capture_generation_error(
-                lambda: _observation_payload(generator,
-                    sample_count=2,
-                    seed=1,
-                    component_indices=(1,),
-                )
-            )
-        )
-        == "component_indices length must match sample_count"
     )
     assert (
         str(

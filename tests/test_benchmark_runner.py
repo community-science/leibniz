@@ -620,10 +620,6 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     timing_phases = cast(dict[str, object], phase_timing["phases"])
     tensor_batch_timing = cast(dict[str, object], timing_phases["training_tensor_batch"])
     forward_timing = cast(dict[str, object], timing_phases["training_forward_loss"])
-    sample_state_timing = cast(
-        dict[str, object],
-        timing_phases["training_formation_generation.sample_state"],
-    )
     render_timing = cast(
         dict[str, object],
         timing_phases["training_formation_generation.batch_tensor_render"],
@@ -637,7 +633,6 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert phase_timing["kind"] == "benchmark-phase-timing"
     assert tensor_batch_timing["sample_count"] == 2
     assert cast(float, tensor_batch_timing["seconds"]) > 0
-    assert sample_state_timing["sample_count"] == 2
     assert cast(float, render_timing["seconds"]) > 0
     assert cast(int, forward_timing["sample_count"]) >= 2
     assert cast(float, forward_timing["seconds"]) > 0

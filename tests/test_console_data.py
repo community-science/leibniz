@@ -336,8 +336,8 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         (batch["mode"], batch["sample_count"])
         for batch in batches
     ] == [
-        ("complexity-window", 50),
-        ("complexity-window", 50),
+        ("complexity-window", 8),
+        ("complexity-window", 32),
         ("complexity-window", 50),
     ]
     assert [batch["label"] for batch in batches] == [
@@ -353,7 +353,8 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert cast(dict[str, object], batches[2]["presentation"])["sample_card_density"] == "standard"
     samples = cast(list[dict[str, object]], batches[0]["samples"])
     component_indices = {cast(int, sample["component_index"]) for sample in samples}
-    assert component_indices == set(range(10))
+    assert component_indices <= set(range(10))
+    assert len(component_indices) == len(samples)
     field_shapes = [tuple(cast(list[int], sample["field_shape"])) for sample in samples]
     assert set(field_shapes) == {(1, 16, 16)}
     materialization_plans = [
@@ -373,7 +374,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     )
     variation_values = cast(dict[str, object], variation["values"])
     assert variation_values["kind"] == "constructed-field-variation-transform-samples"
-    assert variation_values["transform_count"] == 1
+    assert variation_values["transform_count"] == 2
     variation_bounds = cast(dict[str, object], variation_values["bounds"])
     assert variation_bounds["kind"] == "field-variation-transform"
     variation_coordinates = cast(list[dict[str, object]], variation_values["coordinates"])

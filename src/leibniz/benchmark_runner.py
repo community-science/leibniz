@@ -152,7 +152,6 @@ class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
         include_fields: bool = False,
         include_metadata: bool = True,
         complexity_request: ComplexityRequest | None = None,
-        component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,

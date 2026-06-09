@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -66,7 +66,6 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         include_fields: bool = False,
         include_metadata: bool = True,
         complexity_request: ComplexityRequest | None = None,
-        component_indices: Iterable[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
