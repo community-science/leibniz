@@ -67,6 +67,7 @@ _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
 _roofline_cache: dict[str, dict[str, object]] = {}
 _tensor_element_kernel_cache: dict[tuple[object, ...], Any] = {}
 _tensor_element_parameter_cache: dict[tuple[object, ...], Any] = {}
+_tensor_element_tile_metadata_cache: dict[tuple[object, ...], Any] = {}
 _tensor_element_tile_size = 131_072
 
 
@@ -1031,18 +1032,12 @@ def _construct_compiled_tensor_element_tiles(
     with _tensor_runtime_profile_span(runtime, "leibniz.tensor_construct.compiled_tiles"):
         backend = runtime.torch
         total_elements = math.prod(shape)
-        tile_positions = backend.arange(
-            _tensor_element_tile_size,
-            dtype=backend.long,
-            device=runtime.device,
+        tile_positions = _tensor_element_tile_positions(runtime)
+        extents, strides, total_tensor = _tensor_element_shape_metadata(
+            runtime,
+            shape=shape,
+            total_elements=total_elements,
         )
-        extents = backend.tensor(shape, dtype=backend.long, device=runtime.device)
-        strides = backend.tensor(
-            _tensor_element_shape_strides(shape),
-            dtype=backend.long,
-            device=runtime.device,
-        )
-        total_tensor = backend.tensor(total_elements, dtype=backend.long, device=runtime.device)
         _mark_dynamic_tensor_element_parameters(
             runtime=runtime,
             parameter_declarations=program.parameters,
@@ -1057,7 +1052,7 @@ def _construct_compiled_tensor_element_tiles(
         )
         for offset in range(0, total_elements, _tensor_element_tile_size):
             valid_count = min(_tensor_element_tile_size, total_elements - offset)
-            offset_tensor = backend.tensor(offset, dtype=backend.long, device=runtime.device)
+            offset_tensor = _tensor_element_offset_tensor(runtime, offset=offset)
             values = kernel(
                 tile_positions,
                 offset_tensor,
@@ -1142,6 +1137,72 @@ def _tensor_element_parameter_dtype(
     if dtype == "int64":
         return runtime.torch.long
     raise TensorRuntimeError(f"unsupported tensor element parameter dtype: {dtype}")
+
+
+def _tensor_element_tile_positions(runtime: TensorRuntime) -> Any:
+    key = (
+        "tile-positions",
+        runtime.device_kind,
+        str(runtime.device),
+        _tensor_element_tile_size,
+    )
+    cached = _tensor_element_tile_metadata_cache.get(key)
+    if cached is not None:
+        return cached
+    tensor = runtime.torch.arange(
+        _tensor_element_tile_size,
+        dtype=runtime.torch.long,
+        device=runtime.device,
+    )
+    _tensor_element_tile_metadata_cache[key] = tensor
+    return tensor
+
+
+def _tensor_element_shape_metadata(
+    runtime: TensorRuntime,
+    *,
+    shape: tuple[int, ...],
+    total_elements: int,
+) -> tuple[Any, Any, Any]:
+    key = (
+        "shape-metadata",
+        runtime.device_kind,
+        str(runtime.device),
+        shape,
+        total_elements,
+    )
+    cached = _tensor_element_tile_metadata_cache.get(key)
+    if cached is not None:
+        return cast(tuple[Any, Any, Any], cached)
+    extents = runtime.torch.tensor(shape, dtype=runtime.torch.long, device=runtime.device)
+    strides = runtime.torch.tensor(
+        _tensor_element_shape_strides(shape),
+        dtype=runtime.torch.long,
+        device=runtime.device,
+    )
+    total_tensor = runtime.torch.tensor(
+        total_elements,
+        dtype=runtime.torch.long,
+        device=runtime.device,
+    )
+    result = (extents, strides, total_tensor)
+    _tensor_element_tile_metadata_cache[key] = result
+    return result
+
+
+def _tensor_element_offset_tensor(runtime: TensorRuntime, *, offset: int) -> Any:
+    key = (
+        "offset",
+        runtime.device_kind,
+        str(runtime.device),
+        offset,
+    )
+    cached = _tensor_element_tile_metadata_cache.get(key)
+    if cached is not None:
+        return cached
+    tensor = runtime.torch.tensor(offset, dtype=runtime.torch.long, device=runtime.device)
+    _tensor_element_tile_metadata_cache[key] = tensor
+    return tensor
 
 
 def _compiled_tensor_element_tile_kernel(
