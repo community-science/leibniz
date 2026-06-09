@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
-import math
 import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -71,8 +70,18 @@ _generated_batch_cache_path = (
 )
 _generated_batch_cache: dict[tuple[str, str, str], tuple[Mapping[str, object], ...]] = {}
 _generated_preview_sample_limit = 50
-_digits_preview_complexity_windows = ((3.0, 4.0), (5.0, 6.0), (8.0, 9.0))
-_chess_preview_cardinalities = (1, 2, 4, 8, 16, 32, 64)
+_generated_preview_target_state_counts = (8, 32, 256)
+_generated_preview_complexity_windows = (
+    (0.0, 1.0),
+    (1.0, 2.0),
+    (2.0, 3.0),
+    (3.0, 4.0),
+    (4.0, 5.0),
+    (5.0, 6.0),
+    (6.0, 7.0),
+    (7.0, 8.0),
+    (8.0, 9.0),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,31 +95,65 @@ class _PreviewWindow:
 def _preview_windows_for_generator(
     generator: BenchmarkGenerator,
 ) -> tuple[_PreviewWindow, ...]:
-    benchmark_id = str(generator.manifest.id)
-    if benchmark_id == "benchmarks.digits@0.1.0":
-        return tuple(
+    candidates = _preview_window_candidates(generator)
+    by_state_count = {candidate.state_count: candidate for candidate in candidates}
+    selected = tuple(
+        by_state_count[target_state_count]
+        for target_state_count in _generated_preview_target_state_counts
+        if target_state_count in by_state_count
+    )
+    return tuple(
+        _PreviewWindow(
+            label=window.label,
+            seed=401 + index,
+            complexity_request=window.complexity_request,
+            state_count=window.state_count,
+        )
+        for index, window in enumerate(selected)
+    )
+
+
+def _preview_window_candidates(
+    generator: BenchmarkGenerator,
+) -> tuple[_PreviewWindow, ...]:
+    candidates: list[_PreviewWindow] = []
+    seen_state_counts: set[int] = set()
+    for minimum, maximum in _generated_preview_complexity_windows:
+        request = ComplexityRequest(minimum=minimum, maximum=maximum)
+        sample_set = generator(
+            seed=401,
+            shape=1,
+            include_metadata=True,
+            complexity_request=request,
+        )
+        if not sample_set.samples:
+            continue
+        sample = sample_set.samples[0]
+        complexity = (
+            sample.complexity_value.value
+            if sample.complexity_value is not None
+            else sample.complexity
+        )
+        state_count = _state_count_from_log2_complexity(complexity)
+        if state_count in seen_state_counts:
+            continue
+        seen_state_counts.add(state_count)
+        candidates.append(
             _PreviewWindow(
                 label=f"[{minimum:g}, {maximum:g}]",
-                seed=401 + index,
-                complexity_request=ComplexityRequest(minimum=minimum, maximum=maximum),
-                state_count=round(2**minimum),
+                seed=401,
+                complexity_request=request,
+                state_count=state_count,
             )
-            for index, (minimum, maximum) in enumerate(_digits_preview_complexity_windows)
         )
-    if benchmark_id == "benchmarks.chess@0.1.0":
-        return tuple(
-            _PreviewWindow(
-                label=f"{cardinality} puzzle states",
-                seed=401 + index,
-                complexity_request=ComplexityRequest(
-                    minimum=math.log2(cardinality),
-                    maximum=math.log2(cardinality) + 1.0,
-                ),
-                state_count=cardinality,
-            )
-            for index, cardinality in enumerate(_chess_preview_cardinalities)
-        )
-    return ()
+    return tuple(candidates)
+
+
+def _state_count_from_log2_complexity(complexity: float) -> int:
+    state_count = round(2**complexity)
+    if state_count < 1:
+        raise ConsoleDataValidationError("generated sample state count must be positive")
+    return state_count
 
 
 def _preview_batch_record(
@@ -498,7 +541,7 @@ class ConsoleDataBuilder:
         benchmark_root: Path,
     ) -> str:
         hasher = hashlib.sha256()
-        hasher.update(b"complexity-window-sample-sets-v1\0")
+        hasher.update(b"complexity-window-sample-sets-v2\0")
         entrypoint = benchmark_root / "benchmark.py"
         if entrypoint.is_file():
             self._hash_file(hasher, entrypoint)
