@@ -1262,10 +1262,6 @@ class Generator:
                 request=complexity_request
             )
             if requested_complexity_class is None:
-                if runtime is not None:
-                    raise ObservationGenerationError(
-                        "tensor generation complexity request matched no shell"
-                    )
                 return GeneratedSampleSet(
                     benchmark_id=self.manifest.id,
                     generator_id=self.id,

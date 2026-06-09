@@ -2121,6 +2121,13 @@ def evaluate_model_checkpoint_artifact(
                     raise
                 curriculum_exhausted = True
                 break
+            except _EmptyCurriculumWindow:
+                if not results:
+                    raise BenchmarkRunnerError(
+                        "checkpoint evaluation first curriculum rung materialized no samples"
+                    ) from None
+                curriculum_exhausted = True
+                break
         try:
             with phase_timings.span("checkpoint_evaluation.rung_evaluation"):
                 rung_evidence, batch_max_inference_compute = _evaluate_checkpoint_rung(
@@ -2336,16 +2343,17 @@ def _evaluation_terminal_failure_count(
     frontier_index: int,
     chance_mass: float,
 ) -> int:
-    count = 0
-    for result in evaluation_results[frontier_index + 1 :]:
+    if not evaluation_results:
+        return 0
+    failure_start = (
+        frontier_index + 1
         if _evaluation_rung_confidently_above_chance(
-            result,
+            evaluation_results[frontier_index],
             chance_mass=chance_mass,
-        ):
-            count = 0
-        else:
-            count += 1
-    return count
+        )
+        else frontier_index
+    )
+    return len(evaluation_results[failure_start:])
 
 
 @dataclass(frozen=True, slots=True)
@@ -3620,6 +3628,8 @@ def _evaluation_result_frontier_index(
             chance_mass=chance_mass,
         ):
             frontier_index = index
+            continue
+        break
     return frontier_index
 
 

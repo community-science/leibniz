@@ -705,23 +705,24 @@ def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
     assert cpu_runtime.torch.equal(cpu_fields, mps_fields.detach().cpu())
 
 
-def test_digits_tensor_generation_rejects_unmatched_complexity_requests() -> None:
+def test_digits_tensor_generation_returns_null_set_for_unmatched_complexity_requests() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
     outcome_space = generator.manifest.resolve_outcome_space()
     request = ComplexityRequest(minimum=0.5, maximum=0.5)
 
-    with pytest.raises(
-        ObservationGenerationError,
-        match="tensor generation complexity request matched no shell",
-    ):
-        generator(
-            shape=1,
-            seed=910,
-            runtime=runtime,
-            outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
-            complexity_request=request,
-        )
+    sample_set = generator(
+        shape=1,
+        seed=910,
+        runtime=runtime,
+        outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
+        complexity_request=request,
+    )
+
+    assert sample_set.sample_count == 0
+    assert sample_set.samples == ()
+    assert sample_set.fields is None
+    assert sample_set.targets is None
 
 
 def test_digits_generator_rejects_edge_clipped_affine_samples() -> None:

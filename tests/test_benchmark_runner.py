@@ -34,6 +34,8 @@ from leibniz.local_results import load_console_result_view, materialize_benchmar
 from leibniz.materialization import AxisAssignment
 from leibniz.observation_generation import (
     ComplexityRequest,
+    ComplexityValue,
+    GeneratedSample,
     GeneratedSampleSet,
     load_generator,
 )
@@ -493,6 +495,93 @@ def test_chess_benchmark_runner_accepts_fixed_board_tensor(tmp_path: Path) -> No
     assert evaluation_protocol["score_status"] in {"accepted", "provisional"}
     assert cast(int, evaluation_protocol["evaluation_curriculum_rung_count"]) >= 1
     assert cast(int, evaluation_curriculum["unlocked_rung_count"]) >= 1
+
+
+def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _chess_linear_architecture.read_bytes()
+    ).manifest
+    generator = load_generator(_chess_benchmark_root)
+    outcome_space = generator.manifest.resolve_outcome_space()
+    runtime = resolve_tensor_runtime("cpu")
+    outcome_id = outcome_space.outcomes[0].id
+    sample = GeneratedSample(
+        index=0,
+        outcome_id=outcome_id,
+        complexity=0.0,
+        complexity_value=ComplexityValue(value=0.0),
+        available_outcome_ids=(outcome_id,),
+    )
+    batch = GeneratedSampleSet(
+        benchmark_id=generator.manifest.id,
+        generator_id=cast(ProtocolIdentifier, generator.id),
+        generator_version=generator.version,
+        seed=101,
+        shape=(1,),
+        samples=(sample,),
+        fields=runtime.torch.zeros((1, 18, 8, 8), dtype=runtime.torch.float32),
+        targets=runtime.torch.zeros((1, len(outcome_space.outcomes)), dtype=runtime.torch.float32),
+    )
+    rung = cast(Any, benchmark_runner)._CurriculumRung(
+        index=0,
+        resolution_assignment=None,
+        seed=101,
+        batch=batch,
+        sample_count=1,
+        complexity_minimum=0.0,
+        complexity_maximum=1.0,
+    )
+    evidence = cast(Any, benchmark_runner)._CheckpointEvaluationRungEvidence(
+        rung=rung,
+        mean_accepted_mass=1.0,
+        sample_count=1,
+        confidence_half_width=0.0,
+        input_shape=(18, 8, 8),
+    )
+
+    def fake_load_predictor(**_kwargs: object) -> object:
+        return SimpleNamespace(runtime=runtime)
+
+    def fake_curriculum_rung(**kwargs: object) -> object:
+        if cast(int, kwargs["index"]) == 0:
+            return rung
+        raise cast(Any, benchmark_runner)._EmptyCurriculumWindow()
+
+    def fake_evaluate_rung(**_kwargs: object) -> tuple[object, int]:
+        return evidence, 1
+
+    def fake_final_measurements(
+        **_kwargs: object,
+    ) -> tuple[GeneratedSampleSet, tuple[tuple[float, ...], ...], int]:
+        return batch, ((1.0,),), 1
+
+    monkeypatch.setattr(benchmark_runner, "load_model_checkpoint_predictor", fake_load_predictor)
+    monkeypatch.setattr(benchmark_runner, "_evaluation_curriculum_rung", fake_curriculum_rung)
+    monkeypatch.setattr(benchmark_runner, "_evaluate_checkpoint_rung", fake_evaluate_rung)
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_evaluate_checkpoint_rung_measurements",
+        fake_final_measurements,
+    )
+
+    results, final_batch, probabilities, throughput = (
+        benchmark_runner.evaluate_model_checkpoint_artifact(
+            architecture=architecture,
+            generator=cast(Any, generator),
+            outcome_space=outcome_space,
+            seed=101,
+            tensor_device="cpu",
+            checkpoint=cast(Any, object()),
+        )
+    )
+
+    assert results == (evidence,)
+    assert final_batch is batch
+    assert probabilities == ((1.0,),)
+    assert throughput["curriculum_exhausted"] is True
+    assert throughput["capacity_limited"] is False
 
 
 def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
@@ -965,7 +1054,7 @@ def test_checkpoint_evaluation_stops_at_runtime_capacity(
     ] == "provisional"
 
 
-def test_evaluation_frontier_requires_confidence_above_chance() -> None:
+def test_evaluation_frontier_requires_contiguous_confidence_above_chance() -> None:
     rung_evidence = cast(Any, benchmark_runner)._CheckpointEvaluationRungEvidence
     results = (
         rung_evidence(
@@ -996,7 +1085,7 @@ def test_evaluation_frontier_requires_confidence_above_chance() -> None:
             evaluation_results=results,
             outcome_ids=tuple(f"digit-{index}" for index in range(10)),
         )
-        == 2
+        == 0
     )
 
 
@@ -1043,6 +1132,38 @@ def test_evaluation_integration_converges_after_confident_terminal_failures() ->
     assert evidence.frontier_index == 0
     assert evidence.terminal_failure_count == 3
     assert math.isclose(evidence.score_integral_half_width, 0.01 / 0.9)
+    assert evidence.converged
+
+
+def test_evaluation_integration_does_not_reset_after_failed_ladder_gap() -> None:
+    rung_evidence = cast(Any, benchmark_runner)._CheckpointEvaluationRungEvidence
+    integration_evidence = cast(Any, benchmark_runner)._evaluation_integration_evidence
+    outcome_ids = tuple(f"digit-{index}" for index in range(10))
+
+    def rung(index: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            index=index,
+            complexity=float(index + 1),
+            seed=101 + index,
+            complexity_minimum=float(index),
+            complexity_maximum=float(index + 1),
+        )
+
+    results = tuple(
+        rung_evidence(
+            rung=rung(index),
+            mean_accepted_mass=mean,
+            sample_count=100,
+            confidence_half_width=0.01,
+            input_shape=(1, 16, 16),
+        )
+        for index, mean in enumerate((0.90, 0.80, 0.05, 0.04, 0.70))
+    )
+
+    evidence = integration_evidence(evaluation_results=results, outcome_ids=outcome_ids)
+
+    assert evidence.frontier_index == 1
+    assert evidence.terminal_failure_count == 3
     assert evidence.converged
 
 
