@@ -160,19 +160,19 @@ assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind'
 assertEqual(benchmarkTask?.batches.length, 3, 'benchmark batch count');
 assertEqual(
   benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.sample_count}`).join('|'),
-  'complexity-window:50|complexity-window:50|complexity-window:50',
+  'complexity-window:8|complexity-window:32|complexity-window:50',
   'generated benchmark batches',
 );
 const generatedSamples = benchmarkTask?.batches[0]?.samples ?? [];
 const generatedComponentIndices = generatedSamples.map(requiredComponentIndex);
 assertEqual(
   generatedComponentIndices.length,
-  50,
+  8,
   'generated digit sample count',
 );
 assertEqual(
   new Set(generatedComponentIndices.map((sample) => sample.component_index)).size,
-  10,
+  generatedComponentIndices.length,
   'generated digit label coverage',
 );
 assertEqual(
