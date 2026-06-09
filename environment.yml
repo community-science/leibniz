@@ -11,5 +11,4 @@ dependencies:
   - pytorch>=2
   - sel(linux): pytorch-cuda=12.4
   - pip:
-      - "triton; platform_system == 'Linux'"
       - "-e .[dev]"
