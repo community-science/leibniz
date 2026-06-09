@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import math
 import os
+import sys
 import time
 from array import array
 from collections.abc import Callable, Mapping, Sequence
@@ -36,8 +37,10 @@ __all__ = [
     "synchronize_runtime",
     "TensorRuntime",
     "TensorElementParameter",
+    "TensorElementParameterDType",
     "TensorElementProgram",
     "TensorElementRecipe",
+    "TensorElementDType",
     "TensorRuntimeError",
     "TensorRuntimeDevice",
     "TensorRuntimeDeviceKind",
@@ -47,6 +50,7 @@ __all__ = [
     "tensor_runtime_device_choices",
     "tensor_runtime_device_kinds",
     "tensor_runtime_has_fixed_device_memory",
+    "tensor_runtime_profile_operator_rows",
     "tensor_runtime_total_memory_bytes",
     "tensor_runtime_used_memory_bytes",
     "tensor_value_to_host",
@@ -563,6 +567,45 @@ def synchronize_runtime(runtime: TensorRuntime) -> None:
     _synchronize_runtime(runtime)
 
 
+def tensor_runtime_profile_operator_rows(
+    runtime: TensorRuntime,
+    *,
+    callback: Callable[[int], None],
+    repeats: int,
+    row_limit: int,
+    record_name: str,
+) -> tuple[dict[str, object], ...]:
+    """Return compact backend operator profile rows for repeated runtime work."""
+
+    profiler = getattr(runtime.torch, "profiler", None)
+    if profiler is None:
+        raise TensorRuntimeError("tensor runtime does not expose torch.profiler")
+    _synchronize_runtime(runtime)
+    activities = [profiler.ProfilerActivity.CPU]
+    device_activity = _profiler_device_activity(runtime, profiler=profiler)
+    if device_activity is not None:
+        activities.append(device_activity)
+    with profiler.profile(
+        activities=activities,
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=False,
+    ) as profile:
+        for offset in range(repeats):
+            with profiler.record_function(record_name):
+                callback(offset)
+            profile.step()
+    _synchronize_runtime(runtime)
+    return tuple(
+        _operator_profile_row(event)
+        for event in sorted(
+            profile.key_averages(),
+            key=_operator_profile_sort_key,
+            reverse=True,
+        )[:row_limit]
+    )
+
+
 def seed_runtime(runtime: TensorRuntime, *, seed: int) -> None:
     """Set the global random seed for reproducible training."""
 
@@ -908,6 +951,43 @@ def _synchronize_runtime(runtime: TensorRuntime) -> None:
             synchronize()
 
 
+def _profiler_device_activity(runtime: TensorRuntime, *, profiler: object) -> object | None:
+    activities = cast(Any, profiler).ProfilerActivity
+    if runtime.device_kind == "cuda":
+        return getattr(activities, "CUDA", None)
+    _ = profiler
+    return None
+
+
+def _operator_profile_sort_key(event: object) -> tuple[float, float]:
+    return (
+        float(getattr(event, "device_time_total", 0.0)),
+        float(getattr(event, "cpu_time_total", 0.0)),
+    )
+
+
+def _operator_profile_row(event: object) -> dict[str, object]:
+    typed_event = cast(Any, event)
+    return {
+        "name": str(typed_event.key),
+        "calls": int(typed_event.count),
+        "cpu_time_total_us": float(getattr(event, "cpu_time_total", 0.0)),
+        "self_cpu_time_total_us": float(getattr(event, "self_cpu_time_total", 0.0)),
+        "device_time_total_us": float(getattr(event, "device_time_total", 0.0)),
+        "self_device_time_total_us": float(
+            getattr(event, "self_device_time_total", 0.0)
+        ),
+        "cpu_memory_usage_bytes": int(getattr(event, "cpu_memory_usage", 0)),
+        "self_cpu_memory_usage_bytes": int(
+            getattr(event, "self_cpu_memory_usage", 0)
+        ),
+        "device_memory_usage_bytes": int(getattr(event, "device_memory_usage", 0)),
+        "self_device_memory_usage_bytes": int(
+            getattr(event, "self_device_memory_usage", 0)
+        ),
+    }
+
+
 def _monotonic_seconds() -> float:
     return time.perf_counter()
 
@@ -1213,6 +1293,7 @@ def _compiled_tensor_element_tile_kernel(
     parameter_tensors: Mapping[str, Any],
 ) -> Callable[..., Any]:
     key = (
+        _tensor_element_program_scope_key(program.kernel),
         program.cache_key if program.cache_key is not None else id(program.kernel),
         runtime.device_kind,
         "tile",
@@ -1253,11 +1334,32 @@ def _compiled_tensor_element_tile_kernel(
             return values.where(active, values * 0)
 
         try:
+            _clear_stale_compile_module_alias(program.kernel)
             compiled = runtime.torch.compile(tile_kernel)
         except Exception:
             compiled = tile_kernel
     _tensor_element_kernel_cache[key] = compiled
     return cast(Callable[..., Any], compiled)
+
+
+def _tensor_element_program_scope_key(kernel: Callable[..., object]) -> int:
+    globals_mapping = getattr(kernel, "__globals__", None)
+    if isinstance(globals_mapping, dict):
+        return id(cast(object, globals_mapping))
+    return id(kernel)
+
+
+def _clear_stale_compile_module_alias(kernel: Callable[..., object]) -> None:
+    module_name = getattr(kernel, "__module__", None)
+    if not isinstance(module_name, str):
+        return
+    current_module = sys.modules.get(module_name)
+    if current_module is None:
+        return
+    alias = "__import_" + module_name.replace(".", "_dot_")
+    existing_module = globals().get(alias)
+    if existing_module is not None and existing_module is not current_module:
+        del globals()[alias]
 
 
 def _mark_dynamic_tensor_element_parameters(

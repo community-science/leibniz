@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Protocol, cast
 
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.materialization import AxisAssignment
@@ -24,6 +24,7 @@ from leibniz.tensor_runtime import (
     runtime_roofline_record,
     synchronize_runtime,
     tensor_runtime_available_memory_bytes,
+    tensor_runtime_profile_operator_rows,
     validate_tensor_runtime_device,
 )
 from leibniz.timing import TimingCollector
@@ -295,9 +296,6 @@ def profile_formation_operators(
         runtime = resolve_tensor_runtime(plan.tensor_device)
     except TensorRuntimeError as error:
         raise FormationTimingError(str(error)) from error
-    profiler = getattr(runtime.torch, "profiler", None)
-    if profiler is None:
-        raise FormationTimingError("tensor runtime does not expose torch.profiler")
     memory_limit_bytes = min(
         tensor_runtime_available_memory_bytes(runtime),
         _initial_generation_memory_limit_bytes,
@@ -322,30 +320,16 @@ def profile_formation_operators(
         tensor_once(plan.seed + offset)
     _synchronize(runtime)
 
-    activities = [profiler.ProfilerActivity.CPU]
-    device_activity = _profiler_device_activity(runtime, profiler=profiler)
-    if device_activity is not None:
-        activities.append(device_activity)
-    with profiler.profile(
-        activities=activities,
-        record_shapes=True,
-        profile_memory=True,
-        with_stack=False,
-    ) as profile:
-        for offset in range(plan.repeats):
-            with profiler.record_function("leibniz.formation.tensor_batch"):
-                tensor_once(plan.seed + 1_000_003 + offset)
-            profile.step()
-    _synchronize(runtime)
-
-    rows = tuple(
-        _operator_profile_row(event)
-        for event in sorted(
-            profile.key_averages(),
-            key=_operator_profile_sort_key,
-            reverse=True,
-        )[: plan.row_limit]
-    )
+    try:
+        rows = tensor_runtime_profile_operator_rows(
+            runtime,
+            callback=lambda offset: tensor_once(plan.seed + 1_000_003 + offset),
+            repeats=plan.repeats,
+            row_limit=plan.row_limit,
+            record_name="leibniz.formation.tensor_batch",
+        )
+    except TensorRuntimeError as error:
+        raise FormationTimingError(str(error)) from error
     return FormationOperatorProfileSummary(
         benchmark_id=str(generator.manifest.id),
         sample_count=plan.sample_count,
@@ -374,40 +358,3 @@ def _time_repeats(
 
 def _synchronize(runtime: TensorRuntime) -> None:
     synchronize_runtime(runtime)
-
-
-def _profiler_device_activity(runtime: TensorRuntime, *, profiler: object) -> object | None:
-    activities = cast(Any, profiler).ProfilerActivity
-    if runtime.device_kind == "cuda":
-        return getattr(activities, "CUDA", None)
-    _ = profiler
-    return None
-
-
-def _operator_profile_sort_key(event: object) -> tuple[float, float]:
-    return (
-        float(getattr(event, "device_time_total", 0.0)),
-        float(getattr(event, "cpu_time_total", 0.0)),
-    )
-
-
-def _operator_profile_row(event: object) -> dict[str, object]:
-    typed_event = cast(Any, event)
-    return {
-        "name": str(typed_event.key),
-        "calls": int(typed_event.count),
-        "cpu_time_total_us": float(getattr(event, "cpu_time_total", 0.0)),
-        "self_cpu_time_total_us": float(getattr(event, "self_cpu_time_total", 0.0)),
-        "device_time_total_us": float(getattr(event, "device_time_total", 0.0)),
-        "self_device_time_total_us": float(
-            getattr(event, "self_device_time_total", 0.0)
-        ),
-        "cpu_memory_usage_bytes": int(getattr(event, "cpu_memory_usage", 0)),
-        "self_cpu_memory_usage_bytes": int(
-            getattr(event, "self_cpu_memory_usage", 0)
-        ),
-        "device_memory_usage_bytes": int(getattr(event, "device_memory_usage", 0)),
-        "self_device_memory_usage_bytes": int(
-            getattr(event, "self_device_memory_usage", 0)
-        ),
-    }
