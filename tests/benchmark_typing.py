@@ -65,7 +65,9 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
         include_metadata: bool = True,
+        include_artifacts: bool = False,
         complexity_request: ComplexityRequest | None = None,
+        sample_indices: Sequence[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
@@ -74,8 +76,6 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...
-
-    def console_preview_batches(self, *, atom_count: int) -> Sequence[Mapping[str, object]]: ...
 
 
 class DigitsBenchmark(BenchmarkProtocol, Protocol):

@@ -15,6 +15,7 @@ from leibniz.observation_generation import (
     ComplexityRequest,
     ObservationGenerationError,
     load_generator,
+    sample_indices_for_even_state_coverage,
 )
 from leibniz.tensor_runtime import resolve_tensor_runtime, tensor_value_to_host
 
@@ -23,7 +24,6 @@ _benchmark_parent = _repository_root / "src" / "leibniz" / "benchmarks"
 _chess_benchmark_root = _benchmark_parent / "chess"
 _expected_transform_count = 8
 _expected_preview_limit = 4
-_expected_preview_batch_count = 7
 _minimum_chess_fen = "8/8/8/8/8/8/2Q5/krK5 w - - 0 1"
 
 
@@ -574,15 +574,22 @@ def test_chess_generator_can_return_metadata_free_tensors() -> None:
 
 def test_chess_console_preview_uses_board_images_and_text_metadata() -> None:
     generator = load_generator(_chess_benchmark_root)
-    atom_count = len(generator.manifest.outcome_space.outcomes)
+    sample_indices = sample_indices_for_even_state_coverage(
+        state_count=1,
+        seed=401,
+        sample_limit=_expected_preview_limit,
+    )
 
-    batches = tuple(cast(Any, generator).console_preview_batches(atom_count=atom_count))
+    batch = generator(
+        seed=401,
+        shape=len(sample_indices),
+        include_artifacts=True,
+        complexity_request=ComplexityRequest(minimum=0.0, maximum=1.0),
+        sample_indices=sample_indices,
+    )
 
-    assert len(batches) == _expected_preview_batch_count
-    batch = batches[0]
-    assert batch["mode"] == "complexity-window"
-    assert batch["sample_count"] == 1
-    sample = cast(list[dict[str, object]], batch["samples"])[0]
+    assert batch.sample_count == 1
+    sample = batch.samples[0].to_record()
     assert sample["observable_state_id"] == f"fen:{_minimum_chess_fen}"
     coverage_coordinate = cast(list[dict[str, object]], sample["latent_coordinates"])[5]
     assert coverage_coordinate["name"] == (
@@ -617,12 +624,21 @@ def test_chess_console_preview_uses_board_images_and_text_metadata() -> None:
     assert cast(float, target_moves[0]["target_probability"]) == 1.0
     assert "target_distribution" not in sample
     assert "available_outcome_ids" in sample
-    cardinality_16_batch = next(
-        cast(dict[str, object], batch)
-        for batch in batches
-        if cast(list[int], batch["complexity_cardinalities"]) == [16]
+    cardinality_16_indices = sample_indices_for_even_state_coverage(
+        state_count=16,
+        seed=405,
+        sample_limit=_expected_preview_limit,
     )
-    cardinality_16_samples = cast(list[dict[str, object]], cardinality_16_batch["samples"])
+    cardinality_16_batch = generator(
+        seed=405,
+        shape=len(cardinality_16_indices),
+        include_artifacts=True,
+        complexity_request=ComplexityRequest(minimum=4.0, maximum=5.0),
+        sample_indices=cardinality_16_indices,
+    )
+    cardinality_16_samples = [
+        sample.to_record() for sample in cardinality_16_batch.samples
+    ]
     cardinality_16_observable_ids = [
         cast(str, sample["observable_state_id"])
         for sample in cardinality_16_samples
@@ -661,10 +677,6 @@ def _chess_global_sample_index() -> Callable[..., int]:
 def _chess_representatives_for_cardinality() -> Callable[[int], list[dict[str, object]]]:
     module = _chess_benchmark_module()
     global_sample_index = cast(Callable[..., int], module["_global_sample_index"])
-    representative_local_indices = cast(
-        Callable[[int], tuple[int, ...]],
-        module["_representative_local_indices"],
-    )
     position_for_sample_index = cast(
         Callable[[int], Any],
         module["_position_for_sample_index"],
@@ -680,7 +692,11 @@ def _chess_representatives_for_cardinality() -> Callable[[int], list[dict[str, o
                     )
                 ).representative_metadata()
             )
-            for index in representative_local_indices(cardinality)
+            for index in sample_indices_for_even_state_coverage(
+                state_count=cardinality,
+                seed=0,
+                sample_limit=_expected_preview_limit,
+            )
         ]
 
     return representatives

@@ -21,6 +21,7 @@ from leibniz.observation_generation import (
     GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
+    sample_indices_for_even_state_coverage,
 )
 from leibniz.tensor_runtime import TensorRuntimeError, resolve_tensor_runtime
 from leibniz.timing import TimingCollector
@@ -690,6 +691,7 @@ def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
         "transform": generator.formation.variation_transform,
         "grid": complexity_class.affine_grid,
         "seed": 101,
+        "sample_indices": tuple(range(64)),
         "cardinality": complexity_class.cardinality,
         "minimum_address": complexity_class.minimum_address,
         "timing": None,
@@ -763,21 +765,32 @@ def test_digits_benchmark_uses_single_tensor_render_path() -> None:
 
 def test_digits_console_preview_png_encoding_is_deterministic() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
+    seed = 403
+    sample_indices = sample_indices_for_even_state_coverage(
+        state_count=256,
+        seed=seed,
+        sample_limit=50,
+    )
 
-    left = generator.console_preview_batches(atom_count=10)
-    right = generator.console_preview_batches(atom_count=10)
-    sample = cast(dict[str, object], cast(list[object], left[2]["samples"])[0])
+    left = generator(
+        seed=seed,
+        shape=len(sample_indices),
+        include_artifacts=True,
+        complexity_request=ComplexityRequest(minimum=8.0, maximum=9.0),
+        sample_indices=sample_indices,
+    )
+    right = generator(
+        seed=seed,
+        shape=len(sample_indices),
+        include_artifacts=True,
+        complexity_request=ComplexityRequest(minimum=8.0, maximum=9.0),
+        sample_indices=sample_indices,
+    )
+    sample = left.samples[0].to_record()
     data_url = cast(str, sample["image_data_url"])
 
-    assert left == right
-    assert [
-            (batch["label"], batch["sample_count"])
-            for batch in left
-            ] == [
-                ("[3, 4]", 8),
-                ("[5, 6]", 32),
-                ("[8, 9]", 50),
-            ]
+    assert left.to_record() == right.to_record()
+    assert len(left.samples) == 50
     assert data_url.startswith("data:image/png;base64,")
 
 

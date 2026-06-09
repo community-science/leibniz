@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import math
 import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -42,7 +43,11 @@ from leibniz.local_results import (
 )
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_operators import model_operator_vocabulary
-from leibniz.observation_generation import load_generator
+from leibniz.observation_generation import (
+    ComplexityRequest,
+    load_generator,
+    sample_indices_for_even_state_coverage,
+)
 
 __all__ = [
     "ConsoleData",
@@ -65,6 +70,81 @@ _generated_batch_cache_path = (
     / ("generatedSampleSets" + _document_suffix)
 )
 _generated_batch_cache: dict[tuple[str, str, str], tuple[Mapping[str, object], ...]] = {}
+_generated_preview_sample_limit = 50
+_digits_preview_complexity_windows = ((3.0, 4.0), (5.0, 6.0), (8.0, 9.0))
+_chess_preview_cardinalities = (1, 2, 4, 8, 16, 32, 64)
+
+
+@dataclass(frozen=True, slots=True)
+class _PreviewWindow:
+    label: str
+    seed: int
+    complexity_request: ComplexityRequest
+    state_count: int
+
+
+def _preview_windows_for_generator(
+    generator: BenchmarkGenerator,
+) -> tuple[_PreviewWindow, ...]:
+    benchmark_id = str(generator.manifest.id)
+    if benchmark_id == "benchmarks.digits@0.1.0":
+        return tuple(
+            _PreviewWindow(
+                label=f"[{minimum:g}, {maximum:g}]",
+                seed=401 + index,
+                complexity_request=ComplexityRequest(minimum=minimum, maximum=maximum),
+                state_count=round(2**minimum),
+            )
+            for index, (minimum, maximum) in enumerate(_digits_preview_complexity_windows)
+        )
+    if benchmark_id == "benchmarks.chess@0.1.0":
+        return tuple(
+            _PreviewWindow(
+                label=f"{cardinality} puzzle states",
+                seed=401 + index,
+                complexity_request=ComplexityRequest(
+                    minimum=math.log2(cardinality),
+                    maximum=math.log2(cardinality) + 1.0,
+                ),
+                state_count=cardinality,
+            )
+            for index, cardinality in enumerate(_chess_preview_cardinalities)
+        )
+    return ()
+
+
+def _preview_batch_record(
+    *,
+    generator: BenchmarkGenerator,
+    window: _PreviewWindow,
+) -> Mapping[str, object]:
+    sample_indices = sample_indices_for_even_state_coverage(
+        state_count=window.state_count,
+        seed=window.seed,
+        sample_limit=_generated_preview_sample_limit,
+    )
+    sample_set = generator(
+        seed=window.seed,
+        shape=len(sample_indices),
+        include_fields=True,
+        include_artifacts=True,
+        complexity_request=window.complexity_request,
+        sample_indices=sample_indices,
+    )
+    samples = [sample.to_record() for sample in sample_set.samples]
+    return {
+        "mode": "complexity-window",
+        "label": window.label,
+        "seed": window.seed,
+        "sample_count": len(samples),
+        "complexity_window": window.complexity_request.to_record(),
+        "complexity_cardinalities": [window.state_count],
+        "presentation": {
+            "sample_card_density": "compact" if len(samples) > 80 else "standard",
+            "aggregate_mode": False,
+        },
+        "samples": samples,
+    }
 
 
 class ConsoleDataValidationError(ValueError):
@@ -470,14 +550,15 @@ class ConsoleDataBuilder:
         if cached is not None:
             _generated_batch_cache[cache_key] = cached
             return cached
-        preview_batches = getattr(generator, "console_preview_batches", None)
-        if not callable(preview_batches):
+        preview_windows = _preview_windows_for_generator(generator)
+        if not preview_windows:
             raise ConsoleDataValidationError(
                 "benchmark generator does not expose complexity-window preview batches"
             )
         try:
             records = tuple(
-                cast(Iterable[Mapping[str, object]], preview_batches(atom_count=atom_count))
+                _preview_batch_record(generator=generator, window=window)
+                for window in preview_windows
             )
         except ValueError as error:
             raise ConsoleDataValidationError(str(error)) from error

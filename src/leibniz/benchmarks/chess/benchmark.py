@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from base64 import b64encode
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -36,14 +36,11 @@ __all__ = ["all_meaningful_uci_moves", "benchmark"]
 _benchmark_id = ProtocolIdentifier.parse("benchmarks.chess@0.1.0")
 _generator_id = ProtocolIdentifier.parse("benchmarks.chess.generator@0.1.0")
 _outcome_space_id = ProtocolIdentifier.parse("benchmarks.chess.uci-moves@0.1.0")
-_console_preview_limit = 4
-_console_preview_cardinalities = (1, 2, 4, 8, 16, 32, 64)
 _tensor_shape = (18, 8, 8)
 _board_preview_size = 512
 _board_preview_square_size = _board_preview_size // 8
 
 _mate_in_one_family_id = "corner-net-indexed-family"
-_preview_representative_limit = 4
 
 
 def benchmark(root: Path) -> BenchmarkProtocol:
@@ -180,7 +177,9 @@ class Generator:
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
         include_metadata: bool = True,
+        include_artifacts: bool = False,
         complexity_request: ComplexityRequest | None = None,
+        sample_indices: Sequence[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: object | None = None,
         variation_extent: float = 1.0,
@@ -217,30 +216,35 @@ class Generator:
             )
 
         sample_count = _sample_count(sample_shape)
+        resolved_sample_indices = _sample_indices(
+            sample_count=sample_count,
+            sample_indices=sample_indices,
+        )
         complexity = math.log2(sample_space.cardinality)
         selected_local_indices = _sample_local_indices(
             seed=seed,
             cardinality=sample_space.cardinality,
-            sample_count=sample_count,
+            sample_indices=resolved_sample_indices,
         )
         selected_global_indices = _global_sample_indices(
             cardinality=sample_space.cardinality,
             local_indices=selected_local_indices,
         )
-        samples = (
-            _samples_for_global_indices(
+        samples: tuple[GeneratedSample, ...] = ()
+        if include_metadata:
+            samples = _samples_for_global_indices(
                 global_indices=selected_global_indices,
                 outcome_ids=outcome_ids,
                 sample_space_cardinality=sample_space.cardinality,
                 complexity=complexity,
                 full_metadata=runtime is None,
             )
-            if include_metadata
-            else ()
-        )
+            if include_artifacts:
+                samples = tuple(_with_chess_artifacts(sample) for sample in samples)
         fields, targets = _tensor_batch_for_global_indices(
             runtime=runtime,
             seed=seed,
+            sample_indices=resolved_sample_indices,
             cardinality=sample_space.cardinality,
             outcome_ids=outcome_ids,
             sample_shape=sample_shape,
@@ -261,56 +265,6 @@ class Generator:
         """Return the smallest supported Chess sample-space complexity."""
 
         return ComplexityValue(value=0.0)
-
-    def console_preview_batches(
-        self,
-        *,
-        atom_count: int,
-    ) -> tuple[Mapping[str, object], ...]:
-        """Return browser-preview batches for sample-space cardinality classes."""
-
-        if atom_count != len(self.manifest.outcome_space.outcomes):
-            raise ObservationGenerationError("atom_count does not match outcome space")
-        batches: list[Mapping[str, object]] = []
-        for cardinality in _console_preview_cardinalities:
-            if cardinality > _family_capacity():
-                continue
-            complexity = math.log2(cardinality)
-            request = ComplexityRequest(
-                minimum=complexity,
-                maximum=complexity + 1.0,
-            )
-            global_indices = _global_sample_indices(
-                cardinality=cardinality,
-                local_indices=_representative_local_indices(cardinality),
-            )
-            preview_samples = _samples_for_global_indices(
-                global_indices=global_indices,
-                outcome_ids=None,
-                sample_space_cardinality=cardinality,
-                complexity=complexity,
-                full_metadata=True,
-            )
-            samples = [
-                _sample_preview_record(sample)
-                for sample in preview_samples
-            ]
-            batches.append(
-                {
-                    "mode": "complexity-window",
-                    "label": f"{cardinality} puzzle states",
-                    "seed": 401 + len(batches),
-                    "sample_count": len(samples),
-                    "complexity_window": request.to_record(),
-                    "complexity_cardinalities": [cardinality],
-                    "presentation": {
-                        "sample_card_density": "standard",
-                        "aggregate_mode": False,
-                    },
-                    "samples": samples,
-                }
-            )
-        return tuple(batches)
 
     def _sample_space_for_request(
         self,
@@ -482,29 +436,14 @@ def _family_index_lower_bound_for_cardinality(cardinality: int) -> int:
     )
 
 
-def _representative_local_indices(cardinality: int) -> tuple[int, ...]:
-    _require_sample_cardinality(cardinality)
-    count = min(cardinality, _preview_representative_limit)
-    if count == 1:
-        return (0,)
-    return tuple(
-        index * (cardinality - 1) // (count - 1)
-        for index in range(count)
-    )
-
-
 def _sample_local_indices(
     *,
     seed: int,
     cardinality: int,
-    sample_count: int,
+    sample_indices: Sequence[int],
 ) -> tuple[int, ...]:
     _require_sample_cardinality(cardinality)
-    if type(sample_count) is not int or sample_count < 0:
-        raise ObservationGenerationError("Chess sample count must be non-negative")
-    if sample_count == 0:
-        return ()
-    return tuple((seed + index) % cardinality for index in range(sample_count))
+    return tuple((seed + index) % cardinality for index in sample_indices)
 
 
 def _spectator_mask_for_rank(rank: int) -> int:
@@ -833,32 +772,15 @@ def _full_sample(
     )
 
 
-def _sample_preview_record(sample: GeneratedSample) -> Mapping[str, object]:
-    record: dict[str, object] = {
-        "index": sample.index,
-        "outcome_id": sample.outcome_id,
-        "complexity": sample.complexity,
-        "complexity_value": (
-            None
-            if sample.complexity_value is None
-            else sample.complexity_value.to_record()
-        ),
-        "observable_state_id": sample.observable_state_id,
-        "available_outcome_ids": list(sample.available_outcome_ids),
-        "latent_coordinates": [
-            dict(coordinate) for coordinate in sample.latent_coordinates
-        ],
-    }
-    if sample.target_distribution is not None:
-        record["target_distribution"] = [
-            {"outcome_id": outcome_id, "probability": probability}
-            for outcome_id, probability in sample.target_distribution.items()
-        ]
+def _with_chess_artifacts(sample: GeneratedSample) -> GeneratedSample:
+    artifacts: dict[str, object] = {}
     image_data_url = _sample_board_image_data_url(sample)
     if image_data_url is not None:
-        record["image_data_url"] = image_data_url
-        record["image_overlay"] = _sample_board_image_overlay(sample)
-    return record
+        artifacts["image_data_url"] = image_data_url
+        artifacts["image_overlay"] = _sample_board_image_overlay(sample)
+    if not artifacts:
+        return sample
+    return replace(sample, artifacts=artifacts)
 
 
 def _sample_board_image_data_url(sample: GeneratedSample) -> str | None:
@@ -1039,6 +961,7 @@ def _tensor_batch_for_global_indices(
     *,
     runtime: TensorRuntime | None,
     seed: int,
+    sample_indices: tuple[int, ...],
     cardinality: int,
     outcome_ids: tuple[str, ...] | None,
     sample_shape: tuple[int, ...],
@@ -1050,6 +973,7 @@ def _tensor_batch_for_global_indices(
     return _tensor_batch_from_global_indices(
         runtime=runtime,
         seed=seed,
+        sample_indices=sample_indices,
         cardinality=cardinality,
         outcome_ids=outcome_ids,
         sample_shape=sample_shape,
@@ -1060,6 +984,7 @@ def _tensor_batch_from_global_indices(
     *,
     runtime: TensorRuntime,
     seed: int,
+    sample_indices: tuple[int, ...],
     cardinality: int,
     outcome_ids: tuple[str, ...],
     sample_shape: tuple[int, ...],
@@ -1076,6 +1001,7 @@ def _tensor_batch_from_global_indices(
             dtype="float32",
             program=_chess_field_tensor_program(
                 seed=seed,
+                sample_indices=sample_indices,
                 cardinality=cardinality,
                 global_offset=global_offset,
             ),
@@ -1088,6 +1014,7 @@ def _tensor_batch_from_global_indices(
             dtype="float32",
             program=_chess_target_tensor_program(
                 seed=seed,
+                sample_indices=sample_indices,
                 cardinality=cardinality,
                 global_offset=global_offset,
                 base_target_indices=_base_target_indices(outcome_ids),
@@ -1104,6 +1031,7 @@ def _tensor_batch_from_global_indices(
 def _chess_field_tensor_program(
     *,
     seed: int,
+    sample_indices: tuple[int, ...],
     cardinality: int,
     global_offset: int,
 ) -> TensorElementProgram:
@@ -1144,6 +1072,7 @@ def _chess_field_tensor_program(
         flat_indices: Any,
         *,
         seed_value: Any,
+        sample_indices_value: Any,
         cardinality_value: Any,
         global_offset_value: Any,
         mechanism_queen_square_values: Any,
@@ -1152,7 +1081,8 @@ def _chess_field_tensor_program(
         spectator_square_values: Any,
     ) -> Any:
         _ = flat_indices
-        sample_index, plane_index, rank_index, file_index = coordinates
+        sample_axis_index, plane_index, rank_index, file_index = coordinates
+        sample_index = sample_indices_value[sample_axis_index]
         square = rank_index * 8 + file_index
         local_index = (sample_index + seed_value).remainder(cardinality_value)
         global_index = global_offset_value + local_index
@@ -1210,6 +1140,12 @@ def _chess_field_tensor_program(
                 shape=(),
                 values=(seed,),
             ),
+            "sample_indices_value": TensorElementParameter(
+                dtype="int64",
+                shape=(len(sample_indices),),
+                values=sample_indices,
+                dynamic_axes=(0,),
+            ),
             "cardinality_value": TensorElementParameter(
                 dtype="int64",
                 shape=(),
@@ -1248,6 +1184,7 @@ def _chess_field_tensor_program(
 def _chess_target_tensor_program(
     *,
     seed: int,
+    sample_indices: tuple[int, ...],
     cardinality: int,
     global_offset: int,
     base_target_indices: tuple[int, ...],
@@ -1260,12 +1197,14 @@ def _chess_target_tensor_program(
         flat_indices: Any,
         *,
         seed_value: Any,
+        sample_indices_value: Any,
         cardinality_value: Any,
         global_offset_value: Any,
         base_target_index_values: Any,
     ) -> Any:
         _ = coordinates
-        sample_index = flat_indices.div(outcome_count, rounding_mode="floor")
+        sample_axis_index = flat_indices.div(outcome_count, rounding_mode="floor")
+        sample_index = sample_indices_value[sample_axis_index]
         outcome_index = flat_indices.remainder(outcome_count)
         local_index = (sample_index + seed_value).remainder(cardinality_value)
         global_index = global_offset_value + local_index
@@ -1279,6 +1218,12 @@ def _chess_target_tensor_program(
                 dtype="int64",
                 shape=(),
                 values=(seed,),
+            ),
+            "sample_indices_value": TensorElementParameter(
+                dtype="int64",
+                shape=(len(sample_indices),),
+                values=sample_indices,
+                dynamic_axes=(0,),
             ),
             "cardinality_value": TensorElementParameter(
                 dtype="int64",
@@ -1473,6 +1418,21 @@ def _sample_count(shape: Sequence[int]) -> int:
     for axis in shape:
         count *= axis
     return count
+
+
+def _sample_indices(
+    *,
+    sample_count: int,
+    sample_indices: Sequence[int] | None,
+) -> tuple[int, ...]:
+    if sample_indices is None:
+        return tuple(range(sample_count))
+    normalized = tuple(sample_indices)
+    if len(normalized) != sample_count:
+        raise ObservationGenerationError("sample_indices length must match sample shape")
+    if any(type(index) is not int or index < 0 for index in normalized):
+        raise ObservationGenerationError("sample_indices must be nonnegative integers")
+    return normalized
 
 
 all_meaningful_uci_moves = _all_meaningful_uci_moves()

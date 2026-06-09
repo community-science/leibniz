@@ -21,6 +21,7 @@ __all__ = [
     "ComplexityRequest",
     "ComplexityValue",
     "load_generator",
+    "sample_indices_for_even_state_coverage",
 ]
 
 _core_complexity_measure_id = "log2_complexity_class_size"
@@ -103,6 +104,38 @@ class ComplexityValue:
         }
 
 
+def sample_indices_for_even_state_coverage(
+    *,
+    state_count: int,
+    seed: int,
+    sample_limit: int,
+) -> tuple[int, ...]:
+    """Return sample indices that evenly cover a finite indexed state space."""
+
+    if type(state_count) is not int or state_count < 1:
+        raise ObservationGenerationError("state_count must be positive")
+    if type(seed) is not int or seed < 0:
+        raise ObservationGenerationError("seed must be nonnegative")
+    if type(sample_limit) is not int or sample_limit < 1:
+        raise ObservationGenerationError("sample_limit must be positive")
+    return tuple(
+        (state_index - seed) % state_count
+        for state_index in _even_state_indices(state_count, limit=sample_limit)
+    )
+
+
+def _even_state_indices(state_count: int, *, limit: int) -> tuple[int, ...]:
+    if state_count <= limit:
+        return tuple(range(state_count))
+    if limit == 1:
+        return (0,)
+    indices = {
+        round(index * (state_count - 1) / (limit - 1))
+        for index in range(limit)
+    }
+    return tuple(sorted(indices))
+
+
 @dataclass(frozen=True, slots=True)
 class GeneratedSample:
     """One generated sample from a benchmark data source."""
@@ -122,6 +155,7 @@ class GeneratedSample:
     variation_coordinates: tuple[Mapping[str, object], ...] = ()
     variation_values: Mapping[str, object] | None = None
     field: FieldObservation | None = None
+    artifacts: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not self.outcome_id:
@@ -134,6 +168,8 @@ class GeneratedSample:
             raise ObservationGenerationError("available_outcome_ids must be nonempty")
         if self.target_distribution is not None:
             _validate_target_distribution(self.target_distribution)
+        if self.artifacts is None:
+            object.__setattr__(self, "artifacts", {})
 
     def require_field(self) -> FieldObservation:
         """Return the generated field or fail with a domain error."""
@@ -185,6 +221,8 @@ class GeneratedSample:
             record["complexity_value"] = self.complexity_value.to_record()
         if self.field is not None and include_field:
             record["field"] = self.field.to_record()
+        if self.artifacts:
+            record.update(self.artifacts)
         return record
 
 

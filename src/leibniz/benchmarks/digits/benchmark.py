@@ -94,12 +94,6 @@ _constructed_affine_axis_names = (
     "rotation",
     "x_shear",
 )
-_console_preview_complexity_windows = (
-    (3.0, 4.0),
-    (5.0, 6.0),
-    (8.0, 9.0),
-)
-_console_preview_sample_limit = 50
 _CurvePoints: TypeAlias = tuple[tuple[float, float], ...]
 
 
@@ -366,7 +360,9 @@ class Generator:
         *,
         sample_count: int,
         seed: int,
+        sample_indices: tuple[int, ...],
         include_fields: bool,
+        include_artifacts: bool,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         complexity_class: _DigitsComplexityClass,
@@ -384,6 +380,7 @@ class Generator:
             self._sample_state_coordinates(
                 sample_count=sample_count,
                 seed=seed,
+                sample_indices=sample_indices,
                 complexity_class=complexity_class,
                 timing=timing,
                 timing_prefix=timing_prefix,
@@ -412,7 +409,7 @@ class Generator:
             plans = tuple(
                 self._materialization_plan(
                     seed=seed,
-                    index=index,
+                    index=sample_indices[index],
                     resolution_assignment=resolved_resolution_assignment,
                     materialization_declaration=materialization_declaration,
                 )
@@ -443,6 +440,7 @@ class Generator:
                 fields = self._generate_tensor_fields(
                     sample_shape=(sample_count,),
                     seed=seed,
+                    sample_indices=sample_indices,
                     complexity_class=complexity_class,
                     resolution_assignment=resolved_resolution_assignment,
                     memory_limit_bytes=memory_limit_bytes,
@@ -463,15 +461,25 @@ class Generator:
             f"{output_timing_prefix}sample_assembly",
             samples=sample_count,
         ):
-            for index, plan, component_index, variation_sample in zip(
-                range(sample_count),
-                plans,
-                component_index_samples,
-                variation_samples,
-                strict=True,
+            for row_index, (index, plan, component_index, variation_sample) in enumerate(
+                zip(
+                    sample_indices,
+                    plans,
+                    component_index_samples,
+                    variation_samples,
+                    strict=True,
+                )
             ):
                 variation_values, variation_coordinates = variation_sample
-                field_record = field_records[index] if include_fields else None
+                field_record = field_records[row_index] if include_fields else None
+                artifacts = (
+                    {
+                        "field_shape": list(field_record.shape),
+                        "image_data_url": _field_to_png_data_url(field_record),
+                    }
+                    if include_artifacts and field_record is not None
+                    else None
+                )
                 digit_variant_index = 0
                 samples.append(
                     GeneratedSample(
@@ -493,6 +501,7 @@ class Generator:
                             variation_values=variation_values,
                         ),
                         field=field_record,
+                        artifacts=artifacts,
                     )
                 )
         return tuple(samples)
@@ -502,11 +511,13 @@ class Generator:
         *,
         sample_count: int,
         seed: int,
+        sample_indices: tuple[int, ...],
         complexity_class: _DigitsComplexityClass,
     ) -> tuple[GeneratedSample, ...]:
         component_indices, _transform_indices = self._sample_state_coordinates(
             sample_count=sample_count,
             seed=seed,
+            sample_indices=sample_indices,
             complexity_class=complexity_class,
             timing=None,
             timing_prefix="",
@@ -514,7 +525,7 @@ class Generator:
         complexity = complexity_class.complexity
         return tuple(
             GeneratedSample(
-                index=index,
+                index=sample_indices[index],
                 outcome_id=self._outcome_id(component_index),
                 complexity=complexity,
                 complexity_value=_complexity_value(complexity),
@@ -618,6 +629,7 @@ class Generator:
         *,
         sample_count: int,
         seed: int,
+        sample_indices: tuple[int, ...],
         complexity_class: _DigitsComplexityClass,
         timing: TimingCollector | None,
         timing_prefix: str,
@@ -628,7 +640,7 @@ class Generator:
             for index in range(sample_count):
                 state_index = _digits_local_state_index(
                     seed=seed,
-                    sample_index=index,
+                    sample_index=sample_indices[index],
                     cardinality=complexity_class.cardinality,
                 )
                 component_index, transform_index = _digits_state_coordinate(
@@ -644,6 +656,7 @@ class Generator:
         *,
         sample_shape: tuple[int, ...],
         seed: int,
+        sample_indices: tuple[int, ...],
         complexity_class: _DigitsComplexityClass,
         resolution_assignment: AxisAssignment | None,
         memory_limit_bytes: int | None,
@@ -660,6 +673,7 @@ class Generator:
         fields = self._generate_tensor_fields(
             sample_shape=sample_shape,
             seed=seed,
+            sample_indices=sample_indices,
             complexity_class=complexity_class,
             resolution_assignment=resolution_assignment,
             memory_limit_bytes=memory_limit_bytes,
@@ -691,6 +705,7 @@ class Generator:
                     dtype="float32",
                     program=_target_tensor_program(
                         seed=seed,
+                        sample_indices=sample_indices,
                         cardinality=complexity_class.cardinality,
                         minimum_address=complexity_class.minimum_address,
                         digit_count=complexity_class.digit_count,
@@ -706,6 +721,7 @@ class Generator:
         *,
         sample_shape: tuple[int, ...],
         seed: int,
+        sample_indices: tuple[int, ...],
         complexity_class: _DigitsComplexityClass,
         resolution_assignment: AxisAssignment | None,
         memory_limit_bytes: int | None,
@@ -731,6 +747,7 @@ class Generator:
                 transform=self.formation.variation_transform,
                 grid=complexity_class.affine_grid,
                 seed=seed,
+                sample_indices=sample_indices,
                 cardinality=complexity_class.cardinality,
                 minimum_address=complexity_class.minimum_address,
                 runtime=runtime,
@@ -781,6 +798,7 @@ class Generator:
         transform: VariationTransformDeclaration,
         grid: _ConstructedAffineGrid,
         seed: int,
+        sample_indices: tuple[int, ...],
         cardinality: int,
         minimum_address: int,
         runtime: TensorRuntime,
@@ -842,6 +860,7 @@ class Generator:
                 dtype="float32",
                 program=_digits_tensor_program(
                     seed=seed,
+                    sample_indices=sample_indices,
                     cardinality=cardinality,
                     minimum_address=minimum_address,
                     digit_count=digit_count,
@@ -1209,7 +1228,9 @@ class Generator:
         shape: int | Sequence[int] | None = None,
         include_fields: bool = False,
         include_metadata: bool = True,
+        include_artifacts: bool = False,
         complexity_request: ComplexityRequest | None = None,
+        sample_indices: Sequence[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
         variation_extent: float = 1.0,
@@ -1220,8 +1241,14 @@ class Generator:
     ) -> GeneratedSampleSet:
         """Generate a shape-aware Digits sample set."""
 
+        if include_artifacts:
+            include_fields = True
         sample_shape = _sample_shape(shape)
         sample_count = _sample_count(sample_shape)
+        resolved_sample_indices = _sample_indices(
+            sample_count=sample_count,
+            sample_indices=sample_indices,
+        )
         variation_extent_value = _variation_extent_value(variation_extent)
         complexity_class = self._default_complexity_class(
             canonical_variation=variation_extent_value == 0.0,
@@ -1263,6 +1290,7 @@ class Generator:
             fields, targets = self._generate_tensors(
                 sample_shape=sample_shape,
                 seed=seed,
+                sample_indices=resolved_sample_indices,
                 memory_limit_bytes=memory_limit_bytes,
                 resolution_assignment=resolution_assignment,
                 complexity_class=complexity_class,
@@ -1277,13 +1305,16 @@ class Generator:
                 samples = self._generate_tensor_metadata_samples(
                     sample_count=sample_count,
                     seed=seed,
+                    sample_indices=resolved_sample_indices,
                     complexity_class=complexity_class,
                 )
             else:
                 samples = self._generate_samples(
                     sample_count=sample_count,
                     seed=seed,
+                    sample_indices=resolved_sample_indices,
                     include_fields=include_fields,
+                    include_artifacts=include_artifacts,
                     memory_limit_bytes=memory_limit_bytes,
                     resolution_assignment=resolution_assignment,
                     complexity_class=complexity_class,
@@ -1305,150 +1336,6 @@ class Generator:
             fields=fields,
             targets=targets,
         )
-
-    def console_preview_batches(self, *, atom_count: int) -> tuple[Mapping[str, object], ...]:
-        """Return browser-preview batches for declared complexity windows."""
-
-        if atom_count != len(self.manifest.outcome_space.outcomes):
-            raise ObservationGenerationError("atom_count does not match outcome space")
-        return tuple(
-            self._console_preview_complexity_window(
-                minimum=minimum,
-                maximum=maximum,
-                seed=401 + index,
-            )
-            for index, (minimum, maximum) in enumerate(
-                _console_preview_complexity_windows
-            )
-        )
-
-    def _console_preview_complexity_window(
-        self,
-        *,
-        minimum: float,
-        maximum: float,
-        seed: int,
-    ) -> Mapping[str, object]:
-        request = ComplexityRequest(minimum=minimum, maximum=maximum)
-        complexity_classes = self._console_preview_complexity_classes(request=request)
-        samples: list[Mapping[str, object]] = []
-        materialization_declaration = ArtifactReference(
-            kind="materialization-declaration",
-            protocol_id=self.materialization.id,
-            record_digest=self.materialization.digest,
-        )
-        transform = self.formation.variation_transform
-        transform_record = transform.to_record()
-        scaled_factors = tuple(self.latent_factors.sample_factors)
-
-        for shell_index, component_index, transform_index in _preview_sample_coordinates(
-            complexity_classes,
-            limit=_console_preview_sample_limit,
-        ):
-            complexity_class = complexity_classes[shell_index]
-            if complexity_class.resolution_assignment is None:
-                raise ObservationGenerationError(
-                    "Digits complexity shell is missing a resolution assignment"
-                )
-            sample_index = len(samples)
-            plan = self._materialization_plan(
-                seed=seed,
-                index=sample_index,
-                resolution_assignment=complexity_class.resolution_assignment,
-                materialization_declaration=materialization_declaration,
-            )
-            variation_coordinate = _constructed_variation_coordinate_record(
-                transform=transform,
-                component_index=component_index,
-                transform_index=transform_index,
-                grid=complexity_class.affine_grid,
-            )
-            variation_values: Mapping[str, object] = {
-                "kind": "constructed-field-variation-transform-samples",
-                "bounds": transform_record,
-                "complexity_class": complexity_class.metadata(),
-                "shell_index": shell_index,
-                "transform_index": transform_index,
-                "transform_count": complexity_class.affine_transform_count,
-                "coordinates": [dict(variation_coordinate)],
-            }
-            preview_seed = (
-                transform_index * _complexity_class_digit_count
-                + component_index
-                - complexity_class.minimum_address
-            )
-            field_tensor = self._generate_tensor_fields(
-                sample_shape=(1,),
-                seed=preview_seed,
-                complexity_class=complexity_class,
-                resolution_assignment=complexity_class.resolution_assignment,
-                memory_limit_bytes=None,
-                runtime=resolve_host_tensor_runtime(),
-                timing=None,
-                timing_prefix="",
-            )
-            field = self._field_observations_from_tensor_fields(
-                plans=(plan,),
-                fields=field_tensor,
-            )[0]
-            samples.append(
-                {
-                    "index": sample_index,
-                    "outcome_id": self._outcome_id(component_index),
-                    "component_index": component_index,
-                    "complexity": complexity_class.complexity,
-                    "complexity_value": complexity_class.measure().to_record(),
-                    "field_shape": list(field.shape),
-                    "image_data_url": _field_to_png_data_url(field),
-                    "materialization_plan": plan.to_record(),
-                    "latent_coordinates": [
-                        dict(coordinate)
-                        for coordinate in self._latent_coordinates(
-                            component_index=component_index,
-                            digit_variant_index=0,
-                            scaled_factors=scaled_factors,
-                            plan=plan,
-                            variation_values=variation_values,
-                        )
-                    ],
-                }
-            )
-        samples.sort(key=lambda sample: _sample_display_key(sample, len(samples)))
-        return {
-            "mode": "complexity-window",
-            "label": f"[{minimum:g}, {maximum:g}]",
-            "seed": seed,
-            "sample_count": len(samples),
-            "complexity_window": {
-                "measure_id": "log2_complexity_class_size",
-                "minimum": minimum,
-                "maximum": maximum,
-            },
-            "complexity_cardinalities": [
-                complexity_class.cardinality for complexity_class in complexity_classes
-            ],
-            "presentation": {
-                "sample_card_density": "compact" if len(samples) > 80 else "standard",
-                "aggregate_mode": False,
-            },
-            "samples": samples,
-        }
-
-    def _console_preview_complexity_classes(
-        self,
-        *,
-        request: ComplexityRequest,
-    ) -> tuple[_DigitsComplexityClass, ...]:
-        complexity_classes: list[_DigitsComplexityClass] = []
-        for complexity in range(math.floor(request.minimum), math.ceil(request.maximum)):
-            shell_request = ComplexityRequest(
-                minimum=float(complexity),
-                maximum=float(complexity + 1),
-            )
-            complexity_class = self._complexity_class_for_request(request=shell_request)
-            if complexity_class is not None:
-                complexity_classes.append(complexity_class)
-        return tuple(complexity_classes)
 
     def _resolution_assignment_for_complexity_request(
         self,
@@ -1519,6 +1406,21 @@ def _sample_count(shape: Sequence[int]) -> int:
     for axis in shape:
         count *= axis
     return count
+
+
+def _sample_indices(
+    *,
+    sample_count: int,
+    sample_indices: Sequence[int] | None,
+) -> tuple[int, ...]:
+    if sample_indices is None:
+        return tuple(range(sample_count))
+    normalized = tuple(sample_indices)
+    if len(normalized) != sample_count:
+        raise ObservationGenerationError("sample_indices length must match sample shape")
+    if any(type(index) is not int or index < 0 for index in normalized):
+        raise ObservationGenerationError("sample_indices must be nonnegative integers")
+    return normalized
 
 
 def _complexity_value(complexity: float) -> ComplexityValue:
@@ -1787,58 +1689,6 @@ def _variation_extent_value(variation_extent: float) -> float:
     if value < 0.0 or value > 1.0:
         raise ObservationGenerationError("variation_extent must be between 0 and 1")
     return value
-
-
-def _preview_index_selection(count: int, *, limit: int) -> tuple[int, ...]:
-    if count <= 0 or limit <= 0:
-        return ()
-    if count <= limit:
-        return tuple(range(count))
-    if limit == 1:
-        return (0,)
-    indices = {
-        round(index * (count - 1) / (limit - 1))
-        for index in range(limit)
-    }
-    return tuple(sorted(indices))
-
-
-def _preview_sample_coordinates(
-    complexity_classes: tuple[_DigitsComplexityClass, ...],
-    *,
-    limit: int,
-) -> tuple[tuple[int, int, int], ...]:
-    full_count = sum(complexity_class.cardinality for complexity_class in complexity_classes)
-    if full_count <= limit:
-        coordinates: list[tuple[int, int, int]] = []
-        for complexity_class_index, complexity_class in enumerate(complexity_classes):
-            for state_index in range(complexity_class.cardinality):
-                component_index, transform_index = _digits_state_coordinate(
-                    state_index=state_index,
-                    complexity_class=complexity_class,
-                )
-                coordinates.append(
-                    (complexity_class_index, component_index, transform_index)
-                )
-        return tuple(coordinates)
-    coordinates: list[tuple[int, int, int]] = []
-    offset = 0
-    selected_offsets = set(_preview_index_selection(full_count, limit=limit))
-    for complexity_class_index, complexity_class in enumerate(complexity_classes):
-        complexity_class_count = complexity_class.cardinality
-        for selected_offset in sorted(
-            value
-            for value in selected_offsets
-            if offset <= value < offset + complexity_class_count
-        ):
-            local_offset = selected_offset - offset
-            component_index, transform_index = _digits_state_coordinate(
-                state_index=local_offset,
-                complexity_class=complexity_class,
-            )
-            coordinates.append((complexity_class_index, component_index, transform_index))
-        offset += complexity_class_count
-    return tuple(coordinates)
 
 
 def _constructed_affine_grid(
@@ -2385,6 +2235,7 @@ def _constant_tensor_program(value: float) -> TensorElementProgram:
 def _target_tensor_program(
     *,
     seed: int,
+    sample_indices: tuple[int, ...],
     cardinality: int,
     minimum_address: int,
     digit_count: int,
@@ -2396,12 +2247,14 @@ def _target_tensor_program(
         flat_indices: Any,
         *,
         seed_value: Any,
+        sample_indices_value: Any,
         cardinality_value: Any,
         minimum_address_value: Any,
         component_to_outcome: Any,
     ) -> Any:
         _ = coordinates
-        sample_index = flat_indices.div(outcome_count, rounding_mode="floor")
+        sample_axis_index = flat_indices.div(outcome_count, rounding_mode="floor")
+        sample_index = sample_indices_value[sample_axis_index]
         outcome_index = flat_indices.remainder(outcome_count)
         state_index = (sample_index + seed_value).remainder(cardinality_value)
         sample_address = minimum_address_value + state_index
@@ -2416,6 +2269,12 @@ def _target_tensor_program(
                 dtype="int64",
                 shape=(),
                 values=(seed,),
+            ),
+            "sample_indices_value": TensorElementParameter(
+                dtype="int64",
+                shape=(len(sample_indices),),
+                values=sample_indices,
+                dynamic_axes=(0,),
             ),
             "cardinality_value": TensorElementParameter(
                 dtype="int64",
@@ -2440,6 +2299,7 @@ def _target_tensor_program(
 def _digits_tensor_program(
     *,
     seed: int,
+    sample_indices: tuple[int, ...],
     cardinality: int,
     minimum_address: int,
     digit_count: int,
@@ -2505,6 +2365,7 @@ def _digits_tensor_program(
         flat_indices: Any,
         *,
         seed_value: Any,
+        sample_indices_value: Any,
         cardinality_value: Any,
         minimum_address_value: Any,
         preset_units_tensor: Any,
@@ -2529,7 +2390,8 @@ def _digits_tensor_program(
         x_shear_maximum: Any,
     ) -> Any:
         _ = flat_indices
-        sample_index, channel_index, y_index, x_index = coordinates
+        sample_axis_index, channel_index, y_index, x_index = coordinates
+        sample_index = sample_indices_value[sample_axis_index]
         x_center = x_index + 0.5
         y_center = y_index + 0.5
         state_index = (sample_index + seed_value).remainder(cardinality_value)
@@ -2674,6 +2536,12 @@ def _digits_tensor_program(
                 dtype="int64",
                 shape=(),
                 values=(seed,),
+            ),
+            "sample_indices_value": TensorElementParameter(
+                dtype="int64",
+                shape=(len(sample_indices),),
+                values=sample_indices,
+                dynamic_axes=(0,),
             ),
             "cardinality_value": TensorElementParameter(
                 dtype="int64",
@@ -2958,13 +2826,6 @@ def _uint8(value: float) -> int:
 def _require_positive_integer(value: int, name: str) -> None:
     if type(value) is not int or value <= 0:
         raise TensorRuntimeError(f"{name} must be a positive integer")
-
-
-def _sample_display_key(sample: Mapping[str, object], sample_count: int) -> int:
-    index = sample["index"]
-    if not isinstance(index, int):
-        raise ObservationGenerationError("generated sample index must be an integer")
-    return (index * 17) % (sample_count + 1)
 
 
 def _manifest() -> BenchmarkManifest:
