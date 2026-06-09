@@ -938,21 +938,39 @@ class Generator:
         sample_count = len(component_indices)
         if self.formation.channel_count != 1:
             raise TensorRuntimeError("Digits tensor renderer requires one channel")
-        mark_offsets: list[int] = [0]
-        mark_values: list[float] = []
-        mark_widths: list[float] = []
-        curve_points: list[tuple[tuple[float, float], ...]] = []
+        max_mark_count = max(
+            len(self.formation.components[component_index].marks)
+            for component_index in range(digit_count)
+        )
+        component_mark_counts: list[int] = []
+        component_mark_values: list[list[float]] = []
+        component_mark_widths: list[list[float]] = []
+        component_curve_x_points: list[list[list[float]]] = []
+        component_curve_y_points: list[list[list[float]]] = []
         for component_index in range(digit_count):
+            component_values: list[float] = []
+            component_widths: list[float] = []
+            component_x_points: list[list[float]] = []
+            component_y_points: list[list[float]] = []
             for mark in self.formation.components[component_index].marks:
                 if mark.channel != 0:
                     raise TensorRuntimeError("Digits tensor renderer requires single-channel marks")
-                mark_values.append(float(mark.value))
-                mark_widths.append(float(mark.width))
-                curve_points.append(
-                    _sampled_quadratic_points(_quadratic_control_points(mark))
-                )
-            mark_offsets.append(len(mark_values))
-        if not mark_values:
+                points = _sampled_quadratic_points(_quadratic_control_points(mark))
+                component_values.append(float(mark.value))
+                component_widths.append(float(mark.width))
+                component_x_points.append([point[0] for point in points])
+                component_y_points.append([point[1] for point in points])
+            component_mark_counts.append(len(component_values))
+            while len(component_values) < max_mark_count:
+                component_values.append(0.0)
+                component_widths.append(0.0)
+                component_x_points.append([0.0] * _batch_render_curve_sample_count)
+                component_y_points.append([0.0] * _batch_render_curve_sample_count)
+            component_mark_values.append(component_values)
+            component_mark_widths.append(component_widths)
+            component_curve_x_points.append(component_x_points)
+            component_curve_y_points.append(component_y_points)
+        if not max_mark_count:
             return tensor_runtime_construct_tensor(
                 runtime,
                 recipe=TensorElementRecipe(
@@ -966,18 +984,55 @@ class Generator:
             grid=grid,
             transform_indices=transform_indices,
         )
+        sample_mark_counts = tuple(
+            component_mark_counts[component_index] for component_index in component_indices
+        )
+        sample_mark_values = tuple(
+            tuple(
+                component_mark_values[component_index][mark_slot]
+                for component_index in component_indices
+            )
+            for mark_slot in range(max_mark_count)
+        )
+        sample_mark_widths = tuple(
+            tuple(
+                component_mark_widths[component_index][mark_slot]
+                for component_index in component_indices
+            )
+            for mark_slot in range(max_mark_count)
+        )
+        sample_curve_x_points = tuple(
+            tuple(
+                tuple(
+                    component_curve_x_points[component_index][mark_slot][point_index]
+                    for component_index in component_indices
+                )
+                for point_index in range(_batch_render_curve_sample_count)
+            )
+            for mark_slot in range(max_mark_count)
+        )
+        sample_curve_y_points = tuple(
+            tuple(
+                tuple(
+                    component_curve_y_points[component_index][mark_slot][point_index]
+                    for component_index in component_indices
+                )
+                for point_index in range(_batch_render_curve_sample_count)
+            )
+            for mark_slot in range(max_mark_count)
+        )
         return tensor_runtime_construct_tensor(
             runtime,
             recipe=TensorElementRecipe(
                 shape=(sample_count, 1, height, width),
                 dtype="float32",
                 program=_digits_tensor_program(
-                    component_indices=component_indices,
                     matrices=matrices,
-                    mark_offsets=tuple(mark_offsets),
-                    mark_values=tuple(mark_values),
-                    mark_widths=tuple(mark_widths),
-                    curve_points=tuple(curve_points),
+                    sample_mark_counts=sample_mark_counts,
+                    sample_mark_values=sample_mark_values,
+                    sample_mark_widths=sample_mark_widths,
+                    sample_curve_x_points=sample_curve_x_points,
+                    sample_curve_y_points=sample_curve_y_points,
                     height=height,
                     width=width,
                 ),
@@ -2858,6 +2913,7 @@ def _target_tensor_program(
                 dtype="int64",
                 shape=(len(component_indices),),
                 values=component_indices,
+                dynamic_axes=(0,),
             ),
             "component_to_outcome": TensorElementParameter(
                 dtype="int64",
@@ -2871,7 +2927,6 @@ def _target_tensor_program(
 
 def _digits_tensor_program(
     *,
-    component_indices: tuple[int, ...],
     matrices: tuple[
         tuple[float, ...],
         tuple[float, ...],
@@ -2881,25 +2936,35 @@ def _digits_tensor_program(
         tuple[float, ...],
         tuple[float, ...],
     ],
-    mark_offsets: tuple[int, ...],
-    mark_values: tuple[float, ...],
-    mark_widths: tuple[float, ...],
-    curve_points: tuple[tuple[tuple[float, float], ...], ...],
+    sample_mark_counts: tuple[int, ...],
+    sample_mark_values: tuple[tuple[float, ...], ...],
+    sample_mark_widths: tuple[tuple[float, ...], ...],
+    sample_curve_x_points: tuple[tuple[tuple[float, ...], ...], ...],
+    sample_curve_y_points: tuple[tuple[tuple[float, ...], ...], ...],
     height: int,
     width: int,
 ) -> TensorElementProgram:
+    sample_count = len(sample_mark_counts)
+    max_mark_count = len(sample_mark_values)
+    point_count = len(sample_curve_x_points[0]) if max_mark_count else 0
+
     def element_function(
         coordinates: tuple[Any, ...],
         flat_indices: Any,
         *,
-        component_indices: Any,
         matrices: Any,
+        sample_mark_counts: Any,
+        sample_mark_values: Any,
+        sample_mark_widths: Any,
+        sample_curve_x_points: Any,
+        sample_curve_y_points: Any,
+        image_height: Any,
+        image_width: Any,
     ) -> Any:
         _ = flat_indices
         sample_index, channel_index, y_index, x_index = coordinates
         x_center = x_index + 0.5
         y_center = y_index + 0.5
-        component_index = component_indices[sample_index]
         m00 = matrices[0, sample_index]
         m01 = matrices[1, sample_index]
         m02 = matrices[2, sample_index]
@@ -2908,79 +2973,114 @@ def _digits_tensor_program(
         m12 = matrices[5, sample_index]
         width_scale = matrices[6, sample_index]
         value = x_center * 0.0
-        for expected_component_index in range(len(mark_offsets) - 1):
-            mark_start = mark_offsets[expected_component_index]
-            mark_stop = mark_offsets[expected_component_index + 1]
-            active_component = (component_index == expected_component_index) & (
-                channel_index == 0
+        active_channel = channel_index == 0
+        mark_count = sample_mark_counts[sample_index]
+        for mark_slot in range(max_mark_count):
+            active_mark = active_channel & (mark_slot < mark_count)
+            raw_sx = sample_curve_x_points[mark_slot, : point_count - 1, sample_index]
+            raw_sy = sample_curve_y_points[mark_slot, : point_count - 1, sample_index]
+            raw_ex = sample_curve_x_points[mark_slot, 1:point_count, sample_index]
+            raw_ey = sample_curve_y_points[mark_slot, 1:point_count, sample_index]
+            sx = (0.5 + m00 * (raw_sx - 0.5) + m01 * (raw_sy - 0.5) + m02) * image_width
+            sy = (0.5 + m10 * (raw_sx - 0.5) + m11 * (raw_sy - 0.5) + m12) * image_height
+            ex = (0.5 + m00 * (raw_ex - 0.5) + m01 * (raw_ey - 0.5) + m02) * image_width
+            ey = (0.5 + m10 * (raw_ex - 0.5) + m11 * (raw_ey - 0.5) + m12) * image_height
+            dx = ex - sx
+            dy = ey - sy
+            length_squared = dx * dx + dy * dy
+            safe_length_squared = length_squared.where(
+                length_squared != 0.0,
+                length_squared * 0.0 + 1.0,
             )
-            for mark_index in range(mark_start, mark_stop):
-                distance_squared = x_center * 0.0 + 1.0e30
-                mark_points = curve_points[mark_index]
-                for segment_index in range(len(mark_points) - 1):
-                    raw_sx, raw_sy = mark_points[segment_index]
-                    raw_ex, raw_ey = mark_points[segment_index + 1]
-                    sx = (0.5 + m00 * (raw_sx - 0.5) + m01 * (raw_sy - 0.5) + m02) * width
-                    sy = (0.5 + m10 * (raw_sx - 0.5) + m11 * (raw_sy - 0.5) + m12) * height
-                    ex = (0.5 + m00 * (raw_ex - 0.5) + m01 * (raw_ey - 0.5) + m02) * width
-                    ey = (0.5 + m10 * (raw_ex - 0.5) + m11 * (raw_ey - 0.5) + m12) * height
-                    dx = ex - sx
-                    dy = ey - sy
-                    length_squared = dx * dx + dy * dy
-                    safe_length_squared = length_squared.where(
-                        length_squared != 0.0,
-                        length_squared * 0.0 + 1.0,
-                    )
-                    segment_t = (
-                        (x_center - sx) * dx + (y_center - sy) * dy
-                    ) / safe_length_squared
-                    segment_t = segment_t.clamp(0.0, 1.0)
-                    closest_x = sx + segment_t * dx
-                    closest_y = sy + segment_t * dy
-                    segment_distance_squared = (
-                        (x_center - closest_x) * (x_center - closest_x)
-                        + (y_center - closest_y) * (y_center - closest_y)
-                    )
-                    point_distance_squared = (
-                        (x_center - sx) * (x_center - sx)
-                        + (y_center - sy) * (y_center - sy)
-                    )
-                    segment_distance_squared = segment_distance_squared.where(
-                        length_squared != 0.0,
-                        point_distance_squared,
-                    )
-                    distance_squared = distance_squared.minimum(segment_distance_squared)
-                threshold = (width_scale * mark_widths[mark_index] / 2.0) * (
-                    width_scale * mark_widths[mark_index] / 2.0
-                )
-                contribution = (active_component & (distance_squared <= threshold)) * mark_values[
-                    mark_index
-                ]
-                value = value.maximum(contribution)
+            segment_t = ((x_center - sx) * dx + (y_center - sy) * dy) / safe_length_squared
+            segment_t = segment_t.clamp(0.0, 1.0)
+            closest_x = sx + segment_t * dx
+            closest_y = sy + segment_t * dy
+            segment_distance_squared = (
+                (x_center - closest_x) * (x_center - closest_x)
+                + (y_center - closest_y) * (y_center - closest_y)
+            )
+            point_distance_squared = (
+                (x_center - sx) * (x_center - sx)
+                + (y_center - sy) * (y_center - sy)
+            )
+            segment_distance_squared = segment_distance_squared.where(
+                length_squared != 0.0,
+                point_distance_squared,
+            )
+            distance_squared = segment_distance_squared.min(dim=0).values
+            mark_width = sample_mark_widths[mark_slot, sample_index]
+            threshold = (width_scale * mark_width / 2.0) * (width_scale * mark_width / 2.0)
+            contribution = (
+                active_mark & (distance_squared <= threshold)
+            ) * sample_mark_values[mark_slot, sample_index]
+            value = value.maximum(contribution)
         return value
 
     return TensorElementProgram(
         kernel=element_function,
         parameters={
-            "component_indices": TensorElementParameter(
-                dtype="int64",
-                shape=(len(component_indices),),
-                values=component_indices,
-            ),
             "matrices": TensorElementParameter(
                 dtype="float32",
-                shape=(7, len(component_indices)),
+                shape=(7, sample_count),
                 values=tuple(value for row in matrices for value in row),
+                dynamic_axes=(1,),
+            ),
+            "sample_mark_counts": TensorElementParameter(
+                dtype="int64",
+                shape=(sample_count,),
+                values=sample_mark_counts,
+                dynamic_axes=(0,),
+            ),
+            "sample_mark_values": TensorElementParameter(
+                dtype="float32",
+                shape=(max_mark_count, sample_count),
+                values=tuple(value for row in sample_mark_values for value in row),
+                dynamic_axes=(1,),
+            ),
+            "sample_mark_widths": TensorElementParameter(
+                dtype="float32",
+                shape=(max_mark_count, sample_count),
+                values=tuple(value for row in sample_mark_widths for value in row),
+                dynamic_axes=(1,),
+            ),
+            "sample_curve_x_points": TensorElementParameter(
+                dtype="float32",
+                shape=(max_mark_count, point_count, sample_count),
+                values=tuple(
+                    value
+                    for mark in sample_curve_x_points
+                    for points in mark
+                    for value in points
+                ),
+                dynamic_axes=(2,),
+            ),
+            "sample_curve_y_points": TensorElementParameter(
+                dtype="float32",
+                shape=(max_mark_count, point_count, sample_count),
+                values=tuple(
+                    value
+                    for mark in sample_curve_y_points
+                    for points in mark
+                    for value in points
+                ),
+                dynamic_axes=(2,),
+            ),
+            "image_height": TensorElementParameter(
+                dtype="float32",
+                shape=(),
+                values=(float(height),),
+            ),
+            "image_width": TensorElementParameter(
+                dtype="float32",
+                shape=(),
+                values=(float(width),),
             ),
         },
         cache_key=(
             "digits-field",
-            mark_offsets,
-            mark_values,
-            mark_widths,
-            curve_points,
-            height,
-            width,
+            max_mark_count,
+            point_count,
         ),
     )
 

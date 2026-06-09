@@ -64,6 +64,7 @@ TensorElementParameterDType = Literal["float32", "int64"]
 _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
 _roofline_cache: dict[str, dict[str, object]] = {}
 _tensor_element_kernel_cache: dict[tuple[object, ...], Any] = {}
+_tensor_element_tile_size = 8192
 
 
 class TensorRuntimeError(ValueError):
@@ -95,6 +96,7 @@ class TensorElementParameter:
     dtype: TensorElementParameterDType
     shape: tuple[int, ...]
     values: Sequence[int | float]
+    dynamic_axes: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -970,6 +972,35 @@ def _construct_tensor_element_program(
         name: _tensor_element_parameter(runtime=runtime, parameter=parameter)
         for name, parameter in program.parameters.items()
     }
+    if (
+        runtime.device_kind == "cuda"
+        and program.compile
+        and _tensor_runtime_compile_available()
+    ):
+        return _construct_compiled_tensor_element_tiles(
+            runtime=runtime,
+            shape=shape,
+            dtype=dtype,
+            program=program,
+            parameter_tensors=parameter_tensors,
+        )
+    return _construct_eager_tensor_element_program(
+        runtime=runtime,
+        shape=shape,
+        dtype=dtype,
+        program=program,
+        parameter_tensors=parameter_tensors,
+    )
+
+
+def _construct_eager_tensor_element_program(
+    *,
+    runtime: TensorRuntime,
+    shape: tuple[int, ...],
+    dtype: Any,
+    program: TensorElementProgram,
+    parameter_tensors: Mapping[str, Any],
+) -> Any:
     backend = runtime.torch
     total_elements = math.prod(shape)
     flat_indices = backend.arange(total_elements, dtype=backend.long, device=runtime.device)
@@ -977,14 +1008,57 @@ def _construct_tensor_element_program(
         shape=shape,
         flat_indices=flat_indices,
     )
-    kernel = _compiled_tensor_element_kernel(
+    values = cast(Any, program.kernel(coordinate_tensors, flat_indices, **parameter_tensors))
+    return values.to(dtype=dtype).reshape(shape)
+
+
+def _construct_compiled_tensor_element_tiles(
+    *,
+    runtime: TensorRuntime,
+    shape: tuple[int, ...],
+    dtype: Any,
+    program: TensorElementProgram,
+    parameter_tensors: Mapping[str, Any],
+) -> Any:
+    backend = runtime.torch
+    total_elements = math.prod(shape)
+    tile_positions = backend.arange(
+        _tensor_element_tile_size,
+        dtype=backend.long,
+        device=runtime.device,
+    )
+    extents = backend.tensor(shape, dtype=backend.long, device=runtime.device)
+    strides = backend.tensor(
+        _tensor_element_shape_strides(shape),
+        dtype=backend.long,
+        device=runtime.device,
+    )
+    total_tensor = backend.tensor(total_elements, dtype=backend.long, device=runtime.device)
+    _mark_dynamic_tensor_element_parameters(
         runtime=runtime,
-        program=program,
-        shape=shape,
+        parameter_declarations=program.parameters,
         parameter_tensors=parameter_tensors,
     )
-    values = kernel(coordinate_tensors, flat_indices, **parameter_tensors)
-    return values.to(dtype=dtype).reshape(shape)
+    output = backend.empty((total_elements,), dtype=dtype, device=runtime.device)
+    kernel = _compiled_tensor_element_tile_kernel(
+        runtime=runtime,
+        program=program,
+        rank=len(shape),
+        parameter_tensors=parameter_tensors,
+    )
+    for offset in range(0, total_elements, _tensor_element_tile_size):
+        valid_count = min(_tensor_element_tile_size, total_elements - offset)
+        offset_tensor = backend.tensor(offset, dtype=backend.long, device=runtime.device)
+        values = kernel(
+            tile_positions,
+            offset_tensor,
+            extents,
+            strides,
+            total_tensor,
+            **parameter_tensors,
+        ).to(dtype=dtype)
+        output[offset : offset + valid_count] = values[:valid_count]
+    return output.reshape(shape)
 
 
 def _tensor_element_parameter(*, runtime: TensorRuntime, parameter: TensorElementParameter) -> Any:
@@ -1009,35 +1083,72 @@ def _tensor_element_parameter_dtype(
     raise TensorRuntimeError(f"unsupported tensor element parameter dtype: {dtype}")
 
 
-def _compiled_tensor_element_kernel(
+def _compiled_tensor_element_tile_kernel(
     *,
     runtime: TensorRuntime,
     program: TensorElementProgram,
-    shape: tuple[int, ...],
+    rank: int,
     parameter_tensors: Mapping[str, Any],
 ) -> Callable[..., Any]:
-    if runtime.device_kind != "cuda" or not program.compile:
-        return program.kernel
-    if not _tensor_runtime_compile_available():
-        return program.kernel
     key = (
         program.cache_key if program.cache_key is not None else id(program.kernel),
         runtime.device_kind,
-        shape,
+        "tile",
+        rank,
+        _tensor_element_tile_size,
         tuple(
-            (name, tuple(parameter_tensors[name].shape), str(parameter_tensors[name].dtype))
+            (name, str(parameter_tensors[name].dtype))
             for name in sorted(parameter_tensors)
         ),
     )
     cached = _tensor_element_kernel_cache.get(key)
     if cached is not None:
         return cast(Callable[..., Any], cached)
+
+    def tile_kernel(
+        tile_positions: Any,
+        offset: Any,
+        extents: Any,
+        strides: Any,
+        total_elements: Any,
+        **parameters: Any,
+    ) -> Any:
+        flat_indices = tile_positions + offset
+        active = flat_indices < total_elements
+        safe_flat_indices = flat_indices.clamp(max=total_elements - 1)
+        coordinates: list[Any] = []
+        remainder = safe_flat_indices
+        for axis in range(rank):
+            stride = strides[axis]
+            coordinates.append(remainder.div(stride, rounding_mode="floor"))
+            remainder = remainder.remainder(stride)
+        values = cast(
+            Any,
+            program.kernel(tuple(coordinates), safe_flat_indices, **parameters),
+        )
+        return values.where(active, values * 0)
+
     try:
-        compiled = runtime.torch.compile(program.kernel)
+        compiled = runtime.torch.compile(tile_kernel)
     except Exception:
-        return program.kernel
+        compiled = tile_kernel
     _tensor_element_kernel_cache[key] = compiled
     return cast(Callable[..., Any], compiled)
+
+
+def _mark_dynamic_tensor_element_parameters(
+    *,
+    runtime: TensorRuntime,
+    parameter_declarations: Mapping[str, TensorElementParameter],
+    parameter_tensors: Mapping[str, Any],
+) -> None:
+    mark_dynamic = getattr(getattr(runtime.torch, "_dynamo", None), "mark_dynamic", None)
+    if not callable(mark_dynamic):
+        return
+    for name, parameter in parameter_declarations.items():
+        tensor = parameter_tensors[name]
+        for axis in parameter.dynamic_axes:
+            mark_dynamic(tensor, axis)
 
 
 def _tensor_runtime_compile_available() -> bool:

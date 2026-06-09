@@ -5,9 +5,13 @@ from typing import Any, cast
 import pytest
 from benchmark_typing import load_digits_generator
 
+from leibniz import tensor_runtime as tensor_runtime_module
 from leibniz.architectures import ArchitectureManifest
 from leibniz.observation_generation import ObservationGenerationError
 from leibniz.tensor_runtime import (
+    TensorElementProgram,
+    TensorElementRecipe,
+    TensorRuntime,
     TensorRuntimeError,
     architecture_supported_by_tensor_runtime,
     architecture_tensor_runtime_issue,
@@ -16,6 +20,7 @@ from leibniz.tensor_runtime import (
     resolve_tensor_runtime,
     runtime_roofline_record,
     softmax_target_masses,
+    tensor_runtime_construct_tensor,
     tensor_runtime_device_kinds,
     validate_tensor_runtime_device,
 )
@@ -263,6 +268,89 @@ def test_digits_generator_call_tensors_do_not_post_warp_rasters(
     ).require_tensors()
 
     assert calls == {"affine_grid": 0, "grid_sample": 0}
+
+
+def test_tensor_element_compile_cache_is_not_extent_dependent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host_runtime = resolve_tensor_runtime("cpu")
+    runtime = TensorRuntime(
+        torch=host_runtime.torch,
+        device=host_runtime.device,
+        device_kind="cuda",
+    )
+    compile_calls: list[bool | None] = []
+
+    monkeypatch.setattr(tensor_runtime_module, "_tensor_runtime_compile_available", lambda: True)
+
+    def compile_kernel(kernel: Any, **kwargs: Any) -> Any:
+        compile_calls.append(cast(bool | None, kwargs.get("dynamic")))
+        return kernel
+
+    monkeypatch.setattr(runtime.torch, "compile", compile_kernel)
+
+    def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
+        _ = flat_indices
+        return coordinates[0]
+
+    program = TensorElementProgram(
+        kernel=element_function,
+        parameters={},
+        cache_key=("extent-independent-test", id(element_function)),
+    )
+
+    first = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=program),
+    )
+    second = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(3,), dtype="int64", program=program),
+    )
+
+    assert compile_calls == [None]
+    assert first.tolist() == [0, 1]
+    assert second.tolist() == [0, 1, 2]
+
+
+def test_digits_tensor_generation_compiles_two_extent_independent_programs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host_runtime = resolve_tensor_runtime("cpu")
+    runtime = TensorRuntime(
+        torch=host_runtime.torch,
+        device=host_runtime.device,
+        device_kind="cuda",
+    )
+    compile_calls: list[bool | None] = []
+
+    monkeypatch.setattr(tensor_runtime_module, "_tensor_runtime_compile_available", lambda: True)
+
+    def compile_kernel(kernel: Any, **kwargs: Any) -> Any:
+        compile_calls.append(cast(bool | None, kwargs.get("dynamic")))
+        return kernel
+
+    monkeypatch.setattr(runtime.torch, "compile", compile_kernel)
+
+    generator = load_digits_generator(_digits_benchmark_root)
+    outcome_ids = tuple(
+        outcome.id
+        for outcome in generator.manifest.resolve_outcome_space().outcomes
+    )
+
+    for sample_count in (3, 5):
+        generated = generator(
+            shape=sample_count,
+            seed=515,
+            include_metadata=False,
+            runtime=runtime,
+            outcome_ids=outcome_ids,
+        )
+        fields, labels = generated.require_tensors()
+        assert fields.shape[0] == sample_count
+        assert labels.shape == (sample_count, len(outcome_ids))
+
+    assert compile_calls == [None, None]
 
 
 def test_digits_generator_call_tensors_match_pinned_canonical_metadata_batch() -> None:
