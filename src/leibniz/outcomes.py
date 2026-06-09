@@ -127,6 +127,7 @@ class OutcomeSpace:
 
     id: ProtocolIdentifier
     outcomes: tuple[Outcome, ...]
+    _outcome_ids: frozenset[str] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         try:
@@ -138,6 +139,7 @@ class OutcomeSpace:
         outcome_ids = tuple(outcome.id for outcome in self.outcomes)
         if len(set(outcome_ids)) != len(outcome_ids):
             raise OutcomeSpaceValidationError("outcome ids must be unique")
+        object.__setattr__(self, "_outcome_ids", frozenset(outcome_ids))
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> OutcomeSpace:
@@ -154,7 +156,7 @@ class OutcomeSpace:
 
     @property
     def outcome_ids(self) -> frozenset[str]:
-        return frozenset(outcome.id for outcome in self.outcomes)
+        return self._outcome_ids
 
     def contains(self, outcome_id: str) -> bool:
         return outcome_id in self.outcome_ids
