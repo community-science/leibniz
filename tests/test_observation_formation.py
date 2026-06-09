@@ -77,13 +77,13 @@ def test_digits_spatial_variation_bounds_leave_canvas_margin() -> None:
                 (matrix[1][0], matrix[1][1], translation_y),
                 matrix[2],
             )
-            observation = declaration.form_observation(
-                id=ProtocolIdentifier.parse("benchmarks.digits.observations.margin-test@0.1.0"),
-                plan=plan,
+            observation = declaration.component_field(
+                width=plan.resolution_assignment.require_axis("W"),
+                height=plan.resolution_assignment.require_axis("H"),
                 component_index=component_index,
-                variation_coordinates=(_variation_coordinate(matrix=affine_matrix),),
+                variation_coordinate=_variation_coordinate(matrix=affine_matrix),
             )
-            min_x, max_x, min_y, max_y = _nonzero_bounds(observation.field)
+            min_x, max_x, min_y, max_y = _nonzero_bounds(observation)
             assert min_x > 0
             assert max_x < 31
             assert min_y > 0
@@ -97,24 +97,24 @@ def test_digits_observation_formation_is_deterministic_for_materialization_plan(
     ).plan
     component_index = declaration.sample_component_index(seed=plan.seed, sample_index=0)
 
-    left = declaration.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.digits.observations.l3-sample-zero@0.1.0"),
-        plan=plan,
+    left = declaration.component_field(
+        width=plan.resolution_assignment.require_axis("W"),
+        height=plan.resolution_assignment.require_axis("H"),
         component_index=component_index,
     )
-    right = declaration.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.digits.observations.l3-sample-zero@0.1.0"),
-        plan=plan,
+    right = declaration.component_field(
+        width=plan.resolution_assignment.require_axis("W"),
+        height=plan.resolution_assignment.require_axis("H"),
         component_index=component_index,
     )
 
     assert component_index == declaration.sample_component_index(seed=plan.seed, sample_index=0)
     assert left == right
-    assert left.field.shape == (1, 24, 72)
-    assert max(left.field.values) == 1.0
-    assert sum(1 for value in left.field.values if value > 0) > 0
-    assert left.to_record()["component_index"] == component_index
-    assert left.to_record()["field_digest"] == str(left.field.digest)
+    assert left.shape == (1, 24, 72)
+    assert max(left.values) == 1.0
+    assert sum(1 for value in left.values if value > 0) > 0
+    assert left.to_record()["shape"] == [1, 24, 72]
+    assert str(left.digest)
 
 
 def test_digits_observation_formation_uses_sampled_canvas_extent() -> None:
@@ -130,12 +130,12 @@ def test_digits_observation_formation_uses_sampled_canvas_extent() -> None:
         seed=101,
     )
 
-    observation = declaration.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.digits.observations.large-canvas@0.1.0"),
-        plan=plan,
+    observation = declaration.component_field(
+        width=plan.resolution_assignment.require_axis("W"),
+        height=plan.resolution_assignment.require_axis("H"),
         component_index=1,
     )
-    min_x, max_x, min_y, max_y = _nonzero_bounds(observation.field)
+    min_x, max_x, min_y, max_y = _nonzero_bounds(observation)
 
     assert min_x > 0
     assert max_x < 127
@@ -152,9 +152,9 @@ def test_observation_formation_rejects_invalid_component_index() -> None:
     assert (
         str(
             capture_observation_error(
-                lambda: declaration.form_observation(
-                    id=ProtocolIdentifier.parse("benchmarks.digits.observations.bad@0.1.0"),
-                    plan=plan,
+                lambda: declaration.component_field(
+                    width=plan.resolution_assignment.require_axis("W"),
+                    height=plan.resolution_assignment.require_axis("H"),
                     component_index=len(declaration.components),
                 )
             )
@@ -194,59 +194,57 @@ def test_variation_identity_coordinates_preserve_observation_field() -> None:
     ).plan
     component_index = declaration.sample_component_index(seed=plan.seed, sample_index=0)
 
-    untransformed = declaration.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.digits.observations.identity-left@0.1.0"),
-        plan=plan,
+    untransformed = declaration.component_field(
+        width=plan.resolution_assignment.require_axis("W"),
+        height=plan.resolution_assignment.require_axis("H"),
         component_index=component_index,
     )
-    transformed = declaration.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.digits.observations.identity-right@0.1.0"),
-        plan=plan,
+    transformed = declaration.component_field(
+        width=plan.resolution_assignment.require_axis("W"),
+        height=plan.resolution_assignment.require_axis("H"),
         component_index=component_index,
-        variation_coordinates=(_variation_coordinate(),),
+        variation_coordinate=_variation_coordinate(),
     )
 
-    assert transformed.field == untransformed.field
+    assert transformed == untransformed
 
 
 def test_variation_coordinates_apply_spatial_translation() -> None:
     declaration = _synthetic_mark_declaration()
     plan = _synthetic_plan()
-    identity = declaration.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.base@0.1.0"),
-        plan=plan,
+    identity = declaration.component_field(
+        width=plan.resolution_assignment.require_axis("W"),
+        height=plan.resolution_assignment.require_axis("H"),
         component_index=0,
-        variation_coordinates=(_variation_coordinate(),),
+        variation_coordinate=_variation_coordinate(),
     )
-    shifted = declaration.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.synthetic-marks.observations.shifted@0.1.0"),
-        plan=plan,
+    shifted = declaration.component_field(
+        width=plan.resolution_assignment.require_axis("W"),
+        height=plan.resolution_assignment.require_axis("H"),
         component_index=0,
-        variation_coordinates=(_variation_coordinate(matrix=_affine_matrix(tx=0.25)),),
+        variation_coordinate=_variation_coordinate(matrix=_affine_matrix(tx=0.25)),
     )
 
-    assert _weighted_x_mean(shifted.field) > _weighted_x_mean(identity.field) + 0.2
-    assert all(0.0 <= value <= 1.0 for value in shifted.field.values)
+    assert _weighted_x_mean(shifted) > _weighted_x_mean(identity) + 0.2
+    assert all(0.0 <= value <= 1.0 for value in shifted.values)
 
 
-def test_observation_formation_rejects_invalid_variation_coordinate_count() -> None:
+def test_observation_formation_rejects_invalid_variation_coordinate() -> None:
     declaration = _synthetic_mark_declaration()
     plan = _synthetic_plan()
 
     assert (
         str(
             capture_observation_error(
-                lambda: declaration.form_observation(
-                    id=ProtocolIdentifier.parse(
-                        "benchmarks.synthetic-marks.observations.bad@0.1.0"
-                    ),
-                    plan=plan,
+                lambda: declaration.component_field(
+                    width=plan.resolution_assignment.require_axis("W"),
+                    height=plan.resolution_assignment.require_axis("H"),
                     component_index=0,
-                    variation_coordinates=(),
+                    variation_coordinate={},
                 )
             )
         )
-        == "variation_coordinates must contain one coordinate"
+        == "variation_coordinates: expected field-variation-transform-coordinate"
     )
 
 
@@ -349,14 +347,14 @@ def test_non_digits_declaration_uses_same_interpreter_path() -> None:
         seed=101,
     )
 
-    observation = declaration.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.synthetic-bars.observations.sample-zero@0.1.0"),
-        plan=plan,
+    observation = declaration.component_field(
+        width=plan.resolution_assignment.require_axis("W"),
+        height=plan.resolution_assignment.require_axis("H"),
         component_index=0,
     )
 
-    assert observation.field.shape == (1, 96, 96)
-    assert sum(1 for value in observation.field.values if value > 0) > 0
+    assert observation.shape == (1, 96, 96)
+    assert sum(1 for value in observation.values if value > 0) > 0
 
 
 def test_observation_formation_documents_reject_invalid_bytes() -> None:

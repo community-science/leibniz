@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +12,7 @@ from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.benchmark_implementations import load_benchmark
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlan
-from leibniz.observation_formation import (
-    FieldObservation,
-    FormedObservation,
-)
+from leibniz.observation_formation import FieldObservation
 
 __all__ = [
     "GeneratedSample",
@@ -126,11 +122,6 @@ class GeneratedSample:
     variation_coordinates: tuple[Mapping[str, object], ...] = ()
     variation_values: Mapping[str, object] | None = None
     field: FieldObservation | None = None
-    _field_record: FormedObservation | None = dataclass_field(
-        default=None,
-        compare=False,
-        repr=False,
-    )
 
     def __post_init__(self) -> None:
         if not self.outcome_id:
@@ -157,13 +148,6 @@ class GeneratedSample:
         if self.target_distribution is not None:
             return self.target_distribution
         return {self.outcome_id: 1.0}
-
-    def field_record(self) -> FormedObservation:
-        """Return the backing generated-field record for evidence plumbing."""
-
-        if self._field_record is None:
-            raise ObservationGenerationError("sample does not include generated field data")
-        return self._field_record
 
     def to_record(self, *, include_field: bool = False) -> dict[str, object]:
         """Return a record for this generated sample."""

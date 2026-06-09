@@ -13,7 +13,6 @@ from benchmark_typing import (
     sample_width,
 )
 
-from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import AxisAssignment, MaterializationPlan
 from leibniz.observation_formation import FieldObservation
 from leibniz.observation_generation import (
@@ -108,11 +107,10 @@ def test_digits_generator_is_deterministic() -> None:
             height=first_height,
         ),
     )
-    field_record = left.samples[0].field_record()
-    assert sample_component_index(first_sample) == field_record.component_index
-    assert first_sample.outcome_id == f"digit-{field_record.component_index}"
+    assert sample_component_index(first_sample) == first_sample.component_index
+    assert first_sample.outcome_id == f"digit-{first_sample.component_index}"
     assert _coordinate(first_sample.latent_coordinates, role="content")["values"] == {
-            "digit_index": field_record.component_index,
+            "digit_index": first_sample.component_index,
             "digit_variant_index": 0,
             "outcome_id": first_sample.outcome_id,
         }
@@ -131,7 +129,7 @@ def test_digits_generator_is_deterministic() -> None:
     )
     coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
     assert [coordinate["component_index"] for coordinate in coordinates] == [
-        field_record.component_index
+        first_sample.component_index
     ]
     assert len(coordinates) == 1
     constructed_parameters = cast(
@@ -177,7 +175,7 @@ def test_digits_generator_samples_formation_batch_without_fields() -> None:
         (sample.width, sample.height) for sample in observation_batch.samples
     ]
     assert [sample.component_index for sample in formation_batch.samples] == [
-        sample.field_record().component_index for sample in observation_batch.samples
+        sample.component_index for sample in observation_batch.samples
     ]
     assert [sample.outcome_id for sample in formation_batch.samples] == [
         sample.outcome_id for sample in observation_batch.samples
@@ -591,24 +589,20 @@ def test_digits_generator_applies_recorded_variation_coordinates() -> None:
     variation_values = cast(dict[str, object], variation["values"])
     plan = sample_materialization_plan(sample)
     component_index = sample_component_index(sample)
-    direct = generator.formation.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.digits.observations.direct@0.1.0"),
-        plan=plan,
+    direct = generator.formation.component_field(
+        width=plan.resolution_assignment.require_axis("W"),
+        height=plan.resolution_assignment.require_axis("H"),
         component_index=component_index,
-        variation_coordinates=cast(
-            list[Mapping[str, object]],
-            variation_values["coordinates"],
-        ),
+        variation_coordinate=cast(list[Mapping[str, object]], variation_values["coordinates"])[0],
     )
-    untransformed = generator.formation.form_observation(
-        id=ProtocolIdentifier.parse("benchmarks.digits.observations.untransformed@0.1.0"),
-        plan=plan,
+    untransformed = generator.formation.component_field(
+        width=plan.resolution_assignment.require_axis("W"),
+        height=plan.resolution_assignment.require_axis("H"),
         component_index=component_index,
     )
 
-    field_record = sample.field_record()
-    assert field_record.field == direct.field
-    assert field_record.field != untransformed.field
+    assert sample.require_field() == direct
+    assert sample.require_field() != untransformed
     assert all(0.0 <= value <= 1.0 for value in sample.require_field().values)
 
 
@@ -623,9 +617,14 @@ def test_digits_tensor_fields_match_recorded_field_samples() -> None:
         runtime=runtime,
         outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
     )
+    host_batch = generator(
+        shape=4,
+        seed=909,
+        include_fields=True,
+    )
 
     fields = batch.require_tensors()[0].detach().cpu()
-    for index, sample in enumerate(batch.samples):
+    for index, sample in enumerate(host_batch.samples):
         assert tuple(fields[index].shape) == sample.require_field().shape
         assert fields[index].flatten().tolist() == list(sample.require_field().values)
 

@@ -703,14 +703,12 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         for rung in curriculum_rungs
     } == {complexity_value["measure_id"]}
     assert all("generation_memory_limit_bytes" not in rung for rung in curriculum_rungs)
-    assert all("resolution_assignment" in rung for rung in curriculum_rungs)
     expected_evaluation_rung_keys = {
         "complexity",
         "complexity_axis",
         "confidence_half_width",
         "index",
         "mean_accepted_mass",
-        "resolution_assignment",
         "sample_count",
         "seed",
         "complexity_value",
@@ -767,7 +765,14 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         for key in expected_evaluation_rung_keys
         if key not in {"confidence_half_width", "mean_accepted_mass"}
     }
-    assert all(set(rung) == expected_training_rung_keys for rung in training_rungs)
+    expected_training_rung_keys_with_resolution = (
+        expected_training_rung_keys | {"resolution_assignment"}
+    )
+    assert all(
+        set(rung) == expected_training_rung_keys
+        or set(rung) == expected_training_rung_keys_with_resolution
+        for rung in training_rungs
+    )
     sampled_competence = cast(dict[str, object], evaluation_record["sampled_competence"])
     assert sampled_competence["kind"] == "sampled-competence-curriculum"
     assert sampled_competence["sampling_rule"] == "generator-uniform-component-index-v1"

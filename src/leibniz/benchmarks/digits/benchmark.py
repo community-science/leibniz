@@ -32,7 +32,6 @@ from leibniz.materialization import (
 from leibniz.observation_formation import (
     ComponentMark,
     FieldObservation,
-    FormedObservation,
     ObservationComponent,
     ObservationFormationDeclaration,
     SequenceLayout,
@@ -434,7 +433,7 @@ class Generator:
         with _timing_span(timing, f"{output_timing_prefix}scaled_factors"):
             scaled_factors = tuple(self.latent_factors.sample_factors)
 
-        field_records: tuple[FormedObservation, ...]
+        field_records: tuple[FieldObservation, ...]
         if include_fields:
             with _timing_span(
                 timing,
@@ -451,10 +450,8 @@ class Generator:
                     timing=timing,
                     timing_prefix=output_timing_prefix,
                 )
-                field_records = self._formed_observations_from_tensor_fields(
-                    seed=seed,
+                field_records = self._field_observations_from_tensor_fields(
                     plans=plans,
-                    component_indices=component_index_samples,
                     fields=fields,
                 )
         else:
@@ -495,8 +492,7 @@ class Generator:
                             plan=plan,
                             variation_values=variation_values,
                         ),
-                        field=None if field_record is None else field_record.field,
-                        _field_record=field_record,
+                        field=field_record,
                     )
                 )
         return tuple(samples)
@@ -745,19 +741,12 @@ class Generator:
             return fields.reshape((*sample_shape, *tuple(fields.shape[1:])))
         return fields.reshape(tuple(fields.shape[1:]))
 
-    def _formed_observations_from_tensor_fields(
+    def _field_observations_from_tensor_fields(
         self,
         *,
-        seed: int,
         plans: tuple[MaterializationPlan, ...],
-        component_indices: tuple[int, ...],
         fields: Any,
-        sample_indices: tuple[int, ...] | None = None,
-    ) -> tuple[FormedObservation, ...]:
-        if len(plans) != len(component_indices):
-            raise ObservationGenerationError("field plan count must match component indices")
-        if sample_indices is not None and len(sample_indices) != len(plans):
-            raise ObservationGenerationError("field sample index count must match plans")
+    ) -> tuple[FieldObservation, ...]:
         flat_fields = fields.reshape(
             (
                 len(plans),
@@ -767,35 +756,17 @@ class Generator:
             )
         )
         host_fields = tensor_value_to_host(flat_fields)
-        formation_reference = ArtifactReference(
-            kind="observation-formation-declaration",
-            protocol_id=self.formation.id,
-            record_digest=self.formation.digest,
-        )
-        records: list[FormedObservation] = []
-        for index, (plan, component_index) in enumerate(
-            zip(plans, component_indices, strict=True)
-        ):
+        records: list[FieldObservation] = []
+        for index, _plan in enumerate(plans):
             field_shape = tuple(int(size) for size in host_fields[index].shape)
             if len(field_shape) != 3:
                 raise ObservationGenerationError("rendered field shape must have rank 3")
-            sample_index = sample_indices[index] if sample_indices is not None else index
-            field = FieldObservation(
-                shape=(field_shape[0], field_shape[1], field_shape[2]),
-                values=tuple(float(value) for value in host_fields[index].reshape(-1).tolist()),
-            )
             records.append(
-                FormedObservation(
-                    id=self._observation_id(seed=seed, index=sample_index),
-                    benchmark_id=self.manifest.id,
-                    formation_declaration=formation_reference,
-                    materialization_plan=ArtifactReference(
-                        kind="materialization-plan",
-                        protocol_id=plan.id,
-                        record_digest=plan.digest,
+                FieldObservation(
+                    shape=(field_shape[0], field_shape[1], field_shape[2]),
+                    values=tuple(
+                        float(value) for value in host_fields[index].reshape(-1).tolist()
                     ),
-                    component_index=component_index,
-                    field=field,
                 )
             )
         return tuple(records)
@@ -1302,7 +1273,7 @@ class Generator:
             )
         samples: tuple[GeneratedSample, ...] = ()
         if include_metadata:
-            if runtime is not None and not include_fields:
+            if runtime is not None:
                 samples = self._generate_tensor_metadata_samples(
                     sample_count=sample_count,
                     seed=seed,
@@ -1416,12 +1387,9 @@ class Generator:
                 timing=None,
                 timing_prefix="",
             )
-            field_record = self._formed_observations_from_tensor_fields(
-                seed=seed,
+            field = self._field_observations_from_tensor_fields(
                 plans=(plan,),
-                component_indices=(component_index,),
                 fields=field_tensor,
-                sample_indices=(sample_index,),
             )[0]
             samples.append(
                 {
@@ -1430,8 +1398,8 @@ class Generator:
                     "component_index": component_index,
                     "complexity": complexity_class.complexity,
                     "complexity_value": complexity_class.measure().to_record(),
-                    "field_shape": list(field_record.field.shape),
-                    "image_data_url": _field_to_png_data_url(field_record.field),
+                    "field_shape": list(field.shape),
+                    "image_data_url": _field_to_png_data_url(field),
                     "materialization_plan": plan.to_record(),
                     "latent_coordinates": [
                         dict(coordinate)
