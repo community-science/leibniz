@@ -8,6 +8,7 @@ import os
 import time
 from array import array
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -1027,45 +1028,46 @@ def _construct_compiled_tensor_element_tiles(
     program: TensorElementProgram,
     parameter_tensors: Mapping[str, Any],
 ) -> Any:
-    backend = runtime.torch
-    total_elements = math.prod(shape)
-    tile_positions = backend.arange(
-        _tensor_element_tile_size,
-        dtype=backend.long,
-        device=runtime.device,
-    )
-    extents = backend.tensor(shape, dtype=backend.long, device=runtime.device)
-    strides = backend.tensor(
-        _tensor_element_shape_strides(shape),
-        dtype=backend.long,
-        device=runtime.device,
-    )
-    total_tensor = backend.tensor(total_elements, dtype=backend.long, device=runtime.device)
-    _mark_dynamic_tensor_element_parameters(
-        runtime=runtime,
-        parameter_declarations=program.parameters,
-        parameter_tensors=parameter_tensors,
-    )
-    output = backend.empty((total_elements,), dtype=dtype, device=runtime.device)
-    kernel = _compiled_tensor_element_tile_kernel(
-        runtime=runtime,
-        program=program,
-        rank=len(shape),
-        parameter_tensors=parameter_tensors,
-    )
-    for offset in range(0, total_elements, _tensor_element_tile_size):
-        valid_count = min(_tensor_element_tile_size, total_elements - offset)
-        offset_tensor = backend.tensor(offset, dtype=backend.long, device=runtime.device)
-        values = kernel(
-            tile_positions,
-            offset_tensor,
-            extents,
-            strides,
-            total_tensor,
-            **parameter_tensors,
-        ).to(dtype=dtype)
-        output[offset : offset + valid_count] = values[:valid_count]
-    return output.reshape(shape)
+    with _tensor_runtime_profile_span(runtime, "leibniz.tensor_construct.compiled_tiles"):
+        backend = runtime.torch
+        total_elements = math.prod(shape)
+        tile_positions = backend.arange(
+            _tensor_element_tile_size,
+            dtype=backend.long,
+            device=runtime.device,
+        )
+        extents = backend.tensor(shape, dtype=backend.long, device=runtime.device)
+        strides = backend.tensor(
+            _tensor_element_shape_strides(shape),
+            dtype=backend.long,
+            device=runtime.device,
+        )
+        total_tensor = backend.tensor(total_elements, dtype=backend.long, device=runtime.device)
+        _mark_dynamic_tensor_element_parameters(
+            runtime=runtime,
+            parameter_declarations=program.parameters,
+            parameter_tensors=parameter_tensors,
+        )
+        output = backend.empty((total_elements,), dtype=dtype, device=runtime.device)
+        kernel = _compiled_tensor_element_tile_kernel(
+            runtime=runtime,
+            program=program,
+            rank=len(shape),
+            parameter_tensors=parameter_tensors,
+        )
+        for offset in range(0, total_elements, _tensor_element_tile_size):
+            valid_count = min(_tensor_element_tile_size, total_elements - offset)
+            offset_tensor = backend.tensor(offset, dtype=backend.long, device=runtime.device)
+            values = kernel(
+                tile_positions,
+                offset_tensor,
+                extents,
+                strides,
+                total_tensor,
+                **parameter_tensors,
+            ).to(dtype=dtype)
+            output[offset : offset + valid_count] = values[:valid_count]
+        return output.reshape(shape)
 
 
 def _tensor_element_parameter(
@@ -1075,26 +1077,31 @@ def _tensor_element_parameter(
     name: str,
     parameter: TensorElementParameter,
 ) -> Any:
-    expected_count = math.prod(tuple(_positive_tensor_extent(size) for size in parameter.shape))
-    if len(parameter.values) != expected_count:
-        raise TensorRuntimeError("tensor element parameter value count does not match shape")
-    dtype = _tensor_element_parameter_dtype(runtime=runtime, dtype=parameter.dtype)
-    cache_key = _tensor_element_parameter_cache_key(
-        runtime=runtime,
-        program=program,
-        name=name,
-        parameter=parameter,
-    )
-    if cache_key is not None:
-        cached = _tensor_element_parameter_cache.get(cache_key)
-        if cached is not None:
-            return cached
-    tensor = runtime.torch.tensor(parameter.values, dtype=dtype, device=runtime.device).reshape(
-        parameter.shape
-    )
-    if cache_key is not None:
-        _tensor_element_parameter_cache[cache_key] = tensor
-    return tensor
+    with _tensor_runtime_profile_span(runtime, f"leibniz.tensor_parameter.{name}"):
+        expected_count = math.prod(
+            tuple(_positive_tensor_extent(size) for size in parameter.shape)
+        )
+        if len(parameter.values) != expected_count:
+            raise TensorRuntimeError("tensor element parameter value count does not match shape")
+        dtype = _tensor_element_parameter_dtype(runtime=runtime, dtype=parameter.dtype)
+        cache_key = _tensor_element_parameter_cache_key(
+            runtime=runtime,
+            program=program,
+            name=name,
+            parameter=parameter,
+        )
+        if cache_key is not None:
+            cached = _tensor_element_parameter_cache.get(cache_key)
+            if cached is not None:
+                return cached
+        tensor = runtime.torch.tensor(
+            parameter.values,
+            dtype=dtype,
+            device=runtime.device,
+        ).reshape(parameter.shape)
+        if cache_key is not None:
+            _tensor_element_parameter_cache[cache_key] = tensor
+        return tensor
 
 
 def _tensor_element_parameter_cache_key(
@@ -1159,33 +1166,35 @@ def _compiled_tensor_element_tile_kernel(
     if cached is not None:
         return cast(Callable[..., Any], cached)
 
-    def tile_kernel(
-        tile_positions: Any,
-        offset: Any,
-        extents: Any,
-        strides: Any,
-        total_elements: Any,
-        **parameters: Any,
-    ) -> Any:
-        flat_indices = tile_positions + offset
-        active = flat_indices < total_elements
-        safe_flat_indices = flat_indices.clamp(max=total_elements - 1)
-        coordinates: list[Any] = []
-        remainder = safe_flat_indices
-        for axis in range(rank):
-            stride = strides[axis]
-            coordinates.append(remainder.div(stride, rounding_mode="floor"))
-            remainder = remainder.remainder(stride)
-        values = cast(
-            Any,
-            program.kernel(tuple(coordinates), safe_flat_indices, **parameters),
-        )
-        return values.where(active, values * 0)
+    with _tensor_runtime_profile_span(runtime, "leibniz.tensor_construct.compile_lookup"):
 
-    try:
-        compiled = runtime.torch.compile(tile_kernel)
-    except Exception:
-        compiled = tile_kernel
+        def tile_kernel(
+            tile_positions: Any,
+            offset: Any,
+            extents: Any,
+            strides: Any,
+            total_elements: Any,
+            **parameters: Any,
+        ) -> Any:
+            flat_indices = tile_positions + offset
+            active = flat_indices < total_elements
+            safe_flat_indices = flat_indices.clamp(max=total_elements - 1)
+            coordinates: list[Any] = []
+            remainder = safe_flat_indices
+            for axis in range(rank):
+                stride = strides[axis]
+                coordinates.append(remainder.div(stride, rounding_mode="floor"))
+                remainder = remainder.remainder(stride)
+            values = cast(
+                Any,
+                program.kernel(tuple(coordinates), safe_flat_indices, **parameters),
+            )
+            return values.where(active, values * 0)
+
+        try:
+            compiled = runtime.torch.compile(tile_kernel)
+        except Exception:
+            compiled = tile_kernel
     _tensor_element_kernel_cache[key] = compiled
     return cast(Callable[..., Any], compiled)
 
@@ -1211,6 +1220,14 @@ def _tensor_runtime_compile_available() -> bool:
     except ImportError:
         return False
     return hasattr(compiler, "triton_key")
+
+
+def _tensor_runtime_profile_span(runtime: TensorRuntime, name: str) -> Any:
+    profiler = getattr(runtime.torch, "profiler", None)
+    record_function = getattr(profiler, "record_function", None)
+    if callable(record_function):
+        return record_function(name)
+    return nullcontext()
 
 
 def _tensor_element_coordinate_tensors(

@@ -4,8 +4,10 @@ from typing import cast
 import pytest
 
 from leibniz.formation_timing import (
+    FormationOperatorProfilePlan,
     FormationTimingError,
     FormationTimingPlan,
+    profile_formation_operators,
     time_formation_paths,
 )
 
@@ -55,3 +57,26 @@ def test_time_formation_plan_rejects_invalid_counts() -> None:
             benchmark_root=_digits_benchmark_root,
             repeats=0,
         )
+
+
+def test_profile_formation_operators_reports_bounded_rows() -> None:
+    summary = profile_formation_operators(
+        FormationOperatorProfilePlan(
+            benchmark_root=_digits_benchmark_root,
+            sample_count=1,
+            repeats=1,
+            warmup_repeats=0,
+            tensor_device="cpu",
+            row_limit=5,
+        )
+    )
+
+    record = summary.to_record()
+    assert record["format"] == "leibniz.formation-operator-profile"
+    assert record["benchmark_id"] == "benchmarks.digits@0.1.0"
+    assert record["sample_count"] == 1
+    assert record["repeats"] == 1
+    assert record["tensor_device"] == "cpu"
+    rows = cast(list[dict[str, object]], record["rows"])
+    assert 0 < len(rows) <= 5
+    assert {"name", "calls", "cpu_time_total_us"} <= rows[0].keys()

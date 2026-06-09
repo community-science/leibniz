@@ -36,7 +36,12 @@ from leibniz.documents import (
     load_object_document,
 )
 from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
-from leibniz.formation_timing import FormationTimingPlan, time_formation_paths
+from leibniz.formation_timing import (
+    FormationOperatorProfilePlan,
+    FormationTimingPlan,
+    profile_formation_operators,
+    time_formation_paths,
+)
 from leibniz.local_results import (
     LocalResultImportError,
     initialize_result_checkout,
@@ -373,6 +378,17 @@ def _parser() -> argparse.ArgumentParser:
     profile.add_argument("--repeats", default=3, type=int)
     profile.add_argument("--warmup-repeats", default=1, type=int)
     profile.add_argument(
+        "--operator-profile",
+        action="store_true",
+        help="also print a compact PyTorch operator profile for tensor formation",
+    )
+    profile.add_argument(
+        "--profile-row-limit",
+        default=30,
+        type=int,
+        help="maximum operator rows to print when --operator-profile is set",
+    )
+    profile.add_argument(
         "--device",
         default="auto",
         choices=tensor_runtime_device_choices(),
@@ -558,6 +574,21 @@ def _benchmark(args: argparse.Namespace) -> int:
                 )
             )
             print(canonical_document_bytes(summary.to_record()).decode("utf-8"))
+            if args.operator_profile:
+                operator_summary = profile_formation_operators(
+                    FormationOperatorProfilePlan(
+                        benchmark_root=args.benchmark_root,
+                        sample_count=args.batch_target,
+                        seed=args.seed,
+                        repeats=args.repeats,
+                        warmup_repeats=args.warmup_repeats,
+                        tensor_device=args.device,
+                        row_limit=args.profile_row_limit,
+                    )
+                )
+                print(
+                    canonical_document_bytes(operator_summary.to_record()).decode("utf-8")
+                )
             return 0
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
