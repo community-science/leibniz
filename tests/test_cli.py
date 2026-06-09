@@ -484,9 +484,10 @@ def test_cli_profiles_benchmark_formation_paths(
     record = load_object_document(captured.out.encode("utf-8"), description="timing")
     assert exit_code == 0
     assert captured.err == ""
-    assert record["format"] == "leibniz.formation-timing"
+    assert record["format"] == "leibniz.formation-operator-profile"
     assert record["tensor_device"] == "cpu"
     assert record["sample_count"] == 1
+    assert record["rows"] != []
 
 
 def test_cli_benchmark_selection_loads_python_implementation_without_manifest_file(

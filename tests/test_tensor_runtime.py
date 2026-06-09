@@ -271,31 +271,15 @@ def test_digits_generator_call_tensors_do_not_post_warp_rasters(
     assert calls == {"affine_grid": 0, "grid_sample": 0}
 
 
+@pytest.mark.parametrize("device_kind", ["cuda", "mps"])
 def test_tensor_element_compile_cache_is_not_extent_dependent(
     monkeypatch: pytest.MonkeyPatch,
+    device_kind: str,
 ) -> None:
-    host_runtime = resolve_tensor_runtime("cpu")
-    runtime = TensorRuntime(
-        torch=host_runtime.torch,
-        device=host_runtime.device,
-        device_kind="cuda",
+    runtime, compile_calls = _compile_counting_runtime(
+        monkeypatch,
+        device_kind=cast(Any, device_kind),
     )
-    compile_calls: list[bool | None] = []
-
-    def compile_available(_runtime: TensorRuntime) -> bool:
-        return True
-
-    monkeypatch.setattr(
-        tensor_runtime_module,
-        "_tensor_runtime_compile_available",
-        compile_available,
-    )
-
-    def compile_kernel(kernel: Any, **kwargs: Any) -> Any:
-        compile_calls.append(cast(bool | None, kwargs.get("dynamic")))
-        return kernel
-
-    monkeypatch.setattr(runtime.torch, "compile", compile_kernel)
 
     def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
         _ = flat_indices
@@ -304,7 +288,7 @@ def test_tensor_element_compile_cache_is_not_extent_dependent(
     program = TensorElementProgram(
         kernel=element_function,
         parameters={},
-        cache_key=("extent-independent-test", id(element_function)),
+        cache_key=("extent-independent-test", device_kind, id(element_function)),
     )
 
     first = tensor_runtime_construct_tensor(
@@ -317,49 +301,6 @@ def test_tensor_element_compile_cache_is_not_extent_dependent(
     )
 
     assert compile_calls == [None]
-    assert first.tolist() == [0, 1]
-    assert second.tolist() == [0, 1, 2]
-
-
-def test_tensor_element_compile_path_includes_mps_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    host_runtime = resolve_tensor_runtime("cpu")
-    runtime = TensorRuntime(
-        torch=host_runtime.torch,
-        device=host_runtime.device,
-        device_kind="mps",
-    )
-    compile_calls = 0
-
-    def compile_kernel(kernel: Any, **kwargs: Any) -> Any:
-        nonlocal compile_calls
-        _ = kwargs
-        compile_calls += 1
-        return kernel
-
-    monkeypatch.setattr(runtime.torch, "compile", compile_kernel)
-
-    def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
-        _ = flat_indices
-        return coordinates[0]
-
-    program = TensorElementProgram(
-        kernel=element_function,
-        parameters={},
-        cache_key=("mps-compile-test", id(element_function)),
-    )
-
-    first = tensor_runtime_construct_tensor(
-        runtime,
-        recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=program),
-    )
-    second = tensor_runtime_construct_tensor(
-        runtime,
-        recipe=TensorElementRecipe(shape=(3,), dtype="int64", program=program),
-    )
-
-    assert compile_calls == 1
     assert first.tolist() == [0, 1]
     assert second.tolist() == [0, 1, 2]
 
@@ -423,29 +364,7 @@ def test_tensor_element_parameter_cache_reuses_constant_parameters(
 def test_digits_tensor_generation_compiles_two_extent_independent_programs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    host_runtime = resolve_tensor_runtime("cpu")
-    runtime = TensorRuntime(
-        torch=host_runtime.torch,
-        device=host_runtime.device,
-        device_kind="cuda",
-    )
-    compile_calls: list[bool | None] = []
-
-    def compile_available(_runtime: TensorRuntime) -> bool:
-        return True
-
-    monkeypatch.setattr(
-        tensor_runtime_module,
-        "_tensor_runtime_compile_available",
-        compile_available,
-    )
-
-    def compile_kernel(kernel: Any, **kwargs: Any) -> Any:
-        compile_calls.append(cast(bool | None, kwargs.get("dynamic")))
-        return kernel
-
-    monkeypatch.setattr(runtime.torch, "compile", compile_kernel)
-
+    runtime, compile_calls = _compile_counting_runtime(monkeypatch, device_kind="cuda")
     generator = load_digits_generator(_digits_benchmark_root)
     outcome_ids = tuple(
         outcome.id
@@ -527,3 +446,32 @@ def test_digits_generator_call_tensors_reject_invalid_component_requests() -> No
             runtime=runtime,
             outcome_ids=outcome_ids,
         )
+
+
+def _compile_counting_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    device_kind: Any,
+) -> tuple[TensorRuntime, list[bool | None]]:
+    host_runtime = resolve_tensor_runtime("cpu")
+    runtime = TensorRuntime(
+        torch=host_runtime.torch,
+        device=host_runtime.device,
+        device_kind=device_kind,
+    )
+    compile_calls: list[bool | None] = []
+    def compile_available(_runtime: TensorRuntime) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        tensor_runtime_module,
+        "_tensor_runtime_compile_available",
+        compile_available,
+    )
+
+    def compile_kernel(kernel: Any, **kwargs: Any) -> Any:
+        compile_calls.append(cast(bool | None, kwargs.get("dynamic")))
+        return kernel
+
+    monkeypatch.setattr(runtime.torch, "compile", compile_kernel)
+    return runtime, compile_calls
