@@ -83,7 +83,7 @@ _extract = RecordExtractor(error_type=MaterializationValidationError)
 
 @dataclass(frozen=True, slots=True)
 class AxisAssignment:
-    """Integer values assigned to named complexity or resolution axes."""
+    """Integer values assigned to named volume or resolution axes."""
 
     values: Mapping[str, int]
 

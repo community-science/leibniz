@@ -262,7 +262,7 @@ def _validate_sampled_competence(
         raise SubmissionPackageValidationError("sampled_competence has unsupported kind")
     _positive_int(record.get("sample_count"), field="sampled_competence.sample_count")
     _score(record.get("mean_accepted_mass"), field="sampled_competence.mean_accepted_mass")
-    _nonnegative_number(record.get("complexity"), field="sampled_competence.complexity")
+    _nonnegative_number(record.get("log2_volume"), field="sampled_competence.log2_volume")
     points = record.get("points")
     if points is not None:
         for point in _as_sequence(points, field="sampled_competence.points"):
@@ -276,8 +276,8 @@ def _validate_sampled_competence(
                 field="sampled_competence.points.mean_accepted_mass",
             )
             _nonnegative_number(
-                point_record.get("complexity"),
-                field="sampled_competence.points.complexity",
+                point_record.get("log2_volume"),
+                field="sampled_competence.points.log2_volume",
             )
 
 

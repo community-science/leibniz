@@ -22,7 +22,7 @@ from leibniz.state_space import StateSpaceError, StateSpaceRegion, state_space_r
 
 __all__ = [
     "CompetencePoint",
-    "ComplexityIntegral",
+    "StateSpaceIntegral",
     "finite_measurements_for_predictions",
     "sampled_competence_curriculum_record",
     "sampled_competence_compute_cost_integral",
@@ -41,14 +41,14 @@ _default_bit_length_per_op = 32.0
 
 @dataclass(frozen=True, slots=True)
 class CompetencePoint:
-    """A measured point on a complexity frontier."""
+    """A measured point on a state-space volume frontier."""
 
-    complexity: float
+    log2_volume: float
     accepted_mass: float
     sample_count: int = 1
     seed: int = 0
-    complexity_minimum: float | None = None
-    complexity_maximum: float | None = None
+    log2_volume_minimum: float | None = None
+    log2_volume_maximum: float | None = None
     input_shape: tuple[int, ...] | None = None
     region: StateSpaceRegion | None = None
 
@@ -62,9 +62,9 @@ class CompetencePoint:
     ) -> Self:
         seed = record.get("seed")
         return cls(
-            complexity=_record_nonnegative_number(
-                record.get("complexity"),
-                field=f"{field_prefix}.complexity",
+            log2_volume=_record_nonnegative_number(
+                record.get("log2_volume"),
+                field=f"{field_prefix}.log2_volume",
                 error_type=error_type,
             ),
             accepted_mass=_record_nonnegative_number(
@@ -78,14 +78,14 @@ class CompetencePoint:
                 error_type=error_type,
             ),
             seed=seed if type(seed) is int else 0,
-            complexity_minimum=_record_optional_nonnegative_number(
-                record.get("complexity_minimum"),
-                field=f"{field_prefix}.complexity_minimum",
+            log2_volume_minimum=_record_optional_nonnegative_number(
+                record.get("log2_volume_minimum"),
+                field=f"{field_prefix}.log2_volume_minimum",
                 error_type=error_type,
             ),
-            complexity_maximum=_record_optional_nonnegative_number(
-                record.get("complexity_maximum"),
-                field=f"{field_prefix}.complexity_maximum",
+            log2_volume_maximum=_record_optional_nonnegative_number(
+                record.get("log2_volume_maximum"),
+                field=f"{field_prefix}.log2_volume_maximum",
                 error_type=error_type,
             ),
             input_shape=_record_optional_input_shape(
@@ -143,8 +143,8 @@ class StateSpaceIntegralTerm:
 
 
 @dataclass(frozen=True, slots=True)
-class ComplexityIntegral:
-    """A human-readable numerical integral over the complexity axis."""
+class StateSpaceIntegral:
+    """A human-readable numerical integral over the log2 state-space volume axis."""
 
     terms: tuple[StateSpaceIntegralTerm, ...]
 
@@ -162,7 +162,7 @@ class ComplexityIntegral:
 
 @dataclass(frozen=True, slots=True)
 class ValidationCompetencePoint(CompetencePoint):
-    """A validation-loss-derived point on a complexity frontier."""
+    """A validation-loss-derived point on a state-space volume frontier."""
 
 
 def finite_measurements_for_predictions(
@@ -232,10 +232,10 @@ def sampled_competence_record(
     *,
     batch: GeneratedSampleSet,
     measurements: tuple[MeasurementRecord, ...],
-    complexity_axis: str | None,
+    volume_axis: str | None,
     input_shape: tuple[int, ...] | None = None,
 ) -> dict[str, object]:
-    """Return aggregate competence evidence for one sampled complexity window."""
+    """Return aggregate competence evidence for one sampled state-space volume window."""
 
     if len(batch.samples) != len(measurements):
         raise ValueError("sampled competence requires one measurement per sample")
@@ -255,10 +255,10 @@ def sampled_competence_record(
     record: dict[str, object] = {
         "kind": "sampled-state-space-volume-window",
         "sampling_rule": "generator-uniform-component-index-v1",
-        "difficulty_assumption": "approximately-uniform-within-complexity-window",
+        "difficulty_assumption": "approximately-uniform-within-volume-window",
         "benchmark_id": str(batch.benchmark_id),
-        "complexity_axis": complexity_axis,
-        "complexity": batch.complexity,
+        "volume_axis": volume_axis,
+        "log2_volume": batch.log2_volume,
         "seed": batch.seed,
         "sample_count": len(batch.samples),
         "mean_accepted_mass": math.fsum(accepted_mass) / len(accepted_mass),
@@ -275,9 +275,9 @@ def sampled_competence_record(
     if resolved_input_shape is None:
         resolved_input_shape = _sampled_input_shape(batch)
     record["input_shape"] = list(resolved_input_shape)
-    if batch.complexity_request is not None:
-        record["complexity_minimum"] = batch.complexity_request.minimum
-        record["complexity_maximum"] = batch.complexity_request.maximum
+    if batch.volume_request is not None:
+        record["log2_volume_minimum"] = batch.volume_request.minimum
+        record["log2_volume_maximum"] = batch.volume_request.maximum
     if batch.region is not None:
         record["region"] = batch.region.to_record()
     return record
@@ -307,7 +307,7 @@ def _sampled_input_shape(batch: GeneratedSampleSet) -> tuple[int, ...]:
 def sampled_competence_curriculum_record(
     points: Sequence[Mapping[str, object]],
 ) -> dict[str, object]:
-    """Return aggregate competence evidence for a progressive complexity sweep."""
+    """Return aggregate competence evidence for a progressive state-space volume sweep."""
 
     if not points:
         raise ValueError("sampled competence curriculum requires at least one point")
@@ -315,8 +315,8 @@ def sampled_competence_curriculum_record(
         sorted(
             points,
             key=lambda point: _finite_nonnegative_number(
-                point.get("complexity"),
-                field="sampled_competence.complexity",
+                point.get("log2_volume"),
+                field="sampled_competence.log2_volume",
             ),
         )
     )
@@ -345,8 +345,8 @@ def sampled_competence_curriculum_record(
         "sampling_rule": first.get("sampling_rule"),
         "difficulty_assumption": first.get("difficulty_assumption"),
         "benchmark_id": first.get("benchmark_id"),
-        "complexity_axis": first.get("complexity_axis"),
-        "complexity": first.get("complexity"),
+        "volume_axis": first.get("volume_axis"),
+        "log2_volume": first.get("log2_volume"),
         "sample_count": total_samples,
         "mean_accepted_mass": weighted_score,
         "points": [dict(point) for point in sorted_points],
@@ -366,13 +366,13 @@ def sampled_competence_frontier_integral(
     points: Sequence[CompetencePoint],
     *,
     chance_mass: float,
-) -> ComplexityIntegral:
-    """Return the explicit competence integral over measured complexity intervals."""
+) -> StateSpaceIntegral:
+    """Return the explicit competence integral over measured log2-volume intervals."""
 
     terms: list[StateSpaceIntegralTerm] = []
     cursor = 0.0
     for point in sorted(points, key=_competence_point_interval_sort_key):
-        lower, upper = _complexity_point_interval(point)
+        lower, upper = _log2_volume_point_interval(point)
         measured_lower = max(lower, cursor)
         if upper > measured_lower:
             terms.append(
@@ -384,13 +384,13 @@ def sampled_competence_frontier_integral(
                         chance_mass=chance_mass,
                     ),
                     kind="measured-state-space-competence",
-                    representative_log2_volume=point.complexity,
+                    representative_log2_volume=point.log2_volume,
                     sample_count=point.sample_count,
                     region=point.region,
                 )
             )
         cursor = max(cursor, lower, upper)
-    return ComplexityIntegral(terms=tuple(terms))
+    return StateSpaceIntegral(terms=tuple(terms))
 
 
 def sampled_competence_compute_cost_integral(
@@ -399,42 +399,42 @@ def sampled_competence_compute_cost_integral(
     architecture: ArchitectureManifest,
     error_type: type[_ErrorT] = ValueError,
     field_prefix: str = "compute_cost_point",
-) -> ComplexityIntegral:
+) -> StateSpaceIntegral:
     """Return the compute-cost integral for sampled competence intervals."""
 
     ordered = sorted(
         points,
         key=lambda point: _record_nonnegative_number(
-            point.get("complexity"),
-            field=f"{field_prefix}.complexity",
+            point.get("log2_volume"),
+            field=f"{field_prefix}.log2_volume",
             error_type=error_type,
         ),
     )
     cursor = 0.0
     terms: list[StateSpaceIntegralTerm] = []
     for point in ordered:
-        complexity = _record_nonnegative_number(
-            point.get("complexity"),
-            field=f"{field_prefix}.complexity",
+        log2_volume = _record_nonnegative_number(
+            point.get("log2_volume"),
+            field=f"{field_prefix}.log2_volume",
             error_type=error_type,
         )
         minimum = _record_optional_nonnegative_number(
-            point.get("complexity_minimum"),
-            field=f"{field_prefix}.complexity_minimum",
+            point.get("log2_volume_minimum"),
+            field=f"{field_prefix}.log2_volume_minimum",
             error_type=error_type,
         )
         maximum = _record_optional_nonnegative_number(
-            point.get("complexity_maximum"),
-            field=f"{field_prefix}.complexity_maximum",
+            point.get("log2_volume_maximum"),
+            field=f"{field_prefix}.log2_volume_maximum",
             error_type=error_type,
         )
         if minimum is None:
             minimum = cursor
         if maximum is None:
-            maximum = complexity
+            maximum = log2_volume
         if maximum <= minimum:
             minimum = cursor
-            maximum = complexity
+            maximum = log2_volume
         if maximum > minimum:
             terms.append(
                 StateSpaceIntegralTerm(
@@ -450,15 +450,15 @@ def sampled_competence_compute_cost_integral(
                         * _default_bit_length_per_op
                     ),
                     kind="measured-compute-cost",
-                    representative_log2_volume=complexity,
+                    representative_log2_volume=log2_volume,
                 )
             )
         cursor = max(cursor, maximum)
-    return ComplexityIntegral(terms=tuple(terms))
+    return StateSpaceIntegral(terms=tuple(terms))
 
 
 def _competence_point_interval_sort_key(point: CompetencePoint) -> tuple[float, float]:
-    lower, upper = _complexity_point_interval(point)
+    lower, upper = _log2_volume_point_interval(point)
     return (lower, upper)
 
 
@@ -564,31 +564,31 @@ def _record_optional_state_space_region(
         raise error_type(f"{field}: {error}") from error
 
 
-def _complexity_point_interval(
+def _log2_volume_point_interval(
     point: CompetencePoint,
 ) -> tuple[float, float]:
-    complexity = _finite_nonnegative_number(
-        point.complexity,
-        field="complexity_interval.complexity",
+    log2_volume = _finite_nonnegative_number(
+        point.log2_volume,
+        field="log2_volume_interval.log2_volume",
     )
     lower = (
-        max(0.0, complexity - 1.0)
-        if point.complexity_minimum is None
+        max(0.0, log2_volume - 1.0)
+        if point.log2_volume_minimum is None
         else _finite_nonnegative_number(
-            point.complexity_minimum,
-            field="complexity_interval.complexity_minimum",
+            point.log2_volume_minimum,
+            field="log2_volume_interval.log2_volume_minimum",
         )
     )
     upper = (
-        complexity
-        if point.complexity_maximum is None
+        log2_volume
+        if point.log2_volume_maximum is None
         else _finite_nonnegative_number(
-            point.complexity_maximum,
-            field="complexity_interval.complexity_maximum",
+            point.log2_volume_maximum,
+            field="log2_volume_interval.log2_volume_maximum",
         )
     )
     if upper < lower:
-        raise ValueError("complexity interval maximum is below minimum")
+        raise ValueError("volume interval maximum is below minimum")
     return (lower, upper)
 
 

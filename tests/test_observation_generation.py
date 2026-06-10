@@ -20,11 +20,11 @@ from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.materialization import AxisAssignment, MaterializationPlan
 from leibniz.observation_formation import FieldObservation
 from leibniz.observation_generation import (
-    ComplexityRequest,
-    ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
+    StateSpaceVolumeRequest,
+    StateSpaceVolumeValue,
     sample_indices_for_even_state_coverage,
 )
 from leibniz.state_space import state_space_region_from_record
@@ -64,7 +64,6 @@ def test_generated_sample_records_available_outcome_ids() -> None:
     sample = GeneratedSample(
         index=0,
         outcome_id="yes",
-        complexity=1.0,
         available_outcome_ids=("no", "yes"),
     )
 
@@ -76,7 +75,6 @@ def test_generated_sample_rejects_invalid_available_outcome_ids() -> None:
         GeneratedSample(
             index=0,
             outcome_id="yes",
-            complexity=1.0,
             available_outcome_ids=("yes", "yes"),
         )
 
@@ -84,7 +82,6 @@ def test_generated_sample_rejects_invalid_available_outcome_ids() -> None:
         GeneratedSample(
             index=0,
             outcome_id="yes",
-            complexity=1.0,
             available_outcome_ids=("",),
         )
 
@@ -107,8 +104,8 @@ def test_digits_generator_is_deterministic() -> None:
         first_width,
     )
     assert math.isclose(
-        left.complexity,
-        generator.distinguishable_state_complexity(
+        left.log2_volume,
+        generator.distinguishable_state_log2_volume(
             width=first_width,
             height=first_height,
         ),
@@ -290,13 +287,13 @@ def test_digits_generator_samples_resolution_from_memory_bound() -> None:
     assert width >= 1
     assert height >= 1
     assert math.isclose(
-        batch.complexity,
-        generator.distinguishable_state_complexity(width=width, height=height),
+        batch.log2_volume,
+        generator.distinguishable_state_log2_volume(width=width, height=height),
     )
     assert sample.outcome_id == f"digit-{sample.component_index}"
 
 
-def test_digits_generator_counts_constructed_finite_complexity_class() -> None:
+def test_digits_generator_counts_constructed_finite_volume_class() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
     scale_one = _formation_payload(generator, sample_count=3, seed=101)
@@ -305,15 +302,15 @@ def test_digits_generator_counts_constructed_finite_complexity_class() -> None:
         seed=102,
     )
 
-    assert round(scale_one.complexity, 12) == round(
-        generator.distinguishable_state_complexity(
+    assert round(scale_one.log2_volume, 12) == round(
+        generator.distinguishable_state_log2_volume(
             width=sample_width(scale_one.samples[0]),
             height=sample_height(scale_one.samples[0]),
         ),
         12,
     )
-    assert round(scale_one_other_seed.complexity, 12) == round(
-        generator.distinguishable_state_complexity(
+    assert round(scale_one_other_seed.log2_volume, 12) == round(
+        generator.distinguishable_state_log2_volume(
             width=sample_width(scale_one_other_seed.samples[0]),
             height=sample_height(scale_one_other_seed.samples[0]),
         ),
@@ -321,10 +318,10 @@ def test_digits_generator_counts_constructed_finite_complexity_class() -> None:
     )
     assert sample_width(scale_one.samples[0]) >= 1
     assert sample_height(scale_one.samples[0]) >= 1
-    minimum = generator.constructed_complexity_class_complexity(
+    minimum = generator.constructed_volume_class_log2_volume(
         affine_transform_count=1,
     )
-    larger = generator.constructed_complexity_class_complexity(
+    larger = generator.constructed_volume_class_log2_volume(
         affine_transform_count=8,
     )
     assert math.isclose(minimum, math.log2(10))
@@ -351,25 +348,25 @@ def test_digits_generator_uses_runtime_memory_limit_as_canvas_cap() -> None:
     assert all(sample_width(sample) >= 1 and sample_height(sample) >= 1
         for sample in large.samples
     )
-    assert large.samples[0].complexity == small.samples[0].complexity
+    assert large.log2_volume == small.log2_volume
 
 
-def test_digits_generator_accepts_complexity_value_requests() -> None:
+def test_digits_generator_accepts_volume_value_requests() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
-    requested_complexity = generator.minimum_complexity().value
+    requested_log2_volume = generator.minimum_log2_volume().value
 
-    complexity_request = ComplexityRequest(
-        minimum=requested_complexity,
-        maximum=requested_complexity + 1.0,
+    volume_request = StateSpaceVolumeRequest(
+        minimum=requested_log2_volume,
+        maximum=requested_log2_volume + 1.0,
     )
     batch = _observation_payload(
         generator,
         sample_count=2,
         seed=101,
-        complexity_request=complexity_request,
+        volume_request=volume_request,
     )
 
-    assert batch.complexity_request is not None
+    assert batch.volume_request is not None
     assert "component_count" not in batch.to_record()
     assert [sample.require_field().shape for sample in batch.samples] == [
         (1, 16, 16),
@@ -377,10 +374,8 @@ def test_digits_generator_accepts_complexity_value_requests() -> None:
     ]
     assert [sample.outcome_id for sample in batch.samples] == ["digit-0", "digit-0"]
     assert [sample.component_index for sample in batch.samples] == [0, 0]
-    assert {sample.complexity for sample in batch.samples} == {None}
-    assert {sample.complexity_value for sample in batch.samples} == {None}
-    assert math.isclose(batch.complexity, requested_complexity)
-    assert complexity_request.contains(batch.complexity)
+    assert math.isclose(batch.log2_volume, requested_log2_volume)
+    assert volume_request.contains(batch.log2_volume)
 
 
 def test_digits_generated_sample_set_records_region_document_boundary() -> None:
@@ -392,7 +387,7 @@ def test_digits_generated_sample_set_records_region_document_boundary() -> None:
     assert batch.request_outcome.kind == "realized"
     assert batch.request_outcome.region == batch.region
     assert batch.region.volume == 20
-    assert math.isclose(batch.region.log2_volume, batch.complexity)
+    assert math.isclose(batch.region.log2_volume, batch.log2_volume)
     record = batch.to_record()
     loaded = load_object_document(
         canonical_document_bytes(record),
@@ -416,11 +411,11 @@ def test_digits_generated_sample_set_records_region_document_boundary() -> None:
 def test_digits_truncated_address_window_region_has_unequal_strata() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     generator_impl = cast(Any, generator)
-    complexity_class = generator_impl._complexity_class_for_requested_cardinality(
+    volume_class = generator_impl._volume_class_for_requested_cardinality(
         requested_cardinality=13,
         minimum_address=0,
     )
-    assert complexity_class.resolution_assignment is not None
+    assert volume_class.resolution_assignment is not None
     region_for_class = cast(
         Callable[..., object],
         _digits_benchmark_module()["_digits_state_space_region"],
@@ -429,8 +424,8 @@ def test_digits_truncated_address_window_region_has_unequal_strata() -> None:
         cast(
             Any,
             region_for_class(
-                complexity_class=complexity_class,
-                resolution_assignment=complexity_class.resolution_assignment,
+                volume_class=volume_class,
+                resolution_assignment=volume_class.resolution_assignment,
                 margin=generator.manifest.resolution_discriminability_margin(),
             ),
         ).to_record()
@@ -449,13 +444,13 @@ def test_digits_regions_cover_preset_and_grid_coordinates() -> None:
         generator,
         sample_count=3,
         seed=101,
-        complexity_request=ComplexityRequest(minimum=3.0, maximum=4.0),
+        volume_request=StateSpaceVolumeRequest(minimum=3.0, maximum=4.0),
     )
     grid = _formation_payload(
         generator,
         sample_count=3,
         seed=101,
-        complexity_request=ComplexityRequest(minimum=8.0, maximum=9.0),
+        volume_request=StateSpaceVolumeRequest(minimum=8.0, maximum=9.0),
     )
 
     assert preset.region is not None
@@ -474,8 +469,7 @@ def test_digits_regions_cover_preset_and_grid_coordinates() -> None:
     )
     for batch in (preset, grid):
         assert batch.region is not None
-        assert math.isclose(batch.complexity, batch.region.log2_volume)
-        assert {sample.complexity for sample in batch.samples} == {None}
+        assert math.isclose(batch.log2_volume, batch.region.log2_volume)
         for sample in batch.samples:
             assert sample.region_component_index is not None
             assert sample.axis_coordinates is not None
@@ -508,23 +502,23 @@ def test_generated_sample_set_rejects_region_coordinates_outside_region() -> Non
         )
 
 
-def test_digits_generator_materializes_target_complexity_class_band() -> None:
+def test_digits_generator_materializes_target_volume_class_band() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     generator_impl = cast(Any, generator)
-    target = generator.minimum_complexity().value + 3.0
+    target = generator.minimum_log2_volume().value + 3.0
 
-    complexity_class = generator_impl._complexity_class_for_request(
-        request=ComplexityRequest(
+    volume_class = generator_impl._volume_class_for_request(
+        request=StateSpaceVolumeRequest(
             minimum=target,
             maximum=target + 1.0,
         )
     )
 
-    assert complexity_class is not None
-    assert complexity_class.cardinality == 8
-    assert math.isclose(complexity_class.complexity, math.log2(8))
-    assert complexity_class.resolution_assignment is not None
-    metadata = complexity_class.metadata()
+    assert volume_class is not None
+    assert volume_class.cardinality == 8
+    assert math.isclose(volume_class.log2_volume, math.log2(8))
+    assert volume_class.resolution_assignment is not None
+    metadata = volume_class.metadata()
     assert metadata["affine_transform_count"] == 2
     assert metadata["digit_count"] == 10
     assert metadata["output_digit_count"] == 10
@@ -562,17 +556,17 @@ def test_digits_integer_shells_decode_unique_latent_addresses() -> None:
 
     coordinates: set[tuple[int, int]] = set()
     for shell in range(4):
-        complexity_class = generator_impl._complexity_class_for_request(
-            request=ComplexityRequest(
+        volume_class = generator_impl._volume_class_for_request(
+            request=StateSpaceVolumeRequest(
                 minimum=float(shell),
                 maximum=float(shell + 1),
             )
         )
-        assert complexity_class is not None
-        assert complexity_class.cardinality == 2**shell
-        assert complexity_class.minimum_address == 2**shell - 1
-        for state_index in range(complexity_class.cardinality):
-            sample_address = complexity_class.minimum_address + state_index
+        assert volume_class is not None
+        assert volume_class.cardinality == 2**shell
+        assert volume_class.minimum_address == 2**shell - 1
+        for state_index in range(volume_class.cardinality):
+            sample_address = volume_class.minimum_address + state_index
             coordinate = (sample_address % 10, sample_address // 10)
             assert coordinate not in coordinates
             coordinates.add(coordinate)
@@ -606,80 +600,80 @@ def test_digits_generator_high_cardinality_request_has_direct_representative() -
     generator = load_digits_generator(_digits_benchmark_root)
     generator_impl = cast(Any, generator)
 
-    complexity_class = generator_impl._complexity_class_for_request(
-        request=ComplexityRequest(
+    volume_class = generator_impl._volume_class_for_request(
+        request=StateSpaceVolumeRequest(
             minimum=21.0,
             maximum=22.0,
         )
     )
 
-    assert complexity_class is not None
-    assert 21.0 <= math.log2(complexity_class.cardinality) <= 22.0
+    assert volume_class is not None
+    assert 21.0 <= math.log2(volume_class.cardinality) <= 22.0
     assert not hasattr(generator, "complexity_candidate_for_request")
     assert not hasattr(generator, "complexity_curriculum_candidates")
 
 
-def test_digits_generator_materializes_large_target_complexity_class_directly() -> None:
+def test_digits_generator_materializes_large_target_volume_class_directly() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     generator_impl = cast(Any, generator)
 
-    complexity_class = generator_impl._complexity_class_for_request(
-        request=ComplexityRequest(minimum=20.0, maximum=21.0)
+    volume_class = generator_impl._volume_class_for_request(
+        request=StateSpaceVolumeRequest(minimum=20.0, maximum=21.0)
     )
 
-    assert complexity_class is not None
-    assert complexity_class.cardinality == 1_048_576
-    assert 20.0 <= complexity_class.complexity <= 21.0
-    assert complexity_class.resolution_assignment is not None
-    assert cast(int, complexity_class.metadata()["affine_product_cardinality"]) >= (
-        complexity_class.maximum_address + 1
+    assert volume_class is not None
+    assert volume_class.cardinality == 1_048_576
+    assert 20.0 <= volume_class.log2_volume <= 21.0
+    assert volume_class.resolution_assignment is not None
+    assert cast(int, volume_class.metadata()["affine_product_cardinality"]) >= (
+        volume_class.maximum_address + 1
     )
 
 
 def test_digits_generator_accepts_low_sample_cardinality_requests() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
-    complexity_request = ComplexityRequest(
+    volume_request = StateSpaceVolumeRequest(
         minimum=1.0,
         maximum=1.0,
     )
     batch = generator(
         shape=3,
         seed=101,
-        complexity_request=complexity_request,
+        volume_request=volume_request,
     )
 
     assert batch.shape == (3,)
     assert len(batch.samples) == 3
-    assert batch.complexity_request is not None
-    assert batch.complexity_request.measure_id == complexity_request.measure_id
+    assert batch.volume_request is not None
+    assert batch.volume_request.measure_id == volume_request.measure_id
 
 
-def test_complexity_value_ids_are_core_contract() -> None:
-    assert ComplexityRequest(minimum=0.0, maximum=0.0).minimum == 0.0
-    assert ComplexityValue(value=0.0).value == 0.0
+def test_volume_value_ids_are_core_contract() -> None:
+    assert StateSpaceVolumeRequest(minimum=0.0, maximum=0.0).minimum == 0.0
+    assert StateSpaceVolumeValue(value=0.0).value == 0.0
     assert (
         str(
             capture_generation_error(
-                lambda: ComplexityRequest(
+                lambda: StateSpaceVolumeRequest(
                     measure_id="benchmarks.chess.valid-move-count",
                     minimum=1.0,
                     maximum=1.0,
                 )
             )
         )
-        == "complexity id is not a core measure"
+        == "volume measure id is not a core measure"
     )
     assert (
         str(
             capture_generation_error(
-                lambda: ComplexityValue(
+                lambda: StateSpaceVolumeValue(
                     measure_id="benchmarks.chess.valid-move-count",
                     value=1.0,
                 )
             )
         )
-        == "complexity id is not a core measure"
+        == "volume measure id is not a core measure"
     )
 
 
@@ -754,9 +748,9 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
         pytest.skip(str(error))
     outcome_space = generator.manifest.resolve_outcome_space()
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    request = ComplexityRequest(
-        minimum=generator.minimum_complexity().value + 6.0,
-        maximum=generator.minimum_complexity().value + 7.0,
+    request = StateSpaceVolumeRequest(
+        minimum=generator.minimum_log2_volume().value + 6.0,
+        maximum=generator.minimum_log2_volume().value + 7.0,
     )
 
     cpu_fields = generator(
@@ -765,7 +759,7 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
         include_fields=False,
         runtime=cpu_runtime,
         outcome_ids=outcome_ids,
-        complexity_request=request,
+        volume_request=request,
     ).require_tensors()[0]
     cuda_fields = generator(
         shape=16,
@@ -773,7 +767,7 @@ def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
         include_fields=False,
         runtime=cuda_runtime,
         outcome_ids=outcome_ids,
-        complexity_request=request,
+        volume_request=request,
     ).require_tensors()[0]
 
     assert cuda_runtime.torch.equal(cpu_fields, cuda_fields.detach().cpu())
@@ -787,14 +781,14 @@ def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
         mps_runtime = resolve_tensor_runtime("mps")
     except TensorRuntimeError as error:
         pytest.skip(str(error))
-    complexity_class = generator_impl._complexity_class_for_request(
-        request=ComplexityRequest(
-            minimum=generator.minimum_complexity().value + 5.0,
-            maximum=generator.minimum_complexity().value + 6.0,
+    volume_class = generator_impl._volume_class_for_request(
+        request=StateSpaceVolumeRequest(
+            minimum=generator.minimum_log2_volume().value + 5.0,
+            maximum=generator.minimum_log2_volume().value + 6.0,
         )
     )
-    assert complexity_class is not None
-    resolution_assignment = complexity_class.resolution_assignment
+    assert volume_class is not None
+    resolution_assignment = volume_class.resolution_assignment
     assert resolution_assignment is not None
     width = resolution_assignment.require_axis(generator.formation.width_axis)
     height = resolution_assignment.require_axis(generator.formation.height_axis)
@@ -802,13 +796,13 @@ def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
         "sample_count": 64,
         "width": width,
         "height": height,
-        "digit_count": complexity_class.digit_count,
+        "digit_count": volume_class.digit_count,
         "transform": generator.formation.variation_transform,
-        "grid": complexity_class.affine_grid,
+        "grid": volume_class.affine_grid,
         "seed": 101,
         "sample_indices": tuple(range(64)),
-        "cardinality": complexity_class.cardinality,
-        "minimum_address": complexity_class.minimum_address,
+        "cardinality": volume_class.cardinality,
+        "minimum_address": volume_class.minimum_address,
         "timing": None,
         "timing_prefix": "",
     }
@@ -820,18 +814,18 @@ def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
     assert cpu_runtime.torch.equal(cpu_fields, mps_fields.detach().cpu())
 
 
-def test_digits_tensor_generation_returns_null_set_for_unmatched_complexity_requests() -> None:
+def test_digits_tensor_generation_returns_null_set_for_unmatched_volume_requests() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
     outcome_space = generator.manifest.resolve_outcome_space()
-    request = ComplexityRequest(minimum=0.5, maximum=0.5)
+    request = StateSpaceVolumeRequest(minimum=0.5, maximum=0.5)
 
     sample_set = generator(
         shape=1,
         seed=910,
         runtime=runtime,
         outcome_ids=tuple(outcome.id for outcome in outcome_space.outcomes),
-        complexity_request=request,
+        volume_request=request,
     )
 
     assert sample_set.sample_count == 0
@@ -892,14 +886,14 @@ def test_digits_console_preview_png_encoding_is_deterministic() -> None:
         seed=seed,
         shape=len(sample_indices),
         include_artifacts=True,
-        complexity_request=ComplexityRequest(minimum=8.0, maximum=9.0),
+        volume_request=StateSpaceVolumeRequest(minimum=8.0, maximum=9.0),
         sample_indices=sample_indices,
     )
     right = generator(
         seed=seed,
         shape=len(sample_indices),
         include_artifacts=True,
-        complexity_request=ComplexityRequest(minimum=8.0, maximum=9.0),
+        volume_request=StateSpaceVolumeRequest(minimum=8.0, maximum=9.0),
         sample_indices=sample_indices,
     )
     sample = left.samples[0].to_record()
@@ -949,8 +943,8 @@ def test_digits_variation_extent_zero_samples_canonical_affine() -> None:
         variation_extent=1.0,
     )
 
-    assert math.isclose(canonical.complexity, math.log2(10))
-    assert full.complexity > canonical.complexity
+    assert math.isclose(canonical.log2_volume, math.log2(10))
+    assert full.log2_volume > canonical.log2_volume
     variation = _coordinate(canonical.samples[0].latent_coordinates, role="variation")
     values = cast(dict[str, object], variation["values"])
     coordinates = cast(list[dict[str, object]], values["coordinates"])

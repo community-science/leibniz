@@ -31,7 +31,6 @@ def test_prediction_measurements_accept_declared_target_distribution() -> None:
             GeneratedSample(
                 index=0,
                 outcome_id="first",
-                complexity=0.0,
                 target_distribution={"first": 0.5, "second": 0.5},
             ),
         ),
@@ -50,27 +49,27 @@ def test_prediction_measurements_accept_declared_target_distribution() -> None:
     assert math.isclose(evidence.accepted_mass, 1.0)
 
 
-def test_sampled_competence_score_counts_exact_complexity_gaps_once() -> None:
+def test_sampled_competence_score_counts_exact_volume_gaps_once() -> None:
     assert math.isclose(
         sampled_competence_frontier_integral(
             (
                 CompetencePoint(
-                    complexity=1.0,
+                    log2_volume=1.0,
                     accepted_mass=1.0,
-                    complexity_minimum=1.0,
-                    complexity_maximum=1.0,
+                    log2_volume_minimum=1.0,
+                    log2_volume_maximum=1.0,
                 ),
                 CompetencePoint(
-                    complexity=2.0,
+                    log2_volume=2.0,
                     accepted_mass=1.0,
-                    complexity_minimum=2.0,
-                    complexity_maximum=2.0,
+                    log2_volume_minimum=2.0,
+                    log2_volume_maximum=2.0,
                 ),
                 CompetencePoint(
-                    complexity=3.0,
+                    log2_volume=3.0,
                     accepted_mass=1.0,
-                    complexity_minimum=3.0,
-                    complexity_maximum=3.0,
+                    log2_volume_minimum=3.0,
+                    log2_volume_maximum=3.0,
                 ),
             ),
             chance_mass=0.1,
@@ -84,22 +83,22 @@ def test_sampled_competence_score_charges_representative_intervals() -> None:
         sampled_competence_frontier_integral(
             (
                 CompetencePoint(
-                    complexity=0.0,
+                    log2_volume=0.0,
                     accepted_mass=1.0,
-                    complexity_minimum=0.0,
-                    complexity_maximum=0.0,
+                    log2_volume_minimum=0.0,
+                    log2_volume_maximum=0.0,
                 ),
                 CompetencePoint(
-                    complexity=1.0,
+                    log2_volume=1.0,
                     accepted_mass=0.1,
-                    complexity_minimum=0.0,
-                    complexity_maximum=1.0,
+                    log2_volume_minimum=0.0,
+                    log2_volume_maximum=1.0,
                 ),
                 CompetencePoint(
-                    complexity=4.0,
+                    log2_volume=4.0,
                     accepted_mass=1.0,
-                    complexity_minimum=4.0,
-                    complexity_maximum=4.0,
+                    log2_volume_minimum=4.0,
+                    log2_volume_maximum=4.0,
                 ),
             ),
             chance_mass=0.1,
@@ -112,11 +111,11 @@ def test_sampled_competence_integral_exposes_human_readable_terms() -> None:
     integral = sampled_competence_frontier_integral(
         (
             CompetencePoint(
-                complexity=2.0,
+                log2_volume=2.0,
                 accepted_mass=0.55,
                 sample_count=8,
-                complexity_minimum=1.0,
-                complexity_maximum=2.0,
+                log2_volume_minimum=1.0,
+                log2_volume_maximum=2.0,
             ),
         ),
         chance_mass=0.1,
@@ -143,9 +142,9 @@ def test_sampled_competence_integral_exposes_human_readable_terms() -> None:
 def test_sampled_competence_record_regions_flow_into_integral_terms() -> None:
     point = CompetencePoint.from_sampled_record(
         {
-            "complexity": 2.0,
-            "complexity_minimum": 1.0,
-            "complexity_maximum": 2.0,
+            "log2_volume": 2.0,
+            "log2_volume_minimum": 1.0,
+            "log2_volume_maximum": 2.0,
             "mean_accepted_mass": 0.55,
             "sample_count": 8,
             "region": _minimal_state_space_region_record(),
@@ -164,11 +163,11 @@ def test_sampled_competence_record_regions_flow_into_integral_terms() -> None:
 def test_frontier_advancement_uses_current_rung_competence_not_integrated_score() -> None:
     assert validation_competence_frontier_advances(
         frontier_point=ValidationCompetencePoint(
-            complexity=0.0,
+            log2_volume=0.0,
             accepted_mass=0.95,
             sample_count=64,
-            complexity_minimum=0.0,
-            complexity_maximum=0.0,
+            log2_volume_minimum=0.0,
+            log2_volume_maximum=0.0,
         ),
         previous_frontier_points=(),
         chance_mass=0.1,
@@ -178,11 +177,11 @@ def test_frontier_advancement_uses_current_rung_competence_not_integrated_score(
 def test_frontier_advancement_rejects_chance_competence() -> None:
     assert not validation_competence_frontier_advances(
         frontier_point=ValidationCompetencePoint(
-            complexity=0.0,
+            log2_volume=0.0,
             accepted_mass=0.1,
             sample_count=64,
-            complexity_minimum=0.0,
-            complexity_maximum=0.0,
+            log2_volume_minimum=0.0,
+            log2_volume_maximum=0.0,
         ),
         previous_frontier_points=(),
         chance_mass=0.1,

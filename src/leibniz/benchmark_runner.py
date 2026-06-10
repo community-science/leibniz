@@ -51,11 +51,11 @@ from leibniz.model_operators import (
     summarize_architecture_operators,
 )
 from leibniz.observation_generation import (
-    ComplexityRequest,
-    ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
+    StateSpaceVolumeRequest,
+    StateSpaceVolumeValue,
     load_generator,
 )
 from leibniz.outcomes import OutcomeSpace
@@ -142,7 +142,7 @@ _full_variation_extent = 1.0
 class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
     """Internal contract for tensor-backed benchmark training."""
 
-    def minimum_complexity(self) -> ComplexityValue: ...
+    def minimum_log2_volume(self) -> StateSpaceVolumeValue: ...
 
     def __call__(
         self,
@@ -152,7 +152,7 @@ class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
         include_fields: bool = False,
         include_metadata: bool = True,
         include_artifacts: bool = False,
-        complexity_request: ComplexityRequest | None = None,
+        volume_request: StateSpaceVolumeRequest | None = None,
         sample_indices: Sequence[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
@@ -283,12 +283,12 @@ class _RollingValidationCompetencePoint:
             point.accepted_mass * point.sample_count for point in self.points
         )
         return ValidationCompetencePoint(
-            complexity=latest.complexity,
+            log2_volume=latest.log2_volume,
             accepted_mass=accepted_mass_sum / sample_count,
             sample_count=sample_count,
             seed=latest.seed,
-            complexity_minimum=latest.complexity_minimum,
-            complexity_maximum=latest.complexity_maximum,
+            log2_volume_minimum=latest.log2_volume_minimum,
+            log2_volume_maximum=latest.log2_volume_maximum,
             input_shape=latest.input_shape,
         )
 
@@ -304,34 +304,34 @@ class _CurriculumRung:
     seed: int
     batch: GeneratedSampleSet
     sample_count: int = 0
-    complexity_minimum: float | None = None
-    complexity_maximum: float | None = None
+    log2_volume_minimum: float | None = None
+    log2_volume_maximum: float | None = None
 
     @property
-    def complexity(self) -> float:
-        return self.batch.complexity
+    def log2_volume(self) -> float:
+        return self.batch.log2_volume
 
     def to_record(self, *, status: str) -> dict[str, object]:
         record: dict[str, object] = {
             "index": self.index,
             "status": status,
             "seed": self.seed,
-            "complexity_axis": _core_complexity_measure_id(),
-            "complexity": self.complexity,
-            "complexity_value": {
-                "measure_id": _core_complexity_measure_id(),
-                "value": self.complexity,
+            "volume_axis": _core_volume_measure_id(),
+            "log2_volume": self.log2_volume,
+            "volume_value": {
+                "measure_id": _core_volume_measure_id(),
+                "value": self.log2_volume,
             },
-            "complexity_request": (
+            "volume_request": (
                 None
-                if self.batch.complexity_request is None
-                else self.batch.complexity_request.to_record()
+                if self.batch.volume_request is None
+                else self.batch.volume_request.to_record()
             ),
             "sample_count": self.sample_count,
         }
         if self.batch.request_outcome is not None:
             record["request_outcome"] = self.batch.request_outcome.to_record()
-        interval_record = _rung_complexity_interval_record(self)
+        interval_record = _rung_log2_volume_interval_record(self)
         if interval_record:
             record["score_interval"] = interval_record
         if self.resolution_assignment is not None:
@@ -386,16 +386,16 @@ def _evaluation_sampled_competence_record(
             "kind": "sampled-state-space-volume-window",
             "sampling_rule": "generator-uniform-component-index-v1",
             "difficulty_assumption": (
-                "approximately-uniform-within-complexity-window"
+                "approximately-uniform-within-volume-window"
             ),
             "benchmark_id": str(benchmark_id),
-            "complexity_axis": None,
-            "complexity": result.rung.complexity,
+            "volume_axis": None,
+            "log2_volume": result.rung.log2_volume,
             "seed": result.rung.seed,
             "sample_count": result.sample_count,
             "mean_accepted_mass": result.mean_accepted_mass,
             "input_shape": list(result.input_shape),
-            **_rung_complexity_interval_record(result.rung),
+            **_rung_log2_volume_interval_record(result.rung),
         }
         if result.rung.batch.region is not None:
             point["region"] = result.rung.batch.region.to_record()
@@ -403,25 +403,25 @@ def _evaluation_sampled_competence_record(
     return sampled_competence_curriculum_record(points)
 
 
-def _rung_complexity_request(rung: _CurriculumRung) -> ComplexityRequest:
-    if rung.batch.complexity_request is not None:
-        return rung.batch.complexity_request
-    return ComplexityRequest(
-        minimum=rung.complexity,
-        maximum=rung.complexity,
+def _rung_volume_request(rung: _CurriculumRung) -> StateSpaceVolumeRequest:
+    if rung.batch.volume_request is not None:
+        return rung.batch.volume_request
+    return StateSpaceVolumeRequest(
+        minimum=rung.log2_volume,
+        maximum=rung.log2_volume,
     )
 
 
-def _rung_score_complexity_request(rung: _CurriculumRung) -> ComplexityRequest:
-    interval = _rung_complexity_interval(rung)
+def _rung_score_volume_request(rung: _CurriculumRung) -> StateSpaceVolumeRequest:
+    interval = _rung_log2_volume_interval(rung)
     if interval is None:
-        return _rung_complexity_request(rung)
+        return _rung_volume_request(rung)
     lower, upper = interval
-    return ComplexityRequest(minimum=lower, maximum=upper)
+    return StateSpaceVolumeRequest(minimum=lower, maximum=upper)
 
 
-def _core_complexity_measure_id() -> str:
-    return ComplexityRequest(minimum=1.0, maximum=1.0).measure_id
+def _core_volume_measure_id() -> str:
+    return StateSpaceVolumeRequest(minimum=1.0, maximum=1.0).measure_id
 
 
 @dataclass(slots=True)
@@ -1154,12 +1154,12 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         frontier_rung = evaluation_results[evaluation_frontier_index].rung
         final_scored_batch = replace(
             final_evaluation_batch,
-            complexity_request=_rung_score_complexity_request(frontier_rung),
+            volume_request=_rung_score_volume_request(frontier_rung),
         )
         final_sampled_competence = sampled_competence_record(
             batch=final_scored_batch,
             measurements=measurement_groups[0],
-            complexity_axis=None,
+            volume_axis=None,
             input_shape=evaluation_results[evaluation_frontier_index].input_shape,
         )
         sampled_competence = _evaluation_sampled_competence_record(
@@ -1379,11 +1379,11 @@ def _evaluation_curriculum_rung(
     sample_count: int = 1,
     seed: int,
     index: int,
-    planner: _ComplexityCurriculumPlanner | None = None,
+    planner: _VolumeCurriculumPlanner | None = None,
     runtime: TensorRuntime | None = None,
     outcome_ids: tuple[str, ...] | None = None,
 ) -> _CurriculumRung:
-    planner = _ComplexityCurriculumPlanner() if planner is None else planner
+    planner = _VolumeCurriculumPlanner() if planner is None else planner
     return _curriculum_rung_from_window(
         architecture=architecture,
         generator=generator,
@@ -1404,10 +1404,10 @@ def _training_curriculum_rung(
     sample_count: int,
     seed: int,
     index: int,
-    planner: _ComplexityCurriculumPlanner | None = None,
+    planner: _VolumeCurriculumPlanner | None = None,
     phase_timings: TimingCollector | None = None,
 ) -> _CurriculumRung:
-    planner = _ComplexityCurriculumPlanner() if planner is None else planner
+    planner = _VolumeCurriculumPlanner() if planner is None else planner
     with _optional_timing_span(
         phase_timings,
         "training_frontier.rung_window_generation",
@@ -1451,7 +1451,7 @@ def _curriculum_rung_from_window(
         shape=sample_count,
         seed=rung_seed,
         include_fields=include_fields,
-        complexity_request=window.request,
+        volume_request=window.request,
         variation_extent=_full_variation_extent,
         runtime=runtime,
         outcome_ids=outcome_ids,
@@ -1483,8 +1483,8 @@ def _curriculum_rung_from_window(
         seed=batch.seed,
         batch=batch,
         sample_count=len(batch.samples),
-        complexity_minimum=window.minimum,
-        complexity_maximum=window.maximum,
+        log2_volume_minimum=window.minimum,
+        log2_volume_maximum=window.maximum,
     )
 
 
@@ -1501,16 +1501,16 @@ class _CurriculumWindow:
         return float(self.index + 1)
 
     @property
-    def complexity(self) -> float:
+    def log2_volume(self) -> float:
         return self.maximum
 
     @property
-    def request(self) -> ComplexityRequest:
-        return ComplexityRequest(minimum=self.minimum, maximum=self.maximum)
+    def request(self) -> StateSpaceVolumeRequest:
+        return StateSpaceVolumeRequest(minimum=self.minimum, maximum=self.maximum)
 
 
 @dataclass(slots=True)
-class _ComplexityCurriculumPlanner:
+class _VolumeCurriculumPlanner:
     next_index: int = 0
 
     def next(self) -> _CurriculumWindow:
@@ -1538,15 +1538,15 @@ def _curriculum_record(
 ) -> dict[str, object]:
     record: dict[str, object] = {
         "kind": kind,
-        "curriculum_variable": "complexity",
-        "complexity_axis": _core_complexity_measure_id(),
-        "sampling_levers": ["complexity"],
-        "complexity_value": {
-            "measure_id": _core_complexity_measure_id(),
+        "curriculum_variable": "log2-state-space-volume",
+        "volume_axis": _core_volume_measure_id(),
+        "sampling_levers": ["log2-state-space-volume"],
+        "volume_value": {
+            "measure_id": _core_volume_measure_id(),
             "scale": "log2",
         },
         "window_policy": {
-            "kind": "integer-complexity-shells",
+            "kind": "integer-bit-shells",
         },
         "gating_metric": "monotone-frontier-validation-competence",
         "rung_policy": "unbounded-competence-frontier",
@@ -1772,7 +1772,7 @@ def _train_and_predict_on_device(
     validation_counter = _ThroughputCounter()
     evaluation_counter = _ThroughputCounter()
     phase_timings = TimingCollector()
-    training_curriculum_planner = _ComplexityCurriculumPlanner()
+    training_curriculum_planner = _VolumeCurriculumPlanner()
 
     def training_batch_for_seed(
         batch_seed: int,
@@ -1798,7 +1798,7 @@ def _train_and_predict_on_device(
                 shape=physical_sample_count,
                 seed=batch_seed,
                 include_metadata=include_score_metadata,
-                complexity_request=_rung_complexity_request(rung),
+                volume_request=_rung_volume_request(rung),
                 memory_limit_bytes=_runtime_memory_budget_bytes(runtime),
                 variation_extent=_full_variation_extent,
                 runtime=runtime,
@@ -1808,7 +1808,7 @@ def _train_and_predict_on_device(
             )
             if generated.sample_count == 0:
                 raise BenchmarkRunnerError(
-                    "generator returned no samples for selected complexity"
+                    "generator returned no samples for the selected volume window"
                 )
             with phase_timings.span(tensor_phase, samples=physical_sample_count):
                 fields, labels = generated.require_tensors()
@@ -1818,7 +1818,7 @@ def _train_and_predict_on_device(
                     sample_set=(
                         replace(
                             generated,
-                            complexity_request=_rung_score_complexity_request(rung),
+                            volume_request=_rung_score_volume_request(rung),
                         )
                         if include_score_metadata
                         else None
@@ -1847,7 +1847,7 @@ def _train_and_predict_on_device(
                 shape=physical_sample_count,
                 seed=batch_seed,
                 include_fields=False,
-                complexity_request=_rung_complexity_request(rung),
+                volume_request=_rung_volume_request(rung),
                 memory_limit_bytes=_runtime_memory_budget_bytes(runtime),
                 variation_extent=_full_variation_extent,
                 runtime=runtime,
@@ -1857,13 +1857,13 @@ def _train_and_predict_on_device(
             )
             if generated.sample_count == 0:
                 raise BenchmarkRunnerError(
-                    "generator returned no samples for selected complexity"
+                    "generator returned no samples for the selected volume window"
                 )
             if not generated.includes_fields:
                 raise BenchmarkRunnerError("validation gate batch did not include fields")
             return replace(
                 generated,
-                complexity_request=_rung_score_complexity_request(rung),
+                volume_request=_rung_score_volume_request(rung),
             )
 
     training_rungs: list[_CurriculumRung] = [
@@ -2107,7 +2107,7 @@ def evaluate_model_checkpoint_artifact(
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     capacity_limited = False
     curriculum_exhausted = False
-    planner = _ComplexityCurriculumPlanner()
+    planner = _VolumeCurriculumPlanner()
     while True:
         with phase_timings.span("checkpoint_evaluation.rung_planning"):
             try:
@@ -2306,12 +2306,12 @@ def _evaluation_competence_points(
 ) -> tuple[CompetencePoint, ...]:
     return tuple(
         CompetencePoint(
-            complexity=result.rung.complexity,
+            log2_volume=result.rung.log2_volume,
             accepted_mass=result.mean_accepted_mass,
             sample_count=result.sample_count,
             seed=result.rung.seed,
-            complexity_minimum=result.rung.complexity_minimum,
-            complexity_maximum=result.rung.complexity_maximum,
+            log2_volume_minimum=result.rung.log2_volume_minimum,
+            log2_volume_maximum=result.rung.log2_volume_maximum,
             input_shape=result.input_shape,
             region=getattr(getattr(result.rung, "batch", None), "region", None),
         )
@@ -2331,9 +2331,9 @@ def _evaluation_score_integral_half_width(
     widths: list[float] = []
     frontier_results = evaluation_results[: frontier_index + 1]
     for result in frontier_results:
-        lower, upper = _rung_complexity_interval(result.rung) or (
-            max(0.0, result.rung.complexity - 1.0),
-            result.rung.complexity,
+        lower, upper = _rung_log2_volume_interval(result.rung) or (
+            max(0.0, result.rung.log2_volume - 1.0),
+            result.rung.log2_volume,
         )
         widths.append(max(0.0, upper - lower))
     variance_terms = (
@@ -2421,7 +2421,7 @@ def _evaluate_checkpoint_rung_measurements(
             seed=rung.seed,
             shape=(len(samples),),
             variation_extent=_full_variation_extent,
-            complexity_request=rung.batch.complexity_request,
+            volume_request=rung.batch.volume_request,
             region=rung.batch.region,
             request_outcome=rung.batch.request_outcome,
             samples=tuple(samples),
@@ -2467,7 +2467,7 @@ def _checkpoint_evaluation_chunks(
                 seed=chunk_seed,
                 include_fields=False,
                 include_metadata=purpose == "measurements",
-                complexity_request=_rung_complexity_request(rung),
+                volume_request=_rung_volume_request(rung),
                 memory_limit_bytes=_runtime_memory_budget_bytes(predictor.runtime),
                 variation_extent=_full_variation_extent,
                 runtime=predictor.runtime,
@@ -2477,7 +2477,7 @@ def _checkpoint_evaluation_chunks(
             )
         if batch.sample_count == 0:
             raise BenchmarkRunnerError(
-                "generator returned no samples for selected complexity"
+                "generator returned no samples for the selected volume window"
             )
         prediction_started = time.perf_counter()
         with phase_timings.span(
@@ -3127,7 +3127,7 @@ def _train_until_convergence(
                         _sampled_competence_record_from_accepted_mass(
                             batch=training_batch.sample_set,
                             accepted_mass=accepted_mass,
-                            complexity_axis=None,
+                            volume_axis=None,
                         ),
                         field_prefix="score_estimate",
                         error_type=BenchmarkRunnerError,
@@ -3239,7 +3239,7 @@ def _training_gate_score_estimate(
     current_point = _sampled_competence_record_from_accepted_mass(
         batch=batch,
         accepted_mass=accepted_mass,
-        complexity_axis=None,
+        volume_axis=None,
     )
     sampled_competence = _training_sampled_competence_record(
         benchmark_id=batch.benchmark_id,
@@ -3285,7 +3285,7 @@ def _sampled_competence_record_from_accepted_mass(
     *,
     batch: GeneratedSampleSet,
     accepted_mass: tuple[float, ...],
-    complexity_axis: str | None,
+    volume_axis: str | None,
 ) -> dict[str, object]:
     """Return sampled competence from target probability mass."""
 
@@ -3300,10 +3300,10 @@ def _sampled_competence_record_from_accepted_mass(
     record: dict[str, object] = {
         "kind": "sampled-state-space-volume-window",
         "sampling_rule": "generator-uniform-component-index-v1",
-        "difficulty_assumption": "approximately-uniform-within-complexity-window",
+        "difficulty_assumption": "approximately-uniform-within-volume-window",
         "benchmark_id": str(batch.benchmark_id),
-        "complexity_axis": complexity_axis,
-        "complexity": batch.complexity,
+        "volume_axis": volume_axis,
+        "log2_volume": batch.log2_volume,
         "seed": batch.seed,
         "sample_count": len(batch.samples),
         "mean_accepted_mass": math.fsum(accepted_mass) / len(accepted_mass),
@@ -3312,9 +3312,9 @@ def _sampled_competence_record_from_accepted_mass(
     input_shape = _optional_batch_sample_input_shape(batch=batch)
     if input_shape is not None:
         record["input_shape"] = list(input_shape)
-    if batch.complexity_request is not None:
-        record["complexity_minimum"] = batch.complexity_request.minimum
-        record["complexity_maximum"] = batch.complexity_request.maximum
+    if batch.volume_request is not None:
+        record["log2_volume_minimum"] = batch.volume_request.minimum
+        record["log2_volume_maximum"] = batch.volume_request.maximum
     if batch.region is not None:
         record["region"] = batch.region.to_record()
     return record
@@ -3376,8 +3376,8 @@ def _validation_competence_point_interval_key(
     point: ValidationCompetencePoint,
 ) -> tuple[float, float]:
     return (
-        point.complexity if point.complexity_minimum is None else point.complexity_minimum,
-        point.complexity if point.complexity_maximum is None else point.complexity_maximum,
+        point.log2_volume if point.log2_volume_minimum is None else point.log2_volume_minimum,
+        point.log2_volume if point.log2_volume_maximum is None else point.log2_volume_maximum,
     )
 
 
@@ -3391,10 +3391,10 @@ def _training_sampled_competence_record(
         {
             "kind": "sampled-state-space-volume-window",
             "sampling_rule": "generator-uniform-component-index-v1",
-            "difficulty_assumption": "approximately-uniform-within-complexity-window",
+            "difficulty_assumption": "approximately-uniform-within-volume-window",
             "benchmark_id": str(benchmark_id),
-            "complexity_axis": None,
-            "complexity": point.complexity,
+            "volume_axis": None,
+            "log2_volume": point.log2_volume,
             "seed": point.seed,
             "sample_count": point.sample_count,
             "mean_accepted_mass": point.accepted_mass,
@@ -3407,34 +3407,34 @@ def _training_sampled_competence_record(
     return sampled_competence_curriculum_record(points)
 
 
-def _rung_complexity_interval(rung: _CurriculumRung) -> tuple[float, float] | None:
-    if rung.complexity_minimum is not None and rung.complexity_maximum is not None:
-        return (rung.complexity_minimum, rung.complexity_maximum)
-    if rung.batch.complexity_request is None:
+def _rung_log2_volume_interval(rung: _CurriculumRung) -> tuple[float, float] | None:
+    if rung.log2_volume_minimum is not None and rung.log2_volume_maximum is not None:
+        return (rung.log2_volume_minimum, rung.log2_volume_maximum)
+    if rung.batch.volume_request is None:
         return None
     return (
-        rung.batch.complexity_request.minimum,
-        rung.batch.complexity_request.maximum,
+        rung.batch.volume_request.minimum,
+        rung.batch.volume_request.maximum,
     )
 
 
-def _rung_complexity_interval_record(rung: _CurriculumRung) -> dict[str, object]:
-    interval = _rung_complexity_interval(rung)
+def _rung_log2_volume_interval_record(rung: _CurriculumRung) -> dict[str, object]:
+    interval = _rung_log2_volume_interval(rung)
     if interval is None:
         return {}
     lower, upper = interval
     return {
-        "complexity_minimum": lower,
-        "complexity_maximum": upper,
+        "log2_volume_minimum": lower,
+        "log2_volume_maximum": upper,
     }
 
 
 def _competence_point_interval_record(point: ValidationCompetencePoint) -> dict[str, object]:
-    if point.complexity_minimum is None or point.complexity_maximum is None:
+    if point.log2_volume_minimum is None or point.log2_volume_maximum is None:
         return {}
     return {
-        "complexity_minimum": point.complexity_minimum,
-        "complexity_maximum": point.complexity_maximum,
+        "log2_volume_minimum": point.log2_volume_minimum,
+        "log2_volume_maximum": point.log2_volume_maximum,
     }
 
 
@@ -3879,9 +3879,9 @@ def _training_estimate_record(
     if not isinstance(sampled_competence_value, Mapping):
         raise BenchmarkRunnerError("training gate score estimate is missing sampled competence")
     sampled_competence = cast(Mapping[str, object], sampled_competence_value)
-    complexity = _required_float(
-        sampled_competence.get("complexity"),
-        "training_estimate.complexity",
+    log2_volume = _required_float(
+        sampled_competence.get("log2_volume"),
+        "training_estimate.log2_volume",
     )
     mean_accepted_mass = _required_float(
         sampled_competence.get("mean_accepted_mass"),
@@ -3912,8 +3912,8 @@ def _training_estimate_record(
         "score_frame": "none",
         "scoring_recipe": score_estimate.get("scoring_recipe", "sampled-competence-v1"),
         "benchmark_id": str(summary.benchmark_id),
-        "complexity_axis": None,
-        "complexity": complexity,
+        "volume_axis": None,
+        "log2_volume": log2_volume,
         "seed": seed,
         "sample_count": sample_count,
         "mean_accepted_mass": mean_accepted_mass,

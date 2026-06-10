@@ -33,11 +33,10 @@ from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import load_console_result_view, materialize_benchmark_result_views
 from leibniz.materialization import AxisAssignment
 from leibniz.observation_generation import (
-    ComplexityRequest,
-    ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
     GenerationRequestOutcome,
+    StateSpaceVolumeRequest,
     load_generator,
 )
 from leibniz.tensor_runtime import (
@@ -121,15 +120,15 @@ def test_training_sampled_competence_matches_measurement_scoring() -> None:
     runtime = resolve_tensor_runtime("cpu")
     outcome_space = generator.manifest.resolve_outcome_space()
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    request = ComplexityRequest(
-        minimum=generator.minimum_complexity().value,
-        maximum=generator.minimum_complexity().value + 0.1,
+    request = StateSpaceVolumeRequest(
+        minimum=generator.minimum_log2_volume().value,
+        maximum=generator.minimum_log2_volume().value + 0.1,
     )
     batch = generator(
         seed=101,
         shape=8,
         include_fields=True,
-        complexity_request=request,
+        volume_request=request,
         runtime=runtime,
         outcome_ids=outcome_ids,
     )
@@ -149,20 +148,20 @@ def test_training_sampled_competence_matches_measurement_scoring() -> None:
     measurement_record = sampled_competence_record(
         batch=batch,
         measurements=measurements,
-        complexity_axis=None,
+        volume_axis=None,
     )
     direct_record = cast(Any, benchmark_runner)._sampled_competence_record_from_accepted_mass(
         batch=batch,
         accepted_mass=tuple(0.7 for _sample in batch.samples),
-        complexity_axis=None,
+        volume_axis=None,
     )
 
     comparable_keys = {
         "benchmark_id",
-        "complexity",
-        "complexity_axis",
-        "complexity_maximum",
-        "complexity_minimum",
+        "log2_volume",
+        "volume_axis",
+        "log2_volume_maximum",
+        "log2_volume_minimum",
         "difficulty_assumption",
         "kind",
         "input_shape",
@@ -226,7 +225,7 @@ def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
             )
         ),
     )
-    request = ComplexityRequest(minimum=20.0, maximum=20.0)
+    request = StateSpaceVolumeRequest(minimum=20.0, maximum=20.0)
     rung = cast(Any, benchmark_runner)._CurriculumRung(
         index=0,
         resolution_assignment=AxisAssignment(values={"height": 1024, "width": 1024}),
@@ -237,7 +236,7 @@ def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
             generator_version="0.1.0",
                 seed=101,
                 shape=(0,),
-                complexity_request=request,
+                volume_request=request,
                 request_outcome=GenerationRequestOutcome(kind="exhausted-capacity"),
             ),
         )
@@ -300,7 +299,7 @@ def test_capacity_limited_training_run_is_budget_exhausted() -> None:
                     check=10,
                     step=320,
                     score=12.0,
-                    complexity=12.0,
+                    log2_volume=12.0,
                     accepted_mass=1.0,
                 ),
             ),
@@ -509,12 +508,22 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
     outcome_space = generator.manifest.resolve_outcome_space()
     runtime = resolve_tensor_runtime("cpu")
     outcome_id = outcome_space.outcomes[0].id
+    minimum_log2_volume = generator.minimum_log2_volume().value
+    region_batch = generator(
+        seed=101,
+        shape=1,
+        volume_request=StateSpaceVolumeRequest(
+            minimum=minimum_log2_volume,
+            maximum=minimum_log2_volume,
+        ),
+    )
+    region_sample = region_batch.samples[0]
     sample = GeneratedSample(
         index=0,
         outcome_id=outcome_id,
-        complexity=0.0,
-        complexity_value=ComplexityValue(value=0.0),
         available_outcome_ids=(outcome_id,),
+        region_component_index=region_sample.region_component_index,
+        axis_coordinates=region_sample.axis_coordinates,
     )
     batch = GeneratedSampleSet(
         benchmark_id=generator.manifest.id,
@@ -525,6 +534,7 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
         samples=(sample,),
         fields=runtime.torch.zeros((1, 18, 8, 8), dtype=runtime.torch.float32),
         targets=runtime.torch.zeros((1, len(outcome_space.outcomes)), dtype=runtime.torch.float32),
+        region=region_batch.region,
     )
     rung = cast(Any, benchmark_runner)._CurriculumRung(
         index=0,
@@ -532,8 +542,8 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
         seed=101,
         batch=batch,
         sample_count=1,
-        complexity_minimum=0.0,
-        complexity_maximum=1.0,
+        log2_volume_minimum=0.0,
+        log2_volume_maximum=1.0,
     )
     evidence = cast(Any, benchmark_runner)._CheckpointEvaluationRungEvidence(
         rung=rung,
@@ -748,13 +758,13 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     training_curriculum = cast(dict[str, object], training_summary["training_curriculum"])
     curriculum_rungs = cast(list[dict[str, object]], evaluation_curriculum["rungs"])
     assert evaluation_curriculum["kind"] == "checkpoint-benchmark-evaluation-curriculum"
-    assert evaluation_curriculum["curriculum_variable"] == "complexity"
-    assert evaluation_curriculum["sampling_levers"] == ["complexity"]
-    complexity_value = cast(dict[str, object], evaluation_curriculum["complexity_value"])
-    assert complexity_value["scale"] == "log2"
-    assert evaluation_curriculum["complexity_axis"] == complexity_value["measure_id"]
+    assert evaluation_curriculum["curriculum_variable"] == "log2-state-space-volume"
+    assert evaluation_curriculum["sampling_levers"] == ["log2-state-space-volume"]
+    volume_value = cast(dict[str, object], evaluation_curriculum["volume_value"])
+    assert volume_value["scale"] == "log2"
+    assert evaluation_curriculum["volume_axis"] == volume_value["measure_id"]
     window_policy = cast(dict[str, object], evaluation_curriculum["window_policy"])
-    assert window_policy == {"kind": "integer-complexity-shells"}
+    assert window_policy == {"kind": "integer-bit-shells"}
     assert evaluation_curriculum["rung_policy"] == "unbounded-competence-frontier"
     assert (
         evaluation_curriculum["gating_metric"]
@@ -790,20 +800,20 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         )
     assert [rung["index"] for rung in curriculum_rungs] == list(range(len(curriculum_rungs)))
     assert {
-        cast(str, rung["complexity_axis"])
+        cast(str, rung["volume_axis"])
         for rung in curriculum_rungs
-    } == {complexity_value["measure_id"]}
+    } == {volume_value["measure_id"]}
     assert all("generation_memory_limit_bytes" not in rung for rung in curriculum_rungs)
     expected_evaluation_rung_keys = {
-        "complexity",
-        "complexity_axis",
+        "log2_volume",
+        "volume_axis",
         "confidence_half_width",
         "index",
         "mean_accepted_mass",
         "sample_count",
         "seed",
-        "complexity_value",
-        "complexity_request",
+        "volume_value",
+        "volume_request",
             "score_interval",
             "status",
             "request_outcome",
@@ -818,26 +828,26 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         for rung in curriculum_rungs
     )
     for rung in curriculum_rungs:
-        rung_complexity_value = cast(dict[str, object], rung["complexity_value"])
-        complexity_request = cast(dict[str, object], rung["complexity_request"])
-        assert rung_complexity_value["measure_id"] == complexity_value["measure_id"]
-        assert complexity_request["measure_id"] == complexity_value["measure_id"]
+        rung_volume_value = cast(dict[str, object], rung["volume_value"])
+        volume_request = cast(dict[str, object], rung["volume_request"])
+        assert rung_volume_value["measure_id"] == volume_value["measure_id"]
+        assert volume_request["measure_id"] == volume_value["measure_id"]
         assert math.isclose(
-            cast(float, rung_complexity_value["value"]),
-            cast(float, rung["complexity"]),
+            cast(float, rung_volume_value["value"]),
+            cast(float, rung["log2_volume"]),
         )
-        request_minimum = cast(float, complexity_request["minimum"])
-        request_maximum = cast(float, complexity_request["maximum"])
-        rung_complexity = cast(float, rung["complexity"])
-        assert request_minimum <= rung_complexity
-        assert rung_complexity <= request_maximum
+        request_minimum = cast(float, volume_request["minimum"])
+        request_maximum = cast(float, volume_request["maximum"])
+        rung_log2_volume = cast(float, rung["log2_volume"])
+        assert request_minimum <= rung_log2_volume
+        assert rung_log2_volume <= request_maximum
         assert math.isclose(request_maximum - request_minimum, 1.0)
         score_interval = cast(dict[str, object], rung["score_interval"])
-        assert cast(float, score_interval["complexity_minimum"]) <= rung_complexity
-        assert rung_complexity <= cast(float, score_interval["complexity_maximum"])
+        assert cast(float, score_interval["log2_volume_minimum"]) <= rung_log2_volume
+        assert rung_log2_volume <= cast(float, score_interval["log2_volume_maximum"])
     assert all(cast(int, rung["sample_count"]) > 0 for rung in curriculum_rungs)
-    assert [cast(float, rung["complexity"]) for rung in curriculum_rungs] == sorted(
-        cast(float, rung["complexity"]) for rung in curriculum_rungs
+    assert [cast(float, rung["log2_volume"]) for rung in curriculum_rungs] == sorted(
+        cast(float, rung["log2_volume"]) for rung in curriculum_rungs
     )
     assert training_curriculum["kind"] == "competence-gated-training-curriculum"
     assert training_curriculum["source"] == "structured-training-curriculum"
@@ -848,7 +858,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         training_curriculum["gating_metric"]
         == "monotone-frontier-validation-competence"
     )
-    assert training_curriculum["sampling_levers"] == ["complexity"]
+    assert training_curriculum["sampling_levers"] == ["log2-state-space-volume"]
     assert training_curriculum["frontier_index"] == 0
     training_rungs = cast(list[dict[str, object]], training_curriculum["rungs"])
     assert [rung["index"] for rung in training_rungs] == [0]
@@ -870,12 +880,12 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert sampled_competence["sampling_rule"] == "generator-uniform-component-index-v1"
     assert (
         sampled_competence["difficulty_assumption"]
-        == "approximately-uniform-within-complexity-window"
+        == "approximately-uniform-within-volume-window"
     )
-    assert sampled_competence["complexity_axis"] is None
+    assert sampled_competence["volume_axis"] is None
     assert math.isclose(
-        cast(float, sampled_competence["complexity"]),
-        cast(float, curriculum_rungs[0]["complexity"]),
+        cast(float, sampled_competence["log2_volume"]),
+        cast(float, curriculum_rungs[0]["log2_volume"]),
     )
     assert sampled_competence["sample_count"] == sum(
         cast(int, rung["sample_count"]) for rung in curriculum_rungs
@@ -887,19 +897,19 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         rung["sample_count"] for rung in curriculum_rungs
     ]
     assert all(isinstance(point["input_shape"], list) for point in points)
-    assert [point["complexity"] for point in points] == [
-        rung["complexity"] for rung in curriculum_rungs
+    assert [point["log2_volume"] for point in points] == [
+        rung["log2_volume"] for rung in curriculum_rungs
     ]
-    assert [cast(float, point["complexity"]) for point in points] == sorted(
-        cast(float, point["complexity"]) for point in points
+    assert [cast(float, point["log2_volume"]) for point in points] == sorted(
+        cast(float, point["log2_volume"]) for point in points
     )
     assert [
-        (point["complexity_minimum"], point["complexity_maximum"])
+        (point["log2_volume_minimum"], point["log2_volume_maximum"])
         for point in points
     ] == [
         (
-            cast(dict[str, object], rung["score_interval"])["complexity_minimum"],
-            cast(dict[str, object], rung["score_interval"])["complexity_maximum"],
+            cast(dict[str, object], rung["score_interval"])["log2_volume_minimum"],
+            cast(dict[str, object], rung["score_interval"])["log2_volume_maximum"],
         )
         for rung in curriculum_rungs
     ]
@@ -1100,10 +1110,10 @@ def test_evaluation_integration_converges_after_confident_terminal_failures() ->
     def rung(index: int) -> SimpleNamespace:
         return SimpleNamespace(
             index=index,
-            complexity=float(index + 1),
+            log2_volume=float(index + 1),
             seed=101 + index,
-            complexity_minimum=float(index),
-            complexity_maximum=float(index + 1),
+            log2_volume_minimum=float(index),
+            log2_volume_maximum=float(index + 1),
         )
 
     results = (
@@ -1146,10 +1156,10 @@ def test_evaluation_integration_does_not_reset_after_failed_ladder_gap() -> None
     def rung(index: int) -> SimpleNamespace:
         return SimpleNamespace(
             index=index,
-            complexity=float(index + 1),
+            log2_volume=float(index + 1),
             seed=101 + index,
-            complexity_minimum=float(index),
-            complexity_maximum=float(index + 1),
+            log2_volume_minimum=float(index),
+            log2_volume_maximum=float(index + 1),
         )
 
     results = tuple(
@@ -1210,7 +1220,7 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
                             check=0,
                             step=0,
                             score=0.0,
-                            complexity=initial_rung.complexity,
+                            log2_volume=initial_rung.log2_volume,
                             accepted_mass=0.1,
                         ),
                     ),
@@ -1533,7 +1543,7 @@ def test_training_stage_records_current_validation_loss_without_global_best(
             check=cast(int, kwargs["validation_check"]),
             step=cast(int, kwargs["step"]),
             score=1.0,
-            complexity=1.0,
+            log2_volume=1.0,
             accepted_mass=1.0,
         )
 
@@ -1616,7 +1626,7 @@ def test_training_run_artifact_record_omits_historical_score_estimates() -> None
                     check=1,
                     step=32,
                     score=1.0,
-                    complexity=1.0,
+                    log2_volume=1.0,
                     accepted_mass=1.0,
                 ),
             ),
@@ -1650,31 +1660,31 @@ def test_training_curriculum_advances_on_current_rung_competence() -> None:
 
     assert validation_competence_frontier_advances(
         frontier_point=ValidationCompetencePoint(
-            complexity=0.0,
+            log2_volume=0.0,
             accepted_mass=1.0,
-            complexity_minimum=0.0,
-            complexity_maximum=0.0,
+            log2_volume_minimum=0.0,
+            log2_volume_maximum=0.0,
         ),
         previous_frontier_points=(),
         chance_mass=chance_mass,
     )
     assert validation_competence_frontier_advances(
-        frontier_point=ValidationCompetencePoint(complexity=10.0, accepted_mass=1.0),
+        frontier_point=ValidationCompetencePoint(log2_volume=10.0, accepted_mass=1.0),
         previous_frontier_points=(
-            ValidationCompetencePoint(complexity=10.0, accepted_mass=1.0),
+            ValidationCompetencePoint(log2_volume=10.0, accepted_mass=1.0),
         ),
         chance_mass=chance_mass,
     )
     assert not validation_competence_frontier_advances(
-        frontier_point=ValidationCompetencePoint(complexity=30.0, accepted_mass=chance_mass),
+        frontier_point=ValidationCompetencePoint(log2_volume=30.0, accepted_mass=chance_mass),
         previous_frontier_points=(
-            ValidationCompetencePoint(complexity=10.0, accepted_mass=0.5),
-            ValidationCompetencePoint(complexity=20.0, accepted_mass=chance_mass),
+            ValidationCompetencePoint(log2_volume=10.0, accepted_mass=0.5),
+            ValidationCompetencePoint(log2_volume=20.0, accepted_mass=chance_mass),
         ),
         chance_mass=chance_mass,
     )
     assert not validation_competence_frontier_advances(
-        frontier_point=ValidationCompetencePoint(complexity=10.0, accepted_mass=chance_mass),
+        frontier_point=ValidationCompetencePoint(log2_volume=10.0, accepted_mass=chance_mass),
         previous_frontier_points=(),
         chance_mass=chance_mass,
     )
@@ -1687,7 +1697,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
         shape=2,
         seed=101,
         include_fields=True,
-        complexity_request=ComplexityRequest(
+        volume_request=StateSpaceVolumeRequest(
             minimum=4.321928094887362,
             maximum=5.321928094887362,
         ),
@@ -1700,7 +1710,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
         accepted_mass=accepted_mass,
         previous_frontier_points=(
             ValidationCompetencePoint(
-                complexity=math.log2(10),
+                log2_volume=math.log2(10),
                 accepted_mass=1.0,
                 sample_count=64,
                 seed=202,
@@ -1716,9 +1726,9 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
 
     sampled_competence = cast(dict[str, object], estimate["sampled_competence"])
     points = cast(list[dict[str, object]], sampled_competence["points"])
-    assert [point["complexity"] for point in points] == [
+    assert [point["log2_volume"] for point in points] == [
         math.log2(10),
-        batch.complexity,
+        batch.log2_volume,
     ]
     assert points[0]["sample_count"] == 64
     assert points[0]["seed"] == 202
@@ -1730,18 +1740,18 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
         sampled_competence_frontier_integral(
             tuple(
                 CompetencePoint(
-                    complexity=cast(float, point["complexity"]),
+                    log2_volume=cast(float, point["log2_volume"]),
                     accepted_mass=cast(float, point["mean_accepted_mass"]),
                     sample_count=cast(int, point["sample_count"]),
-                    complexity_minimum=(
+                    log2_volume_minimum=(
                         None
-                        if point.get("complexity_minimum") is None
-                        else cast(float, point["complexity_minimum"])
+                        if point.get("log2_volume_minimum") is None
+                        else cast(float, point["log2_volume_minimum"])
                     ),
-                    complexity_maximum=(
+                    log2_volume_maximum=(
                         None
-                        if point.get("complexity_maximum") is None
-                        else cast(float, point["complexity_maximum"])
+                        if point.get("log2_volume_maximum") is None
+                        else cast(float, point["log2_volume_maximum"])
                     ),
                 )
                 for point in points
@@ -1761,7 +1771,7 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
     generator = load_generator(_digits_benchmark_root)
     outcome_space = generator.manifest.resolve_outcome_space()
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    replay_request = ComplexityRequest(
+    replay_request = StateSpaceVolumeRequest(
         minimum=math.log2(10),
         maximum=math.log2(20),
     )
@@ -1772,13 +1782,13 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
         include_metadata=True,
         runtime=runtime,
         outcome_ids=outcome_ids,
-        complexity_request=replay_request,
+        volume_request=replay_request,
     )
     fields, labels = replay_batch.require_tensors()
     prior_point = ValidationCompetencePoint(
-        complexity=math.log2(10),
-        complexity_minimum=math.log2(10),
-        complexity_maximum=math.log2(20),
+        log2_volume=math.log2(10),
+        log2_volume_minimum=math.log2(10),
+        log2_volume_maximum=math.log2(20),
         accepted_mass=1.0,
         sample_count=64,
         seed=202,
@@ -1842,7 +1852,7 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
             check=cast(int, kwargs["validation_check"]),
             step=cast(int, kwargs["step"]),
             score=1.0,
-            complexity=20.0,
+            log2_volume=20.0,
             accepted_mass=1.0,
         )
 
@@ -1899,14 +1909,14 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
     assert replay_refreshed_points[0].sample_count == replay_batch.sample_count
     assert replay_refreshed_points[0].seed == replay_batch.seed
     assert replay_refreshed_points[0].input_shape == tuple(fields.shape[1:])
-    assert replay_refreshed_points[0].complexity_minimum is not None
-    assert replay_refreshed_points[0].complexity_maximum is not None
+    assert replay_refreshed_points[0].log2_volume_minimum is not None
+    assert replay_refreshed_points[0].log2_volume_maximum is not None
     assert math.isclose(
-        replay_refreshed_points[0].complexity_minimum,
+        replay_refreshed_points[0].log2_volume_minimum,
         replay_request.minimum,
     )
     assert math.isclose(
-        replay_refreshed_points[0].complexity_maximum,
+        replay_refreshed_points[0].log2_volume_maximum,
         replay_request.maximum,
     )
     assert math.isclose(replay_refreshed_points[0].accepted_mass, 0.25)
@@ -1918,24 +1928,24 @@ def test_training_replay_frontier_points_are_sample_weighted_by_interval() -> No
     cast(Any, benchmark_runner)._accumulate_replay_frontier_point(
         replay_points,
         ValidationCompetencePoint(
-            complexity=4.0,
+            log2_volume=4.0,
             accepted_mass=0.25,
             sample_count=4,
             seed=101,
-            complexity_minimum=4.0,
-            complexity_maximum=5.0,
+            log2_volume_minimum=4.0,
+            log2_volume_maximum=5.0,
             input_shape=(1, 16, 16),
         ),
     )
     cast(Any, benchmark_runner)._accumulate_replay_frontier_point(
         replay_points,
         ValidationCompetencePoint(
-            complexity=4.0,
+            log2_volume=4.0,
             accepted_mass=0.75,
             sample_count=12,
             seed=202,
-            complexity_minimum=4.0,
-            complexity_maximum=5.0,
+            log2_volume_minimum=4.0,
+            log2_volume_maximum=5.0,
             input_shape=(1, 20, 20),
         ),
     )
@@ -1943,8 +1953,8 @@ def test_training_replay_frontier_points_are_sample_weighted_by_interval() -> No
     rolling_point = cast(Any, replay_points[(4.0, 5.0)]).point
     assert rolling_point.sample_count == 16
     assert rolling_point.seed == 202
-    assert rolling_point.complexity_minimum == 4.0
-    assert rolling_point.complexity_maximum == 5.0
+    assert rolling_point.log2_volume_minimum == 4.0
+    assert rolling_point.log2_volume_maximum == 5.0
     assert rolling_point.input_shape == (1, 20, 20)
     assert math.isclose(rolling_point.accepted_mass, 0.625)
 
@@ -1956,12 +1966,12 @@ def test_training_replay_frontier_points_keep_recent_window() -> None:
         cast(Any, benchmark_runner)._accumulate_replay_frontier_point(
             replay_points,
             ValidationCompetencePoint(
-                complexity=4.0,
+                log2_volume=4.0,
                 accepted_mass=float(index),
                 sample_count=1,
                 seed=100 + index,
-                complexity_minimum=4.0,
-                complexity_maximum=5.0,
+                log2_volume_minimum=4.0,
+                log2_volume_maximum=5.0,
             ),
         )
 
@@ -2001,14 +2011,14 @@ def test_checkpoint_selection_uses_global_training_score_estimate() -> None:
         check=1,
         step=32,
         score=100.0,
-        complexity=20.0,
+        log2_volume=20.0,
         accepted_mass=0.2,
     )
     higher_current_rung_estimate = _score_estimate(
         check=2,
         step=64,
         score=1.0,
-        complexity=20.0,
+        log2_volume=20.0,
         accepted_mass=0.8,
     )
     selected = cast(Any, benchmark_runner)._selected_model_checkpoint(
@@ -2036,14 +2046,14 @@ def test_checkpoint_write_gate_uses_global_training_score_estimate() -> None:
         check=1,
         step=32,
         score=100.0,
-        complexity=20.0,
+        log2_volume=20.0,
         accepted_mass=0.2,
     )
     lower_global_higher_current_rung_estimate = _score_estimate(
         check=2,
         step=64,
         score=1.0,
-        complexity=20.0,
+        log2_volume=20.0,
         accepted_mass=0.8,
     )
     training_run = SimpleNamespace(
@@ -2072,7 +2082,7 @@ def test_training_plateau_signal_uses_current_rung_competence() -> None:
         check=1,
         step=32,
         score=20.0,
-        complexity=20.0,
+        log2_volume=20.0,
         accepted_mass=0.55,
     )
     sampled_competence = cast(dict[str, object], score_estimate["sampled_competence"])
@@ -2082,10 +2092,10 @@ def test_training_plateau_signal_uses_current_rung_competence() -> None:
         {
             "kind": "sampled-state-space-volume-window",
             "sampling_rule": "generator-uniform-component-index-v1",
-            "difficulty_assumption": "approximately-uniform-within-complexity-window",
+            "difficulty_assumption": "approximately-uniform-within-volume-window",
             "benchmark_id": "benchmarks.digits@0.1.0",
-            "complexity_axis": None,
-            "complexity": math.log2(10),
+            "volume_axis": None,
+            "log2_volume": math.log2(10),
             "seed": 101,
             "sample_count": 64,
             "mean_accepted_mass": 1.0,
@@ -2106,7 +2116,7 @@ def test_training_rung_threshold_uses_current_rung_competence() -> None:
         check=1,
         step=32,
         score=20.0,
-        complexity=20.0,
+        log2_volume=20.0,
         accepted_mass=0.19,
     )
     sampled_competence = cast(dict[str, object], score_estimate["sampled_competence"])
@@ -2116,10 +2126,10 @@ def test_training_rung_threshold_uses_current_rung_competence() -> None:
         {
             "kind": "sampled-state-space-volume-window",
             "sampling_rule": "generator-uniform-component-index-v1",
-            "difficulty_assumption": "approximately-uniform-within-complexity-window",
+            "difficulty_assumption": "approximately-uniform-within-volume-window",
             "benchmark_id": "benchmarks.digits@0.1.0",
-            "complexity_axis": None,
-            "complexity": math.log2(10),
+            "volume_axis": None,
+            "log2_volume": math.log2(10),
             "seed": 101,
             "sample_count": 64,
             "mean_accepted_mass": 1.0,
@@ -2146,11 +2156,11 @@ def test_training_rung_threshold_uses_current_rung_competence() -> None:
 
 def test_training_curriculum_can_advance_after_worse_loss_on_larger_rung() -> None:
     first_rung_point = ValidationCompetencePoint(
-        complexity=math.log2(10),
+        log2_volume=math.log2(10),
         accepted_mass=1.0,
     )
     larger_rung_point = ValidationCompetencePoint(
-        complexity=40.0,
+        log2_volume=40.0,
         accepted_mass=0.28,
     )
 
@@ -2220,7 +2230,7 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
             check=cast(int, kwargs["validation_check"]),
             step=cast(int, kwargs["step"]),
             score=1.0,
-            complexity=math.log2(10),
+            log2_volume=math.log2(10),
             accepted_mass=0.5,
         )
 
@@ -2340,7 +2350,7 @@ def test_training_plateau_above_rung_competence_threshold_advances_frontier(
             check=cast(int, kwargs["validation_check"]),
             step=cast(int, kwargs["step"]),
             score=1.0,
-            complexity=math.log2(10),
+            log2_volume=math.log2(10),
             accepted_mass=0.6,
         )
 
@@ -2405,38 +2415,38 @@ def test_training_plateau_above_rung_competence_threshold_advances_frontier(
     assert plateau_history_lengths == [2]
 
 
-def test_complexity_curriculum_planner_emits_integer_windows() -> None:
-    planner = cast(Any, benchmark_runner)._ComplexityCurriculumPlanner()
+def test_volume_curriculum_planner_emits_integer_windows() -> None:
+    planner = cast(Any, benchmark_runner)._VolumeCurriculumPlanner()
 
     windows = [planner.next() for _ in range(4)]
 
-    assert [(window.minimum, window.maximum, window.complexity) for window in windows] == [
+    assert [(window.minimum, window.maximum, window.log2_volume) for window in windows] == [
         (0.0, 1.0, 1.0),
         (1.0, 2.0, 2.0),
         (2.0, 3.0, 3.0),
         (3.0, 4.0, 4.0),
     ]
     assert [window.request.to_record() for window in windows] == [
-        ComplexityRequest(minimum=0.0, maximum=1.0).to_record(),
-        ComplexityRequest(minimum=1.0, maximum=2.0).to_record(),
-        ComplexityRequest(minimum=2.0, maximum=3.0).to_record(),
-        ComplexityRequest(minimum=3.0, maximum=4.0).to_record(),
+        StateSpaceVolumeRequest(minimum=0.0, maximum=1.0).to_record(),
+        StateSpaceVolumeRequest(minimum=1.0, maximum=2.0).to_record(),
+        StateSpaceVolumeRequest(minimum=2.0, maximum=3.0).to_record(),
+        StateSpaceVolumeRequest(minimum=3.0, maximum=4.0).to_record(),
     ]
 
 
 def test_training_curriculum_integer_window_rematerializes() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
-    window_request = ComplexityRequest(minimum=8.0, maximum=9.0)
+    window_request = StateSpaceVolumeRequest(minimum=8.0, maximum=9.0)
     window_sample = generator(
         shape=1,
         seed=123,
         include_fields=True,
-        complexity_request=window_request,
+        volume_request=window_request,
     )
 
     assert window_sample.sample_count == 1
-    assert window_sample.complexity_request == window_request
-    assert window_sample.complexity == 8.0
+    assert window_sample.volume_request == window_request
+    assert window_sample.log2_volume == 8.0
     assert window_sample.samples[0].require_field().shape[1:] == (24, 24)
 
 
@@ -2444,17 +2454,17 @@ def test_digits_integer_window_materializes_constructed_affine_grid() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     generator_impl = cast(Any, generator)
 
-    complexity_class = generator_impl._complexity_class_for_request(
-        request=ComplexityRequest(
+    volume_class = generator_impl._volume_class_for_request(
+        request=StateSpaceVolumeRequest(
             minimum=8.0,
             maximum=9.0,
         )
     )
 
-    assert complexity_class is not None
-    assert complexity_class.cardinality == 256
-    assert math.isclose(complexity_class.complexity, 8.0)
-    metadata = complexity_class.metadata()
+    assert volume_class is not None
+    assert volume_class.cardinality == 256
+    assert math.isclose(volume_class.log2_volume, 8.0)
+    metadata = volume_class.metadata()
     assert metadata["affine_transform_count"] == 56
     assert metadata["minimum_address"] == 255
     assert metadata["maximum_address"] == 510
@@ -2477,8 +2487,8 @@ def test_digits_integer_window_materializes_constructed_affine_grid() -> None:
         "rotation": [-0.03, 0.03],
         "x_shear": [-0.03, 0.03],
     }
-    assert complexity_class.resolution_assignment is not None
-    assert complexity_class.resolution_assignment.values == {
+    assert volume_class.resolution_assignment is not None
+    assert volume_class.resolution_assignment.values == {
         "W": 24,
         "H": 24,
     }
@@ -2762,9 +2772,9 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     )
     assert cast(list[dict[str, object]], score_integral["terms"])
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
-    complexities = [cast(float, point["complexity"]) for point in points]
-    assert math.isclose(complexities[0], 0.0)
-    assert complexities == sorted(complexities)
+    log2_volumes = [cast(float, point["log2_volume"]) for point in points]
+    assert math.isclose(log2_volumes[0], 0.0)
+    assert log2_volumes == sorted(log2_volumes)
     assert points[0]["sample_count"] == 64
     assert len(inspections) == 1
     assert inspections[0]["source_path"] == history[0]["model_inspection_path"]
@@ -2958,7 +2968,7 @@ def _history_point(
             check=check,
             step=step,
             score=score,
-            complexity=1.0,
+            log2_volume=1.0,
             accepted_mass=accepted_mass,
         ),
     )
@@ -2969,26 +2979,26 @@ def _score_estimate(
     check: int,
     step: int,
     score: float,
-    complexity: float,
+    log2_volume: float,
     accepted_mass: float,
 ) -> dict[str, object]:
     sampled_competence = {
         "kind": "sampled-competence-curriculum",
         "sampling_rule": "generator-uniform-component-index-v1",
-        "difficulty_assumption": "approximately-uniform-within-complexity-window",
+        "difficulty_assumption": "approximately-uniform-within-volume-window",
         "benchmark_id": "benchmarks.digits@0.1.0",
-        "complexity_axis": None,
-        "complexity": complexity,
+        "volume_axis": None,
+        "log2_volume": log2_volume,
         "sample_count": 2,
         "mean_accepted_mass": accepted_mass,
         "points": [
             {
                 "kind": "sampled-state-space-volume-window",
                 "sampling_rule": "generator-uniform-component-index-v1",
-                "difficulty_assumption": "approximately-uniform-within-complexity-window",
+                "difficulty_assumption": "approximately-uniform-within-volume-window",
                 "benchmark_id": "benchmarks.digits@0.1.0",
-                "complexity_axis": None,
-                "complexity": complexity,
+                "volume_axis": None,
+                "log2_volume": log2_volume,
                 "seed": 101,
                 "sample_count": 2,
                 "mean_accepted_mass": accepted_mass,
@@ -3016,11 +3026,11 @@ def _score_estimate(
                 {
                     "kind": "measured-state-space-competence",
                     "log2_volume_minimum": 0.0,
-                    "log2_volume_maximum": complexity,
-                    "width_in_bits": complexity,
-                    "competence_density": 0.0 if complexity == 0.0 else score / complexity,
+                    "log2_volume_maximum": log2_volume,
+                    "width_in_bits": log2_volume,
+                    "competence_density": 0.0 if log2_volume == 0.0 else score / log2_volume,
                     "contribution": score,
-                    "representative_log2_volume": complexity,
+                    "representative_log2_volume": log2_volume,
                     "sample_count": 2,
                 }
             ],

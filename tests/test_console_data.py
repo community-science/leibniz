@@ -46,15 +46,15 @@ def test_console_data_reuses_persistent_generated_observation_batch_cache(
     ).clear()
     cache_key = (
         "benchmarks.fake@0.1.0",
-        "complexity-window-samples",
+        "volume-window-samples",
         "source-fingerprint",
     )
     cached_batches: tuple[Mapping[str, object], ...] = ({
-        "mode": "complexity-window",
+        "mode": "volume-window",
         "label": "Cached samples",
         "seed": 401,
         "sample_count": 0,
-        "complexity_window": {
+        "volume_window": {
             "measure_id": "log2-state-space-volume",
             "minimum": 1,
             "maximum": 2,
@@ -315,7 +315,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert cast(int, chess_task["outcome_atom_count"]) > 1000
     chess_batches = cast(list[dict[str, object]], chess_task["batches"])
     assert [
-        batch["complexity_cardinalities"] for batch in chess_batches
+        batch["volumes"] for batch in chess_batches
     ] == [[cardinality] for cardinality in (1, 2, 4, 8, 16, 32, 64, 128, 256)]
     chess_sample = cast(list[dict[str, object]], chess_batches[0]["samples"])[0]
     assert str(chess_sample["image_data_url"]).startswith(
@@ -329,22 +329,22 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     )
     assert task["kind"] == "generated-observations"
     assert task["benchmark_id"] == "benchmarks.digits@0.1.0"
-    assert task["complexity_axis"] == "log2-state-space-volume"
+    assert task["volume_axis"] == "log2-state-space-volume"
     assert task["outcome_atom_count"] == 10
     batches = cast(list[dict[str, object]], task["batches"])
     assert [
         (batch["mode"], batch["sample_count"])
         for batch in batches
     ] == [
-        ("complexity-window", 1),
-        ("complexity-window", 2),
-        ("complexity-window", 4),
-        ("complexity-window", 8),
-        ("complexity-window", 16),
-        ("complexity-window", 32),
-        ("complexity-window", 50),
-        ("complexity-window", 50),
-        ("complexity-window", 50),
+        ("volume-window", 1),
+        ("volume-window", 2),
+        ("volume-window", 4),
+        ("volume-window", 8),
+        ("volume-window", 16),
+        ("volume-window", 32),
+        ("volume-window", 50),
+        ("volume-window", 50),
+        ("volume-window", 50),
     ]
     assert [batch["label"] for batch in batches] == [
         "[0, 1]",
@@ -442,7 +442,7 @@ def test_console_benchmark_tasks_load_python_implementation_without_exported_jso
         assert atom_count == 10
         assert source_fingerprint
         return ({
-            "mode": "complexity-window",
+            "mode": "volume-window",
             "label": "Fake samples",
             "seed": 401,
             "sample_count": 0,
@@ -488,7 +488,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
   "benchmark_results": [
     {
       "benchmark_id": "benchmarks.digits@0.1.0",
-      "complexity_axis": "C",
+      "volume_axis": "C",
           "leaderboard": [
             {
               "model_key": "sha256:model",
@@ -511,7 +511,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
               }
             ]
           },
-          "points": [{"complexity": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
+          "points": [{"log2_volume": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
           "cost_summary": {
             "component_count": 1,
             "cost": 640,
@@ -538,7 +538,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
           "benchmark_id": "benchmarks.digits@0.1.0",
           "architecture_digest": "sha256:model",
           "model_key": "sha256:model",
-          "complexity": 10,
+          "log2_volume": 10,
           "measurement_count": 1,
           "score": 1.0,
           "cost_summary": {
@@ -575,7 +575,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
                   }
                 ]
               },
-              "points": [{"complexity": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
+              "points": [{"log2_volume": 1.0, "score": 1.0, "run_ids": ["run-1"]}],
               "cost_summary": {
                 "component_count": 1,
                 "cost": 640,
@@ -599,7 +599,7 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
               "benchmark_id": "benchmarks.digits@0.1.0",
               "architecture_digest": "sha256:model",
               "model_key": "sha256:model",
-              "complexity": 10,
+              "log2_volume": 10,
               "measurement_count": 1,
               "score": 1.0,
               "cost_summary": {

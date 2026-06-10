@@ -14,7 +14,7 @@ from typing import Any, cast
 from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
-    ComplexityIntegral,
+    StateSpaceIntegral,
     sampled_competence_compute_cost_integral,
     sampled_competence_frontier_integral,
 )
@@ -430,7 +430,7 @@ class _BenchmarkRunRecord:
     benchmark_id: ProtocolIdentifier
     architecture_digest: ContentDigest
     model_key: str
-    complexity: float | None
+    log2_volume: float | None
     measurement_count: int
     score: float
     cost_summary: Mapping[str, object]
@@ -443,7 +443,7 @@ class _BenchmarkRunRecord:
     sampled_competence: Mapping[str, object] | None = None
     training_summary: Mapping[str, object] | None = None
 
-    def to_record(self, *, complexity_axis: str | None = None) -> dict[str, object]:
+    def to_record(self, *, volume_axis: str | None = None) -> dict[str, object]:
         record: dict[str, object] = {
             "source_kind": self.source_kind,
             "result_status": self.result_status,
@@ -461,13 +461,13 @@ class _BenchmarkRunRecord:
             "measurement_dataset_digest": str(self.measurement_dataset_digest),
             "console_view_model": _run_console_view_model(
                 run=self,
-                complexity_axis=complexity_axis,
+                volume_axis=volume_axis,
             ),
         }
         if self.model_inspection_path is not None:
             record["model_inspection_path"] = self.model_inspection_path.as_posix()
-        if self.complexity is not None:
-            record["complexity"] = self.complexity
+        if self.log2_volume is not None:
+            record["log2_volume"] = self.log2_volume
         if self.sampled_competence is not None:
             record["sampled_competence"] = dict(self.sampled_competence)
         if self.training_summary is not None:
@@ -568,7 +568,7 @@ def _local_run_records(
                 benchmark_id=benchmark_id,
                 architecture_digest=summary.architecture_manifest.digest,
                 model_key=model_key,
-                complexity=_sampled_competence_record_complexity(summary.sampled_competence),
+                log2_volume=_sampled_competence_record_log2_volume(summary.sampled_competence),
                 measurement_count=_as_positive_int(
                     summary.sampled_competence.get("sample_count"),
                     "sampled_competence.sample_count",
@@ -652,7 +652,7 @@ def _local_training_estimate_records(
                 benchmark_id=_as_identifier(summary.get("benchmark_id"), "benchmark_id"),
                 architecture_digest=architecture.digest,
                 model_key=str(architecture.digest),
-                complexity=_sampled_competence_record_complexity(sampled_competence),
+                log2_volume=_sampled_competence_record_log2_volume(sampled_competence),
                 measurement_count=0,
                 score=_as_nonnegative_number(
                     estimate.get("score"),
@@ -686,12 +686,12 @@ def _result_state_record_path(path: Path, *, results_root: Path) -> Path:
     return path
 
 
-def _sampled_competence_record_complexity(
+def _sampled_competence_record_log2_volume(
     record: Mapping[str, object] | None,
 ) -> float | None:
     if record is None:
         return None
-    return _as_nonnegative_number(record.get("complexity"), "sampled_competence.complexity")
+    return _as_nonnegative_number(record.get("log2_volume"), "sampled_competence.log2_volume")
 
 
 def _model_inspection_view_record(
@@ -1091,7 +1091,7 @@ def _model_checkpoint_records(
 def _run_console_view_model(
     *,
     run: _BenchmarkRunRecord,
-    complexity_axis: str | None,
+    volume_axis: str | None,
 ) -> Mapping[str, object]:
     sections: list[Mapping[str, object]] = []
     if run.sampled_competence is not None:
@@ -1100,8 +1100,8 @@ def _run_console_view_model(
                 title="Sampled Competence",
                 entries=(
                     (
-                        complexity_axis or "Complexity",
-                        _console_number_value(run.sampled_competence.get("complexity")),
+                        volume_axis or "Volume (bits)",
+                        _console_number_value(run.sampled_competence.get("log2_volume")),
                     ),
                     ("Samples", _console_number_value(run.sampled_competence.get("sample_count"))),
                     (
@@ -1360,8 +1360,8 @@ def _benchmark_result_record(
         "reference_curves": _benchmark_reference_curve_records(
             generator=benchmark.generator,
         ),
-        "training_history": [run.to_record(complexity_axis=None) for run in runs],
-        "plot_runs": [run.to_record(complexity_axis=None) for run in runs],
+        "training_history": [run.to_record(volume_axis=None) for run in runs],
+        "plot_runs": [run.to_record(volume_axis=None) for run in runs],
         "model_inspections": _model_inspection_records(accepted_runs),
     }
     return record
@@ -1399,9 +1399,9 @@ def _generator_oracle_inference_reference_points(
         _as_sequence(raw_points, "oracle_inference_reference_points")
     ):
         point = _extract.mapping(raw_point, f"oracle_inference_reference_points.{index}")
-        complexity = _as_nonnegative_number(
-            point.get("complexity"),
-            f"oracle_inference_reference_points.{index}.complexity",
+        log2_volume = _as_nonnegative_number(
+            point.get("log2_volume"),
+            f"oracle_inference_reference_points.{index}.log2_volume",
         )
         score = _as_nonnegative_number(
             point.get("score"),
@@ -1421,7 +1421,7 @@ def _generator_oracle_inference_reference_points(
         )
         reference_points.append(
             {
-                "complexity": complexity,
+                "log2_volume": log2_volume,
                 "score": score,
                 "cost_density": cost,
                 "metadata": dict(metadata),
@@ -1436,36 +1436,36 @@ def _integrated_reference_curve_points(
     ordered = sorted(
         points,
         key=lambda point: (
-            _as_nonnegative_number(point.get("complexity"), "reference_curve.complexity"),
+            _as_nonnegative_number(point.get("log2_volume"), "reference_curve.log2_volume"),
             _as_nonnegative_number(point.get("cost_density"), "reference_curve.cost_density"),
         ),
     )
     integrated_points: list[dict[str, object]] = []
-    previous_complexity = 0.0
+    previous_log2_volume = 0.0
     cumulative_cost = 0.0
     for point in ordered:
-        complexity = _as_nonnegative_number(
-            point.get("complexity"),
-            "reference_curve.complexity",
+        log2_volume = _as_nonnegative_number(
+            point.get("log2_volume"),
+            "reference_curve.log2_volume",
         )
-        if complexity < previous_complexity:
-            raise LocalResultImportError("reference curve complexities must be ordered")
+        if log2_volume < previous_log2_volume:
+            raise LocalResultImportError("reference curve log2 volumes must be ordered")
         cost_density = _as_nonnegative_number(
             point.get("cost_density"),
             "reference_curve.cost_density",
         )
-        cumulative_cost += (complexity - previous_complexity) * (
+        cumulative_cost += (log2_volume - previous_log2_volume) * (
             cost_density * _default_bit_length_per_op
         )
         integrated_points.append(
             {
-                "complexity": complexity,
+                "log2_volume": log2_volume,
                 "score": _as_nonnegative_number(point.get("score"), "reference_curve.score"),
                 "cost": cumulative_cost,
                 "metadata": _extract.mapping(point.get("metadata"), "reference_curve.metadata"),
             }
         )
-        previous_complexity = complexity
+        previous_log2_volume = log2_volume
     return integrated_points
 
 
@@ -1658,8 +1658,8 @@ def _compact_run_result_record(run: _BenchmarkRunRecord) -> dict[str, object]:
         "score": run.score,
         "cost_summary": _run_cost_summary(run),
     }
-    if run.complexity is not None:
-        record["complexity"] = run.complexity
+    if run.log2_volume is not None:
+        record["log2_volume"] = run.log2_volume
     if run.sampled_competence is not None:
         record["sampled_competence"] = _compact_sampled_competence_record(
             run.sampled_competence
@@ -1673,7 +1673,7 @@ def _compact_sampled_competence_record(
     sampled_competence: Mapping[str, object],
 ) -> dict[str, object]:
     keys = (
-        "complexity",
+        "log2_volume",
         "sample_count",
         "mean_accepted_mass",
         "standard_error",
@@ -1888,10 +1888,10 @@ def _model_console_view_model(
                     _prediction_space_label(manifest),
                 ),
                 (
-                    "Observed " + _model_complexity_label(manifest),
+                    "Observed " + _model_volume_label(manifest),
                     ", ".join(
                         _console_number_value(value, precision=2)
-                        for value in _model_complexities(model)
+                        for value in _model_log2_volumes(model)
                     )
                     or "none",
                 ),
@@ -1952,9 +1952,9 @@ def _model_console_view_model(
     return {"detail_sections": sections}
 
 
-def _model_complexities(model: Mapping[str, object]) -> tuple[float, ...]:
+def _model_log2_volumes(model: Mapping[str, object]) -> tuple[float, ...]:
     return tuple(
-        _point_complexity(_extract.mapping(point, "model.points"))
+        _point_log2_volume(_extract.mapping(point, "model.points"))
         for point in _as_sequence(model.get("points"), "model.points")
     )
 
@@ -2043,15 +2043,15 @@ def _console_training_estimate_comparison_row(
 
 def _console_interval_label(point: Mapping[str, object]) -> str:
     minimum = _optional_nonnegative_number(
-        point.get("complexity_minimum"),
-        "training_estimate_comparison.point.complexity_minimum",
+        point.get("log2_volume_minimum"),
+        "training_estimate_comparison.point.log2_volume_minimum",
     )
     maximum = _optional_nonnegative_number(
-        point.get("complexity_maximum"),
-        "training_estimate_comparison.point.complexity_maximum",
+        point.get("log2_volume_maximum"),
+        "training_estimate_comparison.point.log2_volume_maximum",
     )
     if minimum is None or maximum is None:
-        return _console_number_value(point.get("complexity"), precision=2)
+        return _console_number_value(point.get("log2_volume"), precision=2)
     return (
         f"[{_console_number_value(minimum, precision=2)}, "
         f"{_console_number_value(maximum, precision=2)}]"
@@ -2062,8 +2062,8 @@ def _prediction_space_label(manifest: BenchmarkManifest) -> str:
     return f"finite outcome space with {len(manifest.outcome_space.outcomes)} outcomes"
 
 
-def _model_complexity_label(manifest: BenchmarkManifest) -> str:
-    return "Complexity"
+def _model_volume_label(manifest: BenchmarkManifest) -> str:
+    return "Volume (bits)"
 
 
 def _node_list_label(value: object) -> str:
@@ -2090,24 +2090,24 @@ def _competence_points(
     ] = {}
     for run in runs:
         for point in _run_competence_points(run):
-            complexity = _as_nonnegative_number(point.get("complexity"), "point.complexity")
+            log2_volume = _as_nonnegative_number(point.get("log2_volume"), "point.log2_volume")
             minimum = _optional_nonnegative_number(
-                point.get("complexity_minimum"),
-                "point.complexity_minimum",
+                point.get("log2_volume_minimum"),
+                "point.log2_volume_minimum",
             )
             maximum = _optional_nonnegative_number(
-                point.get("complexity_maximum"),
-                "point.complexity_maximum",
+                point.get("log2_volume_maximum"),
+                "point.log2_volume_maximum",
             )
             score = _as_nonnegative_number(point.get("score"), "point.score")
             sample_count = _as_positive_int(point.get("sample_count"), "point.sample_count")
             input_shape = _optional_point_input_shape(point, "point.input_shape")
             region = _extract.optional_mapping(point.get("region"), "point.region")
-            by_interval.setdefault((complexity, minimum, maximum), []).append(
+            by_interval.setdefault((log2_volume, minimum, maximum), []).append(
                 (run, score, sample_count, input_shape, region)
             )
     points: list[dict[str, object]] = []
-    for (complexity, minimum, maximum), evidence in by_interval.items():
+    for (log2_volume, minimum, maximum), evidence in by_interval.items():
         total_samples = sum(
             sample_count
             for _run, _score, sample_count, _input_shape, _region in evidence
@@ -2120,7 +2120,7 @@ def _competence_points(
             / total_samples
         )
         point: dict[str, object] = {
-            "complexity": complexity,
+            "log2_volume": log2_volume,
             "score": score,
             "sample_count": total_samples,
             "run_ids": [
@@ -2153,11 +2153,11 @@ def _competence_points(
         if len(regions) == 1:
             point["region"] = next(iter(regions.values()))
         if minimum is not None:
-            point["complexity_minimum"] = minimum
+            point["log2_volume_minimum"] = minimum
         if maximum is not None:
-            point["complexity_maximum"] = maximum
+            point["log2_volume_maximum"] = maximum
         points.append(point)
-    return tuple(sorted(points, key=_point_complexity))
+    return tuple(sorted(points, key=_point_log2_volume))
 
 
 def _run_competence_points(run: _BenchmarkRunRecord) -> tuple[dict[str, object], ...]:
@@ -2175,11 +2175,11 @@ def _run_competence_points(run: _BenchmarkRunRecord) -> tuple[dict[str, object],
                 )
             )
         return (_competence_point_from_sampled_record(run.sampled_competence),)
-    if run.complexity is None:
+    if run.log2_volume is None:
         return ()
     return (
         {
-            "complexity": run.complexity,
+            "log2_volume": run.log2_volume,
             "score": run.score,
             "sample_count": run.measurement_count,
         },
@@ -2193,16 +2193,16 @@ def _competence_point_from_sampled_record(point: Mapping[str, object]) -> dict[s
         error_type=LocalResultImportError,
     )
     record: dict[str, object] = {
-        "complexity": competence.complexity,
+        "log2_volume": competence.log2_volume,
         "score": competence.accepted_mass,
         "sample_count": competence.sample_count,
     }
     if competence.input_shape is not None:
         record["input_shape"] = list(competence.input_shape)
-    if competence.complexity_minimum is not None:
-        record["complexity_minimum"] = competence.complexity_minimum
-    if competence.complexity_maximum is not None:
-        record["complexity_maximum"] = competence.complexity_maximum
+    if competence.log2_volume_minimum is not None:
+        record["log2_volume_minimum"] = competence.log2_volume_minimum
+    if competence.log2_volume_maximum is not None:
+        record["log2_volume_maximum"] = competence.log2_volume_maximum
     if competence.region is not None:
         record["region"] = competence.region.to_record()
     return record
@@ -2220,20 +2220,20 @@ def competence_integral(
     points: tuple[dict[str, object], ...],
     *,
     chance_mass: float,
-) -> ComplexityIntegral:
+) -> StateSpaceIntegral:
     return sampled_competence_frontier_integral(
         tuple(
             CompetencePoint(
-                complexity=_point_complexity(point),
+                log2_volume=_point_log2_volume(point),
                 accepted_mass=_point_score(point),
                 sample_count=_point_sample_count(point),
-                complexity_minimum=_optional_nonnegative_number(
-                    point.get("complexity_minimum"),
-                    "competence_point.complexity_minimum",
+                log2_volume_minimum=_optional_nonnegative_number(
+                    point.get("log2_volume_minimum"),
+                    "competence_point.log2_volume_minimum",
                 ),
-                complexity_maximum=_optional_nonnegative_number(
-                    point.get("complexity_maximum"),
-                    "competence_point.complexity_maximum",
+                log2_volume_maximum=_optional_nonnegative_number(
+                    point.get("log2_volume_maximum"),
+                    "competence_point.log2_volume_maximum",
                 ),
                 region=_optional_state_space_region(
                     point.get("region"),
@@ -2286,7 +2286,7 @@ def _training_estimate_comparison_record(
         accepted_point = accepted_by_interval.get(key)
         training_point = training_by_interval.get(key)
         comparison_point: dict[str, object] = {
-            "complexity": _comparison_interval_complexity(
+            "log2_volume": _comparison_interval_log2_volume(
                 accepted_point if accepted_point is not None else training_point
             ),
             "status": _comparison_point_status(
@@ -2380,18 +2380,18 @@ def _training_estimate_competence_points(
 
 
 def _comparison_interval_key(point: Mapping[str, object]) -> tuple[float, float]:
-    complexity = _point_complexity(point)
+    log2_volume = _point_log2_volume(point)
     minimum = _optional_nonnegative_number(
-        point.get("complexity_minimum"),
-        "competence_point.complexity_minimum",
+        point.get("log2_volume_minimum"),
+        "competence_point.log2_volume_minimum",
     )
     maximum = _optional_nonnegative_number(
-        point.get("complexity_maximum"),
-        "competence_point.complexity_maximum",
+        point.get("log2_volume_maximum"),
+        "competence_point.log2_volume_maximum",
     )
     return (
-        minimum if minimum is not None else complexity,
-        maximum if maximum is not None else complexity,
+        minimum if minimum is not None else log2_volume,
+        maximum if maximum is not None else log2_volume,
     )
 
 
@@ -2399,10 +2399,10 @@ def _comparison_interval_sort_key(key: tuple[float, float]) -> tuple[float, floa
     return key
 
 
-def _comparison_interval_complexity(point: Mapping[str, object] | None) -> float:
+def _comparison_interval_log2_volume(point: Mapping[str, object] | None) -> float:
     if point is None:
         raise LocalResultImportError("training comparison point is missing")
-    return _point_complexity(point)
+    return _point_log2_volume(point)
 
 
 def _copy_optional_interval_fields(
@@ -2412,17 +2412,17 @@ def _copy_optional_interval_fields(
     if point is None:
         return
     minimum = _optional_nonnegative_number(
-        point.get("complexity_minimum"),
-        "competence_point.complexity_minimum",
+        point.get("log2_volume_minimum"),
+        "competence_point.log2_volume_minimum",
     )
     maximum = _optional_nonnegative_number(
-        point.get("complexity_maximum"),
-        "competence_point.complexity_maximum",
+        point.get("log2_volume_maximum"),
+        "competence_point.log2_volume_maximum",
     )
     if minimum is not None:
-        target["complexity_minimum"] = minimum
+        target["log2_volume_minimum"] = minimum
     if maximum is not None:
-        target["complexity_maximum"] = maximum
+        target["log2_volume_maximum"] = maximum
 
 
 def _comparison_point_status(
@@ -2495,8 +2495,8 @@ def _optional_cost_value(cost_summary: Mapping[str, object], cost_axis: str) -> 
     return float(value)
 
 
-def _point_complexity(point: Mapping[str, object]) -> float:
-    return _as_nonnegative_number(point["complexity"], "complexity")
+def _point_log2_volume(point: Mapping[str, object]) -> float:
+    return _as_nonnegative_number(point["log2_volume"], "log2_volume")
 
 
 def _point_score(point: Mapping[str, object]) -> float:
@@ -2838,7 +2838,7 @@ def _validate_benchmark_result(record: Mapping[str, object]) -> None:
         record,
         {
             "benchmark_id",
-            "complexity_axis",
+            "volume_axis",
             "leaderboard",
             "model_candidates",
             "frontiers",
@@ -2912,7 +2912,7 @@ def _validate_reference_curve(record: Mapping[str, object], field: str) -> None:
     for index, point in enumerate(points):
         point_field = f"{field}.points.{index}"
         point_record = _extract.mapping(point, point_field)
-        _as_nonnegative_number(point_record.get("complexity"), f"{point_field}.complexity")
+        _as_nonnegative_number(point_record.get("log2_volume"), f"{point_field}.log2_volume")
         _as_nonnegative_number(point_record.get("score"), f"{point_field}.score")
         _as_nonnegative_number(point_record.get("cost"), f"{point_field}.cost")
         if "metadata" in point_record:
@@ -2928,12 +2928,12 @@ def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
     if record.get("result_status") not in {"accepted", "provisional"}:
         raise LocalResultImportError(f"{_field_path(prefix, 'result_status')} is invalid")
     _as_nonnegative_number(record.get("score"), _field_path(prefix, "score"))
-    _validate_complexity_integral(
+    _validate_volume_integral(
         _extract.mapping(record.get("score_integral"), _field_path(prefix, "score_integral")),
         _field_path(prefix, "score_integral"),
     )
     if "cost_integral" in record:
-        _validate_complexity_integral(
+        _validate_volume_integral(
             _extract.mapping(record["cost_integral"], _field_path(prefix, "cost_integral")),
             _field_path(prefix, "cost_integral"),
         )
@@ -2965,7 +2965,7 @@ def _validate_model_result(record: Mapping[str, object], prefix: str) -> None:
         )
 
 
-def _validate_complexity_integral(record: Mapping[str, object], prefix: str) -> None:
+def _validate_volume_integral(record: Mapping[str, object], prefix: str) -> None:
     _require_string_fields(record, prefix, ("kind",))
     _as_nonnegative_number(record.get("value"), _field_path(prefix, "value"))
     terms = _as_sequence(record.get("terms"), _field_path(prefix, "terms"))
@@ -3034,12 +3034,12 @@ def _validate_training_estimate_comparison(
         }:
             raise LocalResultImportError(f"{_field_path(point_path, 'status')} is invalid")
         _as_nonnegative_number(
-            point_record.get("complexity"),
-            _field_path(point_path, "complexity"),
+            point_record.get("log2_volume"),
+            _field_path(point_path, "log2_volume"),
         )
         for optional_number in (
-            "complexity_minimum",
-            "complexity_maximum",
+            "log2_volume_minimum",
+            "log2_volume_maximum",
             "accepted_score",
             "training_score",
             "accepted_sample_count",

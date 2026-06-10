@@ -23,11 +23,11 @@ from leibniz.materialization import (
 )
 from leibniz.observation_formation import ObservationFormationDeclaration
 from leibniz.observation_generation import (
-    ComplexityRequest,
-    ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
     ObservationGenerationError,
+    StateSpaceVolumeRequest,
+    StateSpaceVolumeValue,
     load_generator,
 )
 from leibniz.observation_showcases import ObservationShowcaseManifest
@@ -42,7 +42,7 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
     @property
     def formation(self) -> ObservationFormationDeclaration: ...
 
-    def distinguishable_state_complexity(
+    def distinguishable_state_log2_volume(
         self,
         *,
         width: int,
@@ -50,13 +50,13 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         variation_extent: float = 1.0,
     ) -> float: ...
 
-    def constructed_complexity_class_complexity(
+    def constructed_volume_class_log2_volume(
         self,
         *,
         affine_transform_count: int,
     ) -> float: ...
 
-    def minimum_complexity(self) -> ComplexityValue: ...
+    def minimum_log2_volume(self) -> StateSpaceVolumeValue: ...
 
     def __call__(
         self,
@@ -66,7 +66,7 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         include_fields: bool = False,
         include_metadata: bool = True,
         include_artifacts: bool = False,
-        complexity_request: ComplexityRequest | None = None,
+        volume_request: StateSpaceVolumeRequest | None = None,
         sample_indices: Sequence[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,

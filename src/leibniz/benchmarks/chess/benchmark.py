@@ -15,12 +15,12 @@ from leibniz.benchmark_implementations import Benchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.observation_generation import (
-    ComplexityRequest,
-    ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
     GenerationRequestOutcome,
     ObservationGenerationError,
+    StateSpaceVolumeRequest,
+    StateSpaceVolumeValue,
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.state_space import (
@@ -102,12 +102,12 @@ class _MateInOnePosition:
         return len(self.legal_moves)
 
     @property
-    def complexity(self) -> float:
+    def log2_volume(self) -> float:
         return math.log2(1)
 
     @property
-    def complexity_value(self) -> ComplexityValue:
-        return ComplexityValue(value=self.complexity)
+    def volume_value(self) -> StateSpaceVolumeValue:
+        return StateSpaceVolumeValue(value=self.log2_volume)
 
     @property
     def target_distribution(self) -> Mapping[str, float]:
@@ -171,7 +171,7 @@ class _MateInOnePosition:
 
 @dataclass(frozen=True, slots=True)
 class Generator:
-    """Generate Chess mate-in-one positions by sample-space complexity."""
+    """Generate Chess mate-in-one positions by sample-space volume."""
 
     manifest: BenchmarkManifest
 
@@ -191,7 +191,7 @@ class Generator:
         include_fields: bool = False,
         include_metadata: bool = True,
         include_artifacts: bool = False,
-        complexity_request: ComplexityRequest | None = None,
+        volume_request: StateSpaceVolumeRequest | None = None,
         sample_indices: Sequence[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: object | None = None,
@@ -216,7 +216,7 @@ class Generator:
                 "Chess metadata-free generation requires a tensor runtime"
             )
         sample_shape = _sample_shape(shape)
-        sample_space = self._sample_space_for_request(complexity_request)
+        sample_space = self._sample_space_for_request(volume_request)
         if sample_space is None:
             return GeneratedSampleSet(
                 benchmark_id=self.manifest.id,
@@ -224,9 +224,9 @@ class Generator:
                 generator_version=self.version,
                 seed=seed,
                 shape=(0,),
-                complexity_request=complexity_request,
+                volume_request=volume_request,
                 samples=(),
-                request_outcome=_chess_unrealized_request_outcome(complexity_request),
+                request_outcome=_chess_unrealized_request_outcome(volume_request),
             )
 
         sample_count = _sample_count(sample_shape)
@@ -268,21 +268,21 @@ class Generator:
             generator_version=self.version,
             seed=seed,
             shape=sample_shape,
-            complexity_request=complexity_request,
+            volume_request=volume_request,
             samples=samples,
             fields=fields,
             targets=targets,
             region=region,
         )
 
-    def minimum_complexity(self) -> ComplexityValue:
-        """Return the smallest supported Chess sample-space complexity."""
+    def minimum_log2_volume(self) -> StateSpaceVolumeValue:
+        """Return the smallest supported Chess sample-space log2 volume."""
 
-        return ComplexityValue(value=0.0)
+        return StateSpaceVolumeValue(value=0.0)
 
     def _sample_space_for_request(
         self,
-        request: ComplexityRequest | None,
+        request: StateSpaceVolumeRequest | None,
     ) -> _ChessSampleSpace | None:
         if request is None:
             return _ChessSampleSpace(cardinality=1)
@@ -777,24 +777,24 @@ def _require_sample_cardinality(cardinality: int) -> None:
         raise ObservationGenerationError("Chess sample cardinality exceeds generator capacity")
 
 
-def _ceil_cardinality(complexity: float) -> int:
-    if not math.isfinite(complexity):
-        raise ObservationGenerationError("complexity must be finite")
-    if complexity <= 0.0:
+def _ceil_cardinality(log2_volume: float) -> int:
+    if not math.isfinite(log2_volume):
+        raise ObservationGenerationError("volume must be finite")
+    if log2_volume <= 0.0:
         return 1
-    cardinality = 2**complexity
+    cardinality = 2**log2_volume
     rounded = round(cardinality)
     if math.isclose(cardinality, rounded, rel_tol=1e-12, abs_tol=1e-9):
         return max(1, rounded)
     return max(1, math.ceil(cardinality))
 
 
-def _floor_cardinality(complexity: float) -> int:
-    if not math.isfinite(complexity):
-        raise ObservationGenerationError("complexity must be finite")
-    if complexity < 0.0:
+def _floor_cardinality(log2_volume: float) -> int:
+    if not math.isfinite(log2_volume):
+        raise ObservationGenerationError("volume must be finite")
+    if log2_volume < 0.0:
         return 0
-    cardinality = 2**complexity
+    cardinality = 2**log2_volume
     rounded = round(cardinality)
     if math.isclose(cardinality, rounded, rel_tol=1e-12, abs_tol=1e-9):
         return min(_family_capacity(), rounded)
@@ -802,7 +802,7 @@ def _floor_cardinality(complexity: float) -> int:
 
 
 def _chess_unrealized_request_outcome(
-    request: ComplexityRequest | None,
+    request: StateSpaceVolumeRequest | None,
 ) -> GenerationRequestOutcome:
     if request is None:
         return GenerationRequestOutcome(kind="unrepresentable-below-minimum")
@@ -984,7 +984,7 @@ def _latent_coordinates(
     return (
         {
             "name": "benchmarks.chess.sample-space.cardinality",
-            "role": "complexity",
+            "role": "volume",
             "degree_measure": {
                 "kind": "discrete-log2-count",
                 "count": sample_space_cardinality,

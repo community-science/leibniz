@@ -15,9 +15,9 @@ from leibniz.timing import TimingCollector
 
 if TYPE_CHECKING:
     from leibniz.observation_generation import (
-        ComplexityRequest,
-        ComplexityValue,
         GeneratedSampleSet,
+        StateSpaceVolumeRequest,
+        StateSpaceVolumeValue,
     )
     from leibniz.tensor_runtime import TensorRuntime
 
@@ -57,7 +57,7 @@ class Generator(Protocol):
         include_fields: bool = False,
         include_metadata: bool = True,
         include_artifacts: bool = False,
-        complexity_request: ComplexityRequest | None = None,
+        volume_request: StateSpaceVolumeRequest | None = None,
         sample_indices: Sequence[int] | None = None,
         runtime: TensorRuntime | None = None,
         outcome_ids: tuple[str, ...] | None = None,
@@ -65,7 +65,7 @@ class Generator(Protocol):
         timing_prefix: str = "",
     ) -> GeneratedSampleSet: ...
 
-    def minimum_complexity(self) -> ComplexityValue: ...
+    def minimum_log2_volume(self) -> StateSpaceVolumeValue: ...
 
 
 class Benchmark(Protocol):

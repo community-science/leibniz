@@ -20,15 +20,15 @@ __all__ = [
     "GeneratedSampleSet",
     "GenerationRequestOutcome",
     "ObservationGenerationError",
-    "ComplexityRequest",
-    "ComplexityValue",
+    "StateSpaceVolumeRequest",
+    "StateSpaceVolumeValue",
     "load_generator",
     "sample_indices_for_even_state_coverage",
 ]
 
-_core_complexity_measure_id = "log2-state-space-volume"
-_core_complexity_measure_ids = frozenset({_core_complexity_measure_id})
-_minimum_complexity_value = 0.0
+_core_volume_measure_id = "log2-state-space-volume"
+_core_volume_measure_ids = frozenset({_core_volume_measure_id})
+_minimum_volume_value = 0.0
 _realized_outcome_kind = "realized"
 _exhausted_capacity_outcome_kind = "exhausted-capacity"
 _unrepresentable_below_minimum_outcome_kind = "unrepresentable-below-minimum"
@@ -46,35 +46,35 @@ class ObservationGenerationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class ComplexityRequest:
-    """A core complexity interval requested by a runner."""
+class StateSpaceVolumeRequest:
+    """A log2 state-space volume window requested by a runner."""
 
     minimum: float
     maximum: float
-    measure_id: str = _core_complexity_measure_id
+    measure_id: str = _core_volume_measure_id
 
     def __post_init__(self) -> None:
         if not self.measure_id:
-            raise ObservationGenerationError("complexity id must be nonempty")
-        if self.measure_id not in _core_complexity_measure_ids:
-            raise ObservationGenerationError("complexity id is not a core measure")
+            raise ObservationGenerationError("volume measure id must be nonempty")
+        if self.measure_id not in _core_volume_measure_ids:
+            raise ObservationGenerationError("volume measure id is not a core measure")
         if not math.isfinite(float(self.minimum)):
-            raise ObservationGenerationError("complexity minimum must be finite")
+            raise ObservationGenerationError("volume minimum must be finite")
         if not math.isfinite(float(self.maximum)):
-            raise ObservationGenerationError("complexity maximum must be finite")
-        if self.minimum < _minimum_complexity_value:
+            raise ObservationGenerationError("volume maximum must be finite")
+        if self.minimum < _minimum_volume_value:
             raise ObservationGenerationError(
-                "complexity minimum must be nonnegative"
+                "volume minimum must be nonnegative"
             )
         if self.maximum < self.minimum:
             raise ObservationGenerationError(
-                "complexity maximum must be at least the minimum"
+                "volume maximum must be at least the minimum"
             )
 
-    def contains(self, value: ComplexityValue | float) -> bool:
-        """Return whether a measured sample satisfies this interval."""
+    def contains(self, value: StateSpaceVolumeValue | float) -> bool:
+        """Return whether a measured volume satisfies this window."""
 
-        if isinstance(value, ComplexityValue):
+        if isinstance(value, StateSpaceVolumeValue):
             if value.measure_id != self.measure_id:
                 return False
             measured_value = value.value
@@ -93,22 +93,22 @@ class ComplexityRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class ComplexityValue:
-    """A generated sample's value for a core complexity."""
+class StateSpaceVolumeValue:
+    """A measured log2 state-space volume for a core measure."""
 
     value: float
-    measure_id: str = _core_complexity_measure_id
+    measure_id: str = _core_volume_measure_id
 
     def __post_init__(self) -> None:
         if not self.measure_id:
-            raise ObservationGenerationError("complexity id must be nonempty")
-        if self.measure_id not in _core_complexity_measure_ids:
-            raise ObservationGenerationError("complexity id is not a core measure")
+            raise ObservationGenerationError("volume measure id must be nonempty")
+        if self.measure_id not in _core_volume_measure_ids:
+            raise ObservationGenerationError("volume measure id is not a core measure")
         if not math.isfinite(float(self.value)):
-            raise ObservationGenerationError("complexity value must be finite")
-        if self.value < _minimum_complexity_value:
+            raise ObservationGenerationError("volume value must be finite")
+        if self.value < _minimum_volume_value:
             raise ObservationGenerationError(
-                "complexity value must be nonnegative"
+                "volume value must be nonnegative"
             )
 
     def to_record(self) -> dict[str, object]:
@@ -188,8 +188,6 @@ class GeneratedSample:
 
     index: int
     outcome_id: str
-    complexity: float | None = None
-    complexity_value: ComplexityValue | None = None
     available_outcome_ids: tuple[str, ...] = ()
     observable_state_id: str | None = None
     target_distribution: Mapping[str, float] | None = None
@@ -208,11 +206,6 @@ class GeneratedSample:
     def __post_init__(self) -> None:
         if not self.outcome_id:
             raise ObservationGenerationError("sample outcome_id must be nonempty")
-        if self.complexity is not None:
-            if not math.isfinite(float(self.complexity)):
-                raise ObservationGenerationError("sample complexity must be finite")
-            if self.complexity < 0.0:
-                raise ObservationGenerationError("sample complexity must be nonnegative")
         if self.observable_state_id is not None and not self.observable_state_id:
             raise ObservationGenerationError("sample observable_state_id must be nonempty")
         if len(set(self.available_outcome_ids)) != len(self.available_outcome_ids):
@@ -297,7 +290,7 @@ class GeneratedSampleSet:
     fields: Any | None = None
     targets: Any | None = None
     variation_extent: float | None = None
-    complexity_request: ComplexityRequest | None = None
+    volume_request: StateSpaceVolumeRequest | None = None
     region: StateSpaceRegion | None = None
     request_outcome: GenerationRequestOutcome | None = None
 
@@ -362,18 +355,11 @@ class GeneratedSampleSet:
                     raise ObservationGenerationError(
                         "sample axis coordinates are outside the generated region"
                     )
-            if self.samples and any(
-                sample.complexity is not None
-                and not math.isclose(
-                    sample.complexity,
-                    self.region.log2_volume,
-                    rel_tol=0.0,
-                    abs_tol=1e-9,
-                )
-                for sample in self.samples
+            if self.volume_request is not None and not self.volume_request.contains(
+                self.region.log2_volume
             ):
                 raise ObservationGenerationError(
-                    "sample complexity must match generated region volume"
+                    "sample set volume is outside the requested window"
                 )
         for sample in self.samples:
             if (
@@ -381,12 +367,6 @@ class GeneratedSampleSet:
                 and sample.materialization_plan.benchmark_id != self.benchmark_id
             ):
                 raise ObservationGenerationError("sample benchmark_id does not match sample set")
-            if self.complexity_request is not None and not self.complexity_request.contains(
-                self.complexity
-            ):
-                raise ObservationGenerationError(
-                    "sample set complexity is outside requested interval"
-                )
 
     @property
     def includes_fields(self) -> bool:
@@ -414,25 +394,22 @@ class GeneratedSampleSet:
         return tuple(sample.outcome_id for sample in self.samples)
 
     @property
-    def complexities(self) -> tuple[float, ...]:
-        """Return generated sample complexities."""
+    def log2_volumes(self) -> tuple[float, ...]:
+        """Return the batch log2 state-space volume for each sample."""
 
         if not self.samples:
             return ()
-        return (self.complexity,) * len(self.samples)
+        return (self.log2_volume,) * len(self.samples)
 
     @property
-    def complexity(self) -> float:
+    def log2_volume(self) -> float:
         """Return the generated state-space volume in bits."""
 
-        if self.region is not None:
-            return self.region.log2_volume
-        complexities = {
-            sample.complexity for sample in self.samples if sample.complexity is not None
-        }
-        if len(complexities) != 1:
-            raise ObservationGenerationError("sample set does not have one complexity")
-        return next(iter(complexities))
+        if self.region is None:
+            raise ObservationGenerationError(
+                "sample set does not declare a state-space region"
+            )
+        return self.region.log2_volume
 
     def require_tensors(self) -> tuple[Any, Any]:
         """Return generated field and target tensors or fail with a domain error."""
@@ -451,10 +428,10 @@ class GeneratedSampleSet:
             "seed": self.seed,
             "shape": list(self.shape),
             "sample_count": self.sample_count,
-            "complexity_request": (
+            "volume_request": (
                 None
-                if self.complexity_request is None
-                else self.complexity_request.to_record()
+                if self.volume_request is None
+                else self.volume_request.to_record()
             ),
             "includes_fields": self.includes_fields,
             "includes_tensors": self.fields is not None,
@@ -466,7 +443,7 @@ class GeneratedSampleSet:
             record["variation_extent"] = self.variation_extent
         if self.region is not None:
             record["region"] = self.region.to_record()
-            record["complexity"] = self.region.log2_volume
+            record["log2_volume"] = self.region.log2_volume
         if self.request_outcome is not None:
             record["request_outcome"] = self.request_outcome.to_record()
         return record
