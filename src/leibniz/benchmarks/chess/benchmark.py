@@ -23,6 +23,16 @@ from leibniz.observation_generation import (
     ObservationGenerationError,
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
+from leibniz.state_space import (
+    AxisRegion,
+    BinaryVectorDomain,
+    Distinguishability,
+    IntegerRangeDomain,
+    ProductRegion,
+    StateSpaceAmbient,
+    StateSpaceAxis,
+    StateSpaceRegion,
+)
 from leibniz.tensor_runtime import (
     TensorElementParameter,
     TensorElementProgram,
@@ -232,6 +242,7 @@ class Generator:
             cardinality=sample_space.cardinality,
             local_indices=selected_local_indices,
         )
+        region = _chess_state_space_region(cardinality=sample_space.cardinality)
         samples: tuple[GeneratedSample, ...] = ()
         if include_metadata:
             samples = _samples_for_global_indices(
@@ -261,6 +272,7 @@ class Generator:
             samples=samples,
             fields=fields,
             targets=targets,
+            region=region,
         )
 
     def minimum_complexity(self) -> ComplexityValue:
@@ -438,6 +450,249 @@ def _family_index_lower_bound_for_cardinality(cardinality: int) -> int:
     )
 
 
+def _base_count() -> int:
+    return len(_mate_mechanisms()) * len(_board_transforms())
+
+
+def _ceil_div(numerator: int, denominator: int) -> int:
+    if denominator <= 0:
+        raise ObservationGenerationError("division denominator must be positive")
+    return -((-numerator) // denominator)
+
+
+def _chess_ambient() -> StateSpaceAmbient:
+    return StateSpaceAmbient(
+        field_domain_kind="lattice-2d",
+        field_domain={"width": 8, "height": 8},
+        field_codomain_id="piece-occupancy",
+        distinguishability=Distinguishability(
+            kind="exact",
+            certificate_id="benchmarks.chess.fen-piece-occupancy",
+        ),
+    )
+
+
+def _chess_rank_range_for_base(
+    *,
+    cardinality: int,
+    base_index: int,
+) -> tuple[int, int] | None:
+    _require_sample_cardinality(cardinality)
+    if type(base_index) is not int or base_index < 0 or base_index >= _base_count():
+        raise ObservationGenerationError("Chess base index is outside the indexed family")
+    start = _global_sample_index(cardinality=cardinality, local_index=0)
+    end = start + cardinality - 1
+    lower = max(0, _ceil_div(start - base_index, _base_count()))
+    upper = min(
+        (1 << len(_spectator_squares())) - 1,
+        (end - base_index) // _base_count(),
+    )
+    if lower > upper:
+        return None
+    return (lower, upper)
+
+
+def _chess_region_base_indices(cardinality: int) -> tuple[int, ...]:
+    return tuple(
+        base_index
+        for base_index in range(_base_count())
+        if _chess_rank_range_for_base(
+            cardinality=cardinality,
+            base_index=base_index,
+        )
+        is not None
+    )
+
+
+def _chess_stratum_id(base_index: int) -> str:
+    mechanism, transform = _chess_base_pair(base_index)
+    return f"{mechanism.name}.{transform.name}"
+
+
+def _chess_base_pair(base_index: int) -> tuple[_MateMechanism, _BoardTransform]:
+    if type(base_index) is not int or base_index < 0 or base_index >= _base_count():
+        raise ObservationGenerationError("Chess base index is outside the indexed family")
+    mechanisms = _mate_mechanisms()
+    transforms = _board_transforms()
+    return (
+        mechanisms[base_index // len(transforms)],
+        transforms[base_index % len(transforms)],
+    )
+
+
+def _chess_state_space_region(cardinality: int) -> StateSpaceRegion:
+    _require_sample_cardinality(cardinality)
+    return StateSpaceRegion(
+        id=f"benchmarks.chess.realized-region.cardinality-{cardinality}",
+        ambient=_chess_ambient(),
+        components=tuple(
+            _chess_region_component(
+                cardinality=cardinality,
+                base_index=base_index,
+            )
+            for base_index in _chess_region_base_indices(cardinality)
+        ),
+        union_rule="disjoint-union",
+        volume=cardinality,
+        log2_volume=math.log2(cardinality),
+    )
+
+
+def _chess_capacity_region() -> StateSpaceRegion:
+    return StateSpaceRegion(
+        id="benchmarks.chess.capacity-region",
+        ambient=_chess_ambient(),
+        components=tuple(
+            _chess_region_component(
+                cardinality=_family_capacity(),
+                base_index=base_index,
+            )
+            for base_index in range(_base_count())
+        ),
+        union_rule="disjoint-union",
+        volume=_family_capacity(),
+        log2_volume=math.log2(_family_capacity()),
+    )
+
+
+def _chess_region_component(
+    *,
+    cardinality: int,
+    base_index: int,
+) -> ProductRegion:
+    rank_range = _chess_rank_range_for_base(
+        cardinality=cardinality,
+        base_index=base_index,
+    )
+    if rank_range is None:
+        raise ObservationGenerationError("Chess base stratum is outside the realized region")
+    lower, upper = rank_range
+    volume = upper - lower + 1
+    stratum_id = _chess_stratum_id(base_index)
+    mechanism, transform = _chess_base_pair(base_index)
+    return ProductRegion(
+        axis_regions=(
+            _chess_spectator_axis_region(stratum_id=stratum_id, upper_rank=upper),
+            *_chess_piece_axis_regions(
+                mechanism=mechanism,
+                transform=transform,
+                stratum_id=stratum_id,
+            ),
+        ),
+        measure_rule="benchmark-computed-finite-count",
+        volume=volume,
+        log2_volume=math.log2(volume),
+        stratum_id=stratum_id,
+        stratum_target={
+            "mechanism": mechanism.name,
+            "transform": transform.name,
+            "base_index": base_index,
+            "spectator_rank_lower": lower,
+            "spectator_rank_upper": upper,
+            "spectator_rank_count": volume,
+        },
+    )
+
+
+def _chess_spectator_axis_region(
+    *,
+    stratum_id: str,
+    upper_rank: int,
+) -> AxisRegion:
+    enabled_dimensions = upper_rank.bit_length()
+    return AxisRegion(
+        axis=StateSpaceAxis(
+            id=_chess_spectator_axis_id(stratum_id),
+            domain=BinaryVectorDomain(dimension=len(_spectator_squares())),
+        ),
+        coordinate_region=tuple(range(enabled_dimensions)),
+        count=1 << enabled_dimensions,
+        log2_count=float(enabled_dimensions),
+    )
+
+
+def _chess_piece_axis_regions(
+    *,
+    mechanism: _MateMechanism,
+    transform: _BoardTransform,
+    stratum_id: str,
+) -> tuple[AxisRegion, ...]:
+    regions: list[AxisRegion] = []
+    for piece_index, (square, _piece) in enumerate(_base_mate_pieces(mechanism=mechanism)):
+        transformed_square = _transformed_square(square, transform=transform)
+        file_index = chess.square_file(transformed_square)
+        rank_index = chess.square_rank(transformed_square)
+        regions.append(
+            _chess_singleton_integer_axis_region(
+                axis_id=f"{stratum_id}.piece-{piece_index}.file",
+                value=file_index,
+            )
+        )
+        regions.append(
+            _chess_singleton_integer_axis_region(
+                axis_id=f"{stratum_id}.piece-{piece_index}.rank",
+                value=rank_index,
+            )
+        )
+    return tuple(regions)
+
+
+def _chess_singleton_integer_axis_region(*, axis_id: str, value: int) -> AxisRegion:
+    return AxisRegion(
+        axis=StateSpaceAxis(
+            id=axis_id,
+            domain=IntegerRangeDomain(lower=value, upper=value),
+        ),
+        coordinate_region=(value, value),
+        count=1,
+        log2_count=0.0,
+    )
+
+
+def _chess_region_component_index(
+    *,
+    global_index: int,
+    cardinality: int,
+) -> int:
+    base_index = global_index % _base_count()
+    try:
+        return _chess_region_base_indices(cardinality).index(base_index)
+    except ValueError as error:
+        raise ObservationGenerationError(
+            "Chess sample is outside the realized region"
+        ) from error
+
+
+def _chess_region_axis_coordinates(
+    *,
+    global_index: int,
+) -> Mapping[str, object]:
+    base_index = global_index % _base_count()
+    spectator_rank = global_index // _base_count()
+    mechanism, transform = _chess_base_pair(base_index)
+    stratum_id = _chess_stratum_id(base_index)
+    coordinates: dict[str, object] = {
+        _chess_spectator_axis_id(stratum_id): tuple(
+            bit_index
+            for bit_index in range(len(_spectator_squares()))
+            if spectator_rank & (1 << bit_index)
+        )
+    }
+    for piece_index, (square, _piece) in enumerate(_base_mate_pieces(mechanism=mechanism)):
+        transformed_square = _transformed_square(square, transform=transform)
+        coordinates[f"{stratum_id}.piece-{piece_index}.file"] = chess.square_file(
+            transformed_square
+        )
+        coordinates[f"{stratum_id}.piece-{piece_index}.rank"] = chess.square_rank(
+            transformed_square
+        )
+    return coordinates
+
+
+def _chess_spectator_axis_id(stratum_id: str) -> str:
+    return f"{stratum_id}.spectator-occupancy"
+
+
 def _sample_local_indices(
     *,
     seed: int,
@@ -493,7 +748,10 @@ def _chess_unrealized_request_outcome(
     if request is None:
         return GenerationRequestOutcome(kind="unrepresentable-below-minimum")
     if _ceil_cardinality(request.minimum) > _family_capacity():
-        return GenerationRequestOutcome(kind="exhausted-capacity")
+        return GenerationRequestOutcome(
+            kind="exhausted-capacity",
+            capacity_region=_chess_capacity_region(),
+        )
     return GenerationRequestOutcome(kind="unrepresentable-below-minimum")
 
 
@@ -742,6 +1000,7 @@ def _samples_for_global_indices(
             _full_sample(
                 index=index,
                 position=_position_for_sample_index(global_index),
+                global_index=global_index,
                 sample_space_cardinality=sample_space_cardinality,
                 complexity=complexity,
             )
@@ -758,6 +1017,11 @@ def _samples_for_global_indices(
             outcome_id=outcome_ids[target_indices_by_base[global_index % base_count]],
             complexity=complexity,
             complexity_value=complexity_value,
+            region_component_index=_chess_region_component_index(
+                global_index=global_index,
+                cardinality=sample_space_cardinality,
+            ),
+            axis_coordinates=_chess_region_axis_coordinates(global_index=global_index),
         )
         for index, global_index in enumerate(global_indices)
     )
@@ -767,6 +1031,7 @@ def _full_sample(
     *,
     index: int,
     position: _MateInOnePosition,
+    global_index: int,
     sample_space_cardinality: int,
     complexity: float,
 ) -> GeneratedSample:
@@ -775,6 +1040,11 @@ def _full_sample(
         outcome_id=position.mate_moves[0],
         complexity=complexity,
         complexity_value=ComplexityValue(value=complexity),
+        region_component_index=_chess_region_component_index(
+            global_index=global_index,
+            cardinality=sample_space_cardinality,
+        ),
+        axis_coordinates=_chess_region_axis_coordinates(global_index=global_index),
         available_outcome_ids=position.legal_moves,
         observable_state_id=position.observation_id,
         latent_coordinates=_latent_coordinates(
