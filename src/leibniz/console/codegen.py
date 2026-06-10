@@ -114,6 +114,10 @@ import {
   consoleProtocolFormats,
   consoleProtocolFormatVersions,
 } from './protocolVocabulary.ts';
+import {
+  parseStateSpaceRegionRecord,
+  type StateSpaceRegionRecord,
+} from '../stateSpaceRecords.ts';
 
 const resultViewFormats = consoleProtocolFormats.resultViews;
 const resultViewFormatVersion = consoleProtocolFormatVersions.resultView;
@@ -202,6 +206,8 @@ export type StateSpaceIntegralTermRecord = {
   contribution: number;
   representative_log2_volume?: number;
   sample_count?: number;
+  confidence_half_width?: number;
+  region?: StateSpaceRegionRecord;
 };
 
 export type ComplexityIntegralRecord = {
@@ -475,6 +481,8 @@ function parseStateSpaceIntegralTerm(value: unknown, path: string): StateSpaceIn
     contribution: requireNumber(record.contribution, `${path}.contribution`, transportError),
     representative_log2_volume: optionalNumber(record.representative_log2_volume, `${path}.representative_log2_volume`, transportError),
     sample_count: optionalNumber(record.sample_count, `${path}.sample_count`, transportError),
+    confidence_half_width: optionalNumber(record.confidence_half_width, `${path}.confidence_half_width`, transportError),
+    region: optional(record.region, `${path}.region`, parseStateSpaceRegionRecord),
   };
 }
 

@@ -18,7 +18,7 @@ from leibniz.observation_generation import GeneratedSample, GeneratedSampleSet
 from leibniz.outcomes import AcceptedEvent, OutcomeSpace, RawScoringEvidence
 from leibniz.prediction_results import DirectFiniteProbabilityPrediction
 from leibniz.prediction_spaces import FiniteOutcomeSpace
-from leibniz.state_space import StateSpaceRegion
+from leibniz.state_space import StateSpaceError, StateSpaceRegion, state_space_region_from_record
 
 __all__ = [
     "CompetencePoint",
@@ -91,6 +91,11 @@ class CompetencePoint:
             input_shape=_record_optional_input_shape(
                 record,
                 field=f"{field_prefix}.input_shape",
+                error_type=error_type,
+            ),
+            region=_record_optional_state_space_region(
+                record.get("region"),
+                field=f"{field_prefix}.region",
                 error_type=error_type,
             ),
         )
@@ -546,6 +551,20 @@ def _record_optional_input_shape(
     if "input_shape" not in point:
         return None
     return _sampled_point_input_shape(point, field=field, error_type=error_type)
+
+
+def _record_optional_state_space_region(
+    value: object,
+    *,
+    field: str,
+    error_type: type[_ErrorT],
+) -> StateSpaceRegion | None:
+    if value is None:
+        return None
+    try:
+        return state_space_region_from_record(value)
+    except StateSpaceError as error:
+        raise error_type(f"{field}: {error}") from error
 
 
 def _complexity_point_interval(

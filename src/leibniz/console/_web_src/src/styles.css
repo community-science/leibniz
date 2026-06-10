@@ -234,6 +234,59 @@ p {
   text-transform: uppercase;
 }
 
+.benchmark-integral-term-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.benchmark-integral-term-section h4,
+.benchmark-integral-term-section h5 {
+  margin: var(--space-xs) 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-label);
+  font-weight: 800;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.benchmark-integral-term-grid {
+  display: grid;
+  gap: var(--line-thin);
+  overflow: hidden;
+  border: var(--line-thin) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--border-color);
+}
+
+.benchmark-integral-term-row {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1.2fr) repeat(4, minmax(7rem, 1fr));
+  gap: var(--line-thin);
+  background: var(--panel-bg);
+}
+
+.benchmark-integral-term-row.combined {
+  grid-template-columns:
+    minmax(11rem, 1.4fr)
+    minmax(5.5rem, 0.7fr)
+    repeat(5, minmax(6.5rem, 1fr));
+}
+
+.benchmark-integral-term-row span {
+  min-width: 0;
+  padding: var(--space-xs) var(--space-sm);
+  overflow-wrap: anywhere;
+}
+
+.benchmark-integral-term-row.header {
+  color: var(--text-muted);
+  font-size: var(--font-label);
+  font-weight: 800;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
 .frontier-chart {
   position: relative;
   overflow: hidden;
