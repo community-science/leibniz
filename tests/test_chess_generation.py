@@ -95,8 +95,10 @@ def test_chess_generator_returns_complexity_valued_samples_without_fields() -> N
         if axis_region.axis_id.endswith(".spectator-occupancy")
     ]
     assert len(spectator_regions) == 1
-    assert spectator_regions[0].axis.coordinate_kind == "binary-vector"
-    assert spectator_regions[0].coordinate_region == ()
+    assert spectator_regions[0].axis.coordinate_kind == "enumerated-cells"
+    assert spectator_regions[0].coordinate_region == ("spectator-rank-0",)
+    assert sample.axis_coordinates is not None
+    assert sample.axis_coordinates[spectator_regions[0].axis_id] == "spectator-rank-0"
     assert sample.region_component_index is not None
     assert sample.axis_coordinates is not None
     assert sample_set.region.contains(sample.region_component_index, sample.axis_coordinates)
@@ -187,6 +189,16 @@ def test_chess_complexity_request_reports_exhausted_capacity() -> None:
     expected_capacity = _chess_family_capacity()
     assert sample_set.request_outcome.capacity_region.volume == expected_capacity
     assert len(sample_set.request_outcome.capacity_region.components) == 48
+    capacity_spectator_regions = [
+        axis_region
+        for component in sample_set.request_outcome.capacity_region.components
+        for axis_region in component.axis_regions
+        if axis_region.axis_id.endswith(".spectator-occupancy")
+    ]
+    assert {
+        axis_region.axis.coordinate_kind
+        for axis_region in capacity_spectator_regions
+    } == {"binary-vector"}
     assert {
         component.volume
         for component in sample_set.request_outcome.capacity_region.components
@@ -231,6 +243,26 @@ def test_chess_realized_region_decomposes_exactly_per_stratum() -> None:
         lower = cast(int, stratum_target["spectator_rank_lower"])
         upper = cast(int, stratum_target["spectator_rank_upper"])
         assert upper - lower + 1 == component.volume
+        spectator_region = [
+            axis_region
+            for axis_region in component.axis_regions
+            if axis_region.axis_id.endswith(".spectator-occupancy")
+        ][0]
+        assert spectator_region.axis.coordinate_kind == "enumerated-cells"
+        assert spectator_region.count == component.volume
+        assert spectator_region.coordinate_region == tuple(
+            f"spectator-rank-{rank}" for rank in range(lower, upper + 1)
+        )
+        assert not component.contains(
+            {
+                axis_region.axis_id: (
+                    f"spectator-rank-{upper + 1}"
+                    if axis_region.axis_id.endswith(".spectator-occupancy")
+                    else axis_region.coordinate_region[0]
+                )
+                for axis_region in component.axis_regions
+            }
+        )
     for sample in sample_set.samples:
         assert sample.region_component_index is not None
         assert sample.axis_coordinates is not None

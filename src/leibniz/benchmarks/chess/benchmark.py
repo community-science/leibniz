@@ -27,6 +27,7 @@ from leibniz.state_space import (
     AxisRegion,
     BinaryVectorDomain,
     Distinguishability,
+    EnumeratedCellsDomain,
     IntegerRangeDomain,
     ProductRegion,
     StateSpaceAmbient,
@@ -50,6 +51,7 @@ _outcome_space_id = ProtocolIdentifier.parse("benchmarks.chess.uci-moves@0.1.0")
 _tensor_shape = (18, 8, 8)
 _board_preview_size = 512
 _board_preview_square_size = _board_preview_size // 8
+_realized_spectator_enumeration_limit = 4096
 
 _mate_in_one_family_id = "corner-net-indexed-family"
 
@@ -529,6 +531,7 @@ def _chess_state_space_region(cardinality: int) -> StateSpaceRegion:
             _chess_region_component(
                 cardinality=cardinality,
                 base_index=base_index,
+                capacity=False,
             )
             for base_index in _chess_region_base_indices(cardinality)
         ),
@@ -546,6 +549,7 @@ def _chess_capacity_region() -> StateSpaceRegion:
             _chess_region_component(
                 cardinality=_family_capacity(),
                 base_index=base_index,
+                capacity=True,
             )
             for base_index in range(_base_count())
         ),
@@ -559,6 +563,7 @@ def _chess_region_component(
     *,
     cardinality: int,
     base_index: int,
+    capacity: bool,
 ) -> ProductRegion:
     rank_range = _chess_rank_range_for_base(
         cardinality=cardinality,
@@ -572,7 +577,12 @@ def _chess_region_component(
     mechanism, transform = _chess_base_pair(base_index)
     return ProductRegion(
         axis_regions=(
-            _chess_spectator_axis_region(stratum_id=stratum_id, upper_rank=upper),
+            _chess_spectator_axis_region(
+                stratum_id=stratum_id,
+                lower_rank=lower,
+                upper_rank=upper,
+                capacity=capacity,
+            ),
             *_chess_piece_axis_regions(
                 mechanism=mechanism,
                 transform=transform,
@@ -597,17 +607,36 @@ def _chess_region_component(
 def _chess_spectator_axis_region(
     *,
     stratum_id: str,
+    lower_rank: int,
     upper_rank: int,
+    capacity: bool,
 ) -> AxisRegion:
-    enabled_dimensions = upper_rank.bit_length()
+    if capacity or not _chess_should_enumerate_spectator_ranks(
+        lower_rank=lower_rank,
+        upper_rank=upper_rank,
+    ):
+        enabled_dimensions = upper_rank.bit_length()
+        return AxisRegion(
+            axis=StateSpaceAxis(
+                id=_chess_spectator_axis_id(stratum_id),
+                domain=BinaryVectorDomain(dimension=len(_spectator_squares())),
+            ),
+            coordinate_region=tuple(range(enabled_dimensions)),
+            count=1 << enabled_dimensions,
+            log2_count=float(enabled_dimensions),
+        )
+    cells = tuple(
+        _chess_spectator_cell_id(rank)
+        for rank in range(lower_rank, upper_rank + 1)
+    )
     return AxisRegion(
         axis=StateSpaceAxis(
             id=_chess_spectator_axis_id(stratum_id),
-            domain=BinaryVectorDomain(dimension=len(_spectator_squares())),
+            domain=EnumeratedCellsDomain(cells=cells),
         ),
-        coordinate_region=tuple(range(enabled_dimensions)),
-        count=1 << enabled_dimensions,
-        log2_count=float(enabled_dimensions),
+        coordinate_region=cells,
+        count=len(cells),
+        log2_count=math.log2(len(cells)),
     )
 
 
@@ -666,17 +695,34 @@ def _chess_region_component_index(
 def _chess_region_axis_coordinates(
     *,
     global_index: int,
+    cardinality: int,
 ) -> Mapping[str, object]:
+    _require_sample_cardinality(cardinality)
     base_index = global_index % _base_count()
     spectator_rank = global_index // _base_count()
     mechanism, transform = _chess_base_pair(base_index)
     stratum_id = _chess_stratum_id(base_index)
-    coordinates: dict[str, object] = {
-        _chess_spectator_axis_id(stratum_id): tuple(
+    rank_range = _chess_rank_range_for_base(
+        cardinality=cardinality,
+        base_index=base_index,
+    )
+    if rank_range is None:
+        raise ObservationGenerationError("Chess sample is outside the realized region")
+    lower_rank, upper_rank = rank_range
+    spectator_coordinate: object
+    if _chess_should_enumerate_spectator_ranks(
+        lower_rank=lower_rank,
+        upper_rank=upper_rank,
+    ):
+        spectator_coordinate = _chess_spectator_cell_id(spectator_rank)
+    else:
+        spectator_coordinate = tuple(
             bit_index
             for bit_index in range(len(_spectator_squares()))
             if spectator_rank & (1 << bit_index)
         )
+    coordinates: dict[str, object] = {
+        _chess_spectator_axis_id(stratum_id): spectator_coordinate
     }
     for piece_index, (square, _piece) in enumerate(_base_mate_pieces(mechanism=mechanism)):
         transformed_square = _transformed_square(square, transform=transform)
@@ -691,6 +737,21 @@ def _chess_region_axis_coordinates(
 
 def _chess_spectator_axis_id(stratum_id: str) -> str:
     return f"{stratum_id}.spectator-occupancy"
+
+
+def _chess_should_enumerate_spectator_ranks(
+    *,
+    lower_rank: int,
+    upper_rank: int,
+) -> bool:
+    if lower_rank < 0 or upper_rank < lower_rank:
+        raise ObservationGenerationError("Chess spectator rank range is invalid")
+    return upper_rank - lower_rank + 1 <= _realized_spectator_enumeration_limit
+
+
+def _chess_spectator_cell_id(rank: int) -> str:
+    _ = _spectator_mask_for_rank(rank)
+    return f"spectator-rank-{rank}"
 
 
 def _sample_local_indices(
@@ -1021,7 +1082,10 @@ def _samples_for_global_indices(
                 global_index=global_index,
                 cardinality=sample_space_cardinality,
             ),
-            axis_coordinates=_chess_region_axis_coordinates(global_index=global_index),
+            axis_coordinates=_chess_region_axis_coordinates(
+                global_index=global_index,
+                cardinality=sample_space_cardinality,
+            ),
         )
         for index, global_index in enumerate(global_indices)
     )
@@ -1044,7 +1108,10 @@ def _full_sample(
             global_index=global_index,
             cardinality=sample_space_cardinality,
         ),
-        axis_coordinates=_chess_region_axis_coordinates(global_index=global_index),
+        axis_coordinates=_chess_region_axis_coordinates(
+            global_index=global_index,
+            cardinality=sample_space_cardinality,
+        ),
         available_outcome_ids=position.legal_moves,
         observable_state_id=position.observation_id,
         latent_coordinates=_latent_coordinates(
