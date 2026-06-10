@@ -157,13 +157,23 @@ if (chessBenchmarkTask === undefined) {
   throw new Error('expected chess benchmark task');
 }
 assertEqual(benchmarkTask?.kind, 'generated-observations', 'benchmark task kind');
-assertEqual(benchmarkTask?.batches.length, 3, 'benchmark batch count');
+assertEqual(benchmarkTask?.batches.length, 9, 'benchmark batch count');
 assertEqual(
   benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.sample_count}`).join('|'),
-  'complexity-window:8|complexity-window:32|complexity-window:50',
+  [
+    'complexity-window:1',
+    'complexity-window:2',
+    'complexity-window:4',
+    'complexity-window:8',
+    'complexity-window:16',
+    'complexity-window:32',
+    'complexity-window:50',
+    'complexity-window:50',
+    'complexity-window:50',
+  ].join('|'),
   'generated benchmark batches',
 );
-const generatedSamples = benchmarkTask?.batches[0]?.samples ?? [];
+const generatedSamples = benchmarkTask?.batches[3]?.samples ?? [];
 const generatedComponentIndices = generatedSamples.map(requiredComponentIndex);
 assertEqual(
   generatedComponentIndices.length,
@@ -200,7 +210,7 @@ assertEqual(
   'realized',
   'digits batch request outcome',
 );
-const generatedSample = benchmarkTask?.batches[1]?.samples[0];
+const generatedSample = benchmarkTask?.batches[3]?.samples[0];
 if (generatedSample === undefined) {
   throw new Error('expected generated sample');
 }
@@ -269,22 +279,30 @@ assertEqual(
   'H=16,W=16',
   'sample resolution assignment',
 );
-const chessSample = chessBenchmarkTask.batches[0]?.samples[0];
+const chessBatch = chessBenchmarkTask.batches[3];
+const chessSample = chessBatch?.samples[0];
 if (chessSample === undefined) {
   throw new Error('expected chess generated sample');
 }
 assertEqual(
-  chessBenchmarkTask.batches[0]?.complexity_cardinalities?.[0],
+  chessBenchmarkTask.batches
+    .map((batch) => batch.complexity_cardinalities?.[0])
+    .join(','),
+  '1,2,4,8,16,32,64,128,256',
+  'chess sample cardinalities',
+);
+assertEqual(
+  chessBatch?.complexity_cardinalities?.[0],
   8,
   'chess sample cardinality',
 );
 assertEqual(
-  chessBenchmarkTask.batches[0]?.region?.components.length,
+  chessBatch?.region?.components.length,
   8,
   'chess region component count',
 );
 assertEqual(
-  chessBenchmarkTask.batches[0]?.region?.ambient.field_codomain_id,
+  chessBatch?.region?.ambient.field_codomain_id,
   'piece-occupancy',
   'chess region codomain',
 );

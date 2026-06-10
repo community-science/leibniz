@@ -316,7 +316,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     chess_batches = cast(list[dict[str, object]], chess_task["batches"])
     assert [
         batch["complexity_cardinalities"] for batch in chess_batches
-    ] == [[cardinality] for cardinality in (8, 32, 256)]
+    ] == [[cardinality] for cardinality in (1, 2, 4, 8, 16, 32, 64, 128, 256)]
     chess_sample = cast(list[dict[str, object]], chess_batches[0]["samples"])[0]
     assert str(chess_sample["image_data_url"]).startswith(
         "data:image/svg+xml;base64,"
@@ -336,13 +336,25 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         (batch["mode"], batch["sample_count"])
         for batch in batches
     ] == [
+        ("complexity-window", 1),
+        ("complexity-window", 2),
+        ("complexity-window", 4),
         ("complexity-window", 8),
+        ("complexity-window", 16),
         ("complexity-window", 32),
+        ("complexity-window", 50),
+        ("complexity-window", 50),
         ("complexity-window", 50),
     ]
     assert [batch["label"] for batch in batches] == [
+        "[0, 1]",
+        "[1, 2]",
+        "[2, 3]",
         "[3, 4]",
+        "[4, 5]",
         "[5, 6]",
+        "[6, 7]",
+        "[7, 8]",
         "[8, 9]",
     ]
     presentation = cast(dict[str, object], batches[0]["presentation"])
@@ -350,8 +362,8 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         "sample_card_density": "standard",
         "aggregate_mode": False,
     }
-    assert cast(dict[str, object], batches[2]["presentation"])["sample_card_density"] == "standard"
-    samples = cast(list[dict[str, object]], batches[0]["samples"])
+    assert cast(dict[str, object], batches[-1]["presentation"])["sample_card_density"] == "standard"
+    samples = cast(list[dict[str, object]], batches[3]["samples"])
     component_indices = {cast(int, sample["component_index"]) for sample in samples}
     assert component_indices <= set(range(10))
     assert len(component_indices) == len(samples)
@@ -361,7 +373,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         cast(dict[str, object], sample["materialization_plan"]) for sample in samples
     ]
     assert all(".sample-" in str(plan["id"]) for plan in materialization_plans)
-    assert {plan["seed"] for plan in materialization_plans} == {401}
+    assert {plan["seed"] for plan in materialization_plans} == {404}
     assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
     assert samples[0]["field_shape"] == [1, 16, 16]
     assert _png_dimensions(str(samples[0]["image_data_url"])) == (16, 16)

@@ -70,7 +70,6 @@ _generated_batch_cache_path = (
 )
 _generated_batch_cache: dict[tuple[str, str, str], tuple[Mapping[str, object], ...]] = {}
 _generated_preview_sample_limit = 50
-_generated_preview_target_state_counts = (8, 32, 256)
 _generated_preview_complexity_windows = (
     (0.0, 1.0),
     (1.0, 2.0),
@@ -96,12 +95,6 @@ def _preview_windows_for_generator(
     generator: BenchmarkGenerator,
 ) -> tuple[_PreviewWindow, ...]:
     candidates = _preview_window_candidates(generator)
-    by_state_count = {candidate.state_count: candidate for candidate in candidates}
-    selected = tuple(
-        by_state_count[target_state_count]
-        for target_state_count in _generated_preview_target_state_counts
-        if target_state_count in by_state_count
-    )
     return tuple(
         _PreviewWindow(
             label=window.label,
@@ -109,7 +102,7 @@ def _preview_windows_for_generator(
             complexity_request=window.complexity_request,
             state_count=window.state_count,
         )
-        for index, window in enumerate(selected)
+        for index, window in enumerate(candidates)
     )
 
 
@@ -546,7 +539,7 @@ class ConsoleDataBuilder:
         benchmark_root: Path,
     ) -> str:
         hasher = hashlib.sha256()
-        hasher.update(b"complexity-window-sample-sets-v3\0")
+        hasher.update(b"complexity-window-sample-sets-v4\0")
         entrypoint = benchmark_root / "benchmark.py"
         if entrypoint.is_file():
             self._hash_file(hasher, entrypoint)
