@@ -466,7 +466,7 @@ class ConsoleDataBuilder:
                         benchmark_root,
                         repository_root=self._repository_root,
                     ),
-                    "complexity_axis": "log2_complexity_class_size",
+                    "complexity_axis": "log2-state-space-volume",
                     "outcome_atom_name": outcome_atom_name,
                     "outcome_atom_count": atom_count,
                     "code_surfaces": self._benchmark_code_surfaces(benchmark_root),

@@ -144,7 +144,25 @@ def test_chess_complexity_request_returns_empty_set_for_unexpressible_interval()
     assert sample_set.shape == (0,)
     assert sample_set.samples == ()
     assert sample_set.complexity_request == request
+    assert sample_set.request_outcome is not None
+    assert sample_set.request_outcome.kind == "unrepresentable-below-minimum"
     assert sample_set.to_record()["sample_count"] == 0
+    assert sample_set.to_record()["request_outcome"] == {
+        "kind": "unrepresentable-below-minimum"
+    }
+
+
+def test_chess_complexity_request_reports_exhausted_capacity() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    request = ComplexityRequest(minimum=1000.0, maximum=1001.0)
+
+    sample_set = generator(seed=47, shape=5, complexity_request=request)
+
+    assert sample_set.shape == (0,)
+    assert sample_set.samples == ()
+    assert sample_set.request_outcome is not None
+    assert sample_set.request_outcome.kind == "exhausted-capacity"
+    assert sample_set.to_record()["request_outcome"] == {"kind": "exhausted-capacity"}
 
 
 def test_chess_complexity_request_accepts_matching_interval() -> None:

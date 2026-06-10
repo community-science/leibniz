@@ -19,6 +19,7 @@ from leibniz.observation_generation import (
     ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
+    GenerationRequestOutcome,
     ObservationGenerationError,
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
@@ -213,6 +214,7 @@ class Generator:
                 shape=(0,),
                 complexity_request=complexity_request,
                 samples=(),
+                request_outcome=_chess_unrealized_request_outcome(complexity_request),
             )
 
         sample_count = _sample_count(sample_shape)
@@ -483,6 +485,16 @@ def _floor_cardinality(complexity: float) -> int:
     if math.isclose(cardinality, rounded, rel_tol=1e-12, abs_tol=1e-9):
         return min(_family_capacity(), rounded)
     return min(_family_capacity(), math.floor(cardinality))
+
+
+def _chess_unrealized_request_outcome(
+    request: ComplexityRequest | None,
+) -> GenerationRequestOutcome:
+    if request is None:
+        return GenerationRequestOutcome(kind="unrepresentable-below-minimum")
+    if _ceil_cardinality(request.minimum) > _family_capacity():
+        return GenerationRequestOutcome(kind="exhausted-capacity")
+    return GenerationRequestOutcome(kind="unrepresentable-below-minimum")
 
 
 def _base_mate_pieces(

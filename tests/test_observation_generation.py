@@ -403,6 +403,9 @@ def test_digits_generated_sample_set_records_region_document_boundary() -> None:
     batch = _formation_payload(generator, sample_count=4, seed=101)
 
     assert batch.region is not None
+    assert batch.request_outcome is not None
+    assert batch.request_outcome.kind == "realized"
+    assert batch.request_outcome.region == batch.region
     assert batch.region.volume == 20
     assert math.isclose(batch.region.log2_volume, batch.samples[0].complexity)
     record = batch.to_record()
@@ -411,8 +414,11 @@ def test_digits_generated_sample_set_records_region_document_boundary() -> None:
         description="generated sample set record",
     )
     region = state_space_region_from_record(loaded["region"])
+    request_outcome = cast(dict[str, object], loaded["request_outcome"])
 
     assert region == batch.region
+    assert request_outcome["kind"] == "realized"
+    assert state_space_region_from_record(request_outcome["region"]) == batch.region
     for sample in batch.samples:
         assert sample.region_component_index is not None
         assert sample.axis_coordinates is not None

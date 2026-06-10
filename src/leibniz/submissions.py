@@ -258,7 +258,7 @@ def _validate_sampled_competence(
             "sampled_competence benchmark_id does not match benchmark_manifest"
         )
     kind = record.get("kind")
-    if kind not in {"sampled-complexity-window", "sampled-competence-curriculum"}:
+    if kind not in {"sampled-state-space-volume-window", "sampled-competence-curriculum"}:
         raise SubmissionPackageValidationError("sampled_competence has unsupported kind")
     _positive_int(record.get("sample_count"), field="sampled_competence.sample_count")
     _score(record.get("mean_accepted_mass"), field="sampled_competence.mean_accepted_mass")

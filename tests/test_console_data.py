@@ -55,7 +55,7 @@ def test_console_data_reuses_persistent_generated_observation_batch_cache(
         "seed": 401,
         "sample_count": 0,
         "complexity_window": {
-            "measure_id": "log2_complexity_class_size",
+            "measure_id": "log2-state-space-volume",
             "minimum": 1,
             "maximum": 2,
         },
@@ -329,7 +329,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     )
     assert task["kind"] == "generated-observations"
     assert task["benchmark_id"] == "benchmarks.digits@0.1.0"
-    assert task["complexity_axis"] == "log2_complexity_class_size"
+    assert task["complexity_axis"] == "log2-state-space-volume"
     assert task["outcome_atom_count"] == 10
     batches = cast(list[dict[str, object]], task["batches"])
     assert [
@@ -489,13 +489,13 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
             "value": 1.0,
             "terms": [
               {
-                "kind": "measured-competence",
-                "complexity_minimum": 0.0,
-                "complexity_maximum": 1.0,
-                "complexity_width": 1.0,
-                "density": 1.0,
+                "kind": "measured-state-space-competence",
+                "log2_volume_minimum": 0.0,
+                "log2_volume_maximum": 1.0,
+                "width_in_bits": 1.0,
+                "competence_density": 1.0,
                 "contribution": 1.0,
-                "representative_complexity": 1.0
+                "representative_log2_volume": 1.0
               }
             ]
           },
@@ -553,13 +553,13 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
                 "value": 1.0,
                 "terms": [
                   {
-                    "kind": "measured-competence",
-                    "complexity_minimum": 0.0,
-                    "complexity_maximum": 1.0,
-                    "complexity_width": 1.0,
-                    "density": 1.0,
+                    "kind": "measured-state-space-competence",
+                    "log2_volume_minimum": 0.0,
+                    "log2_volume_maximum": 1.0,
+                    "width_in_bits": 1.0,
+                    "competence_density": 1.0,
                     "contribution": 1.0,
-                    "representative_complexity": 1.0
+                    "representative_log2_volume": 1.0
                   }
                 ]
               },

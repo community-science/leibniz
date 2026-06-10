@@ -2940,17 +2940,17 @@ def _validate_complexity_integral(record: Mapping[str, object], prefix: str) -> 
         term_record = _extract.mapping(term, term_prefix)
         _require_string_fields(term_record, term_prefix, ("kind",))
         for field in (
-            "complexity_minimum",
-            "complexity_maximum",
-            "complexity_width",
-            "density",
+            "log2_volume_minimum",
+            "log2_volume_maximum",
+            "width_in_bits",
+            "competence_density",
             "contribution",
         ):
             _as_nonnegative_number(term_record.get(field), _field_path(term_prefix, field))
-        if "representative_complexity" in term_record:
+        if "representative_log2_volume" in term_record:
             _as_nonnegative_number(
-                term_record.get("representative_complexity"),
-                _field_path(term_prefix, "representative_complexity"),
+                term_record.get("representative_log2_volume"),
+                _field_path(term_prefix, "representative_log2_volume"),
             )
         if "sample_count" in term_record:
             _as_positive_int(
