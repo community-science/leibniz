@@ -121,13 +121,7 @@ def _preview_window_candidates(
         )
         if not sample_set.samples:
             continue
-        sample = sample_set.samples[0]
-        complexity = (
-            sample.complexity_value.value
-            if sample.complexity_value is not None
-            else sample.complexity
-        )
-        state_count = _state_count_from_log2_complexity(complexity)
+        state_count = _state_count_from_log2_complexity(sample_set.complexity)
         if state_count in seen_state_counts:
             continue
         seen_state_counts.add(state_count)

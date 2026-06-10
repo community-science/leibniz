@@ -73,12 +73,8 @@ def test_chess_generator_returns_complexity_valued_samples_without_fields() -> N
     legal_move_count = _sample_legal_move_count(sample)
     assert sample_set.outcomes == (sample.outcome_id,) * 3
     assert sample_set.complexities == (0.0,) * 3
-    assert sample.complexity_value is not None
-    assert sample.complexity_value.measure_id == ComplexityRequest(
-        minimum=0.0,
-        maximum=0.0,
-    ).measure_id
-    assert sample.complexity_value.value == 0.0
+    assert sample.complexity is None
+    assert sample.complexity_value is None
     assert sample.target_distribution is None
     assert sample_set.region is not None
     assert sample_set.request_outcome is not None
@@ -120,10 +116,10 @@ def test_chess_sample_record_does_not_invent_image_surface_fields() -> None:
     assert record["outcome_id"] in available_outcomes
     assert "target_distribution" not in record
     assert len(available_outcomes) == _legal_move_count(record)
-    assert record["complexity_value"] == {
-        "measure_id": ComplexityRequest(minimum=0.0, maximum=0.0).measure_id,
-        "value": math.log2(_sample_space_cardinality(record)),
-    }
+    assert "complexity" not in record
+    assert "complexity_value" not in record
+    batch_record = generator(seed=47, shape=()).to_record(include_fields=True)
+    assert batch_record["complexity"] == math.log2(_sample_space_cardinality(record))
     assert "materialization_plan" not in record
     assert "width" not in record
     assert "height" not in record
@@ -280,7 +276,8 @@ def test_chess_complexity_request_accepts_matching_interval() -> None:
 
     assert sample_set.shape == (2, 2)
     assert len(sample_set.samples) == 4
-    assert all(sample.complexity_value is not None for sample in sample_set.samples)
+    assert sample_set.complexity == complexity
+    assert {sample.complexity_value for sample in sample_set.samples} == {None}
 
 
 def test_chess_generator_does_not_expose_complexity_candidates() -> None:
@@ -304,7 +301,8 @@ def test_chess_integer_shell_requests_use_power_of_two_cardinalities() -> None:
             ),
         )
         assert sample_set.samples
-        assert {sample.complexity for sample in sample_set.samples} == {float(shell)}
+        assert sample_set.complexity == float(shell)
+        assert {sample.complexity for sample in sample_set.samples} == {None}
         assert {
             _sample_space_cardinality(sample.to_record())
             for sample in sample_set.samples

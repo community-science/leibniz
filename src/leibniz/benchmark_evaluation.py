@@ -239,9 +239,6 @@ def sampled_competence_record(
 
     if len(batch.samples) != len(measurements):
         raise ValueError("sampled competence requires one measurement per sample")
-    complexities = {sample.complexity for sample in batch.samples}
-    if len(complexities) != 1:
-        raise ValueError("sampled competence requires one complexity window")
     accepted_mass = tuple(
         measurement.raw_scoring_evidence.accepted_mass for measurement in measurements
     )
@@ -261,7 +258,7 @@ def sampled_competence_record(
         "difficulty_assumption": "approximately-uniform-within-complexity-window",
         "benchmark_id": str(batch.benchmark_id),
         "complexity_axis": complexity_axis,
-        "complexity": next(iter(complexities)),
+        "complexity": batch.complexity,
         "seed": batch.seed,
         "sample_count": len(batch.samples),
         "mean_accepted_mass": math.fsum(accepted_mass) / len(accepted_mass),
