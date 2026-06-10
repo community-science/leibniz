@@ -17,6 +17,7 @@ from leibniz.observation_generation import (
     load_generator,
     sample_indices_for_even_state_coverage,
 )
+from leibniz.state_space import state_space_region_from_record
 from leibniz.tensor_runtime import resolve_tensor_runtime, tensor_value_to_host
 
 _repository_root = Path(__file__).parents[1]
@@ -79,6 +80,26 @@ def test_chess_generator_returns_complexity_valued_samples_without_fields() -> N
     ).measure_id
     assert sample.complexity_value.value == 0.0
     assert sample.target_distribution is None
+    assert sample_set.region is not None
+    assert sample_set.request_outcome is not None
+    assert sample_set.request_outcome.kind == "realized"
+    assert sample_set.request_outcome.region == sample_set.region
+    assert sample_set.region.volume == 1
+    assert len(sample_set.region.components) == 1
+    component = sample_set.region.components[0]
+    assert component.measure_rule == "benchmark-computed-finite-count"
+    assert component.volume == 1
+    spectator_regions = [
+        axis_region
+        for axis_region in component.axis_regions
+        if axis_region.axis_id.endswith(".spectator-occupancy")
+    ]
+    assert len(spectator_regions) == 1
+    assert spectator_regions[0].axis.coordinate_kind == "binary-vector"
+    assert spectator_regions[0].coordinate_region == ()
+    assert sample.region_component_index is not None
+    assert sample.axis_coordinates is not None
+    assert sample_set.region.contains(sample.region_component_index, sample.axis_coordinates)
     assert len(sample.available_outcome_ids) == legal_move_count
     assert sample.outcome_id in sample.available_outcome_ids
     assert sample.latent_coordinates[0]["values"] == 1
@@ -162,7 +183,58 @@ def test_chess_complexity_request_reports_exhausted_capacity() -> None:
     assert sample_set.samples == ()
     assert sample_set.request_outcome is not None
     assert sample_set.request_outcome.kind == "exhausted-capacity"
-    assert sample_set.to_record()["request_outcome"] == {"kind": "exhausted-capacity"}
+    assert sample_set.request_outcome.capacity_region is not None
+    expected_capacity = _chess_family_capacity()
+    assert sample_set.request_outcome.capacity_region.volume == expected_capacity
+    assert len(sample_set.request_outcome.capacity_region.components) == 48
+    assert {
+        component.volume
+        for component in sample_set.request_outcome.capacity_region.components
+    } == {expected_capacity // 48}
+    outcome_record = cast(dict[str, object], sample_set.to_record()["request_outcome"])
+    assert outcome_record["kind"] == "exhausted-capacity"
+    capacity_region = state_space_region_from_record(outcome_record["capacity_region"])
+    assert capacity_region.volume == expected_capacity
+
+
+def test_chess_realized_region_decomposes_exactly_per_stratum() -> None:
+    generator = load_generator(_chess_benchmark_root)
+    cardinality = 96
+    complexity = math.log2(cardinality)
+    sample_set = generator(
+        seed=47,
+        shape=8,
+        complexity_request=ComplexityRequest(minimum=complexity, maximum=complexity),
+    )
+
+    assert sample_set.region is not None
+    region = sample_set.region
+    assert region.volume == cardinality
+    assert math.isclose(region.log2_volume, complexity)
+    assert region.ambient.field_domain_kind == "lattice-2d"
+    assert region.ambient.field_domain == {"width": 8, "height": 8}
+    assert region.ambient.field_codomain_id == "piece-occupancy"
+    assert region.ambient.distinguishability.kind == "exact"
+    assert len(region.components) == 48
+    assert sum(component.volume for component in region.components) == cardinality
+    assert {component.volume for component in region.components} == {2}
+    assert {
+        component.measure_rule for component in region.components
+    } == {"benchmark-computed-finite-count"}
+    assert {
+        cast(dict[str, object], component.stratum_target)["base_index"]
+        for component in region.components
+    } == set(range(48))
+    for component in region.components:
+        stratum_target = cast(dict[str, object], component.stratum_target)
+        assert stratum_target["spectator_rank_count"] == component.volume
+        lower = cast(int, stratum_target["spectator_rank_lower"])
+        upper = cast(int, stratum_target["spectator_rank_upper"])
+        assert upper - lower + 1 == component.volume
+    for sample in sample_set.samples:
+        assert sample.region_component_index is not None
+        assert sample.axis_coordinates is not None
+        assert region.contains(sample.region_component_index, sample.axis_coordinates)
 
 
 def test_chess_complexity_request_accepts_matching_interval() -> None:
@@ -690,6 +762,10 @@ def _sample_analysis(sample: Any) -> dict[str, object]:
 
 def _chess_global_sample_index() -> Callable[..., int]:
     return cast(Callable[..., int], _chess_benchmark_module()["_global_sample_index"])
+
+
+def _chess_family_capacity() -> int:
+    return cast(Callable[[], int], _chess_benchmark_module()["_family_capacity"])()
 
 
 def _chess_representatives_for_cardinality() -> Callable[[int], list[dict[str, object]]]:
