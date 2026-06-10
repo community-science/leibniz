@@ -1528,7 +1528,7 @@ def _model_result_records(
             "score_integral": score_integral.to_record(
                 kind="sampled-competence-integral"
             ),
-            "points": list(points),
+            "points": [_public_competence_point_record(point) for point in points],
             "cost_summary": _model_cost_summary(
                 ordered_runs,
                 best_run=best_run,
@@ -2078,7 +2078,15 @@ def _competence_points(
 ) -> tuple[dict[str, object], ...]:
     by_interval: dict[
         tuple[float, float | None, float | None],
-        list[tuple[_BenchmarkRunRecord, float, int, tuple[int, ...] | None]],
+        list[
+            tuple[
+                _BenchmarkRunRecord,
+                float,
+                int,
+                tuple[int, ...] | None,
+                Mapping[str, object] | None,
+            ]
+        ],
     ] = {}
     for run in runs:
         for point in _run_competence_points(run):
@@ -2094,18 +2102,20 @@ def _competence_points(
             score = _as_nonnegative_number(point.get("score"), "point.score")
             sample_count = _as_positive_int(point.get("sample_count"), "point.sample_count")
             input_shape = _optional_point_input_shape(point, "point.input_shape")
+            region = _extract.optional_mapping(point.get("region"), "point.region")
             by_interval.setdefault((complexity, minimum, maximum), []).append(
-                (run, score, sample_count, input_shape)
+                (run, score, sample_count, input_shape, region)
             )
     points: list[dict[str, object]] = []
     for (complexity, minimum, maximum), evidence in by_interval.items():
         total_samples = sum(
-            sample_count for _run, _score, sample_count, _input_shape in evidence
+            sample_count
+            for _run, _score, sample_count, _input_shape, _region in evidence
         )
         score = (
             sum(
                 score * sample_count
-                for _run, score, sample_count, _input_shape in evidence
+                for _run, score, sample_count, _input_shape, _region in evidence
             )
             / total_samples
         )
@@ -2118,14 +2128,15 @@ def _competence_points(
                 for run in sorted(
                     {
                         run.run_id: run
-                        for run, _score, _sample_count, _input_shape in evidence
+                        for run, _score, _sample_count, _input_shape, _region in evidence
                     }.values(),
                     key=_run_sort_key,
                 )
             ],
         }
         input_shapes = {
-            input_shape for _run, _score, _sample_count, input_shape in evidence
+            input_shape
+            for _run, _score, _sample_count, input_shape, _region in evidence
             if input_shape is not None
         }
         if len(input_shapes) > 1:
@@ -2134,6 +2145,13 @@ def _competence_points(
             )
         if input_shapes:
             point["input_shape"] = list(next(iter(input_shapes)))
+        regions = {
+            canonical_document_bytes(region): region
+            for _run, _score, _sample_count, _input_shape, region in evidence
+            if region is not None
+        }
+        if len(regions) == 1:
+            point["region"] = next(iter(regions.values()))
         if minimum is not None:
             point["complexity_minimum"] = minimum
         if maximum is not None:
@@ -2185,7 +2203,17 @@ def _competence_point_from_sampled_record(point: Mapping[str, object]) -> dict[s
         record["complexity_minimum"] = competence.complexity_minimum
     if competence.complexity_maximum is not None:
         record["complexity_maximum"] = competence.complexity_maximum
+    if competence.region is not None:
+        record["region"] = competence.region.to_record()
     return record
+
+
+def _public_competence_point_record(point: Mapping[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in point.items()
+        if key != "region"
+    }
 
 
 def competence_integral(
@@ -2198,6 +2226,7 @@ def competence_integral(
             CompetencePoint(
                 complexity=_point_complexity(point),
                 accepted_mass=_point_score(point),
+                sample_count=_point_sample_count(point),
                 complexity_minimum=_optional_nonnegative_number(
                     point.get("complexity_minimum"),
                     "competence_point.complexity_minimum",
@@ -2205,6 +2234,10 @@ def competence_integral(
                 complexity_maximum=_optional_nonnegative_number(
                     point.get("complexity_maximum"),
                     "competence_point.complexity_maximum",
+                ),
+                region=_optional_state_space_region(
+                    point.get("region"),
+                    "competence_point.region",
                 ),
             )
             for point in points
@@ -3289,6 +3322,15 @@ def _optional_nonnegative_number(value: object, field: str) -> float | None:
     if value is None:
         return None
     return _as_nonnegative_number(value, field)
+
+
+def _optional_state_space_region(value: object, field: str) -> Any | None:
+    if value is None:
+        return None
+    try:
+        return state_space_region_from_record(value)
+    except StateSpaceError as error:
+        raise LocalResultImportError(f"{field}: {error}") from error
 
 
 def _as_probability(value: object, field: str) -> float:

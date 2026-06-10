@@ -140,6 +140,27 @@ def test_sampled_competence_integral_exposes_human_readable_terms() -> None:
     assert math.isclose(integral.value, 0.5)
 
 
+def test_sampled_competence_record_regions_flow_into_integral_terms() -> None:
+    point = CompetencePoint.from_sampled_record(
+        {
+            "complexity": 2.0,
+            "complexity_minimum": 1.0,
+            "complexity_maximum": 2.0,
+            "mean_accepted_mass": 0.55,
+            "sample_count": 8,
+            "region": _minimal_state_space_region_record(),
+        },
+        field_prefix="point",
+    )
+
+    integral = sampled_competence_frontier_integral((point,), chance_mass=0.1)
+
+    [term] = integral.terms
+    assert term.region is not None
+    assert term.region.id == "test.region"
+    assert term.to_record()["region"] == _minimal_state_space_region_record()
+
+
 def test_frontier_advancement_uses_current_rung_competence_not_integrated_score() -> None:
     assert validation_competence_frontier_advances(
         frontier_point=ValidationCompetencePoint(
@@ -166,3 +187,41 @@ def test_frontier_advancement_rejects_chance_competence() -> None:
         previous_frontier_points=(),
         chance_mass=0.1,
     )
+
+
+def _minimal_state_space_region_record() -> dict[str, object]:
+    return {
+        "id": "test.region",
+        "ambient": {
+            "field_domain_kind": "lattice-2d",
+            "field_domain": {"height": 2, "width": 2},
+            "field_codomain_id": "unit-intensity",
+            "distinguishability": {
+                "kind": "exact",
+                "certificate_id": "test-certificate",
+            },
+        },
+        "components": [
+            {
+                "axis_regions": [
+                    {
+                        "axis": {
+                            "id": "x",
+                            "domain": {"kind": "integer-range", "lower": 0, "upper": 1},
+                        },
+                        "coordinate_region": [0, 1],
+                        "count": 2,
+                        "log2_count": 1.0,
+                    },
+                ],
+                "measure_rule": "product-of-counts",
+                "volume": 2,
+                "log2_volume": 1.0,
+                "stratum_id": "fixture",
+                "stratum_target": {"label": "fixture"},
+            },
+        ],
+        "union_rule": "disjoint-union",
+        "volume": 2,
+        "log2_volume": 1.0,
+    }

@@ -46,14 +46,14 @@ import type {
   ResultViewRecord,
   RunDetailSectionRecord,
   RunResultRecord,
+  StateSpaceIntegralTermRecord,
   TrainingHistoryPointRecord,
   TrainingProtocolRecord,
 } from './resultViews.ts';
-import type { AxisRegionRecord, StateSpaceRegionRecord } from './stateSpaceRecords.ts';
 
 type SampleCardDensity = 'standard' | 'compact';
 type BenchmarkModelCandidate = BenchmarkResultRecord['model_candidates'][number];
-type ModelArtifactView = 'model' | 'architecture' | 'training' | 'provenance';
+type ModelArtifactView = 'model' | 'architecture' | 'measurements' | 'training' | 'provenance';
 type ModelArtifactFlowItem = {
   icon: LucideIcon;
   label: string;
@@ -355,6 +355,9 @@ function BenchmarkModelInspector({
           model={model}
         />
       ) : null}
+      {artifactView === 'measurements' ? (
+        <ModelMeasurementDetail model={model} />
+      ) : null}
       {artifactView === 'architecture' ? (
         <>
           <ModelArchitectureDetail
@@ -402,7 +405,7 @@ function ModelArtifactFlow({
       value: inspection?.measurement_dataset === undefined
         ? `${model.measurement_count} records`
         : referenceLabel(inspection.measurement_dataset),
-      view: 'model',
+      view: 'measurements',
     },
     {
       icon: GitBranch,
@@ -559,6 +562,150 @@ function ModelGeneratedSummarySection({ section }: { section: RunDetailSectionRe
       </dl>
     </section>
   );
+}
+
+function ModelMeasurementDetail({ model }: { model: BenchmarkModelCandidate }) {
+  return (
+    <section className="benchmark-model-detail-section">
+      <h4>Measurements</h4>
+      <dl className="benchmark-model-cost-grid">
+        <div>
+          <dt>Score</dt>
+          <dd>{model.score.toFixed(4)}</dd>
+        </div>
+        <div>
+          <dt>Measurements</dt>
+          <dd>{model.measurement_count.toLocaleString()}</dd>
+        </div>
+        <div>
+          <dt>Score Terms</dt>
+          <dd>{model.score_integral.terms.length.toLocaleString()}</dd>
+        </div>
+        <div>
+          <dt>Cost Terms</dt>
+          <dd>{model.cost_integral?.terms.length.toLocaleString() ?? 'none'}</dd>
+        </div>
+      </dl>
+      {model.cost_integral !== undefined && integralTermsAlign(model.score_integral.terms, model.cost_integral.terms) ? (
+        <CombinedIntegralTermTable
+          costTerms={model.cost_integral.terms}
+          scoreTerms={model.score_integral.terms}
+        />
+      ) : (
+        <>
+          <IntegralTermTable title="Score Integral" terms={model.score_integral.terms} />
+          {model.cost_integral === undefined ? null : (
+            <IntegralTermTable title="Cost Integral" terms={model.cost_integral.terms} />
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function CombinedIntegralTermTable({
+  costTerms,
+  scoreTerms,
+}: {
+  costTerms: StateSpaceIntegralTermRecord[];
+  scoreTerms: StateSpaceIntegralTermRecord[];
+}) {
+  if (scoreTerms.length === 0) {
+    return null;
+  }
+  return (
+    <section className="benchmark-integral-term-section" aria-label="Score and cost integrals">
+      <h5>Score and Cost Integrals</h5>
+      <div className="benchmark-integral-term-grid combined" role="table">
+        <div className="benchmark-integral-term-row combined header" role="row">
+          <span role="columnheader">Range</span>
+          <span role="columnheader">Width</span>
+          <span role="columnheader">Score Density</span>
+          <span role="columnheader">Score</span>
+          <span role="columnheader">Cost Density</span>
+          <span role="columnheader">Cost</span>
+          <span role="columnheader">Samples</span>
+        </div>
+        {scoreTerms.map((scoreTerm, index) => {
+          const costTerm = costTerms[index];
+          return (
+            <div
+              className="benchmark-integral-term-row combined"
+              key={`${scoreTerm.kind}:${scoreTerm.log2_volume_minimum}:${scoreTerm.log2_volume_maximum}:${index}`}
+              role="row"
+            >
+              <span role="cell">{integralTermRegionLabel(scoreTerm)}</span>
+              <span role="cell">{formatBits(scoreTerm.width_in_bits)}</span>
+              <span role="cell">{formatMetricNumber(scoreTerm.competence_density)}</span>
+              <span role="cell">{formatBits(scoreTerm.contribution)}</span>
+              <span role="cell">{formatCost(costTerm.competence_density)}</span>
+              <span role="cell">{formatCost(costTerm.contribution)}</span>
+              <span role="cell">{scoreTerm.sample_count?.toLocaleString() ?? 'unknown'}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function IntegralTermTable({
+  terms,
+  title,
+}: {
+  terms: StateSpaceIntegralTermRecord[];
+  title: string;
+}) {
+  if (terms.length === 0) {
+    return null;
+  }
+  return (
+    <section className="benchmark-integral-term-section" aria-label={title}>
+      <h5>{title}</h5>
+      <div className="benchmark-integral-term-grid" role="table">
+        <div className="benchmark-integral-term-row header" role="row">
+          <span role="columnheader">Range</span>
+          <span role="columnheader">Width</span>
+          <span role="columnheader">Density</span>
+          <span role="columnheader">Contribution</span>
+          <span role="columnheader">Samples</span>
+        </div>
+        {terms.map((term, index) => (
+          <div
+            className="benchmark-integral-term-row"
+            key={`${term.kind}:${term.log2_volume_minimum}:${term.log2_volume_maximum}:${index}`}
+            role="row"
+          >
+            <span role="cell">{integralTermRegionLabel(term)}</span>
+            <span role="cell">{formatBits(term.width_in_bits)}</span>
+            <span role="cell">{formatMetricNumber(term.competence_density)}</span>
+            <span role="cell">{formatBits(term.contribution)}</span>
+            <span role="cell">{term.sample_count?.toLocaleString() ?? 'unknown'}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function integralTermsAlign(
+  scoreTerms: StateSpaceIntegralTermRecord[],
+  costTerms: StateSpaceIntegralTermRecord[],
+): boolean {
+  return scoreTerms.length === costTerms.length && scoreTerms.every((term, index) => {
+    const costTerm = costTerms[index];
+    return costTerm !== undefined
+      && term.log2_volume_minimum === costTerm.log2_volume_minimum
+      && term.log2_volume_maximum === costTerm.log2_volume_maximum;
+  });
+}
+
+function integralTermRegionLabel(term: StateSpaceIntegralTermRecord): string {
+  return `${formatBits(term.log2_volume_minimum)} to ${formatBits(term.log2_volume_maximum)}`;
+}
+
+function formatBits(value: number): string {
+  return `${formatMetricNumber(value)} bits`;
 }
 
 function ModelArchitectureDetail({
@@ -976,20 +1123,6 @@ function formatMetricNumber(value: number): string {
   });
 }
 
-function regionAmbientLabel(region: StateSpaceRegionRecord): string {
-  const domain = Object.entries(region.ambient.field_domain)
-    .map(([key, value]) => `${key}=${value}`)
-    .join(', ');
-  return `${region.ambient.field_domain_kind} (${domain}) -> ${region.ambient.field_codomain_id}, ${region.ambient.distinguishability.kind}`;
-}
-
-function axisRegionLabel(axisRegion: AxisRegionRecord): string {
-  const coordinates = axisRegion.coordinate_region.length === 0
-    ? 'singleton'
-    : axisRegion.coordinate_region.join(', ');
-  return `${axisRegion.axis.id}: ${axisRegion.axis.domain.kind}, ${coordinates}`;
-}
-
 function modelComponentCount(
   inspection: ModelInspectionRecord | undefined,
   model: BenchmarkModelCandidate,
@@ -1108,7 +1241,6 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
         sample={selectedSample?.sample}
         selectedBatch={selectedBatch}
       />
-      <BenchmarkBatchRegionInspector batch={selectedBatch} />
       <section
         aria-label={`Generated benchmark samples ${selectedBatch.label}`}
         className="benchmark-sample-window"
@@ -1134,67 +1266,6 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
         )}
       </section>
     </div>
-  );
-}
-
-function BenchmarkBatchRegionInspector({ batch }: { batch: GeneratedObservationBatchRecord }) {
-  const region = batch.region ?? batch.request_outcome?.region;
-  if (region === undefined) {
-    return null;
-  }
-  return (
-    <section className="benchmark-region-inspector" aria-label="Generated state-space region">
-      <div className="benchmark-region-header">
-        <h3>State Space Region</h3>
-        <span>{`${region.volume.toLocaleString()} states`}</span>
-      </div>
-      <dl>
-        <div>
-          <dt>Ambient</dt>
-          <dd title={regionAmbientLabel(region)}>{regionAmbientLabel(region)}</dd>
-        </div>
-        <div>
-          <dt>Bits</dt>
-          <dd>{formatMetricNumber(region.log2_volume)}</dd>
-        </div>
-        <div>
-          <dt>Components</dt>
-          <dd>{region.components.length.toLocaleString()}</dd>
-        </div>
-        <div>
-          <dt>Samples</dt>
-          <dd>{batch.sample_count.toLocaleString()}</dd>
-        </div>
-      </dl>
-      <div className="benchmark-region-components">
-        {region.components.slice(0, 6).map((component, index) => (
-          <div
-            className="benchmark-region-component"
-            key={`${component.stratum_id ?? 'component'}:${index}`}
-          >
-            <div className="benchmark-region-component-heading">
-              <span>{component.stratum_id ?? `component ${index + 1}`}</span>
-              <span>{`${component.volume.toLocaleString()} states`}</span>
-            </div>
-            <div className="benchmark-region-component-meta">
-              <span>{component.measure_rule}</span>
-              <span>{`${formatMetricNumber(component.log2_volume)} bits`}</span>
-              <span>{`${component.axis_regions.length.toLocaleString()} axes`}</span>
-            </div>
-            <div className="benchmark-region-axis-list">
-              {component.axis_regions.slice(0, 5).map((axisRegion) => (
-                <span key={axisRegion.axis.id} title={axisRegionLabel(axisRegion)}>
-                  {axisRegion.axis.domain.kind}: {axisRegion.count.toLocaleString()}
-                </span>
-              ))}
-            </div>
-          </div>
-        ))}
-        {region.components.length > 6 ? (
-          <p>{`${region.components.length - 6} more components`}</p>
-        ) : null}
-      </div>
-    </section>
   );
 }
 

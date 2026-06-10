@@ -234,40 +234,14 @@ p {
   text-transform: uppercase;
 }
 
-.benchmark-integral-details,
-.benchmark-region-inspector {
-  border: var(--line-thin) solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--panel-bg);
-  padding: var(--space-md);
-}
-
-.benchmark-integral-header,
-.benchmark-region-header,
-.state-space-component-heading,
-.benchmark-region-component-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-md);
-}
-
-.benchmark-integral-header span,
-.benchmark-region-header span,
-.state-space-component-heading span:last-child,
-.benchmark-region-component-heading span:last-child {
-  color: var(--text-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--font-control);
-}
-
 .benchmark-integral-term-section {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
 }
 
-.benchmark-integral-term-section h4 {
+.benchmark-integral-term-section h4,
+.benchmark-integral-term-section h5 {
   margin: var(--space-xs) 0 0;
   color: var(--text-muted);
   font-size: var(--font-label);
@@ -292,6 +266,13 @@ p {
   background: var(--panel-bg);
 }
 
+.benchmark-integral-term-row.combined {
+  grid-template-columns:
+    minmax(11rem, 1.4fr)
+    minmax(5.5rem, 0.7fr)
+    repeat(5, minmax(6.5rem, 1fr));
+}
+
 .benchmark-integral-term-row span {
   min-width: 0;
   padding: var(--space-xs) var(--space-sm);
@@ -304,87 +285,6 @@ p {
   font-weight: 800;
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-}
-
-.state-space-region-summary,
-.benchmark-region-inspector {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-}
-
-.state-space-region-summary dl,
-.benchmark-region-inspector dl {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(var(--result-source-metric-min), 1fr));
-  gap: var(--space-sm);
-  margin: 0;
-}
-
-.state-space-region-summary dl div,
-.benchmark-region-inspector dl div {
-  min-width: 0;
-  border-left: var(--line-accent) solid var(--frontier-accent-border);
-  padding-left: var(--space-sm);
-}
-
-.state-space-region-summary dt,
-.benchmark-region-inspector dt {
-  color: var(--text-dim);
-  font-size: var(--font-label);
-  font-weight: 800;
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-}
-
-.state-space-region-summary dd,
-.benchmark-region-inspector dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--text-primary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--font-control);
-}
-
-.state-space-component-list,
-.benchmark-region-components {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
-  gap: var(--space-sm);
-}
-
-.state-space-component,
-.benchmark-region-component {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
-  min-width: 0;
-  border: var(--line-thin) solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: var(--space-sm);
-}
-
-.state-space-component-meta,
-.benchmark-region-component-meta,
-.state-space-axis-list,
-.benchmark-region-axis-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-xs);
-}
-
-.state-space-component-meta span,
-.benchmark-region-component-meta span,
-.state-space-axis-list span,
-.benchmark-region-axis-list span {
-  max-width: 100%;
-  border: var(--line-thin) solid var(--border-color);
-  border-radius: var(--radius-xs);
-  color: var(--text-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--font-label);
-  padding: var(--space-2xs) var(--space-xs);
-  overflow-wrap: anywhere;
 }
 
 .frontier-chart {
