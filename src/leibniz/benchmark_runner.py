@@ -309,19 +309,19 @@ class _CurriculumRung:
 
     @property
     def complexity(self) -> float:
-        return self.batch.samples[0].complexity
+        return self.batch.complexity
 
     def to_record(self, *, status: str) -> dict[str, object]:
-        complexity_value = self.batch.samples[0].complexity_value
         record: dict[str, object] = {
             "index": self.index,
             "status": status,
             "seed": self.seed,
             "complexity_axis": _core_complexity_measure_id(),
             "complexity": self.complexity,
-            "complexity_value": (
-                None if complexity_value is None else complexity_value.to_record()
-            ),
+            "complexity_value": {
+                "measure_id": _core_complexity_measure_id(),
+                "value": self.complexity,
+            },
             "complexity_request": (
                 None
                 if self.batch.complexity_request is None
@@ -2422,6 +2422,8 @@ def _evaluate_checkpoint_rung_measurements(
             shape=(len(samples),),
             variation_extent=_full_variation_extent,
             complexity_request=rung.batch.complexity_request,
+            region=rung.batch.region,
+            request_outcome=rung.batch.request_outcome,
             samples=tuple(samples),
         ),
         tuple(probabilities),
@@ -3289,9 +3291,6 @@ def _sampled_competence_record_from_accepted_mass(
 
     if len(batch.samples) != len(accepted_mass):
         raise BenchmarkRunnerError("sampled competence requires one mass per sample")
-    complexities = {sample.complexity for sample in batch.samples}
-    if len(complexities) != 1:
-        raise BenchmarkRunnerError("sampled competence requires one complexity window")
     finite_losses = tuple(-math.log(mass) for mass in accepted_mass if mass > 0.0)
     mean_negative_log_score: float | str
     if len(finite_losses) != len(accepted_mass):
@@ -3304,7 +3303,7 @@ def _sampled_competence_record_from_accepted_mass(
         "difficulty_assumption": "approximately-uniform-within-complexity-window",
         "benchmark_id": str(batch.benchmark_id),
         "complexity_axis": complexity_axis,
-        "complexity": next(iter(complexities)),
+        "complexity": batch.complexity,
         "seed": batch.seed,
         "sample_count": len(batch.samples),
         "mean_accepted_mass": math.fsum(accepted_mass) / len(accepted_mass),

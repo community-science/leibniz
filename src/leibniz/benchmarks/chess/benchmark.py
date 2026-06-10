@@ -234,7 +234,6 @@ class Generator:
             sample_count=sample_count,
             sample_indices=sample_indices,
         )
-        complexity = math.log2(sample_space.cardinality)
         selected_local_indices = _sample_local_indices(
             seed=seed,
             cardinality=sample_space.cardinality,
@@ -251,7 +250,6 @@ class Generator:
                 global_indices=selected_global_indices,
                 outcome_ids=outcome_ids,
                 sample_space_cardinality=sample_space.cardinality,
-                complexity=complexity,
                 full_metadata=runtime is None,
             )
             if include_artifacts:
@@ -1053,7 +1051,6 @@ def _samples_for_global_indices(
     global_indices: Sequence[int],
     outcome_ids: tuple[str, ...] | None,
     sample_space_cardinality: int,
-    complexity: float,
     full_metadata: bool,
 ) -> tuple[GeneratedSample, ...]:
     if full_metadata:
@@ -1063,7 +1060,6 @@ def _samples_for_global_indices(
                 position=_position_for_sample_index(global_index),
                 global_index=global_index,
                 sample_space_cardinality=sample_space_cardinality,
-                complexity=complexity,
             )
             for index, global_index in enumerate(global_indices)
         )
@@ -1071,13 +1067,10 @@ def _samples_for_global_indices(
         raise ObservationGenerationError("lightweight Chess samples require outcome_ids")
     base_count = len(_mate_mechanisms()) * len(_board_transforms())
     target_indices_by_base = _base_target_indices(outcome_ids)
-    complexity_value = ComplexityValue(value=complexity)
     return tuple(
         GeneratedSample(
             index=index,
             outcome_id=outcome_ids[target_indices_by_base[global_index % base_count]],
-            complexity=complexity,
-            complexity_value=complexity_value,
             region_component_index=_chess_region_component_index(
                 global_index=global_index,
                 cardinality=sample_space_cardinality,
@@ -1097,13 +1090,10 @@ def _full_sample(
     position: _MateInOnePosition,
     global_index: int,
     sample_space_cardinality: int,
-    complexity: float,
 ) -> GeneratedSample:
     return GeneratedSample(
         index=index,
         outcome_id=position.mate_moves[0],
-        complexity=complexity,
-        complexity_value=ComplexityValue(value=complexity),
         region_component_index=_chess_region_component_index(
             global_index=global_index,
             cardinality=sample_space_cardinality,

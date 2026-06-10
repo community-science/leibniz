@@ -107,7 +107,7 @@ def test_digits_generator_is_deterministic() -> None:
         first_width,
     )
     assert math.isclose(
-        first_sample.complexity,
+        left.complexity,
         generator.distinguishable_state_complexity(
             width=first_width,
             height=first_height,
@@ -290,7 +290,7 @@ def test_digits_generator_samples_resolution_from_memory_bound() -> None:
     assert width >= 1
     assert height >= 1
     assert math.isclose(
-        sample.complexity,
+        batch.complexity,
         generator.distinguishable_state_complexity(width=width, height=height),
     )
     assert sample.outcome_id == f"digit-{sample.component_index}"
@@ -305,30 +305,20 @@ def test_digits_generator_counts_constructed_finite_complexity_class() -> None:
         seed=102,
     )
 
-    assert {
-        round(sample.complexity, 12)
-        for sample in scale_one.samples
-    } == {
-        round(
-            generator.distinguishable_state_complexity(
-                width=sample_width(scale_one.samples[0]),
-                height=sample_height(scale_one.samples[0]),
-            ),
-            12,
-        )
-    }
-    assert {
-        round(sample.complexity, 12)
-        for sample in scale_one_other_seed.samples
-    } == {
-        round(
-            generator.distinguishable_state_complexity(
-                width=sample_width(scale_one_other_seed.samples[0]),
-                height=sample_height(scale_one_other_seed.samples[0]),
-            ),
-            12,
-        )
-    }
+    assert round(scale_one.complexity, 12) == round(
+        generator.distinguishable_state_complexity(
+            width=sample_width(scale_one.samples[0]),
+            height=sample_height(scale_one.samples[0]),
+        ),
+        12,
+    )
+    assert round(scale_one_other_seed.complexity, 12) == round(
+        generator.distinguishable_state_complexity(
+            width=sample_width(scale_one_other_seed.samples[0]),
+            height=sample_height(scale_one_other_seed.samples[0]),
+        ),
+        12,
+    )
     assert sample_width(scale_one.samples[0]) >= 1
     assert sample_height(scale_one.samples[0]) >= 1
     minimum = generator.constructed_complexity_class_complexity(
@@ -387,15 +377,10 @@ def test_digits_generator_accepts_complexity_value_requests() -> None:
     ]
     assert [sample.outcome_id for sample in batch.samples] == ["digit-0", "digit-0"]
     assert [sample.component_index for sample in batch.samples] == [0, 0]
-    assert {
-        sample.complexity_value
-        for sample in batch.samples
-    } == {
-        batch.samples[0].complexity_value,
-    }
-    assert batch.samples[0].complexity_value is not None
-    assert batch.samples[0].complexity_value.measure_id == complexity_request.measure_id
-    assert math.isclose(batch.samples[0].complexity_value.value, requested_complexity)
+    assert {sample.complexity for sample in batch.samples} == {None}
+    assert {sample.complexity_value for sample in batch.samples} == {None}
+    assert math.isclose(batch.complexity, requested_complexity)
+    assert complexity_request.contains(batch.complexity)
 
 
 def test_digits_generated_sample_set_records_region_document_boundary() -> None:
@@ -407,7 +392,7 @@ def test_digits_generated_sample_set_records_region_document_boundary() -> None:
     assert batch.request_outcome.kind == "realized"
     assert batch.request_outcome.region == batch.region
     assert batch.region.volume == 20
-    assert math.isclose(batch.region.log2_volume, batch.samples[0].complexity)
+    assert math.isclose(batch.region.log2_volume, batch.complexity)
     record = batch.to_record()
     loaded = load_object_document(
         canonical_document_bytes(record),
@@ -489,10 +474,8 @@ def test_digits_regions_cover_preset_and_grid_coordinates() -> None:
     )
     for batch in (preset, grid):
         assert batch.region is not None
-        assert all(
-            math.isclose(sample.complexity, batch.region.log2_volume)
-            for sample in batch.samples
-        )
+        assert math.isclose(batch.complexity, batch.region.log2_volume)
+        assert {sample.complexity for sample in batch.samples} == {None}
         for sample in batch.samples:
             assert sample.region_component_index is not None
             assert sample.axis_coordinates is not None
@@ -966,8 +949,8 @@ def test_digits_variation_extent_zero_samples_canonical_affine() -> None:
         variation_extent=1.0,
     )
 
-    assert math.isclose(canonical.samples[0].complexity, math.log2(10))
-    assert full.samples[0].complexity > canonical.samples[0].complexity
+    assert math.isclose(canonical.complexity, math.log2(10))
+    assert full.complexity > canonical.complexity
     variation = _coordinate(canonical.samples[0].latent_coordinates, role="variation")
     values = cast(dict[str, object], variation["values"])
     coordinates = cast(list[dict[str, object]], values["coordinates"])

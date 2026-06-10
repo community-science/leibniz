@@ -1718,7 +1718,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
     points = cast(list[dict[str, object]], sampled_competence["points"])
     assert [point["complexity"] for point in points] == [
         math.log2(10),
-        batch.samples[0].complexity,
+        batch.complexity,
     ]
     assert points[0]["sample_count"] == 64
     assert points[0]["seed"] == 202
@@ -2436,7 +2436,7 @@ def test_training_curriculum_integer_window_rematerializes() -> None:
 
     assert window_sample.sample_count == 1
     assert window_sample.complexity_request == window_request
-    assert window_sample.samples[0].complexity == 8.0
+    assert window_sample.complexity == 8.0
     assert window_sample.samples[0].require_field().shape[1:] == (24, 24)
 
 

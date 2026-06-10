@@ -406,8 +406,6 @@ class Generator:
         )
         transform = self.formation.variation_transform
         transform_record = transform.to_record()
-        with _timing_span(timing, f"{timing_prefix}complexity"):
-            complexity = complexity_class.complexity
         materialization_declaration = ArtifactReference(
             kind="materialization-declaration",
             protocol_id=self.materialization.id,
@@ -519,8 +517,6 @@ class Generator:
                         variation_coordinates=variation_coordinates,
                         variation_values=variation_values,
                         outcome_id=self._outcome_id(component_index),
-                        complexity=complexity,
-                        complexity_value=_complexity_value(complexity),
                         latent_coordinates=self._latent_coordinates(
                             component_index=component_index,
                             digit_variant_index=digit_variant_index,
@@ -551,13 +547,10 @@ class Generator:
             timing=None,
             timing_prefix="",
         )
-        complexity = complexity_class.complexity
         return tuple(
             GeneratedSample(
                 index=sample_indices[index],
                 outcome_id=self._outcome_id(component_index),
-                complexity=complexity,
-                complexity_value=_complexity_value(complexity),
                 component_index=component_index,
                 region_component_index=_digits_region_component_index(
                     component_index=component_index,

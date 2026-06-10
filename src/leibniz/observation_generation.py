@@ -71,12 +71,16 @@ class ComplexityRequest:
                 "complexity maximum must be at least the minimum"
             )
 
-    def contains(self, value: ComplexityValue) -> bool:
+    def contains(self, value: ComplexityValue | float) -> bool:
         """Return whether a measured sample satisfies this interval."""
 
-        if value.measure_id != self.measure_id:
-            return False
-        return self.minimum <= value.value <= self.maximum
+        if isinstance(value, ComplexityValue):
+            if value.measure_id != self.measure_id:
+                return False
+            measured_value = value.value
+        else:
+            measured_value = value
+        return self.minimum <= measured_value <= self.maximum
 
     def to_record(self) -> dict[str, object]:
         """Return a record for this request."""
@@ -184,7 +188,7 @@ class GeneratedSample:
 
     index: int
     outcome_id: str
-    complexity: float
+    complexity: float | None = None
     complexity_value: ComplexityValue | None = None
     available_outcome_ids: tuple[str, ...] = ()
     observable_state_id: str | None = None
@@ -204,6 +208,11 @@ class GeneratedSample:
     def __post_init__(self) -> None:
         if not self.outcome_id:
             raise ObservationGenerationError("sample outcome_id must be nonempty")
+        if self.complexity is not None:
+            if not math.isfinite(float(self.complexity)):
+                raise ObservationGenerationError("sample complexity must be finite")
+            if self.complexity < 0.0:
+                raise ObservationGenerationError("sample complexity must be nonnegative")
         if self.observable_state_id is not None and not self.observable_state_id:
             raise ObservationGenerationError("sample observable_state_id must be nonempty")
         if len(set(self.available_outcome_ids)) != len(self.available_outcome_ids):
@@ -239,7 +248,6 @@ class GeneratedSample:
         record: dict[str, object] = {
             "index": self.index,
             "outcome_id": self.outcome_id,
-            "complexity": self.complexity,
             "latent_coordinates": [dict(coordinate) for coordinate in self.latent_coordinates],
         }
         if self.materialization_plan is not None:
@@ -269,8 +277,6 @@ class GeneratedSample:
             ]
         if self.variation_values is not None:
             record["variation_values"] = dict(self.variation_values)
-        if self.complexity_value is not None:
-            record["complexity_value"] = self.complexity_value.to_record()
         if self.field is not None and include_field:
             record["field"] = self.field.to_record()
         if self.artifacts:
@@ -356,21 +362,31 @@ class GeneratedSampleSet:
                     raise ObservationGenerationError(
                         "sample axis coordinates are outside the generated region"
                     )
+            if self.samples and any(
+                sample.complexity is not None
+                and not math.isclose(
+                    sample.complexity,
+                    self.region.log2_volume,
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                )
+                for sample in self.samples
+            ):
+                raise ObservationGenerationError(
+                    "sample complexity must match generated region volume"
+                )
         for sample in self.samples:
             if (
                 sample.materialization_plan is not None
                 and sample.materialization_plan.benchmark_id != self.benchmark_id
             ):
                 raise ObservationGenerationError("sample benchmark_id does not match sample set")
-            if self.complexity_request is not None:
-                if sample.complexity_value is None:
-                    raise ObservationGenerationError(
-                        "complexity request requires sample complexity values"
-                    )
-                if not self.complexity_request.contains(sample.complexity_value):
-                    raise ObservationGenerationError(
-                        "sample complexity is outside requested interval"
-                    )
+            if self.complexity_request is not None and not self.complexity_request.contains(
+                self.complexity
+            ):
+                raise ObservationGenerationError(
+                    "sample set complexity is outside requested interval"
+                )
 
     @property
     def includes_fields(self) -> bool:
@@ -401,7 +417,22 @@ class GeneratedSampleSet:
     def complexities(self) -> tuple[float, ...]:
         """Return generated sample complexities."""
 
-        return tuple(sample.complexity for sample in self.samples)
+        if not self.samples:
+            return ()
+        return (self.complexity,) * len(self.samples)
+
+    @property
+    def complexity(self) -> float:
+        """Return the generated state-space volume in bits."""
+
+        if self.region is not None:
+            return self.region.log2_volume
+        complexities = {
+            sample.complexity for sample in self.samples if sample.complexity is not None
+        }
+        if len(complexities) != 1:
+            raise ObservationGenerationError("sample set does not have one complexity")
+        return next(iter(complexities))
 
     def require_tensors(self) -> tuple[Any, Any]:
         """Return generated field and target tensors or fail with a domain error."""
@@ -435,6 +466,7 @@ class GeneratedSampleSet:
             record["variation_extent"] = self.variation_extent
         if self.region is not None:
             record["region"] = self.region.to_record()
+            record["complexity"] = self.region.log2_volume
         if self.request_outcome is not None:
             record["request_outcome"] = self.request_outcome.to_record()
         return record
