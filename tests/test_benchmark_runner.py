@@ -37,6 +37,7 @@ from leibniz.observation_generation import (
     ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
+    GenerationRequestOutcome,
     load_generator,
 )
 from leibniz.tensor_runtime import (
@@ -234,11 +235,12 @@ def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
             benchmark_id=ProtocolIdentifier.parse("benchmarks.fake@0.1.0"),
             generator_id=ProtocolIdentifier.parse("generators.fake@0.1.0"),
             generator_version="0.1.0",
-            seed=101,
-            shape=(0,),
-            complexity_request=request,
-        ),
-    )
+                seed=101,
+                shape=(0,),
+                complexity_request=request,
+                request_outcome=GenerationRequestOutcome(kind="exhausted-capacity"),
+            ),
+        )
     timings = benchmark_runner.TimingCollector()
     architecture = ArchitectureManifest.from_record(
         {
@@ -802,9 +804,10 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         "seed",
         "complexity_value",
         "complexity_request",
-        "score_interval",
-        "status",
-    }
+            "score_interval",
+            "status",
+            "request_outcome",
+        }
     assert all(set(rung) == expected_evaluation_rung_keys for rung in curriculum_rungs)
     assert all(
         isinstance(rung["mean_accepted_mass"], float)
@@ -2077,7 +2080,7 @@ def test_training_plateau_signal_uses_current_rung_competence() -> None:
     points.insert(
         0,
         {
-            "kind": "sampled-complexity-window",
+            "kind": "sampled-state-space-volume-window",
             "sampling_rule": "generator-uniform-component-index-v1",
             "difficulty_assumption": "approximately-uniform-within-complexity-window",
             "benchmark_id": "benchmarks.digits@0.1.0",
@@ -2111,7 +2114,7 @@ def test_training_rung_threshold_uses_current_rung_competence() -> None:
     points.insert(
         0,
         {
-            "kind": "sampled-complexity-window",
+            "kind": "sampled-state-space-volume-window",
             "sampling_rule": "generator-uniform-component-index-v1",
             "difficulty_assumption": "approximately-uniform-within-complexity-window",
             "benchmark_id": "benchmarks.digits@0.1.0",
@@ -2980,7 +2983,7 @@ def _score_estimate(
         "mean_accepted_mass": accepted_mass,
         "points": [
             {
-                "kind": "sampled-complexity-window",
+                "kind": "sampled-state-space-volume-window",
                 "sampling_rule": "generator-uniform-component-index-v1",
                 "difficulty_assumption": "approximately-uniform-within-complexity-window",
                 "benchmark_id": "benchmarks.digits@0.1.0",
@@ -3011,13 +3014,13 @@ def _score_estimate(
             "value": score,
             "terms": [
                 {
-                    "kind": "measured-competence",
-                    "complexity_minimum": 0.0,
-                    "complexity_maximum": complexity,
-                    "complexity_width": complexity,
-                    "density": 0.0 if complexity == 0.0 else score / complexity,
+                    "kind": "measured-state-space-competence",
+                    "log2_volume_minimum": 0.0,
+                    "log2_volume_maximum": complexity,
+                    "width_in_bits": complexity,
+                    "competence_density": 0.0 if complexity == 0.0 else score / complexity,
                     "contribution": score,
-                    "representative_complexity": complexity,
+                    "representative_log2_volume": complexity,
                     "sample_count": 2,
                 }
             ],

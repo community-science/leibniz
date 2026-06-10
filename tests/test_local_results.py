@@ -72,28 +72,28 @@ def test_competence_integral_integrates_bits_above_chance() -> None:
             ({"complexity": complexity, "score": 1.0},),
             chance_mass=chance_mass,
         ).value,
-        20.0,
+        1.0,
     )
     assert math.isclose(
         local_results.competence_integral(
             ({"complexity": complexity * 2.0, "score": 1.0},),
             chance_mass=chance_mass,
         ).value,
-        40.0,
+        1.0,
     )
     assert math.isclose(
         local_results.competence_integral(
             ({"complexity": complexity, "score": 0.55},),
             chance_mass=chance_mass,
         ).value,
-        19.5,
+        0.5,
     )
     assert math.isclose(
         local_results.competence_integral(
             ({"complexity": complexity * 4.0, "score": chance_mass},),
             chance_mass=chance_mass,
         ).value,
-        79.0,
+        0.0,
     )
     assert math.isclose(
         local_results.competence_integral(
@@ -103,7 +103,7 @@ def test_competence_integral_integrates_bits_above_chance() -> None:
             ),
             chance_mass=chance_mass,
         ).value,
-        39.0,
+        1.0,
     )
 
 

@@ -75,7 +75,7 @@ def test_sampled_competence_score_counts_exact_complexity_gaps_once() -> None:
             ),
             chance_mass=0.1,
         ).value,
-        3.0,
+        0.0,
     )
 
 
@@ -104,7 +104,7 @@ def test_sampled_competence_score_charges_representative_intervals() -> None:
             ),
             chance_mass=0.1,
         ).value,
-        3.0,
+        0.0,
     )
 
 
@@ -122,30 +122,22 @@ def test_sampled_competence_integral_exposes_human_readable_terms() -> None:
         chance_mass=0.1,
     )
 
-    gap, measured = [term.to_record() for term in integral.terms]
-    assert gap == {
-        "kind": "unrepresentable-gap",
-        "complexity_minimum": 0.0,
-        "complexity_maximum": 1.0,
-        "complexity_width": 1.0,
-        "density": 1.0,
-        "contribution": 1.0,
-    }
-    measured_density = measured.pop("density")
+    [measured] = [term.to_record() for term in integral.terms]
+    measured_density = measured.pop("competence_density")
     measured_contribution = measured.pop("contribution")
     assert measured == {
-        "kind": "measured-competence",
-        "complexity_minimum": 1.0,
-        "complexity_maximum": 2.0,
-        "complexity_width": 1.0,
-        "representative_complexity": 2.0,
+        "kind": "measured-state-space-competence",
+        "log2_volume_minimum": 1.0,
+        "log2_volume_maximum": 2.0,
+        "width_in_bits": 1.0,
+        "representative_log2_volume": 2.0,
         "sample_count": 8,
     }
     assert isinstance(measured_density, int | float)
     assert isinstance(measured_contribution, int | float)
     assert math.isclose(measured_density, 0.5)
     assert math.isclose(measured_contribution, 0.5)
-    assert math.isclose(integral.value, 1.5)
+    assert math.isclose(integral.value, 0.5)
 
 
 def test_frontier_advancement_uses_current_rung_competence_not_integrated_score() -> None:

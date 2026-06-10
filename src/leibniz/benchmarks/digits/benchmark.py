@@ -43,6 +43,7 @@ from leibniz.observation_generation import (
     ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
+    GenerationRequestOutcome,
     ObservationGenerationError,
 )
 from leibniz.observation_showcases import (
@@ -1308,6 +1309,10 @@ class Generator:
                     variation_extent=variation_extent,
                     complexity_request=complexity_request,
                     samples=(),
+                    request_outcome=_digits_unrealized_request_outcome(
+                        request=complexity_request,
+                        minimum_complexity=self.minimum_complexity().value,
+                    ),
                 )
             resolution_assignment = requested_complexity_class.resolution_assignment
             if resolution_assignment is None:
@@ -1863,6 +1868,15 @@ def _digits_transform_indices_by_digit(
         digit_index: tuple(transform_indices)
         for digit_index, transform_indices in sorted(transform_indices_by_digit.items())
     }
+
+
+def _digits_unrealized_request_outcome(
+    *,
+    request: ComplexityRequest,
+    minimum_complexity: float,
+) -> GenerationRequestOutcome:
+    _ = minimum_complexity
+    return GenerationRequestOutcome(kind="unrepresentable-below-minimum")
 
 
 def _digits_local_state_index(
@@ -3105,7 +3119,7 @@ def _manifest() -> BenchmarkManifest:
             "affine_maximum_projected_extent": 1.35,
             "complexity_value": {
                 "kind": "constructed-finite-complexity-shell",
-                "measure_id": "log2_complexity_class_size",
+                "measure_id": "log2-state-space-volume",
                 "formula": "log2(realized_cardinality)",
                 "digit_count": _complexity_class_digit_count,
                 "affine_transform_family": "constructed-finite-affine-product-grid",

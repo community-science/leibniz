@@ -193,21 +193,21 @@ export type TrainingEstimateComparisonRecord = {
   points: TrainingEstimateComparisonPointRecord[];
 };
 
-export type ComplexityIntegralTermRecord = {
+export type StateSpaceIntegralTermRecord = {
   kind: string;
-  complexity_minimum: number;
-  complexity_maximum: number;
-  complexity_width: number;
-  density: number;
+  log2_volume_minimum: number;
+  log2_volume_maximum: number;
+  width_in_bits: number;
+  competence_density: number;
   contribution: number;
-  representative_complexity?: number;
+  representative_log2_volume?: number;
   sample_count?: number;
 };
 
 export type ComplexityIntegralRecord = {
   kind: string;
   value: number;
-  terms: ComplexityIntegralTermRecord[];
+  terms: StateSpaceIntegralTermRecord[];
 };
 
 export type CostSummaryRecord = {
@@ -452,28 +452,28 @@ function parseComplexityIntegral(value: unknown, path: string): ComplexityIntegr
   return {
     kind: requireString(record.kind, `${path}.kind`, transportError),
     value: requireNumber(record.value, `${path}.value`, transportError),
-    terms: arrayOf(record.terms, `${path}.terms`, parseComplexityIntegralTerm),
+    terms: arrayOf(record.terms, `${path}.terms`, parseStateSpaceIntegralTerm),
   };
 }
 
-function parseComplexityIntegralTerm(value: unknown, path: string): ComplexityIntegralTermRecord {
+function parseStateSpaceIntegralTerm(value: unknown, path: string): StateSpaceIntegralTermRecord {
   const record = requireRecord(value, path, transportError);
   requireStrings(record, path, ['kind']);
   requireNumbers(record, path, [
-    'complexity_minimum',
-    'complexity_maximum',
-    'complexity_width',
-    'density',
+    'log2_volume_minimum',
+    'log2_volume_maximum',
+    'width_in_bits',
+    'competence_density',
     'contribution',
   ]);
   return {
     kind: requireString(record.kind, `${path}.kind`, transportError),
-    complexity_minimum: requireNumber(record.complexity_minimum, `${path}.complexity_minimum`, transportError),
-    complexity_maximum: requireNumber(record.complexity_maximum, `${path}.complexity_maximum`, transportError),
-    complexity_width: requireNumber(record.complexity_width, `${path}.complexity_width`, transportError),
-    density: requireNumber(record.density, `${path}.density`, transportError),
+    log2_volume_minimum: requireNumber(record.log2_volume_minimum, `${path}.log2_volume_minimum`, transportError),
+    log2_volume_maximum: requireNumber(record.log2_volume_maximum, `${path}.log2_volume_maximum`, transportError),
+    width_in_bits: requireNumber(record.width_in_bits, `${path}.width_in_bits`, transportError),
+    competence_density: requireNumber(record.competence_density, `${path}.competence_density`, transportError),
     contribution: requireNumber(record.contribution, `${path}.contribution`, transportError),
-    representative_complexity: optionalNumber(record.representative_complexity, `${path}.representative_complexity`, transportError),
+    representative_log2_volume: optionalNumber(record.representative_log2_volume, `${path}.representative_log2_volume`, transportError),
     sample_count: optionalNumber(record.sample_count, `${path}.sample_count`, transportError),
   };
 }

@@ -273,7 +273,7 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
         "affine_maximum_projected_extent": 1.35,
         "complexity_value": {
             "kind": "constructed-finite-complexity-shell",
-            "measure_id": "log2_complexity_class_size",
+            "measure_id": "log2-state-space-volume",
             "formula": "log2(realized_cardinality)",
             "digit_count": 10,
             "affine_transform_family": "constructed-finite-affine-product-grid",

@@ -18,6 +18,7 @@ from leibniz.state_space import StateSpaceRegion
 __all__ = [
     "GeneratedSample",
     "GeneratedSampleSet",
+    "GenerationRequestOutcome",
     "ObservationGenerationError",
     "ComplexityRequest",
     "ComplexityValue",
@@ -25,9 +26,19 @@ __all__ = [
     "sample_indices_for_even_state_coverage",
 ]
 
-_core_complexity_measure_id = "log2_complexity_class_size"
+_core_complexity_measure_id = "log2-state-space-volume"
 _core_complexity_measure_ids = frozenset({_core_complexity_measure_id})
 _minimum_complexity_value = 0.0
+_realized_outcome_kind = "realized"
+_exhausted_capacity_outcome_kind = "exhausted-capacity"
+_unrepresentable_below_minimum_outcome_kind = "unrepresentable-below-minimum"
+_request_outcome_kinds = frozenset(
+    {
+        _realized_outcome_kind,
+        _exhausted_capacity_outcome_kind,
+        _unrepresentable_below_minimum_outcome_kind,
+    }
+)
 
 
 class ObservationGenerationError(ValueError):
@@ -103,6 +114,36 @@ class ComplexityValue:
             "measure_id": self.measure_id,
             "value": self.value,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationRequestOutcome:
+    """The typed result of asking a generator for a state-space volume window."""
+
+    kind: str
+    region: StateSpaceRegion | None = None
+    capacity_region: StateSpaceRegion | None = None
+    minimum_region: StateSpaceRegion | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in _request_outcome_kinds:
+            raise ObservationGenerationError("generation request outcome kind is not supported")
+        if self.kind == _realized_outcome_kind and self.region is None:
+            raise ObservationGenerationError("realized request outcomes require a region")
+        if self.kind != _realized_outcome_kind and self.region is not None:
+            raise ObservationGenerationError("non-realized request outcomes cannot carry a region")
+
+    def to_record(self) -> dict[str, object]:
+        """Return a record for this request outcome."""
+
+        record: dict[str, object] = {"kind": self.kind}
+        if self.region is not None:
+            record["region"] = self.region.to_record()
+        if self.capacity_region is not None:
+            record["capacity_region"] = self.capacity_region.to_record()
+        if self.minimum_region is not None:
+            record["minimum_region"] = self.minimum_region.to_record()
+        return record
 
 
 def sample_indices_for_even_state_coverage(
@@ -252,6 +293,7 @@ class GeneratedSampleSet:
     variation_extent: float | None = None
     complexity_request: ComplexityRequest | None = None
     region: StateSpaceRegion | None = None
+    request_outcome: GenerationRequestOutcome | None = None
 
     def __post_init__(self) -> None:
         if type(self.seed) is not int or self.seed < 0:
@@ -271,10 +313,31 @@ class GeneratedSampleSet:
             raise ObservationGenerationError("empty sample sets must have shape [0]")
         if self.samples and len(self.samples) != self.sample_count:
             raise ObservationGenerationError("sample count does not match sample shape")
-        if not self.samples and not has_tensors and self.complexity_request is None:
-            raise ObservationGenerationError(
-                "empty sample sets require a complexity request"
+        if self.request_outcome is not None:
+            if self.request_outcome.kind == _realized_outcome_kind:
+                if self.region is None or self.request_outcome.region != self.region:
+                    raise ObservationGenerationError(
+                        "realized request outcomes must match the sample set region"
+                    )
+            elif self.samples or has_tensors:
+                raise ObservationGenerationError(
+                    "non-realized request outcomes cannot carry samples or tensors"
+                )
+        elif self.region is not None:
+            object.__setattr__(
+                self,
+                "request_outcome",
+                GenerationRequestOutcome(kind=_realized_outcome_kind, region=self.region),
             )
+        if not self.samples and not has_tensors:
+            if self.request_outcome is None:
+                raise ObservationGenerationError(
+                    "empty sample sets require a typed request outcome"
+                )
+            if self.request_outcome.kind == _realized_outcome_kind:
+                raise ObservationGenerationError(
+                    "realized request outcomes require generated samples or tensors"
+                )
         if self.region is not None:
             if self.samples and any(
                 sample.region_component_index is None or sample.axis_coordinates is None
@@ -372,6 +435,8 @@ class GeneratedSampleSet:
             record["variation_extent"] = self.variation_extent
         if self.region is not None:
             record["region"] = self.region.to_record()
+        if self.request_outcome is not None:
+            record["request_outcome"] = self.request_outcome.to_record()
         return record
 
 

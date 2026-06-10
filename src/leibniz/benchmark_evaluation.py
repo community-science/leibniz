@@ -18,16 +18,17 @@ from leibniz.observation_generation import GeneratedSample, GeneratedSampleSet
 from leibniz.outcomes import AcceptedEvent, OutcomeSpace, RawScoringEvidence
 from leibniz.prediction_results import DirectFiniteProbabilityPrediction
 from leibniz.prediction_spaces import FiniteOutcomeSpace
+from leibniz.state_space import StateSpaceRegion
 
 __all__ = [
     "CompetencePoint",
     "ComplexityIntegral",
-    "ComplexityIntegralTerm",
     "finite_measurements_for_predictions",
     "sampled_competence_curriculum_record",
     "sampled_competence_compute_cost_integral",
     "sampled_competence_record",
     "sampled_competence_frontier_integral",
+    "StateSpaceIntegralTerm",
     "ValidationCompetencePoint",
     "validation_competence",
     "validation_competence_frontier_advances",
@@ -49,6 +50,7 @@ class CompetencePoint:
     complexity_minimum: float | None = None
     complexity_maximum: float | None = None
     input_shape: tuple[int, ...] | None = None
+    region: StateSpaceRegion | None = None
 
     @classmethod
     def from_sampled_record(
@@ -95,15 +97,17 @@ class CompetencePoint:
 
 
 @dataclass(frozen=True, slots=True)
-class ComplexityIntegralTerm:
-    """One explicit interval contribution to an integral over complexity."""
+class StateSpaceIntegralTerm:
+    """One explicit interval contribution to an integral over state-space volume."""
 
     lower: float
     upper: float
-    density: float
+    competence_density: float
     kind: str
-    representative_complexity: float | None = None
+    representative_log2_volume: float | None = None
     sample_count: int | None = None
+    confidence_half_width: float | None = None
+    region: StateSpaceRegion | None = None
 
     @property
     def width(self) -> float:
@@ -111,21 +115,25 @@ class ComplexityIntegralTerm:
 
     @property
     def contribution(self) -> float:
-        return self.width * self.density
+        return self.width * self.competence_density
 
     def to_record(self) -> dict[str, object]:
         record: dict[str, object] = {
             "kind": self.kind,
-            "complexity_minimum": self.lower,
-            "complexity_maximum": self.upper,
-            "complexity_width": self.width,
-            "density": self.density,
+            "log2_volume_minimum": self.lower,
+            "log2_volume_maximum": self.upper,
+            "width_in_bits": self.width,
+            "competence_density": self.competence_density,
             "contribution": self.contribution,
         }
-        if self.representative_complexity is not None:
-            record["representative_complexity"] = self.representative_complexity
+        if self.representative_log2_volume is not None:
+            record["representative_log2_volume"] = self.representative_log2_volume
         if self.sample_count is not None:
             record["sample_count"] = self.sample_count
+        if self.confidence_half_width is not None:
+            record["confidence_half_width"] = self.confidence_half_width
+        if self.region is not None:
+            record["region"] = self.region.to_record()
         return record
 
 
@@ -133,7 +141,7 @@ class ComplexityIntegralTerm:
 class ComplexityIntegral:
     """A human-readable numerical integral over the complexity axis."""
 
-    terms: tuple[ComplexityIntegralTerm, ...]
+    terms: tuple[StateSpaceIntegralTerm, ...]
 
     @property
     def value(self) -> float:
@@ -243,7 +251,7 @@ def sampled_competence_record(
     else:
         mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
     record: dict[str, object] = {
-        "kind": "sampled-complexity-window",
+        "kind": "sampled-state-space-volume-window",
         "sampling_rule": "generator-uniform-component-index-v1",
         "difficulty_assumption": "approximately-uniform-within-complexity-window",
         "benchmark_id": str(batch.benchmark_id),
@@ -268,6 +276,8 @@ def sampled_competence_record(
     if batch.complexity_request is not None:
         record["complexity_minimum"] = batch.complexity_request.minimum
         record["complexity_maximum"] = batch.complexity_request.maximum
+    if batch.region is not None:
+        record["region"] = batch.region.to_record()
     return record
 
 
@@ -357,32 +367,24 @@ def sampled_competence_frontier_integral(
 ) -> ComplexityIntegral:
     """Return the explicit competence integral over measured complexity intervals."""
 
-    terms: list[ComplexityIntegralTerm] = []
+    terms: list[StateSpaceIntegralTerm] = []
     cursor = 0.0
     for point in sorted(points, key=_competence_point_interval_sort_key):
         lower, upper = _complexity_point_interval(point)
-        if lower > cursor:
-            terms.append(
-                ComplexityIntegralTerm(
-                    lower=cursor,
-                    upper=lower,
-                    density=1.0,
-                    kind="unrepresentable-gap",
-                )
-            )
         measured_lower = max(lower, cursor)
         if upper > measured_lower:
             terms.append(
-                ComplexityIntegralTerm(
+                StateSpaceIntegralTerm(
                     lower=measured_lower,
                     upper=upper,
-                    density=_above_chance_competence(
+                    competence_density=_above_chance_competence(
                         point.accepted_mass,
                         chance_mass=chance_mass,
                     ),
-                    kind="measured-competence",
-                    representative_complexity=point.complexity,
+                    kind="measured-state-space-competence",
+                    representative_log2_volume=point.complexity,
                     sample_count=point.sample_count,
+                    region=point.region,
                 )
             )
         cursor = max(cursor, lower, upper)
@@ -407,7 +409,7 @@ def sampled_competence_compute_cost_integral(
         ),
     )
     cursor = 0.0
-    terms: list[ComplexityIntegralTerm] = []
+    terms: list[StateSpaceIntegralTerm] = []
     for point in ordered:
         complexity = _record_nonnegative_number(
             point.get("complexity"),
@@ -433,10 +435,10 @@ def sampled_competence_compute_cost_integral(
             maximum = complexity
         if maximum > minimum:
             terms.append(
-                ComplexityIntegralTerm(
+                StateSpaceIntegralTerm(
                     lower=minimum,
                     upper=maximum,
-                    density=(
+                    competence_density=(
                         _sampled_point_inference_compute(
                             point,
                             architecture=architecture,
@@ -446,7 +448,7 @@ def sampled_competence_compute_cost_integral(
                         * _default_bit_length_per_op
                     ),
                     kind="measured-compute-cost",
-                    representative_complexity=complexity,
+                    representative_log2_volume=complexity,
                 )
             )
         cursor = max(cursor, maximum)

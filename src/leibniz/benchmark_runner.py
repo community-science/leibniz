@@ -329,6 +329,8 @@ class _CurriculumRung:
             ),
             "sample_count": self.sample_count,
         }
+        if self.batch.request_outcome is not None:
+            record["request_outcome"] = self.batch.request_outcome.to_record()
         interval_record = _rung_complexity_interval_record(self)
         if interval_record:
             record["score_interval"] = interval_record
@@ -380,23 +382,24 @@ def _evaluation_sampled_competence_record(
         if index == frontier_index:
             points.append(frontier_point)
             continue
-        points.append(
-            {
-                "kind": "sampled-complexity-window",
-                "sampling_rule": "generator-uniform-component-index-v1",
-                "difficulty_assumption": (
-                    "approximately-uniform-within-complexity-window"
-                ),
-                "benchmark_id": str(benchmark_id),
-                "complexity_axis": None,
-                "complexity": result.rung.complexity,
-                "seed": result.rung.seed,
-                "sample_count": result.sample_count,
-                "mean_accepted_mass": result.mean_accepted_mass,
-                "input_shape": list(result.input_shape),
-                **_rung_complexity_interval_record(result.rung),
-            }
-        )
+        point: dict[str, object] = {
+            "kind": "sampled-state-space-volume-window",
+            "sampling_rule": "generator-uniform-component-index-v1",
+            "difficulty_assumption": (
+                "approximately-uniform-within-complexity-window"
+            ),
+            "benchmark_id": str(benchmark_id),
+            "complexity_axis": None,
+            "complexity": result.rung.complexity,
+            "seed": result.rung.seed,
+            "sample_count": result.sample_count,
+            "mean_accepted_mass": result.mean_accepted_mass,
+            "input_shape": list(result.input_shape),
+            **_rung_complexity_interval_record(result.rung),
+        }
+        if result.rung.batch.region is not None:
+            point["region"] = result.rung.batch.region.to_record()
+        points.append(point)
     return sampled_competence_curriculum_record(points)
 
 
@@ -1455,6 +1458,8 @@ def _curriculum_rung_from_window(
     )
     batch = sample_set
     if not batch.samples:
+        if batch.request_outcome is not None:
+            raise _EmptyCurriculumWindow(str(batch.request_outcome.kind))
         raise _EmptyCurriculumWindow()
     if include_fields or batch.fields is not None:
         sample_shape = _batch_sample_input_shape(batch=batch)
@@ -2308,6 +2313,7 @@ def _evaluation_competence_points(
             complexity_minimum=result.rung.complexity_minimum,
             complexity_maximum=result.rung.complexity_maximum,
             input_shape=result.input_shape,
+            region=getattr(getattr(result.rung, "batch", None), "region", None),
         )
         for result in evaluation_results
     )
@@ -3293,7 +3299,7 @@ def _sampled_competence_record_from_accepted_mass(
     else:
         mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
     record: dict[str, object] = {
-        "kind": "sampled-complexity-window",
+        "kind": "sampled-state-space-volume-window",
         "sampling_rule": "generator-uniform-component-index-v1",
         "difficulty_assumption": "approximately-uniform-within-complexity-window",
         "benchmark_id": str(batch.benchmark_id),
@@ -3310,6 +3316,8 @@ def _sampled_competence_record_from_accepted_mass(
     if batch.complexity_request is not None:
         record["complexity_minimum"] = batch.complexity_request.minimum
         record["complexity_maximum"] = batch.complexity_request.maximum
+    if batch.region is not None:
+        record["region"] = batch.region.to_record()
     return record
 
 
@@ -3382,7 +3390,7 @@ def _training_sampled_competence_record(
 ) -> dict[str, object]:
     points: list[Mapping[str, object]] = [
         {
-            "kind": "sampled-complexity-window",
+            "kind": "sampled-state-space-volume-window",
             "sampling_rule": "generator-uniform-component-index-v1",
             "difficulty_assumption": "approximately-uniform-within-complexity-window",
             "benchmark_id": str(benchmark_id),
