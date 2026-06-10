@@ -13,6 +13,7 @@ from leibniz.benchmark_implementations import load_benchmark
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlan
 from leibniz.observation_formation import FieldObservation
+from leibniz.state_space import StateSpaceRegion
 
 __all__ = [
     "GeneratedSample",
@@ -152,6 +153,8 @@ class GeneratedSample:
     width: int | None = None
     height: int | None = None
     component_index: int | None = None
+    region_component_index: int | None = None
+    axis_coordinates: Mapping[str, object] | None = None
     variation_coordinates: tuple[Mapping[str, object], ...] = ()
     variation_values: Mapping[str, object] | None = None
     field: FieldObservation | None = None
@@ -168,6 +171,10 @@ class GeneratedSample:
             raise ObservationGenerationError("available_outcome_ids must be nonempty")
         if self.target_distribution is not None:
             _validate_target_distribution(self.target_distribution)
+        if (self.region_component_index is None) != (self.axis_coordinates is None):
+            raise ObservationGenerationError(
+                "region_component_index and axis_coordinates must be provided together"
+            )
         if self.artifacts is None:
             object.__setattr__(self, "artifacts", {})
 
@@ -202,6 +209,10 @@ class GeneratedSample:
             record["height"] = self.height
         if self.component_index is not None:
             record["component_index"] = self.component_index
+        if self.region_component_index is not None:
+            record["region_component_index"] = self.region_component_index
+        if self.axis_coordinates is not None:
+            record["axis_coordinates"] = dict(self.axis_coordinates)
         if self.observable_state_id is not None:
             record["observable_state_id"] = self.observable_state_id
         if self.available_outcome_ids:
@@ -240,6 +251,7 @@ class GeneratedSampleSet:
     targets: Any | None = None
     variation_extent: float | None = None
     complexity_request: ComplexityRequest | None = None
+    region: StateSpaceRegion | None = None
 
     def __post_init__(self) -> None:
         if type(self.seed) is not int or self.seed < 0:
@@ -263,6 +275,24 @@ class GeneratedSampleSet:
             raise ObservationGenerationError(
                 "empty sample sets require a complexity request"
             )
+        if self.region is not None:
+            if self.samples and any(
+                sample.region_component_index is None or sample.axis_coordinates is None
+                for sample in self.samples
+            ):
+                raise ObservationGenerationError(
+                    "region sample sets require per-sample region coordinates"
+                )
+            for sample in self.samples:
+                assert sample.region_component_index is not None
+                assert sample.axis_coordinates is not None
+                if not self.region.contains(
+                    sample.region_component_index,
+                    sample.axis_coordinates,
+                ):
+                    raise ObservationGenerationError(
+                        "sample axis coordinates are outside the generated region"
+                    )
         for sample in self.samples:
             if (
                 sample.materialization_plan is not None
@@ -340,6 +370,8 @@ class GeneratedSampleSet:
         }
         if self.variation_extent is not None:
             record["variation_extent"] = self.variation_extent
+        if self.region is not None:
+            record["region"] = self.region.to_record()
         return record
 
 

@@ -1,5 +1,8 @@
+import importlib.util
 import math
+import sys
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,6 +16,7 @@ from benchmark_typing import (
     sample_width,
 )
 
+from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.materialization import AxisAssignment, MaterializationPlan
 from leibniz.observation_formation import FieldObservation
 from leibniz.observation_generation import (
@@ -23,6 +27,7 @@ from leibniz.observation_generation import (
     ObservationGenerationError,
     sample_indices_for_even_state_coverage,
 )
+from leibniz.state_space import state_space_region_from_record
 from leibniz.tensor_runtime import TensorRuntimeError, resolve_tensor_runtime
 from leibniz.timing import TimingCollector
 
@@ -391,6 +396,127 @@ def test_digits_generator_accepts_complexity_value_requests() -> None:
     assert batch.samples[0].complexity_value is not None
     assert batch.samples[0].complexity_value.measure_id == complexity_request.measure_id
     assert math.isclose(batch.samples[0].complexity_value.value, requested_complexity)
+
+
+def test_digits_generated_sample_set_records_region_document_boundary() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    batch = _formation_payload(generator, sample_count=4, seed=101)
+
+    assert batch.region is not None
+    assert batch.region.volume == 20
+    assert math.isclose(batch.region.log2_volume, batch.samples[0].complexity)
+    record = batch.to_record()
+    loaded = load_object_document(
+        canonical_document_bytes(record),
+        description="generated sample set record",
+    )
+    region = state_space_region_from_record(loaded["region"])
+
+    assert region == batch.region
+    for sample in batch.samples:
+        assert sample.region_component_index is not None
+        assert sample.axis_coordinates is not None
+        assert batch.region.contains(sample.region_component_index, sample.axis_coordinates)
+    sample_record = cast(list[dict[str, object]], loaded["samples"])[0]
+    assert sample_record["axis_coordinates"] == batch.samples[0].axis_coordinates
+    assert sample_record["region_component_index"] == batch.samples[0].region_component_index
+
+
+def test_digits_truncated_address_window_region_has_unequal_strata() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    generator_impl = cast(Any, generator)
+    complexity_class = generator_impl._complexity_class_for_requested_cardinality(
+        requested_cardinality=13,
+        minimum_address=0,
+    )
+    assert complexity_class.resolution_assignment is not None
+    region_for_class = cast(
+        Callable[..., object],
+        _digits_benchmark_module()["_digits_state_space_region"],
+    )
+    region = state_space_region_from_record(
+        cast(
+            Any,
+            region_for_class(
+                complexity_class=complexity_class,
+                resolution_assignment=complexity_class.resolution_assignment,
+                margin=generator.manifest.resolution_discriminability_margin(),
+            ),
+        ).to_record()
+    )
+
+    assert region.volume == 13
+    assert math.isclose(region.log2_volume, math.log2(13))
+    volumes = {component.stratum_id: component.volume for component in region.components}
+    assert tuple(volumes[f"digit-{index}"] for index in range(3)) == (2, 2, 2)
+    assert tuple(volumes[f"digit-{index}"] for index in range(3, 10)) == (1,) * 7
+
+
+def test_digits_regions_cover_preset_and_grid_coordinates() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    preset = _formation_payload(
+        generator,
+        sample_count=3,
+        seed=101,
+        complexity_request=ComplexityRequest(minimum=3.0, maximum=4.0),
+    )
+    grid = _formation_payload(
+        generator,
+        sample_count=3,
+        seed=101,
+        complexity_request=ComplexityRequest(minimum=8.0, maximum=9.0),
+    )
+
+    assert preset.region is not None
+    assert grid.region is not None
+    assert preset.region.volume == 8
+    assert grid.region.volume == 256
+    assert any(
+        axis_region.axis.coordinate_kind == "enumerated-cells"
+        for component in preset.region.components
+        for axis_region in component.axis_regions
+    )
+    assert any(
+        axis_region.axis.coordinate_kind == "real-grid"
+        for component in grid.region.components
+        for axis_region in component.axis_regions
+    )
+    for batch in (preset, grid):
+        assert batch.region is not None
+        assert all(
+            math.isclose(sample.complexity, batch.region.log2_volume)
+            for sample in batch.samples
+        )
+        for sample in batch.samples:
+            assert sample.region_component_index is not None
+            assert sample.axis_coordinates is not None
+            assert batch.region.contains(sample.region_component_index, sample.axis_coordinates)
+
+
+def test_generated_sample_set_rejects_region_coordinates_outside_region() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    batch = _formation_payload(generator, sample_count=1, seed=101)
+    assert batch.region is not None
+    sample = batch.samples[0]
+    assert sample.axis_coordinates is not None
+
+    bad_coordinates = dict(sample.axis_coordinates)
+    bad_coordinates["canvas_width"] = cast(int, bad_coordinates["canvas_width"]) + 1
+    bad_sample = replace(sample, axis_coordinates=bad_coordinates)
+
+    with pytest.raises(
+        ObservationGenerationError,
+        match="sample axis coordinates are outside the generated region",
+    ):
+        GeneratedSampleSet(
+            benchmark_id=batch.benchmark_id,
+            generator_id=batch.generator_id,
+            generator_version=batch.generator_version,
+            seed=batch.seed,
+            shape=batch.shape,
+            samples=(bad_sample,),
+            region=batch.region,
+        )
 
 
 def test_digits_generator_materializes_target_complexity_class_band() -> None:
@@ -856,6 +982,18 @@ def _coordinate(
         if coordinate["role"] == role:
             return coordinate
     raise AssertionError(f"missing coordinate role {role}")
+
+
+def _digits_benchmark_module() -> dict[str, object]:
+    module_name = "test_digits_benchmark"
+    entrypoint = _digits_benchmark_root / "benchmark.py"
+    spec = importlib.util.spec_from_file_location(module_name, entrypoint)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return vars(module)
 
 
 def _spatial_affine_matrix(coordinate: Mapping[str, object]) -> list[list[float]]:

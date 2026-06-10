@@ -50,6 +50,17 @@ from leibniz.observation_showcases import (
     ObservationShowcaseSample,
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
+from leibniz.state_space import (
+    AxisRegion,
+    Distinguishability,
+    EnumeratedCellsDomain,
+    IntegerRangeDomain,
+    ProductRegion,
+    RealGridDomain,
+    StateSpaceAmbient,
+    StateSpaceAxis,
+    StateSpaceRegion,
+)
 from leibniz.tensor_runtime import (
     TensorElementParameter,
     TensorElementProgram,
@@ -461,11 +472,18 @@ class Generator:
             f"{output_timing_prefix}sample_assembly",
             samples=sample_count,
         ):
-            for row_index, (index, plan, component_index, variation_sample) in enumerate(
+            for row_index, (
+                index,
+                plan,
+                component_index,
+                transform_index,
+                variation_sample,
+            ) in enumerate(
                 zip(
                     sample_indices,
                     plans,
                     component_index_samples,
+                    transform_index_samples,
                     variation_samples,
                     strict=True,
                 )
@@ -488,6 +506,15 @@ class Generator:
                         width=plan.resolution_assignment.require_axis(self.formation.width_axis),
                         height=plan.resolution_assignment.require_axis(self.formation.height_axis),
                         component_index=component_index,
+                        region_component_index=_digits_region_component_index(
+                            component_index=component_index,
+                            complexity_class=complexity_class,
+                        ),
+                        axis_coordinates=_digits_region_axis_coordinates(
+                            transform_index=transform_index,
+                            grid=complexity_class.affine_grid,
+                            resolution_assignment=resolved_resolution_assignment,
+                        ),
                         variation_coordinates=variation_coordinates,
                         variation_values=variation_values,
                         outcome_id=self._outcome_id(component_index),
@@ -513,8 +540,9 @@ class Generator:
         seed: int,
         sample_indices: tuple[int, ...],
         complexity_class: _DigitsComplexityClass,
+        resolution_assignment: AxisAssignment,
     ) -> tuple[GeneratedSample, ...]:
-        component_indices, _transform_indices = self._sample_state_coordinates(
+        component_indices, transform_indices = self._sample_state_coordinates(
             sample_count=sample_count,
             seed=seed,
             sample_indices=sample_indices,
@@ -530,6 +558,15 @@ class Generator:
                 complexity=complexity,
                 complexity_value=_complexity_value(complexity),
                 component_index=component_index,
+                region_component_index=_digits_region_component_index(
+                    component_index=component_index,
+                    complexity_class=complexity_class,
+                ),
+                axis_coordinates=_digits_region_axis_coordinates(
+                    transform_index=transform_indices[index],
+                    grid=complexity_class.affine_grid,
+                    resolution_assignment=resolution_assignment,
+                ),
             )
             for index, component_index in enumerate(component_indices)
         )
@@ -1280,6 +1317,17 @@ class Generator:
             complexity_class = requested_complexity_class
         if runtime is not None and outcome_ids is None:
             raise ObservationGenerationError("tensor generation requires outcome_ids")
+        resolved_resolution_assignment = self._generation_resolution_assignment(
+            sample_count=sample_count,
+            seed=seed,
+            requested_assignment=resolution_assignment,
+            memory_limit_bytes=memory_limit_bytes,
+        )
+        region = _digits_state_space_region(
+            complexity_class=complexity_class,
+            resolution_assignment=resolved_resolution_assignment,
+            margin=self.manifest.resolution_discriminability_margin(),
+        )
         fields = None
         targets = None
         if runtime is not None and outcome_ids is not None:
@@ -1288,7 +1336,7 @@ class Generator:
                 seed=seed,
                 sample_indices=resolved_sample_indices,
                 memory_limit_bytes=memory_limit_bytes,
-                resolution_assignment=resolution_assignment,
+                resolution_assignment=resolved_resolution_assignment,
                 complexity_class=complexity_class,
                 runtime=runtime,
                 outcome_ids=outcome_ids,
@@ -1303,6 +1351,7 @@ class Generator:
                     seed=seed,
                     sample_indices=resolved_sample_indices,
                     complexity_class=complexity_class,
+                    resolution_assignment=resolved_resolution_assignment,
                 )
             else:
                 samples = self._generate_samples(
@@ -1312,7 +1361,7 @@ class Generator:
                     include_fields=include_fields,
                     include_artifacts=include_artifacts,
                     memory_limit_bytes=memory_limit_bytes,
-                    resolution_assignment=resolution_assignment,
+                    resolution_assignment=resolved_resolution_assignment,
                     complexity_class=complexity_class,
                     timing=timing,
                     timing_prefix=(
@@ -1331,6 +1380,7 @@ class Generator:
             samples=samples,
             fields=fields,
             targets=targets,
+            region=region,
         )
 
     def _resolution_assignment_for_complexity_request(
@@ -1604,6 +1654,215 @@ def _digits_state_coordinate(
     if transform_index >= complexity_class.affine_transform_count:
         raise ObservationGenerationError("sample address exceeds active transform set")
     return (component_index, transform_index)
+
+
+def _digits_state_space_region(
+    *,
+    complexity_class: _DigitsComplexityClass,
+    resolution_assignment: AxisAssignment,
+    margin: float,
+) -> StateSpaceRegion:
+    width = resolution_assignment.require_axis("W")
+    height = resolution_assignment.require_axis("H")
+    ambient = StateSpaceAmbient(
+        field_domain_kind="lattice-2d",
+        field_domain={"height": height, "width": width},
+        field_codomain_id="unit-intensity",
+        distinguishability=Distinguishability(
+            kind="metric-resolution",
+            metric_id="l1-field-distance",
+            resolution=margin,
+            certificate_id="component-discriminability-margin",
+        ),
+    )
+    transform_indices_by_digit = _digits_transform_indices_by_digit(complexity_class)
+    components = tuple(
+        _digits_product_region(
+            digit_index=digit_index,
+            transform_indices=transform_indices,
+            grid=complexity_class.affine_grid,
+            width=width,
+            height=height,
+        )
+        for digit_index, transform_indices in transform_indices_by_digit.items()
+    )
+    return StateSpaceRegion(
+        id=(
+            "benchmarks.digits.realized-region."
+            f"addresses-{complexity_class.minimum_address}-{complexity_class.maximum_address}."
+            f"canvas-{width}x{height}"
+        ),
+        ambient=ambient,
+        components=components,
+        union_rule="disjoint-union",
+        volume=complexity_class.cardinality,
+        log2_volume=complexity_class.complexity,
+    )
+
+
+def _digits_product_region(
+    *,
+    digit_index: int,
+    transform_indices: tuple[int, ...],
+    grid: _ConstructedAffineGrid,
+    width: int,
+    height: int,
+) -> ProductRegion:
+    if not transform_indices:
+        raise ObservationGenerationError("digits region stratum must not be empty")
+    axis_regions = (
+        *_digits_transform_axis_regions(
+            transform_indices=transform_indices,
+            grid=grid,
+        ),
+        _singleton_integer_axis_region("canvas_width", width),
+        _singleton_integer_axis_region("canvas_height", height),
+    )
+    measure_rule = (
+        "product-of-counts"
+        if math.prod(axis_region.count for axis_region in axis_regions)
+        == len(transform_indices)
+        else "benchmark-computed-finite-count"
+    )
+    return ProductRegion(
+        axis_regions=axis_regions,
+        measure_rule=measure_rule,
+        volume=len(transform_indices),
+        log2_volume=math.log2(len(transform_indices)),
+        stratum_id=f"digit-{digit_index}",
+        stratum_target={
+            "digit_index": digit_index,
+            "outcome_id": f"digit-{digit_index}",
+        },
+    )
+
+
+def _digits_transform_axis_regions(
+    *,
+    transform_indices: tuple[int, ...],
+    grid: _ConstructedAffineGrid,
+) -> tuple[AxisRegion, ...]:
+    if grid.preset_count is not None:
+        cells = tuple(f"preset-{index}" for index in range(grid.preset_count))
+        selected = tuple(f"preset-{index}" for index in transform_indices)
+        return (
+            AxisRegion(
+                axis=StateSpaceAxis(
+                    id="affine_preset",
+                    domain=EnumeratedCellsDomain(cells=cells),
+                ),
+                coordinate_region=selected,
+                count=len(selected),
+                log2_count=math.log2(len(selected)),
+            ),
+        )
+    indices_by_axis = {
+        axis_name: tuple(
+            _constructed_affine_indices(transform_index=transform_index, grid=grid)[axis_name]
+            for transform_index in transform_indices
+        )
+        for axis_name in _constructed_affine_axis_names
+    }
+    bounds_by_axis = {
+        "x_translation": grid.x_translation_bounds,
+        "y_translation": grid.y_translation_bounds,
+        "scale": grid.scale_bounds,
+        "rotation": grid.rotation_bounds,
+        "x_shear": grid.x_shear_bounds,
+    }
+    counts_by_axis = dict(zip(_constructed_affine_axis_names, grid.counts, strict=True))
+    return tuple(
+        _real_grid_axis_region(
+            axis_id=axis_name,
+            bounds=bounds_by_axis[axis_name],
+            domain_count=counts_by_axis[axis_name],
+            selected_indices=indices_by_axis[axis_name],
+        )
+        for axis_name in _constructed_affine_axis_names
+    )
+
+
+def _real_grid_axis_region(
+    *,
+    axis_id: str,
+    bounds: tuple[float, float],
+    domain_count: int,
+    selected_indices: tuple[int, ...],
+) -> AxisRegion:
+    lower = min(selected_indices)
+    upper = max(selected_indices)
+    count = upper - lower + 1
+    return AxisRegion(
+        axis=StateSpaceAxis(
+            id=axis_id,
+            domain=RealGridDomain(
+                lower=bounds[0],
+                upper=bounds[1],
+                count=domain_count,
+            ),
+        ),
+        coordinate_region=(lower, upper),
+        count=count,
+        log2_count=math.log2(count),
+    )
+
+
+def _singleton_integer_axis_region(axis_id: str, value: int) -> AxisRegion:
+    return AxisRegion(
+        axis=StateSpaceAxis(
+            id=axis_id,
+            domain=IntegerRangeDomain(lower=value, upper=value),
+        ),
+        coordinate_region=(value, value),
+        count=1,
+        log2_count=0.0,
+    )
+
+
+def _digits_region_component_index(
+    *,
+    component_index: int,
+    complexity_class: _DigitsComplexityClass,
+) -> int:
+    digits = tuple(_digits_transform_indices_by_digit(complexity_class))
+    try:
+        return digits.index(component_index)
+    except ValueError as error:
+        raise ObservationGenerationError(
+            "digit component is outside the realized region"
+        ) from error
+
+
+def _digits_region_axis_coordinates(
+    *,
+    transform_index: int,
+    grid: _ConstructedAffineGrid,
+    resolution_assignment: AxisAssignment,
+) -> Mapping[str, object]:
+    coordinates: dict[str, object]
+    if grid.preset_count is not None:
+        coordinates = {"affine_preset": f"preset-{transform_index}"}
+    else:
+        coordinates = dict(_constructed_affine_indices(transform_index=transform_index, grid=grid))
+    coordinates["canvas_width"] = resolution_assignment.require_axis("W")
+    coordinates["canvas_height"] = resolution_assignment.require_axis("H")
+    return coordinates
+
+
+def _digits_transform_indices_by_digit(
+    complexity_class: _DigitsComplexityClass,
+) -> dict[int, tuple[int, ...]]:
+    transform_indices_by_digit: dict[int, list[int]] = {}
+    for state_index in range(complexity_class.cardinality):
+        component_index, transform_index = _digits_state_coordinate(
+            state_index=state_index,
+            complexity_class=complexity_class,
+        )
+        transform_indices_by_digit.setdefault(component_index, []).append(transform_index)
+    return {
+        digit_index: tuple(transform_indices)
+        for digit_index, transform_indices in sorted(transform_indices_by_digit.items())
+    }
 
 
 def _digits_local_state_index(
