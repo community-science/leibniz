@@ -1,4 +1,10 @@
 import { requireArray, requireNumber, requireRecord, requireString } from './transport.ts';
+import {
+  parseGenerationRequestOutcomeRecord,
+  parseStateSpaceRegionRecord,
+  type GenerationRequestOutcomeRecord,
+  type StateSpaceRegionRecord,
+} from './stateSpaceRecords.ts';
 
 export type BenchmarkTaskRecord = {
   kind: string;
@@ -30,6 +36,8 @@ export type GeneratedObservationBatchRecord = {
   sample_count: number;
   complexity_window?: GeneratedComplexityWindowRecord;
   complexity_cardinalities?: number[];
+  region?: StateSpaceRegionRecord;
+  request_outcome?: GenerationRequestOutcomeRecord;
   presentation: GeneratedObservationBatchPresentationRecord;
   samples: GeneratedObservationSampleRecord[];
 };
@@ -49,6 +57,8 @@ export type GeneratedObservationSampleRecord = {
   index: number;
   outcome_id: string;
   component_index?: number;
+  region_component_index?: number;
+  axis_coordinates?: Record<string, unknown>;
   complexity: number;
   complexity_value?: GeneratedComplexityValueRecord | null;
   available_outcome_ids?: string[];
@@ -126,6 +136,12 @@ function validateBatch(value: unknown, path: string): void {
   if (complexityWindow !== undefined) {
     validateComplexityWindow(complexityWindow, `${path}.complexity_window`);
   }
+  if (record.region !== undefined) {
+    parseStateSpaceRegionRecord(record.region, `${path}.region`, error);
+  }
+  if (record.request_outcome !== undefined) {
+    parseGenerationRequestOutcomeRecord(record.request_outcome, `${path}.request_outcome`, error);
+  }
   if (record.complexity_cardinalities !== undefined) {
     requireArray(record.complexity_cardinalities, `${path}.complexity_cardinalities`, error).forEach(
       (size, index) => {
@@ -138,6 +154,24 @@ function validateBatch(value: unknown, path: string): void {
   }
   if (!Number.isInteger(sampleCount) || sampleCount !== samples.length) {
     throw error(`${path}.sample_count: expected sample length`);
+  }
+  samples.forEach((sample, index) => validateSample(sample, `${path}.samples.${index}`));
+}
+
+function validateSample(value: unknown, path: string): void {
+  const record = requireRecord(value, path, error);
+  if (record.region_component_index !== undefined) {
+    const componentIndex = requireNumber(
+      record.region_component_index,
+      `${path}.region_component_index`,
+      error,
+    );
+    if (!Number.isInteger(componentIndex) || componentIndex < 0) {
+      throw error(`${path}.region_component_index: expected nonnegative integer`);
+    }
+  }
+  if (record.axis_coordinates !== undefined) {
+    requireRecord(record.axis_coordinates, `${path}.axis_coordinates`, error);
   }
 }
 

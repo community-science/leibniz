@@ -18,10 +18,46 @@ import type {
   ResultViewRecord,
 } from '../src/leibniz/console/_web_src/src/resultViews.ts';
 import { parseResultViewRecords } from '../src/leibniz/console/_web_src/src/resultViews.ts';
+import type { StateSpaceRegionRecord } from '../src/leibniz/console/_web_src/src/stateSpaceRecords.ts';
 
 const targetBenchmark = 'benchmarks.target@0.1.0';
 const otherBenchmark = 'benchmarks.other@0.1.0';
 const architectureDigest = 'sha256:abcdef1234567890';
+const fixtureRegion: StateSpaceRegionRecord = {
+  id: 'test.region',
+  ambient: {
+    field_domain_kind: 'lattice-2d',
+    field_domain: { height: 2, width: 2 },
+    field_codomain_id: 'unit-intensity',
+    distinguishability: {
+      kind: 'exact',
+      certificate_id: 'test-certificate',
+    },
+  },
+  components: [
+    {
+      axis_regions: [
+        {
+          axis: {
+            id: 'x',
+            domain: { kind: 'integer-range', lower: 0, upper: 1 },
+          },
+          coordinate_region: [0, 1],
+          count: 2,
+          log2_count: 1,
+        },
+      ],
+      measure_rule: 'product-of-counts',
+      volume: 2,
+      log2_volume: 1,
+      stratum_id: 'fixture',
+      stratum_target: { label: 'fixture' },
+    },
+  ],
+  union_rule: 'disjoint-union',
+  volume: 2,
+  log2_volume: 1,
+};
 
 function modelResult({
   architectureDigest,
@@ -93,6 +129,8 @@ function modelResult({
           competence_density: 1,
           contribution: score,
           representative_log2_volume: score,
+          confidence_half_width: 0,
+          region: fixtureRegion,
         },
       ],
     },
@@ -649,6 +687,11 @@ assertEqual(
   parsedBenchmarkResult.benchmark_results[0]?.model_inspections[0]?.training_provenance.length,
   0,
   'parser defaults missing training provenance',
+);
+assertEqual(
+  parsedBenchmarkResult.benchmark_results[0]?.leaderboard[0]?.score_integral.terms[0]?.region?.id,
+  'test.region',
+  'parser keeps integral term region',
 );
 assertThrows(
   () =>

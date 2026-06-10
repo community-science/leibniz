@@ -190,6 +190,16 @@ assertEqual(
   false,
   'sample presentation aggregate mode',
 );
+assertEqual(
+  benchmarkTask?.batches[0]?.region?.ambient.field_domain_kind,
+  'lattice-2d',
+  'digits batch region ambient',
+);
+assertEqual(
+  benchmarkTask?.batches[0]?.request_outcome?.kind,
+  'realized',
+  'digits batch request outcome',
+);
 const generatedSample = benchmarkTask?.batches[1]?.samples[0];
 if (generatedSample === undefined) {
   throw new Error('expected generated sample');
@@ -269,9 +279,29 @@ assertEqual(
   'chess sample cardinality',
 );
 assertEqual(
+  chessBenchmarkTask.batches[0]?.region?.components.length,
+  8,
+  'chess region component count',
+);
+assertEqual(
+  chessBenchmarkTask.batches[0]?.region?.ambient.field_codomain_id,
+  'piece-occupancy',
+  'chess region codomain',
+);
+assertEqual(
   chessSample.available_outcome_ids?.length,
   2,
   'chess sample legal move count',
+);
+assertEqual(
+  chessSample.region_component_index,
+  0,
+  'chess sample region component index',
+);
+assertEqual(
+  typeof chessSample.axis_coordinates,
+  'object',
+  'chess sample axis coordinates',
 );
 assertEqual(
   chessSample.image_data_url?.startsWith('data:image/svg+xml;base64,'),

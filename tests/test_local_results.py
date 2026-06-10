@@ -399,6 +399,15 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert all(cast(int | float, point["cost"]) >= 0 for point in oracle_points)
     assert any(cast(int | float, point["cost"]) > 0 for point in oracle_points)
     assert max(cast(int | float, point["cost"]) for point in oracle_points) >= 10_000_000_000
+    score_integral = cast(dict[str, object], leaderboard[0]["score_integral"])
+    score_terms = cast(list[dict[str, object]], score_integral["terms"])
+    score_terms[0]["region"] = _minimal_state_space_region_record()
+    reloaded = load_console_result_view(canonical_document_bytes(view))
+    reloaded_results = cast(list[dict[str, object]], reloaded["benchmark_results"])
+    reloaded_leaderboard = cast(list[dict[str, object]], reloaded_results[0]["leaderboard"])
+    reloaded_score_integral = cast(dict[str, object], reloaded_leaderboard[0]["score_integral"])
+    reloaded_score_terms = cast(list[dict[str, object]], reloaded_score_integral["terms"])
+    assert cast(dict[str, object], reloaded_score_terms[0]["region"])["id"] == "test.region"
     model_view = cast(dict[str, object], leaderboard[0]["console_view_model"])
     model_sections = cast(list[dict[str, object]], model_view["detail_sections"])
     assert [section["title"] for section in model_sections] == [
@@ -1107,6 +1116,44 @@ def _record_contains_key(value: object, key: str) -> bool:
         sequence = cast(list[object] | tuple[object, ...], value)
         return any(_record_contains_key(item, key) for item in sequence)
     return False
+
+
+def _minimal_state_space_region_record() -> dict[str, object]:
+    return {
+        "id": "test.region",
+        "ambient": {
+            "field_domain_kind": "lattice-2d",
+            "field_domain": {"height": 2, "width": 2},
+            "field_codomain_id": "unit-intensity",
+            "distinguishability": {
+                "kind": "exact",
+                "certificate_id": "test-certificate",
+            },
+        },
+        "components": [
+            {
+                "axis_regions": [
+                    {
+                        "axis": {
+                            "id": "x",
+                            "domain": {"kind": "integer-range", "lower": 0, "upper": 1},
+                        },
+                        "coordinate_region": [0, 1],
+                        "count": 2,
+                        "log2_count": 1.0,
+                    },
+                ],
+                "measure_rule": "product-of-counts",
+                "volume": 2,
+                "log2_volume": 1.0,
+                "stratum_id": "fixture",
+                "stratum_target": {"label": "fixture"},
+            },
+        ],
+        "union_rule": "disjoint-union",
+        "volume": 2,
+        "log2_volume": 1.0,
+    }
 
 
 def _git(path: Path, *args: str) -> subprocess.CompletedProcess[str]:

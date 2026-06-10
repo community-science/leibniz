@@ -29,8 +29,10 @@ import {
 import type {
   BenchmarkResultRecord,
   ModelResultRecord,
+  StateSpaceIntegralTermRecord,
 } from './resultViews.ts';
 import { usePersistentState } from './persistentState.ts';
+import type { AxisRegionRecord, StateSpaceRegionRecord } from './stateSpaceRecords.ts';
 
 type PlotView = {
   xDomain: [number, number];
@@ -92,6 +94,9 @@ export function BenchmarkResultDashboard({
     selection.selectedModel?.model_key ??
     selection.selectedRun?.model_key;
   const activeSelectedModelKey = selectedSelectionModelKey ?? selectedModelKey;
+  const activeModel = result.model_candidates.find(
+    (model) => model.model_key === activeSelectedModelKey,
+  );
   const activeView = plotView ?? {
     xDomain: plot.xDomain,
     yDomain: plot.yDomain,
@@ -129,6 +134,7 @@ export function BenchmarkResultDashboard({
         sort={leaderboardSort}
         title="Leaderboard"
       />
+      <ModelIntegralDetails model={activeModel} />
     </section>
   );
 }
@@ -516,6 +522,164 @@ function SortHeader({
       </span>
     </button>
   );
+}
+
+function ModelIntegralDetails({ model }: { model: ModelResultRecord | undefined }) {
+  if (model === undefined) {
+    return null;
+  }
+  return (
+    <section className="benchmark-result-table-section benchmark-integral-details">
+      <div className="benchmark-integral-header">
+        <h3>{shortDigest(model.architecture_digest)}</h3>
+        <span>{scoreLabel(model.score)}</span>
+      </div>
+      <IntegralTermTable title="Score Integral" terms={model.score_integral.terms} />
+      {model.cost_integral === undefined ? null : (
+        <IntegralTermTable title="Cost Integral" terms={model.cost_integral.terms} />
+      )}
+    </section>
+  );
+}
+
+function IntegralTermTable({
+  terms,
+  title,
+}: {
+  terms: StateSpaceIntegralTermRecord[];
+  title: string;
+}) {
+  if (terms.length === 0) {
+    return null;
+  }
+  return (
+    <section className="benchmark-integral-term-section" aria-label={title}>
+      <h4>{title}</h4>
+      <div className="benchmark-integral-term-grid" role="table">
+        <div className="benchmark-integral-term-row header" role="row">
+          <span role="columnheader">Region</span>
+          <span role="columnheader">Width</span>
+          <span role="columnheader">Density</span>
+          <span role="columnheader">Contribution</span>
+          <span role="columnheader">Samples</span>
+        </div>
+        {terms.map((term, index) => (
+          <div
+            className="benchmark-integral-term-row"
+            key={`${term.kind}:${term.log2_volume_minimum}:${term.log2_volume_maximum}:${index}`}
+            role="row"
+          >
+            <span role="cell">{integralTermRegionLabel(term)}</span>
+            <span role="cell">{formatBits(term.width_in_bits)}</span>
+            <span role="cell">{formatRatio(term.competence_density)}</span>
+            <span role="cell">{formatBits(term.contribution)}</span>
+            <span role="cell">{term.sample_count?.toLocaleString() ?? 'unknown'}</span>
+          </div>
+        ))}
+      </div>
+      {terms
+        .filter((term) => term.region !== undefined)
+        .map((term, index) => (
+          <StateSpaceRegionSummary
+            key={`${term.kind}:region:${index}`}
+            region={term.region}
+            sampleCount={term.sample_count}
+          />
+        ))}
+    </section>
+  );
+}
+
+function StateSpaceRegionSummary({
+  region,
+  sampleCount,
+}: {
+  region: StateSpaceRegionRecord | undefined;
+  sampleCount?: number;
+}) {
+  if (region === undefined) {
+    return null;
+  }
+  const componentPreview = region.components.slice(0, 4);
+  return (
+    <section className="state-space-region-summary" aria-label="State-space region">
+      <dl>
+        <div>
+          <dt>Ambient</dt>
+          <dd>{regionAmbientLabel(region)}</dd>
+        </div>
+        <div>
+          <dt>Volume</dt>
+          <dd>{`${region.volume.toLocaleString()} states / ${formatBits(region.log2_volume)}`}</dd>
+        </div>
+        <div>
+          <dt>Components</dt>
+          <dd>{region.components.length.toLocaleString()}</dd>
+        </div>
+        <div>
+          <dt>Samples</dt>
+          <dd>{sampleCount?.toLocaleString() ?? 'unknown'}</dd>
+        </div>
+      </dl>
+      <div className="state-space-component-list">
+        {componentPreview.map((component, index) => (
+          <div className="state-space-component" key={`${component.stratum_id ?? 'component'}:${index}`}>
+            <div className="state-space-component-heading">
+              <span>{component.stratum_id ?? `component ${index + 1}`}</span>
+              <span>{`${component.volume.toLocaleString()} / ${formatBits(component.log2_volume)}`}</span>
+            </div>
+            <div className="state-space-component-meta">
+              <span>{component.measure_rule}</span>
+              <span>{component.axis_regions.length.toLocaleString()} axes</span>
+            </div>
+            <div className="state-space-axis-list">
+              {component.axis_regions.slice(0, 4).map((axisRegion) => (
+                <span key={axisRegion.axis.id} title={axisRegionLabel(axisRegion)}>
+                  {axisRegion.axis.domain.kind}: {axisRegion.count.toLocaleString()}
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+        {region.components.length > componentPreview.length ? (
+          <p>{`${region.components.length - componentPreview.length} more components`}</p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function integralTermRegionLabel(term: StateSpaceIntegralTermRecord): string {
+  return `${formatBits(term.log2_volume_minimum)} to ${formatBits(term.log2_volume_maximum)}`;
+}
+
+function regionAmbientLabel(region: StateSpaceRegionRecord): string {
+  const domain = Object.entries(region.ambient.field_domain)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(', ');
+  const distinguishability = region.ambient.distinguishability.kind;
+  return `${region.ambient.field_domain_kind} (${domain}) -> ${region.ambient.field_codomain_id}, ${distinguishability}`;
+}
+
+function formatBits(value: number): string {
+  return `${formatCompactNumber(value)} bits`;
+}
+
+function formatRatio(value: number): string {
+  return formatCompactNumber(value);
+}
+
+function axisRegionLabel(axisRegion: AxisRegionRecord): string {
+  const coordinates = axisRegion.coordinate_region.length === 0
+    ? 'singleton'
+    : axisRegion.coordinate_region.join(', ');
+  return `${axisRegion.axis.id}: ${axisRegion.axis.domain.kind}, ${coordinates}`;
+}
+
+function formatCompactNumber(value: number): string {
+  return Number.isInteger(value) ? value.toLocaleString() : value.toLocaleString(undefined, {
+    maximumFractionDigits: 4,
+  });
 }
 
 function zoomedView(

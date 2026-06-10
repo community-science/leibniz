@@ -17,6 +17,7 @@ export type {
   RunDetailTableRecord,
   RunDetailViewModelRecord,
   RunResultRecord,
+  StateSpaceIntegralTermRecord,
   TrainingArtifactReferenceRecord,
   TrainingDiagnosticsRecord,
   TrainingHistoryPointRecord,

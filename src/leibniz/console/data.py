@@ -175,7 +175,7 @@ def _preview_batch_record(
         sample_indices=sample_indices,
     )
     samples = [sample.to_record() for sample in sample_set.samples]
-    return {
+    record: dict[str, object] = {
         "mode": "complexity-window",
         "label": window.label,
         "seed": window.seed,
@@ -188,6 +188,11 @@ def _preview_batch_record(
         },
         "samples": samples,
     }
+    if sample_set.region is not None:
+        record["region"] = sample_set.region.to_record()
+    if sample_set.request_outcome is not None:
+        record["request_outcome"] = sample_set.request_outcome.to_record()
+    return record
 
 
 class ConsoleDataValidationError(ValueError):
@@ -541,7 +546,7 @@ class ConsoleDataBuilder:
         benchmark_root: Path,
     ) -> str:
         hasher = hashlib.sha256()
-        hasher.update(b"complexity-window-sample-sets-v2\0")
+        hasher.update(b"complexity-window-sample-sets-v3\0")
         entrypoint = benchmark_root / "benchmark.py"
         if entrypoint.is_file():
             self._hash_file(hasher, entrypoint)

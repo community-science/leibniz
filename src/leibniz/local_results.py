@@ -42,6 +42,7 @@ from leibniz.model_inspection import (
     ModelInspectionRecord,
 )
 from leibniz.records import RecordExtractor
+from leibniz.state_space import StateSpaceError, state_space_region_from_record
 from leibniz.training_runs import TrainingRunRecord
 
 __all__ = [
@@ -2957,6 +2958,18 @@ def _validate_complexity_integral(record: Mapping[str, object], prefix: str) -> 
                 term_record.get("sample_count"),
                 _field_path(term_prefix, "sample_count"),
             )
+        if "confidence_half_width" in term_record:
+            _as_nonnegative_number(
+                term_record.get("confidence_half_width"),
+                _field_path(term_prefix, "confidence_half_width"),
+            )
+        if "region" in term_record:
+            try:
+                state_space_region_from_record(term_record["region"])
+            except StateSpaceError as error:
+                raise LocalResultImportError(
+                    f"{_field_path(term_prefix, 'region')}: {error}"
+                ) from error
 
 
 def _validate_training_estimate_comparison(

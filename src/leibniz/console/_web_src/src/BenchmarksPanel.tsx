@@ -49,6 +49,7 @@ import type {
   TrainingHistoryPointRecord,
   TrainingProtocolRecord,
 } from './resultViews.ts';
+import type { AxisRegionRecord, StateSpaceRegionRecord } from './stateSpaceRecords.ts';
 
 type SampleCardDensity = 'standard' | 'compact';
 type BenchmarkModelCandidate = BenchmarkResultRecord['model_candidates'][number];
@@ -969,6 +970,26 @@ function optionalNumberLabel(value: number | undefined): string {
   return value === undefined ? 'unknown' : value.toLocaleString();
 }
 
+function formatMetricNumber(value: number): string {
+  return Number.isInteger(value) ? value.toLocaleString() : value.toLocaleString(undefined, {
+    maximumFractionDigits: 4,
+  });
+}
+
+function regionAmbientLabel(region: StateSpaceRegionRecord): string {
+  const domain = Object.entries(region.ambient.field_domain)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(', ');
+  return `${region.ambient.field_domain_kind} (${domain}) -> ${region.ambient.field_codomain_id}, ${region.ambient.distinguishability.kind}`;
+}
+
+function axisRegionLabel(axisRegion: AxisRegionRecord): string {
+  const coordinates = axisRegion.coordinate_region.length === 0
+    ? 'singleton'
+    : axisRegion.coordinate_region.join(', ');
+  return `${axisRegion.axis.id}: ${axisRegion.axis.domain.kind}, ${coordinates}`;
+}
+
 function modelComponentCount(
   inspection: ModelInspectionRecord | undefined,
   model: BenchmarkModelCandidate,
@@ -1087,6 +1108,7 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
         sample={selectedSample?.sample}
         selectedBatch={selectedBatch}
       />
+      <BenchmarkBatchRegionInspector batch={selectedBatch} />
       <section
         aria-label={`Generated benchmark samples ${selectedBatch.label}`}
         className="benchmark-sample-window"
@@ -1112,6 +1134,67 @@ function BenchmarkTaskPane({ task }: { task: BenchmarkTaskRecord }) {
         )}
       </section>
     </div>
+  );
+}
+
+function BenchmarkBatchRegionInspector({ batch }: { batch: GeneratedObservationBatchRecord }) {
+  const region = batch.region ?? batch.request_outcome?.region;
+  if (region === undefined) {
+    return null;
+  }
+  return (
+    <section className="benchmark-region-inspector" aria-label="Generated state-space region">
+      <div className="benchmark-region-header">
+        <h3>State Space Region</h3>
+        <span>{`${region.volume.toLocaleString()} states`}</span>
+      </div>
+      <dl>
+        <div>
+          <dt>Ambient</dt>
+          <dd title={regionAmbientLabel(region)}>{regionAmbientLabel(region)}</dd>
+        </div>
+        <div>
+          <dt>Bits</dt>
+          <dd>{formatMetricNumber(region.log2_volume)}</dd>
+        </div>
+        <div>
+          <dt>Components</dt>
+          <dd>{region.components.length.toLocaleString()}</dd>
+        </div>
+        <div>
+          <dt>Samples</dt>
+          <dd>{batch.sample_count.toLocaleString()}</dd>
+        </div>
+      </dl>
+      <div className="benchmark-region-components">
+        {region.components.slice(0, 6).map((component, index) => (
+          <div
+            className="benchmark-region-component"
+            key={`${component.stratum_id ?? 'component'}:${index}`}
+          >
+            <div className="benchmark-region-component-heading">
+              <span>{component.stratum_id ?? `component ${index + 1}`}</span>
+              <span>{`${component.volume.toLocaleString()} states`}</span>
+            </div>
+            <div className="benchmark-region-component-meta">
+              <span>{component.measure_rule}</span>
+              <span>{`${formatMetricNumber(component.log2_volume)} bits`}</span>
+              <span>{`${component.axis_regions.length.toLocaleString()} axes`}</span>
+            </div>
+            <div className="benchmark-region-axis-list">
+              {component.axis_regions.slice(0, 5).map((axisRegion) => (
+                <span key={axisRegion.axis.id} title={axisRegionLabel(axisRegion)}>
+                  {axisRegion.axis.domain.kind}: {axisRegion.count.toLocaleString()}
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+        {region.components.length > 6 ? (
+          <p>{`${region.components.length - 6} more components`}</p>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
@@ -1298,6 +1381,12 @@ function BenchmarkSampleCoordinateInspector({
     entries.push(['Outcome', sample.outcome_id]);
     if (sample.component_index !== undefined) {
       entries.push(['Component', String(sample.component_index)]);
+    }
+    if (sample.region_component_index !== undefined) {
+      entries.push(['Region Component', String(sample.region_component_index)]);
+    }
+    if (sample.axis_coordinates !== undefined) {
+      entries.push(['Axis Coordinates', recordLabel(sample.axis_coordinates)]);
     }
     if (sample.field_shape !== undefined) {
       entries.push(['Field', sample.field_shape.join(' x ')]);
