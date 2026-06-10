@@ -64,26 +64,26 @@ def _run_and_evaluate_digits_benchmark(results_root: Path, *, sample_count: int 
 
 
 def test_competence_integral_integrates_bits_above_chance() -> None:
-    complexity = 20.0
+    log2_volume = 20.0
     chance_mass = 0.1
 
     assert math.isclose(
         local_results.competence_integral(
-            ({"complexity": complexity, "score": 1.0, "sample_count": 1},),
+            ({"log2_volume": log2_volume, "score": 1.0, "sample_count": 1},),
             chance_mass=chance_mass,
         ).value,
         1.0,
     )
     assert math.isclose(
         local_results.competence_integral(
-            ({"complexity": complexity * 2.0, "score": 1.0, "sample_count": 1},),
+            ({"log2_volume": log2_volume * 2.0, "score": 1.0, "sample_count": 1},),
             chance_mass=chance_mass,
         ).value,
         1.0,
     )
     assert math.isclose(
         local_results.competence_integral(
-            ({"complexity": complexity, "score": 0.55, "sample_count": 1},),
+            ({"log2_volume": log2_volume, "score": 0.55, "sample_count": 1},),
             chance_mass=chance_mass,
         ).value,
         0.5,
@@ -92,7 +92,7 @@ def test_competence_integral_integrates_bits_above_chance() -> None:
         local_results.competence_integral(
             (
                 {
-                    "complexity": complexity * 4.0,
+                    "log2_volume": log2_volume * 4.0,
                     "score": chance_mass,
                     "sample_count": 1,
                 },
@@ -104,8 +104,8 @@ def test_competence_integral_integrates_bits_above_chance() -> None:
     assert math.isclose(
         local_results.competence_integral(
             (
-                {"complexity": complexity, "score": chance_mass, "sample_count": 1},
-                {"complexity": complexity * 2.0, "score": 1.0, "sample_count": 1},
+                {"log2_volume": log2_volume, "score": chance_mass, "sample_count": 1},
+                {"log2_volume": log2_volume * 2.0, "score": 1.0, "sample_count": 1},
             ),
             chance_mass=chance_mass,
         ).value,
@@ -495,13 +495,13 @@ def test_integrated_model_cost_reconstructs_point_density_from_input_shape() -> 
     cost_integral = sampled_competence_compute_cost_integral(
         points=(
             {
-                "complexity": 1.0,
+                "log2_volume": 1.0,
                 "input_shape": list(first_input_shape),
             },
             {
-                "complexity": 2.0,
-                "complexity_minimum": 2.0,
-                "complexity_maximum": 2.0,
+                "log2_volume": 2.0,
+                "log2_volume_minimum": 2.0,
+                "log2_volume_maximum": 2.0,
                 "input_shape": list(second_input_shape),
             },
         ),

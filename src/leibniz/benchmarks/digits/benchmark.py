@@ -39,12 +39,12 @@ from leibniz.observation_formation import (
     VariationTransformDeclaration,
 )
 from leibniz.observation_generation import (
-    ComplexityRequest,
-    ComplexityValue,
     GeneratedSample,
     GeneratedSampleSet,
     GenerationRequestOutcome,
     ObservationGenerationError,
+    StateSpaceVolumeRequest,
+    StateSpaceVolumeValue,
 )
 from leibniz.observation_showcases import (
     ObservationShowcaseManifest,
@@ -85,12 +85,12 @@ _outcome_space_id = ProtocolIdentifier.parse("benchmarks.digits.outcomes@0.1.0")
 _field_scalar_construction_bytes = 64
 _default_memory_budget_fraction = 0.10
 _default_generation_memory_limit_bytes = 32_768_000
-_complexity_class_digit_count = 10
-_complexity_class_canvas_minimum_side = 16
-_complexity_class_canvas_side_step = 4
-_complexity_class_cardinality_relative_tolerance = 1e-12
+_volume_class_digit_count = 10
+_volume_class_canvas_minimum_side = 16
+_volume_class_canvas_side_step = 4
+_volume_class_cardinality_relative_tolerance = 1e-12
 _default_constructed_affine_transform_count = 2
-_canonical_digits_cardinality = _complexity_class_digit_count
+_canonical_digits_cardinality = _volume_class_digit_count
 _constructed_affine_preset_max_count = 8
 _constructed_affine_translation_bounds = (-0.15, 0.15)
 _constructed_affine_effective_radius_fraction = 0.25
@@ -161,7 +161,7 @@ class _ConstructedAffineGrid:
 
 
 @dataclass(frozen=True, slots=True)
-class _DigitsComplexityClass:
+class _DigitsVolumeClass:
     affine_grid: _ConstructedAffineGrid
     requested_cardinality: int
     minimum_address: int = 0
@@ -169,7 +169,7 @@ class _DigitsComplexityClass:
 
     @property
     def digit_count(self) -> int:
-        return _complexity_class_digit_count
+        return _volume_class_digit_count
 
     @property
     def affine_transform_count(self) -> int:
@@ -184,17 +184,17 @@ class _DigitsComplexityClass:
         return self.minimum_address + self.requested_cardinality - 1
 
     @property
-    def complexity(self) -> float:
+    def log2_volume(self) -> float:
         return math.log2(self.cardinality)
 
-    def measure(self) -> ComplexityValue:
-        return _complexity_value(self.complexity)
+    def measure(self) -> StateSpaceVolumeValue:
+        return _volume_value(self.log2_volume)
 
     def metadata(self) -> dict[str, object]:
         metadata: dict[str, object] = {
-            "kind": "digits-requested-finite-complexity-class",
+            "kind": "digits-requested-finite-volume-class",
             "digit_count": self.digit_count,
-            "output_digit_count": _complexity_class_digit_count,
+            "output_digit_count": _volume_class_digit_count,
             "affine_transform_count": self.affine_transform_count,
             "latent_cardinality": self.cardinality,
             "minimum_address": self.minimum_address,
@@ -377,7 +377,7 @@ class Generator:
         include_artifacts: bool,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
-        complexity_class: _DigitsComplexityClass,
+        volume_class: _DigitsVolumeClass,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
         output_timing_prefix: str = "",
@@ -393,7 +393,7 @@ class Generator:
                 sample_count=sample_count,
                 seed=seed,
                 sample_indices=sample_indices,
-                complexity_class=complexity_class,
+                volume_class=volume_class,
                 timing=timing,
                 timing_prefix=timing_prefix,
             )
@@ -432,7 +432,7 @@ class Generator:
             transform_record=transform_record,
             component_indices=component_index_samples,
             transform_indices=transform_index_samples,
-            complexity_class=complexity_class,
+            volume_class=volume_class,
             timing=timing,
             timing_phase=variation_timing_phase,
         )
@@ -451,7 +451,7 @@ class Generator:
                     sample_shape=(sample_count,),
                     seed=seed,
                     sample_indices=sample_indices,
-                    complexity_class=complexity_class,
+                    volume_class=volume_class,
                     resolution_assignment=resolved_resolution_assignment,
                     memory_limit_bytes=memory_limit_bytes,
                     runtime=resolve_host_tensor_runtime(),
@@ -507,11 +507,11 @@ class Generator:
                         component_index=component_index,
                         region_component_index=_digits_region_component_index(
                             component_index=component_index,
-                            complexity_class=complexity_class,
+                            volume_class=volume_class,
                         ),
                         axis_coordinates=_digits_region_axis_coordinates(
                             transform_index=transform_index,
-                            grid=complexity_class.affine_grid,
+                            grid=volume_class.affine_grid,
                             resolution_assignment=resolved_resolution_assignment,
                         ),
                         variation_coordinates=variation_coordinates,
@@ -536,14 +536,14 @@ class Generator:
         sample_count: int,
         seed: int,
         sample_indices: tuple[int, ...],
-        complexity_class: _DigitsComplexityClass,
+        volume_class: _DigitsVolumeClass,
         resolution_assignment: AxisAssignment,
     ) -> tuple[GeneratedSample, ...]:
         component_indices, transform_indices = self._sample_state_coordinates(
             sample_count=sample_count,
             seed=seed,
             sample_indices=sample_indices,
-            complexity_class=complexity_class,
+            volume_class=volume_class,
             timing=None,
             timing_prefix="",
         )
@@ -554,11 +554,11 @@ class Generator:
                 component_index=component_index,
                 region_component_index=_digits_region_component_index(
                     component_index=component_index,
-                    complexity_class=complexity_class,
+                    volume_class=volume_class,
                 ),
                 axis_coordinates=_digits_region_axis_coordinates(
                     transform_index=transform_indices[index],
-                    grid=complexity_class.affine_grid,
+                    grid=volume_class.affine_grid,
                     resolution_assignment=resolution_assignment,
                 ),
             )
@@ -602,7 +602,7 @@ class Generator:
         transform_record: Mapping[str, object],
         component_indices: tuple[int, ...],
         transform_indices: tuple[int, ...],
-        complexity_class: _DigitsComplexityClass,
+        volume_class: _DigitsVolumeClass,
         timing: TimingCollector | None,
         timing_phase: str,
     ) -> tuple[
@@ -628,7 +628,7 @@ class Generator:
                 transform_index = transform_indices[index]
                 if (
                     transform_index < 0
-                    or transform_index >= complexity_class.affine_transform_count
+                    or transform_index >= volume_class.affine_transform_count
                 ):
                     raise ObservationGenerationError(
                         "transform index is outside active transform set"
@@ -637,7 +637,7 @@ class Generator:
                     transform=transform,
                     component_index=component_index,
                     transform_index=transform_index,
-                    grid=complexity_class.affine_grid,
+                    grid=volume_class.affine_grid,
                 )
                 coordinates = (coordinate,)
                 samples.append(
@@ -645,9 +645,9 @@ class Generator:
                         {
                             "kind": "constructed-field-variation-transform-samples",
                             "bounds": transform_record,
-                            "complexity_class": complexity_class.metadata(),
+                            "volume_class": volume_class.metadata(),
                             "transform_index": transform_index,
-                            "transform_count": complexity_class.affine_transform_count,
+                            "transform_count": volume_class.affine_transform_count,
                             "coordinates": [dict(item) for item in coordinates],
                         },
                         coordinates,
@@ -661,7 +661,7 @@ class Generator:
         sample_count: int,
         seed: int,
         sample_indices: tuple[int, ...],
-        complexity_class: _DigitsComplexityClass,
+        volume_class: _DigitsVolumeClass,
         timing: TimingCollector | None,
         timing_prefix: str,
     ) -> tuple[tuple[int, ...], tuple[int, ...]]:
@@ -672,11 +672,11 @@ class Generator:
                 state_index = _digits_local_state_index(
                     seed=seed,
                     sample_index=sample_indices[index],
-                    cardinality=complexity_class.cardinality,
+                    cardinality=volume_class.cardinality,
                 )
                 component_index, transform_index = _digits_state_coordinate(
                     state_index=state_index,
-                    complexity_class=complexity_class,
+                    volume_class=volume_class,
                 )
                 component_indices.append(component_index)
                 transform_indices.append(transform_index)
@@ -688,7 +688,7 @@ class Generator:
         sample_shape: tuple[int, ...],
         seed: int,
         sample_indices: tuple[int, ...],
-        complexity_class: _DigitsComplexityClass,
+        volume_class: _DigitsVolumeClass,
         resolution_assignment: AxisAssignment | None,
         memory_limit_bytes: int | None,
         runtime: TensorRuntime,
@@ -696,7 +696,7 @@ class Generator:
         timing: TimingCollector | None,
         timing_prefix: str,
     ) -> tuple[Any, Any]:
-        """Generate tensor fields and targets directly from the Digits complexity shell."""
+        """Generate tensor fields and targets directly from the Digits volume shell."""
 
         if not outcome_ids:
             raise ObservationGenerationError("tensor generation requires outcome_ids")
@@ -705,7 +705,7 @@ class Generator:
             sample_shape=sample_shape,
             seed=seed,
             sample_indices=sample_indices,
-            complexity_class=complexity_class,
+            volume_class=volume_class,
             resolution_assignment=resolution_assignment,
             memory_limit_bytes=memory_limit_bytes,
             runtime=runtime,
@@ -718,14 +718,14 @@ class Generator:
             )
             unknown = tuple(
                 outcome_id
-                for outcome_id in component_outcome_ids[: complexity_class.digit_count]
+                for outcome_id in component_outcome_ids[: volume_class.digit_count]
                 if outcome_id not in outcome_ids
             )
             if unknown:
                 raise TensorRuntimeError(f"unknown target outcome id: {unknown[0]}")
             component_to_outcome = tuple(
                 outcome_ids.index(outcome_id)
-                for outcome_id in component_outcome_ids[: complexity_class.digit_count]
+                for outcome_id in component_outcome_ids[: volume_class.digit_count]
             )
             labels = tensor_runtime_construct_tensor(
                 runtime,
@@ -737,9 +737,9 @@ class Generator:
                     program=_target_tensor_program(
                         seed=seed,
                         sample_indices=sample_indices,
-                        cardinality=complexity_class.cardinality,
-                        minimum_address=complexity_class.minimum_address,
-                        digit_count=complexity_class.digit_count,
+                        cardinality=volume_class.cardinality,
+                        minimum_address=volume_class.minimum_address,
+                        digit_count=volume_class.digit_count,
                         component_to_outcome=component_to_outcome,
                         outcome_count=len(outcome_ids),
                     ),
@@ -753,7 +753,7 @@ class Generator:
         sample_shape: tuple[int, ...],
         seed: int,
         sample_indices: tuple[int, ...],
-        complexity_class: _DigitsComplexityClass,
+        volume_class: _DigitsVolumeClass,
         resolution_assignment: AxisAssignment | None,
         memory_limit_bytes: int | None,
         runtime: TensorRuntime,
@@ -774,13 +774,13 @@ class Generator:
                 sample_count=sample_count,
                 width=width,
                 height=height,
-                digit_count=complexity_class.digit_count,
+                digit_count=volume_class.digit_count,
                 transform=self.formation.variation_transform,
-                grid=complexity_class.affine_grid,
+                grid=volume_class.affine_grid,
                 seed=seed,
                 sample_indices=sample_indices,
-                cardinality=complexity_class.cardinality,
-                minimum_address=complexity_class.minimum_address,
+                cardinality=volume_class.cardinality,
+                minimum_address=volume_class.minimum_address,
                 runtime=runtime,
                 timing=timing,
                 timing_prefix=timing_prefix,
@@ -918,7 +918,7 @@ class Generator:
             ),
         )
 
-    def distinguishable_state_complexity(
+    def distinguishable_state_log2_volume(
         self,
         *,
         width: int,
@@ -935,51 +935,51 @@ class Generator:
             raise ObservationGenerationError("variation_extent must be finite")
         if variation_extent_value < 0.0 or variation_extent_value > 1.0:
             raise ObservationGenerationError("variation_extent must be between 0 and 1")
-        return self._default_complexity_class(
+        return self._default_volume_class(
             canonical_variation=variation_extent_value == 0.0,
-        ).complexity
+        ).log2_volume
 
-    def constructed_complexity_class_complexity(
+    def constructed_volume_class_log2_volume(
         self,
         *,
         affine_transform_count: int,
     ) -> float:
         """Return the exact log2 count of constructed single-digit choices."""
 
-        return self._complexity_class_for_requested_cardinality(
-            requested_cardinality=_complexity_class_digit_count * affine_transform_count,
+        return self._volume_class_for_requested_cardinality(
+            requested_cardinality=_volume_class_digit_count * affine_transform_count,
             affine_transform_count=affine_transform_count,
-        ).complexity
+        ).log2_volume
 
-    def minimum_complexity(self) -> ComplexityValue:
-        """Return the smallest score-bearing Digits complexity."""
+    def minimum_log2_volume(self) -> StateSpaceVolumeValue:
+        """Return the smallest score-bearing Digits log2 volume."""
 
-        return _complexity_value(0.0)
+        return _volume_value(0.0)
 
-    def _complexity_class_for_request(
+    def _volume_class_for_request(
         self,
         *,
-        request: ComplexityRequest,
-    ) -> _DigitsComplexityClass | None:
-        """Return the integer address shell represented by a complexity request."""
+        request: StateSpaceVolumeRequest,
+    ) -> _DigitsVolumeClass | None:
+        """Return the integer address shell represented by a volume request."""
 
-        if request.maximum < self.minimum_complexity().value:
+        if request.maximum < self.minimum_log2_volume().value:
             return None
-        requested_cardinality = _ceil_complexity_class_cardinality(
-            max(request.minimum, self.minimum_complexity().value)
+        requested_cardinality = _ceil_volume_class_cardinality(
+            max(request.minimum, self.minimum_log2_volume().value)
         )
-        maximum_cardinality = _floor_complexity_class_cardinality(request.maximum)
+        maximum_cardinality = _floor_volume_class_cardinality(request.maximum)
         if maximum_cardinality < requested_cardinality:
             return None
-        complexity_class = self._complexity_class_for_requested_cardinality(
+        volume_class = self._volume_class_for_requested_cardinality(
             requested_cardinality=requested_cardinality,
-            resolution_assignment=self._resolution_assignment_for_complexity_request(
+            resolution_assignment=self._resolution_assignment_for_volume_request(
                 request
             ),
         )
-        if not request.contains(complexity_class.measure()):
+        if not request.contains(volume_class.measure()):
             return None
-        return complexity_class
+        return volume_class
 
     def oracle_inference_reference_points(
         self,
@@ -994,7 +994,7 @@ class Generator:
         points: list[dict[str, object]] = [
             _oracle_reference_point_for_cardinality(
                 cardinality=1,
-                side=_complexity_class_canvas_minimum_side,
+                side=_volume_class_canvas_minimum_side,
             )
         ]
         for side in sides:
@@ -1003,7 +1003,7 @@ class Generator:
                 bounds=bounds,
                 side=side,
             )
-            sample_cardinality = _complexity_class_digit_count * math.prod(capacities)
+            sample_cardinality = _volume_class_digit_count * math.prod(capacities)
             points.append(
                 _oracle_reference_point_for_cardinality(
                     cardinality=sample_cardinality,
@@ -1013,38 +1013,38 @@ class Generator:
             )
         return tuple(points)
 
-    def _default_complexity_class(
+    def _default_volume_class(
         self,
         *,
         canonical_variation: bool = False,
-    ) -> _DigitsComplexityClass:
-        return self._complexity_class_for_affine_transform_count(
+    ) -> _DigitsVolumeClass:
+        return self._volume_class_for_affine_transform_count(
             affine_transform_count=(
                 1 if canonical_variation else _default_constructed_affine_transform_count
             ),
         )
 
-    def _complexity_class_for_affine_transform_count(
+    def _volume_class_for_affine_transform_count(
         self,
         *,
         affine_transform_count: int,
         resolution_assignment: AxisAssignment | None = None,
-    ) -> _DigitsComplexityClass:
-        return self._complexity_class_for_requested_cardinality(
-            requested_cardinality=_complexity_class_digit_count * affine_transform_count,
+    ) -> _DigitsVolumeClass:
+        return self._volume_class_for_requested_cardinality(
+            requested_cardinality=_volume_class_digit_count * affine_transform_count,
             affine_transform_count=affine_transform_count,
             minimum_address=0,
             resolution_assignment=resolution_assignment,
         )
 
-    def _complexity_class_for_requested_cardinality(
+    def _volume_class_for_requested_cardinality(
         self,
         *,
         requested_cardinality: int,
         affine_transform_count: int | None = None,
         minimum_address: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
-    ) -> _DigitsComplexityClass:
+    ) -> _DigitsVolumeClass:
         _require_generation_positive_integer(
             requested_cardinality,
             "requested_cardinality",
@@ -1072,7 +1072,7 @@ class Generator:
                 affine_transform_count,
                 resolution_assignment=resolution_assignment,
             )
-        return _DigitsComplexityClass(
+        return _DigitsVolumeClass(
             affine_grid=affine_grid,
             requested_cardinality=requested_cardinality,
             minimum_address=shell_minimum_address,
@@ -1260,7 +1260,7 @@ class Generator:
         include_fields: bool = False,
         include_metadata: bool = True,
         include_artifacts: bool = False,
-        complexity_request: ComplexityRequest | None = None,
+        volume_request: StateSpaceVolumeRequest | None = None,
         sample_indices: Sequence[int] | None = None,
         memory_limit_bytes: int | None = None,
         resolution_assignment: AxisAssignment | None = None,
@@ -1281,18 +1281,18 @@ class Generator:
             sample_indices=sample_indices,
         )
         variation_extent_value = _variation_extent_value(variation_extent)
-        complexity_class = self._default_complexity_class(
+        volume_class = self._default_volume_class(
             canonical_variation=variation_extent_value == 0.0,
         )
-        if complexity_request is not None:
+        if volume_request is not None:
             if resolution_assignment is not None:
                 raise ObservationGenerationError(
-                    "complexity request cannot be combined with resolution_assignment"
+                    "volume request cannot be combined with resolution_assignment"
             )
-            requested_complexity_class = self._complexity_class_for_request(
-                request=complexity_request
+            requested_volume_class = self._volume_class_for_request(
+                request=volume_request
             )
-            if requested_complexity_class is None:
+            if requested_volume_class is None:
                 return GeneratedSampleSet(
                     benchmark_id=self.manifest.id,
                     generator_id=self.id,
@@ -1300,19 +1300,19 @@ class Generator:
                     seed=seed,
                     shape=(0,),
                     variation_extent=variation_extent,
-                    complexity_request=complexity_request,
+                    volume_request=volume_request,
                     samples=(),
                     request_outcome=_digits_unrealized_request_outcome(
-                        request=complexity_request,
-                        minimum_complexity=self.minimum_complexity().value,
+                        request=volume_request,
+                        minimum_log2_volume=self.minimum_log2_volume().value,
                     ),
                 )
-            resolution_assignment = requested_complexity_class.resolution_assignment
+            resolution_assignment = requested_volume_class.resolution_assignment
             if resolution_assignment is None:
                 raise ObservationGenerationError(
-                    "Digits complexity shell is missing a resolution assignment"
+                    "Digits volume shell is missing a resolution assignment"
                 )
-            complexity_class = requested_complexity_class
+            volume_class = requested_volume_class
         if runtime is not None and outcome_ids is None:
             raise ObservationGenerationError("tensor generation requires outcome_ids")
         resolved_resolution_assignment = self._generation_resolution_assignment(
@@ -1322,7 +1322,7 @@ class Generator:
             memory_limit_bytes=memory_limit_bytes,
         )
         region = _digits_state_space_region(
-            complexity_class=complexity_class,
+            volume_class=volume_class,
             resolution_assignment=resolved_resolution_assignment,
             margin=self.manifest.resolution_discriminability_margin(),
         )
@@ -1335,7 +1335,7 @@ class Generator:
                 sample_indices=resolved_sample_indices,
                 memory_limit_bytes=memory_limit_bytes,
                 resolution_assignment=resolved_resolution_assignment,
-                complexity_class=complexity_class,
+                volume_class=volume_class,
                 runtime=runtime,
                 outcome_ids=outcome_ids,
                 timing=timing,
@@ -1348,7 +1348,7 @@ class Generator:
                     sample_count=sample_count,
                     seed=seed,
                     sample_indices=resolved_sample_indices,
-                    complexity_class=complexity_class,
+                    volume_class=volume_class,
                     resolution_assignment=resolved_resolution_assignment,
                 )
             else:
@@ -1360,7 +1360,7 @@ class Generator:
                     include_artifacts=include_artifacts,
                     memory_limit_bytes=memory_limit_bytes,
                     resolution_assignment=resolved_resolution_assignment,
-                    complexity_class=complexity_class,
+                    volume_class=volume_class,
                     timing=timing,
                     timing_prefix=(
                         f"{timing_prefix}formation_batch." if include_fields else timing_prefix
@@ -1374,26 +1374,26 @@ class Generator:
             seed=seed,
             shape=sample_shape,
             variation_extent=variation_extent,
-            complexity_request=complexity_request,
+            volume_request=volume_request,
             samples=samples,
             fields=fields,
             targets=targets,
             region=region,
         )
 
-    def _resolution_assignment_for_complexity_request(
+    def _resolution_assignment_for_volume_request(
         self,
-        request: ComplexityRequest,
+        request: StateSpaceVolumeRequest,
     ) -> AxisAssignment:
-        minimum_complexity = self.minimum_complexity().value
-        if request.maximum < minimum_complexity:
-            side = _complexity_class_canvas_minimum_side
+        minimum_log2_volume = self.minimum_log2_volume().value
+        if request.maximum < minimum_log2_volume:
+            side = _volume_class_canvas_minimum_side
         else:
-            minimum_cardinality = _ceil_complexity_class_cardinality(
-                max(request.minimum, minimum_complexity)
+            minimum_cardinality = _ceil_volume_class_cardinality(
+                max(request.minimum, minimum_log2_volume)
             )
-            maximum_cardinality = _floor_complexity_class_cardinality(request.maximum)
-            side = _complexity_class_canvas_side_for_cardinality_range(
+            maximum_cardinality = _floor_volume_class_cardinality(request.maximum)
+            side = _volume_class_canvas_side_for_cardinality_range(
                 minimum_cardinality=minimum_cardinality,
                 maximum_cardinality=maximum_cardinality,
             )
@@ -1420,7 +1420,7 @@ class Generator:
         minimum_assignment = self.materialization.minimum_resolution()
         width_axis = self.formation.width_axis
         height_axis = self.formation.height_axis
-        side = _complexity_class_canvas_side_for_cardinality_range(
+        side = _volume_class_canvas_side_for_cardinality_range(
             minimum_cardinality=requested_cardinality,
             maximum_cardinality=requested_cardinality,
         )
@@ -1467,13 +1467,13 @@ def _sample_indices(
     return normalized
 
 
-def _complexity_value(complexity: float) -> ComplexityValue:
-    return ComplexityValue(
-        value=complexity,
+def _volume_value(log2_volume: float) -> StateSpaceVolumeValue:
+    return StateSpaceVolumeValue(
+        value=log2_volume,
     )
 
 
-def _complexity_class_canvas_side_for_cardinality_range(
+def _volume_class_canvas_side_for_cardinality_range(
     *,
     minimum_cardinality: int,
     maximum_cardinality: int,
@@ -1482,13 +1482,13 @@ def _complexity_class_canvas_side_for_cardinality_range(
     _require_generation_positive_integer(maximum_cardinality, "maximum_cardinality")
     if maximum_cardinality < minimum_cardinality:
         raise ObservationGenerationError(
-            "complexity cardinality range maximum is below minimum"
+            "volume cardinality range maximum is below minimum"
         )
     maximum_transform_count = _affine_transform_count_for_sample_cardinality(
         maximum_cardinality
     )
     required_transform_count = maximum_transform_count
-    side = _complexity_class_canvas_minimum_side
+    side = _volume_class_canvas_minimum_side
     while True:
         bounds = _constructed_affine_bounds_for_canvas_side(side)
         capacities = _constructed_affine_axis_capacities(bounds=bounds, side=side)
@@ -1503,23 +1503,23 @@ def _complexity_class_canvas_side_for_cardinality_range(
                 resolution_assignment=assignment,
             ) is not None:
                 return side
-        side += _complexity_class_canvas_side_step
+        side += _volume_class_canvas_side_step
 
 
 def _oracle_reference_canvas_sides(*, maximum_cost: float) -> tuple[int, ...]:
     if not math.isfinite(maximum_cost) or maximum_cost <= 0.0:
         raise ObservationGenerationError("maximum_cost must be positive and finite")
-    sides = {_complexity_class_canvas_minimum_side}
+    sides = {_volume_class_canvas_minimum_side}
     exponent = 0
     while 10**exponent <= maximum_cost:
         for multiplier in (1, 2, 5):
             target_cost = multiplier * 10**exponent
-            side = _complexity_class_canvas_side_for_cost(target_cost)
+            side = _volume_class_canvas_side_for_cost(target_cost)
             sides.add(side)
             if side * side >= maximum_cost:
                 return tuple(sorted(sides))
         exponent += 1
-    sides.add(_complexity_class_canvas_side_for_cost(maximum_cost))
+    sides.add(_volume_class_canvas_side_for_cost(maximum_cost))
     return tuple(sorted(sides))
 
 
@@ -1531,7 +1531,7 @@ def _oracle_reference_point_for_cardinality(
 ) -> dict[str, object]:
     _require_generation_positive_integer(cardinality, "cardinality")
     _require_generation_positive_integer(side, "side")
-    complexity = math.log2(cardinality)
+    log2_volume = math.log2(cardinality)
     cost = side * side
     components: dict[str, object] = {
         "height": side,
@@ -1548,8 +1548,8 @@ def _oracle_reference_point_for_cardinality(
             "x_shear": affine_axis_capacities[4],
         }
     return {
-        "complexity": complexity,
-        "score": complexity,
+        "log2_volume": log2_volume,
+        "score": log2_volume,
         "cost": cost,
         "metadata": {
             "kind": "oracle-inference-compute-reference-v1",
@@ -1560,36 +1560,36 @@ def _oracle_reference_point_for_cardinality(
     }
 
 
-def _complexity_class_canvas_side_for_cost(cost: float) -> int:
+def _volume_class_canvas_side_for_cost(cost: float) -> int:
     if not math.isfinite(cost) or cost <= 0.0:
         raise ObservationGenerationError("cost must be positive and finite")
-    side = max(_complexity_class_canvas_minimum_side, math.ceil(math.sqrt(cost)))
-    offset = max(0, side - _complexity_class_canvas_minimum_side)
-    steps = math.ceil(offset / _complexity_class_canvas_side_step)
-    return _complexity_class_canvas_minimum_side + steps * _complexity_class_canvas_side_step
+    side = max(_volume_class_canvas_minimum_side, math.ceil(math.sqrt(cost)))
+    offset = max(0, side - _volume_class_canvas_minimum_side)
+    steps = math.ceil(offset / _volume_class_canvas_side_step)
+    return _volume_class_canvas_minimum_side + steps * _volume_class_canvas_side_step
 
 
-def _ceil_complexity_class_cardinality(complexity: float) -> int:
-    value = _complexity_class_cardinality_float(complexity)
-    tolerance = max(1.0, abs(value)) * _complexity_class_cardinality_relative_tolerance
+def _ceil_volume_class_cardinality(log2_volume: float) -> int:
+    value = _volume_class_cardinality_float(log2_volume)
+    tolerance = max(1.0, abs(value)) * _volume_class_cardinality_relative_tolerance
     return max(1, math.ceil(value - tolerance))
 
 
-def _floor_complexity_class_cardinality(complexity: float) -> int:
-    value = _complexity_class_cardinality_float(complexity)
-    tolerance = max(1.0, abs(value)) * _complexity_class_cardinality_relative_tolerance
+def _floor_volume_class_cardinality(log2_volume: float) -> int:
+    value = _volume_class_cardinality_float(log2_volume)
+    tolerance = max(1.0, abs(value)) * _volume_class_cardinality_relative_tolerance
     return max(1, math.floor(value + tolerance))
 
 
-def _complexity_class_cardinality_float(complexity: float) -> float:
-    if not math.isfinite(float(complexity)):
-        raise ObservationGenerationError("complexity must be finite")
-    return 2.0**complexity
+def _volume_class_cardinality_float(log2_volume: float) -> float:
+    if not math.isfinite(float(log2_volume)):
+        raise ObservationGenerationError("volume must be finite")
+    return 2.0**log2_volume
 
 
 def _affine_transform_count_for_sample_cardinality(cardinality: int) -> int:
     _require_generation_positive_integer(cardinality, "cardinality")
-    digit_count = min(_complexity_class_digit_count, cardinality)
+    digit_count = min(_volume_class_digit_count, cardinality)
     return max(1, math.ceil(cardinality / digit_count))
 
 
@@ -1602,7 +1602,7 @@ def _affine_transform_count_for_address_range(
         raise ObservationGenerationError("minimum_address must be a nonnegative integer")
     _require_generation_positive_integer(cardinality, "cardinality")
     maximum_address = minimum_address + cardinality - 1
-    return maximum_address // _complexity_class_digit_count + 1
+    return maximum_address // _volume_class_digit_count + 1
 
 
 def _constructed_affine_grid_for_minimum_transform_count(
@@ -1619,8 +1619,8 @@ def _constructed_affine_grid_for_minimum_transform_count(
         if resolution_assignment is not None
         else AxisAssignment(
             values={
-                "H": _complexity_class_canvas_minimum_side,
-                "W": _complexity_class_canvas_minimum_side,
+                "H": _volume_class_canvas_minimum_side,
+                "W": _volume_class_canvas_minimum_side,
             }
         )
     )
@@ -1640,23 +1640,23 @@ def _constructed_affine_grid_for_minimum_transform_count(
 def _digits_state_coordinate(
     *,
     state_index: int,
-    complexity_class: _DigitsComplexityClass,
+    volume_class: _DigitsVolumeClass,
 ) -> tuple[int, int]:
     if type(state_index) is not int or state_index < 0:
         raise ObservationGenerationError("state_index must be a nonnegative integer")
-    if state_index >= complexity_class.cardinality:
+    if state_index >= volume_class.cardinality:
         raise ObservationGenerationError("state_index must be below cardinality")
-    sample_address = complexity_class.minimum_address + state_index
-    component_index = sample_address % _complexity_class_digit_count
-    transform_index = sample_address // _complexity_class_digit_count
-    if transform_index >= complexity_class.affine_transform_count:
+    sample_address = volume_class.minimum_address + state_index
+    component_index = sample_address % _volume_class_digit_count
+    transform_index = sample_address // _volume_class_digit_count
+    if transform_index >= volume_class.affine_transform_count:
         raise ObservationGenerationError("sample address exceeds active transform set")
     return (component_index, transform_index)
 
 
 def _digits_state_space_region(
     *,
-    complexity_class: _DigitsComplexityClass,
+    volume_class: _DigitsVolumeClass,
     resolution_assignment: AxisAssignment,
     margin: float,
 ) -> StateSpaceRegion:
@@ -1673,12 +1673,12 @@ def _digits_state_space_region(
             certificate_id="component-discriminability-margin",
         ),
     )
-    transform_indices_by_digit = _digits_transform_indices_by_digit(complexity_class)
+    transform_indices_by_digit = _digits_transform_indices_by_digit(volume_class)
     components = tuple(
         _digits_product_region(
             digit_index=digit_index,
             transform_indices=transform_indices,
-            grid=complexity_class.affine_grid,
+            grid=volume_class.affine_grid,
             width=width,
             height=height,
         )
@@ -1687,14 +1687,14 @@ def _digits_state_space_region(
     return StateSpaceRegion(
         id=(
             "benchmarks.digits.realized-region."
-            f"addresses-{complexity_class.minimum_address}-{complexity_class.maximum_address}."
+            f"addresses-{volume_class.minimum_address}-{volume_class.maximum_address}."
             f"canvas-{width}x{height}"
         ),
         ambient=ambient,
         components=components,
         union_rule="disjoint-union",
-        volume=complexity_class.cardinality,
-        log2_volume=complexity_class.complexity,
+        volume=volume_class.cardinality,
+        log2_volume=volume_class.log2_volume,
     )
 
 
@@ -1820,9 +1820,9 @@ def _singleton_integer_axis_region(axis_id: str, value: int) -> AxisRegion:
 def _digits_region_component_index(
     *,
     component_index: int,
-    complexity_class: _DigitsComplexityClass,
+    volume_class: _DigitsVolumeClass,
 ) -> int:
-    digits = tuple(_digits_transform_indices_by_digit(complexity_class))
+    digits = tuple(_digits_transform_indices_by_digit(volume_class))
     try:
         return digits.index(component_index)
     except ValueError as error:
@@ -1848,13 +1848,13 @@ def _digits_region_axis_coordinates(
 
 
 def _digits_transform_indices_by_digit(
-    complexity_class: _DigitsComplexityClass,
+    volume_class: _DigitsVolumeClass,
 ) -> dict[int, tuple[int, ...]]:
     transform_indices_by_digit: dict[int, list[int]] = {}
-    for state_index in range(complexity_class.cardinality):
+    for state_index in range(volume_class.cardinality):
         component_index, transform_index = _digits_state_coordinate(
             state_index=state_index,
-            complexity_class=complexity_class,
+            volume_class=volume_class,
         )
         transform_indices_by_digit.setdefault(component_index, []).append(transform_index)
     return {
@@ -1865,10 +1865,10 @@ def _digits_transform_indices_by_digit(
 
 def _digits_unrealized_request_outcome(
     *,
-    request: ComplexityRequest,
-    minimum_complexity: float,
+    request: StateSpaceVolumeRequest,
+    minimum_log2_volume: float,
 ) -> GenerationRequestOutcome:
-    _ = minimum_complexity
+    _ = minimum_log2_volume
     return GenerationRequestOutcome(kind="unrepresentable-below-minimum")
 
 
@@ -1885,15 +1885,15 @@ def _digits_local_state_index(
     return (seed + sample_index) % cardinality
 
 
-def _complexity_class_canvas_side_from_assignment(
+def _volume_class_canvas_side_from_assignment(
     resolution_assignment: AxisAssignment | None,
 ) -> int:
     if resolution_assignment is None:
-        return _complexity_class_canvas_minimum_side
+        return _volume_class_canvas_minimum_side
     values = tuple(resolution_assignment.values.values())
     if not values:
-        return _complexity_class_canvas_minimum_side
-    return max(_complexity_class_canvas_minimum_side, max(values))
+        return _volume_class_canvas_minimum_side
+    return max(_volume_class_canvas_minimum_side, max(values))
 
 
 def _constructed_affine_bounds_for_canvas_side(
@@ -1959,7 +1959,7 @@ def _constructed_affine_grid(
     resolution_assignment: AxisAssignment | None = None,
 ) -> _ConstructedAffineGrid:
     _require_generation_positive_integer(transform_count, "transform_count")
-    side = _complexity_class_canvas_side_from_assignment(resolution_assignment)
+    side = _volume_class_canvas_side_from_assignment(resolution_assignment)
     bounds = _constructed_affine_bounds_for_canvas_side(side)
     if transform_count <= _constructed_affine_preset_max_count:
         return _ConstructedAffineGrid(
@@ -2010,7 +2010,7 @@ def _constructed_affine_grid_in_transform_count_range(
     )
     if maximum_transform_count < minimum_transform_count:
         return None
-    side = _complexity_class_canvas_side_from_assignment(resolution_assignment)
+    side = _volume_class_canvas_side_from_assignment(resolution_assignment)
     bounds = _constructed_affine_bounds_for_canvas_side(side)
     capacities = _constructed_affine_axis_capacities(bounds=bounds, side=side)
     preset_count = _preset_count_in_range(
@@ -3110,15 +3110,15 @@ def _manifest() -> BenchmarkManifest:
             "affine_maximum_condition_number": 1.6,
             "affine_minimum_projected_extent": 0.65,
             "affine_maximum_projected_extent": 1.35,
-            "complexity_value": {
-                "kind": "constructed-finite-complexity-shell",
+            "volume_value": {
+                "kind": "constructed-finite-volume-shell",
                 "measure_id": "log2-state-space-volume",
                 "formula": "log2(realized_cardinality)",
-                "digit_count": _complexity_class_digit_count,
+                "digit_count": _volume_class_digit_count,
                 "affine_transform_family": "constructed-finite-affine-product-grid",
                 "target_policy": "symmetric-realized-cardinalities-inside-request-band",
                 "description": (
-                    "Score-bearing Digits complexity shells are requested finite "
+                    "Score-bearing Digits volume shells are requested finite "
                     "single-digit windows. The minimum non-null request is the "
                     "canonical 10-way digit classification problem. Larger "
                     "requests add symmetric finite affine choices for every "
@@ -3126,7 +3126,7 @@ def _manifest() -> BenchmarkManifest:
                     "instead of forcing exact powers of two. Canvas resolution "
                     "is the smallest square lattice, rounded to the benchmark "
                     "resolution step, whose finite affine grid can express a "
-                    "cardinality inside the requested complexity band."
+                    "cardinality inside the requested volume band."
                 ),
             },
             "description": (

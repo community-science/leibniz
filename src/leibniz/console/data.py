@@ -43,7 +43,7 @@ from leibniz.local_results import (
 from leibniz.model_inspection import ModelInspectionRecord
 from leibniz.model_operators import model_operator_vocabulary
 from leibniz.observation_generation import (
-    ComplexityRequest,
+    StateSpaceVolumeRequest,
     load_generator,
     sample_indices_for_even_state_coverage,
 )
@@ -70,7 +70,7 @@ _generated_batch_cache_path = (
 )
 _generated_batch_cache: dict[tuple[str, str, str], tuple[Mapping[str, object], ...]] = {}
 _generated_preview_sample_limit = 50
-_generated_preview_complexity_windows = (
+_generated_preview_volume_windows = (
     (0.0, 1.0),
     (1.0, 2.0),
     (2.0, 3.0),
@@ -87,7 +87,7 @@ _generated_preview_complexity_windows = (
 class _PreviewWindow:
     label: str
     seed: int
-    complexity_request: ComplexityRequest
+    volume_request: StateSpaceVolumeRequest
     state_count: int
 
 
@@ -99,7 +99,7 @@ def _preview_windows_for_generator(
         _PreviewWindow(
             label=window.label,
             seed=401 + index,
-            complexity_request=window.complexity_request,
+            volume_request=window.volume_request,
             state_count=window.state_count,
         )
         for index, window in enumerate(candidates)
@@ -111,17 +111,17 @@ def _preview_window_candidates(
 ) -> tuple[_PreviewWindow, ...]:
     candidates: list[_PreviewWindow] = []
     seen_state_counts: set[int] = set()
-    for minimum, maximum in _generated_preview_complexity_windows:
-        request = ComplexityRequest(minimum=minimum, maximum=maximum)
+    for minimum, maximum in _generated_preview_volume_windows:
+        request = StateSpaceVolumeRequest(minimum=minimum, maximum=maximum)
         sample_set = generator(
             seed=401,
             shape=1,
             include_metadata=True,
-            complexity_request=request,
+            volume_request=request,
         )
         if not sample_set.samples:
             continue
-        state_count = _state_count_from_log2_complexity(sample_set.complexity)
+        state_count = _state_count_from_log2_volume(sample_set.log2_volume)
         if state_count in seen_state_counts:
             continue
         seen_state_counts.add(state_count)
@@ -129,15 +129,15 @@ def _preview_window_candidates(
             _PreviewWindow(
                 label=f"[{minimum:g}, {maximum:g}]",
                 seed=401,
-                complexity_request=request,
+                volume_request=request,
                 state_count=state_count,
             )
         )
     return tuple(candidates)
 
 
-def _state_count_from_log2_complexity(complexity: float) -> int:
-    state_count = round(2**complexity)
+def _state_count_from_log2_volume(log2_volume: float) -> int:
+    state_count = round(2**log2_volume)
     if state_count < 1:
         raise ConsoleDataValidationError("generated sample state count must be positive")
     return state_count
@@ -158,17 +158,17 @@ def _preview_batch_record(
         shape=len(sample_indices),
         include_fields=True,
         include_artifacts=True,
-        complexity_request=window.complexity_request,
+        volume_request=window.volume_request,
         sample_indices=sample_indices,
     )
     samples = [sample.to_record() for sample in sample_set.samples]
     record: dict[str, object] = {
-        "mode": "complexity-window",
+        "mode": "volume-window",
         "label": window.label,
         "seed": window.seed,
         "sample_count": len(samples),
-        "complexity_window": window.complexity_request.to_record(),
-        "complexity_cardinalities": [window.state_count],
+        "volume_window": window.volume_request.to_record(),
+        "volumes": [window.state_count],
         "presentation": {
             "sample_card_density": "compact" if len(samples) > 80 else "standard",
             "aggregate_mode": False,
@@ -458,7 +458,7 @@ class ConsoleDataBuilder:
                         benchmark_root,
                         repository_root=self._repository_root,
                     ),
-                    "complexity_axis": "log2-state-space-volume",
+                    "volume_axis": "log2-state-space-volume",
                     "outcome_atom_name": outcome_atom_name,
                     "outcome_atom_count": atom_count,
                     "code_surfaces": self._benchmark_code_surfaces(benchmark_root),
@@ -533,7 +533,7 @@ class ConsoleDataBuilder:
         benchmark_root: Path,
     ) -> str:
         hasher = hashlib.sha256()
-        hasher.update(b"complexity-window-sample-sets-v4\0")
+        hasher.update(b"volume-window-sample-sets-v5\0")
         entrypoint = benchmark_root / "benchmark.py"
         if entrypoint.is_file():
             self._hash_file(hasher, entrypoint)
@@ -573,7 +573,7 @@ class ConsoleDataBuilder:
     ) -> tuple[Mapping[str, object], ...]:
         cache_key = (
             str(generator.manifest.id),
-            "complexity-window-samples",
+            "volume-window-samples",
             source_fingerprint,
         )
         cached = _generated_batch_cache.get(cache_key)
@@ -588,7 +588,7 @@ class ConsoleDataBuilder:
         preview_windows = _preview_windows_for_generator(generator)
         if not preview_windows:
             raise ConsoleDataValidationError(
-                "benchmark generator does not expose complexity-window preview batches"
+                "benchmark generator does not expose volume-window preview batches"
             )
         try:
             records = tuple(

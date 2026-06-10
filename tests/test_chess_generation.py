@@ -12,8 +12,8 @@ import pytest
 from leibniz.benchmark_evaluation import finite_measurements_for_predictions
 from leibniz.benchmark_implementations import discover_benchmark_roots, load_benchmark
 from leibniz.observation_generation import (
-    ComplexityRequest,
     ObservationGenerationError,
+    StateSpaceVolumeRequest,
     load_generator,
     sample_indices_for_even_state_coverage,
 )
@@ -55,15 +55,15 @@ def test_chess_generator_exposes_python_manifest() -> None:
     assert "e2e2" not in outcome_ids
 
 
-def test_chess_generator_returns_complexity_valued_samples_without_fields() -> None:
+def test_chess_generator_returns_volume_valued_samples_without_fields() -> None:
     generator = load_generator(_chess_benchmark_root)
-    complexity = generator.minimum_complexity().value
-    request = ComplexityRequest(minimum=complexity, maximum=complexity)
+    log2_volume = generator.minimum_log2_volume().value
+    request = StateSpaceVolumeRequest(minimum=log2_volume, maximum=log2_volume)
     sample_set = generator(
         seed=47,
         shape=3,
         include_fields=True,
-        complexity_request=request,
+        volume_request=request,
     )
 
     assert sample_set.shape == (3,)
@@ -72,9 +72,7 @@ def test_chess_generator_returns_complexity_valued_samples_without_fields() -> N
     sample = sample_set.samples[0]
     legal_move_count = _sample_legal_move_count(sample)
     assert sample_set.outcomes == (sample.outcome_id,) * 3
-    assert sample_set.complexities == (0.0,) * 3
-    assert sample.complexity is None
-    assert sample.complexity_value is None
+    assert sample_set.log2_volumes == (0.0,) * 3
     assert sample.target_distribution is None
     assert sample_set.region is not None
     assert sample_set.request_outcome is not None
@@ -116,10 +114,10 @@ def test_chess_sample_record_does_not_invent_image_surface_fields() -> None:
     assert record["outcome_id"] in available_outcomes
     assert "target_distribution" not in record
     assert len(available_outcomes) == _legal_move_count(record)
-    assert "complexity" not in record
-    assert "complexity_value" not in record
+    assert "log2_volume" not in record
+    assert "volume_value" not in record
     batch_record = generator(seed=47, shape=()).to_record(include_fields=True)
-    assert batch_record["complexity"] == math.log2(_sample_space_cardinality(record))
+    assert batch_record["log2_volume"] == math.log2(_sample_space_cardinality(record))
     assert "materialization_plan" not in record
     assert "width" not in record
     assert "height" not in record
@@ -152,17 +150,17 @@ def test_chess_measurements_use_declared_fen_observation_ids() -> None:
     ] == [sample.observable_state_id for sample in sample_set.samples]
 
 
-def test_chess_complexity_request_returns_empty_set_for_unexpressible_interval() -> None:
+def test_chess_volume_request_returns_empty_set_for_unexpressible_interval() -> None:
     generator = load_generator(_chess_benchmark_root)
-    request = ComplexityRequest(
+    request = StateSpaceVolumeRequest(
         minimum=1.5,
         maximum=1.5,
     )
-    sample_set = generator(seed=47, shape=5, complexity_request=request)
+    sample_set = generator(seed=47, shape=5, volume_request=request)
 
     assert sample_set.shape == (0,)
     assert sample_set.samples == ()
-    assert sample_set.complexity_request == request
+    assert sample_set.volume_request == request
     assert sample_set.request_outcome is not None
     assert sample_set.request_outcome.kind == "unrepresentable-below-minimum"
     assert sample_set.to_record()["sample_count"] == 0
@@ -171,11 +169,11 @@ def test_chess_complexity_request_returns_empty_set_for_unexpressible_interval()
     }
 
 
-def test_chess_complexity_request_reports_exhausted_capacity() -> None:
+def test_chess_volume_request_reports_exhausted_capacity() -> None:
     generator = load_generator(_chess_benchmark_root)
-    request = ComplexityRequest(minimum=1000.0, maximum=1001.0)
+    request = StateSpaceVolumeRequest(minimum=1000.0, maximum=1001.0)
 
-    sample_set = generator(seed=47, shape=5, complexity_request=request)
+    sample_set = generator(seed=47, shape=5, volume_request=request)
 
     assert sample_set.shape == (0,)
     assert sample_set.samples == ()
@@ -208,17 +206,17 @@ def test_chess_complexity_request_reports_exhausted_capacity() -> None:
 def test_chess_realized_region_decomposes_exactly_per_stratum() -> None:
     generator = load_generator(_chess_benchmark_root)
     cardinality = 96
-    complexity = math.log2(cardinality)
+    log2_volume = math.log2(cardinality)
     sample_set = generator(
         seed=47,
         shape=8,
-        complexity_request=ComplexityRequest(minimum=complexity, maximum=complexity),
+        volume_request=StateSpaceVolumeRequest(minimum=log2_volume, maximum=log2_volume),
     )
 
     assert sample_set.region is not None
     region = sample_set.region
     assert region.volume == cardinality
-    assert math.isclose(region.log2_volume, complexity)
+    assert math.isclose(region.log2_volume, log2_volume)
     assert region.ambient.field_domain_kind == "lattice-2d"
     assert region.ambient.field_domain == {"width": 8, "height": 8}
     assert region.ambient.field_codomain_id == "piece-occupancy"
@@ -265,22 +263,21 @@ def test_chess_realized_region_decomposes_exactly_per_stratum() -> None:
         assert region.contains(sample.region_component_index, sample.axis_coordinates)
 
 
-def test_chess_complexity_request_accepts_matching_interval() -> None:
+def test_chess_volume_request_accepts_matching_interval() -> None:
     generator = load_generator(_chess_benchmark_root)
-    complexity = generator.minimum_complexity().value
-    request = ComplexityRequest(
-        minimum=complexity,
-        maximum=complexity,
+    log2_volume = generator.minimum_log2_volume().value
+    request = StateSpaceVolumeRequest(
+        minimum=log2_volume,
+        maximum=log2_volume,
     )
-    sample_set = generator(seed=47, shape=(2, 2), complexity_request=request)
+    sample_set = generator(seed=47, shape=(2, 2), volume_request=request)
 
     assert sample_set.shape == (2, 2)
     assert len(sample_set.samples) == 4
-    assert sample_set.complexity == complexity
-    assert {sample.complexity_value for sample in sample_set.samples} == {None}
+    assert sample_set.log2_volume == log2_volume
 
 
-def test_chess_generator_does_not_expose_complexity_candidates() -> None:
+def test_chess_generator_does_not_expose_volume_candidates() -> None:
     generator = load_generator(_chess_benchmark_root)
 
     assert not hasattr(generator, "complexity_candidate_for_request")
@@ -295,14 +292,13 @@ def test_chess_integer_shell_requests_use_power_of_two_cardinalities() -> None:
         sample_set = generator(
             seed=47 + shell,
             shape=2,
-            complexity_request=ComplexityRequest(
+            volume_request=StateSpaceVolumeRequest(
                 minimum=float(shell),
                 maximum=float(shell + 1),
             ),
         )
         assert sample_set.samples
-        assert sample_set.complexity == float(shell)
-        assert {sample.complexity for sample in sample_set.samples} == {None}
+        assert sample_set.log2_volume == float(shell)
         assert {
             _sample_space_cardinality(sample.to_record())
             for sample in sample_set.samples
@@ -326,15 +322,15 @@ def test_chess_power_of_two_shells_do_not_reuse_global_positions() -> None:
 def test_chess_indexed_family_samples_are_rules_validated_mate_in_one_moves() -> None:
     generator = load_generator(_chess_benchmark_root)
     requests = (
-        ComplexityRequest(minimum=0.0, maximum=0.0),
-        ComplexityRequest(minimum=3.0, maximum=3.0),
-        ComplexityRequest(minimum=10.0, maximum=10.0),
-        ComplexityRequest(minimum=32.0, maximum=32.0),
+        StateSpaceVolumeRequest(minimum=0.0, maximum=0.0),
+        StateSpaceVolumeRequest(minimum=3.0, maximum=3.0),
+        StateSpaceVolumeRequest(minimum=10.0, maximum=10.0),
+        StateSpaceVolumeRequest(minimum=32.0, maximum=32.0),
     )
     samples = tuple(
         sample
         for request in requests
-        for sample in generator(seed=47, shape=8, complexity_request=request).samples
+        for sample in generator(seed=47, shape=8, volume_request=request).samples
     )
 
     assert len(samples) == 32
@@ -412,9 +408,9 @@ def test_chess_indexed_family_expands_by_sample_cardinality() -> None:
 
 def test_chess_cardinality_two_keeps_canonical_family_simple() -> None:
     generator = load_generator(_chess_benchmark_root)
-    request = ComplexityRequest(minimum=1.0, maximum=1.0)
+    request = StateSpaceVolumeRequest(minimum=1.0, maximum=1.0)
 
-    sample_set = generator(seed=47, shape=2, complexity_request=request)
+    sample_set = generator(seed=47, shape=2, volume_request=request)
 
     spectator_counts = {
         _sample_analysis(sample)["spectator_count"] for sample in sample_set.samples
@@ -424,9 +420,9 @@ def test_chess_cardinality_two_keeps_canonical_family_simple() -> None:
 
 def test_chess_sampling_does_not_repeat_before_exhausting_cardinality() -> None:
     generator = load_generator(_chess_benchmark_root)
-    request = ComplexityRequest(minimum=4.0, maximum=4.0)
+    request = StateSpaceVolumeRequest(minimum=4.0, maximum=4.0)
 
-    sample_set = generator(seed=47, shape=16, complexity_request=request)
+    sample_set = generator(seed=47, shape=16, volume_request=request)
 
     observable_state_ids = tuple(sample.observable_state_id for sample in sample_set.samples)
     assert len(observable_state_ids) == len(frozenset(observable_state_ids))
@@ -434,14 +430,14 @@ def test_chess_sampling_does_not_repeat_before_exhausting_cardinality() -> None:
 
 def test_chess_larger_rungs_do_not_repeat_low_cardinality_boards() -> None:
     generator = load_generator(_chess_benchmark_root)
-    low_request = ComplexityRequest(minimum=2.0, maximum=2.0)
-    spectator_request = ComplexityRequest(minimum=4.0, maximum=4.0)
+    low_request = StateSpaceVolumeRequest(minimum=2.0, maximum=2.0)
+    spectator_request = StateSpaceVolumeRequest(minimum=4.0, maximum=4.0)
 
-    low_sample_set = generator(seed=404, shape=4, complexity_request=low_request)
+    low_sample_set = generator(seed=404, shape=4, volume_request=low_request)
     spectator_sample_set = generator(
         seed=416,
         shape=4,
-        complexity_request=spectator_request,
+        volume_request=spectator_request,
     )
 
     low_observable_ids = {
@@ -455,14 +451,14 @@ def test_chess_larger_rungs_do_not_repeat_low_cardinality_boards() -> None:
 
 def test_chess_varies_mate_mechanism_before_adding_spectators() -> None:
     generator = load_generator(_chess_benchmark_root)
-    sparse_request = ComplexityRequest(minimum=2.0, maximum=2.0)
-    supported_request = ComplexityRequest(minimum=3.0, maximum=3.0)
+    sparse_request = StateSpaceVolumeRequest(minimum=2.0, maximum=2.0)
+    supported_request = StateSpaceVolumeRequest(minimum=3.0, maximum=3.0)
 
-    sparse_sample_set = generator(seed=47, shape=4, complexity_request=sparse_request)
+    sparse_sample_set = generator(seed=47, shape=4, volume_request=sparse_request)
     supported_sample_set = generator(
         seed=47,
         shape=8,
-        complexity_request=supported_request,
+        volume_request=supported_request,
     )
     sparse_analyses = [_sample_analysis(sample) for sample in sparse_sample_set.samples]
     supported_analyses = [
@@ -478,9 +474,9 @@ def test_chess_varies_mate_mechanism_before_adding_spectators() -> None:
 
 def test_chess_adds_spectator_material_as_cardinality_grows() -> None:
     generator = load_generator(_chess_benchmark_root)
-    request = ComplexityRequest(minimum=5.0, maximum=5.0)
+    request = StateSpaceVolumeRequest(minimum=5.0, maximum=5.0)
 
-    sample_set = generator(seed=47, shape=32, complexity_request=request)
+    sample_set = generator(seed=47, shape=32, volume_request=request)
     analyses = [_sample_analysis(sample) for sample in sample_set.samples]
 
     assert {analysis["spectator_count"] for analysis in analyses} == {2}
@@ -612,15 +608,15 @@ def test_chess_generator_returns_board_tensors_and_move_targets() -> None:
     generator = load_generator(_chess_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
     outcome_ids = tuple(outcome.id for outcome in generator.manifest.outcome_space.outcomes)
-    complexity = generator.minimum_complexity().value
-    request = ComplexityRequest(minimum=complexity, maximum=complexity)
+    log2_volume = generator.minimum_log2_volume().value
+    request = StateSpaceVolumeRequest(minimum=log2_volume, maximum=log2_volume)
 
     sample_set = generator(
         seed=47,
         shape=2,
         runtime=runtime,
         outcome_ids=outcome_ids,
-        complexity_request=request,
+        volume_request=request,
     )
     fields, targets = sample_set.require_tensors()
 
@@ -646,7 +642,7 @@ def test_chess_metadata_and_tensor_construction_share_sample_addresses() -> None
     metadata_sample_set = generator(
         seed=47,
         shape=3,
-        complexity_request=ComplexityRequest(minimum=5.0, maximum=5.0),
+        volume_request=StateSpaceVolumeRequest(minimum=5.0, maximum=5.0),
     )
     tensor_sample_set = generator(
         seed=47,
@@ -654,7 +650,7 @@ def test_chess_metadata_and_tensor_construction_share_sample_addresses() -> None
         include_metadata=False,
         runtime=runtime,
         outcome_ids=outcome_ids,
-        complexity_request=ComplexityRequest(minimum=5.0, maximum=5.0),
+        volume_request=StateSpaceVolumeRequest(minimum=5.0, maximum=5.0),
     )
     fields, targets = tensor_sample_set.require_tensors()
     field_values = tensor_value_to_host(fields).tolist()
@@ -704,7 +700,7 @@ def test_chess_console_preview_uses_board_images_and_text_metadata() -> None:
         seed=401,
         shape=len(sample_indices),
         include_artifacts=True,
-        complexity_request=ComplexityRequest(minimum=0.0, maximum=1.0),
+        volume_request=StateSpaceVolumeRequest(minimum=0.0, maximum=1.0),
         sample_indices=sample_indices,
     )
 
@@ -753,7 +749,7 @@ def test_chess_console_preview_uses_board_images_and_text_metadata() -> None:
         seed=405,
         shape=len(cardinality_16_indices),
         include_artifacts=True,
-        complexity_request=ComplexityRequest(minimum=4.0, maximum=5.0),
+        volume_request=StateSpaceVolumeRequest(minimum=4.0, maximum=5.0),
         sample_indices=cardinality_16_indices,
     )
     cardinality_16_samples = [

@@ -271,15 +271,15 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
         "affine_maximum_condition_number": 1.6,
         "affine_minimum_projected_extent": 0.65,
         "affine_maximum_projected_extent": 1.35,
-        "complexity_value": {
-            "kind": "constructed-finite-complexity-shell",
+        "volume_value": {
+            "kind": "constructed-finite-volume-shell",
             "measure_id": "log2-state-space-volume",
             "formula": "log2(realized_cardinality)",
             "digit_count": 10,
             "affine_transform_family": "constructed-finite-affine-product-grid",
             "target_policy": "symmetric-realized-cardinalities-inside-request-band",
             "description": (
-                "Score-bearing Digits complexity shells are requested finite "
+                "Score-bearing Digits volume shells are requested finite "
                 "single-digit windows. The minimum non-null request is the "
                 "canonical 10-way digit classification problem. Larger "
                 "requests add symmetric finite affine choices for every "
@@ -287,7 +287,7 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
                 "instead of forcing exact powers of two. Canvas resolution "
                 "is the smallest square lattice, rounded to the benchmark "
                 "resolution step, whose finite affine grid can express a "
-                "cardinality inside the requested complexity band."
+                "cardinality inside the requested volume band."
             ),
         },
     }
@@ -307,7 +307,7 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
     )
 
 
-def test_digits_benchmark_manifest_validates_complexity_declaration() -> None:
+def test_digits_benchmark_manifest_validates_volume_declaration() -> None:
     benchmark = load_digits_benchmark(_digits_benchmark_root)
 
     benchmark.manifest.validate_latent_factor_declaration(benchmark.latent_factors)

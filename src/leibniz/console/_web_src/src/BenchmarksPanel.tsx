@@ -249,7 +249,7 @@ function BenchmarkPerformancePane({
 function emptyBenchmarkResult(benchmark: BenchmarkTaskRecord): BenchmarkResultRecord {
   return {
     benchmark_id: benchmark.benchmark_id,
-    complexity_axis: benchmark.complexity_axis,
+    volume_axis: benchmark.volume_axis,
     frontiers: emptyFrontiersForCostAxis(),
     leaderboard: [],
     model_candidates: [],
@@ -281,7 +281,7 @@ function BenchmarkModelsPane({
             <p className="artifact-detail-note">No model runs are available.</p>
           ) : (
             <BenchmarkModelInspector
-              complexityAxis={result?.complexity_axis}
+              volumeAxis={result?.volume_axis}
               inspection={selectedRow.inspection}
               model={selectedRow.model}
               operatorVocabulary={operatorVocabulary}
@@ -295,13 +295,13 @@ function BenchmarkModelsPane({
 }
 
 function BenchmarkModelInspector({
-  complexityAxis,
+  volumeAxis,
   inspection,
   model,
   operatorVocabulary,
   runs,
 }: {
-  complexityAxis: string | undefined;
+  volumeAxis: string | undefined;
   inspection: ModelInspectionRecord | undefined;
   model: BenchmarkModelCandidate;
   operatorVocabulary: OperatorVocabularyRecord;
@@ -350,7 +350,7 @@ function BenchmarkModelInspector({
       </dl>
       {artifactView === 'model' ? (
         <ModelManifestDetail
-          complexityAxis={complexityAxis}
+          volumeAxis={volumeAxis}
           inspection={inspection}
           model={model}
         />
@@ -361,7 +361,7 @@ function BenchmarkModelInspector({
       {artifactView === 'architecture' ? (
         <>
           <ModelArchitectureDetail
-            complexityAxis={complexityAxis}
+            volumeAxis={volumeAxis}
             inspection={inspection}
             model={model}
           />
@@ -509,11 +509,11 @@ function lineageNode(
 }
 
 function ModelManifestDetail({
-  complexityAxis,
+  volumeAxis,
   inspection,
   model,
 }: {
-  complexityAxis: string | undefined;
+  volumeAxis: string | undefined;
   inspection: ModelInspectionRecord | undefined;
   model: BenchmarkModelCandidate;
 }) {
@@ -535,8 +535,8 @@ function ModelManifestDetail({
         <dd>{model.benchmark_id}</dd>
         <dt>Architecture</dt>
         <dd>{model.architecture_digest}</dd>
-        <dt>Observed {complexityAxis ?? 'Complexity'}</dt>
-        <dd>{observedComplexityLabel(model)}</dd>
+        <dt>Observed {volumeAxis ?? 'Volume (bits)'}</dt>
+        <dd>{observedVolumeLabel(model)}</dd>
         <dt>Manifest</dt>
         <dd>{inspection?.model_manifest === undefined ? 'not recorded' : referenceLabel(inspection.model_manifest)}</dd>
       </dl>
@@ -709,11 +709,11 @@ function formatBits(value: number): string {
 }
 
 function ModelArchitectureDetail({
-  complexityAxis,
+  volumeAxis,
   inspection,
   model,
 }: {
-  complexityAxis: string | undefined;
+  volumeAxis: string | undefined;
   inspection: ModelInspectionRecord | undefined;
   model: BenchmarkModelCandidate;
 }) {
@@ -727,8 +727,8 @@ function ModelArchitectureDetail({
         <dd>{inspection === undefined ? 'unknown' : shapeLabel(inspection.input_shape)}</dd>
         <dt>Output</dt>
         <dd>{inspection === undefined ? 'unknown' : shapeLabel(inspection.output_shape)}</dd>
-        <dt>Observed {complexityAxis ?? 'Complexity'}</dt>
-        <dd>{observedComplexityLabel(model)}</dd>
+        <dt>Observed {volumeAxis ?? 'Volume (bits)'}</dt>
+        <dd>{observedVolumeLabel(model)}</dd>
         <dt>Sources</dt>
         <dd>{model.source_kinds.join(', ') || 'unknown'}</dd>
       </dl>
@@ -1108,9 +1108,9 @@ function shapeLabel(shape: number[]): string {
   return shape.join(' x ');
 }
 
-function observedComplexityLabel(model: BenchmarkModelCandidate): string {
-  const complexities = model.points.map((point) => point.complexity);
-  return complexities.length === 0 ? 'none' : complexities.join(', ');
+function observedVolumeLabel(model: BenchmarkModelCandidate): string {
+  const volumes = model.points.map((point) => point.log2_volume);
+  return volumes.length === 0 ? 'none' : volumes.join(', ');
 }
 
 function optionalNumberLabel(value: number | undefined): string {
@@ -1444,9 +1444,9 @@ function BenchmarkSampleCoordinateInspector({
   sample: GeneratedObservationSampleRecord | undefined;
   selectedBatch: GeneratedObservationBatchRecord;
 }) {
-  const complexityCardinalities = realizedComplexityCardinalities(selectedBatch);
+  const volumes = realizedVolumes(selectedBatch);
   const entries: [string, string][] = [
-    ['Complexity Classes', complexityCardinalities.length === 0 ? 'null set' : complexityCardinalities.join(', ')],
+    ['Realized Volumes', volumes.length === 0 ? 'null set' : volumes.join(', ')],
   ];
   if (sample !== undefined) {
     entries.push(['Outcome', sample.outcome_id]);
@@ -1475,10 +1475,10 @@ function BenchmarkSampleCoordinateInspector({
       aria-label="Selected sample coordinates"
     >
       <div className="benchmark-sample-coordinate-range">
-        <label htmlFor="benchmark-complexity-range">Complexity Range</label>
+        <label htmlFor="benchmark-volume-range">Volume Range</label>
         <select
           className="benchmark-sample-window-select"
-          id="benchmark-complexity-range"
+          id="benchmark-volume-range"
           onChange={(event) => onBatchChange(event.target.value)}
           value={batchKey(selectedBatch)}
         >
@@ -1501,18 +1501,11 @@ function BenchmarkSampleCoordinateInspector({
   );
 }
 
-function realizedComplexityCardinalities(batch: GeneratedObservationBatchRecord): string[] {
-  if (batch.complexity_cardinalities !== undefined) {
-    return batch.complexity_cardinalities.map((size) => String(size));
+function realizedVolumes(batch: GeneratedObservationBatchRecord): string[] {
+  if (batch.volumes === undefined) {
+    return [];
   }
-  const sizes = new Set<number>();
-  batch.samples.forEach((sample) => {
-    if (sample.complexity_value === undefined || sample.complexity_value === null) {
-      return;
-    }
-    sizes.add(Math.round(2 ** sample.complexity_value.value));
-  });
-  return [...sizes].sort((left, right) => left - right).map((size) => String(size));
+  return batch.volumes.map((size) => String(size));
 }
 
 function sampleKey(

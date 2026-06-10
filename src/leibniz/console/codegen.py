@@ -138,7 +138,7 @@ export type BenchmarkResultViewRecord = ResultViewBaseRecord & {
 
 export type BenchmarkResultRecord = {
   benchmark_id: string;
-  complexity_axis?: string;
+  volume_axis?: string;
   leaderboard: ModelResultRecord[];
   model_candidates: ModelResultRecord[];
   frontiers: Record<string, ModelResultRecord[]>;
@@ -149,7 +149,7 @@ export type BenchmarkResultRecord = {
 };
 
 export type ReferenceCurvePointRecord = {
-  complexity: number;
+  log2_volume: number;
   score: number;
   cost: number;
   metadata?: Record<string, unknown>;
@@ -165,18 +165,18 @@ export type ReferenceCurveRecord = {
 };
 
 export type CompetencePointRecord = {
-  complexity: number;
-  complexity_minimum?: number;
-  complexity_maximum?: number;
+  log2_volume: number;
+  log2_volume_minimum?: number;
+  log2_volume_maximum?: number;
   score: number;
   sample_count?: number;
   run_ids: string[];
 };
 
 export type TrainingEstimateComparisonPointRecord = {
-  complexity: number;
-  complexity_minimum?: number;
-  complexity_maximum?: number;
+  log2_volume: number;
+  log2_volume_minimum?: number;
+  log2_volume_maximum?: number;
   status: 'matched' | 'accepted-only' | 'training-only';
   accepted_score?: number;
   training_score?: number;
@@ -210,7 +210,7 @@ export type StateSpaceIntegralTermRecord = {
   region?: StateSpaceRegionRecord;
 };
 
-export type ComplexityIntegralRecord = {
+export type StateSpaceIntegralRecord = {
   kind: string;
   value: number;
   terms: StateSpaceIntegralTermRecord[];
@@ -233,8 +233,8 @@ export type ModelResultRecord = {
   architecture_digest: string;
   benchmark_id: string;
   score: number;
-  score_integral: ComplexityIntegralRecord;
-  cost_integral?: ComplexityIntegralRecord;
+  score_integral: StateSpaceIntegralRecord;
+  cost_integral?: StateSpaceIntegralRecord;
   points: CompetencePointRecord[];
   cost_summary: CostSummaryRecord;
   run_ids: string[];
@@ -253,7 +253,7 @@ export type RunResultRecord = {
   benchmark_id: string;
   architecture_digest: string;
   model_key: string;
-  complexity?: number;
+  log2_volume?: number;
   measurement_count: number;
   score: number;
   cost_summary: CostSummaryRecord;
@@ -372,7 +372,7 @@ function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultReco
   const record = requireRecord(value, path, transportError);
   return {
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
-    complexity_axis: optional(record.complexity_axis, `${path}.complexity_axis`, (item, itemPath) => requireString(item, itemPath, transportError)),
+    volume_axis: optional(record.volume_axis, `${path}.volume_axis`, (item, itemPath) => requireString(item, itemPath, transportError)),
     leaderboard: arrayOf(record.leaderboard, `${path}.leaderboard`, parseModelResult),
     model_candidates: arrayOf(record.model_candidates, `${path}.model_candidates`, parseModelResult),
     frontiers: parseFrontiers(record.frontiers, `${path}.frontiers`),
@@ -402,7 +402,7 @@ function parseReferenceCurve(value: unknown, path: string): ReferenceCurveRecord
 function parseReferenceCurvePoint(value: unknown, path: string): ReferenceCurvePointRecord {
   const record = requireRecord(value, path, transportError);
   return {
-    complexity: requireNumber(record.complexity, `${path}.complexity`, transportError),
+    log2_volume: requireNumber(record.log2_volume, `${path}.log2_volume`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
     cost: requireNumber(record.cost, `${path}.cost`, transportError),
     metadata: optional(record.metadata, `${path}.metadata`, parseRecordMetadata),
@@ -421,8 +421,8 @@ function parseModelResult(value: unknown, path: string): ModelResultRecord {
     architecture_digest: requireString(record.architecture_digest, `${path}.architecture_digest`, transportError),
     benchmark_id: requireString(record.benchmark_id, `${path}.benchmark_id`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
-    score_integral: parseComplexityIntegral(record.score_integral, `${path}.score_integral`),
-    cost_integral: optional(record.cost_integral, `${path}.cost_integral`, parseComplexityIntegral),
+    score_integral: parseStateSpaceIntegral(record.score_integral, `${path}.score_integral`),
+    cost_integral: optional(record.cost_integral, `${path}.cost_integral`, parseStateSpaceIntegral),
     points: arrayOf(record.points, `${path}.points`, parseCompetencePoint),
     cost_summary: parseCostSummary(record.cost_summary, `${path}.cost_summary`),
     run_ids: stringArray(record.run_ids, `${path}.run_ids`),
@@ -452,7 +452,7 @@ function parseTrainingEstimateComparison(value: unknown, path: string): Training
   }) as TrainingEstimateComparisonRecord;
 }
 
-function parseComplexityIntegral(value: unknown, path: string): ComplexityIntegralRecord {
+function parseStateSpaceIntegral(value: unknown, path: string): StateSpaceIntegralRecord {
   const record = requireRecord(value, path, transportError);
   requireStrings(record, path, ['kind']);
   return {
@@ -493,9 +493,9 @@ function parseTrainingEstimateComparisonPoint(value: unknown, path: string): Tra
     throw transportError(`${path}.status is invalid`);
   }
   return withFields(record, {
-    complexity: requireNumber(record.complexity, `${path}.complexity`, transportError),
-    complexity_minimum: optional(record.complexity_minimum, `${path}.complexity_minimum`, parseNumber),
-    complexity_maximum: optional(record.complexity_maximum, `${path}.complexity_maximum`, parseNumber),
+    log2_volume: requireNumber(record.log2_volume, `${path}.log2_volume`, transportError),
+    log2_volume_minimum: optional(record.log2_volume_minimum, `${path}.log2_volume_minimum`, parseNumber),
+    log2_volume_maximum: optional(record.log2_volume_maximum, `${path}.log2_volume_maximum`, parseNumber),
     status: requireString(record.status, `${path}.status`, transportError) as 'matched' | 'accepted-only' | 'training-only',
     accepted_score: optional(record.accepted_score, `${path}.accepted_score`, parseNumber),
     training_score: optional(record.training_score, `${path}.training_score`, parseNumber),
@@ -534,7 +534,7 @@ function parseRunResult(value: unknown, path: string): RunResultRecord {
 function parseCompetencePoint(value: unknown, path: string): CompetencePointRecord {
   const record = requireRecord(value, path, transportError);
   return {
-    complexity: requireNumber(record.complexity, `${path}.complexity`, transportError),
+    log2_volume: requireNumber(record.log2_volume, `${path}.log2_volume`, transportError),
     score: requireNumber(record.score, `${path}.score`, transportError),
     sample_count: optionalNumber(record.sample_count, `${path}.sample_count`, transportError),
     run_ids: stringArray(record.run_ids, `${path}.run_ids`),

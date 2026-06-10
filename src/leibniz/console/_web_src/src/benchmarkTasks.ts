@@ -11,7 +11,7 @@ export type BenchmarkTaskRecord = {
   benchmark_id: string;
   label: string;
   source_path: string;
-  complexity_axis: string;
+  volume_axis: string;
   outcome_atom_name: string;
   outcome_atom_count: number;
   code_surfaces: BenchmarkCodeSurfaceRecord[];
@@ -34,15 +34,15 @@ export type GeneratedObservationBatchRecord = {
   label: string;
   seed: number;
   sample_count: number;
-  complexity_window?: GeneratedComplexityWindowRecord;
-  complexity_cardinalities?: number[];
+  volume_window?: GeneratedVolumeWindowRecord;
+  volumes?: number[];
   region?: StateSpaceRegionRecord;
   request_outcome?: GenerationRequestOutcomeRecord;
   presentation: GeneratedObservationBatchPresentationRecord;
   samples: GeneratedObservationSampleRecord[];
 };
 
-export type GeneratedComplexityWindowRecord = {
+export type GeneratedVolumeWindowRecord = {
   measure_id: string;
   minimum: number;
   maximum: number;
@@ -59,8 +59,6 @@ export type GeneratedObservationSampleRecord = {
   component_index?: number;
   region_component_index?: number;
   axis_coordinates?: Record<string, unknown>;
-  complexity: number;
-  complexity_value?: GeneratedComplexityValueRecord | null;
   available_outcome_ids?: string[];
   field_shape?: number[];
   image_data_url?: string;
@@ -87,11 +85,6 @@ export type GeneratedGridMoveHighlightRecord = {
 export type GeneratedTargetProbabilityRecord = {
   outcome_id: string;
   probability: number;
-};
-
-export type GeneratedComplexityValueRecord = {
-  measure_id: string;
-  value: number;
 };
 
 export type GeneratedLatentCoordinateRecord = {
@@ -132,9 +125,9 @@ function validateBatch(value: unknown, path: string): void {
   const record = requireRecord(value, path, error);
   const sampleCount = requireNumber(record.sample_count, `${path}.sample_count`, error);
   const samples = requireArray(record.samples, `${path}.samples`, error);
-  const complexityWindow = record.complexity_window;
-  if (complexityWindow !== undefined) {
-    validateComplexityWindow(complexityWindow, `${path}.complexity_window`);
+  const volumeWindow = record.volume_window;
+  if (volumeWindow !== undefined) {
+    validateVolumeWindow(volumeWindow, `${path}.volume_window`);
   }
   if (record.region !== undefined) {
     parseStateSpaceRegionRecord(record.region, `${path}.region`, error);
@@ -142,12 +135,12 @@ function validateBatch(value: unknown, path: string): void {
   if (record.request_outcome !== undefined) {
     parseGenerationRequestOutcomeRecord(record.request_outcome, `${path}.request_outcome`, error);
   }
-  if (record.complexity_cardinalities !== undefined) {
-    requireArray(record.complexity_cardinalities, `${path}.complexity_cardinalities`, error).forEach(
+  if (record.volumes !== undefined) {
+    requireArray(record.volumes, `${path}.volumes`, error).forEach(
       (size, index) => {
-        const value = requireNumber(size, `${path}.complexity_cardinalities.${index}`, error);
+        const value = requireNumber(size, `${path}.volumes.${index}`, error);
         if (!Number.isInteger(value) || value < 1) {
-          throw error(`${path}.complexity_cardinalities.${index}: expected positive integer`);
+          throw error(`${path}.volumes.${index}: expected positive integer`);
         }
       },
     );
@@ -175,7 +168,7 @@ function validateSample(value: unknown, path: string): void {
   }
 }
 
-function validateComplexityWindow(value: unknown, path: string): void {
+function validateVolumeWindow(value: unknown, path: string): void {
   const record = requireRecord(value, path, error);
   requireString(record.measure_id, `${path}.measure_id`, error);
   requireNumber(record.minimum, `${path}.minimum`, error);

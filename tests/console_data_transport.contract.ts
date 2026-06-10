@@ -161,15 +161,15 @@ assertEqual(benchmarkTask?.batches.length, 9, 'benchmark batch count');
 assertEqual(
   benchmarkTask?.batches.map((batch) => `${batch.mode}:${batch.sample_count}`).join('|'),
   [
-    'complexity-window:1',
-    'complexity-window:2',
-    'complexity-window:4',
-    'complexity-window:8',
-    'complexity-window:16',
-    'complexity-window:32',
-    'complexity-window:50',
-    'complexity-window:50',
-    'complexity-window:50',
+    'volume-window:1',
+    'volume-window:2',
+    'volume-window:4',
+    'volume-window:8',
+    'volume-window:16',
+    'volume-window:32',
+    'volume-window:50',
+    'volume-window:50',
+    'volume-window:50',
   ].join('|'),
   'generated benchmark batches',
 );
@@ -286,13 +286,13 @@ if (chessSample === undefined) {
 }
 assertEqual(
   chessBenchmarkTask.batches
-    .map((batch) => batch.complexity_cardinalities?.[0])
+    .map((batch) => batch.volumes?.[0])
     .join(','),
   '1,2,4,8,16,32,64,128,256',
   'chess sample cardinalities',
 );
 assertEqual(
-  chessBatch?.complexity_cardinalities?.[0],
+  chessBatch?.volumes?.[0],
   8,
   'chess sample cardinality',
 );
