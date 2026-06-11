@@ -13,11 +13,16 @@ from leibniz.state_space import (
     IntegerRangeDomain,
     ProductRegion,
     RealGridDomain,
+    RegionFiltration,
     StateSpaceAmbient,
     StateSpaceAxis,
     StateSpaceError,
     StateSpaceRegion,
+    axis_regions_are_disjoint,
+    product_regions_are_disjoint,
+    region_filtration_from_record,
     state_space_region_from_record,
+    state_space_regions_are_disjoint,
 )
 
 _digits_axis_specs = (
@@ -584,3 +589,280 @@ def test_region_parsing_rejects_malformed_records() -> None:
     domain["kind"] = "qualitative-labels"
     with pytest.raises(StateSpaceError):
         state_space_region_from_record(broken)
+
+
+_filtration_pose_axis = StateSpaceAxis(
+    id="pose-transform-index", domain=IntegerRangeDomain(lower=0, upper=3)
+)
+
+
+def _pose_axis_region(*, lower: int, upper: int) -> AxisRegion:
+    count = upper - lower + 1
+    return AxisRegion(
+        axis=_filtration_pose_axis,
+        coordinate_region=(lower, upper),
+        count=count,
+        log2_count=math.log2(count),
+    )
+
+
+def _pose_product(stratum_id: str, *, lower: int, upper: int) -> ProductRegion:
+    pose_region = _pose_axis_region(lower=lower, upper=upper)
+    return ProductRegion(
+        axis_regions=(pose_region,),
+        measure_rule="product-of-counts",
+        volume=pose_region.count,
+        log2_volume=pose_region.log2_count,
+        stratum_id=stratum_id,
+    )
+
+
+def _digit_shell_region(region_id: str, *, lower: int, upper: int) -> StateSpaceRegion:
+    count = upper - lower + 1
+    components = tuple(
+        _pose_product(f"digit-{digit}", lower=lower, upper=upper) for digit in range(10)
+    )
+    volume = 10 * count
+    return StateSpaceRegion(
+        id=region_id,
+        ambient=_metric_ambient(),
+        components=components,
+        union_rule="disjoint-union",
+        volume=volume,
+        log2_volume=math.log2(volume),
+    )
+
+
+def _digits_filtration() -> RegionFiltration:
+    increments = (
+        _digit_shell_region("digits-shell-0", lower=0, upper=0),
+        _digit_shell_region("digits-shell-1", lower=1, upper=1),
+        _digit_shell_region("digits-shell-2", lower=2, upper=3),
+    )
+    return RegionFiltration(
+        id="digits-curriculum",
+        increments=increments,
+        volume=40,
+        log2_volume=math.log2(40),
+    )
+
+
+def test_axis_regions_disjoint_for_interval_kinds() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=9))
+    low = AxisRegion(axis=axis, coordinate_region=(0, 2), count=3, log2_count=math.log2(3))
+    high = AxisRegion(axis=axis, coordinate_region=(3, 5), count=3, log2_count=math.log2(3))
+    touching = AxisRegion(axis=axis, coordinate_region=(2, 4), count=3, log2_count=math.log2(3))
+    assert axis_regions_are_disjoint(low, high)
+    assert not axis_regions_are_disjoint(low, touching)
+
+    grid_axis = StateSpaceAxis(id="scale", domain=RealGridDomain(lower=0.0, upper=1.0, count=6))
+    grid_low = AxisRegion(axis=grid_axis, coordinate_region=(0, 1), count=2, log2_count=1.0)
+    grid_high = AxisRegion(axis=grid_axis, coordinate_region=(2, 3), count=2, log2_count=1.0)
+    grid_overlap = AxisRegion(axis=grid_axis, coordinate_region=(1, 2), count=2, log2_count=1.0)
+    assert axis_regions_are_disjoint(grid_low, grid_high)
+    assert not axis_regions_are_disjoint(grid_low, grid_overlap)
+
+
+def test_axis_regions_disjoint_for_enumerated_cells() -> None:
+    axis = StateSpaceAxis(
+        id="preset", domain=EnumeratedCellsDomain(cells=tuple(f"preset-{i}" for i in range(6)))
+    )
+    left = AxisRegion(
+        axis=axis, coordinate_region=("preset-0", "preset-1"), count=2, log2_count=1.0
+    )
+    right = AxisRegion(
+        axis=axis, coordinate_region=("preset-2", "preset-3"), count=2, log2_count=1.0
+    )
+    overlap = AxisRegion(
+        axis=axis, coordinate_region=("preset-1", "preset-4"), count=2, log2_count=1.0
+    )
+    assert axis_regions_are_disjoint(left, right)
+    assert not axis_regions_are_disjoint(left, overlap)
+
+
+def test_binary_vector_axis_regions_are_never_disjoint() -> None:
+    axis = StateSpaceAxis(id="spectator-occupancy", domain=BinaryVectorDomain(dimension=8))
+    left = AxisRegion(axis=axis, coordinate_region=(0, 1), count=4, log2_count=2.0)
+    right = AxisRegion(axis=axis, coordinate_region=(2, 3, 4), count=8, log2_count=3.0)
+    # The all-zeros vector is a subset of every enabled set, so it lies in both.
+    assert not axis_regions_are_disjoint(left, right)
+
+
+def test_axis_regions_over_different_axes_are_not_comparable() -> None:
+    left_axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
+    right_axis = StateSpaceAxis(id="scale", domain=IntegerRangeDomain(lower=0, upper=3))
+    left = AxisRegion(axis=left_axis, coordinate_region=(0, 0), count=1, log2_count=0.0)
+    right = AxisRegion(axis=right_axis, coordinate_region=(0, 0), count=1, log2_count=0.0)
+    with pytest.raises(StateSpaceError):
+        axis_regions_are_disjoint(left, right)
+
+
+def test_product_regions_disjoint_by_stratum_or_shared_axis() -> None:
+    # Different strata are disjoint even when their axis regions coincide.
+    assert product_regions_are_disjoint(
+        _pose_product("digit-0", lower=0, upper=1),
+        _pose_product("digit-1", lower=0, upper=1),
+    )
+    # Same stratum, disjoint shared axis.
+    assert product_regions_are_disjoint(
+        _pose_product("digit-0", lower=0, upper=0),
+        _pose_product("digit-0", lower=1, upper=1),
+    )
+    # Same stratum, overlapping shared axis: not disjoint.
+    assert not product_regions_are_disjoint(
+        _pose_product("digit-0", lower=0, upper=2),
+        _pose_product("digit-0", lower=1, upper=3),
+    )
+
+
+def test_product_regions_without_distinguishing_evidence_are_not_certified_disjoint() -> None:
+    pose_axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
+    scale_axis = StateSpaceAxis(id="scale", domain=IntegerRangeDomain(lower=0, upper=3))
+    pose_component = ProductRegion(
+        axis_regions=(
+            AxisRegion(axis=pose_axis, coordinate_region=(0, 0), count=1, log2_count=0.0),
+        ),
+        measure_rule="product-of-counts",
+        volume=1,
+        log2_volume=0.0,
+    )
+    scale_component = ProductRegion(
+        axis_regions=(
+            AxisRegion(axis=scale_axis, coordinate_region=(0, 0), count=1, log2_count=0.0),
+        ),
+        measure_rule="product-of-counts",
+        volume=1,
+        log2_volume=0.0,
+    )
+    # No shared axis and no strata: cannot certify disjointness, so report False.
+    assert not product_regions_are_disjoint(pose_component, scale_component)
+
+
+def test_state_space_regions_disjoint_requires_all_pairs_and_shared_ambient() -> None:
+    base = _digit_shell_region("digits-shell-0", lower=0, upper=0)
+    disjoint = _digit_shell_region("digits-shell-1", lower=1, upper=1)
+    overlapping = _digit_shell_region("digits-shell-0-again", lower=0, upper=2)
+    assert state_space_regions_are_disjoint(base, disjoint)
+    assert not state_space_regions_are_disjoint(base, overlapping)
+    with pytest.raises(StateSpaceError):
+        state_space_regions_are_disjoint(base, _chess_region())
+
+
+def test_region_filtration_reports_cumulative_volumes() -> None:
+    filtration = _digits_filtration()
+    assert filtration.volume == 40
+    assert math.isclose(filtration.log2_volume, math.log2(40), rel_tol=0.0, abs_tol=1e-9)
+    assert filtration.cumulative_volumes == (10, 20, 40)
+    assert filtration.cumulative_log2_volumes == (
+        math.log2(10),
+        math.log2(20),
+        math.log2(40),
+    )
+    assert filtration.ambient == _metric_ambient()
+
+
+def test_region_filtration_rejects_overlapping_increments() -> None:
+    with pytest.raises(StateSpaceError):
+        RegionFiltration(
+            id="digits-overlapping",
+            increments=(
+                _digit_shell_region("digits-shell-0", lower=0, upper=1),
+                _digit_shell_region("digits-shell-1", lower=1, upper=2),
+            ),
+            volume=40,
+            log2_volume=math.log2(40),
+        )
+
+
+def test_region_filtration_invariants() -> None:
+    increments = _digits_filtration().increments
+    with pytest.raises(StateSpaceError):
+        RegionFiltration(id="", increments=increments, volume=40, log2_volume=math.log2(40))
+    with pytest.raises(StateSpaceError):
+        RegionFiltration(id="empty", increments=(), volume=1, log2_volume=0.0)
+    with pytest.raises(StateSpaceError):
+        RegionFiltration(
+            id="digits-curriculum",
+            increments=increments,
+            volume=39,
+            log2_volume=math.log2(39),
+        )
+    with pytest.raises(StateSpaceError):
+        RegionFiltration(
+            id="digits-curriculum",
+            increments=increments,
+            volume=40,
+            log2_volume=math.log2(39),
+        )
+
+
+def test_region_filtration_rejects_mismatched_ambient_increments() -> None:
+    with pytest.raises(StateSpaceError):
+        RegionFiltration(
+            id="mixed-ambient",
+            increments=(
+                _digit_shell_region("digits-shell-0", lower=0, upper=0),
+                _chess_region(),
+            ),
+            volume=250,
+            log2_volume=math.log2(250),
+        )
+
+
+def test_region_filtration_rejects_conflicting_shared_axes() -> None:
+    other_pose_axis = StateSpaceAxis(
+        id="pose-transform-index", domain=IntegerRangeDomain(lower=0, upper=7)
+    )
+    conflicting = StateSpaceRegion(
+        id="digits-shell-conflict",
+        ambient=_metric_ambient(),
+        components=(
+            ProductRegion(
+                axis_regions=(
+                    AxisRegion(
+                        axis=other_pose_axis,
+                        coordinate_region=(4, 4),
+                        count=1,
+                        log2_count=0.0,
+                    ),
+                ),
+                measure_rule="product-of-counts",
+                volume=1,
+                log2_volume=0.0,
+                stratum_id="digit-0",
+            ),
+        ),
+        union_rule="disjoint-union",
+        volume=1,
+        log2_volume=0.0,
+    )
+    with pytest.raises(StateSpaceError):
+        RegionFiltration(
+            id="digits-curriculum",
+            increments=(_digit_shell_region("digits-shell-0", lower=0, upper=0), conflicting),
+            volume=11,
+            log2_volume=math.log2(11),
+        )
+
+
+def test_region_filtration_record_round_trips() -> None:
+    filtration = _digits_filtration()
+    record = filtration.to_record()
+    assert region_filtration_from_record(record) == filtration
+    document = canonical_document_bytes(record)
+    loaded = load_object_document(document, description="region filtration record")
+    assert region_filtration_from_record(loaded) == filtration
+
+
+def test_region_filtration_parsing_rejects_malformed_records() -> None:
+    record = _digits_filtration().to_record()
+    with pytest.raises(StateSpaceError):
+        region_filtration_from_record("not-a-mapping")
+    with pytest.raises(StateSpaceError):
+        region_filtration_from_record(
+            {key: value for key, value in record.items() if key != "increments"}
+        )
+    broken = dict(record)
+    broken["volume"] = 41
+    with pytest.raises(StateSpaceError):
+        region_filtration_from_record(broken)

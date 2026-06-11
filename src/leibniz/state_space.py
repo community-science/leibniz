@@ -39,17 +39,22 @@ __all__ = [
     "IntegerRangeDomain",
     "ProductRegion",
     "RealGridDomain",
+    "RegionFiltration",
     "StateSpaceAmbient",
     "StateSpaceAxis",
     "StateSpaceError",
     "StateSpaceRegion",
     "axis_domain_from_record",
     "axis_region_from_record",
+    "axis_regions_are_disjoint",
     "distinguishability_from_record",
     "product_region_from_record",
+    "product_regions_are_disjoint",
+    "region_filtration_from_record",
     "state_space_ambient_from_record",
     "state_space_axis_from_record",
     "state_space_region_from_record",
+    "state_space_regions_are_disjoint",
 ]
 
 _log2_tolerance = 1e-9
@@ -449,6 +454,156 @@ class StateSpaceRegion:
         }
 
 
+def axis_regions_are_disjoint(left: AxisRegion, right: AxisRegion) -> bool:
+    """Return whether two regions over the same axis share no coordinate state.
+
+    The two regions must chart the same axis. Integer-range and real-grid
+    regions are disjoint when their index intervals do not overlap;
+    enumerated-cells regions are disjoint when their selected cell sets are
+    disjoint. Binary-vector regions are never disjoint: the all-zeros vector is
+    a subset of every enabled set, so it lies in both regions whatever their
+    enabled coordinates are.
+    """
+
+    if left.axis != right.axis:
+        raise StateSpaceError("axis regions over different axes are not comparable")
+    domain = left.axis.domain
+    if isinstance(domain, IntegerRangeDomain | RealGridDomain):
+        left_lower, left_upper = cast(tuple[int, int], left.coordinate_region)
+        right_lower, right_upper = cast(tuple[int, int], right.coordinate_region)
+        return left_upper < right_lower or right_upper < left_lower
+    if isinstance(domain, EnumeratedCellsDomain):
+        return set(cast(tuple[str, ...], left.coordinate_region)).isdisjoint(
+            cast(tuple[str, ...], right.coordinate_region)
+        )
+    return False
+
+
+def product_regions_are_disjoint(left: ProductRegion, right: ProductRegion) -> bool:
+    """Return whether two product regions share no state.
+
+    They are disjoint when their strata differ -- a labelled partition admits no
+    shared state -- or when some shared axis carries disjoint axis regions. Two
+    product regions with no distinguishing stratum and no disjoint shared axis
+    are not certified disjoint, so this returns ``False`` for them.
+    """
+
+    if (
+        left.stratum_id is not None
+        and right.stratum_id is not None
+        and left.stratum_id != right.stratum_id
+    ):
+        return True
+    right_by_axis = {axis_region.axis_id: axis_region for axis_region in right.axis_regions}
+    for axis_region in left.axis_regions:
+        counterpart = right_by_axis.get(axis_region.axis_id)
+        if counterpart is not None and axis_regions_are_disjoint(axis_region, counterpart):
+            return True
+    return False
+
+
+def state_space_regions_are_disjoint(left: StateSpaceRegion, right: StateSpaceRegion) -> bool:
+    """Return whether two regions in the same ambient share no state.
+
+    A finite disjoint union is disjoint from another when every component pair
+    is disjoint. The two regions must declare the same ambient field space;
+    comparing regions across different ambients is a category error.
+    """
+
+    if left.ambient != right.ambient:
+        raise StateSpaceError("regions in different ambients are not comparable")
+    return all(
+        product_regions_are_disjoint(left_component, right_component)
+        for left_component in left.components
+        for right_component in right.components
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RegionFiltration:
+    """An ordered chain of pairwise-disjoint region increments over one ambient.
+
+    Each increment ``A_i`` is the new region a curriculum step adds; the
+    cumulative regions ``S_i = A_0 union ... union A_i`` form the score
+    filtration of the direction document. Increments are pairwise disjoint,
+    share one ambient field space, and declare identical axes wherever they
+    share an axis id, so the cumulative volume ``mu(S_i)`` is the exact running
+    sum of increment volumes and no distinguishable state is ever counted twice.
+    """
+
+    id: str
+    increments: tuple[StateSpaceRegion, ...]
+    volume: int
+    log2_volume: float
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            raise StateSpaceError("region filtration id must be nonempty")
+        if not self.increments:
+            raise StateSpaceError("region filtration must declare at least one increment")
+        ambient = self.increments[0].ambient
+        for increment in self.increments:
+            if increment.ambient != ambient:
+                raise StateSpaceError("region filtration increments must share one ambient")
+        axes_by_id: dict[str, StateSpaceAxis] = {}
+        for increment in self.increments:
+            for component in increment.components:
+                for axis_region in component.axis_regions:
+                    declared = axes_by_id.setdefault(axis_region.axis_id, axis_region.axis)
+                    if axis_region.axis != declared:
+                        raise StateSpaceError(
+                            "shared axis ids must declare identical axes across increments"
+                        )
+        for earlier in range(len(self.increments)):
+            for later in range(earlier + 1, len(self.increments)):
+                if not state_space_regions_are_disjoint(
+                    self.increments[earlier], self.increments[later]
+                ):
+                    raise StateSpaceError(
+                        "region filtration increments must be pairwise disjoint"
+                    )
+        if type(self.volume) is not int:
+            raise StateSpaceError("region filtration volume must be an integer")
+        if self.volume != sum(increment.volume for increment in self.increments):
+            raise StateSpaceError(
+                "region filtration volume must equal the sum of increment volumes"
+            )
+        _validate_log2(self.log2_volume, self.volume, label="region filtration log2_volume")
+
+    @property
+    def ambient(self) -> StateSpaceAmbient:
+        """Return the shared ambient field space of the filtration."""
+
+        return self.increments[0].ambient
+
+    @property
+    def cumulative_volumes(self) -> tuple[int, ...]:
+        """Return the cumulative volume ``mu(S_i)`` after each increment."""
+
+        cumulative: list[int] = []
+        running = 0
+        for increment in self.increments:
+            running += increment.volume
+            cumulative.append(running)
+        return tuple(cumulative)
+
+    @property
+    def cumulative_log2_volumes(self) -> tuple[float, ...]:
+        """Return ``log2 mu(S_i)`` after each increment."""
+
+        return tuple(math.log2(volume) for volume in self.cumulative_volumes)
+
+    def to_record(self) -> dict[str, object]:
+        """Return a record for this region filtration."""
+
+        return {
+            "id": self.id,
+            "increments": [increment.to_record() for increment in self.increments],
+            "volume": self.volume,
+            "log2_volume": self.log2_volume,
+        }
+
+
 def distinguishability_from_record(value: object) -> Distinguishability:
     """Parse a distinguishability declaration from a record."""
 
@@ -584,6 +739,22 @@ def state_space_region_from_record(value: object) -> StateSpaceRegion:
         union_rule=_record_str(record, "union_rule", label="state-space region record"),
         volume=_record_int(record, "volume", label="state-space region record"),
         log2_volume=_record_float(record, "log2_volume", label="state-space region record"),
+    )
+
+
+def region_filtration_from_record(value: object) -> RegionFiltration:
+    """Parse a region filtration from a record."""
+
+    record = _record_mapping(value, label="region filtration record")
+    increments = tuple(
+        state_space_region_from_record(item)
+        for item in _record_sequence(record, "increments", label="region filtration record")
+    )
+    return RegionFiltration(
+        id=_record_str(record, "id", label="region filtration record"),
+        increments=increments,
+        volume=_record_int(record, "volume", label="region filtration record"),
+        log2_volume=_record_float(record, "log2_volume", label="region filtration record"),
     )
 
 
