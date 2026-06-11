@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import cast
+from typing import NamedTuple, cast
 
 from leibniz.architecture_semantics import validate_architecture_semantics
 from leibniz.architectures import (
@@ -287,6 +288,22 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="local result checkout; defaults to results",
     )
+    clean_benchmark = benchmark_subcommands.add_parser(
+        "clean",
+        description="remove generated benchmark result state while preserving architectures",
+        help="remove generated result state",
+    )
+    clean_benchmark.add_argument(
+        "--results-root",
+        default=Path("results"),
+        type=Path,
+        help="local result checkout; defaults to results",
+    )
+    clean_benchmark.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print what would be removed without changing files",
+    )
     train = benchmark_subcommands.add_parser(
         "train",
         description="train locally available architecture manifests",
@@ -489,6 +506,19 @@ def _benchmark(args: argparse.Namespace) -> int:
                 ).decode("utf-8")
             )
             return 0
+        if str(args.benchmark_command) == "clean":
+            summary = _clean_benchmark_results(
+                results_root=args.results_root,
+                dry_run=args.dry_run,
+            )
+            action = "would remove" if args.dry_run else "removed"
+            print(
+                f"{action} {summary.removed_path_count} generated benchmark path(s)"
+            )
+            for root in summary.cleaned_roots:
+                print(f"cleaned: {root}")
+            print(f"preserved: {args.results_root / 'architectures'}")
+            return 0
         if str(args.benchmark_command) == "train":
             summaries, skipped, moved = _run_benchmark_training(args)
             if not summaries and not skipped:
@@ -612,6 +642,59 @@ def _run_benchmark_training(args: argparse.Namespace) -> tuple[list[BenchmarkRun
                 continue
             summaries.append(run_benchmark(plan))
     return summaries, skipped, moved
+
+
+_generated_result_roots = ("training", "models", "evaluations", "views")
+
+
+class _CleanBenchmarkResults(NamedTuple):
+    removed_path_count: int
+    cleaned_roots: tuple[str, ...]
+
+
+def _clean_benchmark_results(
+    *,
+    results_root: Path,
+    dry_run: bool,
+) -> _CleanBenchmarkResults:
+    if not results_root.exists():
+        raise ValueError(f"results root does not exist: {results_root}")
+    if not results_root.is_dir():
+        raise ValueError(f"results root is not a directory: {results_root}")
+    removed_path_count = 0
+    cleaned_roots: list[str] = []
+    for name in _generated_result_roots:
+        generated_root = results_root / name
+        if generated_root.exists() and not generated_root.is_dir():
+            raise ValueError(f"generated result root is not a directory: {generated_root}")
+        if generated_root.is_dir():
+            children = tuple(
+                child for child in generated_root.iterdir() if child.name != ".gitkeep"
+            )
+        else:
+            children = ()
+        removed_path_count += len(children)
+        cleaned_roots.append(generated_root.as_posix())
+        if dry_run:
+            continue
+        generated_root.mkdir(parents=True, exist_ok=True)
+        for child in children:
+            _remove_generated_result_path(child)
+        (generated_root / ".gitkeep").touch()
+    return _CleanBenchmarkResults(
+        removed_path_count=removed_path_count,
+        cleaned_roots=tuple(cleaned_roots),
+    )
+
+
+def _remove_generated_result_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return
+    if path.is_dir():
+        shutil.rmtree(path)
+        return
+    path.unlink(missing_ok=True)
 
 
 def _benchmark_run_plan(
