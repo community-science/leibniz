@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import math
 import random
 import struct
@@ -89,99 +90,168 @@ _volume_class_digit_count = 10
 _volume_class_canvas_minimum_side = 16
 _volume_class_canvas_side_step = 4
 _volume_class_cardinality_relative_tolerance = 1e-12
-_default_constructed_affine_transform_count = 2
 _canonical_digits_cardinality = _volume_class_digit_count
-_constructed_affine_preset_max_count = 8
-_constructed_affine_translation_bounds = (-0.15, 0.15)
-_constructed_affine_effective_radius_fraction = 0.25
-_constructed_affine_axis_density = 0.25
-_constructed_affine_scale_bounds = (0.92, 1.08)
-_constructed_affine_rotation_bounds = (-0.03, 0.03)
-_constructed_affine_shear_bounds = (-0.03, 0.03)
 _batch_render_curve_sample_count = 25
-_constructed_affine_axis_names = (
-    "x_translation",
-    "y_translation",
-    "scale",
-    "rotation",
-    "x_shear",
-)
+
+# --- Domain-growth chart geometry (fixed render resolution, growing canvas) ---
+#
+# A problem setup is a digit identity placed at a centre-relative offset and a
+# scale. Offsets and scales live on an integer lattice of "transform cells"
+# centred on identity; the canvas is a per-sample materialization detail (the
+# smallest pixel grid that frames the realized cells at the fixed render
+# resolution), not a score-bearing axis. State-space volume counts distinct
+# setups, so the score filtration stays over one fixed-resolution ambient of
+# unbounded extent. Cells are walked in concentric shells growing outward from
+# identity, with within-shell order fixed by a benchmark permutation so the
+# walk is deterministic and global but not a trivially reversible spiral.
+_render_unit_side = _volume_class_canvas_minimum_side  # pixels for a scale-1 digit box
+_translation_step_pixels = 4  # distinguishable centre-relative shift between cells
+_scale_shell_weight = 2  # one scale level costs this many shells of radius
+_max_scale_level = 3  # scale levels clamp to +/- this
+_scale_ratio_per_level = 0.12  # fractional digit-footprint change per scale level
+_chart_translation_axis_ids = ("x_translation", "y_translation")
+_chart_scale_axis_id = "scale"
+_chart_axis_ids = (*_chart_translation_axis_ids, _chart_scale_axis_id)
 _CurvePoints: TypeAlias = tuple[tuple[float, float], ...]
 
 
+def _cell_radius(tx: int, ty: int, sl: int) -> int:
+    """Return the concentric-shell radius of a transform cell."""
+
+    return max(abs(tx), abs(ty), abs(sl) * _scale_shell_weight)
+
+
+def _shell_cells(radius: int) -> tuple[tuple[int, int, int], ...]:
+    """Return every transform cell whose shell radius equals ``radius``."""
+
+    if radius < 0:
+        raise ObservationGenerationError("shell radius must be nonnegative")
+    if radius == 0:
+        return ((0, 0, 0),)
+    cached = _shell_cells_cache.get(radius)
+    if cached is not None:
+        return cached
+    cells: list[tuple[int, int, int]] = []
+    span = range(-radius, radius + 1)
+    for sl in range(-_max_scale_level, _max_scale_level + 1):
+        if abs(sl) * _scale_shell_weight > radius:
+            continue
+        for tx in span:
+            for ty in span:
+                if _cell_radius(tx, ty, sl) == radius:
+                    cells.append((tx, ty, sl))
+    ordered = tuple(
+        cells[index]
+        for index in sorted(
+            range(len(cells)), key=lambda i: _shell_permutation_key(radius, i)
+        )
+    )
+    _shell_cells_cache[radius] = ordered
+    return ordered
+
+
+def _shell_permutation_key(radius: int, index: int) -> int:
+    digest = hashlib.sha256(
+        f"benchmarks.digits.shell-permutation.v1:{radius}:{index}".encode()
+    ).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
+def _transform_cell_for_ordinal(ordinal: int) -> tuple[int, int, int]:
+    """Return the (x, y, scale) lattice cell at a global transform ordinal."""
+
+    if type(ordinal) is not int or ordinal < 0:
+        raise ObservationGenerationError("transform ordinal must be a nonnegative integer")
+    while len(_chart_cell_prefix) <= ordinal:
+        radius = _chart_prefix_radius[0]
+        _chart_cell_prefix.extend(_shell_cells(radius))
+        _chart_prefix_radius[0] = radius + 1
+    return _chart_cell_prefix[ordinal]
+
+
+_shell_cells_cache: dict[int, tuple[tuple[int, int, int], ...]] = {}
+_chart_cell_prefix: list[tuple[int, int, int]] = []
+_chart_prefix_radius: list[int] = [0]
+
+
 @dataclass(frozen=True, slots=True)
-class _ConstructedAffineGrid:
-    x_translation: int
-    y_translation: int
-    scale: int
-    rotation: int
-    x_shear: int
-    x_translation_bounds: tuple[float, float]
-    y_translation_bounds: tuple[float, float]
-    scale_bounds: tuple[float, float]
-    rotation_bounds: tuple[float, float]
-    x_shear_bounds: tuple[float, float]
-    preset_count: int | None = None
+class _DigitsChart:
+    """The fixed-resolution chart sizing for one realized window.
 
-    @property
-    def counts(self) -> tuple[int, int, int, int, int]:
-        return (
-            self.x_translation,
-            self.y_translation,
-            self.scale,
-            self.rotation,
-            self.x_shear,
-        )
+    The transform enumeration is global; ``canvas_side`` is the only per-window
+    materialization parameter, derived from the deepest realized cell.
+    """
 
-    @property
-    def transform_count(self) -> int:
-        if self.preset_count is not None:
-            return self.preset_count
-        count = 1
-        for axis_count in self.counts:
-            count *= axis_count
-        return count
+    canvas_side: int
 
-    def to_record(self) -> dict[str, int]:
-        record: dict[str, int] = dict(
-            zip(_constructed_affine_axis_names, self.counts, strict=True)
-        )
-        if self.preset_count is not None:
-            record["preset_count"] = self.preset_count
-        return record
+    def normalized_transform(self, ordinal: int) -> tuple[float, float, float]:
+        """Return centre-relative (x_translation, y_translation, scale) in [0, 1]."""
 
-    def bounds_record(self) -> dict[str, list[float]]:
-        return {
-            "x_translation": list(self.x_translation_bounds),
-            "y_translation": list(self.y_translation_bounds),
-            "scale": list(self.scale_bounds),
-            "rotation": list(self.rotation_bounds),
-            "x_shear": list(self.x_shear_bounds),
-        }
+        tx, ty, sl = _transform_cell_for_ordinal(ordinal)
+        scale = _scale_footprint(sl) / self.canvas_side
+        x_translation = (tx * _translation_step_pixels) / self.canvas_side
+        y_translation = (ty * _translation_step_pixels) / self.canvas_side
+        return (x_translation, y_translation, scale)
+
+
+def _scale_footprint(scale_level: int) -> float:
+    """Return the pixel footprint of a scale-1 digit box at a scale level."""
+
+    return _render_unit_side * (1.0 + _scale_ratio_per_level * scale_level)
+
+
+def _chart_canvas_side_for_max_ordinal(max_ordinal: int) -> int:
+    """Return the smallest stepped square canvas framing cells up to an ordinal."""
+
+    max_translation_steps = 0
+    max_scale_level = 0
+    for ordinal in range(max_ordinal + 1):
+        tx, ty, sl = _transform_cell_for_ordinal(ordinal)
+        max_translation_steps = max(max_translation_steps, abs(tx), abs(ty))
+        max_scale_level = max(max_scale_level, sl)
+    footprint = _scale_footprint(max_scale_level)
+    side = footprint + 2.0 * max_translation_steps * _translation_step_pixels
+    side = max(float(_render_unit_side), side)
+    stepped = math.ceil(side / _volume_class_canvas_side_step) * _volume_class_canvas_side_step
+    return int(stepped)
 
 
 @dataclass(frozen=True, slots=True)
 class _DigitsVolumeClass:
-    affine_grid: _ConstructedAffineGrid
-    requested_cardinality: int
-    minimum_address: int = 0
-    resolution_assignment: AxisAssignment | None = None
+    """A realized window: a contiguous global-address increment plus its canvas.
+
+    The window covers global addresses ``[minimum_address, minimum_address +
+    cardinality)``; each address ``a`` is the setup ``(digit a % 10, transform
+    a // 10)``. Volume is the number of distinct setups in the increment.
+    """
+
+    minimum_address: int
+    cardinality: int
+    canvas_side: int
+
+    def __post_init__(self) -> None:
+        if type(self.minimum_address) is not int or self.minimum_address < 0:
+            raise ObservationGenerationError("minimum_address must be a nonnegative integer")
+        if type(self.cardinality) is not int or self.cardinality < 1:
+            raise ObservationGenerationError("cardinality must be a positive integer")
+        if type(self.canvas_side) is not int or self.canvas_side < _render_unit_side:
+            raise ObservationGenerationError("canvas_side must be at least the unit render side")
 
     @property
     def digit_count(self) -> int:
         return _volume_class_digit_count
 
     @property
-    def affine_transform_count(self) -> int:
-        return self.affine_grid.transform_count
-
-    @property
-    def cardinality(self) -> int:
-        return self.requested_cardinality
-
-    @property
     def maximum_address(self) -> int:
-        return self.minimum_address + self.requested_cardinality - 1
+        return self.minimum_address + self.cardinality - 1
+
+    @property
+    def maximum_transform_ordinal(self) -> int:
+        return self.maximum_address // _volume_class_digit_count
+
+    @property
+    def chart(self) -> _DigitsChart:
+        return _DigitsChart(canvas_side=self.canvas_side)
 
     @property
     def log2_volume(self) -> float:
@@ -190,37 +260,34 @@ class _DigitsVolumeClass:
     def measure(self) -> StateSpaceVolumeValue:
         return _volume_value(self.log2_volume)
 
+    def resolution_assignment(self, *, width_axis: str, height_axis: str) -> AxisAssignment:
+        return AxisAssignment(values={width_axis: self.canvas_side, height_axis: self.canvas_side})
+
     def metadata(self) -> dict[str, object]:
-        metadata: dict[str, object] = {
-            "kind": "digits-requested-finite-volume-class",
+        return {
+            "kind": "digits-realized-setup-window",
             "digit_count": self.digit_count,
             "output_digit_count": _volume_class_digit_count,
-            "affine_transform_count": self.affine_transform_count,
-            "latent_cardinality": self.cardinality,
             "minimum_address": self.minimum_address,
             "maximum_address": self.maximum_address,
-            "requested_cardinality": self.requested_cardinality,
+            "cardinality": self.cardinality,
             "realized_cardinality": self.cardinality,
-            "affine_product_cardinality": self.digit_count * self.affine_transform_count,
-            "construction": "symmetric-digits-over-finite-affine-product-grid",
-            "affine_grid": self.affine_grid.to_record(),
-            "affine_bounds": self.affine_grid.bounds_record(),
-            "affine_parameters": list(_constructed_affine_axis_names),
-        }
-        if self.resolution_assignment is not None:
-            width = self.resolution_assignment.require_axis("W")
-            height = self.resolution_assignment.require_axis("H")
-            metadata["oracle_inference_compute"] = {
+            "maximum_transform_ordinal": self.maximum_transform_ordinal,
+            "canvas_side": self.canvas_side,
+            "transform_axes": list(_chart_axis_ids),
+            "construction": "digit-setups-over-shell-ordered-transform-lattice",
+            "oracle_inference_compute": {
                 "kind": "oracle-inference-compute-reference-v1",
                 "unit": "abstract-ops",
-                "value": width * height,
+                "value": self.canvas_side * self.canvas_side,
                 "components": {
-                    "height": height,
-                    "width": width,
-                    "pixel_count": width * height,
+                    "height": self.canvas_side,
+                    "width": self.canvas_side,
+                    "pixel_count": self.canvas_side * self.canvas_side,
                 },
-            }
-        return metadata
+            },
+        }
+
 
 _digit_strokes: tuple[tuple[_CurvePoints, ...], ...] = (
     (
@@ -944,15 +1011,17 @@ class Generator:
         *,
         affine_transform_count: int,
     ) -> float:
-        """Return the exact log2 count of constructed single-digit choices."""
+        """Return the exact log2 setup count for a number of distinct transforms."""
 
-        return self._volume_class_for_requested_cardinality(
-            requested_cardinality=_volume_class_digit_count * affine_transform_count,
-            affine_transform_count=affine_transform_count,
-        ).log2_volume
+        _require_generation_positive_integer(affine_transform_count, "affine_transform_count")
+        return math.log2(_volume_class_digit_count * affine_transform_count)
 
     def minimum_log2_volume(self) -> StateSpaceVolumeValue:
-        """Return the smallest score-bearing Digits log2 volume."""
+        """Return the smallest score-bearing Digits log2 volume.
+
+        The task is always 10-way digit classification; a window with one setup
+        is the floor, so the minimum is ~0 bits, not the 10-way base.
+        """
 
         return _volume_value(0.0)
 
@@ -961,21 +1030,25 @@ class Generator:
         *,
         request: StateSpaceVolumeRequest,
     ) -> _DigitsVolumeClass | None:
-        """Return the integer address shell represented by a volume request."""
+        """Return the realized setup-window increment for a volume request.
+
+        The window covers the global-address increment ``[N(min), N(max))`` where
+        ``N(level) = round(2 ** level)`` is the cumulative setup count, so
+        consecutive curriculum windows realize disjoint new setups.
+        """
 
         if request.maximum < self.minimum_log2_volume().value:
             return None
-        requested_cardinality = _ceil_volume_class_cardinality(
-            max(request.minimum, self.minimum_log2_volume().value)
-        )
-        maximum_cardinality = _floor_volume_class_cardinality(request.maximum)
-        if maximum_cardinality < requested_cardinality:
+        lower = _cumulative_setup_count(max(request.minimum, self.minimum_log2_volume().value))
+        upper = _cumulative_setup_count(request.maximum)
+        if upper <= lower:
             return None
-        volume_class = self._volume_class_for_requested_cardinality(
-            requested_cardinality=requested_cardinality,
-            resolution_assignment=self._resolution_assignment_for_volume_request(
-                request
-            ),
+        cardinality = upper - lower
+        max_ordinal = (upper - 1) // _volume_class_digit_count
+        volume_class = _DigitsVolumeClass(
+            minimum_address=lower,
+            cardinality=cardinality,
+            canvas_side=_chart_canvas_side_for_max_ordinal(max_ordinal),
         )
         if not request.contains(volume_class.measure()):
             return None
@@ -1018,65 +1091,18 @@ class Generator:
         *,
         canonical_variation: bool = False,
     ) -> _DigitsVolumeClass:
-        return self._volume_class_for_affine_transform_count(
-            affine_transform_count=(
-                1 if canonical_variation else _default_constructed_affine_transform_count
-            ),
-        )
+        """Return the default preview window: identity-only, or the first shell."""
 
-    def _volume_class_for_affine_transform_count(
-        self,
-        *,
-        affine_transform_count: int,
-        resolution_assignment: AxisAssignment | None = None,
-    ) -> _DigitsVolumeClass:
-        return self._volume_class_for_requested_cardinality(
-            requested_cardinality=_volume_class_digit_count * affine_transform_count,
-            affine_transform_count=affine_transform_count,
-            minimum_address=0,
-            resolution_assignment=resolution_assignment,
+        cardinality = (
+            _volume_class_digit_count
+            if canonical_variation
+            else 2 * _volume_class_digit_count
         )
-
-    def _volume_class_for_requested_cardinality(
-        self,
-        *,
-        requested_cardinality: int,
-        affine_transform_count: int | None = None,
-        minimum_address: int | None = None,
-        resolution_assignment: AxisAssignment | None = None,
-    ) -> _DigitsVolumeClass:
-        _require_generation_positive_integer(
-            requested_cardinality,
-            "requested_cardinality",
-        )
-        if resolution_assignment is None:
-            resolution_assignment = self._resolution_assignment_for_requested_cardinality(
-                requested_cardinality
-            )
-        shell_minimum_address = (
-            requested_cardinality - 1 if minimum_address is None else minimum_address
-        )
-        if type(shell_minimum_address) is not int or shell_minimum_address < 0:
-            raise ObservationGenerationError("minimum_address must be a nonnegative integer")
-        if affine_transform_count is None:
-            affine_transform_count = _affine_transform_count_for_address_range(
-                minimum_address=shell_minimum_address,
-                cardinality=requested_cardinality,
-            )
-            affine_grid = _constructed_affine_grid_for_minimum_transform_count(
-                minimum_transform_count=affine_transform_count,
-                resolution_assignment=resolution_assignment,
-            )
-        else:
-            affine_grid = _constructed_affine_grid(
-                affine_transform_count,
-                resolution_assignment=resolution_assignment,
-            )
+        max_ordinal = (cardinality - 1) // _volume_class_digit_count
         return _DigitsVolumeClass(
-            affine_grid=affine_grid,
-            requested_cardinality=requested_cardinality,
-            minimum_address=shell_minimum_address,
-            resolution_assignment=resolution_assignment,
+            minimum_address=0,
+            cardinality=cardinality,
+            canvas_side=_chart_canvas_side_for_max_ordinal(max_ordinal),
         )
 
     def _materialization_plan(
@@ -1471,6 +1497,19 @@ def _volume_value(log2_volume: float) -> StateSpaceVolumeValue:
     return StateSpaceVolumeValue(
         value=log2_volume,
     )
+
+
+def _cumulative_setup_count(level: float) -> int:
+    """Return the cumulative distinguishable-setup count at a log2-volume level.
+
+    ``N(level) = round(2 ** level)`` for ``level > 0`` and ``0`` at the origin,
+    so the curriculum window ``[i, i+1]`` realizes the address increment
+    ``[N(i), N(i+1))`` and consecutive windows are disjoint.
+    """
+
+    if not math.isfinite(level) or level <= 0.0:
+        return 0
+    return round(2.0**level)
 
 
 def _volume_class_canvas_side_for_cardinality_range(
