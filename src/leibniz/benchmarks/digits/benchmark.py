@@ -101,7 +101,10 @@ _batch_render_curve_sample_count = 25
 # unbounded extent. Cells are walked in concentric shells growing outward from
 # identity, with within-shell order fixed by a benchmark permutation so the
 # walk is deterministic and global but not a trivially reversible spiral.
-_render_unit_side = _volume_class_canvas_minimum_side  # pixels for a scale-1 digit box
+_render_unit_side = 28  # pixels for a scale-1 digit box. The lowest rung frames a
+# single setup, so its canvas equals this footprint; 28px is the MNIST native
+# resolution (an upper bound for future MNIST validation) and clears the digit
+# discriminability margin at the fixed render pitch with headroom.
 _translation_step_pixels = 4  # distinguishable centre-relative shift between cells
 _scale_shell_weight = 2  # one scale level costs this many shells of radius
 _max_scale_level = 3  # scale levels clamp to +/- this
@@ -1874,7 +1877,10 @@ def _digits_tensor_program(
         m10 = zero
         m11 = scale
         m12 = y_translation
-        width_scale = scale
+        # Stroke width tracks the physical digit footprint (canvas-independent),
+        # not the canvas-normalized scale, so a digit renders with identical
+        # strokes whatever size canvas frames it.
+        width_scale = scale * image_width / _render_unit_side
         value = x_center * 0.0
         active_channel = channel_index == 0
         mark_count = component_mark_counts[component_index]
