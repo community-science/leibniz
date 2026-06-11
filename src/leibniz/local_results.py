@@ -1528,7 +1528,7 @@ def _model_result_records(
             "score_integral": score_integral.to_record(
                 kind="sampled-competence-integral"
             ),
-            "points": [_public_competence_point_record(point) for point in points],
+            "points": [dict(point) for point in points],
             "cost_summary": _model_cost_summary(
                 ordered_runs,
                 best_run=best_run,
@@ -2206,14 +2206,6 @@ def _competence_point_from_sampled_record(point: Mapping[str, object]) -> dict[s
     if competence.region is not None:
         record["region"] = competence.region.to_record()
     return record
-
-
-def _public_competence_point_record(point: Mapping[str, object]) -> dict[str, object]:
-    return {
-        key: value
-        for key, value in point.items()
-        if key != "region"
-    }
 
 
 def competence_integral(

@@ -93,6 +93,179 @@ def test_cli_benchmark_train_discovers_architecture_manifests(
     assert "discovered under results/training" in output
 
 
+def test_cli_benchmark_clean_removes_generated_state_and_keeps_architectures(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    results_root = tmp_path / "results"
+    architecture = results_root / "architectures" / "digits" / "digits_pool.json"
+    training_record = results_root / "training" / "digits" / "run.json"
+    model_artifact = results_root / "models" / "digits" / "checkpoint.pt"
+    evaluation_record = results_root / "evaluations" / "digits" / "eval.json"
+    view_record = results_root / "views" / "digits" / "benchmark_results.json"
+    for path in (architecture, training_record, model_artifact, evaluation_record, view_record):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+    for root_name in ("training", "models", "evaluations", "views"):
+        (results_root / root_name / ".gitkeep").touch()
+
+    assert (
+        main(
+            [
+                "benchmark",
+                "clean",
+                "--results-root",
+                str(results_root),
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+
+    assert "removed 4 generated benchmark path(s)" in output
+    assert architecture.is_file()
+    assert not training_record.exists()
+    assert not model_artifact.exists()
+    assert not evaluation_record.exists()
+    assert not view_record.exists()
+    for root_name in ("training", "models", "evaluations", "views"):
+        assert (results_root / root_name / ".gitkeep").is_file()
+
+
+def test_cli_benchmark_clean_dry_run_does_not_remove_files(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    results_root = tmp_path / "results"
+    architecture = results_root / "architectures" / "digits" / "digits_pool.json"
+    training_record = results_root / "training" / "digits" / "run.json"
+    architecture.parent.mkdir(parents=True)
+    training_record.parent.mkdir(parents=True)
+    architecture.write_text("{}", encoding="utf-8")
+    training_record.write_text("{}", encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "benchmark",
+                "clean",
+                "--results-root",
+                str(results_root),
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+
+    assert "would remove 1 generated benchmark path(s)" in output
+    assert architecture.is_file()
+    assert training_record.is_file()
+
+
+def test_cli_benchmark_train_scopes_architecture_subdirs_by_benchmark_name(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    architecture_root = tmp_path / "architectures"
+    digits_architecture = architecture_root / "digits" / "development" / "digits_pool.json"
+    chess_architecture = architecture_root / "chess" / "linear_board.json"
+    digits_architecture.parent.mkdir(parents=True)
+    chess_architecture.parent.mkdir(parents=True)
+    digits_architecture.write_bytes(
+        (_fixtures_root / "architecture" / "digits_pool.json").read_bytes()
+    )
+    chess_architecture.write_bytes(
+        (_fixtures_root / "architecture" / "chess_board_linear.json").read_bytes()
+    )
+
+    assert (
+        main(
+            [
+                "benchmark",
+                "train",
+                "--architecture",
+                str(architecture_root),
+                "--results-root",
+                str(tmp_path / "results"),
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+
+    assert output.count("planned benchmark training run ") == 2
+    assert "planned benchmark training run chess-arch-" in output
+    assert "planned benchmark training run digits-arch-" in output
+    assert "training/chess/digits-" not in output
+    assert "training/digits/chess-" not in output
+
+
+def test_cli_benchmark_train_ignores_benchmark_named_ancestors_outside_architecture_root(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    architecture_root = tmp_path / "digits" / "manifests"
+    chess_architecture = architecture_root / "chess" / "linear_board.json"
+    chess_architecture.parent.mkdir(parents=True)
+    chess_architecture.write_bytes(
+        (_fixtures_root / "architecture" / "chess_board_linear.json").read_bytes()
+    )
+
+    assert (
+        main(
+            [
+                "benchmark",
+                "train",
+                "--architecture",
+                str(architecture_root),
+                "--results-root",
+                str(tmp_path / "results"),
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+
+    assert output.count("planned benchmark training run ") == 1
+    assert "planned benchmark training run chess-arch-" in output
+    assert "training/digits/" not in output
+
+
+def test_cli_benchmark_train_scopes_architecture_root_named_after_benchmark(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    architecture_root = tmp_path / "architectures" / "digits"
+    digits_architecture = architecture_root / "digits_pool.json"
+    digits_architecture.parent.mkdir(parents=True)
+    digits_architecture.write_bytes(
+        (_fixtures_root / "architecture" / "digits_pool.json").read_bytes()
+    )
+
+    assert (
+        main(
+            [
+                "benchmark",
+                "train",
+                "--architecture",
+                str(architecture_root),
+                "--results-root",
+                str(tmp_path / "results"),
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+
+    assert output.count("planned benchmark training run ") == 1
+    assert "planned benchmark training run digits-arch-" in output
+    assert "training/chess/" not in output
+
+
 def test_cli_benchmark_help_advertises_current_workflow_commands(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -103,6 +276,7 @@ def test_cli_benchmark_help_advertises_current_workflow_commands(
     assert exit_info.value.code == 0
     assert "init" in output
     assert "publish" in output
+    assert "clean" in output
     assert "train" in output
     assert "evaluate" in output
     assert "profile" in output

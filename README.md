@@ -212,6 +212,13 @@ and written per benchmark under
 `results/views/<benchmark>/benchmark_results.json`. The console exposes a
 single vertical `Score` axis, accepted directly from the evaluation harness.
 
+Remove generated local benchmark state while keeping the architecture manifest
+suite and result checkout scaffolding:
+
+```bash
+leibniz benchmark clean
+```
+
 Commit and push the existing local result checkout:
 
 ```bash
