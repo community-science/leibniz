@@ -1359,7 +1359,6 @@ def _compiled_tensor_element_tile_kernel(
         return cast(Callable[..., Any], cached)
 
     with _tensor_runtime_profile_span(runtime, "leibniz.tensor_construct.compile_lookup"):
-
         def tile_kernel(
             tile_positions: Any,
             offset: Any,
@@ -1405,11 +1404,7 @@ def _compiled_tensor_element_tile_kernel(
 
 
 def _tensor_element_compile_options(runtime: TensorRuntime) -> Mapping[str, object]:
-    if runtime.device_kind == "mps":
-        return {
-            "max_fusion_size": 16,
-            "max_fusion_unique_io_buffers": 16,
-        }
+    _ = runtime
     return {}
 
 
