@@ -50,12 +50,6 @@ class DigitsGenerator(BenchmarkGenerator, Protocol):
         variation_extent: float = 1.0,
     ) -> float: ...
 
-    def constructed_volume_class_log2_volume(
-        self,
-        *,
-        affine_transform_count: int,
-    ) -> float: ...
-
     def minimum_log2_volume(self) -> StateSpaceVolumeValue: ...
 
     def __call__(

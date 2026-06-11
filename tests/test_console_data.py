@@ -368,16 +368,16 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert component_indices <= set(range(10))
     assert len(component_indices) == len(samples)
     field_shapes = [tuple(cast(list[int], sample["field_shape"])) for sample in samples]
-    assert set(field_shapes) == {(1, 16, 16)}
+    assert set(field_shapes) == {(1, 36, 36)}
     materialization_plans = [
         cast(dict[str, object], sample["materialization_plan"]) for sample in samples
     ]
     assert all(".sample-" in str(plan["id"]) for plan in materialization_plans)
     assert {plan["seed"] for plan in materialization_plans} == {404}
     assert str(samples[0]["image_data_url"]).startswith("data:image/png;base64,")
-    assert samples[0]["field_shape"] == [1, 16, 16]
-    assert _png_dimensions(str(samples[0]["image_data_url"])) == (16, 16)
-    assert _png_dimensions(str(samples[1]["image_data_url"])) == (16, 16)
+    assert samples[0]["field_shape"] == [1, 36, 36]
+    assert _png_dimensions(str(samples[0]["image_data_url"])) == (36, 36)
+    assert _png_dimensions(str(samples[1]["image_data_url"])) == (36, 36)
     assert "preview_crop" not in samples[0]
     assert "preview_crop" not in samples[1]
     latent_coordinates = cast(list[dict[str, object]], samples[0]["latent_coordinates"])
@@ -386,7 +386,11 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     )
     variation_values = cast(dict[str, object], variation["values"])
     assert variation_values["kind"] == "constructed-field-variation-transform-samples"
-    assert variation_values["transform_count"] == 2
+    assert variation_values["transform_ordinal"] == 0
+    volume_class = cast(dict[str, object], variation_values["volume_class"])
+    assert volume_class["kind"] == "digits-realized-setup-window"
+    assert volume_class["canvas_side"] == 36
+    assert volume_class["transform_axes"] == ["x_translation", "y_translation", "scale"]
     variation_bounds = cast(dict[str, object], variation_values["bounds"])
     assert variation_bounds["kind"] == "field-variation-transform"
     variation_coordinates = cast(list[dict[str, object]], variation_values["coordinates"])

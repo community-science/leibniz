@@ -1023,16 +1023,6 @@ class Generator:
             canonical_variation=variation_extent_value == 0.0,
         ).log2_volume
 
-    def constructed_volume_class_log2_volume(
-        self,
-        *,
-        affine_transform_count: int,
-    ) -> float:
-        """Return the exact log2 setup count for a number of distinct transforms."""
-
-        _require_generation_positive_integer(affine_transform_count, "affine_transform_count")
-        return math.log2(_volume_class_digit_count * affine_transform_count)
-
     def minimum_log2_volume(self) -> StateSpaceVolumeValue:
         """Return the smallest score-bearing Digits log2 volume.
 
@@ -1049,15 +1039,20 @@ class Generator:
     ) -> _DigitsVolumeClass | None:
         """Return the realized setup-window increment for a volume request.
 
-        The window covers the global-address increment ``[N(min), N(max))`` where
-        ``N(level) = round(2 ** level)`` is the cumulative setup count, so
-        consecutive curriculum windows realize disjoint new setups.
+        The window covers zero-based setup addresses ``[N(min)-1, N(max)-1)``
+        where ``N(level) = round(2 ** level)`` is the cumulative setup count,
+        so consecutive curriculum windows realize disjoint new setups while
+        the origin setup remains address 0.
         """
 
         if request.maximum < self.minimum_log2_volume().value:
             return None
-        lower = _cumulative_setup_count(max(request.minimum, self.minimum_log2_volume().value))
-        upper = _cumulative_setup_count(request.maximum)
+        lower_count = _cumulative_setup_count(
+            max(request.minimum, self.minimum_log2_volume().value)
+        )
+        upper_count = _cumulative_setup_count(request.maximum)
+        lower = max(0, lower_count - 1)
+        upper = max(0, upper_count - 1)
         if upper <= lower:
             return None
         cardinality = upper - lower
@@ -1482,13 +1477,15 @@ def _volume_value(log2_volume: float) -> StateSpaceVolumeValue:
 def _cumulative_setup_count(level: float) -> int:
     """Return the cumulative distinguishable-setup count at a log2-volume level.
 
-    ``N(level) = round(2 ** level)`` for ``level > 0`` and ``0`` at the origin,
+    ``N(level) = round(2 ** level)`` from the origin upward,
     so the curriculum window ``[i, i+1]`` realizes the address increment
     ``[N(i), N(i+1))`` and consecutive windows are disjoint.
     """
 
-    if not math.isfinite(level) or level <= 0.0:
+    if not math.isfinite(level):
         return 0
+    if level <= 0.0:
+        return 1
     return round(2.0**level)
 
 
@@ -1692,6 +1689,7 @@ def _constructed_variation_coordinate_record(
             "coordinate_system": spatial.coordinate_system,
             "matrix": matrix,
         },
+        "native_footprint_side": _render_unit_side,
         "transform_ordinal": transform_ordinal,
         "transform_cell": {
             "x_translation_step": tx_step,
@@ -2184,36 +2182,27 @@ def _manifest() -> BenchmarkManifest:
         resolution_analysis={
             "kind": "component-discriminability-margin",
             "discriminability_margin": 20.0,
-            "affine_minimum_absolute_determinant": 0.25,
-            "affine_minimum_axis_alignment": 0.95,
-            "affine_minimum_cell_overlap_ratio": 0.55,
-            "affine_minimum_singular_value": 0.72,
-            "affine_maximum_singular_value": 1.28,
-            "affine_maximum_condition_number": 1.6,
-            "affine_minimum_projected_extent": 0.65,
-            "affine_maximum_projected_extent": 1.35,
+            "render_unit_side": _render_unit_side,
+            "translation_step_pixels": _translation_step_pixels,
+            "scale_ratio_per_level": _scale_ratio_per_level,
             "volume_value": {
-                "kind": "constructed-finite-volume-shell",
+                "kind": "domain-growth-setup-window",
                 "measure_id": "log2-state-space-volume",
                 "formula": "log2(realized_cardinality)",
                 "digit_count": _volume_class_digit_count,
-                "affine_transform_family": "constructed-finite-affine-product-grid",
-                "target_policy": "symmetric-realized-cardinalities-inside-request-band",
+                "transform_axes": list(_chart_axis_ids),
+                "target_policy": "contiguous-global-address-increment",
                 "description": (
-                    "Score-bearing Digits volume shells are requested finite "
-                    "single-digit windows. The minimum non-null request is the "
-                    "canonical 10-way digit classification problem. Larger "
-                    "requests add symmetric finite affine choices for every "
-                    "digit, and the benchmark reports the realized cardinality "
-                    "instead of forcing exact powers of two. Canvas resolution "
-                    "is the smallest square lattice, rounded to the benchmark "
-                    "resolution step, whose finite affine grid can express a "
-                    "cardinality inside the requested volume band."
+                    "Score-bearing Digits volume windows are finite increments "
+                    "of one global address walk over digit identity and a "
+                    "shell-ordered translation/scale transform lattice. The "
+                    "output task remains 10-way classification; volume counts "
+                    "problem setups. Canvas size is materialization metadata "
+                    "derived from the deepest realized transform ordinal."
                 ),
             },
             "description": (
-                "Minimum rendered component separation required when choosing live "
-                "observation resolution."
+                "Native-footprint component separation at the fixed render pitch."
             ),
         },
     )
