@@ -93,6 +93,45 @@ def test_cli_benchmark_train_discovers_architecture_manifests(
     assert "discovered under results/training" in output
 
 
+def test_cli_benchmark_train_scopes_architecture_subdirs_by_benchmark_name(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    architecture_root = tmp_path / "architectures"
+    digits_architecture = architecture_root / "digits" / "development" / "digits_pool.json"
+    chess_architecture = architecture_root / "chess" / "linear_board.json"
+    digits_architecture.parent.mkdir(parents=True)
+    chess_architecture.parent.mkdir(parents=True)
+    digits_architecture.write_bytes(
+        (_fixtures_root / "architecture" / "digits_pool.json").read_bytes()
+    )
+    chess_architecture.write_bytes(
+        (_fixtures_root / "architecture" / "chess_board_linear.json").read_bytes()
+    )
+
+    assert (
+        main(
+            [
+                "benchmark",
+                "train",
+                "--architecture",
+                str(architecture_root),
+                "--results-root",
+                str(tmp_path / "results"),
+                "--dry-run",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+
+    assert output.count("planned benchmark training run ") == 2
+    assert "planned benchmark training run chess-arch-" in output
+    assert "planned benchmark training run digits-arch-" in output
+    assert "training/chess/digits-" not in output
+    assert "training/digits/chess-" not in output
+
+
 def test_cli_benchmark_help_advertises_current_workflow_commands(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

@@ -584,12 +584,9 @@ def _run_benchmark_training(args: argparse.Namespace) -> tuple[list[BenchmarkRun
     summaries: list[BenchmarkRunSummary] = []
     skipped = 0
     moved = 0
-    benchmark_roots = tuple(
-        root
-        for _benchmark_id, root in _selected_benchmark_roots_by_id(
-            explicit_roots=tuple(args.benchmark_root),
-            benchmark_selectors=tuple(args.benchmarks),
-        )
+    benchmark_roots_by_id = _selected_benchmark_roots_by_id(
+        explicit_roots=tuple(args.benchmark_root),
+        benchmark_selectors=tuple(args.benchmarks),
     )
     for architecture_path in _training_architecture_manifests(
         architecture_inputs=tuple(args.architecture),
@@ -601,7 +598,10 @@ def _run_benchmark_training(args: argparse.Namespace) -> tuple[list[BenchmarkRun
             if moved_architecture_path is not None:
                 architecture_path = moved_architecture_path
                 moved += 1
-        for benchmark_root in benchmark_roots:
+        for benchmark_root in _training_benchmark_roots_for_architecture(
+            architecture_path=architecture_path,
+            benchmark_roots_by_id=benchmark_roots_by_id,
+        ):
             plan = _benchmark_run_plan(
                 args,
                 architecture_path=architecture_path,
@@ -683,6 +683,27 @@ def _training_architecture_manifests(
         if architecture_inputs:
             raise ValueError(f"architecture path does not exist: {root}")
     return tuple(dict.fromkeys(paths))
+
+
+def _training_benchmark_roots_for_architecture(
+    *,
+    architecture_path: Path,
+    benchmark_roots_by_id: tuple[tuple[str, Path], ...],
+) -> tuple[Path, ...]:
+    path_parts = frozenset(architecture_path.parts)
+    matches = tuple(
+        root
+        for benchmark_id, root in benchmark_roots_by_id
+        if path_parts
+        & {
+            benchmark_id,
+            benchmark_id.split("@", maxsplit=1)[0],
+            _benchmark_atom(benchmark_id),
+        }
+    )
+    if matches:
+        return matches
+    return tuple(root for _benchmark_id, root in benchmark_roots_by_id)
 
 
 def _pending_training_architecture_manifests(*, results_root: Path) -> tuple[Path, ...]:
