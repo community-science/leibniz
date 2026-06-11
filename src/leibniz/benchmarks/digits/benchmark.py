@@ -197,15 +197,41 @@ def _scale_footprint(scale_level: int) -> float:
     return _render_unit_side * (1.0 + _scale_ratio_per_level * scale_level)
 
 
-def _chart_canvas_side_for_max_ordinal(max_ordinal: int) -> int:
-    """Return the smallest stepped square canvas framing cells up to an ordinal."""
+def _shell_size(radius: int) -> int:
+    """Return the number of transform cells at a shell radius (closed form)."""
 
-    max_translation_steps = 0
-    max_scale_level = 0
-    for ordinal in range(max_ordinal + 1):
-        tx, ty, sl = _transform_cell_for_ordinal(ordinal)
-        max_translation_steps = max(max_translation_steps, abs(tx), abs(ty))
-        max_scale_level = max(max_scale_level, sl)
+    if radius <= 0:
+        return 1
+    inner_scale_levels = min(_max_scale_level, (radius - 1) // _scale_shell_weight)
+    size = (2 * inner_scale_levels + 1) * 8 * radius
+    if radius % _scale_shell_weight == 0 and radius // _scale_shell_weight <= _max_scale_level:
+        size += 2 * (2 * radius + 1) ** 2
+    return size
+
+
+def _radius_for_ordinal(ordinal: int) -> int:
+    """Return the shell radius that contains a global transform ordinal."""
+
+    cumulative = 0
+    radius = 0
+    while True:
+        cumulative += _shell_size(radius)
+        if ordinal < cumulative:
+            return radius
+        radius += 1
+
+
+def _chart_canvas_side_for_max_ordinal(max_ordinal: int) -> int:
+    """Return the smallest stepped square canvas framing cells up to an ordinal.
+
+    Every cell up to ``max_ordinal`` has shell radius at most the radius of the
+    shell containing it, so a canvas sized for that radius's reach frames them
+    all. This is closed form in the radius, so it stays fast at any depth.
+    """
+
+    radius = _radius_for_ordinal(max_ordinal)
+    max_translation_steps = radius
+    max_scale_level = min(_max_scale_level, radius // _scale_shell_weight)
     footprint = _scale_footprint(max_scale_level)
     side = footprint + 2.0 * max_translation_steps * _translation_step_pixels
     side = max(float(_render_unit_side), side)
@@ -1520,13 +1546,15 @@ def _digits_ordinal_ranges_by_digit(
     windows yield disjoint per-digit intervals.
     """
 
+    lower_address = volume_class.minimum_address
+    upper_address = volume_class.minimum_address + volume_class.cardinality
     ranges: dict[int, tuple[int, int]] = {}
-    for state_index in range(volume_class.cardinality):
-        digit_index, ordinal = _digits_state_coordinate(
-            state_index=state_index, volume_class=volume_class
-        )
-        lower, upper = ranges.get(digit_index, (ordinal, ordinal))
-        ranges[digit_index] = (min(lower, ordinal), max(upper, ordinal))
+    for digit_index in range(_volume_class_digit_count):
+        # ordinals o with lower_address <= 10 * o + digit < upper_address.
+        ordinal_lower = max(0, -(-(lower_address - digit_index) // _volume_class_digit_count))
+        ordinal_upper = -(-(upper_address - digit_index) // _volume_class_digit_count) - 1
+        if ordinal_upper >= ordinal_lower:
+            ranges[digit_index] = (ordinal_lower, ordinal_upper)
     return dict(sorted(ranges.items()))
 
 
@@ -2206,7 +2234,7 @@ def _latent_factors() -> LatentFactorDeclaration:
                     "benchmarks.digits.sample.field-variation-transform"
                 ),
                 role="variation",
-                degree_measure=DegreeMeasure.vector_dimension(6),
+                degree_measure=DegreeMeasure.vector_dimension(3),
             ),
             SampleLatentFactor(
                 name=ProtocolName.parse("benchmarks.digits.materialization.canvas-shape"),
