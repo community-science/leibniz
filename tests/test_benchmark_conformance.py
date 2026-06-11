@@ -57,6 +57,18 @@ def test_packaged_benchmarks_emit_region_authoritative_realized_windows(
 def test_packaged_benchmarks_realize_disjoint_integer_window_increments(
     benchmark_root: Path,
 ) -> None:
+    """Assert the cross-benchmark integer-window volume law.
+
+    Every packaged benchmark must realize the integer bit window ``[k, k+1]``
+    as a disjoint increment of exactly ``2**k`` new states for ``k >= 1``, with
+    window ``[0, 1]`` realizing the single origin state, anchoring the
+    cumulative realized state count at ``N(L) = 2**L - 1`` after level ``L``.
+    This is protocol law, not a benchmark convention: it makes integer windows
+    mean the same realized volumes on every benchmark, so scores integrated
+    along the bits axis are comparable across benchmarks. Future benchmarks
+    must satisfy the same anchoring to pass conformance.
+    """
+
     generator = load_benchmark(benchmark_root).generator
     batches = tuple(
         generator(
