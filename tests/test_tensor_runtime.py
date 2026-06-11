@@ -20,6 +20,7 @@ from leibniz.tensor_runtime import (
     resolve_tensor_runtime,
     runtime_roofline_record,
     softmax_target_masses,
+    tensor_element_compile_fallback_records,
     tensor_runtime_construct_tensor,
     tensor_runtime_device_kinds,
     validate_tensor_runtime_device,
@@ -423,6 +424,136 @@ def test_digits_generator_call_tensors_match_metadata_batch() -> None:
         ]
         for sample in observation_batch.samples
     ]
+
+def test_tensor_element_compile_failure_records_loud_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _compile_failing_runtime(monkeypatch, reason="inductor exploded")
+
+    def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
+        _ = flat_indices
+        return coordinates[0]
+
+    program = TensorElementProgram(
+        kernel=element_function,
+        parameters={},
+        cache_key=("loud-fallback-test", id(element_function)),
+    )
+
+    values = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=program),
+    )
+    tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=program),
+    )
+
+    assert values.tolist() == [0, 1]
+    matching = [
+        record
+        for record in tensor_element_compile_fallback_records()
+        if record["program"] == str(program.cache_key)
+    ]
+    assert len(matching) == 1
+    assert matching[0]["kind"] == "tensor-element-compile-fallback"
+    assert matching[0]["tensor_device"] == "cuda"
+    assert "inductor exploded" in str(matching[0]["reason"])
+    assert matching[0]["constructions"] == 2
+
+
+def test_tensor_element_compile_fallback_raises_in_strict_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _compile_failing_runtime(monkeypatch, reason="inductor exploded")
+    monkeypatch.setenv("LEIBNIZ_REQUIRE_TENSOR_COMPILE", "1")
+
+    def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
+        _ = flat_indices
+        return coordinates[0]
+
+    program = TensorElementProgram(
+        kernel=element_function,
+        parameters={},
+        cache_key=("strict-fallback-test", id(element_function)),
+    )
+
+    with pytest.raises(TensorRuntimeError, match="LEIBNIZ_REQUIRE_TENSOR_COMPILE"):
+        tensor_runtime_construct_tensor(
+            runtime,
+            recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=program),
+        )
+
+
+def test_strict_mode_allows_declared_eager_programs_and_cpu_runtimes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LEIBNIZ_REQUIRE_TENSOR_COMPILE", "1")
+
+    def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
+        _ = flat_indices
+        return coordinates[0]
+
+    declared_eager = TensorElementProgram(
+        kernel=element_function,
+        parameters={},
+        compile=False,
+        cache_key=("strict-declared-eager-test", id(element_function)),
+    )
+    cuda_like_runtime = _compile_failing_runtime(monkeypatch, reason="unused")
+    eager_values = tensor_runtime_construct_tensor(
+        cuda_like_runtime,
+        recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=declared_eager),
+    )
+
+    compiled_program = TensorElementProgram(
+        kernel=element_function,
+        parameters={},
+        cache_key=("strict-cpu-test", id(element_function)),
+    )
+    cpu_values = tensor_runtime_construct_tensor(
+        resolve_tensor_runtime("cpu"),
+        recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=compiled_program),
+    )
+
+    assert eager_values.tolist() == [0, 1]
+    assert cpu_values.tolist() == [0, 1]
+    fallback_programs = {
+        record["program"] for record in tensor_element_compile_fallback_records()
+    }
+    assert str(declared_eager.cache_key) not in fallback_programs
+    assert str(compiled_program.cache_key) not in fallback_programs
+
+
+def _compile_failing_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    reason: str,
+) -> TensorRuntime:
+    host_runtime = resolve_tensor_runtime("cpu")
+    runtime = TensorRuntime(
+        torch=host_runtime.torch,
+        device=host_runtime.device,
+        device_kind="cuda",
+    )
+
+    def compile_available(_runtime: TensorRuntime) -> bool:
+        return True
+
+    monkeypatch.setattr(
+        tensor_runtime_module,
+        "_tensor_runtime_compile_available",
+        compile_available,
+    )
+
+    def failing_compile(kernel: Any, **kwargs: Any) -> Any:
+        _ = kernel
+        _ = kwargs
+        raise RuntimeError(reason)
+
+    monkeypatch.setattr(runtime.torch, "compile", failing_compile)
+    return runtime
+
 
 def _compile_counting_runtime(
     monkeypatch: pytest.MonkeyPatch,

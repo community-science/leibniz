@@ -82,6 +82,7 @@ from leibniz.tensor_runtime import (
     seed_runtime,
     softmax_prediction_rows,
     softmax_target_masses,
+    tensor_element_compile_fallback_records,
     tensor_runtime_device_kinds,
     tensor_runtime_has_fixed_device_memory,
     tensor_runtime_total_memory_bytes,
@@ -2008,6 +2009,7 @@ def _train_and_predict_on_device(
                     phase_timings=phase_timings,
                     fallback_errors=fallback_errors,
                     operation_fallbacks=module.operation_fallback_records(),
+                    tensor_compile_fallbacks=tensor_element_compile_fallback_records(),
                 ),
                 _curriculum_record(
                     kind="competence-gated-training-curriculum",
@@ -2074,6 +2076,7 @@ def _train_and_predict_on_device(
             phase_timings=phase_timings,
             fallback_errors=fallback_errors,
             operation_fallbacks=module.operation_fallback_records(),
+            tensor_compile_fallbacks=tensor_element_compile_fallback_records(),
         ),
     )
 
@@ -2194,6 +2197,11 @@ def evaluate_model_checkpoint_artifact(
     throughput["phase_timing"] = phase_timings.to_record()
     throughput["capacity_limited"] = capacity_limited
     throughput["curriculum_exhausted"] = curriculum_exhausted
+    compile_fallbacks = tensor_element_compile_fallback_records()
+    if compile_fallbacks:
+        throughput["tensor_compile_fallbacks"] = [
+            dict(fallback) for fallback in compile_fallbacks
+        ]
     if max_inference_compute is None:
         raise BenchmarkRunnerError(
             "checkpoint evaluation could not measure max_inference_compute"
@@ -4126,6 +4134,7 @@ def _throughput_record(
     phase_timings: TimingCollector,
     fallback_errors: tuple[tuple[str, str], ...] = (),
     operation_fallbacks: Sequence[Mapping[str, object]] = (),
+    tensor_compile_fallbacks: Sequence[Mapping[str, object]] = (),
 ) -> dict[str, object]:
     training = training_counter.to_record(kind="training-throughput")
     validation = validation_counter.to_record(kind="validation-throughput")
@@ -4159,6 +4168,10 @@ def _throughput_record(
     if operation_fallbacks:
         record["operation_runtime_fallbacks"] = [
             dict(fallback) for fallback in operation_fallbacks
+        ]
+    if tensor_compile_fallbacks:
+        record["tensor_compile_fallbacks"] = [
+            dict(fallback) for fallback in tensor_compile_fallbacks
         ]
     return record
 

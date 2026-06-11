@@ -44,6 +44,7 @@ __all__ = [
     "TensorRuntimeError",
     "TensorRuntimeDevice",
     "TensorRuntimeDeviceKind",
+    "tensor_element_compile_fallback_records",
     "tensor_runtime_available_memory_bytes",
     "tensor_runtime_construct_tensor",
     "tensor_runtime_default_device",
@@ -71,9 +72,11 @@ _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
 _roofline_cache: dict[str, dict[str, object]] = {}
 _tensor_element_kernel_cache: dict[tuple[object, ...], Any] = {}
 _tensor_element_compile_failure_cache: set[tuple[object, ...]] = set()
+_tensor_element_compile_fallbacks: dict[tuple[object, ...], dict[str, object]] = {}
 _tensor_element_parameter_cache: dict[tuple[object, ...], Any] = {}
 _tensor_element_tile_metadata_cache: dict[tuple[object, ...], Any] = {}
 _tensor_element_tile_size = 131_072
+_require_tensor_compile_environment_variable = "LEIBNIZ_REQUIRE_TENSOR_COMPILE"
 
 
 class TensorRuntimeError(ValueError):
@@ -143,6 +146,57 @@ def tensor_runtime_construct_tensor(
         dtype=dtype,
         program=recipe.program,
     )
+
+
+def tensor_element_compile_fallback_records() -> tuple[dict[str, object], ...]:
+    """Return process-wide records of element programs that fell back to eager construction.
+
+    Compiled tile construction is the fast path for tensor element programs on
+    accelerator runtimes; the eager fallback is orders of magnitude slower and
+    must never be silent. Each record carries the runtime device kind, a stable
+    program label, the first fallback reason, and the number of constructions
+    served by the fallback. Setting the ``LEIBNIZ_REQUIRE_TENSOR_COMPILE``
+    environment variable to a value other than ``0`` turns any fallback into a
+    ``TensorRuntimeError`` instead.
+    """
+
+    return tuple(dict(record) for record in _tensor_element_compile_fallbacks.values())
+
+
+def _note_tensor_element_compile_fallback(
+    *,
+    runtime: TensorRuntime,
+    program: TensorElementProgram,
+    cache_key: tuple[object, ...],
+    reason: str,
+) -> None:
+    if _tensor_element_compile_required():
+        raise TensorRuntimeError(
+            f"{_require_tensor_compile_environment_variable} is set but tensor "
+            f"element program {_tensor_element_program_label(program)!r} fell "
+            f"back to eager construction: {reason}"
+        )
+    record = _tensor_element_compile_fallbacks.get(cache_key)
+    if record is None:
+        _tensor_element_compile_fallbacks[cache_key] = {
+            "kind": "tensor-element-compile-fallback",
+            "tensor_device": runtime.device_kind,
+            "program": _tensor_element_program_label(program),
+            "reason": reason,
+            "constructions": 1,
+        }
+        return
+    record["constructions"] = cast(int, record["constructions"]) + 1
+
+
+def _tensor_element_compile_required() -> bool:
+    return os.environ.get(_require_tensor_compile_environment_variable, "") not in {"", "0"}
+
+
+def _tensor_element_program_label(program: TensorElementProgram) -> str:
+    if program.cache_key is not None:
+        return str(program.cache_key)
+    return getattr(program.kernel, "__qualname__", repr(program.kernel))
 
 
 def tensor_runtime_device_choices() -> tuple[str, ...]:
@@ -1068,30 +1122,46 @@ def _construct_tensor_element_program(
         )
         for name, parameter in program.parameters.items()
     }
-    compile_cache_key = _tensor_element_kernel_cache_key(
-        runtime=runtime,
-        program=program,
-        rank=len(shape),
-        parameter_tensors=parameter_tensors,
-    )
-    if (
-        runtime.device_kind in {"cuda", "mps"}
-        and program.compile
-        and _tensor_runtime_compile_available(runtime)
-        and compile_cache_key not in _tensor_element_compile_failure_cache
-    ):
-        try:
-            return _construct_compiled_tensor_element_tiles(
+    if runtime.device_kind in {"cuda", "mps"} and program.compile:
+        compile_cache_key = _tensor_element_kernel_cache_key(
+            runtime=runtime,
+            program=program,
+            rank=len(shape),
+            parameter_tensors=parameter_tensors,
+        )
+        if not _tensor_runtime_compile_available(runtime):
+            _note_tensor_element_compile_fallback(
                 runtime=runtime,
-                shape=shape,
-                dtype=dtype,
                 program=program,
-                parameter_tensors=parameter_tensors,
                 cache_key=compile_cache_key,
+                reason="torch.compile is not available for this tensor runtime",
             )
-        except Exception:
-            _tensor_element_compile_failure_cache.add(compile_cache_key)
-            _tensor_element_kernel_cache.pop(compile_cache_key, None)
+        elif compile_cache_key in _tensor_element_compile_failure_cache:
+            _note_tensor_element_compile_fallback(
+                runtime=runtime,
+                program=program,
+                cache_key=compile_cache_key,
+                reason="tensor element compile previously failed for this program",
+            )
+        else:
+            try:
+                return _construct_compiled_tensor_element_tiles(
+                    runtime=runtime,
+                    shape=shape,
+                    dtype=dtype,
+                    program=program,
+                    parameter_tensors=parameter_tensors,
+                    cache_key=compile_cache_key,
+                )
+            except Exception as error:
+                _tensor_element_compile_failure_cache.add(compile_cache_key)
+                _tensor_element_kernel_cache.pop(compile_cache_key, None)
+                _note_tensor_element_compile_fallback(
+                    runtime=runtime,
+                    program=program,
+                    cache_key=compile_cache_key,
+                    reason=f"tensor element compile failed: {error}",
+                )
     return _construct_eager_tensor_element_program(
         runtime=runtime,
         shape=shape,
@@ -1395,17 +1465,9 @@ def _compiled_tensor_element_tile_kernel(
             return values.where(active, values * 0)
 
         _clear_stale_compile_module_alias(program.kernel)
-        compiled = runtime.torch.compile(
-            tile_kernel,
-            options=_tensor_element_compile_options(runtime),
-        )
+        compiled = runtime.torch.compile(tile_kernel)
     _tensor_element_kernel_cache[cache_key] = compiled
     return cast(Callable[..., Any], compiled)
-
-
-def _tensor_element_compile_options(runtime: TensorRuntime) -> Mapping[str, object]:
-    _ = runtime
-    return {}
 
 
 def _tensor_element_kernel_cache_key(

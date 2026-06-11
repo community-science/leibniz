@@ -1653,6 +1653,39 @@ def test_training_run_artifact_record_omits_historical_score_estimates() -> None
     assert record["validation_history"][0]["validation_loss"] == 1.0
 
 
+def test_throughput_record_surfaces_tensor_compile_fallbacks() -> None:
+    fallback = {
+        "kind": "tensor-element-compile-fallback",
+        "tensor_device": "cuda",
+        "program": "('digits-field', 10, 6, 25, 2)",
+        "reason": "tensor element compile failed: inductor exploded",
+        "constructions": 3,
+    }
+
+    record = cast(Any, benchmark_runner)._throughput_record(
+        runtime_device="cuda",
+        training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        evaluation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        roofline={"kind": "system-roofline", "status": "unavailable"},
+        work_estimates=None,
+        phase_timings=benchmark_runner.TimingCollector(),
+        tensor_compile_fallbacks=(fallback,),
+    )
+    silent_record = cast(Any, benchmark_runner)._throughput_record(
+        runtime_device="cuda",
+        training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        evaluation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        roofline={"kind": "system-roofline", "status": "unavailable"},
+        work_estimates=None,
+        phase_timings=benchmark_runner.TimingCollector(),
+    )
+
+    assert record["tensor_compile_fallbacks"] == [fallback]
+    assert "tensor_compile_fallbacks" not in silent_record
+
+
 def test_training_curriculum_is_not_step_indexed() -> None:
     source = Path(benchmark_runner.__file__).read_text(encoding="utf-8")
 
