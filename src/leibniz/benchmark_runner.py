@@ -290,6 +290,7 @@ class _RollingValidationCompetencePoint:
             log2_volume_minimum=latest.log2_volume_minimum,
             log2_volume_maximum=latest.log2_volume_maximum,
             input_shape=latest.input_shape,
+            region=latest.region,
         )
 
 

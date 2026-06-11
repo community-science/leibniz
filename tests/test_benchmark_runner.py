@@ -39,6 +39,7 @@ from leibniz.observation_generation import (
     StateSpaceVolumeRequest,
     load_generator,
 )
+from leibniz.state_space import state_space_region_from_record
 from leibniz.tensor_runtime import (
     TensorRuntime,
     TensorRuntimeDeviceKind,
@@ -913,6 +914,17 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         )
         for rung in curriculum_rungs
     ]
+    assert all("region" in point for point in points)
+    assert all(
+        state_space_region_from_record(cast(dict[str, object], point["region"]))
+        == state_space_region_from_record(
+            cast(
+                dict[str, object],
+                cast(dict[str, object], rung["request_outcome"])["region"],
+            )
+        )
+        for point, rung in zip(points, curriculum_rungs, strict=True)
+    )
 
 
 def test_benchmark_evaluation_rejects_checkpoint_artifact_for_wrong_benchmark(
@@ -1735,6 +1747,13 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
     assert points[0]["mean_accepted_mass"] == 1.0
     assert points[0]["input_shape"] == [1, 16, 16]
     assert points[1]["input_shape"] == list(batch.samples[0].require_field().shape)
+    assert batch.region is not None
+    assert state_space_region_from_record(points[1]["region"]) == batch.region
+    score_terms = cast(
+        list[dict[str, object]],
+        cast(dict[str, object], estimate["score_integral"])["terms"],
+    )
+    assert state_space_region_from_record(score_terms[-1]["region"]) == batch.region
     assert math.isclose(
         cast(float, estimate["score"]),
         sampled_competence_frontier_integral(
@@ -2762,8 +2781,11 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
         cast(float, score_integral["value"]),
         cast(float, leaderboard[0]["score"]),
     )
-    assert cast(list[dict[str, object]], score_integral["terms"])
+    score_terms = cast(list[dict[str, object]], score_integral["terms"])
+    assert score_terms
+    assert all("region" in term for term in score_terms)
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
+    assert all("region" in point for point in points)
     log2_volumes = [cast(float, point["log2_volume"]) for point in points]
     assert math.isclose(log2_volumes[0], 0.0)
     assert log2_volumes == sorted(log2_volumes)

@@ -6,7 +6,7 @@ import pytest
 
 from leibniz.benchmark_implementations import discover_benchmark_roots, load_benchmark
 from leibniz.observation_generation import GeneratedSampleSet, StateSpaceVolumeRequest
-from leibniz.state_space import state_space_region_from_record
+from leibniz.state_space import state_space_region_from_record, state_space_regions_are_disjoint
 
 _repository_root = Path(__file__).parents[1]
 _benchmark_parent = _repository_root / "src" / "leibniz" / "benchmarks"
@@ -54,6 +54,37 @@ def test_packaged_benchmarks_emit_region_authoritative_realized_windows(
 
 
 @pytest.mark.parametrize("benchmark_root", _benchmark_roots(), ids=lambda path: path.name)
+def test_packaged_benchmarks_realize_disjoint_integer_window_increments(
+    benchmark_root: Path,
+) -> None:
+    generator = load_benchmark(benchmark_root).generator
+    batches = tuple(
+        generator(
+            seed=407 + index,
+            shape=4,
+            volume_request=StateSpaceVolumeRequest(float(index), float(index + 1)),
+        )
+        for index in range(4)
+    )
+    regions = tuple(batch.region for batch in batches)
+
+    for batch in batches:
+        assert batch.request_outcome is not None
+        assert batch.request_outcome.kind == "realized"
+    assert all(region is not None for region in regions)
+    realized_regions = tuple(region for region in regions if region is not None)
+    for left_index, left in enumerate(realized_regions):
+        for right in realized_regions[left_index + 1 :]:
+            assert state_space_regions_are_disjoint(left, right)
+
+    cumulative_volume = 0
+    for index, region in enumerate(realized_regions):
+        assert region.volume == _integer_window_increment_volume(index)
+        cumulative_volume += region.volume
+        assert cumulative_volume == _integer_window_cumulative_volume(index + 1)
+
+
+@pytest.mark.parametrize("benchmark_root", _benchmark_roots(), ids=lambda path: path.name)
 def test_packaged_benchmarks_distinguish_unrealized_window_outcomes(
     benchmark_root: Path,
 ) -> None:
@@ -80,3 +111,15 @@ def _state_count(batch: GeneratedSampleSet) -> int:
     state_count = round(2**batch.log2_volume)
     assert state_count > 0
     return state_count
+
+
+def _integer_window_increment_volume(index: int) -> int:
+    if index == 0:
+        return 1
+    return 2**index
+
+
+def _integer_window_cumulative_volume(upper_index: int) -> int:
+    if upper_index <= 0:
+        return 0
+    return 2**upper_index - 1

@@ -2209,11 +2209,7 @@ def _competence_point_from_sampled_record(point: Mapping[str, object]) -> dict[s
 
 
 def _public_competence_point_record(point: Mapping[str, object]) -> dict[str, object]:
-    return {
-        key: value
-        for key, value in point.items()
-        if key != "region"
-    }
+    return dict(point)
 
 
 def competence_integral(
