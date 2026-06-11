@@ -618,18 +618,18 @@ def _run_benchmark_training(args: argparse.Namespace) -> tuple[list[BenchmarkRun
         explicit_roots=tuple(args.benchmark_root),
         benchmark_selectors=tuple(args.benchmarks),
     )
-    for architecture_path in _training_architecture_manifests(
+    for architecture in _training_architecture_manifests(
         architecture_inputs=tuple(args.architecture),
         results_root=args.results_root,
     ):
-        moved_architecture_path = None
+        architecture_path = architecture.path
         if not args.architecture and not args.dry_run:
             moved_architecture_path = _move_training_manifest_out_of_pending(architecture_path)
             if moved_architecture_path is not None:
                 architecture_path = moved_architecture_path
                 moved += 1
         for benchmark_root in _training_benchmark_roots_for_architecture(
-            architecture_path=architecture_path,
+            benchmark_scope=architecture.benchmark_scope,
             benchmark_roots_by_id=benchmark_roots_by_id,
         ):
             plan = _benchmark_run_plan(
@@ -740,44 +740,63 @@ def _selected_benchmark_roots_by_id(
     return roots
 
 
+class _TrainingArchitecture(NamedTuple):
+    path: Path
+    benchmark_scope: frozenset[str]
+
+
 def _training_architecture_manifests(
     *,
     architecture_inputs: tuple[Path, ...],
     results_root: Path,
-) -> tuple[Path, ...]:
+) -> tuple[_TrainingArchitecture, ...]:
     if not architecture_inputs:
         return _pending_training_architecture_manifests(results_root=results_root)
-    roots = architecture_inputs
-    paths: list[Path] = []
-    for root in roots:
+    entries: list[_TrainingArchitecture] = []
+    for root in architecture_inputs:
         if root.is_file():
             if _is_architecture_manifest(root):
-                paths.append(root)
+                entries.append(_TrainingArchitecture(path=root, benchmark_scope=frozenset()))
             else:
                 raise ValueError(f"architecture manifest is invalid: {root}")
             continue
         if root.is_dir():
-            paths.extend(
-                path
+            entries.extend(
+                _TrainingArchitecture(
+                    path=path,
+                    benchmark_scope=_architecture_benchmark_scope(path, root=root),
+                )
                 for path in sorted(root.rglob("*" + document_filename_suffix()))
                 if _is_architecture_manifest(path)
             )
             continue
-        if architecture_inputs:
-            raise ValueError(f"architecture path does not exist: {root}")
-    return tuple(dict.fromkeys(paths))
+        raise ValueError(f"architecture path does not exist: {root}")
+    deduped: dict[Path, _TrainingArchitecture] = {}
+    for entry in entries:
+        deduped.setdefault(entry.path, entry)
+    return tuple(deduped.values())
+
+
+def _architecture_benchmark_scope(path: Path, *, root: Path) -> frozenset[str]:
+    """Return the benchmark-name scope for a manifest discovered under an input root.
+
+    Only the input root's own name and directory names below it participate in
+    benchmark scoping; ancestor directories outside the supplied root must not
+    rescope an architecture.
+    """
+
+    return frozenset((root.name, *path.relative_to(root).parts[:-1]))
 
 
 def _training_benchmark_roots_for_architecture(
     *,
-    architecture_path: Path,
+    benchmark_scope: frozenset[str],
     benchmark_roots_by_id: tuple[tuple[str, Path], ...],
 ) -> tuple[Path, ...]:
-    path_parts = frozenset(architecture_path.parts)
     matches = tuple(
         root
         for benchmark_id, root in benchmark_roots_by_id
-        if path_parts
+        if benchmark_scope
         & {
             benchmark_id,
             benchmark_id.split("@", maxsplit=1)[0],
@@ -789,20 +808,29 @@ def _training_benchmark_roots_for_architecture(
     return tuple(root for _benchmark_id, root in benchmark_roots_by_id)
 
 
-def _pending_training_architecture_manifests(*, results_root: Path) -> tuple[Path, ...]:
+def _pending_training_architecture_manifests(
+    *,
+    results_root: Path,
+) -> tuple[_TrainingArchitecture, ...]:
     training_root = results_root / "training"
     if not training_root.is_dir():
         return ()
-    paths: list[Path] = []
+    entries: list[_TrainingArchitecture] = []
     for pending_root in sorted(training_root.rglob("pending")):
         if not pending_root.is_dir():
             continue
-        paths.extend(
-            path
+        entries.extend(
+            _TrainingArchitecture(
+                path=path,
+                benchmark_scope=_architecture_benchmark_scope(path, root=training_root),
+            )
             for path in sorted(pending_root.rglob("*" + document_filename_suffix()))
             if _is_architecture_manifest(path)
         )
-    return tuple(dict.fromkeys(paths))
+    deduped: dict[Path, _TrainingArchitecture] = {}
+    for entry in entries:
+        deduped.setdefault(entry.path, entry)
+    return tuple(deduped.values())
 
 
 def _is_architecture_manifest(path: Path) -> bool:
