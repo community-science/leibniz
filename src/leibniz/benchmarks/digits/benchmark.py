@@ -577,9 +577,7 @@ class Generator:
                             volume_class=volume_class,
                         ),
                         axis_coordinates=_digits_region_axis_coordinates(
-                            transform_index=transform_index,
-                            grid=volume_class.affine_grid,
-                            resolution_assignment=resolved_resolution_assignment,
+                            transform_ordinal=transform_index,
                         ),
                         variation_coordinates=variation_coordinates,
                         variation_values=variation_values,
@@ -624,9 +622,7 @@ class Generator:
                     volume_class=volume_class,
                 ),
                 axis_coordinates=_digits_region_axis_coordinates(
-                    transform_index=transform_indices[index],
-                    grid=volume_class.affine_grid,
-                    resolution_assignment=resolution_assignment,
+                    transform_ordinal=transform_indices[index],
                 ),
             )
             for index, component_index in enumerate(component_indices)
@@ -1676,6 +1672,14 @@ def _constructed_affine_grid_for_minimum_transform_count(
     return grid
 
 
+_chart_ordinal_axis_id = "transform-ordinal"
+# Practical representable bound on transform ordinals; the global chart is
+# conceptually unbounded, but the region grammar needs a finite, window-stable
+# axis domain so increments share an identical axis declaration. Requests beyond
+# this resolve as exhausted capacity. ~10^12 setups is effectively unbounded.
+_chart_ordinal_domain_extent = 2**40
+
+
 def _digits_state_coordinate(
     *,
     state_index: int,
@@ -1687,23 +1691,24 @@ def _digits_state_coordinate(
         raise ObservationGenerationError("state_index must be below cardinality")
     sample_address = volume_class.minimum_address + state_index
     component_index = sample_address % _volume_class_digit_count
-    transform_index = sample_address // _volume_class_digit_count
-    if transform_index >= volume_class.affine_transform_count:
-        raise ObservationGenerationError("sample address exceeds active transform set")
-    return (component_index, transform_index)
+    transform_ordinal = sample_address // _volume_class_digit_count
+    return (component_index, transform_ordinal)
 
 
-def _digits_state_space_region(
-    *,
-    volume_class: _DigitsVolumeClass,
-    resolution_assignment: AxisAssignment,
-    margin: float,
-) -> StateSpaceRegion:
-    width = resolution_assignment.require_axis("W")
-    height = resolution_assignment.require_axis("H")
-    ambient = StateSpaceAmbient(
+def _digits_ambient(*, margin: float) -> StateSpaceAmbient:
+    """Return the fixed-resolution, unbounded-extent Digits ambient.
+
+    The field domain declares the render pitch, not a concrete canvas: the
+    canvas is a per-sample materialization detail, so every realized window
+    shares this one ambient and the score filtration stays coherent.
+    """
+
+    return StateSpaceAmbient(
         field_domain_kind="lattice-2d",
-        field_domain={"height": height, "width": width},
+        field_domain={
+            "render_unit_side": _render_unit_side,
+            "translation_step_pixels": _translation_step_pixels,
+        },
         field_codomain_id="unit-intensity",
         distinguishability=Distinguishability(
             kind="metric-resolution",
@@ -1712,24 +1717,43 @@ def _digits_state_space_region(
             certificate_id="component-discriminability-margin",
         ),
     )
-    transform_indices_by_digit = _digits_transform_indices_by_digit(volume_class)
-    components = tuple(
-        _digits_product_region(
-            digit_index=digit_index,
-            transform_indices=transform_indices,
-            grid=volume_class.affine_grid,
-            width=width,
-            height=height,
+
+
+def _digits_ordinal_ranges_by_digit(
+    volume_class: _DigitsVolumeClass,
+) -> dict[int, tuple[int, int]]:
+    """Return each realized digit's contiguous transform-ordinal interval.
+
+    Because addresses are ``10 * ordinal + digit``, a contiguous address
+    increment gives every digit a contiguous ordinal interval, so disjoint
+    windows yield disjoint per-digit intervals.
+    """
+
+    ranges: dict[int, tuple[int, int]] = {}
+    for state_index in range(volume_class.cardinality):
+        digit_index, ordinal = _digits_state_coordinate(
+            state_index=state_index, volume_class=volume_class
         )
-        for digit_index, transform_indices in transform_indices_by_digit.items()
+        lower, upper = ranges.get(digit_index, (ordinal, ordinal))
+        ranges[digit_index] = (min(lower, ordinal), max(upper, ordinal))
+    return dict(sorted(ranges.items()))
+
+
+def _digits_state_space_region(
+    *,
+    volume_class: _DigitsVolumeClass,
+    margin: float,
+) -> StateSpaceRegion:
+    components = tuple(
+        _digits_product_region(digit_index=digit_index, ordinal_range=ordinal_range)
+        for digit_index, ordinal_range in _digits_ordinal_ranges_by_digit(volume_class).items()
     )
     return StateSpaceRegion(
         id=(
             "benchmarks.digits.realized-region."
-            f"addresses-{volume_class.minimum_address}-{volume_class.maximum_address}."
-            f"canvas-{width}x{height}"
+            f"addresses-{volume_class.minimum_address}-{volume_class.maximum_address}"
         ),
-        ambient=ambient,
+        ambient=_digits_ambient(margin=margin),
         components=components,
         union_rule="disjoint-union",
         volume=volume_class.cardinality,
@@ -1740,32 +1764,24 @@ def _digits_state_space_region(
 def _digits_product_region(
     *,
     digit_index: int,
-    transform_indices: tuple[int, ...],
-    grid: _ConstructedAffineGrid,
-    width: int,
-    height: int,
+    ordinal_range: tuple[int, int],
 ) -> ProductRegion:
-    if not transform_indices:
-        raise ObservationGenerationError("digits region stratum must not be empty")
-    axis_regions = (
-        *_digits_transform_axis_regions(
-            transform_indices=transform_indices,
-            grid=grid,
+    lower, upper = ordinal_range
+    count = upper - lower + 1
+    axis_region = AxisRegion(
+        axis=StateSpaceAxis(
+            id=_chart_ordinal_axis_id,
+            domain=IntegerRangeDomain(lower=0, upper=_chart_ordinal_domain_extent),
         ),
-        _singleton_integer_axis_region("canvas_width", width),
-        _singleton_integer_axis_region("canvas_height", height),
-    )
-    measure_rule = (
-        "product-of-counts"
-        if math.prod(axis_region.count for axis_region in axis_regions)
-        == len(transform_indices)
-        else "benchmark-computed-finite-count"
+        coordinate_region=(lower, upper),
+        count=count,
+        log2_count=math.log2(count),
     )
     return ProductRegion(
-        axis_regions=axis_regions,
-        measure_rule=measure_rule,
-        volume=len(transform_indices),
-        log2_volume=math.log2(len(transform_indices)),
+        axis_regions=(axis_region,),
+        measure_rule="product-of-counts",
+        volume=count,
+        log2_volume=math.log2(count),
         stratum_id=f"digit-{digit_index}",
         stratum_target={
             "digit_index": digit_index,
@@ -1774,94 +1790,12 @@ def _digits_product_region(
     )
 
 
-def _digits_transform_axis_regions(
-    *,
-    transform_indices: tuple[int, ...],
-    grid: _ConstructedAffineGrid,
-) -> tuple[AxisRegion, ...]:
-    if grid.preset_count is not None:
-        cells = tuple(f"preset-{index}" for index in range(grid.preset_count))
-        selected = tuple(f"preset-{index}" for index in transform_indices)
-        return (
-            AxisRegion(
-                axis=StateSpaceAxis(
-                    id="affine_preset",
-                    domain=EnumeratedCellsDomain(cells=cells),
-                ),
-                coordinate_region=selected,
-                count=len(selected),
-                log2_count=math.log2(len(selected)),
-            ),
-        )
-    indices_by_axis = {
-        axis_name: tuple(
-            _constructed_affine_indices(transform_index=transform_index, grid=grid)[axis_name]
-            for transform_index in transform_indices
-        )
-        for axis_name in _constructed_affine_axis_names
-    }
-    bounds_by_axis = {
-        "x_translation": grid.x_translation_bounds,
-        "y_translation": grid.y_translation_bounds,
-        "scale": grid.scale_bounds,
-        "rotation": grid.rotation_bounds,
-        "x_shear": grid.x_shear_bounds,
-    }
-    counts_by_axis = dict(zip(_constructed_affine_axis_names, grid.counts, strict=True))
-    return tuple(
-        _real_grid_axis_region(
-            axis_id=axis_name,
-            bounds=bounds_by_axis[axis_name],
-            domain_count=counts_by_axis[axis_name],
-            selected_indices=indices_by_axis[axis_name],
-        )
-        for axis_name in _constructed_affine_axis_names
-    )
-
-
-def _real_grid_axis_region(
-    *,
-    axis_id: str,
-    bounds: tuple[float, float],
-    domain_count: int,
-    selected_indices: tuple[int, ...],
-) -> AxisRegion:
-    lower = min(selected_indices)
-    upper = max(selected_indices)
-    count = upper - lower + 1
-    return AxisRegion(
-        axis=StateSpaceAxis(
-            id=axis_id,
-            domain=RealGridDomain(
-                lower=bounds[0],
-                upper=bounds[1],
-                count=domain_count,
-            ),
-        ),
-        coordinate_region=(lower, upper),
-        count=count,
-        log2_count=math.log2(count),
-    )
-
-
-def _singleton_integer_axis_region(axis_id: str, value: int) -> AxisRegion:
-    return AxisRegion(
-        axis=StateSpaceAxis(
-            id=axis_id,
-            domain=IntegerRangeDomain(lower=value, upper=value),
-        ),
-        coordinate_region=(value, value),
-        count=1,
-        log2_count=0.0,
-    )
-
-
 def _digits_region_component_index(
     *,
     component_index: int,
     volume_class: _DigitsVolumeClass,
 ) -> int:
-    digits = tuple(_digits_transform_indices_by_digit(volume_class))
+    digits = tuple(_digits_ordinal_ranges_by_digit(volume_class))
     try:
         return digits.index(component_index)
     except ValueError as error:
@@ -1872,34 +1806,9 @@ def _digits_region_component_index(
 
 def _digits_region_axis_coordinates(
     *,
-    transform_index: int,
-    grid: _ConstructedAffineGrid,
-    resolution_assignment: AxisAssignment,
+    transform_ordinal: int,
 ) -> Mapping[str, object]:
-    coordinates: dict[str, object]
-    if grid.preset_count is not None:
-        coordinates = {"affine_preset": f"preset-{transform_index}"}
-    else:
-        coordinates = dict(_constructed_affine_indices(transform_index=transform_index, grid=grid))
-    coordinates["canvas_width"] = resolution_assignment.require_axis("W")
-    coordinates["canvas_height"] = resolution_assignment.require_axis("H")
-    return coordinates
-
-
-def _digits_transform_indices_by_digit(
-    volume_class: _DigitsVolumeClass,
-) -> dict[int, tuple[int, ...]]:
-    transform_indices_by_digit: dict[int, list[int]] = {}
-    for state_index in range(volume_class.cardinality):
-        component_index, transform_index = _digits_state_coordinate(
-            state_index=state_index,
-            volume_class=volume_class,
-        )
-        transform_indices_by_digit.setdefault(component_index, []).append(transform_index)
-    return {
-        digit_index: tuple(transform_indices)
-        for digit_index, transform_indices in sorted(transform_indices_by_digit.items())
-    }
+    return {_chart_ordinal_axis_id: transform_ordinal}
 
 
 def _digits_unrealized_request_outcome(
