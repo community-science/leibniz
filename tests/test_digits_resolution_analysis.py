@@ -8,7 +8,6 @@ from benchmark_typing import (
     sample_width,
 )
 
-from leibniz.materialization import AxisAssignment
 from leibniz.observation_generation import (
     GeneratedSampleSet,
 )
@@ -55,6 +54,13 @@ def test_digits_resolution_analysis_finds_minimum_live_resolution() -> None:
     ) == (13, 24)
 
 
+# The native render footprint of a digit at the fixed pitch. Setups place this
+# footprint-sized digit at centre-relative offsets on a larger canvas; the
+# digit pixels are identical to the native rendering, so discriminability is
+# certified once at the native footprint rather than at each placement.
+_native_footprint = 28
+
+
 def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
@@ -62,55 +68,37 @@ def test_digits_resolution_analysis_keeps_reported_console_sample_readable() -> 
         generator,
         shape=1,
         seed=4703,
-        resolution_assignment=AxisAssignment(values={"W": 24, "H": 24}),
     )
     sample = batch.samples[0]
 
-    width = sample_width(sample)
-    height = sample_height(sample)
-    assert width % 24 == 0
-    assert height % 24 == 0
-    for coordinate in sample.variation_coordinates:
-        report = generator.formation.component_discriminability_report(
-            width=width,
-            height=height,
-            variation_coordinates=(coordinate,),
-            minimum_pairwise_l1=generator.manifest.resolution_discriminability_margin(),
-        )
-        assert report.passed
-        assert generator.formation.component_discriminability_passes(
-            width=width,
-            height=height,
-            variation_coordinates=(coordinate,),
-            minimum_pairwise_l1=generator.manifest.resolution_discriminability_margin(),
-        )
+    # The materialized canvas frames a native-footprint digit (canvas >= footprint).
+    assert sample_width(sample) >= _native_footprint
+    assert sample_height(sample) >= _native_footprint
+    report = generator.formation.component_discriminability_report(
+        width=_native_footprint,
+        height=_native_footprint,
+        minimum_pairwise_l1=generator.manifest.resolution_discriminability_margin(),
+    )
+    assert report.passed
 
 
-def test_digits_resolution_analysis_certifies_sampled_training_affines() -> None:
+def test_digits_resolution_analysis_certifies_native_footprint_digits() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
-    batch = _formation_payload(
-        generator,
-        shape=64,
-        seed=123,
-        memory_limit_bytes=100_000_000,
-        resolution_assignment=AxisAssignment(values={"W": 24, "H": 24}),
+    report = generator.formation.component_discriminability_report(
+        width=_native_footprint,
+        height=_native_footprint,
+        minimum_pairwise_l1=generator.manifest.resolution_discriminability_margin(),
     )
 
-    for sample in batch.samples:
-        width = sample_width(sample)
-        height = sample_height(sample)
-        assert width % 24 == 0
-        assert height % 24 == 0
-        for coordinate in sample.variation_coordinates:
-            assert generator.formation.component_discriminability_passes(
-                width=width,
-                height=height,
-                variation_coordinates=(coordinate,),
-                minimum_pairwise_l1=(
-                    generator.manifest.resolution_discriminability_margin()
-                ),
-            )
+    assert report.passed
+    assert report.component_vocabulary_size == 10
+    assert report.minimum_pairwise_l1 >= generator.manifest.resolution_discriminability_margin()
+    assert generator.formation.component_discriminability_passes(
+        width=_native_footprint,
+        height=_native_footprint,
+        minimum_pairwise_l1=generator.manifest.resolution_discriminability_margin(),
+    )
 
 
 def test_digits_resolution_analysis_detects_destroyed_discriminability() -> None:

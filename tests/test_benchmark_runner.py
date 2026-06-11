@@ -122,7 +122,7 @@ def test_training_sampled_competence_matches_measurement_scoring() -> None:
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     request = StateSpaceVolumeRequest(
         minimum=generator.minimum_log2_volume().value,
-        maximum=generator.minimum_log2_volume().value + 0.1,
+        maximum=generator.minimum_log2_volume().value + 1.0,
     )
     batch = generator(
         seed=101,
@@ -603,7 +603,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     def runtime_memory_budget_bytes(_runtime: TensorRuntime) -> int:
         return (
             2
-            * (1 * 16 * 16 + 10)
+            * (1 * 28 * 28 + 10)
             * cast(Any, benchmark_runner)._float32_bytes
             * cast(Any, benchmark_runner)._runtime_batch_memory_safety_factor
         )
@@ -2447,10 +2447,10 @@ def test_training_curriculum_integer_window_rematerializes() -> None:
     assert window_sample.sample_count == 1
     assert window_sample.volume_request == window_request
     assert window_sample.log2_volume == 8.0
-    assert window_sample.samples[0].require_field().shape[1:] == (24, 24)
+    assert window_sample.samples[0].require_field().shape[1:] == (48, 48)
 
 
-def test_digits_integer_window_materializes_constructed_affine_grid() -> None:
+def test_digits_integer_window_materializes_setup_increment() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     generator_impl = cast(Any, generator)
 
@@ -2465,32 +2465,24 @@ def test_digits_integer_window_materializes_constructed_affine_grid() -> None:
     assert volume_class.cardinality == 256
     assert math.isclose(volume_class.log2_volume, 8.0)
     metadata = volume_class.metadata()
-    assert metadata["affine_transform_count"] == 56
+    assert metadata["kind"] == "digits-realized-setup-window"
     assert metadata["minimum_address"] == 255
     assert metadata["maximum_address"] == 510
-    assert metadata["requested_cardinality"] == 256
+    assert metadata["cardinality"] == 256
     assert metadata["realized_cardinality"] == 256
+    assert metadata["maximum_transform_ordinal"] == 51
+    assert metadata["canvas_side"] == 48
+    assert metadata["transform_axes"] == ["x_translation", "y_translation", "scale"]
     assert metadata["construction"] == (
-        "symmetric-digits-over-finite-affine-product-grid"
+        "digit-setups-over-shell-ordered-transform-lattice"
     )
-    assert metadata["affine_grid"] == {
-        "x_translation": 8,
-        "y_translation": 7,
-        "scale": 1,
-        "rotation": 1,
-        "x_shear": 1,
-    }
-    assert metadata["affine_bounds"] == {
-        "x_translation": [-0.15, 0.15],
-        "y_translation": [-0.15, 0.15],
-        "scale": [0.92, 1.08],
-        "rotation": [-0.03, 0.03],
-        "x_shear": [-0.03, 0.03],
-    }
-    assert volume_class.resolution_assignment is not None
-    assert volume_class.resolution_assignment.values == {
-        "W": 24,
-        "H": 24,
+    resolution_assignment = volume_class.resolution_assignment(
+        width_axis=generator.formation.width_axis,
+        height_axis=generator.formation.height_axis,
+    )
+    assert resolution_assignment.values == {
+        "W": 48,
+        "H": 48,
     }
 
 
@@ -2741,7 +2733,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     validation_history = cast(list[dict[str, object]], diagnostics["validation_history"])
     assert validation_history
     cost_summary = cast(dict[str, object], history[0]["cost_summary"])
-    assert cost_summary["training_compute"] == 385024.0
+    assert cost_summary["training_compute"] == 925696.0
     assert "training_compute_per_sample" not in cost_summary
     console_view_model = cast(dict[str, object], history[0]["console_view_model"])
     detail_sections = cast(list[dict[str, object]], console_view_model["detail_sections"])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import math
 import random
 import struct
@@ -54,10 +55,8 @@ from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.state_space import (
     AxisRegion,
     Distinguishability,
-    EnumeratedCellsDomain,
     IntegerRangeDomain,
     ProductRegion,
-    RealGridDomain,
     StateSpaceAmbient,
     StateSpaceAxis,
     StateSpaceRegion,
@@ -88,100 +87,197 @@ _default_generation_memory_limit_bytes = 32_768_000
 _volume_class_digit_count = 10
 _volume_class_canvas_minimum_side = 16
 _volume_class_canvas_side_step = 4
-_volume_class_cardinality_relative_tolerance = 1e-12
-_default_constructed_affine_transform_count = 2
 _canonical_digits_cardinality = _volume_class_digit_count
-_constructed_affine_preset_max_count = 8
-_constructed_affine_translation_bounds = (-0.15, 0.15)
-_constructed_affine_effective_radius_fraction = 0.25
-_constructed_affine_axis_density = 0.25
-_constructed_affine_scale_bounds = (0.92, 1.08)
-_constructed_affine_rotation_bounds = (-0.03, 0.03)
-_constructed_affine_shear_bounds = (-0.03, 0.03)
 _batch_render_curve_sample_count = 25
-_constructed_affine_axis_names = (
-    "x_translation",
-    "y_translation",
-    "scale",
-    "rotation",
-    "x_shear",
-)
+
+# --- Domain-growth chart geometry (fixed render resolution, growing canvas) ---
+#
+# A problem setup is a digit identity placed at a centre-relative offset and a
+# scale. Offsets and scales live on an integer lattice of "transform cells"
+# centred on identity; the canvas is a per-sample materialization detail (the
+# smallest pixel grid that frames the realized cells at the fixed render
+# resolution), not a score-bearing axis. State-space volume counts distinct
+# setups, so the score filtration stays over one fixed-resolution ambient of
+# unbounded extent. Cells are walked in concentric shells growing outward from
+# identity, with within-shell order fixed by a benchmark permutation so the
+# walk is deterministic and global but not a trivially reversible spiral.
+_render_unit_side = 28  # pixels for a scale-1 digit box. The lowest rung frames a
+# single setup, so its canvas equals this footprint; 28px is the MNIST native
+# resolution (an upper bound for future MNIST validation) and clears the digit
+# discriminability margin at the fixed render pitch with headroom.
+_translation_step_pixels = 4  # distinguishable centre-relative shift between cells
+_scale_shell_weight = 2  # one scale level costs this many shells of radius
+_max_scale_level = 3  # scale levels clamp to +/- this
+_scale_ratio_per_level = 0.12  # fractional digit-footprint change per scale level
+_chart_translation_axis_ids = ("x_translation", "y_translation")
+_chart_scale_axis_id = "scale"
+_chart_axis_ids = (*_chart_translation_axis_ids, _chart_scale_axis_id)
 _CurvePoints: TypeAlias = tuple[tuple[float, float], ...]
 
 
+def _cell_radius(tx: int, ty: int, sl: int) -> int:
+    """Return the concentric-shell radius of a transform cell."""
+
+    return max(abs(tx), abs(ty), abs(sl) * _scale_shell_weight)
+
+
+def _shell_cells(radius: int) -> tuple[tuple[int, int, int], ...]:
+    """Return every transform cell whose shell radius equals ``radius``."""
+
+    if radius < 0:
+        raise ObservationGenerationError("shell radius must be nonnegative")
+    if radius == 0:
+        return ((0, 0, 0),)
+    cached = _shell_cells_cache.get(radius)
+    if cached is not None:
+        return cached
+    cells: list[tuple[int, int, int]] = []
+    span = range(-radius, radius + 1)
+    for sl in range(-_max_scale_level, _max_scale_level + 1):
+        if abs(sl) * _scale_shell_weight > radius:
+            continue
+        for tx in span:
+            for ty in span:
+                if _cell_radius(tx, ty, sl) == radius:
+                    cells.append((tx, ty, sl))
+    ordered = tuple(
+        cells[index]
+        for index in sorted(
+            range(len(cells)), key=lambda i: _shell_permutation_key(radius, i)
+        )
+    )
+    _shell_cells_cache[radius] = ordered
+    return ordered
+
+
+def _shell_permutation_key(radius: int, index: int) -> int:
+    digest = hashlib.sha256(
+        f"benchmarks.digits.shell-permutation.v1:{radius}:{index}".encode()
+    ).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
+def _transform_cell_for_ordinal(ordinal: int) -> tuple[int, int, int]:
+    """Return the (x, y, scale) lattice cell at a global transform ordinal."""
+
+    if type(ordinal) is not int or ordinal < 0:
+        raise ObservationGenerationError("transform ordinal must be a nonnegative integer")
+    while len(_chart_cell_prefix) <= ordinal:
+        radius = _chart_prefix_radius[0]
+        _chart_cell_prefix.extend(_shell_cells(radius))
+        _chart_prefix_radius[0] = radius + 1
+    return _chart_cell_prefix[ordinal]
+
+
+_shell_cells_cache: dict[int, tuple[tuple[int, int, int], ...]] = {}
+_chart_cell_prefix: list[tuple[int, int, int]] = []
+_chart_prefix_radius: list[int] = [0]
+
+
 @dataclass(frozen=True, slots=True)
-class _ConstructedAffineGrid:
-    x_translation: int
-    y_translation: int
-    scale: int
-    rotation: int
-    x_shear: int
-    x_translation_bounds: tuple[float, float]
-    y_translation_bounds: tuple[float, float]
-    scale_bounds: tuple[float, float]
-    rotation_bounds: tuple[float, float]
-    x_shear_bounds: tuple[float, float]
-    preset_count: int | None = None
+class _DigitsChart:
+    """The fixed-resolution chart sizing for one realized window.
 
-    @property
-    def counts(self) -> tuple[int, int, int, int, int]:
-        return (
-            self.x_translation,
-            self.y_translation,
-            self.scale,
-            self.rotation,
-            self.x_shear,
-        )
+    The transform enumeration is global; ``canvas_side`` is the only per-window
+    materialization parameter, derived from the deepest realized cell.
+    """
 
-    @property
-    def transform_count(self) -> int:
-        if self.preset_count is not None:
-            return self.preset_count
-        count = 1
-        for axis_count in self.counts:
-            count *= axis_count
-        return count
+    canvas_side: int
 
-    def to_record(self) -> dict[str, int]:
-        record: dict[str, int] = dict(
-            zip(_constructed_affine_axis_names, self.counts, strict=True)
-        )
-        if self.preset_count is not None:
-            record["preset_count"] = self.preset_count
-        return record
+    def normalized_transform(self, ordinal: int) -> tuple[float, float, float]:
+        """Return centre-relative (x_translation, y_translation, scale) in [0, 1]."""
 
-    def bounds_record(self) -> dict[str, list[float]]:
-        return {
-            "x_translation": list(self.x_translation_bounds),
-            "y_translation": list(self.y_translation_bounds),
-            "scale": list(self.scale_bounds),
-            "rotation": list(self.rotation_bounds),
-            "x_shear": list(self.x_shear_bounds),
-        }
+        tx, ty, sl = _transform_cell_for_ordinal(ordinal)
+        scale = _scale_footprint(sl) / self.canvas_side
+        x_translation = (tx * _translation_step_pixels) / self.canvas_side
+        y_translation = (ty * _translation_step_pixels) / self.canvas_side
+        return (x_translation, y_translation, scale)
+
+
+def _scale_footprint(scale_level: int) -> float:
+    """Return the pixel footprint of a scale-1 digit box at a scale level."""
+
+    return _render_unit_side * (1.0 + _scale_ratio_per_level * scale_level)
+
+
+def _shell_size(radius: int) -> int:
+    """Return the number of transform cells at a shell radius (closed form)."""
+
+    if radius <= 0:
+        return 1
+    inner_scale_levels = min(_max_scale_level, (radius - 1) // _scale_shell_weight)
+    size = (2 * inner_scale_levels + 1) * 8 * radius
+    if radius % _scale_shell_weight == 0 and radius // _scale_shell_weight <= _max_scale_level:
+        size += 2 * (2 * radius + 1) ** 2
+    return size
+
+
+def _radius_for_ordinal(ordinal: int) -> int:
+    """Return the shell radius that contains a global transform ordinal."""
+
+    cumulative = 0
+    radius = 0
+    while True:
+        cumulative += _shell_size(radius)
+        if ordinal < cumulative:
+            return radius
+        radius += 1
+
+
+def _chart_canvas_side_for_max_ordinal(max_ordinal: int) -> int:
+    """Return the smallest stepped square canvas framing cells up to an ordinal.
+
+    Every cell up to ``max_ordinal`` has shell radius at most the radius of the
+    shell containing it, so a canvas sized for that radius's reach frames them
+    all. This is closed form in the radius, so it stays fast at any depth.
+    """
+
+    radius = _radius_for_ordinal(max_ordinal)
+    max_translation_steps = radius
+    max_scale_level = min(_max_scale_level, radius // _scale_shell_weight)
+    footprint = _scale_footprint(max_scale_level)
+    side = footprint + 2.0 * max_translation_steps * _translation_step_pixels
+    side = max(float(_render_unit_side), side)
+    stepped = math.ceil(side / _volume_class_canvas_side_step) * _volume_class_canvas_side_step
+    return int(stepped)
 
 
 @dataclass(frozen=True, slots=True)
 class _DigitsVolumeClass:
-    affine_grid: _ConstructedAffineGrid
-    requested_cardinality: int
-    minimum_address: int = 0
-    resolution_assignment: AxisAssignment | None = None
+    """A realized window: a contiguous global-address increment plus its canvas.
+
+    The window covers global addresses ``[minimum_address, minimum_address +
+    cardinality)``; each address ``a`` is the setup ``(digit a % 10, transform
+    a // 10)``. Volume is the number of distinct setups in the increment.
+    """
+
+    minimum_address: int
+    cardinality: int
+    canvas_side: int
+
+    def __post_init__(self) -> None:
+        if type(self.minimum_address) is not int or self.minimum_address < 0:
+            raise ObservationGenerationError("minimum_address must be a nonnegative integer")
+        if type(self.cardinality) is not int or self.cardinality < 1:
+            raise ObservationGenerationError("cardinality must be a positive integer")
+        if type(self.canvas_side) is not int or self.canvas_side < _render_unit_side:
+            raise ObservationGenerationError("canvas_side must be at least the unit render side")
 
     @property
     def digit_count(self) -> int:
         return _volume_class_digit_count
 
     @property
-    def affine_transform_count(self) -> int:
-        return self.affine_grid.transform_count
-
-    @property
-    def cardinality(self) -> int:
-        return self.requested_cardinality
-
-    @property
     def maximum_address(self) -> int:
-        return self.minimum_address + self.requested_cardinality - 1
+        return self.minimum_address + self.cardinality - 1
+
+    @property
+    def maximum_transform_ordinal(self) -> int:
+        return self.maximum_address // _volume_class_digit_count
+
+    @property
+    def chart(self) -> _DigitsChart:
+        return _DigitsChart(canvas_side=self.canvas_side)
 
     @property
     def log2_volume(self) -> float:
@@ -190,37 +286,34 @@ class _DigitsVolumeClass:
     def measure(self) -> StateSpaceVolumeValue:
         return _volume_value(self.log2_volume)
 
+    def resolution_assignment(self, *, width_axis: str, height_axis: str) -> AxisAssignment:
+        return AxisAssignment(values={width_axis: self.canvas_side, height_axis: self.canvas_side})
+
     def metadata(self) -> dict[str, object]:
-        metadata: dict[str, object] = {
-            "kind": "digits-requested-finite-volume-class",
+        return {
+            "kind": "digits-realized-setup-window",
             "digit_count": self.digit_count,
             "output_digit_count": _volume_class_digit_count,
-            "affine_transform_count": self.affine_transform_count,
-            "latent_cardinality": self.cardinality,
             "minimum_address": self.minimum_address,
             "maximum_address": self.maximum_address,
-            "requested_cardinality": self.requested_cardinality,
+            "cardinality": self.cardinality,
             "realized_cardinality": self.cardinality,
-            "affine_product_cardinality": self.digit_count * self.affine_transform_count,
-            "construction": "symmetric-digits-over-finite-affine-product-grid",
-            "affine_grid": self.affine_grid.to_record(),
-            "affine_bounds": self.affine_grid.bounds_record(),
-            "affine_parameters": list(_constructed_affine_axis_names),
-        }
-        if self.resolution_assignment is not None:
-            width = self.resolution_assignment.require_axis("W")
-            height = self.resolution_assignment.require_axis("H")
-            metadata["oracle_inference_compute"] = {
+            "maximum_transform_ordinal": self.maximum_transform_ordinal,
+            "canvas_side": self.canvas_side,
+            "transform_axes": list(_chart_axis_ids),
+            "construction": "digit-setups-over-shell-ordered-transform-lattice",
+            "oracle_inference_compute": {
                 "kind": "oracle-inference-compute-reference-v1",
                 "unit": "abstract-ops",
-                "value": width * height,
+                "value": self.canvas_side * self.canvas_side,
                 "components": {
-                    "height": height,
-                    "width": width,
-                    "pixel_count": width * height,
+                    "height": self.canvas_side,
+                    "width": self.canvas_side,
+                    "pixel_count": self.canvas_side * self.canvas_side,
                 },
-            }
-        return metadata
+            },
+        }
+
 
 _digit_strokes: tuple[tuple[_CurvePoints, ...], ...] = (
     (
@@ -510,9 +603,7 @@ class Generator:
                             volume_class=volume_class,
                         ),
                         axis_coordinates=_digits_region_axis_coordinates(
-                            transform_index=transform_index,
-                            grid=volume_class.affine_grid,
-                            resolution_assignment=resolved_resolution_assignment,
+                            transform_ordinal=transform_index,
                         ),
                         variation_coordinates=variation_coordinates,
                         variation_values=variation_values,
@@ -557,9 +648,7 @@ class Generator:
                     volume_class=volume_class,
                 ),
                 axis_coordinates=_digits_region_axis_coordinates(
-                    transform_index=transform_indices[index],
-                    grid=volume_class.affine_grid,
-                    resolution_assignment=resolution_assignment,
+                    transform_ordinal=transform_indices[index],
                 ),
             )
             for index, component_index in enumerate(component_indices)
@@ -622,22 +711,18 @@ class Generator:
             raise ObservationGenerationError("component_indices length must match sample_count")
         if len(transform_indices) != len(plans):
             raise ObservationGenerationError("transform_indices length must match sample_count")
+        chart = volume_class.chart
         with _timing_span(timing, timing_phase, samples=len(plans)):
             for index, _plan in enumerate(plans):
                 component_index = component_indices[index]
-                transform_index = transform_indices[index]
-                if (
-                    transform_index < 0
-                    or transform_index >= volume_class.affine_transform_count
-                ):
-                    raise ObservationGenerationError(
-                        "transform index is outside active transform set"
-                    )
+                transform_ordinal = transform_indices[index]
+                if transform_ordinal < 0:
+                    raise ObservationGenerationError("transform ordinal must be nonnegative")
                 coordinate = _constructed_variation_coordinate_record(
                     transform=transform,
                     component_index=component_index,
-                    transform_index=transform_index,
-                    grid=volume_class.affine_grid,
+                    transform_ordinal=transform_ordinal,
+                    chart=chart,
                 )
                 coordinates = (coordinate,)
                 samples.append(
@@ -646,8 +731,7 @@ class Generator:
                             "kind": "constructed-field-variation-transform-samples",
                             "bounds": transform_record,
                             "volume_class": volume_class.metadata(),
-                            "transform_index": transform_index,
-                            "transform_count": volume_class.affine_transform_count,
+                            "transform_ordinal": transform_ordinal,
                             "coordinates": [dict(item) for item in coordinates],
                         },
                         coordinates,
@@ -775,8 +859,6 @@ class Generator:
                 width=width,
                 height=height,
                 digit_count=volume_class.digit_count,
-                transform=self.formation.variation_transform,
-                grid=volume_class.affine_grid,
                 seed=seed,
                 sample_indices=sample_indices,
                 cardinality=volume_class.cardinality,
@@ -826,8 +908,6 @@ class Generator:
         width: int,
         height: int,
         digit_count: int,
-        transform: VariationTransformDeclaration,
-        grid: _ConstructedAffineGrid,
         seed: int,
         sample_indices: tuple[int, ...],
         cardinality: int,
@@ -839,6 +919,11 @@ class Generator:
         _require_positive_integer(width, "width")
         _require_positive_integer(height, "height")
         _require_positive_integer(digit_count, "digit_count")
+        chart = _DigitsChart(canvas_side=width)
+        maximum_ordinal = (minimum_address + cardinality - 1) // digit_count
+        transform_table = tuple(
+            chart.normalized_transform(ordinal) for ordinal in range(maximum_ordinal + 1)
+        )
         if digit_count > len(self.formation.components):
             raise TensorRuntimeError("digit_count exceeds component vocabulary")
         if self.formation.channel_count != 1:
@@ -895,8 +980,7 @@ class Generator:
                     cardinality=cardinality,
                     minimum_address=minimum_address,
                     digit_count=digit_count,
-                    transform=transform,
-                    grid=grid,
+                    transform_table=transform_table,
                     component_mark_counts=tuple(component_mark_counts),
                     component_mark_values=tuple(
                         tuple(row) for row in component_mark_values
@@ -939,20 +1023,12 @@ class Generator:
             canonical_variation=variation_extent_value == 0.0,
         ).log2_volume
 
-    def constructed_volume_class_log2_volume(
-        self,
-        *,
-        affine_transform_count: int,
-    ) -> float:
-        """Return the exact log2 count of constructed single-digit choices."""
-
-        return self._volume_class_for_requested_cardinality(
-            requested_cardinality=_volume_class_digit_count * affine_transform_count,
-            affine_transform_count=affine_transform_count,
-        ).log2_volume
-
     def minimum_log2_volume(self) -> StateSpaceVolumeValue:
-        """Return the smallest score-bearing Digits log2 volume."""
+        """Return the smallest score-bearing Digits log2 volume.
+
+        The task is always 10-way digit classification; a window with one setup
+        is the floor, so the minimum is ~0 bits, not the 10-way base.
+        """
 
         return _volume_value(0.0)
 
@@ -961,21 +1037,30 @@ class Generator:
         *,
         request: StateSpaceVolumeRequest,
     ) -> _DigitsVolumeClass | None:
-        """Return the integer address shell represented by a volume request."""
+        """Return the realized setup-window increment for a volume request.
+
+        The window covers zero-based setup addresses ``[N(min)-1, N(max)-1)``
+        where ``N(level) = round(2 ** level)`` is the cumulative setup count,
+        so consecutive curriculum windows realize disjoint new setups while
+        the origin setup remains address 0.
+        """
 
         if request.maximum < self.minimum_log2_volume().value:
             return None
-        requested_cardinality = _ceil_volume_class_cardinality(
+        lower_count = _cumulative_setup_count(
             max(request.minimum, self.minimum_log2_volume().value)
         )
-        maximum_cardinality = _floor_volume_class_cardinality(request.maximum)
-        if maximum_cardinality < requested_cardinality:
+        upper_count = _cumulative_setup_count(request.maximum)
+        lower = max(0, lower_count - 1)
+        upper = max(0, upper_count - 1)
+        if upper <= lower:
             return None
-        volume_class = self._volume_class_for_requested_cardinality(
-            requested_cardinality=requested_cardinality,
-            resolution_assignment=self._resolution_assignment_for_volume_request(
-                request
-            ),
+        cardinality = upper - lower
+        max_ordinal = (upper - 1) // _volume_class_digit_count
+        volume_class = _DigitsVolumeClass(
+            minimum_address=lower,
+            cardinality=cardinality,
+            canvas_side=_chart_canvas_side_for_max_ordinal(max_ordinal),
         )
         if not request.contains(volume_class.measure()):
             return None
@@ -990,27 +1075,35 @@ class Generator:
 
         if not math.isfinite(maximum_cost) or maximum_cost <= 0.0:
             raise ObservationGenerationError("maximum_cost must be positive and finite")
-        sides = _oracle_reference_canvas_sides(maximum_cost=maximum_cost)
-        points: list[dict[str, object]] = [
-            _oracle_reference_point_for_cardinality(
-                cardinality=1,
-                side=_volume_class_canvas_minimum_side,
-            )
-        ]
-        for side in sides:
-            bounds = _constructed_affine_bounds_for_canvas_side(side)
-            capacities = _constructed_affine_axis_capacities(
-                bounds=bounds,
-                side=side,
-            )
-            sample_cardinality = _volume_class_digit_count * math.prod(capacities)
+        points: list[dict[str, object]] = []
+        max_ordinal = 0
+        while True:
+            canvas_side = _chart_canvas_side_for_max_ordinal(max_ordinal)
+            cost = canvas_side * canvas_side
+            cardinality = _volume_class_digit_count * (max_ordinal + 1)
+            log2_volume = math.log2(cardinality)
             points.append(
-                _oracle_reference_point_for_cardinality(
-                    cardinality=sample_cardinality,
-                    side=side,
-                    affine_axis_capacities=capacities,
-                )
+                {
+                    "log2_volume": log2_volume,
+                    "score": log2_volume,
+                    "cost": float(cost),
+                    "metadata": {
+                        "kind": "oracle-inference-compute-reference-v1",
+                        "unit": "abstract-ops",
+                        "value": cost,
+                        "components": {
+                            "height": canvas_side,
+                            "width": canvas_side,
+                            "pixel_count": cost,
+                            "sample_cardinality": cardinality,
+                            "maximum_transform_ordinal": max_ordinal,
+                        },
+                    },
+                }
             )
+            if cost >= maximum_cost and len(points) >= 2:
+                break
+            max_ordinal = max_ordinal * 2 + 1
         return tuple(points)
 
     def _default_volume_class(
@@ -1018,65 +1111,18 @@ class Generator:
         *,
         canonical_variation: bool = False,
     ) -> _DigitsVolumeClass:
-        return self._volume_class_for_affine_transform_count(
-            affine_transform_count=(
-                1 if canonical_variation else _default_constructed_affine_transform_count
-            ),
-        )
+        """Return the default preview window: identity-only, or the first shell."""
 
-    def _volume_class_for_affine_transform_count(
-        self,
-        *,
-        affine_transform_count: int,
-        resolution_assignment: AxisAssignment | None = None,
-    ) -> _DigitsVolumeClass:
-        return self._volume_class_for_requested_cardinality(
-            requested_cardinality=_volume_class_digit_count * affine_transform_count,
-            affine_transform_count=affine_transform_count,
-            minimum_address=0,
-            resolution_assignment=resolution_assignment,
+        cardinality = (
+            _volume_class_digit_count
+            if canonical_variation
+            else 2 * _volume_class_digit_count
         )
-
-    def _volume_class_for_requested_cardinality(
-        self,
-        *,
-        requested_cardinality: int,
-        affine_transform_count: int | None = None,
-        minimum_address: int | None = None,
-        resolution_assignment: AxisAssignment | None = None,
-    ) -> _DigitsVolumeClass:
-        _require_generation_positive_integer(
-            requested_cardinality,
-            "requested_cardinality",
-        )
-        if resolution_assignment is None:
-            resolution_assignment = self._resolution_assignment_for_requested_cardinality(
-                requested_cardinality
-            )
-        shell_minimum_address = (
-            requested_cardinality - 1 if minimum_address is None else minimum_address
-        )
-        if type(shell_minimum_address) is not int or shell_minimum_address < 0:
-            raise ObservationGenerationError("minimum_address must be a nonnegative integer")
-        if affine_transform_count is None:
-            affine_transform_count = _affine_transform_count_for_address_range(
-                minimum_address=shell_minimum_address,
-                cardinality=requested_cardinality,
-            )
-            affine_grid = _constructed_affine_grid_for_minimum_transform_count(
-                minimum_transform_count=affine_transform_count,
-                resolution_assignment=resolution_assignment,
-            )
-        else:
-            affine_grid = _constructed_affine_grid(
-                affine_transform_count,
-                resolution_assignment=resolution_assignment,
-            )
+        max_ordinal = (cardinality - 1) // _volume_class_digit_count
         return _DigitsVolumeClass(
-            affine_grid=affine_grid,
-            requested_cardinality=requested_cardinality,
-            minimum_address=shell_minimum_address,
-            resolution_assignment=resolution_assignment,
+            minimum_address=0,
+            cardinality=cardinality,
+            canvas_side=_chart_canvas_side_for_max_ordinal(max_ordinal),
         )
 
     def _materialization_plan(
@@ -1307,12 +1353,16 @@ class Generator:
                         minimum_log2_volume=self.minimum_log2_volume().value,
                     ),
                 )
-            resolution_assignment = requested_volume_class.resolution_assignment
-            if resolution_assignment is None:
-                raise ObservationGenerationError(
-                    "Digits volume shell is missing a resolution assignment"
-                )
+            resolution_assignment = requested_volume_class.resolution_assignment(
+                width_axis=self.formation.width_axis,
+                height_axis=self.formation.height_axis,
+            )
             volume_class = requested_volume_class
+        if resolution_assignment is None:
+            resolution_assignment = volume_class.resolution_assignment(
+                width_axis=self.formation.width_axis,
+                height_axis=self.formation.height_axis,
+            )
         if runtime is not None and outcome_ids is None:
             raise ObservationGenerationError("tensor generation requires outcome_ids")
         resolved_resolution_assignment = self._generation_resolution_assignment(
@@ -1323,7 +1373,6 @@ class Generator:
         )
         region = _digits_state_space_region(
             volume_class=volume_class,
-            resolution_assignment=resolved_resolution_assignment,
             margin=self.manifest.resolution_discriminability_margin(),
         )
         fields = None
@@ -1381,54 +1430,6 @@ class Generator:
             region=region,
         )
 
-    def _resolution_assignment_for_volume_request(
-        self,
-        request: StateSpaceVolumeRequest,
-    ) -> AxisAssignment:
-        minimum_log2_volume = self.minimum_log2_volume().value
-        if request.maximum < minimum_log2_volume:
-            side = _volume_class_canvas_minimum_side
-        else:
-            minimum_cardinality = _ceil_volume_class_cardinality(
-                max(request.minimum, minimum_log2_volume)
-            )
-            maximum_cardinality = _floor_volume_class_cardinality(request.maximum)
-            side = _volume_class_canvas_side_for_cardinality_range(
-                minimum_cardinality=minimum_cardinality,
-                maximum_cardinality=maximum_cardinality,
-            )
-        minimum_assignment = self.materialization.minimum_resolution()
-        values = dict(minimum_assignment.values)
-        values[self.formation.width_axis] = max(
-            values.get(self.formation.width_axis, 1),
-            side,
-        )
-        values[self.formation.height_axis] = max(
-            values.get(self.formation.height_axis, 1),
-            side,
-        )
-        return AxisAssignment(values=values)
-
-    def _resolution_assignment_for_requested_cardinality(
-        self,
-        requested_cardinality: int,
-    ) -> AxisAssignment:
-        _require_generation_positive_integer(
-            requested_cardinality,
-            "requested_cardinality",
-        )
-        minimum_assignment = self.materialization.minimum_resolution()
-        width_axis = self.formation.width_axis
-        height_axis = self.formation.height_axis
-        side = _volume_class_canvas_side_for_cardinality_range(
-            minimum_cardinality=requested_cardinality,
-            maximum_cardinality=requested_cardinality,
-        )
-        values = dict(minimum_assignment.values)
-        values[width_axis] = max(values.get(width_axis, 1), side)
-        values[height_axis] = max(values.get(height_axis, 1), side)
-        return AxisAssignment(values=values)
-
 
 def _sample_shape(shape: int | Sequence[int] | None) -> tuple[int, ...]:
     if shape is None:
@@ -1473,168 +1474,27 @@ def _volume_value(log2_volume: float) -> StateSpaceVolumeValue:
     )
 
 
-def _volume_class_canvas_side_for_cardinality_range(
-    *,
-    minimum_cardinality: int,
-    maximum_cardinality: int,
-) -> int:
-    _require_generation_positive_integer(minimum_cardinality, "minimum_cardinality")
-    _require_generation_positive_integer(maximum_cardinality, "maximum_cardinality")
-    if maximum_cardinality < minimum_cardinality:
-        raise ObservationGenerationError(
-            "volume cardinality range maximum is below minimum"
-        )
-    maximum_transform_count = _affine_transform_count_for_sample_cardinality(
-        maximum_cardinality
-    )
-    required_transform_count = maximum_transform_count
-    side = _volume_class_canvas_minimum_side
-    while True:
-        bounds = _constructed_affine_bounds_for_canvas_side(side)
-        capacities = _constructed_affine_axis_capacities(bounds=bounds, side=side)
-        if math.prod(capacities) >= required_transform_count:
-            assignment = AxisAssignment(values={"H": side, "W": side})
-            if _constructed_affine_grid_in_transform_count_range(
-                minimum_transform_count=required_transform_count,
-                maximum_transform_count=max(
-                    required_transform_count,
-                    required_transform_count * 2,
-                ),
-                resolution_assignment=assignment,
-            ) is not None:
-                return side
-        side += _volume_class_canvas_side_step
+def _cumulative_setup_count(level: float) -> int:
+    """Return the cumulative distinguishable-setup count at a log2-volume level.
+
+    ``N(level) = round(2 ** level)`` from the origin upward,
+    so the curriculum window ``[i, i+1]`` realizes the address increment
+    ``[N(i), N(i+1))`` and consecutive windows are disjoint.
+    """
+
+    if not math.isfinite(level):
+        return 0
+    if level <= 0.0:
+        return 1
+    return round(2.0**level)
 
 
-def _oracle_reference_canvas_sides(*, maximum_cost: float) -> tuple[int, ...]:
-    if not math.isfinite(maximum_cost) or maximum_cost <= 0.0:
-        raise ObservationGenerationError("maximum_cost must be positive and finite")
-    sides = {_volume_class_canvas_minimum_side}
-    exponent = 0
-    while 10**exponent <= maximum_cost:
-        for multiplier in (1, 2, 5):
-            target_cost = multiplier * 10**exponent
-            side = _volume_class_canvas_side_for_cost(target_cost)
-            sides.add(side)
-            if side * side >= maximum_cost:
-                return tuple(sorted(sides))
-        exponent += 1
-    sides.add(_volume_class_canvas_side_for_cost(maximum_cost))
-    return tuple(sorted(sides))
-
-
-def _oracle_reference_point_for_cardinality(
-    *,
-    cardinality: int,
-    side: int,
-    affine_axis_capacities: tuple[int, int, int, int, int] | None = None,
-) -> dict[str, object]:
-    _require_generation_positive_integer(cardinality, "cardinality")
-    _require_generation_positive_integer(side, "side")
-    log2_volume = math.log2(cardinality)
-    cost = side * side
-    components: dict[str, object] = {
-        "height": side,
-        "width": side,
-        "pixel_count": cost,
-        "sample_cardinality": cardinality,
-    }
-    if affine_axis_capacities is not None:
-        components["affine_axis_capacities"] = {
-            "x_translation": affine_axis_capacities[0],
-            "y_translation": affine_axis_capacities[1],
-            "scale": affine_axis_capacities[2],
-            "rotation": affine_axis_capacities[3],
-            "x_shear": affine_axis_capacities[4],
-        }
-    return {
-        "log2_volume": log2_volume,
-        "score": log2_volume,
-        "cost": cost,
-        "metadata": {
-            "kind": "oracle-inference-compute-reference-v1",
-            "unit": "abstract-ops",
-            "value": cost,
-            "components": components,
-        },
-    }
-
-
-def _volume_class_canvas_side_for_cost(cost: float) -> int:
-    if not math.isfinite(cost) or cost <= 0.0:
-        raise ObservationGenerationError("cost must be positive and finite")
-    side = max(_volume_class_canvas_minimum_side, math.ceil(math.sqrt(cost)))
-    offset = max(0, side - _volume_class_canvas_minimum_side)
-    steps = math.ceil(offset / _volume_class_canvas_side_step)
-    return _volume_class_canvas_minimum_side + steps * _volume_class_canvas_side_step
-
-
-def _ceil_volume_class_cardinality(log2_volume: float) -> int:
-    value = _volume_class_cardinality_float(log2_volume)
-    tolerance = max(1.0, abs(value)) * _volume_class_cardinality_relative_tolerance
-    return max(1, math.ceil(value - tolerance))
-
-
-def _floor_volume_class_cardinality(log2_volume: float) -> int:
-    value = _volume_class_cardinality_float(log2_volume)
-    tolerance = max(1.0, abs(value)) * _volume_class_cardinality_relative_tolerance
-    return max(1, math.floor(value + tolerance))
-
-
-def _volume_class_cardinality_float(log2_volume: float) -> float:
-    if not math.isfinite(float(log2_volume)):
-        raise ObservationGenerationError("volume must be finite")
-    return 2.0**log2_volume
-
-
-def _affine_transform_count_for_sample_cardinality(cardinality: int) -> int:
-    _require_generation_positive_integer(cardinality, "cardinality")
-    digit_count = min(_volume_class_digit_count, cardinality)
-    return max(1, math.ceil(cardinality / digit_count))
-
-
-def _affine_transform_count_for_address_range(
-    *,
-    minimum_address: int,
-    cardinality: int,
-) -> int:
-    if type(minimum_address) is not int or minimum_address < 0:
-        raise ObservationGenerationError("minimum_address must be a nonnegative integer")
-    _require_generation_positive_integer(cardinality, "cardinality")
-    maximum_address = minimum_address + cardinality - 1
-    return maximum_address // _volume_class_digit_count + 1
-
-
-def _constructed_affine_grid_for_minimum_transform_count(
-    *,
-    minimum_transform_count: int,
-    resolution_assignment: AxisAssignment | None,
-) -> _ConstructedAffineGrid:
-    _require_generation_positive_integer(
-        minimum_transform_count,
-        "minimum_transform_count",
-    )
-    assignment = (
-        resolution_assignment
-        if resolution_assignment is not None
-        else AxisAssignment(
-            values={
-                "H": _volume_class_canvas_minimum_side,
-                "W": _volume_class_canvas_minimum_side,
-            }
-        )
-    )
-    maximum_transform_count = max(minimum_transform_count, minimum_transform_count * 2)
-    grid = _constructed_affine_grid_in_transform_count_range(
-        minimum_transform_count=minimum_transform_count,
-        maximum_transform_count=maximum_transform_count,
-        resolution_assignment=assignment,
-    )
-    if grid is None:
-        raise ObservationGenerationError(
-            "requested sample cardinality exceeds resolution-aware affine grid capacity"
-        )
-    return grid
+_chart_ordinal_axis_id = "transform-ordinal"
+# Practical representable bound on transform ordinals; the global chart is
+# conceptually unbounded, but the region grammar needs a finite, window-stable
+# axis domain so increments share an identical axis declaration. Requests beyond
+# this resolve as exhausted capacity. ~10^12 setups is effectively unbounded.
+_chart_ordinal_domain_extent = 2**40
 
 
 def _digits_state_coordinate(
@@ -1648,23 +1508,24 @@ def _digits_state_coordinate(
         raise ObservationGenerationError("state_index must be below cardinality")
     sample_address = volume_class.minimum_address + state_index
     component_index = sample_address % _volume_class_digit_count
-    transform_index = sample_address // _volume_class_digit_count
-    if transform_index >= volume_class.affine_transform_count:
-        raise ObservationGenerationError("sample address exceeds active transform set")
-    return (component_index, transform_index)
+    transform_ordinal = sample_address // _volume_class_digit_count
+    return (component_index, transform_ordinal)
 
 
-def _digits_state_space_region(
-    *,
-    volume_class: _DigitsVolumeClass,
-    resolution_assignment: AxisAssignment,
-    margin: float,
-) -> StateSpaceRegion:
-    width = resolution_assignment.require_axis("W")
-    height = resolution_assignment.require_axis("H")
-    ambient = StateSpaceAmbient(
+def _digits_ambient(*, margin: float) -> StateSpaceAmbient:
+    """Return the fixed-resolution, unbounded-extent Digits ambient.
+
+    The field domain declares the render pitch, not a concrete canvas: the
+    canvas is a per-sample materialization detail, so every realized window
+    shares this one ambient and the score filtration stays coherent.
+    """
+
+    return StateSpaceAmbient(
         field_domain_kind="lattice-2d",
-        field_domain={"height": height, "width": width},
+        field_domain={
+            "render_unit_side": _render_unit_side,
+            "translation_step_pixels": _translation_step_pixels,
+        },
         field_codomain_id="unit-intensity",
         distinguishability=Distinguishability(
             kind="metric-resolution",
@@ -1673,24 +1534,45 @@ def _digits_state_space_region(
             certificate_id="component-discriminability-margin",
         ),
     )
-    transform_indices_by_digit = _digits_transform_indices_by_digit(volume_class)
+
+
+def _digits_ordinal_ranges_by_digit(
+    volume_class: _DigitsVolumeClass,
+) -> dict[int, tuple[int, int]]:
+    """Return each realized digit's contiguous transform-ordinal interval.
+
+    Because addresses are ``10 * ordinal + digit``, a contiguous address
+    increment gives every digit a contiguous ordinal interval, so disjoint
+    windows yield disjoint per-digit intervals.
+    """
+
+    lower_address = volume_class.minimum_address
+    upper_address = volume_class.minimum_address + volume_class.cardinality
+    ranges: dict[int, tuple[int, int]] = {}
+    for digit_index in range(_volume_class_digit_count):
+        # ordinals o with lower_address <= 10 * o + digit < upper_address.
+        ordinal_lower = max(0, -(-(lower_address - digit_index) // _volume_class_digit_count))
+        ordinal_upper = -(-(upper_address - digit_index) // _volume_class_digit_count) - 1
+        if ordinal_upper >= ordinal_lower:
+            ranges[digit_index] = (ordinal_lower, ordinal_upper)
+    return dict(sorted(ranges.items()))
+
+
+def _digits_state_space_region(
+    *,
+    volume_class: _DigitsVolumeClass,
+    margin: float,
+) -> StateSpaceRegion:
     components = tuple(
-        _digits_product_region(
-            digit_index=digit_index,
-            transform_indices=transform_indices,
-            grid=volume_class.affine_grid,
-            width=width,
-            height=height,
-        )
-        for digit_index, transform_indices in transform_indices_by_digit.items()
+        _digits_product_region(digit_index=digit_index, ordinal_range=ordinal_range)
+        for digit_index, ordinal_range in _digits_ordinal_ranges_by_digit(volume_class).items()
     )
     return StateSpaceRegion(
         id=(
             "benchmarks.digits.realized-region."
-            f"addresses-{volume_class.minimum_address}-{volume_class.maximum_address}."
-            f"canvas-{width}x{height}"
+            f"addresses-{volume_class.minimum_address}-{volume_class.maximum_address}"
         ),
-        ambient=ambient,
+        ambient=_digits_ambient(margin=margin),
         components=components,
         union_rule="disjoint-union",
         volume=volume_class.cardinality,
@@ -1701,32 +1583,24 @@ def _digits_state_space_region(
 def _digits_product_region(
     *,
     digit_index: int,
-    transform_indices: tuple[int, ...],
-    grid: _ConstructedAffineGrid,
-    width: int,
-    height: int,
+    ordinal_range: tuple[int, int],
 ) -> ProductRegion:
-    if not transform_indices:
-        raise ObservationGenerationError("digits region stratum must not be empty")
-    axis_regions = (
-        *_digits_transform_axis_regions(
-            transform_indices=transform_indices,
-            grid=grid,
+    lower, upper = ordinal_range
+    count = upper - lower + 1
+    axis_region = AxisRegion(
+        axis=StateSpaceAxis(
+            id=_chart_ordinal_axis_id,
+            domain=IntegerRangeDomain(lower=0, upper=_chart_ordinal_domain_extent),
         ),
-        _singleton_integer_axis_region("canvas_width", width),
-        _singleton_integer_axis_region("canvas_height", height),
-    )
-    measure_rule = (
-        "product-of-counts"
-        if math.prod(axis_region.count for axis_region in axis_regions)
-        == len(transform_indices)
-        else "benchmark-computed-finite-count"
+        coordinate_region=(lower, upper),
+        count=count,
+        log2_count=math.log2(count),
     )
     return ProductRegion(
-        axis_regions=axis_regions,
-        measure_rule=measure_rule,
-        volume=len(transform_indices),
-        log2_volume=math.log2(len(transform_indices)),
+        axis_regions=(axis_region,),
+        measure_rule="product-of-counts",
+        volume=count,
+        log2_volume=math.log2(count),
         stratum_id=f"digit-{digit_index}",
         stratum_target={
             "digit_index": digit_index,
@@ -1735,94 +1609,12 @@ def _digits_product_region(
     )
 
 
-def _digits_transform_axis_regions(
-    *,
-    transform_indices: tuple[int, ...],
-    grid: _ConstructedAffineGrid,
-) -> tuple[AxisRegion, ...]:
-    if grid.preset_count is not None:
-        cells = tuple(f"preset-{index}" for index in range(grid.preset_count))
-        selected = tuple(f"preset-{index}" for index in transform_indices)
-        return (
-            AxisRegion(
-                axis=StateSpaceAxis(
-                    id="affine_preset",
-                    domain=EnumeratedCellsDomain(cells=cells),
-                ),
-                coordinate_region=selected,
-                count=len(selected),
-                log2_count=math.log2(len(selected)),
-            ),
-        )
-    indices_by_axis = {
-        axis_name: tuple(
-            _constructed_affine_indices(transform_index=transform_index, grid=grid)[axis_name]
-            for transform_index in transform_indices
-        )
-        for axis_name in _constructed_affine_axis_names
-    }
-    bounds_by_axis = {
-        "x_translation": grid.x_translation_bounds,
-        "y_translation": grid.y_translation_bounds,
-        "scale": grid.scale_bounds,
-        "rotation": grid.rotation_bounds,
-        "x_shear": grid.x_shear_bounds,
-    }
-    counts_by_axis = dict(zip(_constructed_affine_axis_names, grid.counts, strict=True))
-    return tuple(
-        _real_grid_axis_region(
-            axis_id=axis_name,
-            bounds=bounds_by_axis[axis_name],
-            domain_count=counts_by_axis[axis_name],
-            selected_indices=indices_by_axis[axis_name],
-        )
-        for axis_name in _constructed_affine_axis_names
-    )
-
-
-def _real_grid_axis_region(
-    *,
-    axis_id: str,
-    bounds: tuple[float, float],
-    domain_count: int,
-    selected_indices: tuple[int, ...],
-) -> AxisRegion:
-    lower = min(selected_indices)
-    upper = max(selected_indices)
-    count = upper - lower + 1
-    return AxisRegion(
-        axis=StateSpaceAxis(
-            id=axis_id,
-            domain=RealGridDomain(
-                lower=bounds[0],
-                upper=bounds[1],
-                count=domain_count,
-            ),
-        ),
-        coordinate_region=(lower, upper),
-        count=count,
-        log2_count=math.log2(count),
-    )
-
-
-def _singleton_integer_axis_region(axis_id: str, value: int) -> AxisRegion:
-    return AxisRegion(
-        axis=StateSpaceAxis(
-            id=axis_id,
-            domain=IntegerRangeDomain(lower=value, upper=value),
-        ),
-        coordinate_region=(value, value),
-        count=1,
-        log2_count=0.0,
-    )
-
-
 def _digits_region_component_index(
     *,
     component_index: int,
     volume_class: _DigitsVolumeClass,
 ) -> int:
-    digits = tuple(_digits_transform_indices_by_digit(volume_class))
+    digits = tuple(_digits_ordinal_ranges_by_digit(volume_class))
     try:
         return digits.index(component_index)
     except ValueError as error:
@@ -1833,34 +1625,9 @@ def _digits_region_component_index(
 
 def _digits_region_axis_coordinates(
     *,
-    transform_index: int,
-    grid: _ConstructedAffineGrid,
-    resolution_assignment: AxisAssignment,
+    transform_ordinal: int,
 ) -> Mapping[str, object]:
-    coordinates: dict[str, object]
-    if grid.preset_count is not None:
-        coordinates = {"affine_preset": f"preset-{transform_index}"}
-    else:
-        coordinates = dict(_constructed_affine_indices(transform_index=transform_index, grid=grid))
-    coordinates["canvas_width"] = resolution_assignment.require_axis("W")
-    coordinates["canvas_height"] = resolution_assignment.require_axis("H")
-    return coordinates
-
-
-def _digits_transform_indices_by_digit(
-    volume_class: _DigitsVolumeClass,
-) -> dict[int, tuple[int, ...]]:
-    transform_indices_by_digit: dict[int, list[int]] = {}
-    for state_index in range(volume_class.cardinality):
-        component_index, transform_index = _digits_state_coordinate(
-            state_index=state_index,
-            volume_class=volume_class,
-        )
-        transform_indices_by_digit.setdefault(component_index, []).append(transform_index)
-    return {
-        digit_index: tuple(transform_indices)
-        for digit_index, transform_indices in sorted(transform_indices_by_digit.items())
-    }
+    return {_chart_ordinal_axis_id: transform_ordinal}
 
 
 def _digits_unrealized_request_outcome(
@@ -1885,62 +1652,6 @@ def _digits_local_state_index(
     return (seed + sample_index) % cardinality
 
 
-def _volume_class_canvas_side_from_assignment(
-    resolution_assignment: AxisAssignment | None,
-) -> int:
-    if resolution_assignment is None:
-        return _volume_class_canvas_minimum_side
-    values = tuple(resolution_assignment.values.values())
-    if not values:
-        return _volume_class_canvas_minimum_side
-    return max(_volume_class_canvas_minimum_side, max(values))
-
-
-def _constructed_affine_bounds_for_canvas_side(
-    side: int,
-) -> dict[str, tuple[float, float]]:
-    _require_generation_positive_integer(side, "side")
-    return {
-        "x_translation": _constructed_affine_translation_bounds,
-        "y_translation": _constructed_affine_translation_bounds,
-        "scale": _constructed_affine_scale_bounds,
-        "rotation": _constructed_affine_rotation_bounds,
-        "x_shear": _constructed_affine_shear_bounds,
-    }
-
-
-def _constructed_affine_axis_capacities(
-    *,
-    bounds: Mapping[str, tuple[float, float]],
-    side: int,
-) -> tuple[int, int, int, int, int]:
-    _require_generation_positive_integer(side, "side")
-    radius_pixels = max(1.0, side * _constructed_affine_effective_radius_fraction)
-    translation_step = 1.0 / side
-    radius_step = 1.0 / radius_pixels
-    return (
-        _grid_capacity(bounds["x_translation"], minimum_step=translation_step),
-        _grid_capacity(bounds["y_translation"], minimum_step=translation_step),
-        _grid_capacity(bounds["scale"], minimum_step=radius_step),
-        _grid_capacity(bounds["rotation"], minimum_step=radius_step),
-        _grid_capacity(bounds["x_shear"], minimum_step=radius_step),
-    )
-
-
-def _grid_capacity(bounds: tuple[float, float], *, minimum_step: float) -> int:
-    lower, upper = bounds
-    if not math.isfinite(lower) or not math.isfinite(upper):
-        raise ObservationGenerationError("grid bounds must be finite")
-    if upper < lower:
-        raise ObservationGenerationError("grid upper bound must not be below lower bound")
-    if not math.isfinite(minimum_step) or minimum_step <= 0.0:
-        raise ObservationGenerationError("grid minimum step must be positive")
-    width = upper - lower
-    if width <= 0.0:
-        return 1
-    return max(1, math.floor(width / minimum_step) + 1)
-
-
 def _variation_extent_value(variation_extent: float) -> float:
     try:
         value = float(variation_extent)
@@ -1953,317 +1664,21 @@ def _variation_extent_value(variation_extent: float) -> float:
     return value
 
 
-def _constructed_affine_grid(
-    transform_count: int,
-    *,
-    resolution_assignment: AxisAssignment | None = None,
-) -> _ConstructedAffineGrid:
-    _require_generation_positive_integer(transform_count, "transform_count")
-    side = _volume_class_canvas_side_from_assignment(resolution_assignment)
-    bounds = _constructed_affine_bounds_for_canvas_side(side)
-    if transform_count <= _constructed_affine_preset_max_count:
-        return _ConstructedAffineGrid(
-            x_translation=1,
-            y_translation=1,
-            scale=1,
-            rotation=1,
-            x_shear=1,
-            x_translation_bounds=bounds["x_translation"],
-            y_translation_bounds=bounds["y_translation"],
-            scale_bounds=bounds["scale"],
-            rotation_bounds=bounds["rotation"],
-            x_shear_bounds=bounds["x_shear"],
-            preset_count=transform_count,
-        )
-    capacities = _constructed_affine_axis_capacities(bounds=bounds, side=side)
-    counts = _constructed_affine_counts_for_transform_count(
-        transform_count=transform_count,
-        capacities=capacities,
-    )
-    return _ConstructedAffineGrid(
-        x_translation=counts[0],
-        y_translation=counts[1],
-        scale=counts[2],
-        rotation=counts[3],
-        x_shear=counts[4],
-        x_translation_bounds=bounds["x_translation"],
-        y_translation_bounds=bounds["y_translation"],
-        scale_bounds=bounds["scale"],
-        rotation_bounds=bounds["rotation"],
-        x_shear_bounds=bounds["x_shear"],
-    )
-
-
-def _constructed_affine_grid_in_transform_count_range(
-    *,
-    minimum_transform_count: int,
-    maximum_transform_count: int,
-    resolution_assignment: AxisAssignment,
-) -> _ConstructedAffineGrid | None:
-    _require_generation_positive_integer(
-        minimum_transform_count,
-        "minimum_transform_count",
-    )
-    _require_generation_positive_integer(
-        maximum_transform_count,
-        "maximum_transform_count",
-    )
-    if maximum_transform_count < minimum_transform_count:
-        return None
-    side = _volume_class_canvas_side_from_assignment(resolution_assignment)
-    bounds = _constructed_affine_bounds_for_canvas_side(side)
-    capacities = _constructed_affine_axis_capacities(bounds=bounds, side=side)
-    preset_count = _preset_count_in_range(
-        minimum_transform_count=minimum_transform_count,
-        maximum_transform_count=maximum_transform_count,
-    )
-    if preset_count is not None:
-        return _ConstructedAffineGrid(
-            x_translation=1,
-            y_translation=1,
-            scale=1,
-            rotation=1,
-            x_shear=1,
-            x_translation_bounds=bounds["x_translation"],
-            y_translation_bounds=bounds["y_translation"],
-            scale_bounds=bounds["scale"],
-            rotation_bounds=bounds["rotation"],
-            x_shear_bounds=bounds["x_shear"],
-            preset_count=preset_count,
-        )
-    counts = _constructed_affine_counts_in_transform_count_range(
-        minimum_transform_count=max(
-            minimum_transform_count,
-            _constructed_affine_preset_max_count + 1,
-        ),
-        maximum_transform_count=maximum_transform_count,
-        capacities=capacities,
-    )
-    if counts is None:
-        return None
-    return _ConstructedAffineGrid(
-        x_translation=counts[0],
-        y_translation=counts[1],
-        scale=counts[2],
-        rotation=counts[3],
-        x_shear=counts[4],
-        x_translation_bounds=bounds["x_translation"],
-        y_translation_bounds=bounds["y_translation"],
-        scale_bounds=bounds["scale"],
-        rotation_bounds=bounds["rotation"],
-        x_shear_bounds=bounds["x_shear"],
-    )
-
-
-def _preset_count_in_range(
-    *,
-    minimum_transform_count: int,
-    maximum_transform_count: int,
-) -> int | None:
-    if minimum_transform_count > _constructed_affine_preset_max_count:
-        return None
-    if maximum_transform_count < minimum_transform_count:
-        return None
-    return minimum_transform_count
-
-
-def _constructed_affine_counts_in_transform_count_range(
-    *,
-    minimum_transform_count: int,
-    maximum_transform_count: int,
-    capacities: tuple[int, int, int, int, int],
-) -> tuple[int, int, int, int, int] | None:
-    if maximum_transform_count < minimum_transform_count:
-        return None
-    best: tuple[int, int, int, int, int] | None = None
-    best_key: tuple[int, tuple[float, ...], tuple[int, ...]] | None = None
-    x_capacity, y_capacity, scale_capacity, rotation_capacity, shear_capacity = capacities
-    for scale_count in range(1, scale_capacity + 1):
-        for rotation_count in range(1, rotation_capacity + 1):
-            for shear_count in range(1, shear_capacity + 1):
-                base_count = scale_count * rotation_count * shear_count
-                minimum_xy_count = math.ceil(minimum_transform_count / base_count)
-                maximum_xy_count = maximum_transform_count // base_count
-                xy_counts = _constructed_translation_counts_in_product_range(
-                    minimum_product=minimum_xy_count,
-                    maximum_product=maximum_xy_count,
-                    x_capacity=x_capacity,
-                    y_capacity=y_capacity,
-                )
-                if xy_counts is None:
-                    continue
-                counts = (
-                    xy_counts[0],
-                    xy_counts[1],
-                    scale_count,
-                    rotation_count,
-                    shear_count,
-                )
-                product = math.prod(counts)
-                key = (
-                    product,
-                    _constructed_affine_count_sort_key(counts),
-                    counts,
-                )
-                if best_key is None or key < best_key:
-                    best = counts
-                    best_key = key
-    return best
-
-
-def _constructed_translation_counts_in_product_range(
-    *,
-    minimum_product: int,
-    maximum_product: int,
-    x_capacity: int,
-    y_capacity: int,
-) -> tuple[int, int] | None:
-    minimum_product = max(1, minimum_product)
-    if maximum_product < minimum_product:
-        return None
-    if x_capacity * y_capacity < minimum_product:
-        return None
-    best: tuple[int, int] | None = None
-    best_key: tuple[int, float, tuple[int, int]] | None = None
-    for x_count in range(1, min(x_capacity, maximum_product) + 1):
-        y_count = math.ceil(minimum_product / x_count)
-        if y_count < 1 or y_count > y_capacity:
-            continue
-        product = x_count * y_count
-        if product > maximum_product:
-            continue
-        balance_penalty = abs(math.log2(x_count / y_count))
-        key = (product, balance_penalty, (x_count, y_count))
-        if best_key is None or key < best_key:
-            best = (x_count, y_count)
-            best_key = key
-    return best
-
-
-def _constructed_affine_counts_for_transform_count(
-    *,
-    transform_count: int,
-    capacities: tuple[int, int, int, int, int],
-) -> tuple[int, int, int, int, int]:
-    counts = [1, 1, 1, 1, 1]
-    for factor in sorted(_prime_factors(transform_count), reverse=True):
-        factor_options = tuple(
-            index
-            for index, (count, capacity) in enumerate(zip(counts, capacities, strict=True))
-            if count * factor <= capacity
-        )
-        if not factor_options:
-            break
-        selected = min(
-            factor_options,
-            key=lambda index: _constructed_affine_count_sort_key(
-                _with_affine_count_factor(counts=counts, index=index, factor=factor)
-            ),
-        )
-        counts[selected] *= factor
-    if math.prod(counts) == transform_count:
-        return (counts[0], counts[1], counts[2], counts[3], counts[4])
-    raise ObservationGenerationError(
-        "requested affine transform count exceeds resolution-aware grid capacity"
-    )
-
-
-def _with_affine_count_factor(
-    *,
-    counts: Sequence[int],
-    index: int,
-    factor: int,
-) -> tuple[int, int, int, int, int]:
-    return (
-        counts[0] * factor if index == 0 else counts[0],
-        counts[1] * factor if index == 1 else counts[1],
-        counts[2] * factor if index == 2 else counts[2],
-        counts[3] * factor if index == 3 else counts[3],
-        counts[4] * factor if index == 4 else counts[4],
-    )
-
-
-def _constructed_affine_count_sort_key(
-    counts: tuple[int, int, int, int, int],
-) -> tuple[int, int, int, int, int, int]:
-    return (
-        max(counts),
-        counts[4],
-        counts[3],
-        counts[2],
-        counts[1],
-        counts[0],
-    )
-
-
-def _prime_factors(value: int) -> tuple[int, ...]:
-    _require_generation_positive_integer(value, "value")
-    factors: list[int] = []
-    divisor = 2
-    remaining = value
-    while divisor * divisor <= remaining:
-        while remaining % divisor == 0:
-            factors.append(divisor)
-            remaining //= divisor
-        divisor += 1 if divisor == 2 else 2
-    if remaining > 1:
-        factors.append(remaining)
-    return tuple(factors)
-
-
-def _constructed_affine_indices(
-    *,
-    transform_index: int,
-    grid: _ConstructedAffineGrid,
-) -> dict[str, int]:
-    if type(transform_index) is not int or transform_index < 0:
-        raise ObservationGenerationError("transform_index must be a nonnegative integer")
-    if transform_index >= grid.transform_count:
-        raise ObservationGenerationError("transform_index must be below transform_count")
-    if grid.preset_count is not None:
-        return {"preset": transform_index}
-    remainder = transform_index
-    indices: list[int] = []
-    for axis_count in grid.counts:
-        indices.append(remainder % axis_count)
-        remainder //= axis_count
-    return dict(zip(_constructed_affine_axis_names, indices, strict=True))
-
-
 def _constructed_variation_coordinate_record(
     *,
     transform: VariationTransformDeclaration,
     component_index: int,
-    transform_index: int,
-    grid: _ConstructedAffineGrid,
+    transform_ordinal: int,
+    chart: _DigitsChart,
 ) -> Mapping[str, object]:
-    if type(transform_index) is not int or transform_index < 0:
-        raise ObservationGenerationError("transform_index must be a nonnegative integer")
-    if transform_index >= grid.transform_count:
-        raise ObservationGenerationError("transform_index must be below transform_count")
-    if grid.transform_count == 1:
-        return _identity_variation_coordinate_record(
-            transform=transform,
-            component_index=component_index,
-        )
+    if type(transform_ordinal) is not int or transform_ordinal < 0:
+        raise ObservationGenerationError("transform_ordinal must be a nonnegative integer")
     spatial = transform.spatial_affine
-    indices = _constructed_affine_indices(
-        transform_index=transform_index,
-        grid=grid,
-    )
-    parameters = _constructed_affine_parameters(
-        spatial=spatial,
-        grid=grid,
-        indices=indices,
-    )
-    scale = parameters["scale"]
-    rotation = parameters["rotation"]
-    shear = parameters["x_shear"]
-    cosine = math.cos(rotation)
-    sine = math.sin(rotation)
+    tx_step, ty_step, scale_level = _transform_cell_for_ordinal(transform_ordinal)
+    x_translation, y_translation, scale = chart.normalized_transform(transform_ordinal)
     matrix = [
-        [scale * cosine, shear - scale * sine, parameters["x_translation"]],
-        [scale * sine, scale * cosine, parameters["y_translation"]],
+        [scale, 0.0, x_translation],
+        [0.0, scale, y_translation],
         [0.0, 0.0, 1.0],
     ]
     return {
@@ -2274,179 +1689,19 @@ def _constructed_variation_coordinate_record(
             "coordinate_system": spatial.coordinate_system,
             "matrix": matrix,
         },
-        "constructed_affine_indices": indices,
-        "constructed_affine_parameters": parameters,
+        "native_footprint_side": _render_unit_side,
+        "transform_ordinal": transform_ordinal,
+        "transform_cell": {
+            "x_translation_step": tx_step,
+            "y_translation_step": ty_step,
+            "scale_level": scale_level,
+        },
+        "normalized_transform": {
+            "x_translation": x_translation,
+            "y_translation": y_translation,
+            "scale": scale,
+        },
     }
-
-
-def _constructed_affine_parameters(
-    *,
-    spatial: SpatialAffineVariation,
-    grid: _ConstructedAffineGrid,
-    indices: Mapping[str, int],
-) -> dict[str, float]:
-    if grid.preset_count is not None:
-        preset_index = indices.get("preset")
-        if type(preset_index) is not int:
-            raise ObservationGenerationError("affine preset index is missing")
-        return _constructed_affine_preset_parameters(
-            spatial=spatial,
-            grid=grid,
-            preset_index=preset_index,
-        )
-    return {
-        "x_translation": _grid_value(
-            _bounded_interval(
-                grid.x_translation_bounds,
-                lower_bound=spatial.matrix[0][2][0],
-                upper_bound=spatial.matrix[0][2][1],
-            ),
-            index=indices["x_translation"],
-            count=grid.x_translation,
-        ),
-        "y_translation": _grid_value(
-            _bounded_interval(
-                grid.y_translation_bounds,
-                lower_bound=spatial.matrix[1][2][0],
-                upper_bound=spatial.matrix[1][2][1],
-            ),
-            index=indices["y_translation"],
-            count=grid.y_translation,
-        ),
-        "scale": _grid_value(
-            _bounded_interval(
-                grid.scale_bounds,
-                lower_bound=max(spatial.matrix[0][0][0], spatial.matrix[1][1][0]),
-                upper_bound=min(spatial.matrix[0][0][1], spatial.matrix[1][1][1]),
-            ),
-            index=indices["scale"],
-            count=grid.scale,
-        ),
-        "rotation": _grid_value(
-            _bounded_interval(
-                grid.rotation_bounds,
-                lower_bound=spatial.matrix[1][0][0],
-                upper_bound=spatial.matrix[1][0][1],
-            ),
-            index=indices["rotation"],
-            count=grid.rotation,
-        ),
-        "x_shear": _grid_value(
-            _bounded_interval(
-                grid.x_shear_bounds,
-                lower_bound=spatial.matrix[0][1][0],
-                upper_bound=spatial.matrix[0][1][1],
-            ),
-            index=indices["x_shear"],
-            count=grid.x_shear,
-        ),
-    }
-
-
-def _constructed_affine_preset_parameters(
-    *,
-    spatial: SpatialAffineVariation,
-    grid: _ConstructedAffineGrid,
-    preset_index: int,
-) -> dict[str, float]:
-    if grid.preset_count is None:
-        raise ObservationGenerationError("affine preset count is missing")
-    if preset_index < 0 or preset_index >= grid.preset_count:
-        raise ObservationGenerationError("affine preset index is out of range")
-    coordinates = _constructed_affine_preset_unit_coordinates(
-        preset_index=preset_index,
-        preset_count=grid.preset_count,
-    )
-    return {
-        "x_translation": _preset_grid_value(
-            _bounded_interval(
-                grid.x_translation_bounds,
-                lower_bound=spatial.matrix[0][2][0],
-                upper_bound=spatial.matrix[0][2][1],
-            ),
-            fraction=coordinates[0],
-        ),
-        "y_translation": _preset_grid_value(
-            _bounded_interval(
-                grid.y_translation_bounds,
-                lower_bound=spatial.matrix[1][2][0],
-                upper_bound=spatial.matrix[1][2][1],
-            ),
-            fraction=coordinates[1],
-        ),
-        "scale": _preset_grid_value(
-            _bounded_interval(
-                grid.scale_bounds,
-                lower_bound=max(spatial.matrix[0][0][0], spatial.matrix[1][1][0]),
-                upper_bound=min(spatial.matrix[0][0][1], spatial.matrix[1][1][1]),
-            ),
-            fraction=coordinates[2],
-        ),
-        "rotation": _preset_grid_value(
-            _bounded_interval(
-                grid.rotation_bounds,
-                lower_bound=spatial.matrix[1][0][0],
-                upper_bound=spatial.matrix[1][0][1],
-            ),
-            fraction=coordinates[3],
-        ),
-        "x_shear": _preset_grid_value(
-            _bounded_interval(
-                grid.x_shear_bounds,
-                lower_bound=spatial.matrix[0][1][0],
-                upper_bound=spatial.matrix[0][1][1],
-            ),
-            fraction=coordinates[4],
-        ),
-    }
-
-
-def _constructed_affine_preset_unit_coordinates(
-    *,
-    preset_index: int,
-    preset_count: int,
-) -> tuple[float, float, float, float, float]:
-    if preset_count == 1:
-        return (0.5, 0.5, 0.5, 0.5, 0.5)
-    presets = (
-        (0.0, 0.0, 0.0, 0.0, 0.0),
-        (1.0, 1.0, 1.0, 1.0, 1.0),
-        (0.5, 0.5, 0.5, 0.5, 0.5),
-        (0.0, 1.0, 1.0, 0.0, 1.0),
-        (1.0, 0.0, 0.0, 1.0, 0.0),
-        (0.25, 0.75, 0.25, 0.75, 0.25),
-        (0.75, 0.25, 0.75, 0.25, 0.75),
-        (0.5, 0.0, 0.5, 1.0, 0.0),
-    )
-    if preset_count > len(presets):
-        raise ObservationGenerationError("affine preset count exceeds preset table")
-    return presets[preset_index]
-
-
-def _bounded_interval(
-    requested: tuple[float, float],
-    *,
-    lower_bound: float,
-    upper_bound: float,
-) -> tuple[float, float]:
-    lower = max(requested[0], lower_bound)
-    upper = min(requested[1], upper_bound)
-    if upper < lower:
-        center = (lower_bound + upper_bound) / 2.0
-        return (center, center)
-    return (lower, upper)
-
-
-def _preset_grid_value(bounds: tuple[float, float], *, fraction: float) -> float:
-    lower, upper = bounds
-    return lower + (upper - lower) * fraction
-
-
-def _grid_value(bounds: tuple[float, float], *, index: int, count: int) -> float:
-    lower, upper = bounds
-    if count <= 1:
-        return (lower + upper) / 2.0
-    return lower + (upper - lower) * (index / (count - 1))
 
 
 def _quadratic_control_points(
@@ -2565,8 +1820,7 @@ def _digits_tensor_program(
     cardinality: int,
     minimum_address: int,
     digit_count: int,
-    transform: VariationTransformDeclaration,
-    grid: _ConstructedAffineGrid,
+    transform_table: tuple[tuple[float, float, float], ...],
     component_mark_counts: tuple[int, ...],
     component_mark_values: tuple[tuple[float, ...], ...],
     component_mark_widths: tuple[tuple[float, ...], ...],
@@ -2578,49 +1832,8 @@ def _digits_tensor_program(
     component_count = len(component_mark_counts)
     max_mark_count = len(component_mark_values[0]) if component_count else 0
     control_point_count = 3
-    spatial = transform.spatial_affine
-    x_translation_bounds = _bounded_interval(
-        grid.x_translation_bounds,
-        lower_bound=spatial.matrix[0][2][0],
-        upper_bound=spatial.matrix[0][2][1],
-    )
-    y_translation_bounds = _bounded_interval(
-        grid.y_translation_bounds,
-        lower_bound=spatial.matrix[1][2][0],
-        upper_bound=spatial.matrix[1][2][1],
-    )
-    scale_bounds = _bounded_interval(
-        grid.scale_bounds,
-        lower_bound=max(spatial.matrix[0][0][0], spatial.matrix[1][1][0]),
-        upper_bound=min(spatial.matrix[0][0][1], spatial.matrix[1][1][1]),
-    )
-    rotation_bounds = _bounded_interval(
-        grid.rotation_bounds,
-        lower_bound=spatial.matrix[1][0][0],
-        upper_bound=spatial.matrix[1][0][1],
-    )
-    x_shear_bounds = _bounded_interval(
-        grid.x_shear_bounds,
-        lower_bound=spatial.matrix[0][1][0],
-        upper_bound=spatial.matrix[0][1][1],
-    )
-    preset_units = (
-        tuple(
-            value
-            for preset_index in range(grid.preset_count)
-            for value in _constructed_affine_preset_unit_coordinates(
-                preset_index=preset_index,
-                preset_count=grid.preset_count,
-            )
-        )
-        if grid.preset_count is not None
-        else ()
-    )
-
-    def tensor_grid_value(lower: Any, upper: Any, index: Any, count: int) -> Any:
-        if count <= 1:
-            return (lower + upper) / 2.0
-        return lower + (upper - lower) * (index / float(count - 1))
+    table_length = len(transform_table)
+    transform_table_values = tuple(value for entry in transform_table for value in entry)
 
     def element_function(
         coordinates: tuple[Any, ...],
@@ -2630,7 +1843,7 @@ def _digits_tensor_program(
         sample_indices_value: Any,
         cardinality_value: Any,
         minimum_address_value: Any,
-        preset_units_tensor: Any,
+        transform_table_tensor: Any,
         component_mark_counts: Any,
         component_mark_values: Any,
         component_mark_widths: Any,
@@ -2640,16 +1853,6 @@ def _digits_tensor_program(
         segment_end_t: Any,
         image_height: Any,
         image_width: Any,
-        x_translation_minimum: Any,
-        x_translation_maximum: Any,
-        y_translation_minimum: Any,
-        y_translation_maximum: Any,
-        scale_minimum: Any,
-        scale_maximum: Any,
-        rotation_minimum: Any,
-        rotation_maximum: Any,
-        x_shear_minimum: Any,
-        x_shear_maximum: Any,
     ) -> Any:
         _ = flat_indices
         sample_axis_index, channel_index, y_index, x_index = coordinates
@@ -2660,72 +1863,22 @@ def _digits_tensor_program(
         sample_address = minimum_address_value + state_index
         component_index = sample_address.remainder(digit_count)
         transform_index = sample_address.div(digit_count, rounding_mode="floor")
-        if grid.transform_count == 1:
-            m00 = x_center * 0.0 + 1.0
-            m01 = x_center * 0.0
-            m02 = x_center * 0.0
-            m10 = x_center * 0.0
-            m11 = x_center * 0.0 + 1.0
-            m12 = x_center * 0.0
-            width_scale = x_center * 0.0 + 1.0
-        else:
-            def affine_component(
-                axis_slot: int,
-                count: int,
-                lower: Any,
-                upper: Any,
-            ) -> Any:
-                if grid.preset_count is not None:
-                    return lower + (upper - lower) * preset_units_tensor[
-                        transform_index,
-                        axis_slot,
-                    ]
-                remainder = transform_index
-                for prior_count in grid.counts[:axis_slot]:
-                    remainder = remainder.div(prior_count, rounding_mode="floor")
-                return tensor_grid_value(lower, upper, remainder.remainder(count), count)
-
-            x_translation = affine_component(
-                0,
-                grid.x_translation,
-                x_translation_minimum,
-                x_translation_maximum,
-            )
-            y_translation = affine_component(
-                1,
-                grid.y_translation,
-                y_translation_minimum,
-                y_translation_maximum,
-            )
-            scale = affine_component(
-                2,
-                grid.scale,
-                scale_minimum,
-                scale_maximum,
-            )
-            rotation = affine_component(
-                3,
-                grid.rotation,
-                rotation_minimum,
-                rotation_maximum,
-            )
-            x_shear = affine_component(
-                4,
-                grid.x_shear,
-                x_shear_minimum,
-                x_shear_maximum,
-            )
-            cosine = rotation.cos()
-            sine = rotation.sin()
-            m00 = scale * cosine
-            m01 = x_shear - scale * sine
-            m02 = x_translation
-            m10 = scale * sine
-            m11 = scale * cosine
-            m12 = y_translation
-            width_scale = ((m00 * m00 + m10 * m10).sqrt()).maximum(
-                (m01 * m01 + m11 * m11).sqrt()
-            )
+        # Diagonal affine: a digit placed at a centre-relative offset and scale.
+        # Rotation and shear are removed, so the off-diagonal terms are zero.
+        scale = transform_table_tensor[transform_index, 2]
+        x_translation = transform_table_tensor[transform_index, 0]
+        y_translation = transform_table_tensor[transform_index, 1]
+        zero = x_center * 0.0
+        m00 = scale
+        m01 = zero
+        m02 = x_translation
+        m10 = zero
+        m11 = scale
+        m12 = y_translation
+        # Stroke width tracks the physical digit footprint (canvas-independent),
+        # not the canvas-normalized scale, so a digit renders with identical
+        # strokes whatever size canvas frames it.
+        width_scale = scale * image_width / _render_unit_side
         value = x_center * 0.0
         active_channel = channel_index == 0
         mark_count = component_mark_counts[component_index]
@@ -2815,10 +1968,10 @@ def _digits_tensor_program(
                 shape=(),
                 values=(minimum_address,),
             ),
-            "preset_units_tensor": TensorElementParameter(
+            "transform_table_tensor": TensorElementParameter(
                 dtype="float32",
-                shape=(grid.preset_count or 1, 5),
-                values=preset_units if preset_units else (0.0, 0.0, 0.0, 0.0, 0.0),
+                shape=(table_length, 3),
+                values=transform_table_values,
             ),
             "component_mark_counts": TensorElementParameter(
                 dtype="int64",
@@ -2881,88 +2034,15 @@ def _digits_tensor_program(
                 shape=(),
                 values=(float(width),),
             ),
-            "x_translation_minimum": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(x_translation_bounds[0],),
-            ),
-            "x_translation_maximum": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(x_translation_bounds[1],),
-            ),
-            "y_translation_minimum": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(y_translation_bounds[0],),
-            ),
-            "y_translation_maximum": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(y_translation_bounds[1],),
-            ),
-            "scale_minimum": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(scale_bounds[0],),
-            ),
-            "scale_maximum": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(scale_bounds[1],),
-            ),
-            "rotation_minimum": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(rotation_bounds[0],),
-            ),
-            "rotation_maximum": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(rotation_bounds[1],),
-            ),
-            "x_shear_minimum": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(x_shear_bounds[0],),
-            ),
-            "x_shear_maximum": TensorElementParameter(
-                dtype="float32",
-                shape=(),
-                values=(x_shear_bounds[1],),
-            ),
         },
         cache_key=(
             "digits-field",
             component_count,
             max_mark_count,
             _batch_render_curve_sample_count,
-            grid.counts,
-            grid.preset_count,
+            table_length,
         ),
     )
-
-
-def _identity_variation_coordinate_record(
-    *,
-    transform: VariationTransformDeclaration,
-    component_index: int,
-) -> Mapping[str, object]:
-    spatial = transform.spatial_affine
-    spatial_rank = spatial.spatial_rank
-    matrix = [
-        [1.0 if row_index == column_index else 0.0 for column_index in range(spatial_rank + 1)]
-        for row_index in range(spatial_rank + 1)
-    ]
-    return {
-        "kind": "field-variation-transform-coordinate",
-        "component_index": component_index,
-        "spatial_affine": {
-            "kind": "spatial-affine-coordinate",
-            "coordinate_system": spatial.coordinate_system,
-            "matrix": matrix,
-        },
-    }
 
 
 def _resolution_sampling(layout: Mapping[str, object] | None) -> _ResolutionSampling | None:
@@ -3102,36 +2182,27 @@ def _manifest() -> BenchmarkManifest:
         resolution_analysis={
             "kind": "component-discriminability-margin",
             "discriminability_margin": 20.0,
-            "affine_minimum_absolute_determinant": 0.25,
-            "affine_minimum_axis_alignment": 0.95,
-            "affine_minimum_cell_overlap_ratio": 0.55,
-            "affine_minimum_singular_value": 0.72,
-            "affine_maximum_singular_value": 1.28,
-            "affine_maximum_condition_number": 1.6,
-            "affine_minimum_projected_extent": 0.65,
-            "affine_maximum_projected_extent": 1.35,
+            "render_unit_side": _render_unit_side,
+            "translation_step_pixels": _translation_step_pixels,
+            "scale_ratio_per_level": _scale_ratio_per_level,
             "volume_value": {
-                "kind": "constructed-finite-volume-shell",
+                "kind": "domain-growth-setup-window",
                 "measure_id": "log2-state-space-volume",
                 "formula": "log2(realized_cardinality)",
                 "digit_count": _volume_class_digit_count,
-                "affine_transform_family": "constructed-finite-affine-product-grid",
-                "target_policy": "symmetric-realized-cardinalities-inside-request-band",
+                "transform_axes": list(_chart_axis_ids),
+                "target_policy": "contiguous-global-address-increment",
                 "description": (
-                    "Score-bearing Digits volume shells are requested finite "
-                    "single-digit windows. The minimum non-null request is the "
-                    "canonical 10-way digit classification problem. Larger "
-                    "requests add symmetric finite affine choices for every "
-                    "digit, and the benchmark reports the realized cardinality "
-                    "instead of forcing exact powers of two. Canvas resolution "
-                    "is the smallest square lattice, rounded to the benchmark "
-                    "resolution step, whose finite affine grid can express a "
-                    "cardinality inside the requested volume band."
+                    "Score-bearing Digits volume windows are finite increments "
+                    "of one global address walk over digit identity and a "
+                    "shell-ordered translation/scale transform lattice. The "
+                    "output task remains 10-way classification; volume counts "
+                    "problem setups. Canvas size is materialization metadata "
+                    "derived from the deepest realized transform ordinal."
                 ),
             },
             "description": (
-                "Minimum rendered component separation required when choosing live "
-                "observation resolution."
+                "Native-footprint component separation at the fixed render pitch."
             ),
         },
     )
@@ -3158,7 +2229,7 @@ def _latent_factors() -> LatentFactorDeclaration:
                     "benchmarks.digits.sample.field-variation-transform"
                 ),
                 role="variation",
-                degree_measure=DegreeMeasure.vector_dimension(6),
+                degree_measure=DegreeMeasure.vector_dimension(3),
             ),
             SampleLatentFactor(
                 name=ProtocolName.parse("benchmarks.digits.materialization.canvas-shape"),

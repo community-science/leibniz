@@ -260,48 +260,30 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
         "kind": "component-discriminability-margin",
         "discriminability_margin": 20.0,
         "description": (
-            "Minimum rendered component separation required when choosing live "
-            "observation resolution."
+            "Native-footprint component separation at the fixed render pitch."
         ),
-        "affine_minimum_absolute_determinant": 0.25,
-        "affine_minimum_axis_alignment": 0.95,
-        "affine_minimum_cell_overlap_ratio": 0.55,
-        "affine_minimum_singular_value": 0.72,
-        "affine_maximum_singular_value": 1.28,
-        "affine_maximum_condition_number": 1.6,
-        "affine_minimum_projected_extent": 0.65,
-        "affine_maximum_projected_extent": 1.35,
+        "render_unit_side": 28,
+        "translation_step_pixels": 4,
+        "scale_ratio_per_level": 0.12,
         "volume_value": {
-            "kind": "constructed-finite-volume-shell",
+            "kind": "domain-growth-setup-window",
             "measure_id": "log2-state-space-volume",
             "formula": "log2(realized_cardinality)",
             "digit_count": 10,
-            "affine_transform_family": "constructed-finite-affine-product-grid",
-            "target_policy": "symmetric-realized-cardinalities-inside-request-band",
+            "transform_axes": ["x_translation", "y_translation", "scale"],
+            "target_policy": "contiguous-global-address-increment",
             "description": (
-                "Score-bearing Digits volume shells are requested finite "
-                "single-digit windows. The minimum non-null request is the "
-                "canonical 10-way digit classification problem. Larger "
-                "requests add symmetric finite affine choices for every "
-                "digit, and the benchmark reports the realized cardinality "
-                "instead of forcing exact powers of two. Canvas resolution "
-                "is the smallest square lattice, rounded to the benchmark "
-                "resolution step, whose finite affine grid can express a "
-                "cardinality inside the requested volume band."
+                "Score-bearing Digits volume windows are finite increments "
+                "of one global address walk over digit identity and a "
+                "shell-ordered translation/scale transform lattice. The "
+                "output task remains 10-way classification; volume counts "
+                "problem setups. Canvas size is materialization metadata "
+                "derived from the deepest realized transform ordinal."
             ),
         },
     }
     assert manifest.resolution_discriminability_margin() == 20.0
-    assert manifest.affine_acceptance_thresholds() == {
-        "affine_minimum_absolute_determinant": 0.25,
-        "affine_minimum_axis_alignment": 0.95,
-        "affine_minimum_cell_overlap_ratio": 0.55,
-        "affine_minimum_singular_value": 0.72,
-        "affine_maximum_singular_value": 1.28,
-        "affine_maximum_condition_number": 1.6,
-        "affine_minimum_projected_extent": 0.65,
-        "affine_maximum_projected_extent": 1.35,
-    }
+    assert manifest.affine_acceptance_thresholds() == {}
     assert ContentDigest.from_value(manifest.to_record()) == ContentDigest.from_value(
         BenchmarkManifest.from_record(manifest.to_record()).to_record()
     )

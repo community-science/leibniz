@@ -123,6 +123,7 @@ AffineMatrix2D = tuple[
 class VariationCoordinate:
     component_index: int
     matrix: AffineMatrix2D
+    native_footprint_side: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -578,7 +579,7 @@ class ObservationFormationDeclaration:
                 mark=(
                     mark
                     if parsed_coordinate is None
-                    else _transform_mark(mark, parsed_coordinate)
+                    else _transform_mark(mark, parsed_coordinate, field_width=width)
                 ),
             )
         return FieldObservation(
@@ -994,10 +995,18 @@ def _draw_mark(
                 values[value_index] = max(values[value_index], mark.value)
 
 
-def _transform_mark(mark: ComponentMark, coordinate: VariationCoordinate) -> ComponentMark:
+def _transform_mark(
+    mark: ComponentMark,
+    coordinate: VariationCoordinate,
+    *,
+    field_width: int,
+) -> ComponentMark:
     linear_matrix = linear_affine_matrix(coordinate.matrix)
     translation = affine_translation(coordinate.matrix)
     center = (0.5, 0.5)
+    width_scale = _affine_width_scale(linear_matrix)
+    if coordinate.native_footprint_side is not None:
+        width_scale *= field_width / coordinate.native_footprint_side
     return ComponentMark(
         kind=mark.kind,
         channel=mark.channel,
@@ -1011,7 +1020,7 @@ def _transform_mark(mark: ComponentMark, coordinate: VariationCoordinate) -> Com
             )
             for point in mark.control_points
         ),
-        width=mark.width * _affine_width_scale(linear_matrix),
+        width=mark.width * width_scale,
         value=mark.value,
     )
 
@@ -1181,7 +1190,20 @@ def _parse_variation_coordinate(
             f"{field}.component_index",
         ),
         matrix=_coordinate_matrix(spatial.get("matrix"), field=f"{field}.spatial_affine.matrix"),
+        native_footprint_side=_optional_positive_float(
+            value.get("native_footprint_side"),
+            field=f"{field}.native_footprint_side",
+        ),
     )
+
+
+def _optional_positive_float(value: object, *, field: str) -> float | None:
+    if value is None:
+        return None
+    parsed = _extract.float(value, field)
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise ObservationFormationValidationError(f"{field} must be positive and finite")
+    return parsed
 
 
 def _coordinate_matrix(

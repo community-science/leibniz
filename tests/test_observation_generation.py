@@ -123,10 +123,18 @@ def test_digits_generator_is_deterministic() -> None:
     variation = _coordinate(first_sample.latent_coordinates, role="variation")
     assert variation["multiplicity"] == 1
     assert variation["name"] == "benchmarks.digits.sample.field-variation-transform"
-    assert variation["degree_measure"] == {"kind": "vector-dimension", "count": 6.0}
+    assert variation["degree_measure"] == {"kind": "vector-dimension", "count": 3.0}
     variation_values = cast(dict[str, object], variation["values"])
     assert variation_values["kind"] == "constructed-field-variation-transform-samples"
-    assert variation_values["transform_count"] == 2
+    assert variation_values["transform_ordinal"] == 0
+    volume_class = cast(dict[str, object], variation_values["volume_class"])
+    assert volume_class["kind"] == "digits-realized-setup-window"
+    assert volume_class["transform_axes"] == [
+        "x_translation",
+        "y_translation",
+        "scale",
+    ]
+    assert volume_class["canvas_side"] == first_width
     assert cast(dict[str, object], variation_values["bounds"]) == (
         generator.formation.variation_transform.to_record()
     )
@@ -135,22 +143,17 @@ def test_digits_generator_is_deterministic() -> None:
         first_sample.component_index
     ]
     assert len(coordinates) == 1
-    constructed_parameters = cast(
-        dict[str, float],
-        coordinates[0]["constructed_affine_parameters"],
-    )
-    constructed_indices = cast(
-        dict[str, int],
-        coordinates[0]["constructed_affine_indices"],
-    )
-    assert set(constructed_parameters) == {
+    assert coordinates[0]["transform_ordinal"] == 0
+    assert cast(dict[str, int], coordinates[0]["transform_cell"]) == {
+        "x_translation_step": 0,
+        "y_translation_step": 0,
+        "scale_level": 0,
+    }
+    assert set(cast(dict[str, float], coordinates[0]["normalized_transform"])) == {
         "x_translation",
         "y_translation",
         "scale",
-        "rotation",
-        "x_shear",
     }
-    assert set(constructed_indices) == {"preset"}
     assert _within_transform_bounds(
         coordinates[0],
         bounds=generator.formation.variation_transform.to_record(),
@@ -293,42 +296,43 @@ def test_digits_generator_samples_resolution_from_memory_bound() -> None:
     assert sample.outcome_id == f"digit-{sample.component_index}"
 
 
-def test_digits_generator_counts_constructed_finite_volume_class() -> None:
+def test_digits_generator_counts_setup_window_volume_class() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
+    generator_impl = cast(Any, generator)
 
-    scale_one = _formation_payload(generator, sample_count=3, seed=101)
-    scale_one_other_seed = _formation_payload(generator,
+    preview = _formation_payload(generator, sample_count=3, seed=101)
+    preview_other_seed = _formation_payload(generator,
         sample_count=3,
         seed=102,
     )
 
-    assert round(scale_one.log2_volume, 12) == round(
+    assert round(preview.log2_volume, 12) == round(
         generator.distinguishable_state_log2_volume(
-            width=sample_width(scale_one.samples[0]),
-            height=sample_height(scale_one.samples[0]),
+            width=sample_width(preview.samples[0]),
+            height=sample_height(preview.samples[0]),
         ),
         12,
     )
-    assert round(scale_one_other_seed.log2_volume, 12) == round(
+    assert round(preview_other_seed.log2_volume, 12) == round(
         generator.distinguishable_state_log2_volume(
-            width=sample_width(scale_one_other_seed.samples[0]),
-            height=sample_height(scale_one_other_seed.samples[0]),
+            width=sample_width(preview_other_seed.samples[0]),
+            height=sample_height(preview_other_seed.samples[0]),
         ),
         12,
     )
-    assert sample_width(scale_one.samples[0]) >= 1
-    assert sample_height(scale_one.samples[0]) >= 1
-    minimum = generator.constructed_volume_class_log2_volume(
-        affine_transform_count=1,
+    assert sample_width(preview.samples[0]) >= 28
+    assert sample_height(preview.samples[0]) >= 28
+    assert generator.minimum_log2_volume().value == 0.0
+    window = generator_impl._volume_class_for_request(
+        request=StateSpaceVolumeRequest(minimum=5.0, maximum=6.0)
     )
-    larger = generator.constructed_volume_class_log2_volume(
-        affine_transform_count=8,
-    )
-    assert math.isclose(minimum, math.log2(10))
-    assert math.isclose(larger, math.log2(80))
+    assert window is not None
+    assert window.minimum_address == 31
+    assert window.cardinality == 32
+    assert math.isclose(window.log2_volume, 5.0)
 
 
-def test_digits_generator_uses_runtime_memory_limit_as_canvas_cap() -> None:
+def test_digits_generator_accepts_memory_limit_without_changing_canvas() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
     small = _formation_payload(generator,
@@ -342,11 +346,11 @@ def test_digits_generator_uses_runtime_memory_limit_as_canvas_cap() -> None:
         memory_limit_bytes=100_000_000,
     )
 
-    assert all((sample_width(sample), sample_height(sample)) == (13, 21)
-        for sample in small.samples
+    assert [(sample_width(sample), sample_height(sample)) for sample in small.samples] == (
+        [(36, 36)] * 3
     )
-    assert all(sample_width(sample) >= 1 and sample_height(sample) >= 1
-        for sample in large.samples
+    assert [(sample_width(sample), sample_height(sample)) for sample in large.samples] == (
+        [(36, 36)] * 3
     )
     assert large.log2_volume == small.log2_volume
 
@@ -369,8 +373,8 @@ def test_digits_generator_accepts_volume_value_requests() -> None:
     assert batch.volume_request is not None
     assert "component_count" not in batch.to_record()
     assert [sample.require_field().shape for sample in batch.samples] == [
-        (1, 16, 16),
-        (1, 16, 16),
+        (1, 28, 28),
+        (1, 28, 28),
     ]
     assert [sample.outcome_id for sample in batch.samples] == ["digit-0", "digit-0"]
     assert [sample.component_index for sample in batch.samples] == [0, 0]
@@ -410,22 +414,22 @@ def test_digits_generated_sample_set_records_region_document_boundary() -> None:
 
 def test_digits_truncated_address_window_region_has_unequal_strata() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
-    generator_impl = cast(Any, generator)
-    volume_class = generator_impl._volume_class_for_requested_cardinality(
-        requested_cardinality=13,
+    module = _digits_benchmark_module()
+    volume_class_type = cast(Callable[..., object], module["_DigitsVolumeClass"])
+    volume_class = volume_class_type(
         minimum_address=0,
+        cardinality=13,
+        canvas_side=28,
     )
-    assert volume_class.resolution_assignment is not None
     region_for_class = cast(
         Callable[..., object],
-        _digits_benchmark_module()["_digits_state_space_region"],
+        module["_digits_state_space_region"],
     )
     region = state_space_region_from_record(
         cast(
             Any,
             region_for_class(
                 volume_class=volume_class,
-                resolution_assignment=volume_class.resolution_assignment,
                 margin=generator.manifest.resolution_discriminability_margin(),
             ),
         ).to_record()
@@ -438,7 +442,7 @@ def test_digits_truncated_address_window_region_has_unequal_strata() -> None:
     assert tuple(volumes[f"digit-{index}"] for index in range(3, 10)) == (1,) * 7
 
 
-def test_digits_regions_cover_preset_and_grid_coordinates() -> None:
+def test_digits_regions_cover_ordinal_increment_coordinates() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     preset = _formation_payload(
         generator,
@@ -457,13 +461,8 @@ def test_digits_regions_cover_preset_and_grid_coordinates() -> None:
     assert grid.region is not None
     assert preset.region.volume == 8
     assert grid.region.volume == 256
-    assert any(
-        axis_region.axis.coordinate_kind == "enumerated-cells"
-        for component in preset.region.components
-        for axis_region in component.axis_regions
-    )
-    assert any(
-        axis_region.axis.coordinate_kind == "real-grid"
+    assert all(
+        axis_region.axis.coordinate_kind == "integer-range"
         for component in grid.region.components
         for axis_region in component.axis_regions
     )
@@ -484,7 +483,7 @@ def test_generated_sample_set_rejects_region_coordinates_outside_region() -> Non
     assert sample.axis_coordinates is not None
 
     bad_coordinates = dict(sample.axis_coordinates)
-    bad_coordinates["canvas_width"] = cast(int, bad_coordinates["canvas_width"]) + 1
+    bad_coordinates["transform-ordinal"] = 2**40
     bad_sample = replace(sample, axis_coordinates=bad_coordinates)
 
     with pytest.raises(
@@ -517,17 +516,16 @@ def test_digits_generator_materializes_target_volume_class_band() -> None:
     assert volume_class is not None
     assert volume_class.cardinality == 8
     assert math.isclose(volume_class.log2_volume, math.log2(8))
-    assert volume_class.resolution_assignment is not None
     metadata = volume_class.metadata()
-    assert metadata["affine_transform_count"] == 2
+    assert metadata["kind"] == "digits-realized-setup-window"
     assert metadata["digit_count"] == 10
     assert metadata["output_digit_count"] == 10
     assert metadata["minimum_address"] == 7
     assert metadata["maximum_address"] == 14
-    assert metadata["requested_cardinality"] == 8
+    assert metadata["cardinality"] == 8
     assert metadata["realized_cardinality"] == 8
     assert metadata["construction"] == (
-        "symmetric-digits-over-finite-affine-product-grid"
+        "digit-setups-over-shell-ordered-transform-lattice"
     )
     oracle_reference = cast(
         dict[str, object],
@@ -535,18 +533,16 @@ def test_digits_generator_materializes_target_volume_class_band() -> None:
     )
     assert oracle_reference["kind"] == "oracle-inference-compute-reference-v1"
     assert oracle_reference["unit"] == "abstract-ops"
-    assert oracle_reference["value"] == 16 * 16
+    assert oracle_reference["value"] == 36 * 36
     assert oracle_reference["components"] == {
-        "height": 16,
-        "width": 16,
-        "pixel_count": 16 * 16,
+        "height": 36,
+        "width": 36,
+        "pixel_count": 36 * 36,
     }
-    assert metadata["affine_parameters"] == [
+    assert metadata["transform_axes"] == [
         "x_translation",
         "y_translation",
         "scale",
-        "rotation",
-        "x_shear",
     ]
 
 
@@ -563,8 +559,10 @@ def test_digits_integer_shells_decode_unique_latent_addresses() -> None:
             )
         )
         assert volume_class is not None
-        assert volume_class.cardinality == 2**shell
-        assert volume_class.minimum_address == 2**shell - 1
+        expected_cardinality = 2**shell
+        expected_minimum_address = 2**shell - 1
+        assert volume_class.cardinality == expected_cardinality
+        assert volume_class.minimum_address == expected_minimum_address
         for state_index in range(volume_class.cardinality):
             sample_address = volume_class.minimum_address + state_index
             coordinate = (sample_address % 10, sample_address // 10)
@@ -584,11 +582,11 @@ def test_digits_oracle_inference_reference_spans_requested_cost() -> None:
     scores = [cast(int | float, point["score"]) for point in points]
     assert costs == sorted(costs)
     assert scores == sorted(scores)
-    assert costs[0] == 16 * 16
-    assert scores[0] == 0
+    assert costs[0] == 28 * 28
+    assert scores[0] == math.log2(10)
     first_metadata = cast(dict[str, object], points[0]["metadata"])
     first_components = cast(dict[str, object], first_metadata["components"])
-    assert first_components["sample_cardinality"] == 1
+    assert first_components["sample_cardinality"] == 10
     assert costs[-1] >= 10_000_000_000
     metadata = cast(dict[str, object], points[-1]["metadata"])
     components = cast(dict[str, object], metadata["components"])
@@ -624,13 +622,10 @@ def test_digits_generator_materializes_large_target_volume_class_directly() -> N
     assert volume_class is not None
     assert volume_class.cardinality == 1_048_576
     assert 20.0 <= volume_class.log2_volume <= 21.0
-    assert volume_class.resolution_assignment is not None
-    assert cast(int, volume_class.metadata()["affine_product_cardinality"]) >= (
-        volume_class.maximum_address + 1
-    )
+    assert cast(int, volume_class.metadata()["maximum_transform_ordinal"]) >= 1
 
 
-def test_digits_generator_accepts_low_sample_cardinality_requests() -> None:
+def test_digits_generator_returns_null_set_for_empty_volume_requests() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
     volume_request = StateSpaceVolumeRequest(
@@ -643,8 +638,8 @@ def test_digits_generator_accepts_low_sample_cardinality_requests() -> None:
         volume_request=volume_request,
     )
 
-    assert batch.shape == (3,)
-    assert len(batch.samples) == 3
+    assert batch.shape == (0,)
+    assert len(batch.samples) == 0
     assert batch.volume_request is not None
     assert batch.volume_request.measure_id == volume_request.measure_id
 
@@ -677,7 +672,7 @@ def test_volume_value_ids_are_core_contract() -> None:
     )
 
 
-def test_digits_generator_keeps_minimum_canvas_when_memory_cap_is_tiny() -> None:
+def test_digits_generator_keeps_chart_canvas_when_memory_cap_is_tiny() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
     batch = _formation_payload(generator,
@@ -686,7 +681,7 @@ def test_digits_generator_keeps_minimum_canvas_when_memory_cap_is_tiny() -> None
         memory_limit_bytes=1,
     )
 
-    assert [(sample.width, sample.height) for sample in batch.samples] == [(1, 1)] * 8
+    assert [(sample.width, sample.height) for sample in batch.samples] == [(36, 36)] * 8
 
 
 def test_digits_generator_applies_recorded_variation_coordinates() -> None:
@@ -712,7 +707,11 @@ def test_digits_generator_applies_recorded_variation_coordinates() -> None:
     )
 
     assert sample.require_field() == direct
-    assert sample.require_field() != untransformed
+    coordinate = cast(list[Mapping[str, object]], variation_values["coordinates"])[0]
+    if coordinate["transform_ordinal"] == 0 and sample_width(sample) == 28:
+        assert sample.require_field() == untransformed
+    else:
+        assert sample.require_field() != untransformed
     assert all(0.0 <= value <= 1.0 for value in sample.require_field().values)
 
 
@@ -788,8 +787,10 @@ def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
         )
     )
     assert volume_class is not None
-    resolution_assignment = volume_class.resolution_assignment
-    assert resolution_assignment is not None
+    resolution_assignment = volume_class.resolution_assignment(
+        width_axis=generator.formation.width_axis,
+        height_axis=generator.formation.height_axis,
+    )
     width = resolution_assignment.require_axis(generator.formation.width_axis)
     height = resolution_assignment.require_axis(generator.formation.height_axis)
     render_kwargs: dict[str, Any] = {
@@ -797,8 +798,6 @@ def test_digits_mps_tensor_fields_match_cpu_reference() -> None:
         "width": width,
         "height": height,
         "digit_count": volume_class.digit_count,
-        "transform": generator.formation.variation_transform,
-        "grid": volume_class.affine_grid,
         "seed": 101,
         "sample_indices": tuple(range(64)),
         "cardinality": volume_class.cardinality,

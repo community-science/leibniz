@@ -215,7 +215,7 @@ if (generatedSample === undefined) {
   throw new Error('expected generated sample');
 }
 assertEqual(generatedSample.outcome_id.startsWith('digit-'), true, 'sample outcome id');
-assertEqual(requiredFieldShape(generatedSample).join('x'), '1x16x16', 'sample field shape');
+assertEqual(requiredFieldShape(generatedSample).join('x'), '1x36x36', 'sample field shape');
 assertEqual(
   Object.hasOwn(generatedSample, 'preview_crop'),
   false,
@@ -254,14 +254,14 @@ const generatedVariationCoordinate = Array.isArray(variationValues?.coordinates)
   ? variationValues.coordinates[0] as Record<string, unknown>
   : undefined;
 assertEqual(
-  Object.hasOwn(generatedVariationCoordinate ?? {}, 'constructed_affine_indices'),
+  Object.hasOwn(generatedVariationCoordinate ?? {}, 'transform_cell'),
   true,
-  'sample variation constructed affine indices',
+  'sample variation transform cell',
 );
 assertEqual(
-  Object.hasOwn(generatedVariationCoordinate ?? {}, 'constructed_affine_parameters'),
+  Object.hasOwn(generatedVariationCoordinate ?? {}, 'normalized_transform'),
   true,
-  'sample variation constructed affine parameters',
+  'sample variation normalized transform',
 );
 assertEqual(
   Object.hasOwn(variationValues ?? {}, 'observable_state_id'),
@@ -276,7 +276,7 @@ assertEqual(
 const materializationPlan = generatedSample.materialization_plan as Record<string, unknown>;
 assertEqual(
   assignmentLabel(materializationPlan.resolution_assignment),
-  'H=16,W=16',
+  'H=36,W=36',
   'sample resolution assignment',
 );
 const chessBatch = chessBenchmarkTask.batches[3];
