@@ -26,7 +26,7 @@ __all__ = [
     "StateSpaceIntegral",
     "finite_measurements_for_predictions",
     "sampled_competence_curriculum_record",
-    "sampled_competence_compute_cost_integral",
+    "sampled_competence_planning_cost_integral",
     "sampled_competence_record",
     "sampled_competence_frontier_integral",
     "StateSpaceIntegralTerm",
@@ -391,14 +391,14 @@ def sampled_competence_frontier_integral(
     return StateSpaceIntegral(terms=tuple(terms))
 
 
-def sampled_competence_compute_cost_integral(
+def sampled_competence_planning_cost_integral(
     *,
     points: Sequence[Mapping[str, object]],
     architecture: ArchitectureManifest,
     error_type: type[_ErrorT] = ValueError,
     field_prefix: str = "compute_cost_point",
 ) -> StateSpaceIntegral:
-    """Return the compute-cost integral for sampled competence intervals."""
+    """Return a planning compute-cost integral for sampled competence intervals."""
 
     ordered = sorted(
         points,
@@ -446,7 +446,7 @@ def sampled_competence_compute_cost_integral(
                             field_prefix=field_prefix,
                         )
                     ),
-                    kind="measured-compute-cost",
+                    kind="planning-compute-cost",
                     representative_log2_volume=log2_volume,
                 )
             )

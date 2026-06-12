@@ -16,8 +16,8 @@ from leibniz.benchmark_evaluation import (
     CompetencePoint,
     StateSpaceIntegral,
     StateSpaceIntegralTerm,
-    sampled_competence_compute_cost_integral,
     sampled_competence_frontier_integral,
+    sampled_competence_planning_cost_integral,
 )
 from leibniz.benchmark_implementations import (
     Benchmark,
@@ -796,9 +796,6 @@ def _evaluation_summary_cost_summary(
     cost_summary = dict(inspection_cost)
     cost_summary.pop("parameter_count", None)
     cost_summary.pop("inference_compute", None)
-    analytic_inference_compute = _evaluation_summary_max_inference_compute(summary)
-    if analytic_inference_compute is not None:
-        cost_summary["analytic_inference_compute"] = analytic_inference_compute
     cost_summary["inference_compute"] = _evaluation_summary_measured_inference_compute(
         summary
     )
@@ -834,24 +831,6 @@ def _evaluation_summary_capacity_limited(summary: _EvaluationBundleSummary) -> b
         if phase_record.get("capacity_limited") is True:
             return True
     return False
-
-
-def _evaluation_summary_max_inference_compute(
-    summary: _EvaluationBundleSummary,
-) -> float | None:
-    checkpoint_value = _throughput_max_inference_compute(
-        summary.throughput.get("checkpoint_evaluation"),
-        "evaluation_bundle.throughput.checkpoint_evaluation",
-    )
-    if checkpoint_value is not None:
-        return checkpoint_value
-    evaluation_value = _throughput_max_inference_compute(
-        summary.throughput.get("evaluation"),
-        "evaluation_bundle.throughput.evaluation",
-    )
-    if evaluation_value is not None:
-        return evaluation_value
-    return None
 
 
 def _evaluation_summary_measured_inference_compute(
@@ -1536,13 +1515,17 @@ def _model_result_records(
         inference_compute = _model_measured_inference_compute(ordered_runs)
         if inference_compute is None:
             cost_integral = None
-        elif _points_have_measured_inference_compute(points):
+        elif result_status == "accepted":
+            _require_points_have_measured_inference_compute(
+                points,
+                model_key=model_key,
+            )
             cost_integral = _sampled_competence_measured_cost_integral(
                 points=points,
                 field_prefix="compute_cost_point",
             )
         else:
-            cost_integral = sampled_competence_compute_cost_integral(
+            cost_integral = sampled_competence_planning_cost_integral(
                 points=points,
                 architecture=_run_architecture_manifest(best_run),
                 error_type=LocalResultImportError,
@@ -1809,20 +1792,6 @@ def _run_architecture_manifest(run: _BenchmarkRunRecord) -> ArchitectureManifest
     return ArchitectureManifest.from_record(run.architecture)
 
 
-def _throughput_max_inference_compute(
-    value: object,
-    field_path: str,
-    *,
-    field: str = "max_inference_compute",
-) -> float | None:
-    if not isinstance(value, Mapping):
-        return None
-    record = cast(Mapping[str, object], value)
-    if field not in record:
-        return None
-    return _as_nonnegative_number(record[field], field_path)
-
-
 def _throughput_measured_inference_compute(
     value: object,
     field_path: str,
@@ -1872,7 +1841,7 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
                     field_prefix="compute_cost_point",
                 ).value
             else:
-                cost_summary["cost"] = sampled_competence_compute_cost_integral(
+                cost_summary["cost"] = sampled_competence_planning_cost_integral(
                     points=_run_competence_points(run),
                     architecture=_run_architecture_manifest(run),
                     error_type=LocalResultImportError,
@@ -1938,10 +1907,22 @@ def _sampled_competence_measured_cost_integral(
     return StateSpaceIntegral(terms=tuple(terms))
 
 
-def _points_have_measured_inference_compute(
+def _require_points_have_measured_inference_compute(
     points: Sequence[Mapping[str, object]],
-) -> bool:
-    return bool(points) and all("inference_compute" in point for point in points)
+    *,
+    model_key: str,
+) -> None:
+    if not points:
+        raise LocalResultImportError(f"model {model_key} has no measured cost points")
+    missing = tuple(
+        index for index, point in enumerate(points) if "inference_compute" not in point
+    )
+    if missing:
+        joined = ", ".join(str(index) for index in missing)
+        raise LocalResultImportError(
+            f"model {model_key} has accepted points missing measured inference_compute: "
+            f"{joined}"
+        )
 
 
 def _optional_point_input_shape(
@@ -2497,7 +2478,7 @@ def _selected_checkpoint_training_cost(
         return cost
     if not training_points:
         return None
-    return sampled_competence_compute_cost_integral(
+    return sampled_competence_planning_cost_integral(
         points=training_points,
         architecture=architecture,
         error_type=LocalResultImportError,

@@ -9,7 +9,7 @@ import pytest
 
 import leibniz.local_results as local_results
 from leibniz.architectures import ArchitectureManifestDocument
-from leibniz.benchmark_evaluation import sampled_competence_compute_cost_integral
+from leibniz.benchmark_evaluation import sampled_competence_planning_cost_integral
 from leibniz.benchmark_runner import (
     BenchmarkEvaluationPlan,
     BenchmarkRunPlan,
@@ -382,6 +382,34 @@ def test_materialize_benchmark_result_views_rejects_unmodeled_measured_cost(
         )
 
 
+def test_materialize_benchmark_result_views_rejects_accepted_point_without_measured_cost(
+    tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    _run_and_evaluate_digits_benchmark(results_root)
+    for path in results_root.rglob("*.json"):
+        record = dict(load_object_document(path.read_bytes(), description="result record"))
+        if record.get("format") != "leibniz.benchmark-evaluation":
+            continue
+        sampled_competence = cast(dict[str, object], record["sampled_competence"])
+        points = sampled_competence.get("points")
+        if isinstance(points, list) and points:
+            for point in cast(list[dict[str, object]], points):
+                point.pop("inference_compute", None)
+        else:
+            sampled_competence.pop("inference_compute", None)
+        path.write_bytes(canonical_document_bytes(record) + b"\n")
+
+    with pytest.raises(
+        LocalResultImportError,
+        match="accepted points missing measured inference_compute",
+    ):
+        materialize_benchmark_result_views(
+            repository_root=_repository_root,
+            results_root=results_root,
+        )
+
+
 def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     tmp_path: Path,
 ) -> None:
@@ -418,7 +446,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert measurement_count % 64 == 0
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     assert isinstance(cost_summary["inference_compute"], int | float)
-    assert isinstance(cost_summary["analytic_inference_compute"], int | float)
+    assert "analytic_inference_compute" not in cost_summary
     assert isinstance(cost_summary["cost"], int | float)
     assert cost_summary["cost"] >= 0
     cost_integral = cast(dict[str, object], leaderboard[0]["cost_integral"])
@@ -523,7 +551,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     }
 
 
-def test_integrated_model_cost_reconstructs_point_density_from_input_shape() -> None:
+def test_planning_model_cost_reconstructs_point_density_from_input_shape() -> None:
     architecture = ArchitectureManifestDocument.from_bytes(
         _digits_architecture.read_bytes()
     ).manifest
@@ -539,7 +567,7 @@ def test_integrated_model_cost_reconstructs_point_density_from_input_shape() -> 
     assert first_compute is not None
     assert second_compute is not None
 
-    cost_integral = sampled_competence_compute_cost_integral(
+    cost_integral = sampled_competence_planning_cost_integral(
         points=(
             {
                 "log2_volume": 1.0,
@@ -558,6 +586,7 @@ def test_integrated_model_cost_reconstructs_point_density_from_input_shape() -> 
     )
 
     assert math.isclose(cost_integral.value, 32.0 * (first_compute + second_compute))
+    assert {term.kind for term in cost_integral.terms} == {"planning-compute-cost"}
 
 
 def test_training_estimate_comparison_uses_selected_checkpoint_estimate(

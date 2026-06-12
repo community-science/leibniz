@@ -20,9 +20,9 @@ from leibniz.benchmark_evaluation import (
     CompetencePoint,
     ValidationCompetencePoint,
     finite_measurements_for_predictions,
-    sampled_competence_compute_cost_integral,
     sampled_competence_curriculum_record,
     sampled_competence_frontier_integral,
+    sampled_competence_planning_cost_integral,
     sampled_competence_record,
     validation_competence_frontier_advances,
 )
@@ -4103,7 +4103,7 @@ def _training_estimate_record(
     if not isinstance(score_integral_value, Mapping):
         raise BenchmarkRunnerError("training gate score estimate is missing score integral")
     score_integral = cast(Mapping[str, object], score_integral_value)
-    cost_integral = sampled_competence_compute_cost_integral(
+    cost_integral = sampled_competence_planning_cost_integral(
         points=points,
         architecture=architecture,
         error_type=BenchmarkRunnerError,
