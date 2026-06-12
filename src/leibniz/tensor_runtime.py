@@ -11,7 +11,7 @@ from array import array
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, Self, cast
 
 from leibniz.architectures import ArchitectureManifest
 from leibniz.tensor_shapes import TensorShape
@@ -36,21 +36,25 @@ __all__ = [
     "softmax_target_masses",
     "synchronize_runtime",
     "TensorRuntime",
+    "TensorRuntimeOperationRecord",
     "TensorElementParameter",
     "TensorElementParameterDType",
     "TensorBatchProgram",
     "TensorElementRecipe",
     "TensorElementDType",
     "TensorRuntimeError",
+    "TensorRuntimeTensorSpec",
     "TensorRuntimeDevice",
     "TensorRuntimeDeviceKind",
     "tensor_element_compile_fallback_records",
     "tensor_runtime_available_memory_bytes",
+    "tensor_runtime_capture_operations",
     "tensor_runtime_construct_tensor",
     "tensor_runtime_default_device",
     "tensor_runtime_device_choices",
     "tensor_runtime_device_kinds",
     "tensor_runtime_has_fixed_device_memory",
+    "tensor_runtime_operation_capture",
     "tensor_runtime_profile_operator_rows",
     "tensor_runtime_total_memory_bytes",
     "tensor_runtime_used_memory_bytes",
@@ -96,6 +100,87 @@ class TensorRuntime:
     torch: Any
     device: Any
     device_kind: Literal["cpu", "cuda", "mps"]
+
+
+@dataclass(frozen=True, slots=True)
+class TensorRuntimeTensorSpec:
+    """Backend tensor shape and dtype observed during runtime operation capture."""
+
+    shape: tuple[int, ...]
+    dtype: str
+
+
+@dataclass(frozen=True, slots=True)
+class TensorRuntimeOperationRecord:
+    """One captured tensor runtime operation with tensor inputs and outputs."""
+
+    name: str
+    arguments: tuple[object, ...]
+    keyword_arguments: tuple[tuple[str, object], ...]
+    input_tensors: tuple[TensorRuntimeTensorSpec, ...]
+    output_tensors: tuple[TensorRuntimeTensorSpec, ...]
+
+
+class TensorRuntimeOperationCapture:
+    """Context manager that captures a tensor runtime operation stream."""
+
+    def __init__(self, runtime: TensorRuntime) -> None:
+        self._runtime = runtime
+        self._mode: object | None = None
+        self._operations: list[TensorRuntimeOperationRecord] = []
+
+    def __enter__(self) -> Self:
+        if self._mode is not None:
+            raise TensorRuntimeError("tensor runtime operation capture is already active")
+        del self._runtime
+        from torch.utils._python_dispatch import TorchDispatchMode
+
+        parent = self
+
+        class _OperationCaptureMode(TorchDispatchMode):  # type: ignore[misc]
+            def __torch_dispatch__(
+                self,
+                func: object,
+                types: object,
+                args: tuple[object, ...] = (),
+                kwargs: Mapping[str, object] | None = None,
+            ) -> object:
+                del types
+                keyword_arguments = dict(kwargs or {})
+                input_specs = _tensor_runtime_tensor_specs_from_value(args)
+                output = cast(Callable[..., object], func)(*args, **keyword_arguments)
+                parent._operations.append(
+                    TensorRuntimeOperationRecord(
+                        name=_tensor_runtime_operation_name(func),
+                        arguments=tuple(
+                            _tensor_runtime_operation_argument(arg) for arg in args
+                        ),
+                        keyword_arguments=tuple(
+                            (key, _tensor_runtime_operation_argument(value))
+                            for key, value in sorted(
+                                keyword_arguments.items(),
+                                key=lambda item: item[0],
+                            )
+                        ),
+                        input_tensors=input_specs,
+                        output_tensors=_tensor_runtime_tensor_specs_from_value(output),
+                    )
+                )
+                return output
+
+        self._mode = _OperationCaptureMode()
+        self._mode.__enter__()  # type: ignore[attr-defined]
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        if self._mode is None:
+            return
+        mode = self._mode
+        self._mode = None
+        mode.__exit__(exc_type, exc, traceback)  # type: ignore[attr-defined]
+
+    def records(self) -> tuple[TensorRuntimeOperationRecord, ...]:
+        return tuple(self._operations)
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +306,23 @@ def resolve_host_tensor_runtime() -> TensorRuntime:
     """Resolve the portable host tensor runtime."""
 
     return resolve_tensor_runtime("cpu")
+
+
+def tensor_runtime_capture_operations(
+    runtime: TensorRuntime,
+    callback: Callable[[], object],
+) -> tuple[TensorRuntimeOperationRecord, ...]:
+    """Capture the tensor runtime operation stream produced by a callback."""
+
+    with tensor_runtime_operation_capture(runtime) as capture:
+        callback()
+    return capture.records()
+
+
+def tensor_runtime_operation_capture(runtime: TensorRuntime) -> TensorRuntimeOperationCapture:
+    """Create a context manager that captures tensor runtime operations."""
+
+    return TensorRuntimeOperationCapture(runtime)
 
 
 def tensor_value_to_host(value: Any) -> Any:
@@ -1556,6 +1658,78 @@ def _torch() -> Any:
         return cast(Any, importlib.import_module("torch"))
     except ImportError as error:
         raise TensorRuntimeError("PyTorch is required to run benchmark training") from error
+
+
+def _tensor_runtime_operation_name(func: object) -> str:
+    raw = str(func)
+    if raw.startswith("aten."):
+        return raw
+    name = getattr(func, "__name__", None)
+    if isinstance(name, str) and name:
+        return f"aten.{name}"
+    return raw
+
+
+def _tensor_runtime_tensor_specs_from_value(
+    value: object,
+) -> tuple[TensorRuntimeTensorSpec, ...]:
+    specs: list[TensorRuntimeTensorSpec] = []
+    _append_tensor_runtime_tensor_specs(specs, value)
+    return tuple(specs)
+
+
+def _append_tensor_runtime_tensor_specs(
+    specs: list[TensorRuntimeTensorSpec],
+    value: object,
+) -> None:
+    shape = getattr(value, "shape", None)
+    dtype = getattr(value, "dtype", None)
+    if shape is not None and dtype is not None:
+        try:
+            specs.append(
+                TensorRuntimeTensorSpec(
+                    shape=tuple(int(extent) for extent in shape),
+                    dtype=str(dtype).removeprefix("torch."),
+                )
+            )
+            return
+        except TypeError:
+            pass
+    if isinstance(value, Mapping):
+        for item in cast(Mapping[object, object], value).values():
+            _append_tensor_runtime_tensor_specs(specs, item)
+        return
+    if isinstance(value, (tuple, list)):
+        for item in cast(Sequence[object], value):
+            _append_tensor_runtime_tensor_specs(specs, item)
+
+
+def _tensor_runtime_operation_argument(value: object) -> object:
+    shape = getattr(value, "shape", None)
+    dtype = getattr(value, "dtype", None)
+    if shape is not None and dtype is not None:
+        try:
+            return TensorRuntimeTensorSpec(
+                shape=tuple(int(extent) for extent in shape),
+                dtype=str(dtype).removeprefix("torch."),
+            )
+        except TypeError:
+            pass
+    if isinstance(value, (bool, int, float, str)) or value is None:
+        return value
+    if isinstance(value, Mapping):
+        return tuple(
+            (str(key), _tensor_runtime_operation_argument(item))
+            for key, item in sorted(
+                cast(Mapping[object, object], value).items(),
+                key=lambda item: str(item[0]),
+            )
+        )
+    if isinstance(value, (tuple, list)):
+        return tuple(
+            _tensor_runtime_operation_argument(item) for item in cast(Sequence[object], value)
+        )
+    return repr(value)
 
 
 def _positive_memory_bytes(value: object, *, field: str) -> int:

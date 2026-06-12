@@ -1,4 +1,4 @@
-"""Measured PyTorch program cost with a declared abstract-FLOP model."""
+"""Measured tensor program cost with a declared abstract-FLOP model."""
 
 from __future__ import annotations
 
@@ -6,12 +6,18 @@ import math
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Self, cast
+from typing import Any, Self, cast
 
-from leibniz.tensor_runtime import TensorRuntime
+from leibniz.tensor_runtime import (
+    TensorRuntime,
+    TensorRuntimeOperationRecord,
+    TensorRuntimeTensorSpec,
+    tensor_runtime_capture_operations,
+    tensor_runtime_operation_capture,
+)
 
 __all__ = [
-    "PYTORCH_COST_MODEL_ID",
+    "TENSOR_RUNTIME_COST_MODEL_ID",
     "CostMeasurement",
     "CostMetrologyError",
     "CostMeter",
@@ -23,7 +29,7 @@ __all__ = [
     "measure_program_cost",
 ]
 
-PYTORCH_COST_MODEL_ID = "leibniz.cost-model.pytorch@0.1.0"
+TENSOR_RUNTIME_COST_MODEL_ID = "leibniz.cost-model.tensor-runtime@0.1.0"
 
 
 class CostMetrologyError(ValueError):
@@ -291,7 +297,7 @@ class CostMeasurement:
 
 
 class CostMeter:
-    """Context manager that records a PyTorch aten op stream for a runtime."""
+    """Context manager that records a tensor runtime operation stream."""
 
     def __init__(
         self,
@@ -303,141 +309,44 @@ class CostMeter:
         self._runtime = runtime
         self._strict = strict
         self._roofline = roofline
-        self._mode: object | None = None
+        self._capture: Any | None = None
+        self._active = False
         self._started_at = 0.0
         self._wall_seconds = 0.0
-        self._per_op: dict[str, _OperationAccumulator] = {}
-        self._movement: dict[str, _MovementAccumulator] = {}
-        self._unmodeled: dict[str, _UnmodeledAccumulator] = {}
-        self._operation_trace: list[CostOperationTraceRecord] = []
-        self.operation_count = 0
 
     def __enter__(self) -> Self:
-        if self._mode is not None:
+        if self._active:
             raise CostMetrologyError("cost meter is already active")
-        from torch.utils._python_dispatch import TorchDispatchMode
-
-        parent = self
-
-        class _DispatchCostMode(TorchDispatchMode):  # type: ignore[misc]
-            def __torch_dispatch__(
-                self,
-                func: object,
-                types: object,
-                args: tuple[object, ...] = (),
-                kwargs: Mapping[str, object] | None = None,
-            ) -> object:
-                del types
-                keyword_arguments = dict(kwargs or {})
-                name = _operation_name(func)
-                input_specs = _tensor_specs_from_value(args)
-                callable_func = cast(Callable[..., object], func)
-                output = callable_func(*args, **keyword_arguments)
-                output_specs = _tensor_specs_from_value(output)
-                parent._record_operation(
-                    name=name,
-                    args=args,
-                    input_specs=input_specs,
-                    output_specs=output_specs,
-                )
-                return output
-
+        if self._capture is not None:
+            raise CostMetrologyError("cost meter has already captured operations")
+        capture = tensor_runtime_operation_capture(self._runtime)
         self._started_at = time.perf_counter()
-        self._mode = _DispatchCostMode()
-        self._mode.__enter__()  # type: ignore[attr-defined]
+        capture.__enter__()
+        self._capture = capture
+        self._active = True
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        if self._mode is None:
+        capture = self._capture
+        if capture is None or not self._active:
             return
         self._wall_seconds += time.perf_counter() - self._started_at
-        mode = self._mode
-        self._mode = None
-        mode.__exit__(exc_type, exc, traceback)  # type: ignore[attr-defined]
+        self._active = False
+        capture.__exit__(exc_type, exc, traceback)
 
     def measurement(self) -> CostMeasurement:
-        return CostMeasurement(
-            cost_model_id=PYTORCH_COST_MODEL_ID,
-            abstract_flops=sum(record.abstract_flops for record in self._per_op.values()),
-            per_op=tuple(
-                OperationCostRecord(
-                    name=name,
-                    calls=record.calls,
-                    abstract_flops=record.abstract_flops,
-                    output_elements=record.output_elements,
-                )
-                for name, record in sorted(self._per_op.items())
-            ),
-            moved_elements=sum(record.moved_elements for record in self._movement.values()),
-            movement=tuple(
-                MovementCostRecord(
-                    name=name,
-                    calls=record.calls,
-                    moved_elements=record.moved_elements,
-                )
-                for name, record in sorted(self._movement.items())
-            ),
-            unmodeled_operations=tuple(
-                UnmodeledOperationRecord(
-                    name=name,
-                    calls=record.calls,
-                    output_elements=record.output_elements,
-                )
-                for name, record in sorted(self._unmodeled.items())
-            ),
-            operation_count=self.operation_count,
-            operation_trace=tuple(self._operation_trace),
-            wall_seconds=self._wall_seconds,
-            tensor_device=self._runtime.device_kind,
+        capture = self._capture
+        if capture is None:
+            raise CostMetrologyError("cost meter has not captured any operations")
+        return _measurement_from_operation_stream(
+            runtime=self._runtime,
+            operations=capture.records(),
+            wall_seconds=self._wall_seconds
+            if not self._active
+            else time.perf_counter() - self._started_at,
+            strict=self._strict,
             roofline=self._roofline,
         )
-
-    def _record_operation(
-        self,
-        *,
-        name: str,
-        args: tuple[object, ...],
-        input_specs: tuple[TensorValueSpec, ...],
-        output_specs: tuple[TensorValueSpec, ...],
-    ) -> None:
-        self.operation_count += 1
-        self._operation_trace.append(
-            CostOperationTraceRecord(
-                name=name,
-                input_tensors=input_specs,
-                output_tensors=output_specs,
-            )
-        )
-        output_elements = _specs_numel(output_specs)
-        moved_elements = _movement_elements(
-            name=name,
-            input_specs=input_specs,
-            output_specs=output_specs,
-        )
-        if moved_elements is not None:
-            record = self._movement.setdefault(name, _MovementAccumulator())
-            record.calls += 1
-            record.moved_elements += moved_elements
-            return
-        abstract_flops = _abstract_flops(
-            name=name,
-            args=args,
-            input_specs=input_specs,
-            output_specs=output_specs,
-        )
-        if abstract_flops is None:
-            if self._strict:
-                raise CostMetrologyError(
-                    f"unmodeled operation in cost model {PYTORCH_COST_MODEL_ID}: {name}"
-                )
-            record = self._unmodeled.setdefault(name, _UnmodeledAccumulator())
-            record.calls += 1
-            record.output_elements += output_elements
-            return
-        record = self._per_op.setdefault(name, _OperationAccumulator())
-        record.calls += 1
-        record.abstract_flops += abstract_flops
-        record.output_elements += output_elements
 
 
 def measure_program_cost(
@@ -448,12 +357,122 @@ def measure_program_cost(
     strict: bool = False,
     roofline: Mapping[str, object] | None = None,
 ) -> CostMeasurement:
-    """Measure one execution of a program under the declared PyTorch cost model."""
+    """Measure one execution of a program under the declared tensor cost model."""
 
     args = cast(tuple[object, ...], inputs) if isinstance(inputs, tuple) else (inputs,)
-    with CostMeter(runtime, strict=strict, roofline=roofline) as meter:
-        program(*args)
-    return meter.measurement()
+    def callback() -> object:
+        return program(*args)
+
+    started = time.perf_counter()
+    operations = tensor_runtime_capture_operations(runtime, callback)
+    wall_seconds = time.perf_counter() - started
+    return _measurement_from_operation_stream(
+        runtime=runtime,
+        operations=operations,
+        wall_seconds=wall_seconds,
+        strict=strict,
+        roofline=roofline,
+    )
+
+
+def _measurement_from_operation_stream(
+    *,
+    runtime: TensorRuntime,
+    operations: tuple[TensorRuntimeOperationRecord, ...],
+    wall_seconds: float,
+    strict: bool,
+    roofline: Mapping[str, object] | None,
+) -> CostMeasurement:
+    per_op: dict[str, _OperationAccumulator] = {}
+    movement: dict[str, _MovementAccumulator] = {}
+    unmodeled: dict[str, _UnmodeledAccumulator] = {}
+    operation_trace: list[CostOperationTraceRecord] = []
+    for operation in operations:
+        trace = _operation_trace_from_runtime(operation)
+        operation_trace.append(trace)
+        output_elements = _specs_numel(trace.output_tensors)
+        moved_elements = _movement_elements(
+            name=trace.name,
+            input_specs=trace.input_tensors,
+            output_specs=trace.output_tensors,
+        )
+        if moved_elements is not None:
+            record = movement.setdefault(trace.name, _MovementAccumulator())
+            record.calls += 1
+            record.moved_elements += moved_elements
+            continue
+        abstract_flops = _abstract_flops(
+            name=trace.name,
+            arguments=operation.arguments,
+            keyword_arguments=operation.keyword_arguments,
+            input_specs=trace.input_tensors,
+            output_specs=trace.output_tensors,
+        )
+        if abstract_flops is None:
+            if strict:
+                raise CostMetrologyError(
+                    "unmodeled operation in cost model "
+                    f"{TENSOR_RUNTIME_COST_MODEL_ID}: {trace.name}"
+                )
+            record = unmodeled.setdefault(trace.name, _UnmodeledAccumulator())
+            record.calls += 1
+            record.output_elements += output_elements
+            continue
+        record = per_op.setdefault(trace.name, _OperationAccumulator())
+        record.calls += 1
+        record.abstract_flops += abstract_flops
+        record.output_elements += output_elements
+    return CostMeasurement(
+        cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
+        abstract_flops=sum(record.abstract_flops for record in per_op.values()),
+        per_op=tuple(
+            OperationCostRecord(
+                name=name,
+                calls=record.calls,
+                abstract_flops=record.abstract_flops,
+                output_elements=record.output_elements,
+            )
+            for name, record in sorted(per_op.items())
+        ),
+        moved_elements=sum(record.moved_elements for record in movement.values()),
+        movement=tuple(
+            MovementCostRecord(
+                name=name,
+                calls=record.calls,
+                moved_elements=record.moved_elements,
+            )
+            for name, record in sorted(movement.items())
+        ),
+        unmodeled_operations=tuple(
+            UnmodeledOperationRecord(
+                name=name,
+                calls=record.calls,
+                output_elements=record.output_elements,
+            )
+            for name, record in sorted(unmodeled.items())
+        ),
+        operation_count=len(operations),
+        operation_trace=tuple(operation_trace),
+        wall_seconds=wall_seconds,
+        tensor_device=runtime.device_kind,
+        roofline=roofline,
+    )
+
+
+def _operation_trace_from_runtime(
+    operation: TensorRuntimeOperationRecord,
+) -> CostOperationTraceRecord:
+    return CostOperationTraceRecord(
+        name=operation.name,
+        input_tensors=tuple(_tensor_spec_from_runtime(spec) for spec in operation.input_tensors),
+        output_tensors=tuple(
+            _tensor_spec_from_runtime(spec) for spec in operation.output_tensors
+        ),
+    )
+
+
+def _tensor_spec_from_runtime(spec: TensorRuntimeTensorSpec) -> TensorValueSpec:
+    return TensorValueSpec(shape=spec.shape, dtype=spec.dtype)
 
 
 @dataclass(slots=True)
@@ -475,49 +494,11 @@ class _UnmodeledAccumulator:
     output_elements: int = 0
 
 
-def _operation_name(func: object) -> str:
-    raw = str(func)
-    if raw.startswith("aten."):
-        return raw
-    name = getattr(func, "__name__", None)
-    if isinstance(name, str) and name:
-        return f"aten.{name}"
-    return raw
-
-
-def _tensor_specs_from_value(value: object) -> tuple[TensorValueSpec, ...]:
-    specs: list[TensorValueSpec] = []
-    _append_tensor_specs(specs, value)
-    return tuple(specs)
-
-
-def _append_tensor_specs(specs: list[TensorValueSpec], value: object) -> None:
-    shape = getattr(value, "shape", None)
-    dtype = getattr(value, "dtype", None)
-    if shape is not None and dtype is not None:
-        try:
-            specs.append(
-                TensorValueSpec(
-                    shape=tuple(int(extent) for extent in shape),
-                    dtype=str(dtype).removeprefix("torch."),
-                )
-            )
-            return
-        except TypeError:
-            pass
-    if isinstance(value, Mapping):
-        for item in cast(Mapping[object, object], value).values():
-            _append_tensor_specs(specs, item)
-        return
-    if isinstance(value, (tuple, list)):
-        for item in cast(Sequence[object], value):
-            _append_tensor_specs(specs, item)
-
-
 def _abstract_flops(
     *,
     name: str,
-    args: tuple[object, ...],
+    arguments: tuple[object, ...],
+    keyword_arguments: tuple[tuple[str, object], ...],
     input_specs: tuple[TensorValueSpec, ...],
     output_specs: tuple[TensorValueSpec, ...],
 ) -> int | None:
@@ -530,7 +511,12 @@ def _abstract_flops(
     if name in {"aten.convolution.default", "aten.conv2d.default"}:
         return _convolution_flops(input_specs, output_specs)
     if name.startswith("aten._fft_"):
-        return _fft_flops(name=name, args=args, input_specs=input_specs)
+        return _fft_flops(
+            name=name,
+            arguments=arguments,
+            keyword_arguments=keyword_arguments,
+            input_specs=input_specs,
+        )
     if name in _pointwise_ops:
         return _specs_numel(output_specs)
     if name in _reduction_ops:
@@ -586,7 +572,8 @@ def _convolution_flops(
 def _fft_flops(
     *,
     name: str,
-    args: tuple[object, ...],
+    arguments: tuple[object, ...],
+    keyword_arguments: tuple[tuple[str, object], ...],
     input_specs: tuple[TensorValueSpec, ...],
 ) -> int | None:
     if not input_specs:
@@ -594,7 +581,11 @@ def _fft_flops(
     shape = input_specs[0].shape
     if not shape:
         return 0
-    dims = _fft_dims(args=args, rank=len(shape))
+    dims = _fft_dims(
+        arguments=arguments,
+        keyword_arguments=keyword_arguments,
+        rank=len(shape),
+    )
     real_factor = 0.5 if name in {"aten._fft_r2c.default", "aten._fft_c2r.default"} else 1.0
     total = 0.0
     for dim in dims:
@@ -606,10 +597,16 @@ def _fft_flops(
     return int(round(total))
 
 
-def _fft_dims(*, args: tuple[object, ...], rank: int) -> tuple[int, ...]:
-    if len(args) < 2:
-        return (rank - 1,)
-    raw_dims = args[1]
+def _fft_dims(
+    *,
+    arguments: tuple[object, ...],
+    keyword_arguments: tuple[tuple[str, object], ...],
+    rank: int,
+) -> tuple[int, ...]:
+    keyword_map = dict(keyword_arguments)
+    raw_dims = keyword_map.get("dim", keyword_map.get("dims"))
+    if raw_dims is None:
+        raw_dims = arguments[1] if len(arguments) >= 2 else rank - 1
     if isinstance(raw_dims, int):
         dims = (raw_dims,)
     elif isinstance(raw_dims, Sequence) and not isinstance(raw_dims, (str, bytes)):

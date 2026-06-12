@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 
 from leibniz.cost_metrology import (
-    PYTORCH_COST_MODEL_ID,
+    TENSOR_RUNTIME_COST_MODEL_ID,
     CostMeasurement,
     CostMeter,
     CostMetrologyError,
@@ -23,7 +23,7 @@ def test_measure_program_cost_counts_matmul_formula() -> None:
 
     measurement = measure_program_cost(runtime, program, (left, right), strict=True)
 
-    assert measurement.cost_model_id == PYTORCH_COST_MODEL_ID
+    assert measurement.cost_model_id == TENSOR_RUNTIME_COST_MODEL_ID
     assert measurement.abstract_flops == 2 * 2 * 4 * 3
     assert measurement.operation_count == len(measurement.operation_trace)
     assert measurement.operation_trace[0].name == "aten.mm.default"

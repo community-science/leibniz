@@ -237,7 +237,6 @@ def test_backend_terms_are_used_only_in_tensor_runtime() -> None:
     banned_terms = ("torch", "cuda", "cpu", "triton")
     exempt_paths = frozenset(
         {
-            "cost_metrology.py",
             "tensor_runtime.py",
             "_repository_policy.py",
         }

@@ -27,7 +27,7 @@ from leibniz.benchmark_runner import (
     run_benchmark,
 )
 from leibniz.cli import main
-from leibniz.cost_metrology import PYTORCH_COST_MODEL_ID, CostMeasurement
+from leibniz.cost_metrology import TENSOR_RUNTIME_COST_MODEL_ID, CostMeasurement
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
 from leibniz.identifiers import ProtocolIdentifier
@@ -621,7 +621,7 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
             ((1.0,),),
             1,
             CostMeasurement(
-                cost_model_id=PYTORCH_COST_MODEL_ID,
+                cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
                 abstract_flops=0,
                 per_op=(),
                 moved_elements=0,
@@ -753,7 +753,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     inference_cost = CostMeasurement.from_record(
         checkpoint_evaluation_throughput["inference_cost_measurement"]
     )
-    assert inference_cost.cost_model_id == PYTORCH_COST_MODEL_ID
+    assert inference_cost.cost_model_id == TENSOR_RUNTIME_COST_MODEL_ID
     assert inference_cost.tensor_device == "cpu"
     assert inference_cost.operation_count > 0
     assert inference_cost.unmodeled_operations == ()
