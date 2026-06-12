@@ -30,7 +30,6 @@ __all__ = [
     "no_grad_context",
     "optimizer_step",
     "OperationFallbackSequential",
-    "preferred_tensor_runtime_device_kind",
     "seed_runtime",
     "softmax_prediction_rows",
     "softmax_target_mass_tensor",
@@ -498,14 +497,6 @@ def tensor_runtime_device_kinds(
     """Return available runtime device kinds in fallback order."""
 
     return _resolve_device_kinds(torch=_torch(), requested_device=requested_device)
-
-
-def preferred_tensor_runtime_device_kind(
-    requested_device: TensorRuntimeDevice = "auto",
-) -> TensorRuntimeDeviceKind:
-    """Return the first device kind that would be used for a request."""
-
-    return tensor_runtime_device_kinds(requested_device)[0]
 
 
 def architecture_supported_by_tensor_runtime(

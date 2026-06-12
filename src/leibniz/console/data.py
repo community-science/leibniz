@@ -329,8 +329,6 @@ class ConsoleDataBuilder:
                 "id": record["id"],
                 "construction_factors": record["construction_factors"],
                 "sample_factors": record["sample_factors"],
-                "complexity_projections": record.get("complexity_projections", ()),
-                "resolution_requirements": record.get("resolution_requirements", ()),
             }
         if kind == "materialization-declaration":
             summary = {
