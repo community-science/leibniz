@@ -1,107 +1,7 @@
-"""Generate small console web-source modules from Python-owned protocol metadata."""
-
-# ruff: noqa: E501
-
-from __future__ import annotations
-
-import argparse
-from collections.abc import Mapping, Sequence
-from pathlib import Path
-
-from leibniz.console.protocol import (
-    console_protocol_format_versions,
-    console_protocol_formats,
-)
-from leibniz.record_contracts import typescript_literal
-
-__all__ = [
-    "generated_console_protocol_module",
-    "generated_console_result_view_records_module",
-    "write_generated_console_protocol_module",
-    "write_generated_console_result_view_records_module",
-    "write_generated_console_web_modules",
-]
-
-_generated_protocol_module_path = (
-    Path(__file__).parent / "_web_src" / "src" / "generated" / "protocolVocabulary.ts"
-)
-_generated_result_view_records_module_path = (
-    Path(__file__).parent / "_web_src" / "src" / "generated" / "resultViewRecords.ts"
-)
-
-
-def generated_console_protocol_module() -> str:
-    """Return the generated TypeScript console protocol vocabulary module."""
-
-    formats = _console_protocol_formats()
-    versions = _console_protocol_format_versions()
-    return (
-        "export const consoleProtocolFormats = "
-        f"{typescript_literal(formats)} as const;\n\n"
-        "export const consoleProtocolFormatVersions = "
-        f"{typescript_literal(versions)} as const;\n"
-    )
-
-
-def write_generated_console_protocol_module(
-    path: Path = _generated_protocol_module_path,
-) -> Path:
-    """Write the generated TypeScript console protocol vocabulary module."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(generated_console_protocol_module(), encoding="utf-8")
-    return path
-
-
-def generated_console_result_view_records_module() -> str:
-    """Return the generated TypeScript result-view record parser module."""
-
-    return _result_view_records_module.rstrip("\n") + "\n"
-
-
-def write_generated_console_result_view_records_module(
-    path: Path = _generated_result_view_records_module_path,
-) -> Path:
-    """Write the generated TypeScript result-view record parser module."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(generated_console_result_view_records_module(), encoding="utf-8")
-    return path
-
-
-def write_generated_console_web_modules() -> tuple[Path, ...]:
-    """Write every generated console web-source module."""
-
-    return (
-        write_generated_console_protocol_module(),
-        write_generated_console_result_view_records_module(),
-    )
-
-
-def _console_protocol_formats() -> Mapping[str, object]:
-    formats = console_protocol_formats()
-    return {
-        "consoleData": formats.console_data,
-        "artifactIndex": formats.artifact_index,
-        "resultViews": {
-            "benchmarkResults": formats.benchmark_result_view,
-        },
-    }
-
-
-def _console_protocol_format_versions() -> Mapping[str, object]:
-    versions = console_protocol_format_versions()
-    return {
-        "consoleData": versions.console_data,
-        "artifactIndex": versions.artifact_index,
-        "resultView": versions.result_view,
-    }
-
-
-_result_view_records_module = """import {
+import {
   parseModelInspectionRecord,
   type ModelInspectionRecord,
-} from '../modelInspections.ts';
+} from './modelInspections.ts';
 import {
   requireArray,
   requireLiteral,
@@ -109,7 +9,7 @@ import {
   requireRecord,
   requireString,
   optionalNumber,
-} from '../transport.ts';
+} from './transport.ts';
 import {
   consoleProtocolFormats,
   consoleProtocolFormatVersions,
@@ -117,7 +17,7 @@ import {
 import {
   parseStateSpaceRegionRecord,
   type StateSpaceRegionRecord,
-} from '../stateSpaceRecords.ts';
+} from './stateSpaceRecords.ts';
 
 const resultViewFormats = consoleProtocolFormats.resultViews;
 const resultViewFormatVersion = consoleProtocolFormatVersions.resultView;
@@ -680,48 +580,3 @@ function stringArray(value: unknown, path: string): string[] {
 function numberArray(value: unknown, path: string): number[] {
   return arrayOf(value, path, (item, itemPath) => requireNumber(item, itemPath, transportError));
 }
-
-"""
-
-def _main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Generate console web-source modules.")
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="fail if the generated module is not up to date",
-    )
-    parser.add_argument(
-        "--path",
-        default=None,
-        type=Path,
-        help="generated protocol vocabulary module path",
-    )
-    parser.add_argument(
-        "--result-view-records-path",
-        default=None,
-        type=Path,
-        help="generated result-view records module path",
-    )
-    args = parser.parse_args(argv)
-
-    protocol_path = args.path or _generated_protocol_module_path
-    result_view_records_path = (
-        args.result_view_records_path or _generated_result_view_records_module_path
-    )
-    expected_modules = (
-        (protocol_path, generated_console_protocol_module()),
-        (result_view_records_path, generated_console_result_view_records_module()),
-    )
-    if args.check:
-        for path, expected in expected_modules:
-            actual = path.read_text(encoding="utf-8")
-            if actual != expected:
-                raise SystemExit(f"{path}: generated console web module is out of date")
-        return 0
-    write_generated_console_protocol_module(protocol_path)
-    write_generated_console_result_view_records_module(result_view_records_path)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(_main())

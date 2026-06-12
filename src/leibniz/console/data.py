@@ -62,10 +62,9 @@ _document_suffix = document_filename_suffix()
 _generated_batch_cache_format = "leibniz.console.generated-sample-set-cache"
 _generated_batch_cache_format_version = 2
 _generated_batch_cache_path = (
-    Path(__file__).parent
-    / "_web_src"
-    / "src"
-    / "generated"
+    Path(__file__).parents[3]
+    / ".local-cache"
+    / "console"
     / ("generatedSampleSets" + _document_suffix)
 )
 _generated_batch_cache: dict[tuple[str, str, str], tuple[Mapping[str, object], ...]] = {}
