@@ -520,7 +520,7 @@ function assertConsoleResultRootPolicy() {
       'training summaries still refresh console data',
     );
     assertEqual(
-      consoleDataPayloadPath().endsWith('.leibniz/console/consoleDataPayload.json'),
+      consoleDataPayloadPath().endsWith('local-cache/console/consoleDataPayload.json'),
       true,
       'console data payload path',
     );
