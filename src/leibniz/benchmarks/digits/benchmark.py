@@ -18,7 +18,6 @@ from leibniz.artifacts import ArtifactReference
 from leibniz.benchmark_implementations import Benchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.cost_metrology import (
-    TENSOR_RUNTIME_COST_MODEL_ID,
     CostMeasurement,
     OperationCostRecord,
 )
@@ -128,7 +127,7 @@ def _digits_oracle_cost_measurement(
     operation_stream_source: str,
 ) -> CostMeasurement:
     return CostMeasurement(
-        cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
+        cost_model_id=CostMeasurement.tensor_runtime_cost_model_id(),
         abstract_flops=pixel_count,
         per_op=(
             OperationCostRecord(

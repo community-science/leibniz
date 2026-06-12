@@ -28,7 +28,6 @@ from leibniz.benchmark_runner import (
 )
 from leibniz.cli import main
 from leibniz.cost_metrology import (
-    TENSOR_RUNTIME_COST_MODEL_ID,
     CostMeasurement,
     OperationCostRecord,
 )
@@ -84,7 +83,7 @@ def _cost_measurement(abstract_flops: int = 0) -> CostMeasurement:
         )
     )
     return CostMeasurement(
-        cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
+        cost_model_id=CostMeasurement.tensor_runtime_cost_model_id(),
         abstract_flops=abstract_flops,
         per_op=per_op,
         moved_elements=0,
@@ -773,7 +772,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     inference_cost = CostMeasurement.from_record(
         checkpoint_evaluation_throughput["inference_cost_measurement"]
     )
-    assert inference_cost.cost_model_id == TENSOR_RUNTIME_COST_MODEL_ID
+    assert inference_cost.cost_model_id == CostMeasurement.tensor_runtime_cost_model_id()
     assert inference_cost.tensor_device == "cpu"
     assert inference_cost.operation_count > 0
     assert inference_cost.unmodeled_operations == ()
@@ -2020,7 +2019,7 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
 
     def fake_inference_cost_measurement(**_kwargs: object) -> CostMeasurement:
         return CostMeasurement(
-            cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
+            cost_model_id=CostMeasurement.tensor_runtime_cost_model_id(),
             abstract_flops=40,
             per_op=(
                 OperationCostRecord(

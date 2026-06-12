@@ -11,7 +11,7 @@ from leibniz.artifacts import ArtifactReference, reference_for_record
 from leibniz.benchmarks import BenchmarkManifestDocument
 from leibniz.cli import main
 from leibniz.content import ContentDigest
-from leibniz.cost_metrology import TENSOR_RUNTIME_COST_MODEL_ID
+from leibniz.cost_metrology import CostMeasurement
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.measurements import MeasurementDocument
 from leibniz.model_manifests import ModelExecutionFamily
@@ -664,7 +664,7 @@ def test_cli_profiles_benchmark_formation_paths(
     assert record["sample_count"] == 1
     assert record["rows"] != []
     measured_cost = cast(dict[str, object], record["measured_cost"])
-    assert measured_cost["cost_model_id"] == TENSOR_RUNTIME_COST_MODEL_ID
+    assert measured_cost["cost_model_id"] == CostMeasurement.tensor_runtime_cost_model_id()
     assert isinstance(measured_cost["per_op"], list)
     assert isinstance(measured_cost["movement"], list)
     assert isinstance(measured_cost["unmodeled_operations"], list)

@@ -122,7 +122,7 @@ class TensorRuntimeOperationRecord:
     output_tensors: tuple[TensorRuntimeTensorSpec, ...]
 
 
-class TensorRuntimeOperationCapture:
+class _TensorRuntimeOperationCapture:
     """Context manager that captures a tensor runtime operation stream."""
 
     def __init__(self, runtime: TensorRuntime) -> None:
@@ -329,10 +329,10 @@ def tensor_runtime_capture_operations(
     return capture.records()
 
 
-def tensor_runtime_operation_capture(runtime: TensorRuntime) -> TensorRuntimeOperationCapture:
+def tensor_runtime_operation_capture(runtime: TensorRuntime) -> _TensorRuntimeOperationCapture:
     """Create a context manager that captures tensor runtime operations."""
 
-    return TensorRuntimeOperationCapture(runtime)
+    return _TensorRuntimeOperationCapture(runtime)
 
 
 def tensor_runtime_project_operations(

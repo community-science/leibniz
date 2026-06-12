@@ -17,7 +17,6 @@ from leibniz.benchmark_runner import (
 )
 from leibniz.cli import main
 from leibniz.cost_metrology import (
-    TENSOR_RUNTIME_COST_MODEL_ID,
     CostMeasurement,
     OperationCostRecord,
 )
@@ -43,7 +42,7 @@ _digits_architecture = (
 
 def _cost_measurement(abstract_flops: int) -> CostMeasurement:
     return CostMeasurement(
-        cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
+        cost_model_id=CostMeasurement.tensor_runtime_cost_model_id(),
         abstract_flops=abstract_flops,
         per_op=(
             OperationCostRecord(

@@ -19,7 +19,6 @@ from leibniz.tensor_runtime import (
 )
 
 __all__ = [
-    "TENSOR_RUNTIME_COST_MODEL_ID",
     "CostMeasurement",
     "CostMetrologyError",
     "CostMeter",
@@ -33,8 +32,8 @@ __all__ = [
     "measure_program_cost",
 ]
 
-TENSOR_RUNTIME_COST_MODEL_ID = "leibniz.cost-model.tensor-runtime@0.1.0"
-CostExecutionMode = Literal["measured", "dry-run"]
+_tensor_runtime_cost_model_id = "leibniz.cost-model.tensor-runtime@0.1.0"
+_CostExecutionMode = Literal["measured", "dry-run"]
 
 
 class CostMetrologyError(ValueError):
@@ -229,10 +228,16 @@ class CostMeasurement:
     operation_trace: tuple[CostOperationTraceRecord, ...]
     wall_seconds: float
     tensor_device: str
-    execution_mode: CostExecutionMode = "measured"
+    execution_mode: _CostExecutionMode = "measured"
     operation_stream_source: str = "runtime-executed"
     operations_executed: bool = True
     roofline: Mapping[str, object] | None = None
+
+    @classmethod
+    def tensor_runtime_cost_model_id(cls) -> str:
+        """Return the cost model id used for tensor runtime operation streams."""
+
+        return _tensor_runtime_cost_model_id
 
     def __post_init__(self) -> None:
         _require_nonempty_string(self.cost_model_id, "cost_model_id")
@@ -536,7 +541,7 @@ def _measurement_from_operation_stream(
     wall_seconds: float,
     strict: bool,
     roofline: Mapping[str, object] | None,
-    execution_mode: CostExecutionMode,
+    execution_mode: _CostExecutionMode,
     operation_stream_source: str,
     operations_executed: bool,
 ) -> CostMeasurement:
@@ -569,7 +574,7 @@ def _measurement_from_operation_stream(
             if strict:
                 raise CostMetrologyError(
                     "unmodeled operation in cost model "
-                    f"{TENSOR_RUNTIME_COST_MODEL_ID}: {trace.name}"
+                    f"{_tensor_runtime_cost_model_id}: {trace.name}"
                 )
             record = unmodeled.setdefault(trace.name, _UnmodeledAccumulator())
             record.calls += 1
@@ -580,7 +585,7 @@ def _measurement_from_operation_stream(
         record.abstract_flops += abstract_flops
         record.output_elements += output_elements
     return CostMeasurement(
-        cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
+        cost_model_id=_tensor_runtime_cost_model_id,
         abstract_flops=sum(record.abstract_flops for record in per_op.values()),
         per_op=tuple(
             OperationCostRecord(
@@ -974,9 +979,9 @@ def _nonnegative_number(value: object, field: str) -> float:
     return numeric
 
 
-def _record_execution_mode(value: object) -> CostExecutionMode:
+def _record_execution_mode(value: object) -> _CostExecutionMode:
     if value == "measured" or value == "dry-run":
-        return cast(CostExecutionMode, value)
+        return cast(_CostExecutionMode, value)
     raise CostMetrologyError("execution_mode must be measured or dry-run")
 
 
