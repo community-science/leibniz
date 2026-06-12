@@ -381,7 +381,6 @@ const inspections: ModelInspectionRecord[] = [
             tensor_relation: 'identity',
           },
           index: 0,
-          inference_compute: 0,
           input_shape: [1],
           kind: 'operator',
           operator_kind: 'identity',
