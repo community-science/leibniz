@@ -164,7 +164,8 @@ Use validation tiers deliberately:
 
 - While iterating, run targeted tests or checks that exercise the changed
   contract.
-- Before review, run the full local check set from `README.md` for
+- Before review, run `python scripts/validate.py`, the full local check set
+  from `README.md`, for
   non-documentation changes unless the pull request explains a skipped check.
 - For expensive benchmark, GPU, or result repository workflows, document
   the manual validation path instead of making it a routine pull-request gate.
