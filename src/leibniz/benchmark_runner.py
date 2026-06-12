@@ -257,6 +257,7 @@ def _require_tensor_generator(generator: BenchmarkGenerator) -> _TensorBenchmark
 class _TrainingStageResult:
     validation_history: tuple[TrainingHistoryPoint, ...]
     stop_reason: str
+    validation_inference_compute: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -554,6 +555,7 @@ class _ComputeCounter:
 class _PhaseWorkEstimate:
     compute_per_sample: float
     bytes_per_sample: float
+    compute_source: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -2121,6 +2123,7 @@ def _train_and_predict_on_device(
             work_estimates=_training_work_estimates(
                 architecture=architecture,
                 inference_compute=_training_history_max_inference_compute(validation_history),
+                measured_inference_compute=training_result.validation_inference_compute,
                 training_compute_per_sample=(
                     _training_history_latest_training_compute_per_sample(validation_history)
                 ),
@@ -2300,6 +2303,32 @@ def _checkpoint_inference_cost_measurement(
         strict=True,
         roofline=runtime_roofline_record(predictor.runtime),
     )
+
+
+def _module_inference_cost_measurement(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    fields: Any,
+) -> CostMeasurement:
+    was_training = bool(module.training)
+    module.eval()
+
+    def program(input_fields: Any) -> object:
+        with no_grad_context(runtime):
+            return module(input_fields)
+
+    try:
+        return measure_program_cost(
+            runtime,
+            program,
+            fields,
+            strict=True,
+            roofline=runtime_roofline_record(runtime),
+        )
+    finally:
+        if was_training:
+            module.train()
 
 
 def _evaluate_checkpoint_rung(
@@ -2871,6 +2900,14 @@ def _max_optional_int(left: int | None, right: int | None) -> int | None:
     return max(left, right)
 
 
+def _max_optional_float(left: float | None, right: float | None) -> float | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
+
+
 def load_model_checkpoint_predictor(
     *,
     architecture: ArchitectureManifest,
@@ -3121,6 +3158,7 @@ def _train_until_convergence(
     stop_reason = "training-stopped"
     plateau_window_start_index = 0
     max_validation_inference_compute: int | None = None
+    max_measured_validation_inference_compute: float | None = None
     latest_training_compute_per_sample: int | None = None
     replay_frontier_points: dict[
         tuple[float, float],
@@ -3130,7 +3168,7 @@ def _train_until_convergence(
 
     def append_validation(*, step: int, check: int) -> None:
         nonlocal best_score, max_validation_inference_compute
-        nonlocal stale_checks
+        nonlocal max_measured_validation_inference_compute, stale_checks
         with phase_timings.span("validation_replay_score_flush"):
             _flush_pending_replay_scores(
                 pending_replay_scores=pending_replay_scores,
@@ -3163,6 +3201,22 @@ def _train_until_convergence(
                 device=runtime.device,
             )
         actual_gate_sample_count = _tensor_batch_size(fields, fallback=gate_batch_target)
+        with phase_timings.span(
+            "validation_inference_cost_metrology",
+            samples=actual_gate_sample_count,
+        ):
+            validation_cost_measurement = _module_inference_cost_measurement(
+                runtime=runtime,
+                module=module,
+                fields=fields,
+            )
+        max_measured_validation_inference_compute = _max_optional_float(
+            max_measured_validation_inference_compute,
+            tensor_runtime_ops_per_item(
+                validation_cost_measurement.abstract_flops,
+                actual_gate_sample_count,
+            ),
+        )
         with phase_timings.span("validation_forward_loss", samples=actual_gate_sample_count):
             was_training = bool(module.training)
             module.eval()
@@ -3246,6 +3300,7 @@ def _train_until_convergence(
         return _TrainingStageResult(
             validation_history=tuple(validation_history),
             stop_reason="no-training-steps" if start_step == 0 else "max-steps",
+            validation_inference_compute=max_measured_validation_inference_compute,
         )
     validation_check = start_check + 1
     steps = count(start_step + 1) if max_steps is None else range(start_step + 1, max_steps + 1)
@@ -3397,6 +3452,7 @@ def _train_until_convergence(
     return _TrainingStageResult(
         validation_history=tuple(validation_history),
         stop_reason=stop_reason,
+        validation_inference_compute=max_measured_validation_inference_compute,
     )
 
 
@@ -4476,6 +4532,7 @@ def _phase_roofline_record(
         )
     return {
         "compute_per_sample": work.compute_per_sample,
+        "compute_source": work.compute_source,
         "bytes_per_sample": work.bytes_per_sample,
         "arithmetic_intensity_compute_per_byte": arithmetic_intensity,
         "expected_roofline_compute_per_second": expected_compute,
@@ -4499,10 +4556,16 @@ def _training_work_estimates(
     training_compute_per_sample: int | None,
     storage_bytes: int | None,
     batch_size: int,
+    measured_inference_compute: float | None = None,
 ) -> _TrainingWorkEstimates | None:
+    inference_compute_per_sample = (
+        measured_inference_compute
+        if measured_inference_compute is not None
+        else None if inference_compute is None else float(inference_compute)
+    )
     if (
-        inference_compute is None
-        or inference_compute <= 0
+        inference_compute_per_sample is None
+        or inference_compute_per_sample <= 0
         or training_compute_per_sample is None
         or training_compute_per_sample <= 0
     ):
@@ -4512,6 +4575,11 @@ def _training_work_estimates(
     batch_size_value = max(1, batch_size)
     storage_bytes_per_sample = float(storage_bytes or 0) / batch_size_value
     inference_bytes = input_bytes + output_bytes + storage_bytes_per_sample
+    inference_compute_source = (
+        "measured-forward-metrology"
+        if measured_inference_compute is not None
+        else "planning-operator-estimate"
+    )
     formation_bytes = 8.0 * input_bytes
     training_compute = float(training_compute_per_sample)
     training_bytes = formation_bytes + 3.0 * inference_bytes + 4.0 * storage_bytes_per_sample
@@ -4521,18 +4589,29 @@ def _training_work_estimates(
         training=_PhaseWorkEstimate(
             compute_per_sample=training_compute,
             bytes_per_sample=training_bytes,
+            compute_source="planning-operator-estimate",
         ),
         validation=_PhaseWorkEstimate(
-            compute_per_sample=float(inference_compute),
+            compute_per_sample=inference_compute_per_sample,
             bytes_per_sample=validation_bytes,
+            compute_source=inference_compute_source,
         ),
         evaluation=_PhaseWorkEstimate(
-            compute_per_sample=float(inference_compute),
+            compute_per_sample=inference_compute_per_sample,
             bytes_per_sample=evaluation_bytes,
+            compute_source=inference_compute_source,
         ),
         assumptions=(
             "float32 tensor elements are four bytes",
-            "training compute follows the declared per-operator training trace",
+            "training compute follows the declared per-operator planning trace",
+            (
+                "validation and evaluation compute use measured forward-pass metrology"
+                if measured_inference_compute is not None
+                else (
+                    "validation and evaluation compute follow the declared "
+                    "per-operator planning trace"
+                )
+            ),
             "storage bytes are amortized across the local batch",
             "formation bytes are approximated as eight input fields per sample",
             "optimizer and gradient traffic are approximated from storage bytes",

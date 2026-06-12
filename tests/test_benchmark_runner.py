@@ -27,7 +27,11 @@ from leibniz.benchmark_runner import (
     run_benchmark,
 )
 from leibniz.cli import main
-from leibniz.cost_metrology import TENSOR_RUNTIME_COST_MODEL_ID, CostMeasurement
+from leibniz.cost_metrology import (
+    TENSOR_RUNTIME_COST_MODEL_ID,
+    CostMeasurement,
+    OperationCostRecord,
+)
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
 from leibniz.identifiers import ProtocolIdentifier
@@ -804,6 +808,8 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     roofline_comparison = cast(dict[str, object], throughput["roofline_comparison"])
     phases = cast(dict[str, object], roofline_comparison["phases"])
     training_phase = cast(dict[str, object], phases["training"])
+    validation_phase = cast(dict[str, object], phases["validation"])
+    evaluation_phase = cast(dict[str, object], phases["evaluation"])
     assert throughput["tensor_runtime"] == "pytorch"
     assert throughput["tensor_device"] == "cpu"
     assert phase_timing["kind"] == "benchmark-phase-timing"
@@ -821,8 +827,15 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert roofline_comparison["model"] == "operational-intensity"
     assert cast(float, roofline_comparison["training_fraction_of_roofline"]) > 0
     assert training_phase["limiting_resource"] in {"compute", "memory-bandwidth"}
+    assert training_phase["compute_source"] == "planning-operator-estimate"
+    assert validation_phase["compute_source"] == "measured-forward-metrology"
+    assert evaluation_phase["compute_source"] == "measured-forward-metrology"
     assert cast(float, training_phase["arithmetic_intensity_compute_per_byte"]) > 0
     assert cast(float, training_phase["expected_roofline_compute_per_second"]) > 0
+    assert "validation and evaluation compute use measured forward-pass metrology" in cast(
+        list[object],
+        roofline_comparison["assumptions"],
+    )
     assert training_run.steps_run == 1
     assert training_run.validation_checks == 2
     assert training_run.validation_history[0].step == 0
@@ -1991,6 +2004,27 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
     def fake_batch_max_compute(**_kwargs: object) -> int:
         return 10
 
+    def fake_inference_cost_measurement(**_kwargs: object) -> CostMeasurement:
+        return CostMeasurement(
+            cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
+            abstract_flops=40,
+            per_op=(
+                OperationCostRecord(
+                    name="test.forward",
+                    calls=1,
+                    abstract_flops=40,
+                    output_elements=40,
+                ),
+            ),
+            moved_elements=0,
+            movement=(),
+            unmodeled_operations=(),
+            operation_count=0,
+            operation_trace=(),
+            wall_seconds=0.0,
+            tensor_device="cpu",
+        )
+
     monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
     monkeypatch.setattr(
         benchmark_runner,
@@ -2006,6 +2040,11 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
         benchmark_runner,
         "_training_gate_score_estimate",
         fake_training_gate_score_estimate,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_module_inference_cost_measurement",
+        fake_inference_cost_measurement,
     )
 
     stage_result = cast(Any, benchmark_runner)._train_until_convergence(
