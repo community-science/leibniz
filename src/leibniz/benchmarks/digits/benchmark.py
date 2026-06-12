@@ -62,8 +62,8 @@ from leibniz.state_space import (
     StateSpaceRegion,
 )
 from leibniz.tensor_runtime import (
+    TensorBatchProgram,
     TensorElementParameter,
-    TensorElementProgram,
     TensorElementRecipe,
     TensorRuntime,
     TensorRuntimeError,
@@ -171,6 +171,7 @@ def _transform_cell_for_ordinal(ordinal: int) -> tuple[int, int, int]:
 
 _shell_cells_cache: dict[int, tuple[tuple[int, int, int], ...]] = {}
 _chart_cell_prefix: list[tuple[int, int, int]] = []
+_transform_table_value_cache: dict[tuple[int, int], tuple[float, ...]] = {}
 _chart_prefix_radius: list[int] = [0]
 
 
@@ -919,10 +920,10 @@ class Generator:
         _require_positive_integer(width, "width")
         _require_positive_integer(height, "height")
         _require_positive_integer(digit_count, "digit_count")
-        chart = _DigitsChart(canvas_side=width)
         maximum_ordinal = (minimum_address + cardinality - 1) // digit_count
-        transform_table = tuple(
-            chart.normalized_transform(ordinal) for ordinal in range(maximum_ordinal + 1)
+        transform_table_values = _transform_table_values(
+            canvas_side=width,
+            table_length=maximum_ordinal + 1,
         )
         if digit_count > len(self.formation.components):
             raise TensorRuntimeError("digit_count exceeds component vocabulary")
@@ -980,7 +981,7 @@ class Generator:
                     cardinality=cardinality,
                     minimum_address=minimum_address,
                     digit_count=digit_count,
-                    transform_table=transform_table,
+                    transform_table_values=transform_table_values,
                     component_mark_counts=tuple(component_mark_counts),
                     component_mark_values=tuple(
                         tuple(row) for row in component_mark_values
@@ -1704,6 +1705,21 @@ def _constructed_variation_coordinate_record(
     }
 
 
+def _transform_table_values(*, canvas_side: int, table_length: int) -> tuple[float, ...]:
+    key = (canvas_side, table_length)
+    cached = _transform_table_value_cache.get(key)
+    if cached is not None:
+        return cached
+    chart = _DigitsChart(canvas_side=canvas_side)
+    values = tuple(
+        value
+        for ordinal in range(table_length)
+        for value in chart.normalized_transform(ordinal)
+    )
+    _transform_table_value_cache[key] = values
+    return values
+
+
 def _quadratic_control_points(
     mark: ComponentMark,
 ) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
@@ -1725,11 +1741,11 @@ def _quadratic_tensor_point(
     mark_slot: int,
     t: Any,
 ) -> Any:
-    t_by_segment = t.reshape((-1, 1))
+    t_by_segment = t.reshape((1, -1))
     one_minus_t = 1.0 - t_by_segment
-    start = controls[component_index, mark_slot, 0].reshape((1, -1))
-    control = controls[component_index, mark_slot, 1].reshape((1, -1))
-    end = controls[component_index, mark_slot, 2].reshape((1, -1))
+    start = controls[component_index, mark_slot, 0].reshape((-1, 1))
+    control = controls[component_index, mark_slot, 1].reshape((-1, 1))
+    end = controls[component_index, mark_slot, 2].reshape((-1, 1))
     return (
         one_minus_t * one_minus_t * start
         + 2.0 * one_minus_t * t_by_segment * control
@@ -1737,12 +1753,15 @@ def _quadratic_tensor_point(
     )
 
 
-def _constant_tensor_program(value: float) -> TensorElementProgram:
-    def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
-        _ = flat_indices
-        return coordinates[0] * 0.0 + value
+def _constant_tensor_program(value: float) -> TensorBatchProgram:
+    def element_function(coordinates: tuple[Any, ...]) -> Any:
+        result = coordinates[0].reshape((-1,) + (1,) * (len(coordinates) - 1)) * 0.0
+        for axis, coordinate in enumerate(coordinates[1:], start=1):
+            shape = (1,) * axis + (-1,) + (1,) * (len(coordinates) - axis - 1)
+            result = result + coordinate.reshape(shape) * 0.0
+        return result + value
 
-    return TensorElementProgram(
+    return TensorBatchProgram(
         kernel=element_function,
         parameters={},
         cache_key=("constant", value),
@@ -1758,10 +1777,9 @@ def _target_tensor_program(
     digit_count: int,
     component_to_outcome: tuple[int, ...],
     outcome_count: int,
-) -> TensorElementProgram:
+) -> TensorBatchProgram:
     def element_function(
         coordinates: tuple[Any, ...],
-        flat_indices: Any,
         *,
         seed_value: Any,
         sample_indices_value: Any,
@@ -1769,17 +1787,21 @@ def _target_tensor_program(
         minimum_address_value: Any,
         component_to_outcome: Any,
     ) -> Any:
-        _ = coordinates
-        sample_axis_index = flat_indices.div(outcome_count, rounding_mode="floor")
+        if len(coordinates) == 1:
+            outcome_index = coordinates[0]
+            sample_axis_index = outcome_index[0] * 0
+        else:
+            sample_axis_index, outcome_index = coordinates
         sample_index = sample_indices_value[sample_axis_index]
-        outcome_index = flat_indices.remainder(outcome_count)
         state_index = (sample_index + seed_value).remainder(cardinality_value)
         sample_address = minimum_address_value + state_index
         component_index = sample_address.remainder(digit_count)
         target_index = component_to_outcome[component_index]
-        return (target_index == outcome_index).to(dtype=target_index.dtype)
+        return (target_index.reshape((-1, 1)) == outcome_index.reshape((1, -1))).to(
+            dtype=target_index.dtype
+        )
 
-    return TensorElementProgram(
+    return TensorBatchProgram(
         kernel=element_function,
         parameters={
             "seed_value": TensorElementParameter(
@@ -1820,7 +1842,7 @@ def _digits_tensor_program(
     cardinality: int,
     minimum_address: int,
     digit_count: int,
-    transform_table: tuple[tuple[float, float, float], ...],
+    transform_table_values: tuple[float, ...],
     component_mark_counts: tuple[int, ...],
     component_mark_values: tuple[tuple[float, ...], ...],
     component_mark_widths: tuple[tuple[float, ...], ...],
@@ -1828,16 +1850,14 @@ def _digits_tensor_program(
     component_control_y_points: tuple[tuple[tuple[float, ...], ...], ...],
     height: int,
     width: int,
-) -> TensorElementProgram:
+) -> TensorBatchProgram:
     component_count = len(component_mark_counts)
     max_mark_count = len(component_mark_values[0]) if component_count else 0
     control_point_count = 3
-    table_length = len(transform_table)
-    transform_table_values = tuple(value for entry in transform_table for value in entry)
+    table_length = len(transform_table_values) // 3
 
     def element_function(
         coordinates: tuple[Any, ...],
-        flat_indices: Any,
         *,
         seed_value: Any,
         sample_indices_value: Any,
@@ -1854,36 +1874,39 @@ def _digits_tensor_program(
         image_height: Any,
         image_width: Any,
     ) -> Any:
-        _ = flat_indices
         sample_axis_index, channel_index, y_index, x_index = coordinates
         sample_index = sample_indices_value[sample_axis_index]
-        x_center = x_index + 0.5
-        y_center = y_index + 0.5
         state_index = (sample_index + seed_value).remainder(cardinality_value)
         sample_address = minimum_address_value + state_index
         component_index = sample_address.remainder(digit_count)
         transform_index = sample_address.div(digit_count, rounding_mode="floor")
+        x_center = x_index.reshape((1, 1, 1, -1)) + 0.5
+        y_center = y_index.reshape((1, 1, -1, 1)) + 0.5
         # Diagonal affine: a digit placed at a centre-relative offset and scale.
         # Rotation and shear are removed, so the off-diagonal terms are zero.
-        scale = transform_table_tensor[transform_index, 2]
-        x_translation = transform_table_tensor[transform_index, 0]
-        y_translation = transform_table_tensor[transform_index, 1]
-        zero = x_center * 0.0
+        scale = transform_table_tensor[transform_index, 2].reshape((-1, 1))
+        x_translation = transform_table_tensor[transform_index, 0].reshape((-1, 1))
+        y_translation = transform_table_tensor[transform_index, 1].reshape((-1, 1))
         m00 = scale
-        m01 = zero
         m02 = x_translation
-        m10 = zero
         m11 = scale
         m12 = y_translation
         # Stroke width tracks the physical digit footprint (canvas-independent),
         # not the canvas-normalized scale, so a digit renders with identical
         # strokes whatever size canvas frames it.
         width_scale = scale * image_width / _render_unit_side
-        value = x_center * 0.0
-        active_channel = channel_index == 0
+        value = (
+            sample_axis_index.reshape((-1, 1, 1, 1)) * 0.0
+            + channel_index.reshape((1, -1, 1, 1)) * 0.0
+            + y_index.reshape((1, 1, -1, 1)) * 0.0
+            + x_index.reshape((1, 1, 1, -1)) * 0.0
+        )
+        active_channel = channel_index.reshape((1, -1, 1, 1)) == 0
         mark_count = component_mark_counts[component_index]
         for mark_slot in range(max_mark_count):
-            active_mark = active_channel & (mark_slot < mark_count)
+            active_mark = active_channel & (
+                mark_slot < mark_count.reshape((-1, 1, 1, 1))
+            )
             raw_sx = _quadratic_tensor_point(
                 component_control_x_points,
                 component_index,
@@ -1908,10 +1931,14 @@ def _digits_tensor_program(
                 mark_slot,
                 segment_end_t,
             )
-            sx = (0.5 + m00 * (raw_sx - 0.5) + m01 * (raw_sy - 0.5) + m02) * image_width
-            sy = (0.5 + m10 * (raw_sx - 0.5) + m11 * (raw_sy - 0.5) + m12) * image_height
-            ex = (0.5 + m00 * (raw_ex - 0.5) + m01 * (raw_ey - 0.5) + m02) * image_width
-            ey = (0.5 + m10 * (raw_ex - 0.5) + m11 * (raw_ey - 0.5) + m12) * image_height
+            sx = (0.5 + m00 * (raw_sx - 0.5) + m02) * image_width
+            sy = (0.5 + m11 * (raw_sy - 0.5) + m12) * image_height
+            ex = (0.5 + m00 * (raw_ex - 0.5) + m02) * image_width
+            ey = (0.5 + m11 * (raw_ey - 0.5) + m12) * image_height
+            sx = sx.reshape((sx.shape[0], sx.shape[1], 1, 1))
+            sy = sy.reshape((sy.shape[0], sy.shape[1], 1, 1))
+            ex = ex.reshape((ex.shape[0], ex.shape[1], 1, 1))
+            ey = ey.reshape((ey.shape[0], ey.shape[1], 1, 1))
             dx = ex - sx
             dy = ey - sy
             length_squared = dx * dx + dy * dy
@@ -1935,16 +1962,23 @@ def _digits_tensor_program(
                 length_squared != 0.0,
                 point_distance_squared,
             )
-            distance_squared = segment_distance_squared.min(dim=0).values
-            mark_width = component_mark_widths[component_index, mark_slot]
-            threshold = (width_scale * mark_width / 2.0) * (width_scale * mark_width / 2.0)
+            distance_squared = segment_distance_squared.min(dim=1).values.reshape(
+                (-1, 1, y_index.shape[0], x_index.shape[0])
+            )
+            mark_width = component_mark_widths[component_index, mark_slot].reshape(
+                (-1, 1, 1, 1)
+            )
+            width_scale_field = width_scale.reshape((-1, 1, 1, 1))
+            threshold = (width_scale_field * mark_width / 2.0) * (
+                width_scale_field * mark_width / 2.0
+            )
             contribution = (
                 active_mark & (distance_squared <= threshold)
-            ) * component_mark_values[component_index, mark_slot]
+            ) * component_mark_values[component_index, mark_slot].reshape((-1, 1, 1, 1))
             value = value.maximum(contribution)
         return value
 
-    return TensorElementProgram(
+    return TensorBatchProgram(
         kernel=element_function,
         parameters={
             "seed_value": TensorElementParameter(

@@ -738,6 +738,70 @@ def test_digits_tensor_fields_match_recorded_field_samples() -> None:
         assert fields[index].flatten().tolist() == list(sample.require_field().values)
 
 
+def test_digits_transform_table_is_reused_after_first_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    generator_impl = cast(Any, generator)
+    runtime = resolve_tensor_runtime("cpu")
+    module_globals = generator_impl._build_batch_tensor.__globals__
+    cache = cast(
+        dict[tuple[int, int], tuple[float, ...]],
+        module_globals["_transform_table_value_cache"],
+    )
+    cache.clear()
+    chart_type = module_globals["_DigitsChart"]
+    original_normalized_transform = chart_type.normalized_transform
+    calls = 0
+
+    def count_normalized_transform(self: object, ordinal: int) -> tuple[float, float, float]:
+        nonlocal calls
+        calls += 1
+        return cast(tuple[float, float, float], original_normalized_transform(self, ordinal))
+
+    monkeypatch.setattr(chart_type, "normalized_transform", count_normalized_transform)
+
+    volume_class = generator_impl._default_volume_class()
+    resolution_assignment = volume_class.resolution_assignment(
+        width_axis=generator.formation.width_axis,
+        height_axis=generator.formation.height_axis,
+    )
+    width = resolution_assignment.require_axis(generator.formation.width_axis)
+    height = resolution_assignment.require_axis(generator.formation.height_axis)
+    render_kwargs: dict[str, Any] = {
+        "sample_count": 4,
+        "width": width,
+        "height": height,
+        "digit_count": volume_class.digit_count,
+        "seed": 101,
+        "sample_indices": tuple(range(4)),
+        "cardinality": volume_class.cardinality,
+        "minimum_address": volume_class.minimum_address,
+        "runtime": runtime,
+        "timing": None,
+        "timing_prefix": "",
+    }
+
+    generator_impl._build_batch_tensor(**render_kwargs)
+    first_call_count = calls
+    generator_impl._build_batch_tensor(**render_kwargs)
+
+    table_length = (
+        (volume_class.minimum_address + volume_class.cardinality - 1)
+        // volume_class.digit_count
+        + 1
+    )
+    assert first_call_count == table_length
+    assert calls == first_call_count
+    cached_values = cache[(width, table_length)]
+    expected_values = tuple(
+        value
+        for ordinal in range(table_length)
+        for value in original_normalized_transform(chart_type(canvas_side=width), ordinal)
+    )
+    assert cached_values == expected_values
+
+
 def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     cpu_runtime = resolve_tensor_runtime("cpu")

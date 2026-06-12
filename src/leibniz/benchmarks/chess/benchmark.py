@@ -35,8 +35,8 @@ from leibniz.state_space import (
     StateSpaceRegion,
 )
 from leibniz.tensor_runtime import (
+    TensorBatchProgram,
     TensorElementParameter,
-    TensorElementProgram,
     TensorElementRecipe,
     TensorRuntime,
     tensor_runtime_construct_tensor,
@@ -1373,7 +1373,7 @@ def _chess_field_tensor_program(
     sample_indices: tuple[int, ...],
     cardinality: int,
     global_offset: int,
-) -> TensorElementProgram:
+) -> TensorBatchProgram:
     mechanisms = _mate_mechanisms()
     spectator_squares = _spectator_squares()
     base_count = len(mechanisms) * len(_board_transforms())
@@ -1408,7 +1408,6 @@ def _chess_field_tensor_program(
 
     def element_function(
         coordinates: tuple[Any, ...],
-        flat_indices: Any,
         *,
         seed_value: Any,
         sample_indices_value: Any,
@@ -1419,59 +1418,79 @@ def _chess_field_tensor_program(
         support_plane_values: Any,
         spectator_square_values: Any,
     ) -> Any:
-        _ = flat_indices
         sample_axis_index, plane_index, rank_index, file_index = coordinates
         sample_index = sample_indices_value[sample_axis_index]
-        square = rank_index * 8 + file_index
+        square = rank_index.reshape((1, 1, -1, 1)) * 8 + file_index.reshape(
+            (1, 1, 1, -1)
+        )
         local_index = (sample_index + seed_value).remainder(cardinality_value)
         global_index = global_offset_value + local_index
         base_index = global_index.remainder(base_count)
         mechanism_index = base_index.div(8, rounding_mode="floor")
         transform_index = base_index.remainder(8)
         spectator_mask = global_index.div(base_count, rounding_mode="floor")
+        plane = plane_index.reshape((1, -1, 1, 1))
+        transformed_a1 = transformed_square(
+            transform_index.reshape((-1, 1, 1, 1)) * 0 + chess.A1,
+            transform_index.reshape((-1, 1, 1, 1)),
+        )
+        transformed_b1 = transformed_square(
+            transform_index.reshape((-1, 1, 1, 1)) * 0 + chess.B1,
+            transform_index.reshape((-1, 1, 1, 1)),
+        )
+        transformed_c1 = transformed_square(
+            transform_index.reshape((-1, 1, 1, 1)) * 0 + chess.C1,
+            transform_index.reshape((-1, 1, 1, 1)),
+        )
         occupied = (
-            (plane_index == 12)
-            | ((plane_index == _piece_plane(chess.Piece(chess.KING, chess.BLACK)))
-             & (square == transformed_square(square * 0 + chess.A1, transform_index)))
-            | ((plane_index == _piece_plane(chess.Piece(chess.ROOK, chess.BLACK)))
-               & (square == transformed_square(square * 0 + chess.B1, transform_index)))
-            | ((plane_index == _piece_plane(chess.Piece(chess.KING, chess.WHITE)))
-               & (square == transformed_square(square * 0 + chess.C1, transform_index)))
-            | ((plane_index == _piece_plane(chess.Piece(chess.QUEEN, chess.WHITE)))
+            (plane == 12)
+            | ((plane == _piece_plane(chess.Piece(chess.KING, chess.BLACK)))
+             & (square == transformed_a1))
+            | ((plane == _piece_plane(chess.Piece(chess.ROOK, chess.BLACK)))
+               & (square == transformed_b1))
+            | ((plane == _piece_plane(chess.Piece(chess.KING, chess.WHITE)))
+               & (square == transformed_c1))
+            | ((plane == _piece_plane(chess.Piece(chess.QUEEN, chess.WHITE)))
                & (
                    square
                    == transformed_square(
-                       mechanism_queen_square_values[mechanism_index],
-                       transform_index,
+                       mechanism_queen_square_values[mechanism_index].reshape((-1, 1, 1, 1)),
+                       transform_index.reshape((-1, 1, 1, 1)),
                    )
                ))
         )
         support_square = support_square_values[mechanism_index]
         support_plane = support_plane_values[mechanism_index]
         occupied = occupied | (
-            (support_square >= 0)
-            & (plane_index == support_plane)
-            & (square == transformed_square(support_square, transform_index))
+            (support_square.reshape((-1, 1, 1, 1)) >= 0)
+            & (plane == support_plane.reshape((-1, 1, 1, 1)))
+            & (
+                square
+                == transformed_square(
+                    support_square.reshape((-1, 1, 1, 1)),
+                    transform_index.reshape((-1, 1, 1, 1)),
+                )
+            )
         )
         for spectator_index in range(len(spectator_squares)):
             spectator_active = (
                 spectator_mask.div(1 << spectator_index, rounding_mode="floor").remainder(2)
                 == 1
-            )
+            ).reshape((-1, 1, 1, 1))
             occupied = occupied | (
                 spectator_active
-                & (plane_index == _piece_plane(chess.Piece(chess.KNIGHT, chess.WHITE)))
+                & (plane == _piece_plane(chess.Piece(chess.KNIGHT, chess.WHITE)))
                 & (
                     square
                     == transformed_square(
                         spectator_square_values[spectator_index],
-                        transform_index,
+                        transform_index.reshape((-1, 1, 1, 1)),
                     )
                 )
             )
         return occupied * 1.0
 
-    return TensorElementProgram(
+    return TensorBatchProgram(
         kernel=element_function,
         parameters={
             "seed_value": TensorElementParameter(
@@ -1528,12 +1547,11 @@ def _chess_target_tensor_program(
     global_offset: int,
     base_target_indices: tuple[int, ...],
     outcome_count: int,
-) -> TensorElementProgram:
+) -> TensorBatchProgram:
     base_count = len(base_target_indices)
 
     def element_function(
         coordinates: tuple[Any, ...],
-        flat_indices: Any,
         *,
         seed_value: Any,
         sample_indices_value: Any,
@@ -1541,16 +1559,14 @@ def _chess_target_tensor_program(
         global_offset_value: Any,
         base_target_index_values: Any,
     ) -> Any:
-        _ = coordinates
-        sample_axis_index = flat_indices.div(outcome_count, rounding_mode="floor")
+        sample_axis_index, outcome_index = coordinates
         sample_index = sample_indices_value[sample_axis_index]
-        outcome_index = flat_indices.remainder(outcome_count)
         local_index = (sample_index + seed_value).remainder(cardinality_value)
         global_index = global_offset_value + local_index
         target_index = base_target_index_values[global_index.remainder(base_count)]
-        return (target_index == outcome_index) * 1.0
+        return (target_index.reshape((-1, 1)) == outcome_index.reshape((1, -1))) * 1.0
 
-    return TensorElementProgram(
+    return TensorBatchProgram(
         kernel=element_function,
         parameters={
             "seed_value": TensorElementParameter(
