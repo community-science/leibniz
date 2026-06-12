@@ -45,6 +45,8 @@ def test_validation_commands_match_routine_ci_gates() -> None:
         "Build wheel and source distribution",
         "Install built wheel",
         "Import installed package",
+        "Restore editable checkout",
+        "Import editable checkout",
         "Console build and browser tests",
     ]
     assert [command.argv[1:] for command in commands[:4]] == [
@@ -62,6 +64,19 @@ def test_validation_commands_match_routine_ci_gates() -> None:
         "__wheel__",
     )
     assert commands[6].argv[1:] == ("-c", "import leibniz; print(leibniz.__version__)")
+    assert commands[7].argv[1:] == (
+        "-m",
+        "pip",
+        "install",
+        "--no-build-isolation",
+        "--no-deps",
+        "--editable",
+        ".",
+    )
+    assert commands[8].argv[1:] == (
+        "-c",
+        "from pathlib import Path; import leibniz; print(Path(leibniz.__file__).resolve())",
+    )
     assert commands[-1].argv == ("npm", "test")
     assert commands[-1].cwd == _repository_root / "src" / "leibniz" / "console" / "_web_src"
 
@@ -82,4 +97,6 @@ def test_validation_commands_can_omit_console_gate() -> None:
         "Build wheel and source distribution",
         "Install built wheel",
         "Import installed package",
+        "Restore editable checkout",
+        "Import editable checkout",
     ]
