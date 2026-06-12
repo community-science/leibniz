@@ -77,7 +77,7 @@ from leibniz.timing import TimingCollector
 __all__ = ["benchmark"]
 
 _benchmark_id = ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
-_latent_factor_id = ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0")
+_latent_factor_id = ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.2.0")
 _materialization_id = ProtocolIdentifier.parse("benchmarks.digits.materialization@0.1.0")
 _formation_id = ProtocolIdentifier.parse("benchmarks.digits.observation-formation@0.1.0")
 _generator_id = ProtocolIdentifier.parse("benchmarks.digits.generator@0.1.0")
@@ -2270,7 +2270,6 @@ def _latent_factors() -> LatentFactorDeclaration:
                 degree_measure=DegreeMeasure.vector_dimension(2),
             ),
         ),
-        complexity_projections=(),
     )
 
 

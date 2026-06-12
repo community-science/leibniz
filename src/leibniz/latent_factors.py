@@ -1,4 +1,4 @@
-"""Latent factors and complexity projections for benchmark generators."""
+"""Latent factors for benchmark generators."""
 
 from __future__ import annotations
 
@@ -13,14 +13,12 @@ from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 
 __all__ = [
-    "ComplexityProjection",
     "DegreeMeasure",
     "GeneratorConstructionFactor",
     "LatentFactorDeclaration",
     "LatentFactorDeclarationDocument",
     "LatentFactorRole",
     "LatentFactorValidationError",
-    "ResolutionRequirement",
     "SampleLatentFactor",
 ]
 
@@ -32,8 +30,6 @@ _degree_measure_kinds = (
     "vector-dimension",
 )
 _latent_factor_roles = ("content", "variation", "materialization")
-_resolution_bases = ("declared-minimum", "analytic-bound", "certified-search")
-
 _degree_measure_record = RecordSpec(
     fields={
         "kind": FieldSpec(kind="string"),
@@ -57,25 +53,6 @@ _sample_factor_record = RecordSpec(
         "description": FieldSpec(kind="string", required=False),
     }
 )
-_complexity_projection_record = RecordSpec(
-    fields={
-        "name": FieldSpec(kind="name"),
-        "coordinate": FieldSpec(kind="string"),
-        "included_roles": FieldSpec(kind="sequence", item=FieldSpec(kind="string")),
-        "description": FieldSpec(kind="string", required=False),
-    }
-)
-_resolution_requirement_record = RecordSpec(
-    fields={
-        "name": FieldSpec(kind="name"),
-        "resolution_axis": FieldSpec(kind="string"),
-        "content_coordinate": FieldSpec(kind="string"),
-        "content_complexity": FieldSpec(kind="number"),
-        "minimum_resolution": FieldSpec(kind="integer"),
-        "basis": FieldSpec(kind="string"),
-        "description": FieldSpec(kind="string", required=False),
-    }
-)
 _latent_factor_declaration_record = RecordSpec(
     fields={
         "id": FieldSpec(kind="identifier"),
@@ -86,16 +63,6 @@ _latent_factor_declaration_record = RecordSpec(
         "sample_factors": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="record"),
-        ),
-        "complexity_projections": FieldSpec(
-            kind="sequence",
-            item=FieldSpec(kind="record"),
-            required=False,
-        ),
-        "resolution_requirements": FieldSpec(
-            kind="sequence",
-            item=FieldSpec(kind="record"),
-            required=False,
         ),
     }
 )
@@ -277,140 +244,12 @@ class SampleLatentFactor:
 
 
 @dataclass(frozen=True, slots=True)
-class ComplexityProjection:
-    """A scalar coordinate derived from sample latent factors."""
-
-    name: ProtocolName
-    coordinate: str
-    included_roles: frozenset[LatentFactorRole]
-    description: str | None = None
-
-    def __post_init__(self) -> None:
-        if not self.coordinate:
-            raise LatentFactorValidationError("coordinate must be nonempty")
-        if self.coordinate == "N":
-            raise LatentFactorValidationError("N is a resolution axis, not a complexity axis")
-        if not self.included_roles:
-            raise LatentFactorValidationError("included_roles must be nonempty")
-        for role in self.included_roles:
-            if role not in _latent_factor_roles:
-                raise LatentFactorValidationError(
-                    f"unsupported included latent factor role: {role}"
-                )
-
-    @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> ComplexityProjection:
-        try:
-            validated = _complexity_projection_record.validate(record)
-        except ValueError as error:
-            raise LatentFactorValidationError(str(error)) from error
-        roles: frozenset[LatentFactorRole] = frozenset(
-            _as_role(role) for role in _extract.sequence(validated["included_roles"], "roles")
-        )
-        return cls(
-            name=_as_name(validated["name"], field="name"),
-            coordinate=str(validated["coordinate"]),
-            included_roles=roles,
-            description=_extract.optional_string(validated.get("description"), "description"),
-        )
-
-    def evaluate(self, factors: Iterable[SampleLatentFactor]) -> float:
-        return sum(
-            factor.contribution for factor in factors if factor.role in self.included_roles
-        )
-
-    def to_record(self) -> dict[str, object]:
-        record: dict[str, object] = {
-            "name": str(self.name),
-            "coordinate": self.coordinate,
-            "included_roles": sorted(self.included_roles),
-        }
-        if self.description is not None:
-            record["description"] = self.description
-        return record
-
-
-@dataclass(frozen=True, slots=True)
-class ResolutionRequirement:
-    """A minimum resolution needed for a content-complexity level."""
-
-    name: ProtocolName
-    resolution_axis: str
-    content_coordinate: str
-    content_complexity: float
-    minimum_resolution: int
-    basis: str
-    description: str | None = None
-
-    def __post_init__(self) -> None:
-        if not self.resolution_axis:
-            raise LatentFactorValidationError("resolution_axis must be nonempty")
-        if not self.content_coordinate:
-            raise LatentFactorValidationError("content_coordinate must be nonempty")
-        if not math.isfinite(self.content_complexity) or self.content_complexity < 0:
-            raise LatentFactorValidationError(
-                "content_complexity must be finite and nonnegative"
-            )
-        if isinstance(self.minimum_resolution, bool):
-            raise LatentFactorValidationError("minimum_resolution must be an integer")
-        if self.minimum_resolution < 1:
-            raise LatentFactorValidationError("minimum_resolution must be positive")
-        if self.basis not in _resolution_bases:
-            raise LatentFactorValidationError(f"unsupported resolution basis: {self.basis}")
-
-    @classmethod
-    def from_record(cls, record: Mapping[str, object]) -> ResolutionRequirement:
-        try:
-            validated = _resolution_requirement_record.validate(record)
-        except ValueError as error:
-            raise LatentFactorValidationError(str(error)) from error
-        return cls(
-            name=_as_name(validated["name"], field="name"),
-            resolution_axis=str(validated["resolution_axis"]),
-            content_coordinate=str(validated["content_coordinate"]),
-            content_complexity=_extract.float(
-                validated["content_complexity"],
-                "content_complexity",
-            ),
-            minimum_resolution=_extract.integer(
-                validated["minimum_resolution"],
-                "minimum_resolution",
-            ),
-            basis=str(validated["basis"]),
-            description=_extract.optional_string(validated.get("description"), "description"),
-        )
-
-    def require_resolution(self, resolution: int) -> None:
-        if resolution < self.minimum_resolution:
-            raise LatentFactorValidationError(
-                f"{self.resolution_axis}={resolution} is below minimum "
-                f"{self.minimum_resolution} for {self.content_coordinate}="
-                f"{self.content_complexity:g}"
-            )
-
-    def to_record(self) -> dict[str, object]:
-        record: dict[str, object] = {
-            "name": str(self.name),
-            "resolution_axis": self.resolution_axis,
-            "content_coordinate": self.content_coordinate,
-            "content_complexity": self.content_complexity,
-            "minimum_resolution": self.minimum_resolution,
-            "basis": self.basis,
-        }
-        if self.description is not None:
-            record["description"] = self.description
-        return record
-
-
-@dataclass(frozen=True, slots=True)
 class LatentFactorDeclaration:
-    """A generator-owned declaration of latent factors and complexity views."""
+    """A generator-owned declaration of latent factors."""
 
     id: ProtocolIdentifier
     construction_factors: tuple[GeneratorConstructionFactor, ...]
     sample_factors: tuple[SampleLatentFactor, ...]
-    complexity_projections: tuple[ComplexityProjection, ...]
-    resolution_requirements: tuple[ResolutionRequirement, ...] = ()
 
     def __post_init__(self) -> None:
         try:
@@ -426,14 +265,6 @@ class LatentFactorDeclaration:
         _reject_duplicate_names(
             (factor.name for factor in self.sample_factors),
             description="sample factor",
-        )
-        _reject_duplicate_names(
-            (projection.name for projection in self.complexity_projections),
-            description="complexity projection",
-        )
-        _reject_duplicate_names(
-            (requirement.name for requirement in self.resolution_requirements),
-            description="resolution requirement",
         )
 
     @classmethod
@@ -457,40 +288,7 @@ class LatentFactorDeclaration:
                 SampleLatentFactor.from_record(_extract.mapping(factor, "sample_factors"))
                 for factor in _extract.sequence(validated["sample_factors"], "sample_factors")
             ),
-            complexity_projections=tuple(
-                ComplexityProjection.from_record(
-                    _extract.mapping(projection, "complexity_projections")
-                )
-                for projection in _extract.sequence(
-                    validated.get("complexity_projections", ()),
-                    "complexity_projections",
-                )
-            ),
-            resolution_requirements=tuple(
-                ResolutionRequirement.from_record(
-                    _extract.mapping(requirement, "resolution_requirements")
-                )
-                for requirement in _extract.sequence(
-                    validated.get("resolution_requirements", ()),
-                    "resolution_requirements",
-                )
-            ),
         )
-
-    def projection(self, coordinate: str) -> ComplexityProjection:
-        matches = tuple(
-            projection
-            for projection in self.complexity_projections
-            if projection.coordinate == coordinate
-        )
-        if len(matches) != 1:
-            raise LatentFactorValidationError(
-                f"expected exactly one complexity projection for coordinate {coordinate!r}"
-            )
-        return matches[0]
-
-    def evaluate_complexity(self, coordinate: str) -> float:
-        return self.projection(coordinate).evaluate(self.sample_factors)
 
     @property
     def digest(self) -> ContentDigest:
@@ -504,14 +302,6 @@ class LatentFactorDeclaration:
             ],
             "sample_factors": [factor.to_record() for factor in self.sample_factors],
         }
-        if self.complexity_projections:
-            record["complexity_projections"] = [
-                projection.to_record() for projection in self.complexity_projections
-            ]
-        if self.resolution_requirements:
-            record["resolution_requirements"] = [
-                requirement.to_record() for requirement in self.resolution_requirements
-            ]
         return record
 
 

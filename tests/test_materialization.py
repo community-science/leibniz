@@ -88,7 +88,7 @@ def test_digits_materialization_declaration_is_python_owned() -> None:
     assert declaration.benchmark_id == ProtocolIdentifier.parse("benchmarks.digits@0.1.0")
     assert declaration.latent_factor_declaration == ArtifactReference(
         kind="latent-factor-declaration",
-        protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
+        protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.2.0"),
     )
     assert declaration.requirements == ()
     assert declaration.minimum_resolution() == AxisAssignment(values={"W": 1, "H": 1})
@@ -193,7 +193,7 @@ def test_materialization_plan_accepts_arbitrary_positive_resolution() -> None:
         ),
         latent_factor_declaration=ArtifactReference(
             kind="latent-factor-declaration",
-            protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
+            protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.2.0"),
         ),
         resolution_assignment=AxisAssignment(values={"W": 48, "H": 28}),
         seed=101,
@@ -213,7 +213,7 @@ def test_materialization_plan_rejects_under_resolved_request() -> None:
         ),
         latent_factor_declaration=ArtifactReference(
             kind="latent-factor-declaration",
-            protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
+            protocol_id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.2.0"),
         ),
         resolution_assignment=AxisAssignment(values={"W": 0, "H": 1}),
         seed=101,

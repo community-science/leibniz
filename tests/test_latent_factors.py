@@ -8,13 +8,11 @@ from benchmark_typing import load_digits_benchmark
 from leibniz.content import ContentDigest
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.latent_factors import (
-    ComplexityProjection,
     DegreeMeasure,
     GeneratorConstructionFactor,
     LatentFactorDeclaration,
     LatentFactorDeclarationDocument,
     LatentFactorValidationError,
-    ResolutionRequirement,
     SampleLatentFactor,
 )
 
@@ -45,70 +43,12 @@ def test_degree_measure_validates_supported_kinds() -> None:
     ) == "discrete-choice degree measure requires domain_size"
 
 
-def test_complexity_projection_counts_content_and_excludes_variation() -> None:
-    declaration = _digits_declaration(sample_multiplicity=3)
-
-    assert declaration.evaluate_complexity("C") == 3.0
-    assert [
-        factor.name
-        for factor in declaration.sample_factors
-        if factor.role == "variation"
-    ] == [ProtocolName.parse("benchmarks.digits.sample.field-variation-transform")]
-    assert declaration.construction_factors == (
-        GeneratorConstructionFactor(
-            name=ProtocolName.parse("benchmarks.digits.construction.stroke-basis"),
-            degree_measure=DegreeMeasure.constant_count(7),
-        ),
-    )
-
-
-def test_digits_content_complexity_is_linear_in_sample_multiplicity() -> None:
-    values = [
-        _digits_declaration(sample_multiplicity=multiplicity).evaluate_complexity("C")
-        for multiplicity in (1, 2, 5)
-    ]
-
-    assert values == [1.0, 2.0, 5.0]
-
-
-def test_complexity_projection_rejects_resolution_axis() -> None:
-    assert str(
-        capture_latent_error(
-            lambda: ComplexityProjection(
-                name=ProtocolName.parse("benchmarks.digits.complexity.bad"),
-                coordinate="N",
-                included_roles=frozenset({"content"}),
-            )
-        )
-    ) == "N is a resolution axis, not a complexity axis"
-
-
-def test_resolution_requirement_rejects_infeasible_canvas_size() -> None:
-    requirement = ResolutionRequirement.from_record(
-        {
-            "name": "benchmarks.digits.resolution.minimum-c1",
-            "resolution_axis": "N",
-            "content_coordinate": "C",
-            "content_complexity": 1,
-            "minimum_resolution": 32,
-            "basis": "declared-minimum",
-        }
-    )
-
-    requirement.require_resolution(32)
-
-    assert str(capture_latent_error(lambda: requirement.require_resolution(31))) == (
-        "N=31 is below minimum 32 for C=1"
-    )
-
-
 def test_digits_latent_factor_declaration_is_python_owned() -> None:
     declaration = load_digits_benchmark(_digits_benchmark_root).latent_factors
 
     assert declaration.id == ProtocolIdentifier.parse(
-        "benchmarks.digits.latent-factors@0.1.0"
+        "benchmarks.digits.latent-factors@0.2.0"
     )
-    assert declaration.complexity_projections == ()
     assert ContentDigest.from_value(declaration.to_record()) == declaration.digest
 
 
@@ -118,7 +58,6 @@ def test_latent_factor_declaration_digest_is_stable() -> None:
     reordered = {
         "sample_factors": record["sample_factors"],
         "construction_factors": record["construction_factors"],
-        "complexity_projections": record["complexity_projections"],
         "id": record["id"],
     }
 
@@ -136,6 +75,24 @@ def test_latent_factor_declaration_rejects_duplicate_factor_names() -> None:
     ) == "duplicate sample factor: benchmarks.digits.sample.digit-identity"
 
 
+def test_latent_factor_declaration_rejects_removed_complexity_projection_key() -> None:
+    record = _digits_declaration(sample_multiplicity=1).to_record()
+    record["complexity_projections"] = []
+
+    assert str(
+        capture_latent_error(lambda: LatentFactorDeclaration.from_record(record))
+    ) == "complexity_projections: unknown field"
+
+
+def test_latent_factor_declaration_rejects_removed_resolution_requirements_key() -> None:
+    record = _digits_declaration(sample_multiplicity=1).to_record()
+    record["resolution_requirements"] = []
+
+    assert str(
+        capture_latent_error(lambda: LatentFactorDeclaration.from_record(record))
+    ) == "resolution_requirements: unknown field"
+
+
 def test_latent_factor_declaration_document_rejects_invalid_bytes() -> None:
     assert str(
         capture_latent_error(lambda: LatentFactorDeclarationDocument.from_bytes(b"\xff"))
@@ -147,7 +104,7 @@ def test_latent_factor_declaration_document_rejects_invalid_bytes() -> None:
 
 def _digits_declaration(sample_multiplicity: int) -> LatentFactorDeclaration:
     return LatentFactorDeclaration(
-        id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.1.0"),
+        id=ProtocolIdentifier.parse("benchmarks.digits.latent-factors@0.2.0"),
         construction_factors=(
             GeneratorConstructionFactor(
                 name=ProtocolName.parse("benchmarks.digits.construction.stroke-basis"),
@@ -171,13 +128,6 @@ def _digits_declaration(sample_multiplicity: int) -> LatentFactorDeclaration:
                 name=ProtocolName.parse("benchmarks.digits.materialization.canvas-side"),
                 role="materialization",
                 degree_measure=DegreeMeasure.scalar(),
-            ),
-        ),
-        complexity_projections=(
-            ComplexityProjection(
-                name=ProtocolName.parse("benchmarks.digits.complexity.content"),
-                coordinate="C",
-                included_roles=frozenset({"content"}),
             ),
         ),
     )
