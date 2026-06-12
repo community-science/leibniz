@@ -369,7 +369,7 @@ function assertConsoleTextIsUseful() {
 
 function assertConsoleResultRootPolicy() {
   const resultViewRecords = readFileSync(
-    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/generated/resultViewRecords.ts'),
+    resolve(repositoryRoot, 'src/leibniz/console/_web_src/src/resultViewRecords.ts'),
     'utf8',
   );
   for (const marker of ['delete resultRecord']) {
@@ -520,7 +520,7 @@ function assertConsoleResultRootPolicy() {
       'training summaries still refresh console data',
     );
     assertEqual(
-      consoleDataPayloadPath().endsWith('src/leibniz/console/_web_src/src/generated/consoleDataPayload.json'),
+      consoleDataPayloadPath().endsWith('.leibniz/console/consoleDataPayload.json'),
       true,
       'console data payload path',
     );

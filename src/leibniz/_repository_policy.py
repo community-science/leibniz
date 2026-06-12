@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 _forbidden_names = frozenset(
     {
         ".mypy_cache",
+        ".leibniz",
         ".pytest_cache",
         ".ruff_cache",
         "results",
