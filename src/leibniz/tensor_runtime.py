@@ -33,6 +33,7 @@ __all__ = [
     "preferred_tensor_runtime_device_kind",
     "seed_runtime",
     "softmax_prediction_rows",
+    "softmax_target_mass_tensor",
     "softmax_target_masses",
     "synchronize_runtime",
     "TensorRuntime",
@@ -704,13 +705,23 @@ def softmax_target_masses(
 ) -> list[float]:
     """Return each prediction row's probability mass assigned to its target."""
 
+    return softmax_target_mass_tensor(runtime, logits, targets).detach().tolist()
+
+
+def softmax_target_mass_tensor(
+    runtime: TensorRuntime,
+    logits: Any,
+    targets: Any,
+) -> Any:
+    """Return target probability masses as a runtime tensor."""
+
     _ = runtime
     torch = _torch()
     probabilities = torch.softmax(logits.detach(), dim=1)
     if targets.shape == probabilities.shape:
-        return (probabilities * targets).sum(dim=1).detach().tolist()
+        return (probabilities * targets).sum(dim=1).detach()
     target_indexes = targets.reshape((-1, 1)).long()
-    return probabilities.gather(1, target_indexes).reshape((-1,)).detach().tolist()
+    return probabilities.gather(1, target_indexes).reshape((-1,)).detach()
 
 
 def build_optimizer(

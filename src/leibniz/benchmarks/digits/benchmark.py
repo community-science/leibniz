@@ -896,7 +896,7 @@ class Generator:
                 FieldObservation(
                     shape=(field_shape[0], field_shape[1], field_shape[2]),
                     values=tuple(
-                        float(value) for value in host_fields[index].reshape(-1).tolist()
+                        float(value) for value in host_fields[index].reshape(-1)
                     ),
                 )
             )

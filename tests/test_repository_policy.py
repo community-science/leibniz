@@ -3,6 +3,9 @@ import re
 import subprocess
 from pathlib import Path, PurePosixPath
 
+import pytest
+
+import leibniz._repository_policy as repository_policy_module
 from leibniz._repository_policy import PolicyViolation, RepositoryPolicy
 from leibniz.documents import load_object_document
 
@@ -252,6 +255,10 @@ def test_benchmark_implementations_do_not_use_runtime_backend_escape_hatches() -
         "tensor_runtime_backend",
         "runtime.device",
         "runtime.torch",
+        ".tolist(",
+        ".item(",
+        ".numpy(",
+        ".cpu(",
     )
 
     offenders = tuple(
@@ -263,6 +270,41 @@ def test_benchmark_implementations_do_not_use_runtime_backend_escape_hatches() -
     )
 
     assert offenders == ()
+
+
+def test_repository_policy_rejects_benchmark_hot_path_host_transfer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = PurePosixPath("src/leibniz/benchmarks/example/benchmark.py")
+    benchmark_file = tmp_path / path
+    benchmark_file.parent.mkdir(parents=True)
+    benchmark_file.write_text(
+        "def render(value):\n"
+        "    return value.tolist()\n",
+        encoding="utf-8",
+    )
+
+    def tracked_paths(_root: Path) -> tuple[str, ...]:
+        return (path.as_posix(),)
+
+    monkeypatch.setattr(
+        repository_policy_module,
+        "_tracked_paths",
+        tracked_paths,
+    )
+
+    violations = RepositoryPolicy.validate_repository(tmp_path)
+
+    assert violations == (
+        PolicyViolation(
+            path=path,
+            message=(
+                "benchmark implementation hot-path host transfer "
+                "at line 2: .tolist("
+            ),
+        ),
+    )
 
 
 def test_repository_policy_cli_scans_backend_terms() -> None:

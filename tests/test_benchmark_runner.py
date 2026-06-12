@@ -116,6 +116,46 @@ def test_fieldless_tensor_samples_can_score_predictions() -> None:
     )
 
 
+def test_runtime_phase_timings_do_not_sync_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    sync_calls = 0
+
+    def count_sync(_runtime: TensorRuntime) -> None:
+        nonlocal sync_calls
+        sync_calls += 1
+
+    monkeypatch.delenv("LEIBNIZ_SYNC_TIMING", raising=False)
+    monkeypatch.setattr(benchmark_runner, "synchronize_runtime", count_sync)
+
+    timings = cast(Any, benchmark_runner)._runtime_phase_timings(runtime)
+    with timings.span("phase"):
+        pass
+
+    assert sync_calls == 0
+
+
+def test_runtime_phase_timings_sync_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    sync_calls = 0
+
+    def count_sync(_runtime: TensorRuntime) -> None:
+        nonlocal sync_calls
+        sync_calls += 1
+
+    monkeypatch.setenv("LEIBNIZ_SYNC_TIMING", "1")
+    monkeypatch.setattr(benchmark_runner, "synchronize_runtime", count_sync)
+
+    timings = cast(Any, benchmark_runner)._runtime_phase_timings(runtime)
+    with timings.span("phase"):
+        pass
+
+    assert sync_calls == 2
+
+
 def test_training_sampled_competence_matches_measurement_scoring() -> None:
     generator = load_generator(_digits_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
@@ -2033,6 +2073,45 @@ def test_training_replay_frontier_points_keep_recent_window() -> None:
     assert rolling_point.sample_count == 8
     assert rolling_point.seed == 108
     assert math.isclose(rolling_point.accepted_mass, 4.5)
+
+
+def test_training_compute_per_sample_is_cached_by_architecture_and_input_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    fields = SimpleNamespace(shape=(4, 1, 16, 16))
+    calls = 0
+
+    def fake_summary(_architecture: ArchitectureManifest) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(training_compute_per_sample=123)
+
+    cache = cast(
+        dict[tuple[str, tuple[int, ...]], int | None],
+        benchmark_runner.__dict__["_training_compute_per_sample_cache"],
+    )
+    cache.clear()
+    monkeypatch.setattr(
+        benchmark_runner,
+        "summarize_architecture_operators",
+        fake_summary,
+    )
+
+    first = cast(Any, benchmark_runner)._batch_max_training_compute_per_sample(
+        architecture=architecture,
+        fields=fields,
+    )
+    second = cast(Any, benchmark_runner)._batch_max_training_compute_per_sample(
+        architecture=architecture,
+        fields=fields,
+    )
+
+    assert first == 123
+    assert second == 123
+    assert calls == 1
 
 
 def test_training_rung_schedule_alternates_frontier_and_replay() -> None:

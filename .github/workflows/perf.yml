@@ -1,0 +1,29 @@
+name: Performance gates
+
+on:
+  workflow_dispatch:
+
+jobs:
+  perf:
+    name: Manual performance gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up environment
+        run: bash scripts/setup_environment.sh
+
+      - name: Run device performance gates
+        shell: bash
+        run: |
+          source scripts/activate_environment.sh
+          python -m pytest -m perf_gate
+
+      - name: Run roofline gates
+        shell: bash
+        env:
+          LEIBNIZ_PERF_GATES: "1"
+        run: |
+          source scripts/activate_environment.sh
+          python -m pytest -m perf_roofline
