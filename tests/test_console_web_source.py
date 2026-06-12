@@ -36,7 +36,7 @@ def test_console_web_source_is_handwritten_not_codegen_output() -> None:
     assert "src/leibniz/console/_web_src/src/generated/" in (
         _repository_root / ".gitignore"
     ).read_text(encoding="utf-8")
-    assert "local-cache/" in (_repository_root / ".gitignore").read_text(encoding="utf-8")
+    assert ".local-cache/" in (_repository_root / ".gitignore").read_text(encoding="utf-8")
     assert not (_repository_root / "src" / "leibniz" / "console" / "codegen.py").exists()
 
     package = (_console_package / "package.json").read_text(encoding="utf-8")
@@ -82,7 +82,7 @@ def test_console_web_source_is_handwritten_not_codegen_output() -> None:
     assert "isConsoleDataPayloadCurrent()" in prepare_console_data
     assert "export function isConsoleDataPayloadCurrent()" in vite_config
     assert "function consoleDataInputFiles()" in vite_config
-    assert "local-cache/console/consoleDataPayload.json" in vite_config
+    assert ".local-cache/console/consoleDataPayload.json" in vite_config
     assert "src/leibniz/console/_web_src/src/generated/consoleDataPayload.json" not in (
         vite_config
     )

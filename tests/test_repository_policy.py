@@ -38,7 +38,7 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
             "results/measurements/digits/local-run.json",
             "results/evaluations/digits/local-run.json",
             "results/views/digits/benchmark_results.json",
-            "local-cache/console/consoleDataPayload.json",
+            ".local-cache/console/consoleDataPayload.json",
             ".venv/pyvenv.cfg",
             ".vite/deps/react.js",
             "build/lib/leibniz/__init__.py",
@@ -78,7 +78,7 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(
-            path=PurePosixPath("local-cache/console/consoleDataPayload.json"),
+            path=PurePosixPath(".local-cache/console/consoleDataPayload.json"),
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(

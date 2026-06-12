@@ -13,7 +13,7 @@ node_modules/
 .vite/
 dist/
 build/
-local-cache/
+.local-cache/
 src/leibniz/console/_web_src/src/generated/
 
 # Local tooling
