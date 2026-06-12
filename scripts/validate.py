@@ -118,6 +118,32 @@ def validation_checks(
                     argv=(python, "-c", "import leibniz; print(leibniz.__version__)"),
                     cwd=repository_root,
                 ),
+                ValidationCommand(
+                    label="Restore editable checkout",
+                    argv=(
+                        python,
+                        "-m",
+                        "pip",
+                        "install",
+                        "--no-build-isolation",
+                        "--no-deps",
+                        "--editable",
+                        ".",
+                    ),
+                    cwd=repository_root,
+                ),
+                ValidationCommand(
+                    label="Import editable checkout",
+                    argv=(
+                        python,
+                        "-c",
+                        (
+                            "from pathlib import Path; import leibniz; "
+                            "print(Path(leibniz.__file__).resolve())"
+                        ),
+                    ),
+                    cwd=repository_root,
+                ),
             ),
         ),
     ]
