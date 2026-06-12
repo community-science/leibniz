@@ -7,9 +7,16 @@ from leibniz.cost_metrology import (
     CostMeasurement,
     CostMeter,
     CostMetrologyError,
+    cost_measurement_from_abstract_flops,
+    estimate_operation_stream_cost,
     measure_program_cost,
 )
-from leibniz.tensor_runtime import TensorRuntimeError, resolve_tensor_runtime
+from leibniz.tensor_runtime import (
+    TensorRuntimeError,
+    TensorRuntimeOperationRecord,
+    TensorRuntimeTensorSpec,
+    resolve_tensor_runtime,
+)
 
 
 def test_measure_program_cost_counts_matmul_formula() -> None:
@@ -26,6 +33,9 @@ def test_measure_program_cost_counts_matmul_formula() -> None:
     assert measurement.cost_model_id == TENSOR_RUNTIME_COST_MODEL_ID
     assert measurement.abstract_flops == 2 * 2 * 4 * 3
     assert measurement.operation_count == len(measurement.operation_trace)
+    assert measurement.execution_mode == "measured"
+    assert measurement.operation_stream_source == "runtime-executed"
+    assert measurement.operations_executed is True
     assert measurement.operation_trace[0].name == "aten.mm.default"
     assert measurement.operation_trace[0].input_tensors[0].shape == (2, 3)
     assert measurement.operation_trace[0].output_tensors[0].shape == (2, 4)
@@ -38,6 +48,45 @@ def test_measure_program_cost_counts_matmul_formula() -> None:
         ),
     )
     assert measurement.unmodeled_operations == ()
+
+
+def test_cost_measurement_from_abstract_flops_records_dry_run_provenance() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+
+    measurement = cost_measurement_from_abstract_flops(
+        runtime,
+        123,
+        operation_stream_source="declared-planning-trace",
+    )
+
+    assert measurement.abstract_flops == 123
+    assert measurement.execution_mode == "dry-run"
+    assert measurement.operation_stream_source == "declared-planning-trace"
+    assert measurement.operations_executed is False
+    assert measurement.wall_seconds == 0.0
+    assert measurement.operation_count == 0
+
+
+def test_estimate_operation_stream_cost_uses_unified_formula_table() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    operation = TensorRuntimeOperationRecord(
+        name="aten.mm.default",
+        arguments=(),
+        keyword_arguments=(),
+        input_tensors=(
+            TensorRuntimeTensorSpec(shape=(2, 3), dtype="torch.float32"),
+            TensorRuntimeTensorSpec(shape=(3, 4), dtype="torch.float32"),
+        ),
+        output_tensors=(TensorRuntimeTensorSpec(shape=(2, 4), dtype="torch.float32"),),
+    )
+
+    measurement = estimate_operation_stream_cost(runtime, (operation,), strict=True)
+
+    assert measurement.abstract_flops == 2 * 2 * 4 * 3
+    assert measurement.execution_mode == "dry-run"
+    assert measurement.operation_stream_source == "runtime-dry-run"
+    assert measurement.operations_executed is False
+    assert measurement.per_op[0].name == "aten.mm.default"
 
 
 def test_measure_program_cost_counts_fft_formula() -> None:

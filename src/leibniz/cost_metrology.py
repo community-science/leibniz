@@ -6,7 +6,7 @@ import math
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Self, cast
+from typing import Any, Literal, Self, cast
 
 from leibniz.tensor_runtime import (
     TensorRuntime,
@@ -29,10 +29,13 @@ __all__ = [
     "OperationCostRecord",
     "TensorValueSpec",
     "UnmodeledOperationRecord",
+    "cost_measurement_from_abstract_flops",
+    "estimate_operation_stream_cost",
     "measure_program_cost",
 ]
 
 TENSOR_RUNTIME_COST_MODEL_ID = "leibniz.cost-model.tensor-runtime@0.1.0"
+CostExecutionMode = Literal["measured", "dry-run"]
 
 
 class CostMetrologyError(ValueError):
@@ -215,7 +218,7 @@ class CostOperationTraceRecord:
 
 @dataclass(frozen=True, slots=True)
 class CostMeasurement:
-    """Measured abstract cost for one program execution."""
+    """Abstract cost for one tensor-runtime operation stream."""
 
     cost_model_id: str
     abstract_flops: int
@@ -227,6 +230,9 @@ class CostMeasurement:
     operation_trace: tuple[CostOperationTraceRecord, ...]
     wall_seconds: float
     tensor_device: str
+    execution_mode: CostExecutionMode = "measured"
+    operation_stream_source: str = "runtime-executed"
+    operations_executed: bool = True
     roofline: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
@@ -236,6 +242,18 @@ class CostMeasurement:
         _require_nonnegative_int(self.operation_count, "operation_count")
         _require_finite_nonnegative_float(self.wall_seconds, "wall_seconds")
         _require_nonempty_string(self.tensor_device, "tensor_device")
+        if self.execution_mode not in {"measured", "dry-run"}:
+            raise CostMetrologyError("execution_mode must be measured or dry-run")
+        _require_nonempty_string(
+            self.operation_stream_source,
+            "operation_stream_source",
+        )
+        if type(self.operations_executed) is not bool:
+            raise CostMetrologyError("operations_executed must be a boolean")
+        if self.execution_mode == "measured" and not self.operations_executed:
+            raise CostMetrologyError("measured cost must execute operations")
+        if self.execution_mode == "dry-run" and self.operations_executed:
+            raise CostMetrologyError("dry-run cost must not execute operations")
         if sum(record.abstract_flops for record in self.per_op) != self.abstract_flops:
             raise CostMetrologyError("abstract_flops must equal summed per_op abstract_flops")
         if sum(record.moved_elements for record in self.movement) != self.moved_elements:
@@ -278,6 +296,17 @@ class CostMeasurement:
             ),
             wall_seconds=_record_float(mapping.get("wall_seconds"), "wall_seconds"),
             tensor_device=_record_string(mapping.get("tensor_device"), "tensor_device"),
+            execution_mode=_record_execution_mode(
+                mapping.get("execution_mode", "measured")
+            ),
+            operation_stream_source=_record_string(
+                mapping.get("operation_stream_source", "runtime-executed"),
+                "operation_stream_source",
+            ),
+            operations_executed=_record_bool(
+                mapping.get("operations_executed", True),
+                "operations_executed",
+            ),
             roofline=cast(Mapping[str, object] | None, roofline),
         )
 
@@ -293,6 +322,9 @@ class CostMeasurement:
             "operation_trace": [op.to_record() for op in self.operation_trace],
             "wall_seconds": self.wall_seconds,
             "tensor_device": self.tensor_device,
+            "execution_mode": self.execution_mode,
+            "operation_stream_source": self.operation_stream_source,
+            "operations_executed": self.operations_executed,
         }
         if self.roofline is not None:
             record["roofline"] = dict(self.roofline)
@@ -349,6 +381,9 @@ class CostMeter:
             else time.perf_counter() - self._started_at,
             strict=self._strict,
             roofline=self._roofline,
+            execution_mode="measured",
+            operation_stream_source="runtime-executed",
+            operations_executed=True,
         )
 
 
@@ -375,6 +410,72 @@ def measure_program_cost(
         wall_seconds=wall_seconds,
         strict=strict,
         roofline=roofline,
+        execution_mode="measured",
+        operation_stream_source="runtime-executed",
+        operations_executed=True,
+    )
+
+
+def estimate_operation_stream_cost(
+    runtime: TensorRuntime,
+    operations: Iterable[TensorRuntimeOperationRecord],
+    *,
+    strict: bool = False,
+    roofline: Mapping[str, object] | None = None,
+    operation_stream_source: str = "runtime-dry-run",
+) -> CostMeasurement:
+    """Estimate cost for a projected tensor-runtime operation stream."""
+
+    return _measurement_from_operation_stream(
+        runtime=runtime,
+        operations=tuple(operations),
+        wall_seconds=0.0,
+        strict=strict,
+        roofline=roofline,
+        execution_mode="dry-run",
+        operation_stream_source=operation_stream_source,
+        operations_executed=False,
+    )
+
+
+def cost_measurement_from_abstract_flops(
+    runtime: TensorRuntime,
+    abstract_flops: int,
+    *,
+    operation_stream_source: str,
+    roofline: Mapping[str, object] | None = None,
+) -> CostMeasurement:
+    """Represent an existing abstract-op projection as cost metrology metadata."""
+
+    _require_nonnegative_int(abstract_flops, "abstract_flops")
+    _require_nonempty_string(operation_stream_source, "operation_stream_source")
+    per_op = (
+        ()
+        if abstract_flops == 0
+        else (
+            OperationCostRecord(
+                name=operation_stream_source,
+                calls=1,
+                abstract_flops=abstract_flops,
+                output_elements=0,
+            ),
+        )
+    )
+    return CostMeasurement(
+        cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
+        abstract_flops=abstract_flops,
+        per_op=per_op,
+        moved_elements=0,
+        movement=(),
+        unmodeled_operations=(),
+        operation_count=0,
+        operation_trace=(),
+        wall_seconds=0.0,
+        tensor_device=runtime.device_kind,
+        execution_mode="dry-run",
+        operation_stream_source=operation_stream_source,
+        operations_executed=False,
+        roofline=roofline,
     )
 
 
@@ -385,6 +486,9 @@ def _measurement_from_operation_stream(
     wall_seconds: float,
     strict: bool,
     roofline: Mapping[str, object] | None,
+    execution_mode: CostExecutionMode,
+    operation_stream_source: str,
+    operations_executed: bool,
 ) -> CostMeasurement:
     per_op: dict[str, _OperationAccumulator] = {}
     movement: dict[str, _MovementAccumulator] = {}
@@ -458,6 +562,9 @@ def _measurement_from_operation_stream(
         operation_trace=tuple(operation_trace),
         wall_seconds=wall_seconds,
         tensor_device=runtime.device_kind,
+        execution_mode=execution_mode,
+        operation_stream_source=operation_stream_source,
+        operations_executed=operations_executed,
         roofline=roofline,
     )
 
@@ -762,6 +869,18 @@ def _record_float(value: object, field: str) -> float:
     if not math.isfinite(numeric) or numeric < 0.0:
         raise CostMetrologyError(f"{field} must be finite and nonnegative")
     return numeric
+
+
+def _record_bool(value: object, field: str) -> bool:
+    if type(value) is not bool:
+        raise CostMetrologyError(f"{field} must be a boolean")
+    return value
+
+
+def _record_execution_mode(value: object) -> CostExecutionMode:
+    if value == "measured" or value == "dry-run":
+        return cast(CostExecutionMode, value)
+    raise CostMetrologyError("execution_mode must be measured or dry-run")
 
 
 def _require_nonempty_string(value: str, field: str) -> None:

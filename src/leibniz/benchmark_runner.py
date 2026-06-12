@@ -28,7 +28,11 @@ from leibniz.benchmark_evaluation import (
 )
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.content import ContentDigest
-from leibniz.cost_metrology import CostMeasurement, measure_program_cost
+from leibniz.cost_metrology import (
+    CostMeasurement,
+    cost_measurement_from_abstract_flops,
+    measure_program_cost,
+)
 from leibniz.documents import (
     canonical_document_bytes,
     document_filename_suffix,
@@ -257,7 +261,7 @@ def _require_tensor_generator(generator: BenchmarkGenerator) -> _TensorBenchmark
 class _TrainingStageResult:
     validation_history: tuple[TrainingHistoryPoint, ...]
     stop_reason: str
-    validation_inference_compute: float | None = None
+    validation_inference_cost: tuple[CostMeasurement, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2055,7 +2059,10 @@ def _train_and_predict_on_device(
                     roofline=runtime_roofline_record(runtime),
                     work_estimates=_training_work_estimates(
                         architecture=architecture,
-                        inference_compute=_training_history_max_inference_compute(history),
+                        inference_cost=_training_history_inference_cost_measurement(
+                            runtime=runtime,
+                            validation_history=history,
+                        ),
                         training_compute_per_sample=(
                             _training_history_latest_training_compute_per_sample(history)
                         ),
@@ -2122,8 +2129,13 @@ def _train_and_predict_on_device(
             roofline=runtime_roofline_record(runtime),
             work_estimates=_training_work_estimates(
                 architecture=architecture,
-                inference_compute=_training_history_max_inference_compute(validation_history),
-                measured_inference_compute=training_result.validation_inference_compute,
+                inference_cost=(
+                    training_result.validation_inference_cost
+                    or _training_history_inference_cost_measurement(
+                        runtime=runtime,
+                        validation_history=validation_history,
+                    )
+                ),
                 training_compute_per_sample=(
                     _training_history_latest_training_compute_per_sample(validation_history)
                 ),
@@ -2719,6 +2731,14 @@ def _measurement_inference_compute(measurement: tuple[CostMeasurement, int]) -> 
     return tensor_runtime_ops_per_item(cost.abstract_flops, sample_count)
 
 
+def _cost_measurement_compute_source(measurement: CostMeasurement) -> str:
+    if measurement.operations_executed:
+        return "measured-forward-metrology"
+    if measurement.operation_stream_source == "declared-planning-trace":
+        return "dry-run-declared-planning-trace"
+    return "dry-run-metrology"
+
+
 def _batch_max_inference_compute(
     *,
     architecture: ArchitectureManifest,
@@ -2893,14 +2913,6 @@ def _is_runtime_capacity_error(error: RuntimeError) -> bool:
 
 
 def _max_optional_int(left: int | None, right: int | None) -> int | None:
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return max(left, right)
-
-
-def _max_optional_float(left: float | None, right: float | None) -> float | None:
     if left is None:
         return right
     if right is None:
@@ -3158,7 +3170,7 @@ def _train_until_convergence(
     stop_reason = "training-stopped"
     plateau_window_start_index = 0
     max_validation_inference_compute: int | None = None
-    max_measured_validation_inference_compute: float | None = None
+    max_validation_inference_cost: tuple[CostMeasurement, int] | None = None
     latest_training_compute_per_sample: int | None = None
     replay_frontier_points: dict[
         tuple[float, float],
@@ -3168,7 +3180,7 @@ def _train_until_convergence(
 
     def append_validation(*, step: int, check: int) -> None:
         nonlocal best_score, max_validation_inference_compute
-        nonlocal max_measured_validation_inference_compute, stale_checks
+        nonlocal max_validation_inference_cost, stale_checks
         with phase_timings.span("validation_replay_score_flush"):
             _flush_pending_replay_scores(
                 pending_replay_scores=pending_replay_scores,
@@ -3210,12 +3222,9 @@ def _train_until_convergence(
                 module=module,
                 fields=fields,
             )
-        max_measured_validation_inference_compute = _max_optional_float(
-            max_measured_validation_inference_compute,
-            tensor_runtime_ops_per_item(
-                validation_cost_measurement.abstract_flops,
-                actual_gate_sample_count,
-            ),
+        max_validation_inference_cost = _max_cost_measurement(
+            max_validation_inference_cost,
+            (validation_cost_measurement, actual_gate_sample_count),
         )
         with phase_timings.span("validation_forward_loss", samples=actual_gate_sample_count):
             was_training = bool(module.training)
@@ -3300,7 +3309,7 @@ def _train_until_convergence(
         return _TrainingStageResult(
             validation_history=tuple(validation_history),
             stop_reason="no-training-steps" if start_step == 0 else "max-steps",
-            validation_inference_compute=max_measured_validation_inference_compute,
+            validation_inference_cost=max_validation_inference_cost,
         )
     validation_check = start_check + 1
     steps = count(start_step + 1) if max_steps is None else range(start_step + 1, max_steps + 1)
@@ -3452,7 +3461,7 @@ def _train_until_convergence(
     return _TrainingStageResult(
         validation_history=tuple(validation_history),
         stop_reason=stop_reason,
-        validation_inference_compute=max_measured_validation_inference_compute,
+        validation_inference_cost=max_validation_inference_cost,
     )
 
 
@@ -3808,6 +3817,25 @@ def _training_history_max_inference_compute(
         if type(current) is int:
             max_compute = _max_optional_int(max_compute, current)
     return max_compute
+
+
+def _training_history_inference_cost_measurement(
+    *,
+    runtime: TensorRuntime,
+    validation_history: Sequence[TrainingHistoryPoint],
+) -> tuple[CostMeasurement, int] | None:
+    max_compute = _training_history_max_inference_compute(validation_history)
+    if max_compute is None:
+        return None
+    return (
+        cost_measurement_from_abstract_flops(
+            runtime,
+            max_compute,
+            operation_stream_source="declared-planning-trace",
+            roofline=runtime_roofline_record(runtime),
+        ),
+        1,
+    )
 
 
 def _training_history_latest_training_compute_per_sample(
@@ -4552,20 +4580,17 @@ def _phase_roofline_record(
 def _training_work_estimates(
     *,
     architecture: ArchitectureManifest,
-    inference_compute: int | None,
+    inference_cost: tuple[CostMeasurement, int] | None,
     training_compute_per_sample: int | None,
     storage_bytes: int | None,
     batch_size: int,
-    measured_inference_compute: float | None = None,
 ) -> _TrainingWorkEstimates | None:
-    inference_compute_per_sample = (
-        measured_inference_compute
-        if measured_inference_compute is not None
-        else None if inference_compute is None else float(inference_compute)
-    )
+    if inference_cost is None:
+        return None
+    inference_measurement = inference_cost[0]
+    inference_compute_per_sample = _measurement_inference_compute(inference_cost)
     if (
-        inference_compute_per_sample is None
-        or inference_compute_per_sample <= 0
+        inference_compute_per_sample <= 0
         or training_compute_per_sample is None
         or training_compute_per_sample <= 0
     ):
@@ -4575,11 +4600,7 @@ def _training_work_estimates(
     batch_size_value = max(1, batch_size)
     storage_bytes_per_sample = float(storage_bytes or 0) / batch_size_value
     inference_bytes = input_bytes + output_bytes + storage_bytes_per_sample
-    inference_compute_source = (
-        "measured-forward-metrology"
-        if measured_inference_compute is not None
-        else "planning-operator-estimate"
-    )
+    inference_compute_source = _cost_measurement_compute_source(inference_measurement)
     formation_bytes = 8.0 * input_bytes
     training_compute = float(training_compute_per_sample)
     training_bytes = formation_bytes + 3.0 * inference_bytes + 4.0 * storage_bytes_per_sample
@@ -4606,10 +4627,10 @@ def _training_work_estimates(
             "training compute follows the declared per-operator planning trace",
             (
                 "validation and evaluation compute use measured forward-pass metrology"
-                if measured_inference_compute is not None
+                if inference_measurement.operations_executed
                 else (
-                    "validation and evaluation compute follow the declared "
-                    "per-operator planning trace"
+                    "validation and evaluation compute use dry-run cost metrology "
+                    f"from {inference_measurement.operation_stream_source}"
                 )
             ),
             "storage bytes are amortized across the local batch",
