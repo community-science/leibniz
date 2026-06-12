@@ -37,6 +37,12 @@ _benchmark_runtime_escape_hatches = (
     "runtime.device",
     "runtime.torch",
 )
+_benchmark_hot_path_forbidden_fragments = (
+    ".tolist(",
+    ".item(",
+    ".numpy(",
+    ".cpu(",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +166,17 @@ def _validate_benchmark_runtime_escape_hatches(
                             path=path,
                             message=(
                                 "benchmark implementation runtime escape hatch "
+                                f"at line {line_number}: {fragment}"
+                            ),
+                        )
+                    )
+            for fragment in _benchmark_hot_path_forbidden_fragments:
+                if fragment in line:
+                    violations.append(
+                        PolicyViolation(
+                            path=path,
+                            message=(
+                                "benchmark implementation hot-path host transfer "
                                 f"at line {line_number}: {fragment}"
                             ),
                         )

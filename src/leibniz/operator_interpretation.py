@@ -66,6 +66,8 @@ def interpret_operator_semantic(
             parameters,
             input_shape,
         )
+    if semantic.shape_law == "preserve-input-shape":
+        return _interpret_preserve_input_shape(semantic, input_shape)
     raise OperatorInterpretationError(f"unsupported shape_law: {semantic.shape_law}")
 
 
@@ -201,6 +203,20 @@ def _interpret_fixed_support_affine(
         parameter_count=(input_channels + 1) * out_channels,
         inference_compute=inference_compute,
         training_compute_per_sample=(2 * input_elements) + (3 * affine_compute),
+    )
+
+
+def _interpret_preserve_input_shape(
+    semantic: ModelOperatorSemantic,
+    input_shape: tuple[int, ...],
+) -> OperatorInterpretation:
+    _require_cost_law(semantic, "input-elements")
+    input_elements = TensorShape.from_axes(input_shape).element_count
+    return OperatorInterpretation(
+        output_shape=input_shape,
+        parameter_count=0,
+        inference_compute=input_elements,
+        training_compute_per_sample=2 * input_elements,
     )
 
 

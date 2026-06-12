@@ -35,7 +35,13 @@ __all__ = [
 
 _OperatorStateKind = Literal["learned", "fixed"]
 _OperatorSupportKind = Literal["global", "local-window", "pointwise", "rank-collapsing"]
-_TensorRelationKind = Literal["affine", "aggregation", "identity", "shape-transform"]
+_TensorRelationKind = Literal[
+    "affine",
+    "aggregation",
+    "identity",
+    "nonlinear",
+    "shape-transform",
+]
 _ProgramEffectKind = Literal[
     "branch",
     "identity-path",

@@ -19,12 +19,14 @@ def test_model_operator_semantic_registry_declares_current_public_vocabulary() -
         "local-aggregation",
         "local-affine",
         "fixed-support-affine",
+        "rectified-linear-activation",
         "rank-collapse",
         "affine-readout",
     ]
     assert [record["alias"] for record in registry.syntax_alias_records()] == [
         "adaptive-pooling",
         "convolution",
+        "relu",
         "flatten",
         "dense",
     ]
@@ -33,10 +35,12 @@ def test_model_operator_semantic_registry_declares_current_public_vocabulary() -
     assert registry.semantic_for_alias("local-affine") == registry.operators[1]
     assert registry.semantic_for_alias("convolution") == registry.operators[1]
     assert registry.semantic_for_alias("fixed-support-affine") == registry.operators[2]
-    assert registry.semantic_for_alias("rank-collapse") == registry.operators[3]
-    assert registry.semantic_for_alias("flatten") == registry.operators[3]
-    assert registry.semantic_for_alias("affine-readout") == registry.operators[4]
-    assert registry.semantic_for_alias("dense") == registry.operators[4]
+    assert registry.semantic_for_alias("rectified-linear-activation") == registry.operators[3]
+    assert registry.semantic_for_alias("relu") == registry.operators[3]
+    assert registry.semantic_for_alias("rank-collapse") == registry.operators[4]
+    assert registry.semantic_for_alias("flatten") == registry.operators[4]
+    assert registry.semantic_for_alias("affine-readout") == registry.operators[5]
+    assert registry.semantic_for_alias("dense") == registry.operators[5]
     assert registry.operators[0].descriptor_record(aliases=("adaptive-pooling",)) == {
         "kind": "local-aggregation",
         "tensor_relation": "aggregation",

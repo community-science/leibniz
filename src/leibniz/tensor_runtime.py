@@ -33,12 +33,13 @@ __all__ = [
     "preferred_tensor_runtime_device_kind",
     "seed_runtime",
     "softmax_prediction_rows",
+    "softmax_target_mass_tensor",
     "softmax_target_masses",
     "synchronize_runtime",
     "TensorRuntime",
     "TensorElementParameter",
     "TensorElementParameterDType",
-    "TensorElementProgram",
+    "TensorBatchProgram",
     "TensorElementRecipe",
     "TensorElementDType",
     "TensorRuntimeError",
@@ -55,6 +56,7 @@ __all__ = [
     "tensor_runtime_total_memory_bytes",
     "tensor_runtime_used_memory_bytes",
     "tensor_value_to_host",
+    "tensor_value_to_host_values",
     "resolve_host_tensor_runtime",
     "resolve_tensor_runtime",
     "runtime_roofline_record",
@@ -74,7 +76,12 @@ _tensor_element_kernel_cache: dict[tuple[object, ...], Any] = {}
 _tensor_element_compile_failure_cache: set[tuple[object, ...]] = set()
 _tensor_element_compile_fallbacks: dict[tuple[object, ...], dict[str, object]] = {}
 _tensor_element_parameter_cache: dict[tuple[object, ...], Any] = {}
-_tensor_element_tile_metadata_cache: dict[tuple[object, ...], Any] = {}
+_tensor_element_parameter_cache_capacity = 256
+_tensor_element_parameter_values_key_cache: dict[
+    tuple[int, TensorElementParameterDType],
+    tuple[Sequence[int | float], bytes],
+] = {}
+_tensor_element_parameter_values_key_cache_minimum_size = 64
 _tensor_element_tile_size = 131_072
 _require_tensor_compile_environment_variable = "LEIBNIZ_REQUIRE_TENSOR_COMPILE"
 
@@ -98,7 +105,7 @@ class TensorElementRecipe:
 
     shape: tuple[int, ...]
     dtype: TensorElementDType
-    program: TensorElementProgram
+    program: TensorBatchProgram
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,8 +119,8 @@ class TensorElementParameter:
 
 
 @dataclass(frozen=True, slots=True)
-class TensorElementProgram:
-    """Rank-agnostic vectorized element function to lift over a tensor extent."""
+class TensorBatchProgram:
+    """Batch-rank tensor construction kernel over recipe axis coordinates."""
 
     kernel: Callable[..., object]
     parameters: Mapping[str, TensorElementParameter]
@@ -166,7 +173,7 @@ def tensor_element_compile_fallback_records() -> tuple[dict[str, object], ...]:
 def _note_tensor_element_compile_fallback(
     *,
     runtime: TensorRuntime,
-    program: TensorElementProgram,
+    program: TensorBatchProgram,
     cache_key: tuple[object, ...],
     reason: str,
 ) -> None:
@@ -193,7 +200,7 @@ def _tensor_element_compile_required() -> bool:
     return os.environ.get(_require_tensor_compile_environment_variable, "") not in {"", "0"}
 
 
-def _tensor_element_program_label(program: TensorElementProgram) -> str:
+def _tensor_element_program_label(program: TensorBatchProgram) -> str:
     if program.cache_key is not None:
         return str(program.cache_key)
     return getattr(program.kernel, "__qualname__", repr(program.kernel))
@@ -227,6 +234,23 @@ def tensor_value_to_host(value: Any) -> Any:
     if callable(move_to_host):
         value = move_to_host()
     return value
+
+
+def tensor_value_to_host_values(value: Any) -> list[float]:
+    """Return a tensor-like value's elements as a flat host list of floats.
+
+    This is the supported host-materialization path for benchmark
+    implementations, which the repository policy bars from calling backend
+    host-transfer methods directly.
+    """
+
+    host_value = tensor_value_to_host(value)
+    reshape = getattr(host_value, "reshape", None)
+    if callable(reshape):
+        host_value = reshape(-1)
+    to_list = getattr(host_value, "tolist", None)
+    flat_values = cast(Any, to_list() if callable(to_list) else host_value)
+    return [float(element) for element in flat_values]
 
 
 def tensor_runtime_has_fixed_device_memory(runtime: TensorRuntime) -> bool:
@@ -596,6 +620,8 @@ def build_architecture_modules(
                 for axis in shape[spatial_axis_start:]
             )
             shape = (*shape[:channel_axis_index], out_channels, *output_spatial_axes)
+        elif kind == "rectified-linear-activation":
+            modules.append(torch.nn.ReLU())
         elif kind == "rank-collapse":
             modules.append(torch.nn.Flatten())
             shape = (TensorShape.from_axes(shape).element_count,)
@@ -700,13 +726,23 @@ def softmax_target_masses(
 ) -> list[float]:
     """Return each prediction row's probability mass assigned to its target."""
 
+    return softmax_target_mass_tensor(runtime, logits, targets).detach().tolist()
+
+
+def softmax_target_mass_tensor(
+    runtime: TensorRuntime,
+    logits: Any,
+    targets: Any,
+) -> Any:
+    """Return target probability masses as a runtime tensor."""
+
     _ = runtime
     torch = _torch()
     probabilities = torch.softmax(logits.detach(), dim=1)
     if targets.shape == probabilities.shape:
-        return (probabilities * targets).sum(dim=1).detach().tolist()
+        return (probabilities * targets).sum(dim=1).detach()
     target_indexes = targets.reshape((-1, 1)).long()
-    return probabilities.gather(1, target_indexes).reshape((-1,)).detach().tolist()
+    return probabilities.gather(1, target_indexes).reshape((-1,)).detach()
 
 
 def build_optimizer(
@@ -1111,7 +1147,7 @@ def _construct_tensor_element_program(
     runtime: TensorRuntime,
     shape: tuple[int, ...],
     dtype: Any,
-    program: TensorElementProgram,
+    program: TensorBatchProgram,
 ) -> Any:
     parameter_tensors = {
         name: _tensor_element_parameter(
@@ -1176,18 +1212,17 @@ def _construct_eager_tensor_element_program(
     runtime: TensorRuntime,
     shape: tuple[int, ...],
     dtype: Any,
-    program: TensorElementProgram,
+    program: TensorBatchProgram,
     parameter_tensors: Mapping[str, Any],
 ) -> Any:
-    backend = runtime.torch
-    total_elements = math.prod(shape)
-    flat_indices = backend.arange(total_elements, dtype=backend.long, device=runtime.device)
-    coordinate_tensors = _tensor_element_coordinate_tensors(
+    output = runtime.torch.empty(shape, dtype=dtype, device=runtime.device)
+    for start, stop, axis_coordinates in _tensor_batch_axis_coordinate_chunks(
+        runtime=runtime,
         shape=shape,
-        flat_indices=flat_indices,
-    )
-    values = cast(Any, program.kernel(coordinate_tensors, flat_indices, **parameter_tensors))
-    return values.to(dtype=dtype).reshape(shape)
+    ):
+        values = cast(Any, program.kernel(axis_coordinates, **parameter_tensors))
+        output[start:stop] = values.to(dtype=dtype)
+    return output
 
 
 def _construct_compiled_tensor_element_tiles(
@@ -1195,30 +1230,23 @@ def _construct_compiled_tensor_element_tiles(
     runtime: TensorRuntime,
     shape: tuple[int, ...],
     dtype: Any,
-    program: TensorElementProgram,
+    program: TensorBatchProgram,
     parameter_tensors: Mapping[str, Any],
     cache_key: tuple[object, ...],
 ) -> Any:
     with _tensor_runtime_profile_span(runtime, "leibniz.tensor_construct.compiled_tiles"):
         backend = runtime.torch
-        total_elements = math.prod(shape)
         compiled_parameters = _compiled_tensor_element_parameters(
             runtime=runtime,
             declarations=program.parameters,
             parameter_tensors=parameter_tensors,
-        )
-        tile_positions = _tensor_element_tile_positions(runtime)
-        extents, strides, total_tensor = _tensor_element_shape_metadata(
-            runtime,
-            shape=shape,
-            total_elements=total_elements,
         )
         _mark_dynamic_tensor_element_parameters(
             runtime=runtime,
             parameter_declarations=program.parameters,
             parameter_tensors=compiled_parameters.tensors,
         )
-        output = backend.empty((total_elements,), dtype=dtype, device=runtime.device)
+        output = backend.empty(shape, dtype=dtype, device=runtime.device)
         kernel = _compiled_tensor_element_tile_kernel(
             runtime=runtime,
             program=program,
@@ -1227,19 +1255,16 @@ def _construct_compiled_tensor_element_tiles(
             scalar_aliases=compiled_parameters.scalar_aliases,
             cache_key=cache_key,
         )
-        for offset in range(0, total_elements, _tensor_element_tile_size):
-            valid_count = min(_tensor_element_tile_size, total_elements - offset)
-            offset_tensor = _tensor_element_offset_tensor(runtime, offset=offset)
+        for start, stop, axis_coordinates in _tensor_batch_axis_coordinate_chunks(
+            runtime=runtime,
+            shape=shape,
+        ):
             values = kernel(
-                tile_positions,
-                offset_tensor,
-                extents,
-                strides,
-                total_tensor,
+                axis_coordinates,
                 **compiled_parameters.tensors,
             ).to(dtype=dtype)
-            output[offset : offset + valid_count] = values[:valid_count]
-        return output.reshape(shape)
+            output[start:stop] = values
+        return output
 
 
 def _compiled_tensor_element_parameters(
@@ -1278,7 +1303,7 @@ def _compiled_tensor_element_parameters(
 def _tensor_element_parameter(
     *,
     runtime: TensorRuntime,
-    program: TensorElementProgram,
+    program: TensorBatchProgram,
     name: str,
     parameter: TensorElementParameter,
 ) -> Any:
@@ -1305,6 +1330,10 @@ def _tensor_element_parameter(
             device=runtime.device,
         ).reshape(parameter.shape)
         if cache_key is not None:
+            while len(_tensor_element_parameter_cache) >= _tensor_element_parameter_cache_capacity:
+                _tensor_element_parameter_cache.pop(
+                    next(iter(_tensor_element_parameter_cache))
+                )
             _tensor_element_parameter_cache[cache_key] = tensor
         return tensor
 
@@ -1312,7 +1341,7 @@ def _tensor_element_parameter(
 def _tensor_element_parameter_cache_key(
     *,
     runtime: TensorRuntime,
-    program: TensorElementProgram,
+    program: TensorBatchProgram,
     name: str,
     parameter: TensorElementParameter,
 ) -> tuple[object, ...] | None:
@@ -1330,11 +1359,24 @@ def _tensor_element_parameter_cache_key(
 
 
 def _tensor_element_parameter_values_key(parameter: TensorElementParameter) -> bytes:
+    cacheable = len(parameter.values) >= _tensor_element_parameter_values_key_cache_minimum_size
+    if cacheable:
+        cache_key = (id(parameter.values), parameter.dtype)
+        cached = _tensor_element_parameter_values_key_cache.get(cache_key)
+        if cached is not None and cached[0] is parameter.values:
+            return cached[1]
     if parameter.dtype == "float32":
-        return array("f", (float(value) for value in parameter.values)).tobytes()
-    if parameter.dtype == "int64":
-        return array("q", (int(value) for value in parameter.values)).tobytes()
-    raise TensorRuntimeError(f"unsupported tensor element parameter dtype: {parameter.dtype}")
+        values_key = array("f", (float(value) for value in parameter.values)).tobytes()
+    elif parameter.dtype == "int64":
+        values_key = array("q", (int(value) for value in parameter.values)).tobytes()
+    else:
+        raise TensorRuntimeError(f"unsupported tensor element parameter dtype: {parameter.dtype}")
+    if cacheable:
+        _tensor_element_parameter_values_key_cache[(id(parameter.values), parameter.dtype)] = (
+            parameter.values,
+            values_key,
+        )
+    return values_key
 
 
 def _tensor_element_parameter_dtype(
@@ -1349,76 +1391,52 @@ def _tensor_element_parameter_dtype(
     raise TensorRuntimeError(f"unsupported tensor element parameter dtype: {dtype}")
 
 
-def _tensor_element_tile_positions(runtime: TensorRuntime) -> Any:
-    key = (
-        "tile-positions",
-        runtime.device_kind,
-        str(runtime.device),
-        _tensor_element_tile_size,
-    )
-    cached = _tensor_element_tile_metadata_cache.get(key)
-    if cached is not None:
-        return cached
-    tensor = runtime.torch.arange(
-        _tensor_element_tile_size,
-        dtype=runtime.torch.long,
-        device=runtime.device,
-    )
-    _tensor_element_tile_metadata_cache[key] = tensor
-    return tensor
-
-
-def _tensor_element_shape_metadata(
-    runtime: TensorRuntime,
+def _tensor_batch_axis_coordinate_chunks(
     *,
+    runtime: TensorRuntime,
     shape: tuple[int, ...],
-    total_elements: int,
-) -> tuple[Any, Any, Any]:
-    key = (
-        "shape-metadata",
-        runtime.device_kind,
-        str(runtime.device),
-        shape,
-        total_elements,
+) -> tuple[tuple[int, int, tuple[Any, ...]], ...]:
+    if not shape:
+        scalar_coordinate = runtime.torch.arange(
+            1,
+            dtype=runtime.torch.long,
+            device=runtime.device,
+        )
+        return ((0, 1, (scalar_coordinate,)),)
+    leading_extent = shape[0]
+    trailing_element_count = math.prod(shape[1:]) if len(shape) > 1 else 1
+    chunk_extent = max(
+        1,
+        min(leading_extent, _tensor_element_tile_size // trailing_element_count),
     )
-    cached = _tensor_element_tile_metadata_cache.get(key)
-    if cached is not None:
-        return cast(tuple[Any, Any, Any], cached)
-    extents = runtime.torch.tensor(shape, dtype=runtime.torch.long, device=runtime.device)
-    strides = runtime.torch.tensor(
-        _tensor_element_shape_strides(shape),
-        dtype=runtime.torch.long,
-        device=runtime.device,
+    trailing_coordinates = tuple(
+        runtime.torch.arange(extent, dtype=runtime.torch.long, device=runtime.device)
+        for extent in shape[1:]
     )
-    total_tensor = runtime.torch.tensor(
-        total_elements,
-        dtype=runtime.torch.long,
-        device=runtime.device,
-    )
-    result = (extents, strides, total_tensor)
-    _tensor_element_tile_metadata_cache[key] = result
-    return result
+    chunks: list[tuple[int, int, tuple[Any, ...]]] = []
+    for start in range(0, leading_extent, chunk_extent):
+        stop = min(leading_extent, start + chunk_extent)
+        leading_coordinates = runtime.torch.arange(
+            start,
+            stop,
+            dtype=runtime.torch.long,
+            device=runtime.device,
+        )
+        _mark_dynamic_leading_axis_coordinate(runtime, leading_coordinates)
+        chunks.append((start, stop, (leading_coordinates, *trailing_coordinates)))
+    return tuple(chunks)
 
 
-def _tensor_element_offset_tensor(runtime: TensorRuntime, *, offset: int) -> Any:
-    key = (
-        "offset",
-        runtime.device_kind,
-        str(runtime.device),
-        offset,
-    )
-    cached = _tensor_element_tile_metadata_cache.get(key)
-    if cached is not None:
-        return cached
-    tensor = runtime.torch.tensor(offset, dtype=runtime.torch.long, device=runtime.device)
-    _tensor_element_tile_metadata_cache[key] = tensor
-    return tensor
+def _mark_dynamic_leading_axis_coordinate(runtime: TensorRuntime, tensor: Any) -> None:
+    mark_dynamic = getattr(getattr(runtime.torch, "_dynamo", None), "mark_dynamic", None)
+    if callable(mark_dynamic):
+        mark_dynamic(tensor, 0)
 
 
 def _compiled_tensor_element_tile_kernel(
     *,
     runtime: TensorRuntime,
-    program: TensorElementProgram,
+    program: TensorBatchProgram,
     rank: int,
     parameter_tensors: Mapping[str, Any],
     scalar_aliases: Mapping[str, tuple[str, int]],
@@ -1430,11 +1448,7 @@ def _compiled_tensor_element_tile_kernel(
 
     with _tensor_runtime_profile_span(runtime, "leibniz.tensor_construct.compile_lookup"):
         def tile_kernel(
-            tile_positions: Any,
-            offset: Any,
-            extents: Any,
-            strides: Any,
-            total_elements: Any,
+            axis_coordinates: tuple[Any, ...],
             **parameters: Any,
         ) -> Any:
             packed_names = {packed_name for packed_name, _index in scalar_aliases.values()}
@@ -1445,24 +1459,15 @@ def _compiled_tensor_element_tile_kernel(
             }
             for name, (packed_name, index) in scalar_aliases.items():
                 kernel_parameters[name] = parameters[packed_name][index]
-            flat_indices = tile_positions + offset
-            active = flat_indices < total_elements
-            safe_flat_indices = flat_indices.clamp(max=total_elements - 1)
-            coordinates: list[Any] = []
-            remainder = safe_flat_indices
-            for axis in range(rank):
-                stride = strides[axis]
-                coordinates.append(remainder.div(stride, rounding_mode="floor"))
-                remainder = remainder.remainder(stride)
+            _ = rank
             values = cast(
                 Any,
                 program.kernel(
-                    tuple(coordinates),
-                    safe_flat_indices,
+                    axis_coordinates,
                     **kernel_parameters,
                 ),
             )
-            return values.where(active, values * 0)
+            return values
 
         _clear_stale_compile_module_alias(program.kernel)
         compiled = runtime.torch.compile(tile_kernel)
@@ -1473,7 +1478,7 @@ def _compiled_tensor_element_tile_kernel(
 def _tensor_element_kernel_cache_key(
     *,
     runtime: TensorRuntime,
-    program: TensorElementProgram,
+    program: TensorBatchProgram,
     rank: int,
     parameter_tensors: Mapping[str, Any],
 ) -> tuple[object, ...]:
@@ -1535,10 +1540,16 @@ def _tensor_runtime_compile_available(runtime: TensorRuntime) -> bool:
     if runtime.device_kind == "mps":
         return True
     try:
-        compiler = importlib.import_module("triton.compiler.compiler")
+        triton_support = importlib.import_module("torch.utils._triton")
     except ImportError:
         return False
-    return hasattr(compiler, "triton_key")
+    has_triton = getattr(triton_support, "has_triton", None)
+    if not callable(has_triton):
+        return False
+    try:
+        return bool(has_triton())
+    except Exception:  # pragma: no cover - backend probe failure
+        return False
 
 
 def _tensor_runtime_profile_span(runtime: TensorRuntime, name: str) -> Any:
@@ -1547,31 +1558,6 @@ def _tensor_runtime_profile_span(runtime: TensorRuntime, name: str) -> Any:
     if callable(record_function):
         return record_function(name)
     return nullcontext()
-
-
-def _tensor_element_coordinate_tensors(
-    *,
-    shape: tuple[int, ...],
-    flat_indices: Any,
-) -> tuple[Any, ...]:
-    coordinates: list[Any] = []
-    for stride in _tensor_element_shape_strides(shape):
-        coordinates.append(flat_indices.div(stride, rounding_mode="floor"))
-        flat_indices = flat_indices.remainder(stride)
-    return tuple(coordinates)
-
-
-def _tensor_element_shape_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
-    if not shape:
-        return ()
-    strides: list[int] = []
-    stride = 1
-    for extent in reversed(shape[1:]):
-        stride *= extent
-        strides.append(stride)
-    strides.reverse()
-    strides.append(1)
-    return tuple(strides)
 
 
 def _torch() -> Any:

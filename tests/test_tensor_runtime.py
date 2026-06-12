@@ -1,3 +1,4 @@
+import importlib
 import math
 from pathlib import Path
 from typing import Any, cast
@@ -8,8 +9,8 @@ from benchmark_typing import load_digits_generator
 from leibniz import tensor_runtime as tensor_runtime_module
 from leibniz.architectures import ArchitectureManifest
 from leibniz.tensor_runtime import (
+    TensorBatchProgram,
     TensorElementParameter,
-    TensorElementProgram,
     TensorElementRecipe,
     TensorRuntime,
     TensorRuntimeError,
@@ -23,6 +24,7 @@ from leibniz.tensor_runtime import (
     tensor_element_compile_fallback_records,
     tensor_runtime_construct_tensor,
     tensor_runtime_device_kinds,
+    tensor_value_to_host_values,
     validate_tensor_runtime_device,
 )
 
@@ -281,11 +283,10 @@ def test_tensor_element_compile_cache_is_not_extent_dependent(
         device_kind=cast(Any, device_kind),
     )
 
-    def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
-        _ = flat_indices
+    def element_function(coordinates: tuple[Any, ...]) -> Any:
         return coordinates[0]
 
-    program = TensorElementProgram(
+    program = TensorBatchProgram(
         kernel=element_function,
         parameters={},
         cache_key=("extent-independent-test", device_kind, id(element_function)),
@@ -321,15 +322,13 @@ def test_tensor_element_parameter_cache_reuses_constant_parameters(
 
     def element_function(
         coordinates: tuple[Any, ...],
-        flat_indices: Any,
         *,
         constant: Any,
         dynamic: Any,
     ) -> Any:
-        _ = flat_indices
         return coordinates[0] + constant[0] + dynamic[coordinates[0]]
 
-    program = TensorElementProgram(
+    program = TensorBatchProgram(
         kernel=element_function,
         parameters={
             "constant": TensorElementParameter(
@@ -425,16 +424,110 @@ def test_digits_generator_call_tensors_match_metadata_batch() -> None:
         for sample in observation_batch.samples
     ]
 
+
+def test_digits_tensor_generation_accepts_scalar_sample_shape() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    generator = load_digits_generator(_digits_benchmark_root)
+    outcome_ids = tuple(
+        outcome.id
+        for outcome in generator.manifest.resolve_outcome_space().outcomes
+    )
+
+    generated = generator(
+        seed=515,
+        include_metadata=False,
+        runtime=runtime,
+        outcome_ids=outcome_ids,
+    )
+    fields, labels = generated.require_tensors()
+
+    assert tuple(fields.shape[:1]) == (1,)
+    assert labels.shape == (len(outcome_ids),)
+    assert labels.sum().item() == 1.0
+
+
+def test_tensor_batch_program_chunks_only_leading_axis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    monkeypatch.setattr(tensor_runtime_module, "_tensor_element_tile_size", 6)
+    observed_shapes: list[tuple[tuple[int, ...], ...]] = []
+
+    def element_function(coordinates: tuple[Any, ...]) -> Any:
+        observed_shapes.append(tuple(tuple(coordinate.shape) for coordinate in coordinates))
+        sample, row, column = coordinates
+        return (
+            sample.reshape((-1, 1, 1)) * 100
+            + row.reshape((1, -1, 1)) * 10
+            + column.reshape((1, 1, -1))
+        )
+
+    program = TensorBatchProgram(
+        kernel=element_function,
+        parameters={},
+        compile=False,
+        cache_key=("chunk-leading-axis-test",),
+    )
+
+    values = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(5, 2, 3), dtype="int64", program=program),
+    )
+
+    assert observed_shapes == [
+        ((1,), (2,), (3,)),
+        ((1,), (2,), (3,)),
+        ((1,), (2,), (3,)),
+        ((1,), (2,), (3,)),
+        ((1,), (2,), (3,)),
+    ]
+    assert values.tolist() == [
+        [[0, 1, 2], [10, 11, 12]],
+        [[100, 101, 102], [110, 111, 112]],
+        [[200, 201, 202], [210, 211, 212]],
+        [[300, 301, 302], [310, 311, 312]],
+        [[400, 401, 402], [410, 411, 412]],
+    ]
+
+
+def test_tensor_batch_program_chunk_boundary_matches_unchunked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+
+    def element_function(coordinates: tuple[Any, ...]) -> Any:
+        sample, row, column = coordinates
+        return (
+            sample.reshape((-1, 1, 1)) * 100
+            + row.reshape((1, -1, 1)) * 10
+            + column.reshape((1, 1, -1))
+        )
+
+    program = TensorBatchProgram(
+        kernel=element_function,
+        parameters={},
+        compile=False,
+        cache_key=("chunk-boundary-test",),
+    )
+    recipe = TensorElementRecipe(shape=(5, 2, 3), dtype="int64", program=program)
+
+    monkeypatch.setattr(tensor_runtime_module, "_tensor_element_tile_size", 6)
+    chunked = tensor_runtime_construct_tensor(runtime, recipe=recipe)
+    monkeypatch.setattr(tensor_runtime_module, "_tensor_element_tile_size", 1024)
+    unchunked = tensor_runtime_construct_tensor(runtime, recipe=recipe)
+
+    assert runtime.torch.equal(chunked, unchunked)
+
+
 def test_tensor_element_compile_failure_records_loud_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _compile_failing_runtime(monkeypatch, reason="inductor exploded")
 
-    def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
-        _ = flat_indices
+    def element_function(coordinates: tuple[Any, ...]) -> Any:
         return coordinates[0]
 
-    program = TensorElementProgram(
+    program = TensorBatchProgram(
         kernel=element_function,
         parameters={},
         cache_key=("loud-fallback-test", id(element_function)),
@@ -468,11 +561,10 @@ def test_tensor_element_compile_fallback_raises_in_strict_mode(
     runtime = _compile_failing_runtime(monkeypatch, reason="inductor exploded")
     monkeypatch.setenv("LEIBNIZ_REQUIRE_TENSOR_COMPILE", "1")
 
-    def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
-        _ = flat_indices
+    def element_function(coordinates: tuple[Any, ...]) -> Any:
         return coordinates[0]
 
-    program = TensorElementProgram(
+    program = TensorBatchProgram(
         kernel=element_function,
         parameters={},
         cache_key=("strict-fallback-test", id(element_function)),
@@ -490,11 +582,10 @@ def test_strict_mode_allows_declared_eager_programs_and_cpu_runtimes(
 ) -> None:
     monkeypatch.setenv("LEIBNIZ_REQUIRE_TENSOR_COMPILE", "1")
 
-    def element_function(coordinates: tuple[Any, ...], flat_indices: Any) -> Any:
-        _ = flat_indices
+    def element_function(coordinates: tuple[Any, ...]) -> Any:
         return coordinates[0]
 
-    declared_eager = TensorElementProgram(
+    declared_eager = TensorBatchProgram(
         kernel=element_function,
         parameters={},
         compile=False,
@@ -506,7 +597,7 @@ def test_strict_mode_allows_declared_eager_programs_and_cpu_runtimes(
         recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=declared_eager),
     )
 
-    compiled_program = TensorElementProgram(
+    compiled_program = TensorBatchProgram(
         kernel=element_function,
         parameters={},
         cache_key=("strict-cpu-test", id(element_function)),
@@ -582,3 +673,95 @@ def _compile_counting_runtime(
 
     monkeypatch.setattr(runtime.torch, "compile", compile_kernel)
     return runtime, compile_calls
+
+
+def test_compile_availability_follows_torch_triton_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host_runtime = resolve_tensor_runtime("cpu")
+    cuda_like_runtime = TensorRuntime(
+        torch=host_runtime.torch,
+        device=host_runtime.device,
+        device_kind="cuda",
+    )
+    triton_support = importlib.import_module("torch.utils._triton")
+    compile_available = cast(Any, tensor_runtime_module)._tensor_runtime_compile_available
+
+    monkeypatch.setattr(triton_support, "has_triton", lambda: True)
+    assert compile_available(cuda_like_runtime) is True
+
+    monkeypatch.setattr(triton_support, "has_triton", lambda: False)
+    assert compile_available(cuda_like_runtime) is False
+
+
+def test_tensor_value_to_host_values_flattens_to_floats() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    tensor = runtime.torch.arange(6, dtype=runtime.torch.float32).reshape((2, 3))
+
+    values = tensor_value_to_host_values(tensor)
+
+    assert values == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    assert all(type(value) is float for value in values)
+
+
+def test_parameter_values_key_cache_skips_per_batch_scalars() -> None:
+    cache = cast(Any, tensor_runtime_module)._tensor_element_parameter_values_key_cache
+    values_key = cast(Any, tensor_runtime_module)._tensor_element_parameter_values_key
+    minimum_size = cast(
+        int,
+        cast(Any, tensor_runtime_module)._tensor_element_parameter_values_key_cache_minimum_size,
+    )
+    cache.clear()
+
+    small = TensorElementParameter(dtype="int64", shape=(1,), values=(7,))
+    large_values = tuple(range(minimum_size))
+    large = TensorElementParameter(
+        dtype="int64",
+        shape=(minimum_size,),
+        values=large_values,
+    )
+
+    small_key = values_key(small)
+    large_key = values_key(large)
+
+    assert small_key
+    assert large_key
+    assert len(cache) == 1
+    assert next(iter(cache.values()))[0] is large_values
+
+
+def test_parameter_tensor_cache_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    cache = cast(Any, tensor_runtime_module)._tensor_element_parameter_cache
+    cache.clear()
+    monkeypatch.setattr(
+        tensor_runtime_module,
+        "_tensor_element_parameter_cache_capacity",
+        4,
+    )
+
+    def element_function(coordinates: tuple[Any, ...], *, offset: Any) -> Any:
+        return coordinates[0] + offset
+
+    for seed in range(10):
+        program = TensorBatchProgram(
+            kernel=element_function,
+            parameters={
+                "offset": TensorElementParameter(
+                    dtype="int64",
+                    shape=(),
+                    values=(seed,),
+                ),
+            },
+            compile=False,
+            cache_key=("parameter-cache-bound-test",),
+        )
+        values = tensor_runtime_construct_tensor(
+            runtime,
+            recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=program),
+        )
+        assert values.tolist() == [seed, seed + 1]
+
+    assert len(cache) <= 4

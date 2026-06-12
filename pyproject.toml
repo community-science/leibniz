@@ -51,6 +51,10 @@ addopts = [
     "--strict-config",
     "--strict-markers",
 ]
+markers = [
+    "perf_gate: deterministic device performance contract checks",
+    "perf_roofline: scheduled or manual roofline performance checks",
+]
 
 [tool.ruff]
 line-length = 100

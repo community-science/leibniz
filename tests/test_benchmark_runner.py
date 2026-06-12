@@ -116,6 +116,46 @@ def test_fieldless_tensor_samples_can_score_predictions() -> None:
     )
 
 
+def test_runtime_phase_timings_do_not_sync_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    sync_calls = 0
+
+    def count_sync(_runtime: TensorRuntime) -> None:
+        nonlocal sync_calls
+        sync_calls += 1
+
+    monkeypatch.delenv("LEIBNIZ_SYNC_TIMING", raising=False)
+    monkeypatch.setattr(benchmark_runner, "synchronize_runtime", count_sync)
+
+    timings = cast(Any, benchmark_runner)._runtime_phase_timings(runtime)
+    with timings.span("phase"):
+        pass
+
+    assert sync_calls == 0
+
+
+def test_runtime_phase_timings_sync_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    sync_calls = 0
+
+    def count_sync(_runtime: TensorRuntime) -> None:
+        nonlocal sync_calls
+        sync_calls += 1
+
+    monkeypatch.setenv("LEIBNIZ_SYNC_TIMING", "1")
+    monkeypatch.setattr(benchmark_runner, "synchronize_runtime", count_sync)
+
+    timings = cast(Any, benchmark_runner)._runtime_phase_timings(runtime)
+    with timings.span("phase"):
+        pass
+
+    assert sync_calls == 2
+
+
 def test_training_sampled_competence_matches_measurement_scoring() -> None:
     generator = load_generator(_digits_benchmark_root)
     runtime = resolve_tensor_runtime("cpu")
@@ -2033,6 +2073,222 @@ def test_training_replay_frontier_points_keep_recent_window() -> None:
     assert rolling_point.sample_count == 8
     assert rolling_point.seed == 108
     assert math.isclose(rolling_point.accepted_mass, 4.5)
+
+
+def test_training_steps_materialize_replay_masses_only_at_gate_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_log: list[str] = []
+
+    class RecordingMass:
+        def tolist(self) -> list[float]:
+            event_log.append("tolist")
+            return [0.5, 0.5]
+
+    class FakeSampleSet:
+        sample_count = 2
+
+    def fake_batch(_index: int) -> object:
+        event_log.append("step")
+        return cast(Any, benchmark_runner)._TrainingStepBatch(
+            fields=object(),
+            labels=object(),
+            sample_set=cast(Any, FakeSampleSet()),
+        )
+
+    class FakeLossValue:
+        def item(self) -> float:
+            return 2.0
+
+        def backward(self) -> None:
+            pass
+
+    class FakeLossFunction:
+        def __call__(self, _logits: object, _labels: object) -> FakeLossValue:
+            return FakeLossValue()
+
+    class FakeModule:
+        training = True
+
+        def __call__(self, _fields: object) -> object:
+            return object()
+
+        def eval(self) -> None:
+            self.training = False
+
+        def train(self) -> None:
+            self.training = True
+
+    class FakeValidationBatch:
+        sample_count = 2
+
+    class FakeOptimizer:
+        param_groups: list[dict[str, object]] = [{}]
+
+        def zero_grad(self, *, set_to_none: bool) -> None:
+            _ = set_to_none
+
+        def step(self) -> None:
+            pass
+
+    def fake_validation_batch(_index: int) -> FakeValidationBatch:
+        event_log.append("gate")
+        return FakeValidationBatch()
+
+    def fake_batch_tensors(**_kwargs: object) -> tuple[object, object]:
+        return object(), object()
+
+    def fake_target_mass_tensor(
+        _runtime: object,
+        _logits: object,
+        _labels: object,
+    ) -> RecordingMass:
+        return RecordingMass()
+
+    def fake_target_masses(
+        _runtime: object,
+        _logits: object,
+        _labels: object,
+    ) -> list[float]:
+        return [1.0]
+
+    def fake_sampled_record(**kwargs: object) -> dict[str, object]:
+        assert kwargs["accepted_mass"] == (0.5, 0.5)
+        return {}
+
+    def fake_training_gate_score_estimate(**kwargs: object) -> dict[str, object]:
+        return _score_estimate(
+            check=cast(int, kwargs["validation_check"]),
+            step=cast(int, kwargs["step"]),
+            score=1.0,
+            log2_volume=math.log2(10),
+            accepted_mass=0.5,
+        )
+
+    def fake_batch_max_compute(**_kwargs: object) -> int:
+        return 10
+
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    outcome_ids = tuple(
+        outcome.id for outcome in benchmark.manifest.resolve_outcome_space().outcomes
+    )
+    monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
+    monkeypatch.setattr(
+        benchmark_runner,
+        "softmax_target_mass_tensor",
+        fake_target_mass_tensor,
+    )
+    monkeypatch.setattr(benchmark_runner, "softmax_target_masses", fake_target_masses)
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_sampled_competence_record_from_accepted_mass",
+        fake_sampled_record,
+    )
+    monkeypatch.setattr(
+        benchmark_runner.ValidationCompetencePoint,
+        "from_sampled_record",
+        staticmethod(lambda *_args, **_kwargs: None),
+    )
+    def fake_accumulate(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_accumulate_replay_frontier_point",
+        fake_accumulate,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_inference_compute",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_batch_max_training_compute_per_sample",
+        fake_batch_max_compute,
+    )
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_training_gate_score_estimate",
+        fake_training_gate_score_estimate,
+    )
+
+    cast(Any, benchmark_runner)._train_until_convergence(
+        runtime=resolve_tensor_runtime("cpu"),
+        module=FakeModule(),
+        optimizer=FakeOptimizer(),
+        scheduler=None,
+        loss_function=FakeLossFunction(),
+        train_batch=fake_batch,
+        validation_batch=cast(Any, fake_validation_batch),
+        outcome_space=benchmark.manifest.resolve_outcome_space(),
+        outcome_ids=outcome_ids,
+        max_steps=4,
+        gate_check_interval=2,
+        patience=5,
+        min_delta=0.001,
+        rung_competence_threshold=0.9,
+        architecture=ArchitectureManifestDocument.from_bytes(
+            _digits_architecture.read_bytes()
+        ).manifest,
+        training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
+        validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        phase_timings=benchmark_runner.TimingCollector(),
+    )
+
+    assert event_log == [
+        "gate",
+        "step",
+        "step",
+        "tolist",
+        "tolist",
+        "gate",
+        "step",
+        "step",
+        "tolist",
+        "tolist",
+        "gate",
+    ]
+
+
+def test_training_compute_per_sample_is_cached_by_architecture_and_input_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    fields = SimpleNamespace(shape=(4, 1, 16, 16))
+    calls = 0
+
+    def fake_summary(_architecture: ArchitectureManifest) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(training_compute_per_sample=123)
+
+    cache = cast(
+        dict[tuple[str, tuple[int, ...]], int | None],
+        benchmark_runner.__dict__["_training_compute_per_sample_cache"],
+    )
+    cache.clear()
+    monkeypatch.setattr(
+        benchmark_runner,
+        "summarize_architecture_operators",
+        fake_summary,
+    )
+
+    first = cast(Any, benchmark_runner)._batch_max_training_compute_per_sample(
+        architecture=architecture,
+        fields=fields,
+    )
+    second = cast(Any, benchmark_runner)._batch_max_training_compute_per_sample(
+        architecture=architecture,
+        fields=fields,
+    )
+
+    assert first == 123
+    assert second == 123
+    assert calls == 1
 
 
 def test_training_rung_schedule_alternates_frontier_and_replay() -> None:

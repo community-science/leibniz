@@ -152,6 +152,48 @@ def test_convolution_alias_routes_through_local_affine_semantics() -> None:
     assert output.shape == (2, 10)
 
 
+def test_relu_alias_routes_through_rectified_linear_activation_semantics() -> None:
+    torch = cast(Any, importlib.import_module("torch"))
+    manifest = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 8, 8],
+            "output_shape": [10],
+            "layers": [
+                {
+                    "kind": "convolution",
+                    "parameters": {
+                        "dimension": 2,
+                        "size": 3,
+                        "out_channels": 4,
+                        "stride": 1,
+                        "padding": 1,
+                    },
+                },
+                {"kind": "relu"},
+                {"kind": "rank-collapse"},
+                {"kind": "affine-readout", "parameters": {"out": 10}},
+            ],
+        }
+    )
+
+    plan = summarize_architecture_operators(manifest)
+    module = ExecutableModelOperator(manifest).sequential_module()
+    output = module(torch.randn(2, 1, 8, 8))
+
+    assert [operator.descriptor.kind for operator in plan.operators] == [
+        "local-affine",
+        "rectified-linear-activation",
+        "rank-collapse",
+        "affine-readout",
+    ]
+    assert plan.operators[1].descriptor.aliases == ("relu",)
+    assert plan.operators[1].output_shape == (4, 8, 8)
+    assert plan.operators[1].parameter_count == 0
+    assert plan.operators[1].inference_compute == 256
+    assert plan.operators[1].training_compute_per_sample == 512
+    assert output.shape == (2, 10)
+
+
 def test_fixed_support_affine_projects_variable_canvas_to_fixed_convnet_shape() -> None:
     torch = cast(Any, importlib.import_module("torch"))
     manifest = ArchitectureManifest.from_record(
@@ -253,12 +295,14 @@ def test_model_operator_vocabulary_exports_registry_metadata() -> None:
         "local-aggregation",
         "local-affine",
         "fixed-support-affine",
+        "rectified-linear-activation",
         "rank-collapse",
         "affine-readout",
     ]
     assert [alias["alias"] for alias in aliases] == [
         "adaptive-pooling",
         "convolution",
+        "relu",
         "flatten",
         "dense",
     ]

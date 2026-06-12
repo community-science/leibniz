@@ -167,6 +167,31 @@ as PyTorch may be used later behind thin optional adapter layers, but they
 should not define the protocol's tensor, model, parameter, or probability
 measure concepts.
 
+## Hot Path Discipline
+
+Benchmark generation and training hot paths must keep host work outside the
+per-step critical path. Per-sample work belongs at batch rank, not inside
+per-pixel computation. Do not add Python loops proportional to batch size,
+pixel count, or curriculum window cardinality to renderer or training-step hot
+paths.
+
+Do not call `.item()`, `.tolist()`, `.cpu()`, `.numpy()`, or equivalent host
+materialization inside the training step loop between gate checks. Keep
+accepted-mass and similar diagnostics as runtime tensors during steps, and
+materialize host values only when recording gate-check evidence.
+
+Instrumentation must not change synchronization behavior by default. Timing
+that needs device synchronization must be opt-in and documented, currently via
+`LEIBNIZ_SYNC_TIMING=1`. Required CI performance checks should use
+deterministic structural gates such as operation-count budgets; timing and
+roofline thresholds belong in explicit device or manual workflows.
+
+Protocol-style records and validation stop at the tensor-kernel boundary.
+Inside a tensor kernel, write plain backend math with batched coordinates and
+parameters. Do not cache rendered images or tensor fields to pass performance
+gates. Caching deterministic chart geometry, such as latent-coordinate
+transform tables, is allowed because it is not sampled rendered evidence.
+
 ## Generated And Local Files
 
 Do not commit local outputs unless they have deterministic producers and a clear

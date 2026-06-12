@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import secrets
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from itertools import count
 from pathlib import Path
@@ -81,7 +82,9 @@ from leibniz.tensor_runtime import (
     save_tensor_runtime_state,
     seed_runtime,
     softmax_prediction_rows,
+    softmax_target_mass_tensor,
     softmax_target_masses,
+    synchronize_runtime,
     tensor_element_compile_fallback_records,
     tensor_runtime_device_kinds,
     tensor_runtime_has_fixed_device_memory,
@@ -138,6 +141,8 @@ _legal_uncapped_training_stage_stop_reasons = frozenset(
 )
 _minimum_plateau_lr_reductions = 3
 _full_variation_extent = 1.0
+_training_compute_per_sample_cache: dict[tuple[str, tuple[int, ...]], int | None] = {}
+_sync_timing_environment_variable = "LEIBNIZ_SYNC_TIMING"
 
 
 class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
@@ -255,6 +260,27 @@ class _TrainingStepBatch:
     fields: Any
     labels: Any
     sample_set: GeneratedSampleSet | None = None
+
+
+class _SynchronizedTimingCollector(TimingCollector):
+    """Timing collector that synchronizes runtime work around measured spans."""
+
+    def __init__(self, runtime: TensorRuntime) -> None:
+        super().__init__()
+        self._runtime = runtime
+
+    @contextmanager
+    def span(self, phase: str, *, samples: int = 0) -> Any:
+        synchronize_runtime(self._runtime)
+        with super().span(phase, samples=samples):
+            yield
+        synchronize_runtime(self._runtime)
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingReplayScore:
+    sample_set: GeneratedSampleSet
+    accepted_mass: Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -1773,7 +1799,7 @@ def _train_and_predict_on_device(
     training_compute_counter = _ComputeCounter()
     validation_counter = _ThroughputCounter()
     evaluation_counter = _ThroughputCounter()
-    phase_timings = TimingCollector()
+    phase_timings = _runtime_phase_timings(runtime)
     training_curriculum_planner = _VolumeCurriculumPlanner()
 
     def training_batch_for_seed(
@@ -2106,6 +2132,9 @@ def evaluate_model_checkpoint_artifact(
             checkpoint=checkpoint,
             tensor_device=tensor_device,
         )
+    runtime_phase_timings = _runtime_phase_timings(predictor.runtime)
+    runtime_phase_timings.counters.update(phase_timings.counters)
+    phase_timings = runtime_phase_timings
     max_inference_compute: int | None = None
     results: list[_CheckpointEvaluationRungEvidence] = []
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
@@ -2580,9 +2609,13 @@ def _batch_max_training_compute_per_sample(
     input_shape = _tensor_input_shape(fields)
     if input_shape is None:
         return None
+    cache_key = (str(architecture.digest), input_shape)
+    if cache_key in _training_compute_per_sample_cache:
+        return _training_compute_per_sample_cache[cache_key]
     plan = summarize_architecture_operators(
         architecture_with_input_shape(architecture, input_shape)
     )
+    _training_compute_per_sample_cache[cache_key] = plan.training_compute_per_sample
     return plan.training_compute_per_sample
 
 
@@ -2914,6 +2947,12 @@ def training_stage_converged(stop_reason: str) -> bool:
     return stop_reason in _converged_training_stage_stop_reasons
 
 
+def _runtime_phase_timings(runtime: TensorRuntime) -> TimingCollector:
+    if os.environ.get(_sync_timing_environment_variable, "") in {"", "0"}:
+        return TimingCollector()
+    return _SynchronizedTimingCollector(runtime)
+
+
 def _training_stage_finished_legally(stop_reason: str) -> bool:
     return stop_reason in _legal_uncapped_training_stage_stop_reasons
 
@@ -2959,10 +2998,16 @@ def _train_until_convergence(
         tuple[float, float],
         _RollingValidationCompetencePoint,
     ] = {}
+    pending_replay_scores: list[_PendingReplayScore] = []
 
     def append_validation(*, step: int, check: int) -> None:
         nonlocal best_score, max_validation_inference_compute
         nonlocal stale_checks
+        with phase_timings.span("validation_replay_score_flush"):
+            _flush_pending_replay_scores(
+                pending_replay_scores=pending_replay_scores,
+                replay_frontier_points=replay_frontier_points,
+            )
         validation_started = time.perf_counter()
         batch = validation_batch(check)
         with phase_timings.span("validation_max_inference_compute"):
@@ -3129,21 +3174,15 @@ def _train_until_convergence(
                     "training_replay_score_update",
                     samples=training_batch.sample_set.sample_count,
                 ):
-                    accepted_mass = tuple(
-                        softmax_target_masses(runtime, first_logits, labels)
-                    )
-                    replay_point = ValidationCompetencePoint.from_sampled_record(
-                        _sampled_competence_record_from_accepted_mass(
-                            batch=training_batch.sample_set,
-                            accepted_mass=accepted_mass,
-                            volume_axis=None,
-                        ),
-                        field_prefix="score_estimate",
-                        error_type=BenchmarkRunnerError,
-                    )
-                    _accumulate_replay_frontier_point(
-                        replay_frontier_points,
-                        replay_point,
+                    pending_replay_scores.append(
+                        _PendingReplayScore(
+                            sample_set=training_batch.sample_set,
+                            accepted_mass=softmax_target_mass_tensor(
+                                runtime,
+                                first_logits,
+                                labels,
+                            ),
+                        )
                     )
         except RuntimeError as error:
             if not _is_runtime_capacity_error(error):
@@ -3379,6 +3418,34 @@ def _accumulate_replay_frontier_point(
         )
         return
     replay_frontier_points[key] = existing.add(point)
+
+
+def _flush_pending_replay_scores(
+    *,
+    pending_replay_scores: list[_PendingReplayScore],
+    replay_frontier_points: dict[
+        tuple[float, float],
+        _RollingValidationCompetencePoint,
+    ],
+) -> None:
+    if not pending_replay_scores:
+        return
+    for pending in pending_replay_scores:
+        accepted_mass = tuple(float(value) for value in pending.accepted_mass.tolist())
+        replay_point = ValidationCompetencePoint.from_sampled_record(
+            _sampled_competence_record_from_accepted_mass(
+                batch=pending.sample_set,
+                accepted_mass=accepted_mass,
+                volume_axis=None,
+            ),
+            field_prefix="score_estimate",
+            error_type=BenchmarkRunnerError,
+        )
+        _accumulate_replay_frontier_point(
+            replay_frontier_points,
+            replay_point,
+        )
+    pending_replay_scores.clear()
 
 
 def _validation_competence_point_interval_key(
