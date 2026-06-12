@@ -28,6 +28,7 @@ from leibniz.benchmark_evaluation import (
 )
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.content import ContentDigest
+from leibniz.cost_metrology import CostMeasurement, measure_program_cost
 from leibniz.documents import (
     canonical_document_bytes,
     document_filename_suffix,
@@ -2204,7 +2205,13 @@ def evaluate_model_checkpoint_artifact(
             outcome_ids=outcome_ids,
         )
     with phase_timings.span("checkpoint_evaluation.final_measurements"):
-        final_batch, final_probabilities, final_max_inference_compute = (
+        (
+            final_batch,
+            final_probabilities,
+            final_max_inference_compute,
+            final_inference_cost_measurement,
+            final_inference_cost_sample_count,
+        ) = (
             _evaluate_checkpoint_rung_measurements(
                 predictor=predictor,
                 architecture=architecture,
@@ -2236,7 +2243,30 @@ def evaluate_model_checkpoint_artifact(
             "checkpoint evaluation could not measure max_inference_compute"
         )
     throughput["max_inference_compute"] = max_inference_compute
+    throughput["inference_cost_measurement"] = final_inference_cost_measurement.to_record()
+    throughput["inference_cost_sample_count"] = final_inference_cost_sample_count
     return tuple(results), final_batch, final_probabilities, throughput
+
+
+def _checkpoint_inference_cost_measurement(
+    *,
+    predictor: CheckpointModelPredictor,
+    batch: GeneratedSampleSet,
+    outcome_ids: tuple[str, ...],
+) -> CostMeasurement:
+    fields, _labels = _batch_tensors(
+        runtime=predictor.runtime,
+        batch=batch,
+        outcome_ids=outcome_ids,
+        device=predictor.runtime.device,
+    )
+    predictor.module.eval()
+
+    def program(input_fields: Any) -> object:
+        with no_grad_context(predictor.runtime):
+            return predictor.module(input_fields)
+
+    return measure_program_cost(predictor.runtime, program, fields, strict=True)
 
 
 def _evaluate_checkpoint_rung(
@@ -2408,6 +2438,8 @@ class _CheckpointEvaluationChunk:
     accepted_mass_sum: float
     sample_count: int
     max_inference_compute: int
+    inference_cost_measurement: CostMeasurement | None = None
+    inference_cost_sample_count: int | None = None
 
 
 def _evaluate_checkpoint_rung_measurements(
@@ -2420,10 +2452,11 @@ def _evaluate_checkpoint_rung_measurements(
     requested_sample_count: int,
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
-) -> tuple[GeneratedSampleSet, tuple[tuple[float, ...], ...], int]:
+) -> tuple[GeneratedSampleSet, tuple[tuple[float, ...], ...], int, CostMeasurement, int]:
     samples: list[GeneratedSample] = []
     probabilities: list[tuple[float, ...]] = []
     max_inference_compute: int | None = None
+    max_cost_measurement: tuple[CostMeasurement, int] | None = None
     for chunk in _checkpoint_evaluation_chunks(
         predictor=predictor,
         architecture=architecture,
@@ -2445,12 +2478,21 @@ def _evaluate_checkpoint_rung_measurements(
             max_inference_compute,
             chunk.max_inference_compute,
         )
+        max_cost_measurement = _max_cost_measurement(
+            max_cost_measurement,
+            None
+            if chunk.inference_cost_measurement is None
+            or chunk.inference_cost_sample_count is None
+            else (chunk.inference_cost_measurement, chunk.inference_cost_sample_count),
+        )
     if not samples:
         raise BenchmarkRunnerError("checkpoint evaluation final rung produced no samples")
     if max_inference_compute is None:
         raise BenchmarkRunnerError(
             "checkpoint evaluation could not measure max_inference_compute"
         )
+    if max_cost_measurement is None:
+        raise BenchmarkRunnerError("checkpoint evaluation could not measure inference cost")
     return (
         GeneratedSampleSet(
             benchmark_id=rung.batch.benchmark_id,
@@ -2466,6 +2508,8 @@ def _evaluate_checkpoint_rung_measurements(
         ),
         tuple(probabilities),
         max_inference_compute,
+        max_cost_measurement[0],
+        max_cost_measurement[1],
     )
 
 
@@ -2550,6 +2594,17 @@ def _checkpoint_evaluation_chunks(
                 probabilities=predictions,
                 outcome_ids=outcome_ids,
             )
+        inference_cost_measurement: CostMeasurement | None = None
+        if purpose == "measurements":
+            with phase_timings.span(
+                f"checkpoint_evaluation_{purpose}_inference_cost_metrology",
+                samples=batch.sample_count,
+            ):
+                inference_cost_measurement = _checkpoint_inference_cost_measurement(
+                    predictor=predictor,
+                    batch=batch,
+                    outcome_ids=outcome_ids,
+                )
         yield _CheckpointEvaluationChunk(
             batch=batch,
             probabilities=predictions,
@@ -2557,9 +2612,31 @@ def _checkpoint_evaluation_chunks(
             accepted_mass_sum=math.fsum(accepted_mass),
             sample_count=batch.sample_count,
             max_inference_compute=batch_max_inference_compute,
+            inference_cost_measurement=inference_cost_measurement,
+            inference_cost_sample_count=(
+                batch.sample_count if inference_cost_measurement is not None else None
+            ),
         )
         remaining -= batch.sample_count
         chunk_index += 1
+
+
+def _max_cost_measurement(
+    left: tuple[CostMeasurement, int] | None,
+    right: tuple[CostMeasurement, int] | None,
+) -> tuple[CostMeasurement, int] | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    left_cost, left_sample_count = left
+    right_cost, right_sample_count = right
+    if (
+        right_cost.abstract_flops / right_sample_count
+        > left_cost.abstract_flops / left_sample_count
+    ):
+        return right
+    return left
 
 
 def _batch_max_inference_compute(

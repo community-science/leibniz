@@ -27,6 +27,7 @@ from leibniz.benchmark_runner import (
     run_benchmark,
 )
 from leibniz.cli import main
+from leibniz.cost_metrology import PYTORCH_COST_MODEL_ID, CostMeasurement
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.evaluation_bundles import BenchmarkEvaluationBundleDocument
 from leibniz.identifiers import ProtocolIdentifier
@@ -607,8 +608,31 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
 
     def fake_final_measurements(
         **_kwargs: object,
-    ) -> tuple[GeneratedSampleSet, tuple[tuple[float, ...], ...], int]:
-        return batch, ((1.0,),), 1
+    ) -> tuple[
+        GeneratedSampleSet,
+        tuple[tuple[float, ...], ...],
+        int,
+        CostMeasurement,
+        int,
+    ]:
+        return (
+            batch,
+            ((1.0,),),
+            1,
+            CostMeasurement(
+                cost_model_id=PYTORCH_COST_MODEL_ID,
+                abstract_flops=0,
+                per_op=(),
+                moved_elements=0,
+                movement=(),
+                unmodeled_operations=(),
+                operation_count=0,
+                operation_trace=(),
+                wall_seconds=0.0,
+                tensor_device="cpu",
+            ),
+            1,
+        )
 
     monkeypatch.setattr(benchmark_runner, "load_model_checkpoint_predictor", fake_load_predictor)
     monkeypatch.setattr(benchmark_runner, "_evaluation_curriculum_rung", fake_curriculum_rung)
@@ -725,6 +749,14 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     )
     assert isinstance(checkpoint_evaluation_throughput["max_inference_compute"], int)
     assert checkpoint_evaluation_throughput["max_inference_compute"] >= 0
+    inference_cost = CostMeasurement.from_record(
+        checkpoint_evaluation_throughput["inference_cost_measurement"]
+    )
+    assert inference_cost.cost_model_id == PYTORCH_COST_MODEL_ID
+    assert inference_cost.tensor_device == "cpu"
+    assert inference_cost.operation_count > 0
+    assert inference_cost.unmodeled_operations == ()
+    assert len(inference_cost.operation_trace) == inference_cost.operation_count
     assert (
         evaluation_bundle.model_checkpoint["manifest_digest"]
         == str(evaluation_bundle.model_manifest.digest)

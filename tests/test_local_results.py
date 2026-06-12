@@ -324,7 +324,7 @@ def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: 
         load_console_result_view(canonical_document_bytes(view))
 
 
-def test_materialize_benchmark_result_views_rejects_evaluation_bundle_without_inference_compute(
+def test_materialize_benchmark_result_views_rejects_evaluation_bundle_without_measured_cost(
     tmp_path: Path,
 ) -> None:
     results_root = tmp_path / "results"
@@ -336,12 +336,45 @@ def test_materialize_benchmark_result_views_rejects_evaluation_bundle_without_in
         throughput = cast(dict[str, object], record["throughput"])
         for key in ("checkpoint_evaluation", "evaluation"):
             phase = cast(dict[str, object], throughput[key])
-            phase.pop("max_inference_compute", None)
+            phase.pop("inference_cost_measurement", None)
+            phase.pop("inference_cost_sample_count", None)
         path.write_bytes(canonical_document_bytes(record) + b"\n")
 
     with pytest.raises(
         LocalResultImportError,
-        match="missing measured max_inference_compute",
+        match="missing measured inference_cost_measurement",
+    ):
+        materialize_benchmark_result_views(
+            repository_root=_repository_root,
+            results_root=results_root,
+        )
+
+
+def test_materialize_benchmark_result_views_rejects_unmodeled_measured_cost(
+    tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    _run_and_evaluate_digits_benchmark(results_root)
+    for path in results_root.rglob("*.json"):
+        record = dict(load_object_document(path.read_bytes(), description="result record"))
+        if record.get("format") != "leibniz.benchmark-evaluation":
+            continue
+        throughput = cast(dict[str, object], record["throughput"])
+        for key in ("checkpoint_evaluation", "evaluation"):
+            phase = cast(dict[str, object], throughput[key])
+            measurement = cast(dict[str, object], phase["inference_cost_measurement"])
+            measurement["unmodeled_operations"] = [
+                {
+                    "name": "aten.unpriced.default",
+                    "calls": 1,
+                    "output_elements": 1,
+                }
+            ]
+        path.write_bytes(canonical_document_bytes(record) + b"\n")
+
+    with pytest.raises(
+        LocalResultImportError,
+        match="unmodeled operations",
     ):
         materialize_benchmark_result_views(
             repository_root=_repository_root,
@@ -385,12 +418,20 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert measurement_count % 64 == 0
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     assert isinstance(cost_summary["inference_compute"], int | float)
+    assert isinstance(cost_summary["analytic_inference_compute"], int | float)
     assert isinstance(cost_summary["cost"], int | float)
     assert cost_summary["cost"] >= 0
     cost_integral = cast(dict[str, object], leaderboard[0]["cost_integral"])
     assert cost_integral["kind"] == "compute-cost-integral"
     assert math.isclose(cast(float, cost_integral["value"]), cast(float, cost_summary["cost"]))
-    assert cast(list[dict[str, object]], cost_integral["terms"])
+    cost_terms = cast(list[dict[str, object]], cost_integral["terms"])
+    assert cost_terms
+    assert math.isclose(
+        cast(float, cost_integral["value"]),
+        cast(float, cost_summary["inference_compute"])
+        * 32.0
+        * math.fsum(cast(float, term["width_in_bits"]) for term in cost_terms),
+    )
     frontiers = cast(dict[str, object], result["frontiers"])
     assert len(cast(list[object], frontiers["cost"])) == 1
     reference_curves = cast(list[dict[str, object]], result["reference_curves"])

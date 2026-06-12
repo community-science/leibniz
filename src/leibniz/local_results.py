@@ -15,6 +15,7 @@ from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocu
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
     StateSpaceIntegral,
+    StateSpaceIntegralTerm,
     sampled_competence_compute_cost_integral,
     sampled_competence_frontier_integral,
 )
@@ -29,6 +30,7 @@ from leibniz.console.protocol import (
     console_protocol_formats,
 )
 from leibniz.content import ContentDigest
+from leibniz.cost_metrology import CostMeasurement
 from leibniz.documents import (
     canonical_document_bytes,
     document_filename_suffix,
@@ -794,7 +796,12 @@ def _evaluation_summary_cost_summary(
     cost_summary = dict(inspection_cost)
     cost_summary.pop("parameter_count", None)
     cost_summary.pop("inference_compute", None)
-    cost_summary["inference_compute"] = _evaluation_summary_max_inference_compute(summary)
+    analytic_inference_compute = _evaluation_summary_max_inference_compute(summary)
+    if analytic_inference_compute is not None:
+        cost_summary["analytic_inference_compute"] = analytic_inference_compute
+    cost_summary["inference_compute"] = _evaluation_summary_measured_inference_compute(
+        summary
+    )
     training_compute = summary.evaluation_protocol.get("training_compute")
     if training_compute is not None:
         cost_summary["training_compute"] = _as_nonnegative_number(
@@ -831,7 +838,7 @@ def _evaluation_summary_capacity_limited(summary: _EvaluationBundleSummary) -> b
 
 def _evaluation_summary_max_inference_compute(
     summary: _EvaluationBundleSummary,
-) -> float:
+) -> float | None:
     checkpoint_value = _throughput_max_inference_compute(
         summary.throughput.get("checkpoint_evaluation"),
         "evaluation_bundle.throughput.checkpoint_evaluation",
@@ -844,8 +851,26 @@ def _evaluation_summary_max_inference_compute(
     )
     if evaluation_value is not None:
         return evaluation_value
+    return None
+
+
+def _evaluation_summary_measured_inference_compute(
+    summary: _EvaluationBundleSummary,
+) -> float:
+    checkpoint_value = _throughput_measured_inference_compute(
+        summary.throughput.get("checkpoint_evaluation"),
+        "evaluation_bundle.throughput.checkpoint_evaluation",
+    )
+    if checkpoint_value is not None:
+        return checkpoint_value
+    evaluation_value = _throughput_measured_inference_compute(
+        summary.throughput.get("evaluation"),
+        "evaluation_bundle.throughput.evaluation",
+    )
+    if evaluation_value is not None:
+        return evaluation_value
     raise LocalResultImportError(
-        "benchmark evaluation bundle is missing measured max_inference_compute"
+        "benchmark evaluation bundle is missing measured inference_cost_measurement"
     )
 
 
@@ -1512,10 +1537,9 @@ def _model_result_records(
         cost_integral = (
             None
             if inference_compute is None
-            else sampled_competence_compute_cost_integral(
+            else _sampled_competence_measured_cost_integral(
                 points=points,
-                architecture=_run_architecture_manifest(best_run),
-                error_type=LocalResultImportError,
+                inference_compute=inference_compute,
                 field_prefix="compute_cost_point",
             )
         )
@@ -1794,6 +1818,33 @@ def _throughput_max_inference_compute(
     return _as_nonnegative_number(record[field], field_path)
 
 
+def _throughput_measured_inference_compute(
+    value: object,
+    field_path: str,
+) -> float | None:
+    if not isinstance(value, Mapping):
+        return None
+    record = cast(Mapping[str, object], value)
+    if "inference_cost_measurement" not in record:
+        return None
+    try:
+        measurement = CostMeasurement.from_record(record["inference_cost_measurement"])
+    except ValueError as error:
+        raise LocalResultImportError(
+            f"{field_path}.inference_cost_measurement is invalid: {error}"
+        ) from error
+    if measurement.unmodeled_operations:
+        names = ", ".join(record.name for record in measurement.unmodeled_operations)
+        raise LocalResultImportError(
+            f"{field_path}.inference_cost_measurement has unmodeled operations: {names}"
+        )
+    sample_count = _as_positive_int(
+        record.get("inference_cost_sample_count"),
+        f"{field_path}.inference_cost_sample_count",
+    )
+    return measurement.abstract_flops / sample_count
+
+
 def _run_training_compute_value(run: _BenchmarkRunRecord) -> float | None:
     training_compute = _run_training_compute(run)
     if training_compute is not None:
@@ -1810,18 +1861,74 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
         inference_compute = _optional_cost_value(cost_summary, "inference_compute")
         if inference_compute is not None:
             cost_summary["inference_compute"] = inference_compute
-            cost_summary["cost"] = sampled_competence_compute_cost_integral(
-                points=_run_competence_points(run),
-                architecture=_run_architecture_manifest(run),
-                error_type=LocalResultImportError,
-                field_prefix="compute_cost_point",
-            ).value
+            if run.source_kind == "local-run":
+                cost_summary["cost"] = _sampled_competence_measured_cost_integral(
+                    points=_run_competence_points(run),
+                    inference_compute=inference_compute,
+                    field_prefix="compute_cost_point",
+                ).value
+            else:
+                cost_summary["cost"] = sampled_competence_compute_cost_integral(
+                    points=_run_competence_points(run),
+                    architecture=_run_architecture_manifest(run),
+                    error_type=LocalResultImportError,
+                    field_prefix="compute_cost_point",
+                ).value
     else:
         cost_summary.pop("inference_compute", None)
     training_compute = _run_training_compute(run)
     if training_compute is not None:
         cost_summary["training_compute"] = training_compute
     return cost_summary
+
+
+def _sampled_competence_measured_cost_integral(
+    *,
+    points: Sequence[Mapping[str, object]],
+    inference_compute: float,
+    field_prefix: str,
+) -> StateSpaceIntegral:
+    ordered = sorted(
+        points,
+        key=lambda point: _as_nonnegative_number(
+            point.get("log2_volume"),
+            f"{field_prefix}.log2_volume",
+        ),
+    )
+    cursor = 0.0
+    terms: list[StateSpaceIntegralTerm] = []
+    for point in ordered:
+        log2_volume = _as_nonnegative_number(
+            point.get("log2_volume"),
+            f"{field_prefix}.log2_volume",
+        )
+        minimum = _optional_nonnegative_number(
+            point.get("log2_volume_minimum"),
+            f"{field_prefix}.log2_volume_minimum",
+        )
+        maximum = _optional_nonnegative_number(
+            point.get("log2_volume_maximum"),
+            f"{field_prefix}.log2_volume_maximum",
+        )
+        if minimum is None:
+            minimum = cursor
+        if maximum is None:
+            maximum = log2_volume
+        if maximum <= minimum:
+            minimum = cursor
+            maximum = log2_volume
+        if maximum > minimum:
+            terms.append(
+                StateSpaceIntegralTerm(
+                    lower=minimum,
+                    upper=maximum,
+                    competence_density=inference_compute * _default_bit_length_per_op,
+                    kind="measured-compute-cost",
+                    representative_log2_volume=log2_volume,
+                )
+            )
+        cursor = max(cursor, maximum)
+    return StateSpaceIntegral(terms=tuple(terms))
 
 
 def _optional_point_input_shape(
