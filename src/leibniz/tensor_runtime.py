@@ -331,7 +331,7 @@ def tensor_runtime_shape_element_count(shape: tuple[int, ...]) -> int:
 
 
 def tensor_runtime_input_element_ops(input_shape: tuple[int, ...]) -> int:
-    """Return the declared one-op-per-input-element planning count."""
+    """Return the declared one-op-per-input-element projected count."""
 
     return tensor_runtime_shape_element_count(input_shape)
 
@@ -373,7 +373,7 @@ def tensor_runtime_fft_ops(
 
 
 def tensor_runtime_ops_scaled(operations: int, multiplier: int | float) -> int:
-    """Scale an abstract operation count by a declared planning multiplier."""
+    """Scale an abstract operation count by a declared projection multiplier."""
 
     if type(operations) is not int or operations < 0:
         raise TensorRuntimeError("operations must be a nonnegative integer")
@@ -392,7 +392,7 @@ def tensor_runtime_training_ops_from_inference(
     *,
     multiplier: int | float,
 ) -> int:
-    """Return a declared training planning count derived from inference ops."""
+    """Return a declared training projection count derived from inference ops."""
 
     return tensor_runtime_ops_scaled(inference_operations, multiplier)
 

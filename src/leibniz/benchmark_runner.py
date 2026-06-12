@@ -22,7 +22,7 @@ from leibniz.benchmark_evaluation import (
     finite_measurements_for_predictions,
     sampled_competence_curriculum_record,
     sampled_competence_frontier_integral,
-    sampled_competence_planning_cost_integral,
+    sampled_competence_metrology_cost_integral,
     sampled_competence_record,
     validation_competence_frontier_advances,
 )
@@ -30,6 +30,7 @@ from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.content import ContentDigest
 from leibniz.cost_metrology import (
     CostMeasurement,
+    CostMeter,
     CostMetrologyError,
     estimate_program_cost,
     measure_program_cost,
@@ -52,11 +53,7 @@ from leibniz.model_manifests import (
     ModelArtifactManifestDocument,
     ModelExecutionFamily,
 )
-from leibniz.model_operators import (
-    ExecutableModelOperator,
-    architecture_with_input_shape,
-    summarize_architecture_operators,
-)
+from leibniz.model_operators import ExecutableModelOperator
 from leibniz.observation_generation import (
     GeneratedSample,
     GeneratedSampleSet,
@@ -151,7 +148,6 @@ _legal_uncapped_training_stage_stop_reasons = frozenset(
 )
 _minimum_plateau_lr_reductions = 3
 _full_variation_extent = 1.0
-_training_compute_per_sample_cache: dict[tuple[str, tuple[int, ...]], int | None] = {}
 _sync_timing_environment_variable = "LEIBNIZ_SYNC_TIMING"
 
 
@@ -2191,7 +2187,7 @@ def evaluate_model_checkpoint_artifact(
     curriculum_exhausted = False
     planner = _VolumeCurriculumPlanner()
     while True:
-        with phase_timings.span("checkpoint_evaluation.rung_planning"):
+        with phase_timings.span("checkpoint_evaluation.rung_preparation"):
             try:
                 rung = _evaluation_curriculum_rung(
                     architecture=architecture,
@@ -2698,15 +2694,6 @@ def _checkpoint_evaluation_chunks(
             seconds=time.perf_counter() - prediction_started,
             samples=batch.sample_count,
         )
-        with phase_timings.span(f"checkpoint_evaluation_{purpose}_compute_cost"):
-            batch_max_inference_compute = _batch_max_inference_compute(
-                architecture=architecture,
-                batch=batch,
-            )
-        if batch_max_inference_compute is None:
-            raise BenchmarkRunnerError(
-                "checkpoint evaluation could not measure max_inference_compute"
-            )
         with phase_timings.span(
             f"checkpoint_evaluation_{purpose}_accepted_mass",
             samples=batch.sample_count,
@@ -2727,6 +2714,16 @@ def _checkpoint_evaluation_chunks(
                     batch=batch,
                     outcome_ids=outcome_ids,
                 )
+        if inference_cost_measurement is None:
+            raise BenchmarkRunnerError("checkpoint evaluation could not measure inference cost")
+        batch_max_inference_compute = int(
+            math.ceil(
+                tensor_runtime_ops_per_item(
+                    inference_cost_measurement.abstract_flops,
+                    batch.sample_count,
+                )
+            )
+        )
         yield _CheckpointEvaluationChunk(
             batch=batch,
             probabilities=predictions,
@@ -2735,9 +2732,7 @@ def _checkpoint_evaluation_chunks(
             sample_count=batch.sample_count,
             max_inference_compute=batch_max_inference_compute,
             inference_cost_measurement=inference_cost_measurement,
-            inference_cost_sample_count=(
-                batch.sample_count if inference_cost_measurement is not None else None
-            ),
+            inference_cost_sample_count=batch.sample_count,
         )
         remaining -= batch.sample_count
         chunk_index += 1
@@ -2780,28 +2775,6 @@ def _cost_measurement_compute_source(measurement: CostMeasurement) -> str:
     return "dry-run-metrology"
 
 
-def _batch_max_inference_compute(
-    *,
-    architecture: ArchitectureManifest,
-    batch: GeneratedSampleSet,
-) -> int | None:
-    tensor_input_shape = _tensor_input_shape(batch.fields)
-    if tensor_input_shape is not None:
-        plan = summarize_architecture_operators(
-            architecture_with_input_shape(architecture, tensor_input_shape)
-        )
-        return plan.inference_compute
-    max_compute: int | None = None
-    for input_shape in sorted({sample.require_field().shape for sample in batch.samples}):
-        plan = summarize_architecture_operators(
-            architecture_with_input_shape(architecture, input_shape)
-        )
-        if plan.inference_compute is None:
-            return None
-        max_compute = _max_optional_int(max_compute, plan.inference_compute)
-    return max_compute
-
-
 def _batch_sample_input_shape(
     *,
     batch: GeneratedSampleSet,
@@ -2817,24 +2790,6 @@ def _batch_sample_input_shape(
     raise BenchmarkRunnerError(
         "tensor benchmark generator must return tensors or inspectable field metadata"
     )
-
-
-def _batch_max_training_compute_per_sample(
-    *,
-    architecture: ArchitectureManifest,
-    fields: Any,
-) -> int | None:
-    input_shape = _tensor_input_shape(fields)
-    if input_shape is None:
-        return None
-    cache_key = (str(architecture.digest), input_shape)
-    if cache_key in _training_compute_per_sample_cache:
-        return _training_compute_per_sample_cache[cache_key]
-    plan = summarize_architecture_operators(
-        architecture_with_input_shape(architecture, input_shape)
-    )
-    _training_compute_per_sample_cache[cache_key] = plan.training_compute_per_sample
-    return plan.training_compute_per_sample
 
 
 def _tensor_input_shape(fields: Any) -> tuple[int, ...] | None:
@@ -3229,23 +3184,6 @@ def _train_until_convergence(
             )
         validation_started = time.perf_counter()
         batch = validation_batch(check)
-        with phase_timings.span("validation_max_inference_compute"):
-            batch_max_inference_compute = _batch_max_inference_compute(
-                architecture=architecture,
-                batch=batch,
-            )
-        if batch_max_inference_compute is None:
-            raise BenchmarkRunnerError(
-                "training gate could not measure max_inference_compute"
-            )
-        max_validation_inference_compute = _max_optional_int(
-            max_validation_inference_compute,
-            batch_max_inference_compute,
-        )
-        if max_validation_inference_compute is None:
-            raise BenchmarkRunnerError(
-                "training gate could not measure running max_inference_compute"
-            )
         with phase_timings.span("validation_tensor_batch", samples=batch.sample_count):
             fields, labels = _batch_tensors(
                 runtime=runtime,
@@ -3267,6 +3205,24 @@ def _train_until_convergence(
             max_validation_inference_cost,
             (validation_cost_measurement, actual_gate_sample_count),
         )
+        if max_validation_inference_cost is None:
+            raise BenchmarkRunnerError("training gate could not measure inference cost")
+        batch_max_inference_compute = int(
+            math.ceil(
+                tensor_runtime_ops_per_item(
+                    validation_cost_measurement.abstract_flops,
+                    actual_gate_sample_count,
+                )
+            )
+        )
+        max_validation_inference_compute = _max_optional_int(
+            max_validation_inference_compute,
+            batch_max_inference_compute,
+        )
+        if max_validation_inference_compute is None:
+            raise BenchmarkRunnerError(
+                "training gate could not measure running max_inference_compute"
+            )
         with phase_timings.span("validation_forward_loss", samples=actual_gate_sample_count):
             was_training = bool(module.training)
             module.eval()
@@ -3277,6 +3233,9 @@ def _train_until_convergence(
             if was_training:
                 module.train()
         with phase_timings.span("validation_score_estimate", samples=batch.sample_count):
+            running_inference_compute = _measurement_inference_compute(
+                max_validation_inference_cost
+            )
             score_estimate = _training_gate_score_estimate(
                 batch=batch,
                 outcome_space=outcome_space,
@@ -3289,6 +3248,7 @@ def _train_until_convergence(
                 step=step,
                 max_inference_compute=batch_max_inference_compute,
                 running_max_inference_compute=max_validation_inference_compute,
+                running_inference_compute=running_inference_compute,
                 training_compute_per_sample=latest_training_compute_per_sample,
             )
         plateau_signal = _training_score_estimate_frontier_competence(
@@ -3370,12 +3330,6 @@ def _train_until_convergence(
         fields = training_batch.fields
         labels = training_batch.labels
         actual_batch_size = _tensor_batch_size(fields, fallback=training_batch_target)
-        with phase_timings.span("training_max_training_compute"):
-            batch_training_compute_per_sample = _batch_max_training_compute_per_sample(
-                architecture=architecture,
-                fields=fields,
-            )
-        latest_training_compute_per_sample = batch_training_compute_per_sample
         module.train()
         try:
             first_logits: Any | None = None
@@ -3399,7 +3353,14 @@ def _train_until_convergence(
                 return loss
 
             with phase_timings.span("training_optimizer_step"):
-                optimizer_step(runtime, optimizer, loss_closure)
+                with CostMeter(runtime, strict=False) as training_cost_meter:
+                    optimizer_step(runtime, optimizer, loss_closure)
+                training_cost_measurement = training_cost_meter.measurement()
+            batch_training_compute_per_sample = tensor_runtime_ops_per_item(
+                training_cost_measurement.abstract_flops,
+                actual_batch_size,
+            )
+            latest_training_compute_per_sample = int(math.ceil(batch_training_compute_per_sample))
             if training_batch.sample_set is not None:
                 if first_logits is None:
                     raise BenchmarkRunnerError("optimizer did not evaluate training loss")
@@ -3516,6 +3477,7 @@ def _training_gate_score_estimate(
     step: int,
     max_inference_compute: int,
     running_max_inference_compute: int,
+    running_inference_compute: float,
     training_compute_per_sample: int | None,
 ) -> dict[str, object]:
     current_point = _sampled_competence_record_from_accepted_mass(
@@ -3529,6 +3491,10 @@ def _training_gate_score_estimate(
         current_point=current_point,
     )
     compact_sampled_competence = _compact_training_sampled_competence(sampled_competence)
+    _assign_sampled_competence_inference_compute(
+        compact_sampled_competence,
+        inference_compute=running_inference_compute,
+    )
     point_records = _training_score_estimate_points(compact_sampled_competence)
     chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
     score_integral = sampled_competence_frontier_integral(
@@ -3554,6 +3520,7 @@ def _training_gate_score_estimate(
         "step": step,
         "max_inference_compute": max_inference_compute,
         "running_max_inference_compute": running_max_inference_compute,
+        "inference_compute": running_inference_compute,
         "chance_mass": chance_mass,
         "score_integral": score_integral.to_record(kind="sampled-competence-integral"),
         "sampled_competence": compact_sampled_competence,
@@ -3780,6 +3747,20 @@ def _compact_training_sampled_competence(
             )
         compact["points"] = compact_points
     return compact
+
+
+def _assign_sampled_competence_inference_compute(
+    sampled_competence: dict[str, object],
+    *,
+    inference_compute: float,
+) -> None:
+    sampled_competence["inference_compute"] = inference_compute
+    points = sampled_competence.get("points")
+    if not isinstance(points, list):
+        return
+    for point in cast(list[object], points):
+        if isinstance(point, dict):
+            point["inference_compute"] = inference_compute
 
 
 def _training_score_estimate_points(
@@ -4209,9 +4190,8 @@ def _training_estimate_record(
     if not isinstance(score_integral_value, Mapping):
         raise BenchmarkRunnerError("training gate score estimate is missing score integral")
     score_integral = cast(Mapping[str, object], score_integral_value)
-    cost_integral = sampled_competence_planning_cost_integral(
+    cost_integral = sampled_competence_metrology_cost_integral(
         points=points,
-        architecture=architecture,
         error_type=BenchmarkRunnerError,
         field_prefix="training_estimate.cost_point",
     )
@@ -4632,7 +4612,7 @@ def _training_work_estimates(
         training=_PhaseWorkEstimate(
             compute_per_sample=training_compute,
             bytes_per_sample=training_bytes,
-            compute_source="planning-operator-estimate",
+            compute_source="measured-training-metrology",
         ),
         validation=_PhaseWorkEstimate(
             compute_per_sample=inference_compute_per_sample,
@@ -4646,7 +4626,7 @@ def _training_work_estimates(
         ),
         assumptions=(
             "float32 tensor elements are four bytes",
-            "training compute follows the declared per-operator planning trace",
+            "training compute uses measured runtime metrology from optimizer steps",
             (
                 "validation and evaluation compute use measured forward-pass metrology"
                 if inference_measurement.operations_executed

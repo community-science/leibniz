@@ -13,12 +13,21 @@ from leibniz.artifacts import (
     reference_sort_key,
 )
 from leibniz.content import ContentDigest
+from leibniz.cost_metrology import CostMeasurement, CostMetrologyError, estimate_program_cost
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.model_manifests import ModelArtifactManifest
-from leibniz.model_operators import summarize_architecture_operators
+from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
 from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 from leibniz.submissions import SubmissionPackageManifest
+from leibniz.tensor_runtime import (
+    TensorRuntimeError,
+    make_empty_float_tensor,
+    no_grad_context,
+    resolve_host_tensor_runtime,
+    runtime_roofline_record,
+    tensor_runtime_ops_per_item,
+)
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
@@ -57,6 +66,8 @@ _cost_summary_record = RecordSpec(
         "parameter_count": FieldSpec(kind="integer", required=False),
         "storage_bytes": FieldSpec(kind="integer", required=False),
         "inference_compute": FieldSpec(kind="integer", required=False),
+        "inference_cost_measurement": FieldSpec(kind="record", required=False),
+        "inference_cost_sample_count": FieldSpec(kind="integer", required=False),
         "training_compute_per_sample": FieldSpec(kind="integer", required=False),
         "unknown_parameter_components": FieldSpec(
             kind="sequence",
@@ -334,6 +345,8 @@ class ModelInspectionCostSummary:
     parameter_count: int | None
     storage_bytes: int | None = None
     inference_compute: int | None = None
+    inference_cost_measurement: CostMeasurement | None = None
+    inference_cost_sample_count: int | None = None
     training_compute_per_sample: int | None = None
     unknown_parameter_components: tuple[int, ...] = ()
     unknown_compute_components: tuple[int, ...] = ()
@@ -347,6 +360,13 @@ class ModelInspectionCostSummary:
             raise ModelInspectionValidationError("storage_bytes must be nonnegative")
         if self.inference_compute is not None and self.inference_compute < 0:
             raise ModelInspectionValidationError("inference_compute must be nonnegative")
+        if (
+            self.inference_cost_sample_count is not None
+            and self.inference_cost_sample_count < 1
+        ):
+            raise ModelInspectionValidationError(
+                "inference_cost_sample_count must be positive"
+            )
         if (
             self.training_compute_per_sample is not None
             and self.training_compute_per_sample < 0
@@ -397,6 +417,20 @@ class ModelInspectionCostSummary:
                 validated.get("inference_compute"),
                 "inference_compute",
             ),
+            inference_cost_measurement=(
+                None
+                if validated.get("inference_cost_measurement") is None
+                else CostMeasurement.from_record(
+                    _extract.mapping(
+                        validated.get("inference_cost_measurement"),
+                        "inference_cost_measurement",
+                    )
+                )
+            ),
+            inference_cost_sample_count=_extract.optional_integer(
+                validated.get("inference_cost_sample_count"),
+                "inference_cost_sample_count",
+            ),
             training_compute_per_sample=_extract.optional_integer(
                 validated.get("training_compute_per_sample"),
                 "training_compute_per_sample",
@@ -428,6 +462,10 @@ class ModelInspectionCostSummary:
             record["storage_bytes"] = self.storage_bytes
         if self.inference_compute is not None:
             record["inference_compute"] = self.inference_compute
+        if self.inference_cost_measurement is not None:
+            record["inference_cost_measurement"] = self.inference_cost_measurement.to_record()
+        if self.inference_cost_sample_count is not None:
+            record["inference_cost_sample_count"] = self.inference_cost_sample_count
         if self.training_compute_per_sample is not None:
             record["training_compute_per_sample"] = self.training_compute_per_sample
         if self.unknown_compute_components:
@@ -1123,6 +1161,12 @@ def _architecture_components(
     components: list[ModelInspectionComponent] = []
     stages: list[ModelInspectionTraceStage] = []
     plan = summarize_architecture_operators(architecture_manifest)
+    inference_cost = _architecture_inference_cost_measurement(architecture_manifest)
+    inference_compute = (
+        None
+        if inference_cost is None
+        else int(tensor_runtime_ops_per_item(inference_cost.abstract_flops, 1))
+    )
     for component, operator in zip(architecture_manifest.components, plan.operators, strict=True):
         descriptor = operator.descriptor
         components.append(
@@ -1135,8 +1179,6 @@ def _architecture_components(
                 operator=descriptor.to_record(),
                 parameter_count=operator.parameter_count,
                 storage_bytes=operator.storage_bytes,
-                inference_compute=operator.inference_compute,
-                training_compute_per_sample=operator.training_compute_per_sample,
             )
         )
         if operator.input_shape is not None and operator.output_shape is not None:
@@ -1159,8 +1201,6 @@ def _architecture_components(
                     shape_law=descriptor.shape_law,
                     cost_law=descriptor.cost_law,
                     parameter_count=operator.parameter_count,
-                    inference_compute=operator.inference_compute,
-                    training_compute_per_sample=operator.training_compute_per_sample,
                 )
             )
     return (
@@ -1169,10 +1209,13 @@ def _architecture_components(
             component_count=len(components),
             parameter_count=plan.parameter_count,
             storage_bytes=plan.storage_bytes,
-            inference_compute=plan.inference_compute,
-            training_compute_per_sample=plan.training_compute_per_sample,
+            inference_compute=inference_compute,
+            inference_cost_measurement=inference_cost,
+            inference_cost_sample_count=1 if inference_cost is not None else None,
             unknown_parameter_components=plan.unknown_parameter_layers,
-            unknown_compute_components=plan.unknown_compute_layers,
+            unknown_compute_components=(
+                () if inference_cost is not None else tuple(range(len(components)))
+            ),
         ),
         ModelInspectionTrace(
             input_shape=architecture_manifest.input_shape,
@@ -1180,6 +1223,34 @@ def _architecture_components(
             stages=tuple(stages),
         ),
     )
+
+
+def _architecture_inference_cost_measurement(
+    architecture_manifest: ArchitectureManifest,
+) -> CostMeasurement | None:
+    try:
+        runtime = resolve_host_tensor_runtime()
+        module = ExecutableModelOperator(architecture_manifest).sequential_module()
+        module.eval()
+        fields = make_empty_float_tensor(
+            runtime,
+            (1, *architecture_manifest.input_shape),
+            device=runtime.device,
+        )
+
+        def program(input_fields: object) -> object:
+            with no_grad_context(runtime):
+                return module(input_fields)
+
+        return estimate_program_cost(
+            runtime,
+            program,
+            inputs=(fields,),
+            strict=True,
+            roofline=runtime_roofline_record(runtime),
+        )
+    except (CostMetrologyError, TensorRuntimeError, ValueError):
+        return None
 
 
 def _node_evidence_records(

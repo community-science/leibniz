@@ -914,8 +914,13 @@ function ModelCostDetail({
           <dd>{optionalNumberLabel(summary.cost)}</dd>
         </div>
         <div>
-          <dt>Inference Compute</dt>
-          <dd>{optionalNumberLabel(summary.inference_compute)}</dd>
+          <dt>Inference Cost</dt>
+          <dd>
+            {optionalNumberLabel(summary.inference_compute)}
+            {summary.inference_cost_measurement?.operation_stream_source === undefined
+              ? ''
+              : ` (${summary.inference_cost_measurement.operation_stream_source})`}
+          </dd>
         </div>
         <div>
           <dt>Training Compute</dt>
@@ -979,14 +984,6 @@ function ModelGraphOperations({
                 <div>
                   <dt>Output</dt>
                   <dd>{shapeLabel(stage.output_shape)}</dd>
-                </div>
-                <div>
-                  <dt>Inference Compute</dt>
-                  <dd>{optionalNumberLabel(stage.inference_compute)}</dd>
-                </div>
-                <div>
-                  <dt>Training Compute / Sample</dt>
-                  <dd>{optionalNumberLabel(stage.training_compute_per_sample)}</dd>
                 </div>
               </dl>
               <p className="benchmark-model-operation-config">

@@ -17,7 +17,7 @@ from leibniz.benchmark_evaluation import (
     StateSpaceIntegral,
     StateSpaceIntegralTerm,
     sampled_competence_frontier_integral,
-    sampled_competence_planning_cost_integral,
+    sampled_competence_metrology_cost_integral,
 )
 from leibniz.benchmark_implementations import (
     Benchmark,
@@ -1525,9 +1525,8 @@ def _model_result_records(
                 field_prefix="compute_cost_point",
             )
         else:
-            cost_integral = sampled_competence_planning_cost_integral(
+            cost_integral = sampled_competence_metrology_cost_integral(
                 points=points,
-                architecture=_run_architecture_manifest(best_run),
                 error_type=LocalResultImportError,
                 field_prefix="compute_cost_point",
             )
@@ -1841,9 +1840,8 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
                     field_prefix="compute_cost_point",
                 ).value
             else:
-                cost_summary["cost"] = sampled_competence_planning_cost_integral(
+                cost_summary["cost"] = sampled_competence_metrology_cost_integral(
                     points=_run_competence_points(run),
-                    architecture=_run_architecture_manifest(run),
                     error_type=LocalResultImportError,
                     field_prefix="compute_cost_point",
                 ).value
@@ -2040,7 +2038,7 @@ def _model_console_view_model(
                 ("Cost", _console_number_value(cost_summary.get("cost"))),
                 ("Model Size", _console_number_value(cost_summary.get("storage_bytes"))),
                 (
-                    "Inference Compute",
+                    "Inference Cost",
                     _console_number_value(cost_summary.get("inference_compute")),
                 ),
                 (
@@ -2478,9 +2476,8 @@ def _selected_checkpoint_training_cost(
         return cost
     if not training_points:
         return None
-    return sampled_competence_planning_cost_integral(
+    return sampled_competence_metrology_cost_integral(
         points=training_points,
-        architecture=architecture,
         error_type=LocalResultImportError,
         field_prefix="training_estimate.cost_point",
     ).value

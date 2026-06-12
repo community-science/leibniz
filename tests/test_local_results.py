@@ -8,8 +8,7 @@ from typing import Any, cast
 import pytest
 
 import leibniz.local_results as local_results
-from leibniz.architectures import ArchitectureManifestDocument
-from leibniz.benchmark_evaluation import sampled_competence_planning_cost_integral
+from leibniz.benchmark_evaluation import sampled_competence_metrology_cost_integral
 from leibniz.benchmark_runner import (
     BenchmarkEvaluationPlan,
     BenchmarkRunPlan,
@@ -27,10 +26,6 @@ from leibniz.local_results import (
     publish_local_benchmark_results,
     push_result_checkout,
     summarize_local_benchmark_results,
-)
-from leibniz.model_operators import (
-    architecture_with_input_shape,
-    summarize_architecture_operators,
 )
 from leibniz.training_runs import TrainingHistoryPoint
 
@@ -551,42 +546,29 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     }
 
 
-def test_planning_model_cost_reconstructs_point_density_from_input_shape() -> None:
-    architecture = ArchitectureManifestDocument.from_bytes(
-        _digits_architecture.read_bytes()
-    ).manifest
-    first_input_shape = (1, 16, 16)
-    second_input_shape = (1, 32, 32)
-    first_compute = summarize_architecture_operators(
-        architecture_with_input_shape(architecture, first_input_shape)
-    ).inference_compute
-    second_compute = summarize_architecture_operators(
-        architecture_with_input_shape(architecture, second_input_shape)
-    ).inference_compute
+def test_metrology_model_cost_uses_point_inference_compute() -> None:
+    first_compute = 128
+    second_compute = 512
 
-    assert first_compute is not None
-    assert second_compute is not None
-
-    cost_integral = sampled_competence_planning_cost_integral(
+    cost_integral = sampled_competence_metrology_cost_integral(
         points=(
             {
                 "log2_volume": 1.0,
-                "input_shape": list(first_input_shape),
+                "inference_compute": first_compute,
             },
             {
                 "log2_volume": 2.0,
                 "log2_volume_minimum": 2.0,
                 "log2_volume_maximum": 2.0,
-                "input_shape": list(second_input_shape),
+                "inference_compute": second_compute,
             },
         ),
-        architecture=architecture,
         error_type=local_results.LocalResultImportError,
         field_prefix="compute_cost_point",
     )
 
     assert math.isclose(cost_integral.value, 32.0 * (first_compute + second_compute))
-    assert {term.kind for term in cost_integral.terms} == {"planning-compute-cost"}
+    assert {term.kind for term in cost_integral.terms} == {"metrology-compute-cost"}
 
 
 def test_training_estimate_comparison_uses_selected_checkpoint_estimate(

@@ -827,11 +827,15 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert roofline_comparison["model"] == "operational-intensity"
     assert cast(float, roofline_comparison["training_fraction_of_roofline"]) > 0
     assert training_phase["limiting_resource"] in {"compute", "memory-bandwidth"}
-    assert training_phase["compute_source"] == "planning-operator-estimate"
+    assert training_phase["compute_source"] == "measured-training-metrology"
     assert validation_phase["compute_source"] == "measured-forward-metrology"
     assert evaluation_phase["compute_source"] == "measured-forward-metrology"
     assert cast(float, training_phase["arithmetic_intensity_compute_per_byte"]) > 0
     assert cast(float, training_phase["expected_roofline_compute_per_second"]) > 0
+    assert "training compute uses measured runtime metrology from optimizer steps" in cast(
+        list[object],
+        roofline_comparison["assumptions"],
+    )
     assert "validation and evaluation compute use measured forward-pass metrology" in cast(
         list[object],
         roofline_comparison["assumptions"],
@@ -1652,21 +1656,8 @@ def test_training_stage_records_current_validation_loss_without_global_best(
             accepted_mass=1.0,
         )
 
-    def fake_batch_max_compute(**_kwargs: object) -> int:
-        return 10
-
     monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
     monkeypatch.setattr(benchmark_runner, "softmax_target_masses", fake_target_masses)
-    monkeypatch.setattr(
-        benchmark_runner,
-        "_batch_max_inference_compute",
-        fake_batch_max_compute,
-    )
-    monkeypatch.setattr(
-        benchmark_runner,
-        "_batch_max_training_compute_per_sample",
-        fake_batch_max_compute,
-    )
     monkeypatch.setattr(
         benchmark_runner,
         "_training_gate_score_estimate",
@@ -1859,6 +1850,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
         step=32,
         max_inference_compute=10,
         running_max_inference_compute=10,
+        running_inference_compute=10.0,
         training_compute_per_sample=20,
     )
 
@@ -1872,7 +1864,9 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
     assert points[0]["seed"] == 202
     assert points[0]["mean_accepted_mass"] == 1.0
     assert points[0]["input_shape"] == [1, 16, 16]
+    assert points[0]["inference_compute"] == 10.0
     assert points[1]["input_shape"] == list(batch.samples[0].require_field().shape)
+    assert points[1]["inference_compute"] == 10.0
     assert batch.region is not None
     assert state_space_region_from_record(points[1]["region"]) == batch.region
     score_terms = cast(
@@ -2001,9 +1995,6 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
             accepted_mass=1.0,
         )
 
-    def fake_batch_max_compute(**_kwargs: object) -> int:
-        return 10
-
     def fake_inference_cost_measurement(**_kwargs: object) -> CostMeasurement:
         return CostMeasurement(
             cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
@@ -2026,16 +2017,6 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
         )
 
     monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
-    monkeypatch.setattr(
-        benchmark_runner,
-        "_batch_max_inference_compute",
-        fake_batch_max_compute,
-    )
-    monkeypatch.setattr(
-        benchmark_runner,
-        "_batch_max_training_compute_per_sample",
-        fake_batch_max_compute,
-    )
     monkeypatch.setattr(
         benchmark_runner,
         "_training_gate_score_estimate",
@@ -2244,9 +2225,6 @@ def test_training_steps_materialize_replay_masses_only_at_gate_checks(
             accepted_mass=0.5,
         )
 
-    def fake_batch_max_compute(**_kwargs: object) -> int:
-        return 10
-
     benchmark = load_digits_benchmark(_digits_benchmark_root)
     outcome_ids = tuple(
         outcome.id for outcome in benchmark.manifest.resolve_outcome_space().outcomes
@@ -2275,16 +2253,6 @@ def test_training_steps_materialize_replay_masses_only_at_gate_checks(
         benchmark_runner,
         "_accumulate_replay_frontier_point",
         fake_accumulate,
-    )
-    monkeypatch.setattr(
-        benchmark_runner,
-        "_batch_max_inference_compute",
-        fake_batch_max_compute,
-    )
-    monkeypatch.setattr(
-        benchmark_runner,
-        "_batch_max_training_compute_per_sample",
-        fake_batch_max_compute,
     )
     monkeypatch.setattr(
         benchmark_runner,
@@ -2329,45 +2297,6 @@ def test_training_steps_materialize_replay_masses_only_at_gate_checks(
         "tolist",
         "gate",
     ]
-
-
-def test_training_compute_per_sample_is_cached_by_architecture_and_input_shape(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    architecture = ArchitectureManifestDocument.from_bytes(
-        _digits_architecture.read_bytes()
-    ).manifest
-    fields = SimpleNamespace(shape=(4, 1, 16, 16))
-    calls = 0
-
-    def fake_summary(_architecture: ArchitectureManifest) -> SimpleNamespace:
-        nonlocal calls
-        calls += 1
-        return SimpleNamespace(training_compute_per_sample=123)
-
-    cache = cast(
-        dict[tuple[str, tuple[int, ...]], int | None],
-        benchmark_runner.__dict__["_training_compute_per_sample_cache"],
-    )
-    cache.clear()
-    monkeypatch.setattr(
-        benchmark_runner,
-        "summarize_architecture_operators",
-        fake_summary,
-    )
-
-    first = cast(Any, benchmark_runner)._batch_max_training_compute_per_sample(
-        architecture=architecture,
-        fields=fields,
-    )
-    second = cast(Any, benchmark_runner)._batch_max_training_compute_per_sample(
-        architecture=architecture,
-        fields=fields,
-    )
-
-    assert first == 123
-    assert second == 123
-    assert calls == 1
 
 
 def test_training_rung_schedule_alternates_frontier_and_replay() -> None:
@@ -2621,9 +2550,6 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
             accepted_mass=0.5,
         )
 
-    def fake_batch_max_compute(**_kwargs: object) -> int:
-        return 10
-
     def fail_if_advancing(_history: object) -> bool:
         raise AssertionError("frontier should not advance below competence threshold")
 
@@ -2633,16 +2559,6 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
     )
     monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
     monkeypatch.setattr(benchmark_runner, "softmax_target_masses", fake_target_masses)
-    monkeypatch.setattr(
-        benchmark_runner,
-        "_batch_max_inference_compute",
-        fake_batch_max_compute,
-    )
-    monkeypatch.setattr(
-        benchmark_runner,
-        "_batch_max_training_compute_per_sample",
-        fake_batch_max_compute,
-    )
     monkeypatch.setattr(
         benchmark_runner,
         "_training_gate_score_estimate",
@@ -2741,9 +2657,6 @@ def test_training_plateau_above_rung_competence_threshold_advances_frontier(
             accepted_mass=0.6,
         )
 
-    def fake_batch_max_compute(**_kwargs: object) -> int:
-        return 10
-
     plateau_history_lengths: list[int] = []
 
     def advance_frontier(history: object) -> bool:
@@ -2756,16 +2669,6 @@ def test_training_plateau_above_rung_competence_threshold_advances_frontier(
     )
     monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
     monkeypatch.setattr(benchmark_runner, "softmax_target_masses", fake_target_masses)
-    monkeypatch.setattr(
-        benchmark_runner,
-        "_batch_max_inference_compute",
-        fake_batch_max_compute,
-    )
-    monkeypatch.setattr(
-        benchmark_runner,
-        "_batch_max_training_compute_per_sample",
-        fake_batch_max_compute,
-    )
     monkeypatch.setattr(
         benchmark_runner,
         "_training_gate_score_estimate",
@@ -3120,7 +3023,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     validation_history = cast(list[dict[str, object]], diagnostics["validation_history"])
     assert validation_history
     cost_summary = cast(dict[str, object], history[0]["cost_summary"])
-    assert cost_summary["training_compute"] == 925696.0
+    assert cast(float, cost_summary["training_compute"]) > 0
     assert "training_compute_per_sample" not in cost_summary
     console_view_model = cast(dict[str, object], history[0]["console_view_model"])
     detail_sections = cast(list[dict[str, object]], console_view_model["detail_sections"])

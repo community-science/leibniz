@@ -222,6 +222,8 @@ export type CostSummaryRecord = {
   cost?: number;
   storage_bytes?: number;
   inference_compute?: number;
+  inference_cost_measurement?: Record<string, unknown>;
+  inference_cost_sample_count?: number;
   training_compute_per_sample?: number;
   training_compute?: number;
   unknown_parameter_components?: number[];
@@ -617,6 +619,11 @@ function parseCostSummary(value: unknown, path: string): CostSummaryRecord {
     cost: optionalNumber(record.cost, `${path}.cost`, transportError),
     storage_bytes: optionalNumber(record.storage_bytes, `${path}.storage_bytes`, transportError),
     inference_compute: optionalNumber(record.inference_compute, `${path}.inference_compute`, transportError),
+    inference_cost_measurement:
+      record.inference_cost_measurement === undefined
+        ? undefined
+        : requireRecord(record.inference_cost_measurement, `${path}.inference_cost_measurement`, transportError),
+    inference_cost_sample_count: optionalNumber(record.inference_cost_sample_count, `${path}.inference_cost_sample_count`, transportError),
     training_compute_per_sample: optionalNumber(record.training_compute_per_sample, `${path}.training_compute_per_sample`, transportError),
     training_compute: optionalNumber(record.training_compute, `${path}.training_compute`, transportError),
     unknown_parameter_components:
