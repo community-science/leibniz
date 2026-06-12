@@ -70,6 +70,7 @@ from leibniz.tensor_runtime import (
     resolve_host_tensor_runtime,
     tensor_runtime_construct_tensor,
     tensor_value_to_host,
+    tensor_value_to_host_values,
 )
 from leibniz.timing import TimingCollector
 
@@ -895,9 +896,7 @@ class Generator:
             records.append(
                 FieldObservation(
                     shape=(field_shape[0], field_shape[1], field_shape[2]),
-                    values=tuple(
-                        float(value) for value in host_fields[index].reshape(-1)
-                    ),
+                    values=tuple(tensor_value_to_host_values(host_fields[index])),
                 )
             )
         return tuple(records)

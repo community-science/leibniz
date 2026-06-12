@@ -56,6 +56,7 @@ __all__ = [
     "tensor_runtime_total_memory_bytes",
     "tensor_runtime_used_memory_bytes",
     "tensor_value_to_host",
+    "tensor_value_to_host_values",
     "resolve_host_tensor_runtime",
     "resolve_tensor_runtime",
     "runtime_roofline_record",
@@ -75,11 +76,12 @@ _tensor_element_kernel_cache: dict[tuple[object, ...], Any] = {}
 _tensor_element_compile_failure_cache: set[tuple[object, ...]] = set()
 _tensor_element_compile_fallbacks: dict[tuple[object, ...], dict[str, object]] = {}
 _tensor_element_parameter_cache: dict[tuple[object, ...], Any] = {}
+_tensor_element_parameter_cache_capacity = 256
 _tensor_element_parameter_values_key_cache: dict[
     tuple[int, TensorElementParameterDType],
     tuple[Sequence[int | float], bytes],
 ] = {}
-_tensor_element_tile_metadata_cache: dict[tuple[object, ...], Any] = {}
+_tensor_element_parameter_values_key_cache_minimum_size = 64
 _tensor_element_tile_size = 131_072
 _require_tensor_compile_environment_variable = "LEIBNIZ_REQUIRE_TENSOR_COMPILE"
 
@@ -232,6 +234,23 @@ def tensor_value_to_host(value: Any) -> Any:
     if callable(move_to_host):
         value = move_to_host()
     return value
+
+
+def tensor_value_to_host_values(value: Any) -> list[float]:
+    """Return a tensor-like value's elements as a flat host list of floats.
+
+    This is the supported host-materialization path for benchmark
+    implementations, which the repository policy bars from calling backend
+    host-transfer methods directly.
+    """
+
+    host_value = tensor_value_to_host(value)
+    reshape = getattr(host_value, "reshape", None)
+    if callable(reshape):
+        host_value = reshape(-1)
+    to_list = getattr(host_value, "tolist", None)
+    flat_values = cast(Any, to_list() if callable(to_list) else host_value)
+    return [float(element) for element in flat_values]
 
 
 def tensor_runtime_has_fixed_device_memory(runtime: TensorRuntime) -> bool:
@@ -1309,6 +1328,10 @@ def _tensor_element_parameter(
             device=runtime.device,
         ).reshape(parameter.shape)
         if cache_key is not None:
+            while len(_tensor_element_parameter_cache) >= _tensor_element_parameter_cache_capacity:
+                _tensor_element_parameter_cache.pop(
+                    next(iter(_tensor_element_parameter_cache))
+                )
             _tensor_element_parameter_cache[cache_key] = tensor
         return tensor
 
@@ -1334,17 +1357,23 @@ def _tensor_element_parameter_cache_key(
 
 
 def _tensor_element_parameter_values_key(parameter: TensorElementParameter) -> bytes:
-    cache_key = (id(parameter.values), parameter.dtype)
-    cached = _tensor_element_parameter_values_key_cache.get(cache_key)
-    if cached is not None and cached[0] is parameter.values:
-        return cached[1]
+    cacheable = len(parameter.values) >= _tensor_element_parameter_values_key_cache_minimum_size
+    if cacheable:
+        cache_key = (id(parameter.values), parameter.dtype)
+        cached = _tensor_element_parameter_values_key_cache.get(cache_key)
+        if cached is not None and cached[0] is parameter.values:
+            return cached[1]
     if parameter.dtype == "float32":
         values_key = array("f", (float(value) for value in parameter.values)).tobytes()
     elif parameter.dtype == "int64":
         values_key = array("q", (int(value) for value in parameter.values)).tobytes()
     else:
         raise TensorRuntimeError(f"unsupported tensor element parameter dtype: {parameter.dtype}")
-    _tensor_element_parameter_values_key_cache[cache_key] = (parameter.values, values_key)
+    if cacheable:
+        _tensor_element_parameter_values_key_cache[(id(parameter.values), parameter.dtype)] = (
+            parameter.values,
+            values_key,
+        )
     return values_key
 
 
@@ -1509,10 +1538,16 @@ def _tensor_runtime_compile_available(runtime: TensorRuntime) -> bool:
     if runtime.device_kind == "mps":
         return True
     try:
-        compiler = importlib.import_module("triton.compiler.compiler")
+        triton_support = importlib.import_module("torch.utils._triton")
     except ImportError:
         return False
-    return hasattr(compiler, "triton_key")
+    has_triton = getattr(triton_support, "has_triton", None)
+    if not callable(has_triton):
+        return False
+    try:
+        return bool(has_triton())
+    except Exception:  # pragma: no cover - backend probe failure
+        return False
 
 
 def _tensor_runtime_profile_span(runtime: TensorRuntime, name: str) -> Any:

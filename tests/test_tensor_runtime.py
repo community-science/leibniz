@@ -1,3 +1,4 @@
+import importlib
 import math
 from pathlib import Path
 from typing import Any, cast
@@ -23,6 +24,7 @@ from leibniz.tensor_runtime import (
     tensor_element_compile_fallback_records,
     tensor_runtime_construct_tensor,
     tensor_runtime_device_kinds,
+    tensor_value_to_host_values,
     validate_tensor_runtime_device,
 )
 
@@ -671,3 +673,95 @@ def _compile_counting_runtime(
 
     monkeypatch.setattr(runtime.torch, "compile", compile_kernel)
     return runtime, compile_calls
+
+
+def test_compile_availability_follows_torch_triton_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host_runtime = resolve_tensor_runtime("cpu")
+    cuda_like_runtime = TensorRuntime(
+        torch=host_runtime.torch,
+        device=host_runtime.device,
+        device_kind="cuda",
+    )
+    triton_support = importlib.import_module("torch.utils._triton")
+    compile_available = cast(Any, tensor_runtime_module)._tensor_runtime_compile_available
+
+    monkeypatch.setattr(triton_support, "has_triton", lambda: True)
+    assert compile_available(cuda_like_runtime) is True
+
+    monkeypatch.setattr(triton_support, "has_triton", lambda: False)
+    assert compile_available(cuda_like_runtime) is False
+
+
+def test_tensor_value_to_host_values_flattens_to_floats() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    tensor = runtime.torch.arange(6, dtype=runtime.torch.float32).reshape((2, 3))
+
+    values = tensor_value_to_host_values(tensor)
+
+    assert values == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    assert all(type(value) is float for value in values)
+
+
+def test_parameter_values_key_cache_skips_per_batch_scalars() -> None:
+    cache = cast(Any, tensor_runtime_module)._tensor_element_parameter_values_key_cache
+    values_key = cast(Any, tensor_runtime_module)._tensor_element_parameter_values_key
+    minimum_size = cast(
+        int,
+        cast(Any, tensor_runtime_module)._tensor_element_parameter_values_key_cache_minimum_size,
+    )
+    cache.clear()
+
+    small = TensorElementParameter(dtype="int64", shape=(1,), values=(7,))
+    large_values = tuple(range(minimum_size))
+    large = TensorElementParameter(
+        dtype="int64",
+        shape=(minimum_size,),
+        values=large_values,
+    )
+
+    small_key = values_key(small)
+    large_key = values_key(large)
+
+    assert small_key
+    assert large_key
+    assert len(cache) == 1
+    assert next(iter(cache.values()))[0] is large_values
+
+
+def test_parameter_tensor_cache_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    cache = cast(Any, tensor_runtime_module)._tensor_element_parameter_cache
+    cache.clear()
+    monkeypatch.setattr(
+        tensor_runtime_module,
+        "_tensor_element_parameter_cache_capacity",
+        4,
+    )
+
+    def element_function(coordinates: tuple[Any, ...], *, offset: Any) -> Any:
+        return coordinates[0] + offset
+
+    for seed in range(10):
+        program = TensorBatchProgram(
+            kernel=element_function,
+            parameters={
+                "offset": TensorElementParameter(
+                    dtype="int64",
+                    shape=(),
+                    values=(seed,),
+                ),
+            },
+            compile=False,
+            cache_key=("parameter-cache-bound-test",),
+        )
+        values = tensor_runtime_construct_tensor(
+            runtime,
+            recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=program),
+        )
+        assert values.tolist() == [seed, seed + 1]
+
+    assert len(cache) <= 4
