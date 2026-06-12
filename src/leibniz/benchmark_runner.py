@@ -30,7 +30,8 @@ from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.content import ContentDigest
 from leibniz.cost_metrology import (
     CostMeasurement,
-    cost_measurement_from_abstract_flops,
+    CostMetrologyError,
+    estimate_program_cost,
     measure_program_cost,
 )
 from leibniz.documents import (
@@ -77,6 +78,7 @@ from leibniz.tensor_runtime import (
     build_optimizer,
     build_plateau_lr_schedule,
     load_tensor_runtime_state,
+    make_empty_float_tensor,
     make_float_tensor,
     make_long_tensor,
     no_grad_context,
@@ -2059,9 +2061,11 @@ def _train_and_predict_on_device(
                     roofline=runtime_roofline_record(runtime),
                     work_estimates=_training_work_estimates(
                         architecture=architecture,
-                        inference_cost=_training_history_inference_cost_measurement(
+                        inference_cost=_module_projected_inference_cost_measurement(
                             runtime=runtime,
-                            validation_history=history,
+                            module=checked_module,
+                            input_shape=architecture.input_shape,
+                            batch_size=batch_size,
                         ),
                         training_compute_per_sample=(
                             _training_history_latest_training_compute_per_sample(history)
@@ -2131,9 +2135,11 @@ def _train_and_predict_on_device(
                 architecture=architecture,
                 inference_cost=(
                     training_result.validation_inference_cost
-                    or _training_history_inference_cost_measurement(
+                    or _module_projected_inference_cost_measurement(
                         runtime=runtime,
-                        validation_history=validation_history,
+                        module=module,
+                        input_shape=architecture.input_shape,
+                        batch_size=batch_size,
                     )
                 ),
                 training_compute_per_sample=(
@@ -2338,6 +2344,43 @@ def _module_inference_cost_measurement(
             strict=True,
             roofline=runtime_roofline_record(runtime),
         )
+    finally:
+        if was_training:
+            module.train()
+
+
+def _module_projected_inference_cost_measurement(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    input_shape: tuple[int, ...],
+    batch_size: int,
+) -> tuple[CostMeasurement, int] | None:
+    sample_count = max(1, batch_size)
+    was_training = bool(module.training)
+    module.eval()
+
+    def program() -> object:
+        fields = make_empty_float_tensor(
+            runtime,
+            (sample_count, *input_shape),
+            device=runtime.device,
+        )
+        with no_grad_context(runtime):
+            return module(fields)
+
+    try:
+        return (
+            estimate_program_cost(
+                runtime,
+                program,
+                strict=True,
+                roofline=runtime_roofline_record(runtime),
+            ),
+            sample_count,
+        )
+    except (CostMetrologyError, TensorRuntimeError):
+        return None
     finally:
         if was_training:
             module.train()
@@ -2734,8 +2777,6 @@ def _measurement_inference_compute(measurement: tuple[CostMeasurement, int]) -> 
 def _cost_measurement_compute_source(measurement: CostMeasurement) -> str:
     if measurement.operations_executed:
         return "measured-forward-metrology"
-    if measurement.operation_stream_source == "declared-planning-trace":
-        return "dry-run-declared-planning-trace"
     return "dry-run-metrology"
 
 
@@ -3817,25 +3858,6 @@ def _training_history_max_inference_compute(
         if type(current) is int:
             max_compute = _max_optional_int(max_compute, current)
     return max_compute
-
-
-def _training_history_inference_cost_measurement(
-    *,
-    runtime: TensorRuntime,
-    validation_history: Sequence[TrainingHistoryPoint],
-) -> tuple[CostMeasurement, int] | None:
-    max_compute = _training_history_max_inference_compute(validation_history)
-    if max_compute is None:
-        return None
-    return (
-        cost_measurement_from_abstract_flops(
-            runtime,
-            max_compute,
-            operation_stream_source="declared-planning-trace",
-            roofline=runtime_roofline_record(runtime),
-        ),
-        1,
-    )
 
 
 def _training_history_latest_training_compute_per_sample(

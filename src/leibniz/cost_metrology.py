@@ -16,6 +16,7 @@ from leibniz.tensor_runtime import (
     tensor_runtime_fft_ops,
     tensor_runtime_multiply_add_ops,
     tensor_runtime_operation_capture,
+    tensor_runtime_project_operations,
     tensor_runtime_shape_element_count,
 )
 
@@ -29,7 +30,7 @@ __all__ = [
     "OperationCostRecord",
     "TensorValueSpec",
     "UnmodeledOperationRecord",
-    "cost_measurement_from_abstract_flops",
+    "estimate_program_cost",
     "estimate_operation_stream_cost",
     "measure_program_cost",
 ]
@@ -438,44 +439,28 @@ def estimate_operation_stream_cost(
     )
 
 
-def cost_measurement_from_abstract_flops(
+def estimate_program_cost(
     runtime: TensorRuntime,
-    abstract_flops: int,
+    program: Callable[..., object],
+    inputs: object = (),
     *,
-    operation_stream_source: str,
+    strict: bool = False,
     roofline: Mapping[str, object] | None = None,
+    operation_stream_source: str = "runtime-dry-run",
 ) -> CostMeasurement:
-    """Represent an existing abstract-op projection as cost metrology metadata."""
+    """Estimate a program's cost from a dry-run tensor-runtime operation stream."""
 
-    _require_nonnegative_int(abstract_flops, "abstract_flops")
-    _require_nonempty_string(operation_stream_source, "operation_stream_source")
-    per_op = (
-        ()
-        if abstract_flops == 0
-        else (
-            OperationCostRecord(
-                name=operation_stream_source,
-                calls=1,
-                abstract_flops=abstract_flops,
-                output_elements=0,
-            ),
-        )
-    )
-    return CostMeasurement(
-        cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
-        abstract_flops=abstract_flops,
-        per_op=per_op,
-        moved_elements=0,
-        movement=(),
-        unmodeled_operations=(),
-        operation_count=0,
-        operation_trace=(),
-        wall_seconds=0.0,
-        tensor_device=runtime.device_kind,
-        execution_mode="dry-run",
-        operation_stream_source=operation_stream_source,
-        operations_executed=False,
+    args = cast(tuple[object, ...], inputs) if isinstance(inputs, tuple) else (inputs,)
+
+    def callback() -> object:
+        return program(*args)
+
+    return estimate_operation_stream_cost(
+        runtime,
+        tensor_runtime_project_operations(runtime, callback),
+        strict=strict,
         roofline=roofline,
+        operation_stream_source=operation_stream_source,
     )
 
 

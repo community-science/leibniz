@@ -26,6 +26,7 @@ __all__ = [
     "build_optimizer",
     "build_plateau_lr_schedule",
     "make_float_tensor",
+    "make_empty_float_tensor",
     "make_long_tensor",
     "no_grad_context",
     "optimizer_step",
@@ -58,6 +59,7 @@ __all__ = [
     "tensor_runtime_input_element_ops",
     "tensor_runtime_multiply_add_ops",
     "tensor_runtime_operation_capture",
+    "tensor_runtime_project_operations",
     "tensor_runtime_ops_bit_density",
     "tensor_runtime_ops_per_byte",
     "tensor_runtime_ops_per_item",
@@ -160,6 +162,9 @@ class TensorRuntimeOperationCapture:
                 keyword_arguments = dict(kwargs or {})
                 input_specs = _tensor_runtime_tensor_specs_from_value(args)
                 output = cast(Callable[..., object], func)(*args, **keyword_arguments)
+                output_specs = _tensor_runtime_tensor_specs_from_value(output)
+                if not output_specs:
+                    return output
                 parent._operations.append(
                     TensorRuntimeOperationRecord(
                         name=_tensor_runtime_operation_name(func),
@@ -174,7 +179,7 @@ class TensorRuntimeOperationCapture:
                             )
                         ),
                         input_tensors=input_specs,
-                        output_tensors=_tensor_runtime_tensor_specs_from_value(output),
+                        output_tensors=output_specs,
                     )
                 )
                 return output
@@ -460,6 +465,25 @@ def tensor_runtime_operation_capture(runtime: TensorRuntime) -> TensorRuntimeOpe
     """Create a context manager that captures tensor runtime operations."""
 
     return TensorRuntimeOperationCapture(runtime)
+
+
+def tensor_runtime_project_operations(
+    runtime: TensorRuntime,
+    callback: Callable[[], object],
+) -> tuple[TensorRuntimeOperationRecord, ...]:
+    """Project a tensor operation stream without executing tensor kernels."""
+
+    try:
+        from torch._subclasses.fake_tensor import FakeTensorMode
+    except ImportError as error:
+        raise TensorRuntimeError(
+            "PyTorch FakeTensorMode is required for dry-run projection"
+        ) from error
+
+    fake_mode = FakeTensorMode(allow_non_fake_inputs=True)
+    with tensor_runtime_operation_capture(runtime) as capture, fake_mode:
+        callback()
+    return capture.records()
 
 
 def tensor_value_to_host(value: Any) -> Any:
@@ -1172,6 +1196,15 @@ def make_float_tensor(runtime: TensorRuntime, values: Any, *, device: Any) -> An
     _ = runtime
     torch = _torch()
     return torch.tensor(values, dtype=torch.float32, device=device)
+
+
+def make_empty_float_tensor(runtime: TensorRuntime, shape: Sequence[int], *, device: Any) -> Any:
+    """Create an uninitialized float32 tensor on the given device."""
+
+    _ = runtime
+    torch = _torch()
+    resolved_shape = tuple(_positive_tensor_extent(extent) for extent in shape)
+    return torch.empty(resolved_shape, dtype=torch.float32, device=device)
 
 
 def make_long_tensor(runtime: TensorRuntime, values: Any, *, device: Any) -> Any:

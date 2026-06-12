@@ -7,8 +7,8 @@ from leibniz.cost_metrology import (
     CostMeasurement,
     CostMeter,
     CostMetrologyError,
-    cost_measurement_from_abstract_flops,
     estimate_operation_stream_cost,
+    estimate_program_cost,
     measure_program_cost,
 )
 from leibniz.tensor_runtime import (
@@ -50,23 +50,6 @@ def test_measure_program_cost_counts_matmul_formula() -> None:
     assert measurement.unmodeled_operations == ()
 
 
-def test_cost_measurement_from_abstract_flops_records_dry_run_provenance() -> None:
-    runtime = resolve_tensor_runtime("cpu")
-
-    measurement = cost_measurement_from_abstract_flops(
-        runtime,
-        123,
-        operation_stream_source="declared-planning-trace",
-    )
-
-    assert measurement.abstract_flops == 123
-    assert measurement.execution_mode == "dry-run"
-    assert measurement.operation_stream_source == "declared-planning-trace"
-    assert measurement.operations_executed is False
-    assert measurement.wall_seconds == 0.0
-    assert measurement.operation_count == 0
-
-
 def test_estimate_operation_stream_cost_uses_unified_formula_table() -> None:
     runtime = resolve_tensor_runtime("cpu")
     operation = TensorRuntimeOperationRecord(
@@ -87,6 +70,28 @@ def test_estimate_operation_stream_cost_uses_unified_formula_table() -> None:
     assert measurement.operation_stream_source == "runtime-dry-run"
     assert measurement.operations_executed is False
     assert measurement.per_op[0].name == "aten.mm.default"
+
+
+def test_estimate_program_cost_projects_without_executing_ops() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    left = torch.randn(2, 3, device=runtime.device)
+    right = torch.randn(3, 4, device=runtime.device)
+
+    def program(a: Any, b: Any) -> Any:
+        return (a @ b).relu()
+
+    measurement = estimate_program_cost(runtime, program, (left, right), strict=True)
+
+    assert measurement.abstract_flops == 48 + 8
+    assert measurement.execution_mode == "dry-run"
+    assert measurement.operation_stream_source == "runtime-dry-run"
+    assert measurement.operations_executed is False
+    assert measurement.wall_seconds == 0.0
+    assert [record.name for record in measurement.per_op] == [
+        "aten.mm.default",
+        "aten.relu.default",
+    ]
 
 
 def test_measure_program_cost_counts_fft_formula() -> None:
