@@ -220,9 +220,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert cost_summary["component_count"] == 3
     assert cost_summary["parameter_count"] == 50
     assert cost_summary["storage_bytes"] == 200
-    assert cost_summary["inference_compute"] == 656
     assert cost_summary["inference_cost_sample_count"] == 1
-    assert "training_compute_per_sample" not in cost_summary
     assert cost_summary["unknown_parameter_components"] == []
     inference_cost = cast(dict[str, object], cost_summary["inference_cost_measurement"])
     assert inference_cost["abstract_flops"] == 656
@@ -530,7 +528,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
             "component_count": 1,
             "cost": 640,
             "storage_bytes": 40,
-            "inference_compute": 20,
+            "inference_cost_measurement": {"abstract_flops": 20},
+            "inference_cost_sample_count": 1,
             "training_compute": 60,
             "unknown_parameter_components": []
           },
@@ -559,7 +558,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
             "component_count": 1,
             "cost": 640,
             "storage_bytes": 40,
-            "inference_compute": 20,
+            "inference_cost_measurement": {"abstract_flops": 20},
+            "inference_cost_sample_count": 1,
             "training_compute": 60,
             "unknown_parameter_components": []
           },
@@ -594,7 +594,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
                 "component_count": 1,
                 "cost": 640,
                 "storage_bytes": 40,
-                "inference_compute": 20,
+                "inference_cost_measurement": {"abstract_flops": 20},
+            "inference_cost_sample_count": 1,
                 "training_compute": 60,
                 "unknown_parameter_components": []
               },
@@ -620,7 +621,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
                 "component_count": 1,
                 "cost": 640,
                 "storage_bytes": 40,
-                "inference_compute": 20,
+                "inference_cost_measurement": {"abstract_flops": 20},
+            "inference_cost_sample_count": 1,
                 "training_compute": 60,
                 "unknown_parameter_components": []
               },

@@ -16,6 +16,11 @@ from leibniz.benchmark_runner import (
     run_benchmark,
 )
 from leibniz.cli import main
+from leibniz.cost_metrology import (
+    TENSOR_RUNTIME_COST_MODEL_ID,
+    CostMeasurement,
+    OperationCostRecord,
+)
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import (
@@ -34,6 +39,28 @@ _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "
 _digits_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool.json"
 )
+
+
+def _cost_measurement(abstract_flops: int) -> CostMeasurement:
+    return CostMeasurement(
+        cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
+        abstract_flops=abstract_flops,
+        per_op=(
+            OperationCostRecord(
+                name="test.forward",
+                calls=1,
+                abstract_flops=abstract_flops,
+                output_elements=abstract_flops,
+            ),
+        ),
+        moved_elements=0,
+        movement=(),
+        unmodeled_operations=(),
+        operation_count=0,
+        operation_trace=(),
+        wall_seconds=0.0,
+        tensor_device="cpu",
+    )
 
 
 def _run_and_evaluate_digits_benchmark(results_root: Path, *, sample_count: int = 1) -> None:
@@ -390,14 +417,16 @@ def test_materialize_benchmark_result_views_rejects_accepted_point_without_measu
         points = sampled_competence.get("points")
         if isinstance(points, list) and points:
             for point in cast(list[dict[str, object]], points):
-                point.pop("inference_compute", None)
+                point.pop("inference_cost_measurement", None)
+                point.pop("inference_cost_sample_count", None)
         else:
-            sampled_competence.pop("inference_compute", None)
+            sampled_competence.pop("inference_cost_measurement", None)
+            sampled_competence.pop("inference_cost_sample_count", None)
         path.write_bytes(canonical_document_bytes(record) + b"\n")
 
     with pytest.raises(
         LocalResultImportError,
-        match="accepted points missing measured inference_compute",
+        match="accepted points missing inference_cost_measurement",
     ):
         materialize_benchmark_result_views(
             repository_root=_repository_root,
@@ -440,7 +469,9 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert measurement_count >= 64 * 3
     assert measurement_count % 64 == 0
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
-    assert isinstance(cost_summary["inference_compute"], int | float)
+    inference_cost = CostMeasurement.from_record(cost_summary["inference_cost_measurement"])
+    assert inference_cost.abstract_flops > 0
+    assert isinstance(cost_summary["inference_cost_sample_count"], int)
     assert "analytic_inference_compute" not in cost_summary
     assert isinstance(cost_summary["cost"], int | float)
     assert cost_summary["cost"] >= 0
@@ -450,15 +481,19 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     cost_terms = cast(list[dict[str, object]], cost_integral["terms"])
     assert cost_terms
     points = cast(list[dict[str, object]], leaderboard[0]["points"])
-    assert all(isinstance(point["inference_compute"], int | float) for point in points)
+    point_costs = [
+        CostMeasurement.from_record(point["inference_cost_measurement"]).abstract_flops
+        / cast(int, point["inference_cost_sample_count"])
+        for point in points
+    ]
     assert len(points) == len(cost_terms)
     assert math.isclose(
         cast(float, cost_integral["value"]),
         math.fsum(
-            cast(float, point["inference_compute"])
+            point_cost
             * 32.0
             * cast(float, term["width_in_bits"])
-            for point, term in zip(points, cost_terms, strict=True)
+            for point_cost, term in zip(point_costs, cost_terms, strict=True)
         ),
     )
     frontiers = cast(dict[str, object], result["frontiers"])
@@ -546,7 +581,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     }
 
 
-def test_metrology_model_cost_uses_point_inference_compute() -> None:
+def test_metrology_model_cost_uses_point_cost_measurement() -> None:
     first_compute = 128
     second_compute = 512
 
@@ -554,13 +589,15 @@ def test_metrology_model_cost_uses_point_inference_compute() -> None:
         points=(
             {
                 "log2_volume": 1.0,
-                "inference_compute": first_compute,
+                "inference_cost_measurement": _cost_measurement(first_compute).to_record(),
+                "inference_cost_sample_count": 1,
             },
             {
                 "log2_volume": 2.0,
                 "log2_volume_minimum": 2.0,
                 "log2_volume_maximum": 2.0,
-                "inference_compute": second_compute,
+                "inference_cost_measurement": _cost_measurement(second_compute).to_record(),
+                "inference_cost_sample_count": 1,
             },
         ),
         error_type=local_results.LocalResultImportError,

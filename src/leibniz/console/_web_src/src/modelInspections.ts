@@ -63,7 +63,6 @@ export type ModelInspectionCostSummaryRecord = {
   component_count: number;
   parameter_count?: number;
   storage_bytes?: number;
-  inference_compute?: number;
   inference_cost_measurement?: {
     execution_mode?: string;
     operation_stream_source?: string;
@@ -71,7 +70,13 @@ export type ModelInspectionCostSummaryRecord = {
     abstract_flops?: number;
   };
   inference_cost_sample_count?: number;
-  training_compute_per_sample?: number;
+  training_cost_measurement?: {
+    execution_mode?: string;
+    operation_stream_source?: string;
+    operations_executed?: boolean;
+    abstract_flops?: number;
+  };
+  training_cost_sample_count?: number;
   unknown_parameter_components: number[];
   unknown_compute_components: number[];
 };

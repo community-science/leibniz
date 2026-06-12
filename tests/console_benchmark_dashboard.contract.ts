@@ -101,7 +101,8 @@ function modelResult({
     cost_summary: {
       component_count: 1,
       cost,
-      inference_compute: inferenceCompute,
+      inference_cost_measurement: { abstract_flops: inferenceCompute },
+      inference_cost_sample_count: 1,
       storage_bytes: storageBytes,
       training_compute: trainingCompute,
     },
@@ -201,7 +202,8 @@ const result: BenchmarkResultRecord = {
       cost_summary: {
         component_count: 1,
         cost: 640,
-        inference_compute: 20,
+        inference_cost_measurement: { abstract_flops: 20 },
+        inference_cost_sample_count: 1,
         storage_bytes: 40,
         training_compute: 360,
       },
@@ -270,7 +272,8 @@ const result: BenchmarkResultRecord = {
       cost_summary: {
         component_count: 1,
         cost: 640,
-        inference_compute: 20,
+        inference_cost_measurement: { abstract_flops: 20 },
+        inference_cost_sample_count: 1,
         storage_bytes: 40,
         training_compute: 360,
       },
@@ -292,7 +295,8 @@ const result: BenchmarkResultRecord = {
       cost_summary: {
         component_count: 2,
         cost: 2560,
-        inference_compute: 80,
+        inference_cost_measurement: { abstract_flops: 80 },
+        inference_cost_sample_count: 1,
         storage_bytes: 160,
         training_compute: 1440,
       },
@@ -333,7 +337,8 @@ const inspections: ModelInspectionRecord[] = [
       record_digest: architectureDigest,
     },
     cost_summary: {
-      inference_compute: 20,
+      inference_cost_measurement: { abstract_flops: 20 },
+      inference_cost_sample_count: 1,
       component_count: 1,
       storage_bytes: 40,
       unknown_compute_components: [],

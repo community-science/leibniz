@@ -100,7 +100,7 @@ assertEqual(
   'model inspection storage bytes',
 );
 assertEqual(
-  modelInspection.cost_summary.inference_compute,
+  modelInspection.cost_summary.inference_cost_measurement?.abstract_flops,
   656,
   'model inspection compute',
 );

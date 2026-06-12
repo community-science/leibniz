@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Self, TypeVar, cast
 
+from leibniz.cost_metrology import CostMeasurement, CostMetrologyError
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementRecord
 from leibniz.observation_generation import GeneratedSample, GeneratedSampleSet
@@ -14,7 +15,7 @@ from leibniz.outcomes import AcceptedEvent, OutcomeSpace, RawScoringEvidence
 from leibniz.prediction_results import DirectFiniteProbabilityPrediction
 from leibniz.prediction_spaces import FiniteOutcomeSpace
 from leibniz.state_space import StateSpaceError, StateSpaceRegion, state_space_region_from_record
-from leibniz.tensor_runtime import tensor_runtime_ops_bit_density
+from leibniz.tensor_runtime import tensor_runtime_ops_bit_density, tensor_runtime_ops_per_item
 
 __all__ = [
     "CompetencePoint",
@@ -433,9 +434,9 @@ def sampled_competence_metrology_cost_integral(
                     lower=minimum,
                     upper=maximum,
                     competence_density=tensor_runtime_ops_bit_density(
-                        _record_nonnegative_number(
-                            point.get("inference_compute"),
-                            field=f"{field_prefix}.inference_compute",
+                        _record_cost_measurement_ops_per_item(
+                            point,
+                            field_prefix=field_prefix,
                             error_type=error_type,
                         )
                     ),
@@ -450,6 +451,26 @@ def sampled_competence_metrology_cost_integral(
 def _competence_point_interval_sort_key(point: CompetencePoint) -> tuple[float, float]:
     lower, upper = _log2_volume_point_interval(point)
     return (lower, upper)
+
+
+def _record_cost_measurement_ops_per_item(
+    point: Mapping[str, object],
+    *,
+    field_prefix: str,
+    error_type: type[_ErrorT],
+) -> float:
+    try:
+        measurement = CostMeasurement.from_record(
+            point.get("inference_cost_measurement")
+        )
+    except CostMetrologyError as error:
+        raise error_type(f"{field_prefix}.inference_cost_measurement: {error}") from error
+    sample_count = _record_positive_int(
+        point.get("inference_cost_sample_count"),
+        field=f"{field_prefix}.inference_cost_sample_count",
+        error_type=error_type,
+    )
+    return tensor_runtime_ops_per_item(measurement.abstract_flops, sample_count)
 
 
 def _record_optional_nonnegative_number(

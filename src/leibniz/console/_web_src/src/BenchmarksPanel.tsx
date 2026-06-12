@@ -916,7 +916,7 @@ function ModelCostDetail({
         <div>
           <dt>Inference Cost</dt>
           <dd>
-            {optionalNumberLabel(summary.inference_compute)}
+            {optionalNumberLabel(costMeasurementPerSample(summary.inference_cost_measurement, summary.inference_cost_sample_count))}
             {summary.inference_cost_measurement?.operation_stream_source === undefined
               ? ''
               : ` (${summary.inference_cost_measurement.operation_stream_source})`}
@@ -1112,6 +1112,16 @@ function observedVolumeLabel(model: BenchmarkModelCandidate): string {
 
 function optionalNumberLabel(value: number | undefined): string {
   return value === undefined ? 'unknown' : value.toLocaleString();
+}
+
+function costMeasurementPerSample(
+  measurement: { abstract_flops?: number } | undefined,
+  sampleCount: number | undefined,
+): number | undefined {
+  if (measurement?.abstract_flops === undefined || sampleCount === undefined || sampleCount < 1) {
+    return undefined;
+  }
+  return measurement.abstract_flops / sampleCount;
 }
 
 function formatMetricNumber(value: number): string {

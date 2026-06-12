@@ -185,11 +185,9 @@ class BenchmarkEvaluationBundle:
             raise BenchmarkEvaluationBundleValidationError(
                 "measurement_score_view is not derived from measurement_dataset"
             )
-        _validate_measured_max_inference_compute(
+        _validate_inference_cost_measurement(
             self.throughput,
-            "throughput.checkpoint_evaluation.max_inference_compute",
             phase="checkpoint_evaluation",
-            field="max_inference_compute",
         )
 
     def _validate_model_checkpoint(self) -> None:
@@ -293,15 +291,29 @@ def _single_benchmark_id(dataset: MeasurementDataset) -> ProtocolIdentifier:
     return next(iter(benchmark_ids))
 
 
-def _validate_measured_max_inference_compute(
+def _validate_inference_cost_measurement(
     throughput: Mapping[str, object],
-    field_path: str,
     *,
     phase: str,
-    field: str,
-) -> int:
+) -> None:
     phase_record = _record.mapping(throughput.get(phase), f"throughput.{phase}")
-    value = _record.integer(phase_record.get(field), field_path)
-    if value < 0:
-        raise BenchmarkEvaluationBundleValidationError(f"{field_path} must be nonnegative")
-    return value
+    measurement = _record.mapping(
+        phase_record.get("inference_cost_measurement"),
+        f"throughput.{phase}.inference_cost_measurement",
+    )
+    abstract_flops = _record.integer(
+        measurement.get("abstract_flops"),
+        f"throughput.{phase}.inference_cost_measurement.abstract_flops",
+    )
+    if abstract_flops < 0:
+        raise BenchmarkEvaluationBundleValidationError(
+            f"throughput.{phase}.inference_cost_measurement.abstract_flops must be nonnegative"
+        )
+    sample_count = _record.integer(
+        phase_record.get("inference_cost_sample_count"),
+        f"throughput.{phase}.inference_cost_sample_count",
+    )
+    if sample_count < 1:
+        raise BenchmarkEvaluationBundleValidationError(
+            f"throughput.{phase}.inference_cost_sample_count must be positive"
+        )

@@ -41,8 +41,6 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
     assert inspection.components[0].operator["kind"] == "local-aggregation"
     assert inspection.components[0].operator["aliases"] == ["adaptive-pooling"]
     assert inspection.components[0].parameter_count == 0
-    assert inspection.components[0].inference_compute is None
-    assert inspection.components[0].training_compute_per_sample is None
     assert inspection.components[1].input_shape == (1, 2, 2)
     assert inspection.components[1].output_shape == (4,)
     assert inspection.components[1].operator is not None
@@ -54,13 +52,9 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
     assert inspection.components[2].operator["kind"] == "affine-readout"
     assert inspection.components[2].parameter_count == 50
     assert inspection.components[2].storage_bytes == 200
-    assert inspection.components[2].inference_compute is None
-    assert inspection.components[2].training_compute_per_sample is None
     assert inspection.cost_summary.component_count == 3
     assert inspection.cost_summary.parameter_count == 50
     assert inspection.cost_summary.storage_bytes == 200
-    assert inspection.cost_summary.inference_compute == 656
-    assert inspection.cost_summary.training_compute_per_sample is None
     assert inspection.cost_summary.inference_cost_measurement is not None
     assert inspection.cost_summary.inference_cost_measurement.abstract_flops == 656
     assert inspection.cost_summary.inference_cost_measurement.execution_mode == "dry-run"
@@ -98,7 +92,6 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
         "preserve-prefix-replace-trailing-axes"
     )
     assert inspection.architecture_trace.stages[2].parameter_count == 50
-    assert inspection.architecture_trace.stages[2].training_compute_per_sample is None
     assert [node.id for node in inspection.architecture_graph.nodes] == [
         "component-0",
         "component-1",

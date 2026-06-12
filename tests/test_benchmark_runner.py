@@ -70,6 +70,33 @@ _chess_linear_architecture = (
 )
 
 
+def _cost_measurement(abstract_flops: int = 0) -> CostMeasurement:
+    per_op = (
+        ()
+        if abstract_flops == 0
+        else (
+            OperationCostRecord(
+                name="test.forward",
+                calls=1,
+                abstract_flops=abstract_flops,
+                output_elements=abstract_flops,
+            ),
+        )
+    )
+    return CostMeasurement(
+        cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
+        abstract_flops=abstract_flops,
+        per_op=per_op,
+        moved_elements=0,
+        movement=(),
+        unmodeled_operations=(),
+        operation_count=0,
+        operation_trace=(),
+        wall_seconds=0.0,
+        tensor_device="cpu",
+    )
+
+
 def _observation_payload(
     generator: BenchmarkGenerator,
     **kwargs: object,
@@ -597,7 +624,8 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
         sample_count=1,
         confidence_half_width=0.0,
         input_shape=(18, 8, 8),
-        inference_compute=0.0,
+        inference_cost_measurement=_cost_measurement(),
+            inference_cost_sample_count=1,
     )
 
     def fake_load_predictor(**_kwargs: object) -> object:
@@ -608,34 +636,21 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
             return rung
         raise cast(Any, benchmark_runner)._EmptyCurriculumWindow()
 
-    def fake_evaluate_rung(**_kwargs: object) -> tuple[object, int]:
-        return evidence, 1
+    def fake_evaluate_rung(**_kwargs: object) -> object:
+        return evidence
 
     def fake_final_measurements(
         **_kwargs: object,
     ) -> tuple[
         GeneratedSampleSet,
         tuple[tuple[float, ...], ...],
-        int,
         CostMeasurement,
         int,
     ]:
         return (
             batch,
             ((1.0,),),
-            1,
-            CostMeasurement(
-                cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
-                abstract_flops=0,
-                per_op=(),
-                moved_elements=0,
-                movement=(),
-                unmodeled_operations=(),
-                operation_count=0,
-                operation_trace=(),
-                wall_seconds=0.0,
-                tensor_device="cpu",
-            ),
+            _cost_measurement(),
             1,
         )
 
@@ -726,7 +741,11 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         evaluation_bundle.measurement_dataset.digest
     )
     assert evaluation_bundle.model_inspection.cost_summary.parameter_count == 50
-    assert evaluation_bundle.model_inspection.cost_summary.inference_compute == 656
+    assert evaluation_bundle.model_inspection.cost_summary.inference_cost_measurement is not None
+    assert (
+        evaluation_bundle.model_inspection.cost_summary.inference_cost_measurement.abstract_flops
+        == 656
+    )
     checkpoint_evaluation_throughput = cast(
         dict[str, object],
         evaluation_bundle.throughput["checkpoint_evaluation"],
@@ -752,8 +771,6 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         float,
         dynamic_counters["physical_sample_count"],
     )
-    assert isinstance(checkpoint_evaluation_throughput["max_inference_compute"], int)
-    assert checkpoint_evaluation_throughput["max_inference_compute"] >= 0
     inference_cost = CostMeasurement.from_record(
         checkpoint_evaluation_throughput["inference_cost_measurement"]
     )
@@ -1179,7 +1196,8 @@ def test_evaluation_frontier_requires_contiguous_confidence_above_chance() -> No
             sample_count=100,
             confidence_half_width=0.01,
             input_shape=(1, 16, 16),
-            inference_compute=0.0,
+            inference_cost_measurement=_cost_measurement(),
+            inference_cost_sample_count=1,
         ),
         rung_evidence(
             rung=SimpleNamespace(index=1),
@@ -1187,7 +1205,8 @@ def test_evaluation_frontier_requires_contiguous_confidence_above_chance() -> No
             sample_count=100,
             confidence_half_width=0.08,
             input_shape=(1, 16, 16),
-            inference_compute=0.0,
+            inference_cost_measurement=_cost_measurement(),
+            inference_cost_sample_count=1,
         ),
         rung_evidence(
             rung=SimpleNamespace(index=2),
@@ -1195,7 +1214,8 @@ def test_evaluation_frontier_requires_contiguous_confidence_above_chance() -> No
             sample_count=100,
             confidence_half_width=0.03,
             input_shape=(1, 16, 16),
-            inference_compute=0.0,
+            inference_cost_measurement=_cost_measurement(),
+            inference_cost_sample_count=1,
         ),
     )
 
@@ -1229,7 +1249,8 @@ def test_evaluation_integration_converges_after_confident_terminal_failures() ->
             sample_count=100,
             confidence_half_width=0.01,
             input_shape=(1, 16, 16),
-            inference_compute=0.0,
+            inference_cost_measurement=_cost_measurement(),
+            inference_cost_sample_count=1,
         ),
     )
 
@@ -1244,7 +1265,8 @@ def test_evaluation_integration_converges_after_confident_terminal_failures() ->
             sample_count=100,
             confidence_half_width=0.01,
             input_shape=(1, 16, 16),
-            inference_compute=0.0,
+            inference_cost_measurement=_cost_measurement(),
+            inference_cost_sample_count=1,
         )
         for index in range(4)
     )
@@ -1277,7 +1299,8 @@ def test_evaluation_integration_does_not_reset_after_failed_ladder_gap() -> None
             sample_count=100,
             confidence_half_width=0.01,
             input_shape=(1, 16, 16),
-            inference_compute=0.0,
+            inference_cost_measurement=_cost_measurement(),
+            inference_cost_sample_count=1,
         )
         for index, mean in enumerate((0.90, 0.80, 0.05, 0.04, 0.70))
     )
@@ -1848,10 +1871,8 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
         ),
         validation_check=1,
         step=32,
-        max_inference_compute=10,
-        running_max_inference_compute=10,
-        running_inference_compute=10.0,
-        training_compute_per_sample=20,
+        inference_cost=(_cost_measurement(20), 2),
+        training_cost=(_cost_measurement(40), 2),
     )
 
     sampled_competence = cast(dict[str, object], estimate["sampled_competence"])
@@ -1864,9 +1885,15 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
     assert points[0]["seed"] == 202
     assert points[0]["mean_accepted_mass"] == 1.0
     assert points[0]["input_shape"] == [1, 16, 16]
-    assert points[0]["inference_compute"] == 10.0
+    assert CostMeasurement.from_record(
+        points[0]["inference_cost_measurement"]
+    ).abstract_flops == 20
+    assert points[0]["inference_cost_sample_count"] == 2
     assert points[1]["input_shape"] == list(batch.samples[0].require_field().shape)
-    assert points[1]["inference_compute"] == 10.0
+    assert CostMeasurement.from_record(
+        points[1]["inference_cost_measurement"]
+    ).abstract_flops == 20
+    assert points[1]["inference_cost_sample_count"] == 2
     assert batch.region is not None
     assert state_space_region_from_record(points[1]["region"]) == batch.region
     score_terms = cast(
@@ -3143,7 +3170,10 @@ def test_digits_benchmark_runner_keeps_running_training_out_of_result_views(
         dict[str, object],
         materialized_progress_record["training_estimate"],
     )
-    assert isinstance(training_estimate["max_inference_compute"], int)
+    assert CostMeasurement.from_record(
+        training_estimate["inference_cost_measurement"]
+    ).abstract_flops >= 0
+    assert isinstance(training_estimate["inference_cost_sample_count"], int)
     sampled_competence = cast(dict[str, object], training_estimate["sampled_competence"])
     sampled_points = cast(list[dict[str, object]], sampled_competence["points"])
     assert training_estimate["seed"] == sampled_points[0]["seed"]
@@ -3267,6 +3297,8 @@ def _score_estimate(
     log2_volume: float,
     accepted_mass: float,
 ) -> dict[str, object]:
+    inference_cost = _cost_measurement(20).to_record()
+    training_cost = _cost_measurement(40).to_record()
     sampled_competence = {
         "kind": "sampled-competence-curriculum",
         "sampling_rule": "generator-uniform-component-index-v1",
@@ -3276,6 +3308,8 @@ def _score_estimate(
         "log2_volume": log2_volume,
         "sample_count": 2,
         "mean_accepted_mass": accepted_mass,
+        "inference_cost_measurement": inference_cost,
+        "inference_cost_sample_count": 2,
         "points": [
             {
                 "kind": "sampled-state-space-volume-window",
@@ -3288,6 +3322,8 @@ def _score_estimate(
                 "sample_count": 2,
                 "mean_accepted_mass": accepted_mass,
                 "input_shape": [1, 16, 16],
+                "inference_cost_measurement": inference_cost,
+                "inference_cost_sample_count": 2,
             }
         ],
     }
@@ -3300,9 +3336,10 @@ def _score_estimate(
         "score": score,
         "validation_check": check,
         "step": step,
-        "max_inference_compute": 10,
-        "running_max_inference_compute": 10,
-        "training_compute_per_sample": 10,
+        "inference_cost_measurement": inference_cost,
+        "inference_cost_sample_count": 2,
+        "training_cost_measurement": training_cost,
+        "training_cost_sample_count": 2,
         "chance_mass": 0.1,
         "score_integral": {
             "kind": "sampled-competence-integral",
