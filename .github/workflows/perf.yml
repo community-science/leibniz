@@ -1,5 +1,10 @@
 name: Performance gates
 
+# GitHub-hosted runners have no CUDA or MPS device, so the device-conditional
+# perf_gate tests skip here and only the cpu roofline case runs. Meaningful
+# device coverage requires dispatching this workflow on a self-hosted GPU
+# runner, or running the same pytest commands on a CUDA or MPS host and
+# reporting the results on the pull request.
 on:
   workflow_dispatch:
 

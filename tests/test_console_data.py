@@ -136,6 +136,10 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
             "architecture-manifest",
             "tests/fixtures/architecture/digits_convnet.json",
         ),
+        (
+            "architecture-manifest",
+            "tests/fixtures/architecture/digits_perf_conv.json",
+        ),
         ("architecture-manifest", "tests/fixtures/architecture/digits_pool.json"),
         ("benchmark-manifest", "tests/fixtures/finite_outcome/manifest.json"),
         ("materialization-plan", "tests/fixtures/digits/materialization_plan_l1.json"),
@@ -198,6 +202,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     ] == [
         "tests/fixtures/architecture/chess_board_linear.json",
         "tests/fixtures/architecture/digits_convnet.json",
+        "tests/fixtures/architecture/digits_perf_conv.json",
         "tests/fixtures/architecture/digits_pool.json",
     ]
     model_inspection = next(
