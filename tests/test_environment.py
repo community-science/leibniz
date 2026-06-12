@@ -54,8 +54,12 @@ def test_ci_uses_miniforge_environment_file() -> None:
     assert "actions/setup-node@v4" in workflow
     assert "npm ci" in workflow
     assert "npx playwright install --with-deps chromium" in workflow
-    assert "npm test" in workflow
-    assert "python -m build --no-isolation" in workflow
+    assert "python scripts/validate.py --check tests" in workflow
+    assert "python scripts/validate.py --check lint" in workflow
+    assert "python scripts/validate.py --check type" in workflow
+    assert "python scripts/validate.py --check repository-policy" in workflow
+    assert "python scripts/validate.py --check console" in workflow
+    assert "python scripts/validate.py --check package" in workflow
     assert "actions/setup-python" not in workflow
 
 
