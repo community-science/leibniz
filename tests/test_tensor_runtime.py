@@ -24,16 +24,7 @@ from leibniz.tensor_runtime import (
     tensor_element_compile_fallback_records,
     tensor_runtime_construct_tensor,
     tensor_runtime_device_kinds,
-    tensor_runtime_fft_ops,
-    tensor_runtime_input_element_ops,
-    tensor_runtime_multiply_add_ops,
-    tensor_runtime_ops_bit_density,
-    tensor_runtime_ops_per_byte,
-    tensor_runtime_ops_per_item,
-    tensor_runtime_ops_rate,
-    tensor_runtime_ops_scaled,
     tensor_runtime_shape_element_count,
-    tensor_runtime_training_ops_from_inference,
     tensor_value_to_host_values,
     validate_tensor_runtime_device,
 )
@@ -77,17 +68,8 @@ def test_resolve_tensor_runtime_rejects_unavailable_explicit_device() -> None:
             resolve_tensor_runtime("cuda")
 
 
-def test_tensor_runtime_abstract_op_helpers_declare_shared_counting_conventions() -> None:
+def test_tensor_runtime_shape_element_count_declares_shape_convention() -> None:
     assert tensor_runtime_shape_element_count((2, 3, 4)) == 24
-    assert tensor_runtime_input_element_ops((2, 3, 4)) == 24
-    assert tensor_runtime_multiply_add_ops(2, 3, 4) == 48
-    assert tensor_runtime_training_ops_from_inference(48, multiplier=3) == 144
-    assert tensor_runtime_ops_scaled(5, 2) == 10
-    assert tensor_runtime_fft_ops((3, 8), dims=(1,)) == 5 * 3 * 8 * 3
-    assert tensor_runtime_ops_per_item(120, 5) == 24.0
-    assert tensor_runtime_ops_bit_density(2.5) == 80.0
-    assert tensor_runtime_ops_rate(12, 2.5) == 30.0
-    assert tensor_runtime_ops_per_byte(48, 12) == 4.0
 
 
 def test_softmax_target_masses_accepts_labels_and_distributions() -> None:

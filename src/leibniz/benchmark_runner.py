@@ -92,9 +92,6 @@ from leibniz.tensor_runtime import (
     tensor_element_compile_fallback_records,
     tensor_runtime_device_kinds,
     tensor_runtime_has_fixed_device_memory,
-    tensor_runtime_ops_per_byte,
-    tensor_runtime_ops_per_item,
-    tensor_runtime_ops_rate,
     tensor_runtime_total_memory_bytes,
     tensor_runtime_used_memory_bytes,
     tensor_value_to_host,
@@ -2665,8 +2662,8 @@ def _max_cost_measurement(
     left_cost, left_sample_count = left
     right_cost, right_sample_count = right
     if (
-        tensor_runtime_ops_per_item(right_cost.abstract_flops, right_sample_count)
-        > tensor_runtime_ops_per_item(left_cost.abstract_flops, left_sample_count)
+        right_cost.abstract_flops_per_item(right_sample_count)
+        > left_cost.abstract_flops_per_item(left_sample_count)
     ):
         return right
     return left
@@ -2682,7 +2679,7 @@ def _chunk_cost_measurement_pair(
 
 def _measurement_ops_per_item(measurement: tuple[CostMeasurement, int]) -> float:
     cost, sample_count = measurement
-    return tensor_runtime_ops_per_item(cost.abstract_flops, sample_count)
+    return cost.abstract_flops_per_item(sample_count)
 
 
 def _cost_measurement_compute_source(measurement: CostMeasurement) -> str:
@@ -4447,7 +4444,7 @@ def _phase_roofline_record(
     peak_compute_per_second: float,
     peak_bytes_per_second: float,
 ) -> dict[str, object]:
-    arithmetic_intensity = tensor_runtime_ops_per_byte(
+    arithmetic_intensity = CostMeasurement.abstract_flops_per_byte_value(
         work.compute_per_sample,
         work.bytes_per_sample,
     )
@@ -4461,7 +4458,7 @@ def _phase_roofline_record(
         measured_samples = 0.0
     else:
         measured_samples = float(measured)
-        observed_compute = tensor_runtime_ops_rate(
+        observed_compute = CostMeasurement.abstract_flops_rate_value(
             work.compute_per_sample,
             measured_samples,
         )

@@ -7,6 +7,7 @@ from leibniz.cost_metrology import (
     CostMeasurement,
     CostMeter,
     CostMetrologyError,
+    OperationCostRecord,
     estimate_operation_stream_cost,
     estimate_program_cost,
     measure_program_cost,
@@ -224,6 +225,37 @@ def test_cost_measurement_round_trips_through_record() -> None:
     )
 
     assert CostMeasurement.from_record(measurement.to_record()) == measurement
+
+
+def test_cost_measurement_exposes_public_cost_normalization_api() -> None:
+    measurement = CostMeasurement(
+        cost_model_id=TENSOR_RUNTIME_COST_MODEL_ID,
+        abstract_flops=120,
+        per_op=(
+            OperationCostRecord(
+                name="test.op",
+                calls=1,
+                abstract_flops=120,
+                output_elements=1,
+            ),
+        ),
+        moved_elements=0,
+        movement=(),
+        unmodeled_operations=(),
+        operation_count=0,
+        operation_trace=(),
+        wall_seconds=0.0,
+        tensor_device="cpu",
+    )
+
+    assert measurement.abstract_flops_per_item(5) == 24.0
+    assert measurement.abstract_flops_per_byte(12) == 10.0
+    assert measurement.abstract_flops_rate(2.5, item_count=5) == 60.0
+    assert measurement.bit_density(item_count=5) == 768.0
+    assert CostMeasurement.abstract_flops_bit_density(2.5) == 80.0
+    assert CostMeasurement.abstract_flops_per_item_value(120, 5) == 24.0
+    assert CostMeasurement.abstract_flops_per_byte_value(48, 12) == 4.0
+    assert CostMeasurement.abstract_flops_rate_value(12, 2.5) == 30.0
 
 
 def test_cost_meter_context_manager_measures_existing_flow() -> None:

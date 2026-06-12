@@ -13,8 +13,6 @@ from leibniz.tensor_runtime import (
     TensorRuntimeOperationRecord,
     TensorRuntimeTensorSpec,
     tensor_runtime_capture_operations,
-    tensor_runtime_fft_ops,
-    tensor_runtime_multiply_add_ops,
     tensor_runtime_operation_capture,
     tensor_runtime_project_operations,
     tensor_runtime_shape_element_count,
@@ -331,6 +329,73 @@ class CostMeasurement:
             record["roofline"] = dict(self.roofline)
         return record
 
+    def abstract_flops_per_item(self, item_count: int) -> float:
+        """Return this measurement's abstract-FLOP count normalized by item count."""
+
+        return self.abstract_flops_per_item_value(self.abstract_flops, item_count)
+
+    def abstract_flops_per_byte(self, byte_count: int | float) -> float:
+        """Return this measurement's abstract-FLOP intensity per byte."""
+
+        return self.abstract_flops_per_byte_value(self.abstract_flops, byte_count)
+
+    def abstract_flops_rate(self, items_per_second: int | float, *, item_count: int = 1) -> float:
+        """Return observed abstract FLOPs per second from this measurement and throughput."""
+
+        return self.abstract_flops_rate_value(
+            self.abstract_flops_per_item(item_count),
+            items_per_second,
+        )
+
+    def bit_density(self, *, item_count: int = 1) -> float:
+        """Return this measurement's declared bit-density cost unit."""
+
+        return self.abstract_flops_bit_density(self.abstract_flops_per_item(item_count))
+
+    @classmethod
+    def abstract_flops_bit_density(cls, abstract_flops: int | float) -> float:
+        """Convert abstract FLOPs into the declared bit-density cost unit."""
+
+        return _nonnegative_number(abstract_flops, "abstract_flops") * 32.0
+
+    @classmethod
+    def abstract_flops_per_item_value(
+        cls,
+        abstract_flops: int | float,
+        item_count: int,
+    ) -> float:
+        """Return an abstract-FLOP count normalized by item count."""
+
+        return _nonnegative_number(abstract_flops, "abstract_flops") / _positive_item_count(
+            item_count
+        )
+
+    @classmethod
+    def abstract_flops_per_byte_value(
+        cls,
+        abstract_flops: int | float,
+        byte_count: int | float,
+    ) -> float:
+        """Return abstract-FLOP intensity per byte."""
+
+        bytes_value = _nonnegative_number(byte_count, "byte_count")
+        if bytes_value <= 0.0:
+            raise CostMetrologyError("byte_count must be positive")
+        return _nonnegative_number(abstract_flops, "abstract_flops") / bytes_value
+
+    @classmethod
+    def abstract_flops_rate_value(
+        cls,
+        abstract_flops_per_item: int | float,
+        items_per_second: int | float,
+    ) -> float:
+        """Return observed abstract FLOPs per second from cost and throughput."""
+
+        return _nonnegative_number(
+            abstract_flops_per_item,
+            "abstract_flops_per_item",
+        ) * _nonnegative_number(items_per_second, "items_per_second")
+
 
 class CostMeter:
     """Context manager that records a tensor runtime operation stream."""
@@ -624,15 +689,24 @@ def _matmul_flops(input_specs: tuple[TensorValueSpec, ...]) -> int | None:
         return None
     left, right = input_specs[0].shape, input_specs[1].shape
     if len(left) == 2 and len(right) == 2:
-        return tensor_runtime_multiply_add_ops(left[0], right[1], left[1])
+        return _multiply_add_flops(left[0], right[1], left[1])
     if len(left) >= 3 and len(right) >= 3 and left[:-2] == right[:-2]:
-        return tensor_runtime_multiply_add_ops(
+        return _multiply_add_flops(
             math.prod(left[:-2]),
             left[-2],
             right[-1],
             left[-1],
         )
     return None
+
+
+def _multiply_add_flops(*factors: int) -> int:
+    if not factors:
+        return 0
+    for factor in factors:
+        if type(factor) is not int or factor < 0:
+            raise CostMetrologyError("multiply-add factors must be nonnegative integers")
+    return 2 * math.prod(factors)
 
 
 def _addmm_flops(
@@ -643,7 +717,7 @@ def _addmm_flops(
         return None
     left, right = input_specs[1].shape, input_specs[2].shape
     if len(left) == 2 and len(right) == 2:
-        return tensor_runtime_multiply_add_ops(left[0], right[1], left[1])
+        return _multiply_add_flops(left[0], right[1], left[1])
     return _specs_numel(output_specs)
 
 
@@ -653,7 +727,7 @@ def _bmm_flops(input_specs: tuple[TensorValueSpec, ...]) -> int | None:
     left, right = input_specs[0].shape, input_specs[1].shape
     if len(left) != 3 or len(right) != 3:
         return None
-    return tensor_runtime_multiply_add_ops(left[0], left[1], right[2], left[2])
+    return _multiply_add_flops(left[0], left[1], right[2], left[2])
 
 
 def _convolution_flops(
@@ -666,7 +740,7 @@ def _convolution_flops(
     if len(weight) < 3:
         return None
     kernel_elements_per_output = math.prod(weight[1:])
-    return tensor_runtime_multiply_add_ops(
+    return _multiply_add_flops(
         _spec_numel(output_specs[0]),
         kernel_elements_per_output,
     )
@@ -690,7 +764,30 @@ def _fft_flops(
         rank=len(shape),
     )
     real_factor = 0.5 if name in {"aten._fft_r2c.default", "aten._fft_c2r.default"} else 1.0
-    return tensor_runtime_fft_ops(shape, dims=dims, real_factor=real_factor)
+    return _fft_formula_flops(shape, dims=dims, real_factor=real_factor)
+
+
+def _fft_formula_flops(
+    shape: tuple[int, ...],
+    *,
+    dims: Sequence[int],
+    real_factor: float = 1.0,
+) -> int:
+    tensor_runtime_shape_element_count(shape)
+    if isinstance(real_factor, bool):
+        raise CostMetrologyError("real_factor must be numeric")
+    if not math.isfinite(float(real_factor)) or real_factor < 0:
+        raise CostMetrologyError("real_factor must be finite and nonnegative")
+    total = 0.0
+    for dim in dims:
+        if type(dim) is not int:
+            raise CostMetrologyError("FFT dimensions must be integers")
+        extent = shape[dim % len(shape)]
+        if extent <= 1:
+            continue
+        transform_count = math.prod(shape) / extent
+        total += float(real_factor) * 5.0 * transform_count * extent * math.log2(extent)
+    return int(round(total))
 
 
 def _fft_dims(
@@ -860,6 +957,21 @@ def _record_bool(value: object, field: str) -> bool:
     if type(value) is not bool:
         raise CostMetrologyError(f"{field} must be a boolean")
     return value
+
+
+def _positive_item_count(value: int) -> int:
+    if type(value) is not int or value < 1:
+        raise CostMetrologyError("item_count must be a positive integer")
+    return value
+
+
+def _nonnegative_number(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise CostMetrologyError(f"{field} must be numeric")
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric < 0.0:
+        raise CostMetrologyError(f"{field} must be finite and nonnegative")
+    return numeric
 
 
 def _record_execution_mode(value: object) -> CostExecutionMode:

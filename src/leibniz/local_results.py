@@ -44,7 +44,6 @@ from leibniz.model_inspection import (
 )
 from leibniz.records import RecordExtractor
 from leibniz.state_space import StateSpaceError, state_space_region_from_record
-from leibniz.tensor_runtime import tensor_runtime_ops_bit_density, tensor_runtime_ops_per_item
 from leibniz.training_runs import TrainingRunRecord
 
 __all__ = [
@@ -1456,7 +1455,7 @@ def _integrated_reference_curve_points(
             "reference_curve.cost_density",
         )
         cumulative_cost += (log2_volume - previous_log2_volume) * (
-            tensor_runtime_ops_bit_density(cost_density)
+            CostMeasurement.abstract_flops_bit_density(cost_density)
         )
         integrated_points.append(
             {
@@ -1828,7 +1827,7 @@ def _cost_measurement_pair_from_record(
 
 
 def _cost_measurement_pair_ops_per_item(pair: tuple[CostMeasurement, int]) -> float:
-    return tensor_runtime_ops_per_item(pair[0].abstract_flops, pair[1])
+    return pair[0].abstract_flops_per_item(pair[1])
 
 
 def _summary_cost_measurement_ops_per_item(

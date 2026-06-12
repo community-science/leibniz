@@ -15,7 +15,6 @@ from leibniz.outcomes import AcceptedEvent, OutcomeSpace, RawScoringEvidence
 from leibniz.prediction_results import DirectFiniteProbabilityPrediction
 from leibniz.prediction_spaces import FiniteOutcomeSpace
 from leibniz.state_space import StateSpaceError, StateSpaceRegion, state_space_region_from_record
-from leibniz.tensor_runtime import tensor_runtime_ops_bit_density, tensor_runtime_ops_per_item
 
 __all__ = [
     "CompetencePoint",
@@ -433,7 +432,7 @@ def sampled_competence_metrology_cost_integral(
                 StateSpaceIntegralTerm(
                     lower=minimum,
                     upper=maximum,
-                    competence_density=tensor_runtime_ops_bit_density(
+                    competence_density=CostMeasurement.abstract_flops_bit_density(
                         _record_cost_measurement_ops_per_item(
                             point,
                             field_prefix=field_prefix,
@@ -470,7 +469,7 @@ def _record_cost_measurement_ops_per_item(
         field=f"{field_prefix}.inference_cost_sample_count",
         error_type=error_type,
     )
-    return tensor_runtime_ops_per_item(measurement.abstract_flops, sample_count)
+    return measurement.abstract_flops_per_item(sample_count)
 
 
 def _record_optional_nonnegative_number(
