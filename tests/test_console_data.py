@@ -119,6 +119,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     } == {
         "adaptive-pooling",
         "convolution",
+        "relu",
         "flatten",
         "dense",
     }

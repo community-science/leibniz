@@ -620,6 +620,8 @@ def build_architecture_modules(
                 for axis in shape[spatial_axis_start:]
             )
             shape = (*shape[:channel_axis_index], out_channels, *output_spatial_axes)
+        elif kind == "rectified-linear-activation":
+            modules.append(torch.nn.ReLU())
         elif kind == "rank-collapse":
             modules.append(torch.nn.Flatten())
             shape = (TensorShape.from_axes(shape).element_count,)

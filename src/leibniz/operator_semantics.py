@@ -406,6 +406,19 @@ _operator_semantics = (
         ),
     ),
     ModelOperatorSemantic(
+        kind="rectified-linear-activation",
+        display_name="Rectified linear activation",
+        tensor_relation="nonlinear",
+        state="fixed",
+        support="pointwise",
+        projection_law="pointwise-coordinate-map",
+        aggregation_law="thresholded-identity",
+        parameter_sharing="none",
+        shape_law="preserve-input-shape",
+        cost_law="input-elements",
+        syntax_aliases=("relu",),
+    ),
+    ModelOperatorSemantic(
         kind="rank-collapse",
         display_name="Rank collapse",
         tensor_relation="shape-transform",
@@ -449,6 +462,7 @@ _descriptor_axes = (
                 "affine": "Affine",
                 "aggregation": "Aggregation",
                 "identity": "Identity",
+                "nonlinear": "Nonlinear",
                 "shape-transform": "Shape transform",
             }
         ),

@@ -35,7 +35,7 @@ assertEqual(parsed.model_inspections.length, 4, 'model inspection count');
 assertEqual(parsed.benchmark_tasks.length, 2, 'benchmark task count');
 assertEqual(
   parsed.operator_vocabulary.operators.map((operator) => operator.kind).join(','),
-  'local-aggregation,local-affine,fixed-support-affine,rank-collapse,affine-readout',
+  'local-aggregation,local-affine,fixed-support-affine,rectified-linear-activation,rank-collapse,affine-readout',
   'operator vocabulary order',
 );
 assertEqual(
