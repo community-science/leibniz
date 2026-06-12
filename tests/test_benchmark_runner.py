@@ -593,6 +593,7 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
         sample_count=1,
         confidence_half_width=0.0,
         input_shape=(18, 8, 8),
+        inference_compute=0.0,
     )
 
     def fake_load_predictor(**_kwargs: object) -> object:
@@ -757,6 +758,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert inference_cost.operation_count > 0
     assert inference_cost.unmodeled_operations == ()
     assert len(inference_cost.operation_trace) == inference_cost.operation_count
+    assert inference_cost.roofline is not None
     assert (
         evaluation_bundle.model_checkpoint["manifest_digest"]
         == str(evaluation_bundle.model_manifest.digest)
@@ -1160,6 +1162,7 @@ def test_evaluation_frontier_requires_contiguous_confidence_above_chance() -> No
             sample_count=100,
             confidence_half_width=0.01,
             input_shape=(1, 16, 16),
+            inference_compute=0.0,
         ),
         rung_evidence(
             rung=SimpleNamespace(index=1),
@@ -1167,6 +1170,7 @@ def test_evaluation_frontier_requires_contiguous_confidence_above_chance() -> No
             sample_count=100,
             confidence_half_width=0.08,
             input_shape=(1, 16, 16),
+            inference_compute=0.0,
         ),
         rung_evidence(
             rung=SimpleNamespace(index=2),
@@ -1174,6 +1178,7 @@ def test_evaluation_frontier_requires_contiguous_confidence_above_chance() -> No
             sample_count=100,
             confidence_half_width=0.03,
             input_shape=(1, 16, 16),
+            inference_compute=0.0,
         ),
     )
 
@@ -1207,6 +1212,7 @@ def test_evaluation_integration_converges_after_confident_terminal_failures() ->
             sample_count=100,
             confidence_half_width=0.01,
             input_shape=(1, 16, 16),
+            inference_compute=0.0,
         ),
     )
 
@@ -1221,6 +1227,7 @@ def test_evaluation_integration_converges_after_confident_terminal_failures() ->
             sample_count=100,
             confidence_half_width=0.01,
             input_shape=(1, 16, 16),
+            inference_compute=0.0,
         )
         for index in range(4)
     )
@@ -1253,6 +1260,7 @@ def test_evaluation_integration_does_not_reset_after_failed_ladder_gap() -> None
             sample_count=100,
             confidence_half_width=0.01,
             input_shape=(1, 16, 16),
+            inference_compute=0.0,
         )
         for index, mean in enumerate((0.90, 0.80, 0.05, 0.04, 0.70))
     )

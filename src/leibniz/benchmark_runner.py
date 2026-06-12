@@ -375,6 +375,7 @@ class _CheckpointEvaluationRungEvidence:
     sample_count: int
     confidence_half_width: float
     input_shape: tuple[int, ...]
+    inference_compute: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,6 +425,7 @@ def _evaluation_sampled_competence_record(
             "sample_count": result.sample_count,
             "mean_accepted_mass": result.mean_accepted_mass,
             "input_shape": list(result.input_shape),
+            "inference_compute": result.inference_compute,
             **_rung_log2_volume_interval_record(result.rung),
         }
         if result.rung.batch.region is not None:
@@ -1191,6 +1193,11 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             volume_axis=None,
             input_shape=evaluation_results[evaluation_frontier_index].input_shape,
         )
+        final_sampled_competence["inference_compute"] = (
+            _checkpoint_evaluation_throughput_inference_compute(
+                checkpoint_evaluation_throughput
+            )
+        )
         sampled_competence = _evaluation_sampled_competence_record(
             benchmark_id=benchmark_id,
             evaluation_results=evaluation_results,
@@ -1330,6 +1337,23 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
 
 def _checkpoint_evaluation_capacity_limited(throughput: Mapping[str, object]) -> bool:
     return throughput.get("capacity_limited") is True
+
+
+def _checkpoint_evaluation_throughput_inference_compute(
+    throughput: Mapping[str, object],
+) -> float:
+    measurement = CostMeasurement.from_record(
+        throughput.get("inference_cost_measurement")
+    )
+    sample_count = _required_int(
+        throughput.get("inference_cost_sample_count"),
+        "checkpoint_evaluation.inference_cost_sample_count",
+    )
+    if sample_count < 1:
+        raise BenchmarkRunnerError(
+            "checkpoint_evaluation.inference_cost_sample_count must be positive"
+        )
+    return measurement.abstract_flops / sample_count
 
 
 def _evaluation_input_from_plan(
@@ -2266,7 +2290,13 @@ def _checkpoint_inference_cost_measurement(
         with no_grad_context(predictor.runtime):
             return predictor.module(input_fields)
 
-    return measure_program_cost(predictor.runtime, program, fields, strict=True)
+    return measure_program_cost(
+        predictor.runtime,
+        program,
+        fields,
+        strict=True,
+        roofline=runtime_roofline_record(predictor.runtime),
+    )
 
 
 def _evaluate_checkpoint_rung(
@@ -2281,6 +2311,7 @@ def _evaluate_checkpoint_rung(
 ) -> tuple[_CheckpointEvaluationRungEvidence, int]:
     estimator = _RunningMeanEstimator()
     max_inference_compute: int | None = None
+    max_cost_measurement: tuple[CostMeasurement, int] | None = None
     chance_mass = _chance_accepted_mass(outcome_ids)
     half_width_threshold = (
         _default_evaluation_convergence_half_width
@@ -2311,6 +2342,10 @@ def _evaluate_checkpoint_rung(
                 max_inference_compute,
                 chunk.max_inference_compute,
             )
+            max_cost_measurement = _max_cost_measurement(
+                max_cost_measurement,
+                _chunk_cost_measurement_pair(chunk),
+            )
     observed_sample_count = estimator.samples
     if observed_sample_count < 1:
         raise BenchmarkRunnerError("checkpoint evaluation rung produced no samples")
@@ -2318,6 +2353,8 @@ def _evaluate_checkpoint_rung(
         raise BenchmarkRunnerError(
             "checkpoint evaluation could not measure max_inference_compute"
         )
+    if max_cost_measurement is None:
+        raise BenchmarkRunnerError("checkpoint evaluation could not measure inference cost")
     return (
         _CheckpointEvaluationRungEvidence(
             rung=replace(rung, sample_count=observed_sample_count),
@@ -2325,6 +2362,7 @@ def _evaluate_checkpoint_rung(
             sample_count=observed_sample_count,
             confidence_half_width=_evaluation_confidence_half_width(estimator),
             input_shape=_batch_sample_input_shape(batch=rung.batch),
+            inference_compute=_measurement_inference_compute(max_cost_measurement),
         ),
         max_inference_compute,
     )
@@ -2480,10 +2518,7 @@ def _evaluate_checkpoint_rung_measurements(
         )
         max_cost_measurement = _max_cost_measurement(
             max_cost_measurement,
-            None
-            if chunk.inference_cost_measurement is None
-            or chunk.inference_cost_sample_count is None
-            else (chunk.inference_cost_measurement, chunk.inference_cost_sample_count),
+            _chunk_cost_measurement_pair(chunk),
         )
     if not samples:
         raise BenchmarkRunnerError("checkpoint evaluation final rung produced no samples")
@@ -2595,7 +2630,7 @@ def _checkpoint_evaluation_chunks(
                 outcome_ids=outcome_ids,
             )
         inference_cost_measurement: CostMeasurement | None = None
-        if purpose == "measurements":
+        if purpose in {"score", "measurements"}:
             with phase_timings.span(
                 f"checkpoint_evaluation_{purpose}_inference_cost_metrology",
                 samples=batch.sample_count,
@@ -2637,6 +2672,19 @@ def _max_cost_measurement(
     ):
         return right
     return left
+
+
+def _chunk_cost_measurement_pair(
+    chunk: _CheckpointEvaluationChunk,
+) -> tuple[CostMeasurement, int] | None:
+    if chunk.inference_cost_measurement is None or chunk.inference_cost_sample_count is None:
+        return None
+    return (chunk.inference_cost_measurement, chunk.inference_cost_sample_count)
+
+
+def _measurement_inference_compute(measurement: tuple[CostMeasurement, int]) -> float:
+    cost, sample_count = measurement
+    return cost.abstract_flops / sample_count
 
 
 def _batch_max_inference_compute(

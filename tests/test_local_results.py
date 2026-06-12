@@ -426,11 +426,17 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     assert math.isclose(cast(float, cost_integral["value"]), cast(float, cost_summary["cost"]))
     cost_terms = cast(list[dict[str, object]], cost_integral["terms"])
     assert cost_terms
+    points = cast(list[dict[str, object]], leaderboard[0]["points"])
+    assert all(isinstance(point["inference_compute"], int | float) for point in points)
+    assert len(points) == len(cost_terms)
     assert math.isclose(
         cast(float, cost_integral["value"]),
-        cast(float, cost_summary["inference_compute"])
-        * 32.0
-        * math.fsum(cast(float, term["width_in_bits"]) for term in cost_terms),
+        math.fsum(
+            cast(float, point["inference_compute"])
+            * 32.0
+            * cast(float, term["width_in_bits"])
+            for point, term in zip(points, cost_terms, strict=True)
+        ),
     )
     frontiers = cast(dict[str, object], result["frontiers"])
     assert len(cast(list[object], frontiers["cost"])) == 1

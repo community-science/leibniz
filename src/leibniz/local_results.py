@@ -1534,15 +1534,20 @@ def _model_result_records(
             else "provisional"
         )
         inference_compute = _model_measured_inference_compute(ordered_runs)
-        cost_integral = (
-            None
-            if inference_compute is None
-            else _sampled_competence_measured_cost_integral(
+        if inference_compute is None:
+            cost_integral = None
+        elif _points_have_measured_inference_compute(points):
+            cost_integral = _sampled_competence_measured_cost_integral(
                 points=points,
-                inference_compute=inference_compute,
                 field_prefix="compute_cost_point",
             )
-        )
+        else:
+            cost_integral = sampled_competence_compute_cost_integral(
+                points=points,
+                architecture=_run_architecture_manifest(best_run),
+                error_type=LocalResultImportError,
+                field_prefix="compute_cost_point",
+            )
         record: dict[str, object] = {
             "model_key": model_key,
             "result_status": result_status,
@@ -1864,7 +1869,6 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
             if run.source_kind == "local-run":
                 cost_summary["cost"] = _sampled_competence_measured_cost_integral(
                     points=_run_competence_points(run),
-                    inference_compute=inference_compute,
                     field_prefix="compute_cost_point",
                 ).value
             else:
@@ -1885,7 +1889,6 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
 def _sampled_competence_measured_cost_integral(
     *,
     points: Sequence[Mapping[str, object]],
-    inference_compute: float,
     field_prefix: str,
 ) -> StateSpaceIntegral:
     ordered = sorted(
@@ -1918,6 +1921,10 @@ def _sampled_competence_measured_cost_integral(
             minimum = cursor
             maximum = log2_volume
         if maximum > minimum:
+            inference_compute = _as_nonnegative_number(
+                point.get("inference_compute"),
+                f"{field_prefix}.inference_compute",
+            )
             terms.append(
                 StateSpaceIntegralTerm(
                     lower=minimum,
@@ -1929,6 +1936,12 @@ def _sampled_competence_measured_cost_integral(
             )
         cursor = max(cursor, maximum)
     return StateSpaceIntegral(terms=tuple(terms))
+
+
+def _points_have_measured_inference_compute(
+    points: Sequence[Mapping[str, object]],
+) -> bool:
+    return bool(points) and all("inference_compute" in point for point in points)
 
 
 def _optional_point_input_shape(
@@ -2191,6 +2204,7 @@ def _competence_points(
                 float,
                 int,
                 tuple[int, ...] | None,
+                float | None,
                 Mapping[str, object] | None,
             ]
         ],
@@ -2209,20 +2223,24 @@ def _competence_points(
             score = _as_nonnegative_number(point.get("score"), "point.score")
             sample_count = _as_positive_int(point.get("sample_count"), "point.sample_count")
             input_shape = _optional_point_input_shape(point, "point.input_shape")
+            inference_compute = _optional_nonnegative_number(
+                point.get("inference_compute"),
+                "point.inference_compute",
+            )
             region = _extract.optional_mapping(point.get("region"), "point.region")
             by_interval.setdefault((log2_volume, minimum, maximum), []).append(
-                (run, score, sample_count, input_shape, region)
+                (run, score, sample_count, input_shape, inference_compute, region)
             )
     points: list[dict[str, object]] = []
     for (log2_volume, minimum, maximum), evidence in by_interval.items():
         total_samples = sum(
             sample_count
-            for _run, _score, sample_count, _input_shape, _region in evidence
+            for _run, _score, sample_count, _input_shape, _inference_compute, _region in evidence
         )
         score = (
             sum(
                 score * sample_count
-                for _run, score, sample_count, _input_shape, _region in evidence
+                for _run, score, sample_count, _input_shape, _inference_compute, _region in evidence
             )
             / total_samples
         )
@@ -2235,7 +2253,14 @@ def _competence_points(
                 for run in sorted(
                     {
                         run.run_id: run
-                        for run, _score, _sample_count, _input_shape, _region in evidence
+                        for (
+                            run,
+                            _score,
+                            _sample_count,
+                            _input_shape,
+                            _inference_compute,
+                            _region,
+                        ) in evidence
                     }.values(),
                     key=_run_sort_key,
                 )
@@ -2243,7 +2268,7 @@ def _competence_points(
         }
         input_shapes = {
             input_shape
-            for _run, _score, _sample_count, input_shape, _region in evidence
+            for _run, _score, _sample_count, input_shape, _inference_compute, _region in evidence
             if input_shape is not None
         }
         if len(input_shapes) > 1:
@@ -2252,9 +2277,23 @@ def _competence_points(
             )
         if input_shapes:
             point["input_shape"] = list(next(iter(input_shapes)))
+        inference_values = [
+            inference_compute
+            for (
+                _run,
+                _score,
+                _sample_count,
+                _input_shape,
+                inference_compute,
+                _region,
+            ) in evidence
+            if inference_compute is not None
+        ]
+        if inference_values:
+            point["inference_compute"] = max(inference_values)
         regions = {
             canonical_document_bytes(region): region
-            for _run, _score, _sample_count, _input_shape, region in evidence
+            for _run, _score, _sample_count, _input_shape, _inference_compute, region in evidence
             if region is not None
         }
         if len(regions) == 1:
@@ -2312,6 +2351,12 @@ def _competence_point_from_sampled_record(point: Mapping[str, object]) -> dict[s
         record["log2_volume_maximum"] = competence.log2_volume_maximum
     if competence.region is not None:
         record["region"] = competence.region.to_record()
+    inference_compute = _optional_nonnegative_number(
+        point.get("inference_compute"),
+        "sampled_competence.point.inference_compute",
+    )
+    if inference_compute is not None:
+        record["inference_compute"] = inference_compute
     return record
 
 
