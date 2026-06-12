@@ -472,7 +472,7 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     inference_cost = CostMeasurement.from_record(cost_summary["inference_cost_measurement"])
     assert inference_cost.abstract_flops > 0
     assert isinstance(cost_summary["inference_cost_sample_count"], int)
-    assert "analytic_inference_compute" not in cost_summary
+    assert not any(key.startswith("analytic_") for key in cost_summary)
     assert isinstance(cost_summary["cost"], int | float)
     assert cost_summary["cost"] >= 0
     cost_integral = cast(dict[str, object], leaderboard[0]["cost_integral"])
@@ -501,8 +501,8 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     reference_curves = cast(list[dict[str, object]], result["reference_curves"])
     assert len(reference_curves) == 1
     oracle_curve = reference_curves[0]
-    assert oracle_curve["kind"] == "oracle-inference-compute-reference-v1"
-    assert oracle_curve["key"] == "oracle_inference_compute"
+    assert oracle_curve["kind"] == "oracle-cost-measurement-reference-v1"
+    assert oracle_curve["key"] == "oracle_cost_measurement"
     assert oracle_curve["x_axis"] == "cost"
     assert oracle_curve["y_axis"] == "score"
     oracle_points = cast(list[dict[str, object]], oracle_curve["points"])

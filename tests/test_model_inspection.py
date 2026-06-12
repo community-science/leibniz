@@ -61,7 +61,7 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
     assert not inspection.cost_summary.inference_cost_measurement.operations_executed
     assert inspection.cost_summary.inference_cost_sample_count == 1
     assert inspection.cost_summary.unknown_parameter_components == ()
-    assert inspection.cost_summary.unknown_compute_components == ()
+    assert inspection.cost_summary.unknown_cost_components == ()
     assert inspection.architecture_summary.component_count == 3
     assert inspection.architecture_summary.edge_count == 2
     assert inspection.architecture_summary.input_node_ids == ("component-0",)
@@ -72,7 +72,7 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
         "dense",
     )
     assert inspection.architecture_summary.unsupported_parameter_components == ()
-    assert inspection.architecture_summary.unsupported_compute_components == ()
+    assert inspection.architecture_summary.unsupported_cost_components == ()
     assert inspection.architecture_trace.input_shape == (1, 24, 24)
     assert inspection.architecture_trace.output_shape == (10,)
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [

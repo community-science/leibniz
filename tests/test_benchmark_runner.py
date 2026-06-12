@@ -378,7 +378,6 @@ def test_capacity_limited_training_run_is_budget_exhausted() -> None:
             ),
         ),
         stop_reason="capacity-limited",
-        training_compute=100.0,
     )
 
     assert training_run.status == "budget-exhausted"
@@ -1358,7 +1357,6 @@ def test_benchmark_runner_reports_only_final_evaluation_rung(
                     ),
                 ),
             stop_reason="max-steps",
-            training_compute=0.0,
         )
         runtime = resolve_tensor_runtime("cpu")
         executable = benchmark_runner.ExecutableModelOperator(cast(Any, kwargs["architecture"]))
@@ -1709,7 +1707,6 @@ def test_training_stage_records_current_validation_loss_without_global_best(
             _digits_architecture.read_bytes()
         ).manifest,
         training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
-        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
         validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         phase_timings=benchmark_runner.TimingCollector(),
         start_step=100,
@@ -1751,7 +1748,6 @@ def test_training_run_artifact_record_omits_historical_score_estimates() -> None
             ),
         ),
         stop_reason="validation-plateau",
-        training_compute=10.0,
     )
 
     record = cast(Any, benchmark_runner)._training_run_artifact_record(training_run)
@@ -2074,7 +2070,6 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
             _digits_architecture.read_bytes()
         ).manifest,
         training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
-        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
         validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         phase_timings=benchmark_runner.TimingCollector(),
         frontier_points=lambda: (prior_point,),
@@ -2306,7 +2301,6 @@ def test_training_steps_materialize_replay_masses_only_at_gate_checks(
             _digits_architecture.read_bytes()
         ).manifest,
         training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
-        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
         validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         phase_timings=benchmark_runner.TimingCollector(),
     )
@@ -2611,7 +2605,6 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
             _digits_architecture.read_bytes()
         ).manifest,
         training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
-        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
         validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         phase_timings=benchmark_runner.TimingCollector(),
         on_plateau=fail_if_advancing,
@@ -2721,7 +2714,6 @@ def test_training_plateau_above_rung_competence_threshold_advances_frontier(
             _digits_architecture.read_bytes()
         ).manifest,
         training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
-        training_compute_counter=cast(Any, benchmark_runner)._ComputeCounter(),
         validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
         phase_timings=benchmark_runner.TimingCollector(),
         on_plateau=advance_frontier,
@@ -3050,8 +3042,8 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     validation_history = cast(list[dict[str, object]], diagnostics["validation_history"])
     assert validation_history
     cost_summary = cast(dict[str, object], history[0]["cost_summary"])
-    assert cast(float, cost_summary["training_compute"]) > 0
-    assert "training_compute_per_sample" not in cost_summary
+    assert "inference_cost_measurement" in cost_summary
+    assert not any(key.startswith("training_") and key.endswith("_compute") for key in cost_summary)
     console_view_model = cast(dict[str, object], history[0]["console_view_model"])
     detail_sections = cast(list[dict[str, object]], console_view_model["detail_sections"])
     assert [section["title"] for section in detail_sections] == [

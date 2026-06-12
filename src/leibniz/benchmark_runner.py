@@ -194,7 +194,6 @@ class _EvaluationInput:
     checkpoint: ModelCheckpointArtifact
     run_slug: str
     benchmark_id: ProtocolIdentifier
-    training_compute: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,16 +544,6 @@ def _evaluation_next_sample_count(
     return max(1, target - estimator.samples)
 
 
-@dataclass(slots=True)
-class _ComputeCounter:
-    compute: float = 0.0
-
-    def add(self, *, compute_per_sample: float | None, samples: int) -> None:
-        if compute_per_sample is None:
-            return
-        self.compute += float(compute_per_sample) * float(samples)
-
-
 @dataclass(frozen=True, slots=True)
 class _PhaseWorkEstimate:
     compute_per_sample: float
@@ -883,15 +872,12 @@ def run_benchmark(
 
     def checkpoint_record(
         checkpoint: ModelCheckpointArtifact,
-        *,
-        training_compute: float | None,
     ) -> dict[str, object]:
         return _model_checkpoint_artifact_record(
             checkpoint=checkpoint,
             architecture=architecture,
             benchmark_id=summary.benchmark_id,
             run_slug=summary.run_slug,
-            training_compute=training_compute,
             results_root=plan.results_root,
         )
 
@@ -936,10 +922,7 @@ def run_benchmark(
             )
         with progress_timings.span("training_progress.checkpoint_records"):
             progress_full_checkpoint_records = tuple(
-                checkpoint_record(
-                    checkpoint,
-                    training_compute=training_run.training_compute,
-                )
+                checkpoint_record(checkpoint)
                 for checkpoint in checkpoint_artifacts
             )
             progress_checkpoint_records = tuple(
@@ -949,10 +932,7 @@ def run_benchmark(
             selected_checkpoint_record = (
                 None
                 if selected_checkpoint is None
-                else checkpoint_record(
-                    selected_checkpoint,
-                    training_compute=training_run.training_compute,
-                )
+                else checkpoint_record(selected_checkpoint)
             )
         with progress_timings.span("training_progress.record"):
             progress_record = _training_progress_record(
@@ -1019,10 +999,7 @@ def run_benchmark(
         architecture_manifest=architecture,
     )
     full_checkpoint_records = tuple(
-        checkpoint_record(
-            checkpoint,
-            training_compute=training_result.training_run.training_compute,
-        )
+        checkpoint_record(checkpoint)
         for checkpoint in checkpoint_artifacts
     )
     for checkpoint, record in zip(checkpoint_artifacts, full_checkpoint_records, strict=True):
@@ -1034,10 +1011,7 @@ def run_benchmark(
         _compact_model_checkpoint_summary_record(record)
         for record in full_checkpoint_records
     )
-    selected_checkpoint_record = checkpoint_record(
-        selected_checkpoint,
-        training_compute=training_result.training_run.training_compute,
-    )
+    selected_checkpoint_record = checkpoint_record(selected_checkpoint)
     completed_training_estimate = _training_estimate_record(
         architecture=architecture,
         summary=summary,
@@ -1299,14 +1273,11 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         "tensor_device": evaluation_tensor_device,
         "requested_tensor_device": plan.tensor_device,
     }
-    if evaluation_input.training_compute is not None:
-        evaluation_protocol["training_compute"] = evaluation_input.training_compute
     checkpoint_record = _model_checkpoint_artifact_record(
         checkpoint=selected_checkpoint,
         architecture=architecture,
         benchmark_id=benchmark_id,
         run_slug=run_slug,
-        training_compute=evaluation_input.training_compute,
         results_root=plan.results_root,
     )
     with workflow_timings.span("evaluation_workflow.bundle_construction"):
@@ -1395,12 +1366,6 @@ def _evaluation_input_from_plan(
             "checkpoint_artifact.benchmark_id does not match benchmark root"
         )
     run_slug = _required_string(checkpoint_record.get("run_slug"), "checkpoint_artifact.run_slug")
-    training_compute = _extract.optional_float(
-        checkpoint_record.get("training_compute"),
-        "checkpoint_artifact.training_compute",
-    )
-    if training_compute is not None and training_compute < 0:
-        raise BenchmarkRunnerError("checkpoint_artifact.training_compute must be nonnegative")
     return _EvaluationInput(
         architecture=architecture,
         checkpoint=load_model_checkpoint_artifact(
@@ -1409,7 +1374,6 @@ def _evaluation_input_from_plan(
         ),
         run_slug=run_slug,
         benchmark_id=checkpoint_benchmark_id,
-        training_compute=training_compute,
     )
 
 
@@ -1830,7 +1794,6 @@ def _train_and_predict_on_device(
         patience=convergence_patience,
     )
     training_counter = _ThroughputCounter()
-    training_compute_counter = _ComputeCounter()
     validation_counter = _ThroughputCounter()
     evaluation_counter = _ThroughputCounter()
     phase_timings = _runtime_phase_timings(runtime)
@@ -2024,7 +1987,6 @@ def _train_and_predict_on_device(
         rung_competence_threshold=rung_competence_threshold,
         architecture=architecture,
         training_counter=training_counter,
-        training_compute_counter=training_compute_counter,
         validation_counter=validation_counter,
         phase_timings=phase_timings,
         on_plateau=advance_frontier,
@@ -2049,7 +2011,6 @@ def _train_and_predict_on_device(
                         else None
                     ),
                     validation_history=history,
-                    training_compute=training_compute_counter.compute,
                 ),
                 _throughput_record(
                     runtime_device=runtime.device_kind,
@@ -2116,7 +2077,6 @@ def _train_and_predict_on_device(
         ),
         validation_history=tuple(validation_history),
         stop_reason=final_training_stop_reason,
-        training_compute=training_compute_counter.compute,
     )
     return _TrainingResult(
         evaluation_results=(),
@@ -2954,7 +2914,6 @@ def _model_checkpoint_artifact_record(
     architecture: ArchitectureManifest,
     benchmark_id: ProtocolIdentifier,
     run_slug: str,
-    training_compute: float | None,
     results_root: Path | None = None,
 ) -> dict[str, object]:
     record = checkpoint.to_record()
@@ -2972,8 +2931,6 @@ def _model_checkpoint_artifact_record(
     record["run_slug"] = run_slug
     record["architecture_manifest"] = architecture.to_record()
     record["model_manifest"] = checkpoint.manifest.to_record()
-    if training_compute is not None:
-        record["training_compute"] = training_compute
     if checkpoint.score_estimate is not None:
         record["score"] = _checkpoint_score_estimate_selection_score(
             checkpoint.score_estimate
@@ -2996,7 +2953,6 @@ def _compact_model_checkpoint_summary_record(
         "validation_loss",
         "benchmark_id",
         "run_slug",
-        "training_compute",
     )
     compact = {key: record[key] for key in summary_keys if key in record}
     score = record.get("score")
@@ -3108,7 +3064,6 @@ def _train_until_convergence(
     rung_competence_threshold: float,
     architecture: ArchitectureManifest,
     training_counter: _ThroughputCounter,
-    training_compute_counter: _ComputeCounter,
     validation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
     training_batch_target: int = _default_training_batch_target,
@@ -3294,10 +3249,6 @@ def _train_until_convergence(
                 with CostMeter(runtime, strict=False) as training_cost_meter:
                     optimizer_step(runtime, optimizer, loss_closure)
                 training_cost_measurement = training_cost_meter.measurement()
-            batch_training_ops_per_sample = tensor_runtime_ops_per_item(
-                training_cost_measurement.abstract_flops,
-                actual_batch_size,
-            )
             latest_training_cost = (training_cost_measurement, actual_batch_size)
             if training_batch.sample_set is not None:
                 if first_logits is None:
@@ -3332,10 +3283,6 @@ def _train_until_convergence(
         phase_timings.add(
             "training_step_total",
             seconds=training_elapsed,
-            samples=actual_batch_size,
-        )
-        training_compute_counter.add(
-            compute_per_sample=batch_training_ops_per_sample,
             samples=actual_batch_size,
         )
         hit_step_cap = max_steps is not None and step == max_steps
@@ -3930,7 +3877,6 @@ def _training_run_record(
     runtime_memory_budget_fraction: float | None = None,
     validation_history: tuple[TrainingHistoryPoint, ...],
     stop_reason: str,
-    training_compute: float | None,
 ) -> TrainingRunRecord:
     last_step = validation_history[-1].step
     if stop_reason == "no-training-steps":
@@ -3945,7 +3891,6 @@ def _training_run_record(
         status=status,
         stop_reason=stop_reason,
         steps_run=last_step,
-        training_compute=training_compute,
         validation_checks=len(validation_history),
         protocol=TrainingProtocol(
             kind="fixed-step-local-batch",
@@ -3984,13 +3929,11 @@ def _running_training_run_record(
     tensor_device: str,
     runtime_memory_budget_fraction: float | None = None,
     validation_history: tuple[TrainingHistoryPoint, ...],
-    training_compute: float | None,
 ) -> TrainingRunRecord:
     return TrainingRunRecord(
         status="running",
         stop_reason="validation-checkpoint",
         steps_run=validation_history[-1].step,
-        training_compute=training_compute,
         validation_checks=len(validation_history),
         protocol=TrainingProtocol(
             kind="fixed-step-local-batch",
@@ -4200,8 +4143,6 @@ def _training_cost_summary(
     if inference_cost is not None:
         cost_summary["inference_cost_measurement"] = inference_cost[0].to_record()
         cost_summary["inference_cost_sample_count"] = inference_cost[1]
-    if training_run.training_compute is not None:
-        cost_summary["training_compute"] = training_run.training_compute
     training_cost = _training_history_latest_training_cost_measurement(
         training_run.validation_history
     )
@@ -4571,13 +4512,13 @@ def _training_work_estimates(
     inference_bytes = input_bytes + output_bytes + storage_bytes_per_sample
     inference_cost_source = _cost_measurement_compute_source(inference_measurement)
     formation_bytes = 8.0 * input_bytes
-    training_compute = float(training_ops_per_sample)
+    training_cost_per_sample = float(training_ops_per_sample)
     training_bytes = formation_bytes + 3.0 * inference_bytes + 4.0 * storage_bytes_per_sample
     validation_bytes = formation_bytes + inference_bytes
     evaluation_bytes = input_bytes + inference_bytes
     return _TrainingWorkEstimates(
         training=_PhaseWorkEstimate(
-            compute_per_sample=training_compute,
+            compute_per_sample=training_cost_per_sample,
             bytes_per_sample=training_bytes,
             compute_source="measured-training-metrology",
         ),

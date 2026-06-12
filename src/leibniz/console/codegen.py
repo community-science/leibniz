@@ -156,7 +156,7 @@ export type ReferenceCurvePointRecord = {
 };
 
 export type ReferenceCurveRecord = {
-  kind: 'oracle-inference-compute-reference-v1';
+  kind: 'oracle-cost-measurement-reference-v1';
   key: string;
   label: string;
   x_axis: string;
@@ -225,7 +225,6 @@ export type CostSummaryRecord = {
   inference_cost_sample_count?: number;
   training_cost_measurement?: Record<string, unknown>;
   training_cost_sample_count?: number;
-  training_compute?: number;
   unknown_parameter_components?: number[];
 };
 
@@ -298,7 +297,6 @@ export type TrainingDiagnosticsRecord = {
   validation_loss_reference?: number;
   final_validation_step: number;
   final_validation_check: number;
-  training_compute?: number;
   validation_history_sample_count?: number;
   validation_history_total_count?: number;
   protocol: TrainingProtocolRecord;
@@ -388,11 +386,11 @@ function parseBenchmarkResult(value: unknown, path: string): BenchmarkResultReco
 function parseReferenceCurve(value: unknown, path: string): ReferenceCurveRecord {
   const record = requireRecord(value, path, transportError);
   requireStrings(record, path, ['kind', 'key', 'label', 'x_axis', 'y_axis']);
-  if (record.kind !== 'oracle-inference-compute-reference-v1') {
+  if (record.kind !== 'oracle-cost-measurement-reference-v1') {
     throw transportError(`${path}.kind is invalid`);
   }
   return {
-    kind: requireString(record.kind, `${path}.kind`, transportError) as 'oracle-inference-compute-reference-v1',
+    kind: requireString(record.kind, `${path}.kind`, transportError) as 'oracle-cost-measurement-reference-v1',
     key: requireString(record.key, `${path}.key`, transportError),
     label: requireString(record.label, `${path}.label`, transportError),
     x_axis: requireString(record.x_axis, `${path}.x_axis`, transportError),
@@ -592,7 +590,6 @@ function parseTrainingDiagnostics(value: unknown, path: string): TrainingDiagnos
     'final_validation_check',
   ]);
   return withFields(record, {
-    training_compute: optionalNumber(record.training_compute, `${path}.training_compute`, transportError),
     validation_loss_reference: optionalNumber(record.validation_loss_reference, `${path}.validation_loss_reference`, transportError),
     validation_history_sample_count: optionalNumber(record.validation_history_sample_count, `${path}.validation_history_sample_count`, transportError),
     validation_history_total_count: optionalNumber(record.validation_history_total_count, `${path}.validation_history_total_count`, transportError),
@@ -628,7 +625,6 @@ function parseCostSummary(value: unknown, path: string): CostSummaryRecord {
         ? undefined
         : requireRecord(record.training_cost_measurement, `${path}.training_cost_measurement`, transportError),
     training_cost_sample_count: optionalNumber(record.training_cost_sample_count, `${path}.training_cost_sample_count`, transportError),
-    training_compute: optionalNumber(record.training_compute, `${path}.training_compute`, transportError),
     unknown_parameter_components:
       record.unknown_parameter_components === undefined
         ? undefined

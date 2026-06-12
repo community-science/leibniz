@@ -797,12 +797,6 @@ def _evaluation_summary_cost_summary(
     inference_cost, inference_cost_sample_count = _evaluation_summary_inference_cost(summary)
     cost_summary["inference_cost_measurement"] = inference_cost.to_record()
     cost_summary["inference_cost_sample_count"] = inference_cost_sample_count
-    training_compute = summary.evaluation_protocol.get("training_compute")
-    if training_compute is not None:
-        cost_summary["training_compute"] = _as_nonnegative_number(
-            training_compute,
-            "evaluation_protocol.training_compute",
-        )
     return cost_summary
 
 
@@ -941,8 +935,6 @@ def _training_diagnostics_record(run: _BenchmarkRunRecord) -> Mapping[str, objec
     )
     if validation_loss_reference is not None:
         record["validation_loss_reference"] = validation_loss_reference
-    if training_run.training_compute is not None:
-        record["training_compute"] = training_run.training_compute
     throughput = run.training_summary.get("throughput")
     if isinstance(throughput, Mapping):
         record["throughput"] = dict(cast(Mapping[str, object], throughput))
@@ -1373,13 +1365,13 @@ def _benchmark_reference_curve_records(
     *,
     generator: Any,
 ) -> list[dict[str, object]]:
-    points = _generator_oracle_inference_reference_points(generator)
+    points = _generator_oracle_cost_reference_points(generator)
     if not points:
         return []
     return [
         {
-            "kind": "oracle-inference-compute-reference-v1",
-            "key": "oracle_inference_compute",
+            "kind": "oracle-cost-measurement-reference-v1",
+            "key": "oracle_cost_measurement",
             "label": "Oracle Reference",
             "x_axis": _benchmark_cost_axis_key,
             "y_axis": "score",
@@ -1388,45 +1380,52 @@ def _benchmark_reference_curve_records(
     ]
 
 
-def _generator_oracle_inference_reference_points(
+def _generator_oracle_cost_reference_points(
     generator: Any,
 ) -> list[dict[str, object]]:
-    if not hasattr(generator, "oracle_inference_reference_points"):
+    if not hasattr(generator, "oracle_cost_reference_points"):
         return []
-    raw_points = generator.oracle_inference_reference_points(
+    raw_points = generator.oracle_cost_reference_points(
         maximum_cost=_reference_curve_default_maximum_cost
     )
     reference_points: list[dict[str, object]] = []
     for index, raw_point in enumerate(
-        _as_sequence(raw_points, "oracle_inference_reference_points")
+            _as_sequence(raw_points, "oracle_cost_reference_points")
     ):
-        point = _extract.mapping(raw_point, f"oracle_inference_reference_points.{index}")
+        point = _extract.mapping(raw_point, f"oracle_cost_reference_points.{index}")
         log2_volume = _as_nonnegative_number(
             point.get("log2_volume"),
-            f"oracle_inference_reference_points.{index}.log2_volume",
+            f"oracle_cost_reference_points.{index}.log2_volume",
         )
         score = _as_nonnegative_number(
             point.get("score"),
-            f"oracle_inference_reference_points.{index}.score",
+            f"oracle_cost_reference_points.{index}.score",
         )
-        cost = _as_nonnegative_number(
-            point.get("cost"),
-            f"oracle_inference_reference_points.{index}.cost",
-        )
+        try:
+            cost_measurement = CostMeasurement.from_record(point.get("cost_measurement"))
+        except ValueError as error:
+            raise LocalResultImportError(
+                f"oracle_cost_reference_points.{index}.cost_measurement: {error}"
+            ) from error
+        cost = float(cost_measurement.abstract_flops)
         if cost <= 0:
             raise LocalResultImportError(
-                f"oracle_inference_reference_points.{index}.cost must be positive"
+                f"oracle_cost_reference_points.{index}.cost_measurement."
+                "abstract_flops must be positive"
             )
         metadata = _extract.mapping(
             point.get("metadata"),
-            f"oracle_inference_reference_points.{index}.metadata",
+            f"oracle_cost_reference_points.{index}.metadata",
         )
         reference_points.append(
             {
                 "log2_volume": log2_volume,
                 "score": score,
                 "cost_density": cost,
-                "metadata": dict(metadata),
+                "metadata": {
+                    **dict(metadata),
+                    "cost_measurement": cost_measurement.to_record(),
+                },
             }
         )
     return _integrated_reference_curve_points(reference_points)
@@ -1744,7 +1743,6 @@ def _compact_selected_checkpoint_record(
         "validation_check",
         "validation_loss",
         "score",
-        "training_compute",
     )
     return {key: checkpoint[key] for key in keys if key in checkpoint}
 
@@ -1764,12 +1762,6 @@ def _model_cost_summary(
         cost_summary["inference_cost_sample_count"] = inference_cost[1]
         if cost is not None:
             cost_summary["cost"] = cost
-    training_values = tuple(_run_training_compute_value(run) for run in runs)
-    if any(value is None for value in training_values):
-        raise LocalResultImportError(
-            f"model {best_run.model_key} is missing reconstructible training compute"
-        )
-    cost_summary["training_compute"] = sum(cast(float, value) for value in training_values)
     return cost_summary
 
 
@@ -1803,13 +1795,6 @@ def _throughput_inference_cost(
         sample_count_field="inference_cost_sample_count",
         required=False,
     )
-
-
-def _run_training_compute_value(run: _BenchmarkRunRecord) -> float | None:
-    training_compute = _run_training_compute(run)
-    if training_compute is not None:
-        return training_compute
-    return _optional_cost_value(run.cost_summary, "training_compute")
 
 
 def _cost_measurement_pair_from_record(
@@ -1900,9 +1885,6 @@ def _run_cost_summary(run: _BenchmarkRunRecord) -> dict[str, object]:
     else:
         cost_summary.pop("inference_cost_measurement", None)
         cost_summary.pop("inference_cost_sample_count", None)
-    training_compute = _run_training_compute(run)
-    if training_compute is not None:
-        cost_summary["training_compute"] = training_compute
     return cost_summary
 
 
@@ -1942,15 +1924,6 @@ def _optional_point_input_shape(
             raise LocalResultImportError(f"{field}: expected positive integer shape")
         shape.append(axis)
     return tuple(shape)
-
-
-def _run_training_compute(run: _BenchmarkRunRecord) -> float | None:
-    if run.training_summary is None:
-        return None
-    training_run = TrainingRunRecord.from_record(
-        _extract.mapping(run.training_summary.get("training_run"), "training_run")
-    )
-    return training_run.training_compute
 
 
 def _model_console_view_model(
@@ -2050,10 +2023,6 @@ def _model_console_view_model(
                             sample_count_field="inference_cost_sample_count",
                         )
                     ),
-                ),
-                (
-                    "Training Compute",
-                    _console_number_value(cost_summary.get("training_compute")),
                 ),
             ),
         ),
@@ -3048,7 +3017,7 @@ def _validate_reference_curve(record: Mapping[str, object], field: str) -> None:
         field,
         ("kind", "key", "label", "x_axis", "y_axis"),
     )
-    if record.get("kind") != "oracle-inference-compute-reference-v1":
+    if record.get("kind") != "oracle-cost-measurement-reference-v1":
         raise LocalResultImportError(f"{field}.kind is invalid")
     points = _as_sequence(record.get("points"), f"{field}.points")
     for index, point in enumerate(points):
@@ -3297,11 +3266,6 @@ def _validate_training_diagnostics(record: Mapping[str, object], prefix: str) ->
     )
     for field in numeric_fields:
         _as_nonnegative_number(record.get(field), _field_path(prefix, field))
-    if "training_compute" in record:
-        _as_nonnegative_number(
-            record.get("training_compute"),
-            _field_path(prefix, "training_compute"),
-        )
     if "validation_loss_reference" in record:
         _as_nonnegative_number(
             record.get("validation_loss_reference"),

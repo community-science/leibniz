@@ -16,6 +16,7 @@ from benchmark_typing import (
     sample_width,
 )
 
+from leibniz.cost_metrology import CostMeasurement
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.materialization import AxisAssignment, MaterializationPlan
 from leibniz.observation_formation import FieldObservation
@@ -527,14 +528,11 @@ def test_digits_generator_materializes_target_volume_class_band() -> None:
     assert metadata["construction"] == (
         "digit-setups-over-shell-ordered-transform-lattice"
     )
-    oracle_reference = cast(
-        dict[str, object],
-        metadata["oracle_inference_compute"],
-    )
-    assert oracle_reference["kind"] == "oracle-inference-compute-reference-v1"
-    assert oracle_reference["unit"] == "abstract-ops"
-    assert oracle_reference["value"] == 36 * 36
-    assert oracle_reference["components"] == {
+    oracle_reference = CostMeasurement.from_record(metadata["oracle_cost_measurement"])
+    assert oracle_reference.abstract_flops == 36 * 36
+    assert oracle_reference.execution_mode == "dry-run"
+    assert not oracle_reference.operations_executed
+    assert metadata["oracle_cost_components"] == {
         "height": 36,
         "width": 36,
         "pixel_count": 36 * 36,
@@ -570,15 +568,18 @@ def test_digits_integer_shells_decode_unique_latent_addresses() -> None:
             coordinates.add(coordinate)
 
 
-def test_digits_oracle_inference_reference_spans_requested_cost() -> None:
+def test_digits_oracle_cost_reference_spans_requested_cost() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
 
-    points = cast(Any, generator).oracle_inference_reference_points(
+    points = cast(Any, generator).oracle_cost_reference_points(
         maximum_cost=10_000_000_000
     )
 
     assert len(points) > 10
-    costs = [cast(int | float, point["cost"]) for point in points]
+    costs = [
+        CostMeasurement.from_record(point["cost_measurement"]).abstract_flops
+        for point in points
+    ]
     scores = [cast(int | float, point["score"]) for point in points]
     assert costs == sorted(costs)
     assert scores == sorted(scores)

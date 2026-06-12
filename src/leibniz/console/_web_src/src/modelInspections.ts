@@ -78,7 +78,7 @@ export type ModelInspectionCostSummaryRecord = {
   };
   training_cost_sample_count?: number;
   unknown_parameter_components: number[];
-  unknown_compute_components: number[];
+  unknown_cost_components: number[];
 };
 
 export type ModelInspectionGraphSummaryRecord = {
@@ -90,7 +90,7 @@ export type ModelInspectionGraphSummaryRecord = {
   output_node_ids: string[];
   component_kinds: string[];
   unsupported_parameter_components: number[];
-  unsupported_compute_components: number[];
+  unsupported_cost_components: number[];
 };
 
 export type ModelInspectionTraceRecord = {

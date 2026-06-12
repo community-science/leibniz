@@ -70,7 +70,7 @@ _cost_summary_record = RecordSpec(
             kind="sequence",
             item=FieldSpec(kind="integer"),
         ),
-        "unknown_compute_components": FieldSpec(
+        "unknown_cost_components": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="integer"),
             required=False,
@@ -116,7 +116,7 @@ _graph_summary_record = RecordSpec(
             kind="sequence",
             item=FieldSpec(kind="integer"),
         ),
-        "unsupported_compute_components": FieldSpec(
+        "unsupported_cost_components": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="integer"),
         ),
@@ -321,7 +321,7 @@ class ModelInspectionCostSummary:
     training_cost_measurement: CostMeasurement | None = None
     training_cost_sample_count: int | None = None
     unknown_parameter_components: tuple[int, ...] = ()
-    unknown_compute_components: tuple[int, ...] = ()
+    unknown_cost_components: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.component_count) is not int or self.component_count < 0:
@@ -356,12 +356,12 @@ class ModelInspectionCostSummary:
             raise ModelInspectionValidationError(
                 "unknown_parameter_components must be sorted unique"
             )
-        if any(type(index) is not int or index < 0 for index in self.unknown_compute_components):
+        if any(type(index) is not int or index < 0 for index in self.unknown_cost_components):
             raise ModelInspectionValidationError(
-                "unknown_compute_components must contain nonnegative integers"
+                "unknown_cost_components must contain nonnegative integers"
             )
-        if self.unknown_compute_components != tuple(sorted(set(self.unknown_compute_components))):
-            raise ModelInspectionValidationError("unknown_compute_components must be sorted unique")
+        if self.unknown_cost_components != tuple(sorted(set(self.unknown_cost_components))):
+            raise ModelInspectionValidationError("unknown_cost_components must be sorted unique")
         if self.parameter_count is None and not self.unknown_parameter_components:
             raise ModelInspectionValidationError(
                 "unknown parameter_count requires unknown_parameter_components"
@@ -418,11 +418,11 @@ class ModelInspectionCostSummary:
                     "unknown_parameter_components",
                 )
             ),
-            unknown_compute_components=tuple(
-                _extract.integer(index, "unknown_compute_components")
+            unknown_cost_components=tuple(
+                _extract.integer(index, "unknown_cost_components")
                 for index in _extract.sequence(
-                    validated.get("unknown_compute_components", ()),
-                    "unknown_compute_components",
+                    validated.get("unknown_cost_components", ()),
+                    "unknown_cost_components",
                 )
             ),
         )
@@ -444,8 +444,8 @@ class ModelInspectionCostSummary:
             record["training_cost_measurement"] = self.training_cost_measurement.to_record()
         if self.training_cost_sample_count is not None:
             record["training_cost_sample_count"] = self.training_cost_sample_count
-        if self.unknown_compute_components:
-            record["unknown_compute_components"] = list(self.unknown_compute_components)
+        if self.unknown_cost_components:
+            record["unknown_cost_components"] = list(self.unknown_cost_components)
         return record
 
 
@@ -607,7 +607,7 @@ class ModelInspectionGraphSummary:
     output_node_ids: tuple[str, ...]
     component_kinds: tuple[str, ...]
     unsupported_parameter_components: tuple[int, ...] = ()
-    unsupported_compute_components: tuple[int, ...] = ()
+    unsupported_cost_components: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.component_count) is not int or self.component_count <= 0:
@@ -634,9 +634,9 @@ class ModelInspectionGraphSummary:
             field="unsupported_parameter_components",
         )
         _require_index_set(
-            self.unsupported_compute_components,
+            self.unsupported_cost_components,
             component_count=self.component_count,
-            field="unsupported_compute_components",
+            field="unsupported_cost_components",
         )
 
     @classmethod
@@ -655,7 +655,7 @@ class ModelInspectionGraphSummary:
             output_node_ids=graph.output_node_ids,
             component_kinds=tuple(node.component.kind for node in graph.nodes),
             unsupported_parameter_components=cost_summary.unknown_parameter_components,
-            unsupported_compute_components=cost_summary.unknown_compute_components,
+            unsupported_cost_components=cost_summary.unknown_cost_components,
         )
 
     @classmethod
@@ -697,11 +697,11 @@ class ModelInspectionGraphSummary:
                     "unsupported_parameter_components",
                 )
             ),
-            unsupported_compute_components=tuple(
-                _extract.integer(index, "unsupported_compute_components")
+            unsupported_cost_components=tuple(
+                _extract.integer(index, "unsupported_cost_components")
                 for index in _extract.sequence(
-                    validated["unsupported_compute_components"],
-                    "unsupported_compute_components",
+                    validated["unsupported_cost_components"],
+                    "unsupported_cost_components",
                 )
             ),
         )
@@ -716,7 +716,7 @@ class ModelInspectionGraphSummary:
             "output_node_ids": list(self.output_node_ids),
             "component_kinds": list(self.component_kinds),
             "unsupported_parameter_components": list(self.unsupported_parameter_components),
-            "unsupported_compute_components": list(self.unsupported_compute_components),
+            "unsupported_cost_components": list(self.unsupported_cost_components),
         }
 
 
@@ -1158,7 +1158,7 @@ def _architecture_components(
             inference_cost_measurement=inference_cost,
             inference_cost_sample_count=1 if inference_cost is not None else None,
             unknown_parameter_components=plan.unknown_parameter_layers,
-            unknown_compute_components=(
+            unknown_cost_components=(
                 () if inference_cost is not None else tuple(range(len(components)))
             ),
         ),

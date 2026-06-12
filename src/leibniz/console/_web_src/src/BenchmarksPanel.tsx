@@ -923,10 +923,6 @@ function ModelCostDetail({
           </dd>
         </div>
         <div>
-          <dt>Training Compute</dt>
-          <dd>{optionalNumberLabel(summary.training_compute)}</dd>
-        </div>
-        <div>
           <dt>Unknown Parameter Components</dt>
           <dd>
             {unknownComponentLabel(
@@ -937,7 +933,7 @@ function ModelCostDetail({
         <div>
           <dt>Unknown compute Components</dt>
           <dd>
-            {unknownComponentLabel(inspection?.architecture_summary.unsupported_compute_components)}
+            {unknownComponentLabel(inspection?.architecture_summary.unsupported_cost_components)}
           </dd>
         </div>
       </dl>

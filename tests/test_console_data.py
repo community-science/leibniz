@@ -252,7 +252,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         "output_node_ids": ["component-2"],
         "component_kinds": ["adaptive-pooling", "flatten", "dense"],
         "unsupported_parameter_components": [],
-        "unsupported_compute_components": [],
+        "unsupported_cost_components": [],
     }
     assert [
         evidence["node_path"]
@@ -530,7 +530,6 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
             "storage_bytes": 40,
             "inference_cost_measurement": {"abstract_flops": 20},
             "inference_cost_sample_count": 1,
-            "training_compute": 60,
             "unknown_parameter_components": []
           },
           "run_ids": ["run-1"],
@@ -560,7 +559,6 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
             "storage_bytes": 40,
             "inference_cost_measurement": {"abstract_flops": 20},
             "inference_cost_sample_count": 1,
-            "training_compute": 60,
             "unknown_parameter_components": []
           },
           "architecture": {"kind": "architecture-manifest"},
@@ -596,7 +594,6 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
                 "storage_bytes": 40,
                 "inference_cost_measurement": {"abstract_flops": 20},
             "inference_cost_sample_count": 1,
-                "training_compute": 60,
                 "unknown_parameter_components": []
               },
               "run_ids": ["run-1"],
@@ -623,7 +620,6 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
                 "storage_bytes": 40,
                 "inference_cost_measurement": {"abstract_flops": 20},
             "inference_cost_sample_count": 1,
-                "training_compute": 60,
                 "unknown_parameter_components": []
               },
               "architecture": {"kind": "architecture-manifest"},
