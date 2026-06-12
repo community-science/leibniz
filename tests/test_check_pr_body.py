@@ -31,20 +31,99 @@ def test_pr_body_validator_accepts_completed_template_body() -> None:
 
 
 def test_pr_body_validator_rejects_missing_template_heading() -> None:
-    template = _module._sections(
-        (_repository_root / ".github" / "pull_request_template.md").read_text(
-            encoding="utf-8"
-        )
-    )
+    template = _template_sections()
     body = _completed_body().replace("## Boundary", "## Scope")
 
     errors = _module.validate_pr_body(template=template, body=body)
 
+    assert errors == ["missing required section ## Boundary"]
+
+
+def test_pr_body_validator_accepts_extra_sections_before_contribution_terms() -> None:
+    template = _template_sections()
+    body = _completed_body().replace(
+        "## Public Surface",
+        "## Implementation Plan\n\nStep one, then step two.\n\n## Public Surface",
+    ).replace(
+        "## Rationale",
+        "## Validation Results\n\nAll gates pass on cuda.\n\n## Rationale",
+    )
+
+    errors = _module.validate_pr_body(template=template, body=body)
+
+    assert errors == []
+
+
+def test_pr_body_validator_rejects_sections_after_contribution_terms() -> None:
+    template = _template_sections()
+    body = _completed_body() + "\n## Attribution\n\nGenerated with assistance.\n"
+
+    errors = _module.validate_pr_body(template=template, body=body)
+
     assert errors == [
-        "section headings must begin with the pull request template headings in order: "
-        "## Purpose, ## Boundary, ## Public Surface, ## Dependencies, ## Tests, "
-        "## Rationale, ## Design Review, ## Contribution Terms"
+        "## Contribution Terms must be the final section (found ## Attribution after it)"
     ]
+
+
+def test_pr_body_validator_rejects_duplicate_required_heading() -> None:
+    template = _template_sections()
+    body = _completed_body().replace(
+        "## Rationale",
+        "## Tests\n\nA second tests section.\n\n## Rationale",
+    )
+
+    errors = _module.validate_pr_body(template=template, body=body)
+
+    assert "section ## Tests appears more than once" in errors
+
+
+def test_pr_body_validator_hints_on_case_mismatched_heading() -> None:
+    template = _template_sections()
+    body = _completed_body().replace("## Public Surface", "## Public surface")
+
+    errors = _module.validate_pr_body(template=template, body=body)
+
+    assert (
+        "section ## Public surface does not match required section "
+        "## Public Surface; headings are case-sensitive"
+    ) in errors
+    assert "missing required section ## Public Surface" in errors
+
+
+def test_pr_body_validator_rejects_out_of_order_required_sections() -> None:
+    template = _template_sections()
+    body = _completed_body().replace(
+        "## Dependencies\n\nUses the checked-in pull request template.\n\n## Tests\n\n"
+        "Unit tests cover accepted and rejected body shapes.\n",
+        "## Tests\n\nUnit tests cover accepted and rejected body shapes.\n\n"
+        "## Dependencies\n\nUses the checked-in pull request template.\n",
+    )
+
+    errors = _module.validate_pr_body(template=template, body=body)
+
+    assert errors == [
+        "required sections out of order: found ## Tests where ## Dependencies was expected"
+    ]
+
+
+def test_pr_body_validator_rejects_empty_extra_section() -> None:
+    template = _template_sections()
+    body = _completed_body().replace(
+        "## Rationale",
+        "## Open Questions\n\n## Rationale",
+    )
+
+    errors = _module.validate_pr_body(template=template, body=body)
+
+    assert errors == ["section ## Open Questions must not be empty"]
+
+
+def _template_sections() -> tuple[object, ...]:
+    return _module._sections(
+        (_repository_root / ".github" / "pull_request_template.md").read_text(
+            encoding="utf-8"
+        )
+    )
 
 
 def test_pr_body_validator_rejects_unchanged_placeholder_text() -> None:

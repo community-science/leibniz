@@ -39,39 +39,98 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def validate_pr_body(*, template: tuple[TemplateSection, ...], body: str) -> list[str]:
-    """Return validation errors for a PR body."""
+    """Return validation errors for a PR body.
 
-    errors: list[str] = []
+    Rules:
+
+    - Every template section heading appears exactly once.
+    - Template headings appear in template order; extra ``##`` sections are
+      allowed anywhere before the template's final section.
+    - The template's final section (Contribution Terms) is also the body's
+      final section and matches the template text exactly.
+    - Every section, required or extra, is non-empty; required sections must
+      not contain only the template placeholder text.
+    """
+
     if not body.strip():
         return ["body is empty"]
     body_sections = _sections(body)
     body_titles = [section.title for section in body_sections]
     template_titles = [section.title for section in template]
-    if body_titles[: len(template_titles)] != template_titles:
-        errors.append(
-            "section headings must begin with the pull request template headings in order: "
+    if not body_sections:
+        return [
+            "body has no '## ' section headings; required sections: "
             + ", ".join(f"## {title}" for title in template_titles)
-        )
-        return errors
+        ]
+    errors: list[str] = []
 
-    body_by_title = {section.title: section for section in body_sections}
+    seen_titles: set[str] = set()
+    duplicate_titles: list[str] = []
+    for title in body_titles:
+        if title in seen_titles and title not in duplicate_titles:
+            duplicate_titles.append(title)
+        seen_titles.add(title)
+    errors.extend(
+        f"section ## {title} appears more than once" for title in duplicate_titles
+    )
+
+    template_title_set = set(template_titles)
+    required_by_casefold = {title.casefold(): title for title in template_titles}
+    for title in dict.fromkeys(body_titles):
+        if title in template_title_set:
+            continue
+        expected = required_by_casefold.get(title.casefold())
+        if expected is not None:
+            errors.append(
+                f"section ## {title} does not match required section "
+                f"## {expected}; headings are case-sensitive"
+            )
+
+    missing_titles = [title for title in template_titles if title not in seen_titles]
+    errors.extend(f"missing required section ## {title}" for title in missing_titles)
+
+    if not missing_titles and not duplicate_titles:
+        ordered_required = [title for title in body_titles if title in template_title_set]
+        for found, expected in zip(ordered_required, template_titles, strict=True):
+            if found != expected:
+                errors.append(
+                    "required sections out of order: found "
+                    f"## {found} where ## {expected} was expected"
+                )
+                break
+
+    final_title = template_titles[-1]
+    if final_title in seen_titles and body_titles[-1] != final_title:
+        errors.append(
+            f"## {final_title} must be the final section "
+            f"(found ## {body_titles[-1]} after it)"
+        )
+
     template_by_title = {section.title: section for section in template}
-    for title in template_titles:
-        section = body_by_title[title]
+    validated_titles: set[str] = set()
+    for section in body_sections:
+        if section.title in validated_titles:
+            continue
+        validated_titles.add(section.title)
         content = _normalized_section_body(section.body)
         if not content:
-            errors.append(f"section ## {title} must not be empty")
+            errors.append(f"section ## {section.title} must not be empty")
             continue
-        template_content = _normalized_section_body(template_by_title[title].body)
-        if title == "Contribution Terms":
+        template_section = template_by_title.get(section.title)
+        if template_section is None:
+            continue
+        template_content = _normalized_section_body(template_section.body)
+        if section.title == final_title:
             if _normalized_whitespace(content) != _normalized_whitespace(template_content):
                 errors.append(
-                    "section ## Contribution Terms must match the template "
+                    f"section ## {final_title} must match the template "
                     "contribution terms exactly"
                 )
             continue
         if content == template_content:
-            errors.append(f"section ## {title} still contains only template placeholder text")
+            errors.append(
+                f"section ## {section.title} still contains only template placeholder text"
+            )
     return errors
 
 

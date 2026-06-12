@@ -71,6 +71,16 @@ Each nontrivial pull request should explain:
 - Design review: which design choices were considered, kept, changed, or
   rejected.
 
+Pull request bodies must follow `.github/pull_request_template.md`, enforced
+by the Template CI check: every template section present exactly once and in
+order, `## Contribution Terms` verbatim and last, and extra `##` sections
+allowed anywhere before it. Validate a body locally before opening or editing
+a pull request:
+
+```bash
+python scripts/check_pr_body.py --body-file <your-body-file>
+```
+
 ## Public Surface
 
 Treat these as public surface unless the pull request states otherwise:
