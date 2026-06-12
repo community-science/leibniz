@@ -89,6 +89,9 @@ from leibniz.tensor_runtime import (
     tensor_element_compile_fallback_records,
     tensor_runtime_device_kinds,
     tensor_runtime_has_fixed_device_memory,
+    tensor_runtime_ops_per_byte,
+    tensor_runtime_ops_per_item,
+    tensor_runtime_ops_rate,
     tensor_runtime_total_memory_bytes,
     tensor_runtime_used_memory_bytes,
     tensor_value_to_host,
@@ -1353,7 +1356,7 @@ def _checkpoint_evaluation_throughput_inference_compute(
         raise BenchmarkRunnerError(
             "checkpoint_evaluation.inference_cost_sample_count must be positive"
         )
-    return measurement.abstract_flops / sample_count
+    return tensor_runtime_ops_per_item(measurement.abstract_flops, sample_count)
 
 
 def _evaluation_input_from_plan(
@@ -2667,8 +2670,8 @@ def _max_cost_measurement(
     left_cost, left_sample_count = left
     right_cost, right_sample_count = right
     if (
-        right_cost.abstract_flops / right_sample_count
-        > left_cost.abstract_flops / left_sample_count
+        tensor_runtime_ops_per_item(right_cost.abstract_flops, right_sample_count)
+        > tensor_runtime_ops_per_item(left_cost.abstract_flops, left_sample_count)
     ):
         return right
     return left
@@ -2684,7 +2687,7 @@ def _chunk_cost_measurement_pair(
 
 def _measurement_inference_compute(measurement: tuple[CostMeasurement, int]) -> float:
     cost, sample_count = measurement
-    return cost.abstract_flops / sample_count
+    return tensor_runtime_ops_per_item(cost.abstract_flops, sample_count)
 
 
 def _batch_max_inference_compute(
@@ -4453,7 +4456,10 @@ def _phase_roofline_record(
     peak_compute_per_second: float,
     peak_bytes_per_second: float,
 ) -> dict[str, object]:
-    arithmetic_intensity = work.compute_per_sample / work.bytes_per_sample
+    arithmetic_intensity = tensor_runtime_ops_per_byte(
+        work.compute_per_sample,
+        work.bytes_per_sample,
+    )
     expected_compute = min(
         peak_compute_per_second,
         peak_bytes_per_second * arithmetic_intensity,
@@ -4464,7 +4470,10 @@ def _phase_roofline_record(
         measured_samples = 0.0
     else:
         measured_samples = float(measured)
-        observed_compute = measured_samples * work.compute_per_sample
+        observed_compute = tensor_runtime_ops_rate(
+            work.compute_per_sample,
+            measured_samples,
+        )
     return {
         "compute_per_sample": work.compute_per_sample,
         "bytes_per_sample": work.bytes_per_sample,

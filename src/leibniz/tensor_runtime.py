@@ -53,10 +53,20 @@ __all__ = [
     "tensor_runtime_default_device",
     "tensor_runtime_device_choices",
     "tensor_runtime_device_kinds",
+    "tensor_runtime_fft_ops",
     "tensor_runtime_has_fixed_device_memory",
+    "tensor_runtime_input_element_ops",
+    "tensor_runtime_multiply_add_ops",
     "tensor_runtime_operation_capture",
+    "tensor_runtime_ops_bit_density",
+    "tensor_runtime_ops_per_byte",
+    "tensor_runtime_ops_per_item",
+    "tensor_runtime_ops_rate",
+    "tensor_runtime_ops_scaled",
     "tensor_runtime_profile_operator_rows",
+    "tensor_runtime_shape_element_count",
     "tensor_runtime_total_memory_bytes",
+    "tensor_runtime_training_ops_from_inference",
     "tensor_runtime_used_memory_bytes",
     "tensor_value_to_host",
     "tensor_value_to_host_values",
@@ -87,6 +97,7 @@ _tensor_element_parameter_values_key_cache: dict[
 _tensor_element_parameter_values_key_cache_minimum_size = 64
 _tensor_element_tile_size = 131_072
 _require_tensor_compile_environment_variable = "LEIBNIZ_REQUIRE_TENSOR_COMPILE"
+_tensor_runtime_default_bit_length_per_op = 32.0
 
 
 class TensorRuntimeError(ValueError):
@@ -306,6 +317,132 @@ def resolve_host_tensor_runtime() -> TensorRuntime:
     """Resolve the portable host tensor runtime."""
 
     return resolve_tensor_runtime("cpu")
+
+
+def tensor_runtime_shape_element_count(shape: tuple[int, ...]) -> int:
+    """Return the tensor element count for a positive shape."""
+
+    return TensorShape.from_axes(shape).element_count
+
+
+def tensor_runtime_input_element_ops(input_shape: tuple[int, ...]) -> int:
+    """Return the declared one-op-per-input-element planning count."""
+
+    return tensor_runtime_shape_element_count(input_shape)
+
+
+def tensor_runtime_multiply_add_ops(*factors: int) -> int:
+    """Return the declared abstract ops for a multiply-add family count."""
+
+    if not factors:
+        return 0
+    for factor in factors:
+        if type(factor) is not int or factor < 0:
+            raise TensorRuntimeError("multiply-add factors must be nonnegative integers")
+    return 2 * math.prod(factors)
+
+
+def tensor_runtime_fft_ops(
+    shape: tuple[int, ...],
+    *,
+    dims: Sequence[int],
+    real_factor: float = 1.0,
+) -> int:
+    """Return the declared abstract ops for FFT families over transformed axes."""
+
+    tensor_runtime_shape_element_count(shape)
+    if isinstance(real_factor, bool):
+        raise TensorRuntimeError("real_factor must be numeric")
+    if not math.isfinite(float(real_factor)) or real_factor < 0:
+        raise TensorRuntimeError("real_factor must be finite and nonnegative")
+    total = 0.0
+    for dim in dims:
+        if type(dim) is not int:
+            raise TensorRuntimeError("FFT dimensions must be integers")
+        extent = shape[dim % len(shape)]
+        if extent <= 1:
+            continue
+        transform_count = math.prod(shape) / extent
+        total += float(real_factor) * 5.0 * transform_count * extent * math.log2(extent)
+    return int(round(total))
+
+
+def tensor_runtime_ops_scaled(operations: int, multiplier: int | float) -> int:
+    """Scale an abstract operation count by a declared planning multiplier."""
+
+    if type(operations) is not int or operations < 0:
+        raise TensorRuntimeError("operations must be a nonnegative integer")
+    if isinstance(multiplier, bool):
+        raise TensorRuntimeError("operation multiplier must be numeric")
+    scaled = operations * multiplier
+    if not math.isfinite(float(scaled)) or scaled < 0:
+        raise TensorRuntimeError("scaled operations must be finite and nonnegative")
+    if int(scaled) != scaled:
+        raise TensorRuntimeError("scaled operations must be integral")
+    return int(scaled)
+
+
+def tensor_runtime_training_ops_from_inference(
+    inference_operations: int,
+    *,
+    multiplier: int | float,
+) -> int:
+    """Return a declared training planning count derived from inference ops."""
+
+    return tensor_runtime_ops_scaled(inference_operations, multiplier)
+
+
+def tensor_runtime_ops_bit_density(operations: int | float) -> float:
+    """Convert abstract ops into the declared bit-density unit."""
+
+    return _tensor_runtime_nonnegative_number(
+        operations,
+        "operations",
+    ) * _tensor_runtime_default_bit_length_per_op
+
+
+def tensor_runtime_ops_per_item(
+    operations: int | float,
+    item_count: int,
+) -> float:
+    """Return an abstract operation count normalized by item count."""
+
+    if type(item_count) is not int or item_count < 1:
+        raise TensorRuntimeError("item_count must be a positive integer")
+    return _tensor_runtime_nonnegative_number(operations, "operations") / item_count
+
+
+def tensor_runtime_ops_per_byte(
+    operations: int | float,
+    byte_count: int | float,
+) -> float:
+    """Return abstract operation intensity per byte."""
+
+    bytes_value = _tensor_runtime_nonnegative_number(byte_count, "byte_count")
+    if bytes_value <= 0.0:
+        raise TensorRuntimeError("byte_count must be positive")
+    return _tensor_runtime_nonnegative_number(operations, "operations") / bytes_value
+
+
+def tensor_runtime_ops_rate(
+    operations_per_item: int | float,
+    items_per_second: int | float,
+) -> float:
+    """Return an observed abstract operation rate from count and throughput."""
+
+    return _tensor_runtime_nonnegative_number(
+        operations_per_item,
+        "operations_per_item",
+    ) * _tensor_runtime_nonnegative_number(items_per_second, "items_per_second")
+
+
+def _tensor_runtime_nonnegative_number(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TensorRuntimeError(f"{field} must be numeric")
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric < 0.0:
+        raise TensorRuntimeError(f"{field} must be finite and nonnegative")
+    return numeric
 
 
 def tensor_runtime_capture_operations(

@@ -45,6 +45,7 @@ from leibniz.model_inspection import (
 )
 from leibniz.records import RecordExtractor
 from leibniz.state_space import StateSpaceError, state_space_region_from_record
+from leibniz.tensor_runtime import tensor_runtime_ops_bit_density, tensor_runtime_ops_per_item
 from leibniz.training_runs import TrainingRunRecord
 
 __all__ = [
@@ -76,7 +77,6 @@ _result_directories = (
 )
 _benchmark_cost_axis_key = "cost"
 _benchmark_cost_axis_keys = (_benchmark_cost_axis_key,)
-_default_bit_length_per_op = 32.0
 _console_validation_history_max_points = 512
 _reference_curve_default_maximum_cost = 10_000_000_000
 _component_count = 1
@@ -1480,7 +1480,7 @@ def _integrated_reference_curve_points(
             "reference_curve.cost_density",
         )
         cumulative_cost += (log2_volume - previous_log2_volume) * (
-            cost_density * _default_bit_length_per_op
+            tensor_runtime_ops_bit_density(cost_density)
         )
         integrated_points.append(
             {
@@ -1847,7 +1847,7 @@ def _throughput_measured_inference_compute(
         record.get("inference_cost_sample_count"),
         f"{field_path}.inference_cost_sample_count",
     )
-    return measurement.abstract_flops / sample_count
+    return tensor_runtime_ops_per_item(measurement.abstract_flops, sample_count)
 
 
 def _run_training_compute_value(run: _BenchmarkRunRecord) -> float | None:
@@ -1929,7 +1929,7 @@ def _sampled_competence_measured_cost_integral(
                 StateSpaceIntegralTerm(
                     lower=minimum,
                     upper=maximum,
-                    competence_density=inference_compute * _default_bit_length_per_op,
+                    competence_density=tensor_runtime_ops_bit_density(inference_compute),
                     kind="measured-compute-cost",
                     representative_log2_volume=log2_volume,
                 )

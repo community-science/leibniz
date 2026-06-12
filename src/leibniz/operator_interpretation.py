@@ -6,7 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from leibniz.operator_semantics import ModelOperatorSemantic
-from leibniz.tensor_shapes import TensorShape
+from leibniz.tensor_runtime import (
+    tensor_runtime_input_element_ops,
+    tensor_runtime_multiply_add_ops,
+    tensor_runtime_ops_scaled,
+    tensor_runtime_shape_element_count,
+    tensor_runtime_training_ops_from_inference,
+)
 
 __all__ = [
     "OperatorInterpretation",
@@ -77,7 +83,7 @@ def _interpret_product_of_input_axes(
 ) -> OperatorInterpretation:
     _require_cost_law(semantic, "zero-arithmetic")
     return OperatorInterpretation(
-        output_shape=(TensorShape.from_axes(input_shape).element_count,),
+        output_shape=(tensor_runtime_shape_element_count(input_shape),),
         parameter_count=0,
         inference_compute=0,
         training_compute_per_sample=0,
@@ -96,11 +102,15 @@ def _interpret_rank_1_output(
     if output_count is None:
         return _unknown_interpretation()
     input_count = input_shape[0]
+    inference_compute = tensor_runtime_multiply_add_ops(input_count, output_count)
     return OperatorInterpretation(
         output_shape=(output_count,),
         parameter_count=(input_count + 1) * output_count,
-        inference_compute=(2 * input_count) * output_count,
-        training_compute_per_sample=(6 * input_count) * output_count,
+        inference_compute=inference_compute,
+        training_compute_per_sample=tensor_runtime_training_ops_from_inference(
+            inference_compute,
+            multiplier=3,
+        ),
     )
 
 
@@ -124,12 +134,15 @@ def _interpret_preserve_prefix_replace_trailing_axes(
         output_axes = tuple(size for _index in range(dimension))
     else:
         return _unknown_interpretation()
-    input_elements = TensorShape.from_axes(input_shape).element_count
+    input_elements = tensor_runtime_input_element_ops(input_shape)
     return OperatorInterpretation(
         output_shape=(*preserved, *output_axes),
         parameter_count=0,
         inference_compute=input_elements,
-        training_compute_per_sample=2 * input_elements,
+        training_compute_per_sample=tensor_runtime_training_ops_from_inference(
+            input_elements,
+            multiplier=2,
+        ),
     )
 
 
@@ -164,13 +177,21 @@ def _interpret_preserve_prefix_local_window(
         return _unknown_interpretation()
     output_spatial = tuple(axis for axis in output_spatial_axes if axis is not None)
     support_elements = size**dimension
-    output_positions = TensorShape.from_axes(output_spatial).element_count
-    pair_compute = 2 * input_channels * support_elements * out_channels * output_positions
+    output_positions = tensor_runtime_shape_element_count(output_spatial)
+    pair_compute = tensor_runtime_multiply_add_ops(
+        input_channels,
+        support_elements,
+        out_channels,
+        output_positions,
+    )
     return OperatorInterpretation(
         output_shape=(*preserved, out_channels, *output_spatial),
         parameter_count=(input_channels * support_elements + 1) * out_channels,
         inference_compute=pair_compute,
-        training_compute_per_sample=3 * pair_compute,
+        training_compute_per_sample=tensor_runtime_training_ops_from_inference(
+            pair_compute,
+            multiplier=3,
+        ),
     )
 
 
@@ -194,15 +215,20 @@ def _interpret_fixed_support_affine(
         return _unknown_interpretation()
     preserved = input_shape[: len(input_shape) - dimension - 1]
     input_channels = input_shape[len(input_shape) - dimension - 1]
-    input_elements = TensorShape.from_axes(input_shape).element_count
+    input_elements = tensor_runtime_input_element_ops(input_shape)
     output_positions = out_height * out_width
-    affine_compute = 2 * input_channels * out_channels * output_positions
+    affine_compute = tensor_runtime_multiply_add_ops(
+        input_channels,
+        out_channels,
+        output_positions,
+    )
     inference_compute = input_elements + affine_compute
     return OperatorInterpretation(
         output_shape=(*preserved, out_channels, out_height, out_width),
         parameter_count=(input_channels + 1) * out_channels,
         inference_compute=inference_compute,
-        training_compute_per_sample=(2 * input_elements) + (3 * affine_compute),
+        training_compute_per_sample=tensor_runtime_ops_scaled(input_elements, 2)
+        + tensor_runtime_training_ops_from_inference(affine_compute, multiplier=3),
     )
 
 
@@ -211,12 +237,15 @@ def _interpret_preserve_input_shape(
     input_shape: tuple[int, ...],
 ) -> OperatorInterpretation:
     _require_cost_law(semantic, "input-elements")
-    input_elements = TensorShape.from_axes(input_shape).element_count
+    input_elements = tensor_runtime_input_element_ops(input_shape)
     return OperatorInterpretation(
         output_shape=input_shape,
         parameter_count=0,
         inference_compute=input_elements,
-        training_compute_per_sample=2 * input_elements,
+        training_compute_per_sample=tensor_runtime_training_ops_from_inference(
+            input_elements,
+            multiplier=2,
+        ),
     )
 
 

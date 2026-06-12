@@ -19,6 +19,7 @@ from leibniz.outcomes import AcceptedEvent, OutcomeSpace, RawScoringEvidence
 from leibniz.prediction_results import DirectFiniteProbabilityPrediction
 from leibniz.prediction_spaces import FiniteOutcomeSpace
 from leibniz.state_space import StateSpaceError, StateSpaceRegion, state_space_region_from_record
+from leibniz.tensor_runtime import tensor_runtime_ops_bit_density
 
 __all__ = [
     "CompetencePoint",
@@ -35,9 +36,6 @@ __all__ = [
 ]
 
 _ErrorT = TypeVar("_ErrorT", bound=ValueError)
-
-_default_bit_length_per_op = 32.0
-
 
 @dataclass(frozen=True, slots=True)
 class CompetencePoint:
@@ -440,14 +438,13 @@ def sampled_competence_compute_cost_integral(
                 StateSpaceIntegralTerm(
                     lower=minimum,
                     upper=maximum,
-                    competence_density=(
+                    competence_density=tensor_runtime_ops_bit_density(
                         _sampled_point_inference_compute(
                             point,
                             architecture=architecture,
                             error_type=error_type,
                             field_prefix=field_prefix,
                         )
-                        * _default_bit_length_per_op
                     ),
                     kind="measured-compute-cost",
                     representative_log2_volume=log2_volume,

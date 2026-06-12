@@ -13,7 +13,10 @@ from leibniz.tensor_runtime import (
     TensorRuntimeOperationRecord,
     TensorRuntimeTensorSpec,
     tensor_runtime_capture_operations,
+    tensor_runtime_fft_ops,
+    tensor_runtime_multiply_add_ops,
     tensor_runtime_operation_capture,
+    tensor_runtime_shape_element_count,
 )
 
 __all__ = [
@@ -529,9 +532,14 @@ def _matmul_flops(input_specs: tuple[TensorValueSpec, ...]) -> int | None:
         return None
     left, right = input_specs[0].shape, input_specs[1].shape
     if len(left) == 2 and len(right) == 2:
-        return 2 * left[0] * right[1] * left[1]
+        return tensor_runtime_multiply_add_ops(left[0], right[1], left[1])
     if len(left) >= 3 and len(right) >= 3 and left[:-2] == right[:-2]:
-        return 2 * math.prod(left[:-2]) * left[-2] * right[-1] * left[-1]
+        return tensor_runtime_multiply_add_ops(
+            math.prod(left[:-2]),
+            left[-2],
+            right[-1],
+            left[-1],
+        )
     return None
 
 
@@ -543,7 +551,7 @@ def _addmm_flops(
         return None
     left, right = input_specs[1].shape, input_specs[2].shape
     if len(left) == 2 and len(right) == 2:
-        return 2 * left[0] * right[1] * left[1]
+        return tensor_runtime_multiply_add_ops(left[0], right[1], left[1])
     return _specs_numel(output_specs)
 
 
@@ -553,7 +561,7 @@ def _bmm_flops(input_specs: tuple[TensorValueSpec, ...]) -> int | None:
     left, right = input_specs[0].shape, input_specs[1].shape
     if len(left) != 3 or len(right) != 3:
         return None
-    return 2 * left[0] * left[1] * right[2] * left[2]
+    return tensor_runtime_multiply_add_ops(left[0], left[1], right[2], left[2])
 
 
 def _convolution_flops(
@@ -566,7 +574,10 @@ def _convolution_flops(
     if len(weight) < 3:
         return None
     kernel_elements_per_output = math.prod(weight[1:])
-    return 2 * _spec_numel(output_specs[0]) * kernel_elements_per_output
+    return tensor_runtime_multiply_add_ops(
+        _spec_numel(output_specs[0]),
+        kernel_elements_per_output,
+    )
 
 
 def _fft_flops(
@@ -587,14 +598,7 @@ def _fft_flops(
         rank=len(shape),
     )
     real_factor = 0.5 if name in {"aten._fft_r2c.default", "aten._fft_c2r.default"} else 1.0
-    total = 0.0
-    for dim in dims:
-        extent = shape[dim]
-        if extent <= 1:
-            continue
-        transform_count = math.prod(shape) / extent
-        total += real_factor * 5.0 * transform_count * extent * math.log2(extent)
-    return int(round(total))
+    return tensor_runtime_fft_ops(shape, dims=dims, real_factor=real_factor)
 
 
 def _fft_dims(
@@ -640,7 +644,7 @@ def _is_indexing_op(name: str) -> bool:
 
 
 def _spec_numel(spec: TensorValueSpec) -> int:
-    return math.prod(spec.shape)
+    return tensor_runtime_shape_element_count(spec.shape) if spec.shape else 1
 
 
 def _specs_numel(specs: Iterable[TensorValueSpec]) -> int:

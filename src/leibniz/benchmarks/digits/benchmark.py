@@ -69,6 +69,7 @@ from leibniz.tensor_runtime import (
     TensorRuntimeError,
     resolve_host_tensor_runtime,
     tensor_runtime_construct_tensor,
+    tensor_runtime_shape_element_count,
     tensor_value_to_host,
     tensor_value_to_host_values,
 )
@@ -292,6 +293,9 @@ class _DigitsVolumeClass:
         return AxisAssignment(values={width_axis: self.canvas_side, height_axis: self.canvas_side})
 
     def metadata(self) -> dict[str, object]:
+        pixel_count = tensor_runtime_shape_element_count(
+            (self.canvas_side, self.canvas_side)
+        )
         return {
             "kind": "digits-realized-setup-window",
             "digit_count": self.digit_count,
@@ -307,11 +311,11 @@ class _DigitsVolumeClass:
             "oracle_inference_compute": {
                 "kind": "oracle-inference-compute-reference-v1",
                 "unit": "abstract-ops",
-                "value": self.canvas_side * self.canvas_side,
+                "value": pixel_count,
                 "components": {
                     "height": self.canvas_side,
                     "width": self.canvas_side,
-                    "pixel_count": self.canvas_side * self.canvas_side,
+                    "pixel_count": pixel_count,
                 },
             },
         }
@@ -1079,7 +1083,7 @@ class Generator:
         max_ordinal = 0
         while True:
             canvas_side = _chart_canvas_side_for_max_ordinal(max_ordinal)
-            cost = canvas_side * canvas_side
+            cost = tensor_runtime_shape_element_count((canvas_side, canvas_side))
             cardinality = _volume_class_digit_count * (max_ordinal + 1)
             log2_volume = math.log2(cardinality)
             points.append(

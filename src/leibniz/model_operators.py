@@ -14,6 +14,7 @@ from leibniz.tensor_runtime import (
     TensorRuntimeError,
     build_architecture_modules,
     build_architecture_sequential,
+    tensor_runtime_ops_scaled,
 )
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
@@ -576,7 +577,10 @@ def _program_effect_parameter_count(effect: ModelProgramEffect) -> int:
 
 def _program_effect_inference_compute(effect: ModelProgramEffect) -> int:
     if effect.kind == "repeat":
-        return effect.repetitions * effect.nested_inference_compute
+        return tensor_runtime_ops_scaled(
+            effect.nested_inference_compute,
+            effect.repetitions,
+        )
     return 0
 
 
