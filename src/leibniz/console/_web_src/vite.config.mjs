@@ -16,7 +16,7 @@ export const consoleDataPayloadMaxBuffer = 64 * 1024 * 1024;
 const consoleDataRefreshDebounceMs = 250;
 const consoleDataCachePath = resolve(
   repositoryRoot,
-  'src/leibniz/console/_web_src/src/generated/consoleDataPayload.json',
+  '.local-cache/console/consoleDataPayload.json',
 );
 const consoleDataCacheMetadataPath = `${consoleDataCachePath}.metadata.json`;
 
@@ -268,7 +268,7 @@ function ignoredSourcePath(path) {
   return (
     normalized.includes('/__pycache__/') ||
     normalized.includes('/node_modules/') ||
-    normalized.startsWith('src/leibniz/console/_web_src/src/generated/')
+    normalized.startsWith('.local-cache/')
   );
 }
 

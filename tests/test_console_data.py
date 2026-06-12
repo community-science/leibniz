@@ -15,6 +15,21 @@ from leibniz.identifiers import ProtocolIdentifier
 _repository_root = Path(__file__).parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _use_test_console_sample_cache(  # pyright: ignore[reportUnusedFunction]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "leibniz.console.data._generated_batch_cache_path",
+        tmp_path / "generatedSampleSets.leibniz.json",
+    )
+    cast(
+        dict[tuple[str, str, str], tuple[Mapping[str, object], ...]],
+        console_data._generated_batch_cache,  # type: ignore[reportPrivateUsage]
+    ).clear()
+
+
 def test_console_data_discovery_is_deterministic() -> None:
     builder = ConsoleDataBuilder(_repository_root)
 
