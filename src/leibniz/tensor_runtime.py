@@ -78,8 +78,8 @@ __all__ = [
 
 TensorRuntimeDevice = Literal["auto", "cpu", "cuda", "mps"]
 TensorRuntimeDeviceKind = Literal["cpu", "cuda", "mps"]
-TensorElementDType = Literal["float32", "int64"]
-TensorElementParameterDType = Literal["float32", "int64"]
+TensorElementDType = Literal["float32", "float64", "int64"]
+TensorElementParameterDType = Literal["float32", "float64", "int64"]
 _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
 _roofline_cache: dict[str, dict[str, object]] = {}
 _tensor_element_kernel_cache: dict[tuple[object, ...], Any] = {}
@@ -1394,6 +1394,8 @@ def _positive_tensor_extent(value: object) -> int:
 def _tensor_element_dtype(*, runtime: TensorRuntime, dtype: TensorElementDType) -> Any:
     if dtype == "float32":
         return runtime.torch.float32
+    if dtype == "float64":
+        return runtime.torch.float64
     if dtype == "int64":
         return runtime.torch.long
     raise TensorRuntimeError(f"unsupported tensor element dtype: {dtype}")
@@ -1534,6 +1536,7 @@ def _compiled_tensor_element_parameters(
     scalar_aliases: dict[str, tuple[str, int]] = {}
     scalar_groups: dict[TensorElementParameterDType, list[tuple[str, Any]]] = {
         "float32": [],
+        "float64": [],
         "int64": [],
     }
     for name, declaration in declarations.items():
@@ -1622,6 +1625,8 @@ def _tensor_element_parameter_values_key(parameter: TensorElementParameter) -> b
             return cached[1]
     if parameter.dtype == "float32":
         values_key = array("f", (float(value) for value in parameter.values)).tobytes()
+    elif parameter.dtype == "float64":
+        values_key = array("d", (float(value) for value in parameter.values)).tobytes()
     elif parameter.dtype == "int64":
         values_key = array("q", (int(value) for value in parameter.values)).tobytes()
     else:
@@ -1641,6 +1646,8 @@ def _tensor_element_parameter_dtype(
 ) -> Any:
     if dtype == "float32":
         return runtime.torch.float32
+    if dtype == "float64":
+        return runtime.torch.float64
     if dtype == "int64":
         return runtime.torch.long
     raise TensorRuntimeError(f"unsupported tensor element parameter dtype: {dtype}")
