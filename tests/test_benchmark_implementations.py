@@ -14,6 +14,7 @@ from leibniz.observation_generation import (
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
+_ks_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "ks"
 
 
 def test_digits_benchmark_loads_python_implementation_entrypoint() -> None:
@@ -30,6 +31,24 @@ def test_digits_benchmark_loads_python_implementation_entrypoint() -> None:
     assert implementation.sampling_protocol.kind == "uniform-monte-carlo"
     assert implementation.sampling_protocol.confidence_method_id == "wilson"
     assert implementation.accessible_subspace.ladder_id == "digits-continuous-transform-covering"
+    assert not implementation.accessible_subspace.exclusions
+
+
+def test_ks_benchmark_loads_field_valued_target_contract() -> None:
+    implementation = load_benchmark(_ks_benchmark_root)
+
+    assert implementation.root == _ks_benchmark_root
+    assert str(implementation.manifest.id) == "benchmarks.ks@0.1.0"
+    assert callable(implementation.generator)
+    assert implementation.target_contract.kind == "field-valued"
+    assert implementation.target_contract.loss_id == "equation-residual"
+    assert implementation.target_contract.competence.kind == "mass-within-resolution"
+    assert (
+        implementation.target_contract.competence.parameters["residual_operator_id"]
+        == "benchmarks.ks.residual-operator@0.1.0"
+    )
+    assert implementation.sampling_protocol.kind == "uniform-monte-carlo"
+    assert implementation.accessible_subspace.ladder_id == "ks-space-time-covering"
     assert not implementation.accessible_subspace.exclusions
 
 

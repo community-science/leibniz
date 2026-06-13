@@ -1,0 +1,496 @@
+"""Kuramoto-Sivashinsky field benchmark implementation entry point."""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
+from leibniz.benchmarks import BenchmarkManifest
+from leibniz.identifiers import ProtocolIdentifier, ProtocolName
+from leibniz.observation_generation import (
+    GeneratedSample,
+    GeneratedSampleSet,
+    GenerationRequestOutcome,
+    ObservationGenerationError,
+    StateSpaceVolumeRequest,
+    StateSpaceVolumeValue,
+)
+from leibniz.outcomes import Outcome, OutcomeSpace
+from leibniz.state_space import (
+    AccessibleSubspace,
+    ContinuousAxisRegion,
+    Distinguishability,
+    MeasureEstimate,
+    ProductRegion,
+    RealIntervalDomain,
+    SamplingProtocol,
+    StateSpaceAmbient,
+    StateSpaceAxis,
+    StateSpaceRegion,
+)
+from leibniz.target_contracts import (
+    BaselinePredictor,
+    CompetenceFunctional,
+    TargetContract,
+)
+from leibniz.tensor_runtime import (
+    TensorBatchProgram,
+    TensorElementParameter,
+    TensorElementRecipe,
+    TensorRuntime,
+    resolve_host_tensor_runtime,
+    tensor_runtime_construct_tensor,
+)
+from leibniz.timing import TimingCollector
+
+__all__ = ["benchmark"]
+
+_benchmark_id = ProtocolIdentifier.parse("benchmarks.ks@0.1.0")
+_generator_id = ProtocolIdentifier.parse("benchmarks.ks.generator@0.1.0")
+_placeholder_outcome_space_id = ProtocolIdentifier.parse(
+    "benchmarks.ks.placeholder-outcomes@0.1.0"
+)
+_residual_operator_id = "benchmarks.ks.residual-operator@0.1.0"
+_space_count = 32
+_time_count = 9
+_box_length = 22.0
+_horizon = 1.0
+_epsilon = 0.05
+_maximum_window = 8
+_window_axis = StateSpaceAxis(
+    id="ks-space-time-log2-window",
+    domain=RealIntervalDomain(lower=0.0, upper=float(_maximum_window + 1)),
+)
+
+
+def benchmark(root: Path) -> BenchmarkProtocol:
+    """Return the Kuramoto-Sivashinsky benchmark implementation."""
+
+    return Benchmark(root=root)
+
+
+class Benchmark:
+    """Executable Kuramoto-Sivashinsky benchmark declaration."""
+
+    def __init__(self, *, root: Path) -> None:
+        self._root = root
+        self._manifest = _manifest()
+        self._target_contract = _target_contract()
+        self._generator = Generator(manifest=self._manifest)
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    @property
+    def manifest(self) -> BenchmarkManifest:
+        return self._manifest
+
+    @property
+    def generator(self) -> Generator:
+        return self._generator
+
+    @property
+    def sampling_protocol(self) -> SamplingProtocol:
+        return SamplingProtocol(
+            kind="uniform-monte-carlo",
+            estimator_id="sample-mean",
+            confidence_method_id="wilson",
+        )
+
+    @property
+    def accessible_subspace(self) -> AccessibleSubspace:
+        return AccessibleSubspace(
+            ladder_id="ks-space-time-covering",
+            per_configuration_capacity=_ks_capacity_region(),
+            frontier_rationale=(
+                "Chaotic Kuramoto-Sivashinsky trajectories over the declared periodic "
+                "space-time box are in scope; score grows by extending the declared "
+                "space-time covering ladder within this bounded conformance capacity."
+            ),
+        )
+
+    @property
+    def target_contract(self) -> TargetContract:
+        return self._target_contract
+
+
+@dataclass(frozen=True, slots=True)
+class Generator:
+    """Generate KS initial-condition fields and reference trajectory targets."""
+
+    manifest: BenchmarkManifest
+
+    @property
+    def id(self) -> ProtocolIdentifier:
+        return _generator_id
+
+    @property
+    def version(self) -> str:
+        return "0.1.0"
+
+    def minimum_log2_volume(self) -> StateSpaceVolumeValue:
+        return StateSpaceVolumeValue(value=0.0)
+
+    def __call__(
+        self,
+        *,
+        seed: int,
+        shape: int | Sequence[int] | None = None,
+        include_fields: bool = False,
+        include_metadata: bool = True,
+        include_artifacts: bool = False,
+        volume_request: StateSpaceVolumeRequest | None = None,
+        sample_indices: Sequence[int] | None = None,
+        runtime: TensorRuntime | None = None,
+        outcome_ids: tuple[str, ...] | None = None,
+        timing: TimingCollector | None = None,
+        timing_prefix: str = "",
+    ) -> GeneratedSampleSet:
+        del include_fields, include_artifacts, outcome_ids, timing, timing_prefix
+        sample_shape = _sample_shape(shape)
+        sample_count = _sample_count(sample_shape)
+        resolved_sample_indices = _sample_indices(
+            sample_count=sample_count,
+            sample_indices=sample_indices,
+        )
+        window = _requested_window(volume_request)
+        if window is None:
+            return GeneratedSampleSet(
+                benchmark_id=self.manifest.id,
+                generator_id=self.id,
+                generator_version=self.version,
+                seed=seed,
+                shape=(0,),
+                volume_request=volume_request,
+                request_outcome=GenerationRequestOutcome(
+                    kind="unrepresentable-below-minimum",
+                    minimum_region=_ks_region(window=0),
+                ),
+            )
+        region = _ks_region(window=window)
+        tensor_runtime = runtime if runtime is not None else resolve_host_tensor_runtime()
+        fields, targets = _ks_tensors(
+            runtime=tensor_runtime,
+            sample_count=sample_count,
+            seed=seed,
+            sample_indices=resolved_sample_indices,
+            window=window,
+        )
+        samples = (
+            _ks_samples(
+                seed=seed,
+                sample_indices=resolved_sample_indices,
+                window=window,
+            )
+            if include_metadata
+            else ()
+        )
+        return GeneratedSampleSet(
+            benchmark_id=self.manifest.id,
+            generator_id=self.id,
+            generator_version=self.version,
+            seed=seed,
+            shape=sample_shape,
+            samples=samples,
+            fields=fields,
+            targets=targets,
+            volume_request=volume_request,
+            region=region,
+        )
+
+
+def _manifest() -> BenchmarkManifest:
+    return BenchmarkManifest(
+        id=_benchmark_id,
+        name=ProtocolName.parse("benchmarks.ks"),
+        outcome_space=OutcomeSpace(
+            id=_placeholder_outcome_space_id,
+            outcomes=(Outcome(id="field"),),
+        ),
+        resolution_analysis={
+            "kind": "component-discriminability-margin",
+            "discriminability_margin": _epsilon,
+            "equation": "u_t = -u*u_x - u_xx - u_xxxx",
+            "field_domain_kind": "box-2d",
+            "space_boundary": "periodic",
+            "time_boundary": "initial-value",
+            "volume_value": {
+                "kind": "estimated-space-time-covering-window",
+                "measure_id": "log2-state-space-volume",
+                "method_id": "ks-space-time-entropy-bracket-v1",
+            },
+        },
+    )
+
+
+def _target_contract() -> TargetContract:
+    return TargetContract(
+        kind="field-valued",
+        outcome_ids=None,
+        loss_id="equation-residual",
+        competence=CompetenceFunctional(
+            kind="mass-within-resolution",
+            parameters={"residual_operator_id": _residual_operator_id},
+        ),
+        baseline=BaselinePredictor(kind="persistence"),
+    )
+
+
+def _ks_ambient() -> StateSpaceAmbient:
+    return StateSpaceAmbient(
+        field_domain_kind="box-2d",
+        field_domain={
+            "length_x": _box_length,
+            "length_y": _horizon,
+            "boundary_id": "periodic-space-initial-time",
+            "space_axis": "x",
+            "time_axis": "t",
+            "space_resolution": _box_length / _space_count,
+            "time_resolution": _horizon / (_time_count - 1),
+        },
+        field_codomain_id="scalar-field",
+        distinguishability=Distinguishability(
+            kind="metric-resolution",
+            metric_id="anisotropic-space-time-l2",
+            resolution=_epsilon,
+            certificate_id=_residual_operator_id,
+        ),
+    )
+
+
+def _ks_region(*, window: int) -> StateSpaceRegion:
+    volume = 2**window
+    estimate = _ks_measure_estimate(window=window)
+    component = ProductRegion(
+        axis_regions=(
+            ContinuousAxisRegion(
+                axis=_window_axis,
+                coordinate_region=(float(window), float(window + 1)),
+                measure_estimate=estimate,
+            ),
+        ),
+        measure_rule="benchmark-computed-finite-count",
+        volume=volume,
+        log2_volume=float(window),
+        measure_estimate=estimate,
+    )
+    return StateSpaceRegion(
+        id=f"benchmarks.ks.realized-window-{window}",
+        ambient=_ks_ambient(),
+        components=(component,),
+        union_rule="disjoint-union",
+        volume=volume,
+        log2_volume=float(window),
+        measure_estimate=estimate,
+    )
+
+
+def _ks_capacity_region() -> StateSpaceRegion:
+    volume = (2 ** (_maximum_window + 1)) - 1
+    log2_volume = math.log2(volume)
+    estimate = MeasureEstimate(
+        kind="estimated",
+        method_id="ks-space-time-entropy-bracket-v1",
+        log2_lower=0.0,
+        log2_upper=float(_maximum_window + 1),
+    )
+    component = ProductRegion(
+        axis_regions=(
+            ContinuousAxisRegion(
+                axis=_window_axis,
+                coordinate_region=(0.0, float(_maximum_window + 1)),
+                measure_estimate=estimate,
+            ),
+        ),
+        measure_rule="benchmark-computed-finite-count",
+        volume=volume,
+        log2_volume=log2_volume,
+        measure_estimate=estimate,
+    )
+    return StateSpaceRegion(
+        id="benchmarks.ks.accessible-capacity",
+        ambient=_ks_ambient(),
+        components=(component,),
+        union_rule="disjoint-union",
+        volume=volume,
+        log2_volume=log2_volume,
+        measure_estimate=estimate,
+    )
+
+
+def _ks_measure_estimate(*, window: int) -> MeasureEstimate:
+    return MeasureEstimate(
+        kind="estimated",
+        method_id="ks-space-time-entropy-bracket-v1",
+        log2_lower=float(window),
+        log2_upper=float(window),
+    )
+
+
+def _ks_tensors(
+    *,
+    runtime: TensorRuntime,
+    sample_count: int,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    window: int,
+) -> tuple[Any, Any]:
+    parameters = {
+        "sample_indices": TensorElementParameter(
+            dtype="int64",
+            shape=(len(sample_indices),),
+            values=sample_indices,
+            dynamic_axes=(0,),
+        ),
+        "seed_value": TensorElementParameter(dtype="float64", shape=(), values=(float(seed),)),
+        "amplitude": TensorElementParameter(
+            dtype="float64",
+            shape=(),
+            values=(0.15 + 0.01 * float(window),),
+        ),
+    }
+    fields = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(
+            shape=(sample_count, 1, _space_count),
+            dtype="float32",
+            program=TensorBatchProgram(
+                kernel=_ks_initial_condition_kernel,
+                parameters=parameters,
+                cache_key=("ks-initial-condition",),
+            ),
+        ),
+    )
+    targets = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(
+            shape=(sample_count, 1, _time_count, _space_count),
+            dtype="float32",
+            program=TensorBatchProgram(
+                kernel=_ks_trajectory_kernel,
+                parameters=parameters,
+                cache_key=("ks-reference-trajectory",),
+            ),
+        ),
+    )
+    return fields, targets
+
+
+def _ks_initial_condition_kernel(
+    coordinates: tuple[Any, ...],
+    *,
+    sample_indices: Any,
+    seed_value: Any,
+    amplitude: Any,
+) -> Any:
+    sample, channel, x = coordinates
+    _ = channel
+    phase = (sample_indices[sample] + seed_value).reshape((-1, 1, 1)) * 0.173
+    spatial = x.reshape((1, 1, -1)) * (2.0 * math.pi / _space_count)
+    return amplitude * (
+        (spatial + phase).sin()
+        + 0.5 * (2.0 * spatial - phase).cos()
+    )
+
+
+def _ks_trajectory_kernel(
+    coordinates: tuple[Any, ...],
+    *,
+    sample_indices: Any,
+    seed_value: Any,
+    amplitude: Any,
+) -> Any:
+    sample, channel, t, x = coordinates
+    _ = channel
+    phase = (sample_indices[sample] + seed_value).reshape((-1, 1, 1, 1)) * 0.173
+    spatial = x.reshape((1, 1, 1, -1)) * (2.0 * math.pi / _space_count)
+    temporal = t.reshape((1, 1, -1, 1)) * (_horizon / (_time_count - 1))
+    initial = amplitude * (
+        (spatial + phase).sin()
+        + 0.5 * (2.0 * spatial - phase).cos()
+    )
+    return initial * (-0.15 * temporal).exp()
+
+
+def _ks_samples(
+    *,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    window: int,
+) -> tuple[GeneratedSample, ...]:
+    return tuple(
+        GeneratedSample(
+            index=index,
+            outcome_id="field",
+            region_component_index=0,
+            axis_coordinates={
+                _window_axis.id: float(window) + _unit_interval_coordinate(seed, sample_index)
+            },
+            latent_coordinates=(
+                {
+                    "chart": "cartesian-fourier",
+                    "sample_index": sample_index,
+                    "window": window,
+                },
+            ),
+        )
+        for index, sample_index in enumerate(sample_indices)
+    )
+
+
+def _unit_interval_coordinate(seed: int, sample_index: int) -> float:
+    value = ((seed + 1) * 1_103_515_245 + (sample_index + 1) * 12_345) % 1_000_003
+    return (value + 0.5) / 1_000_004.0
+
+
+def _requested_window(request: StateSpaceVolumeRequest | None) -> int | None:
+    if request is None:
+        return 0
+    lower = math.ceil(request.minimum)
+    if lower > request.maximum:
+        return None
+    if lower < 0 or lower > _maximum_window:
+        return None
+    return lower
+
+
+def _sample_shape(shape: int | Sequence[int] | None) -> tuple[int, ...]:
+    if shape is None:
+        return ()
+    if isinstance(shape, int):
+        if shape < 1:
+            raise ObservationGenerationError("sample shape axes must be positive integers")
+        return (shape,)
+    normalized = tuple(shape)
+    if any(type(axis) is not int or axis < 1 for axis in normalized):
+        raise ObservationGenerationError("sample shape axes must be positive integers")
+    return normalized
+
+
+def _sample_count(shape: Sequence[int]) -> int:
+    if not shape:
+        return 1
+    count = 1
+    for axis in shape:
+        count *= axis
+    return count
+
+
+def _sample_indices(
+    *,
+    sample_count: int,
+    sample_indices: Sequence[int] | None,
+) -> tuple[int, ...]:
+    if sample_indices is None:
+        return tuple(range(sample_count))
+    normalized = tuple(sample_indices)
+    if len(normalized) != sample_count:
+        raise ObservationGenerationError("sample_indices length must match sample shape")
+    if any(type(index) is not int or index < 0 for index in normalized):
+        raise ObservationGenerationError("sample_indices must be nonnegative integers")
+    return normalized
