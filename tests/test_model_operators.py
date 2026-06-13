@@ -225,6 +225,93 @@ def test_fixed_support_affine_projects_variable_canvas_to_fixed_convnet_shape() 
     assert output.shape == (2, 10)
 
 
+def test_dimension_one_local_operators_build_and_preserve_field_shape() -> None:
+    torch = cast(Any, importlib.import_module("torch"))
+    manifest = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 31],
+            "output_shape": [2, 8],
+            "layers": [
+                {
+                    "kind": "fixed-support-affine",
+                    "parameters": {
+                        "dimension": 1,
+                        "out_channels": 4,
+                        "out_length": 16,
+                    },
+                },
+                {
+                    "kind": "convolution",
+                    "parameters": {
+                        "dimension": 1,
+                        "size": 3,
+                        "out_channels": 3,
+                        "stride": 1,
+                        "padding": 1,
+                    },
+                },
+                {
+                    "kind": "local-aggregation",
+                    "parameters": {"dimension": 1, "out_length": 8},
+                },
+                {
+                    "kind": "convolution",
+                    "parameters": {
+                        "dimension": 1,
+                        "size": 1,
+                        "out_channels": 2,
+                        "stride": 1,
+                        "padding": 0,
+                    },
+                },
+            ],
+        }
+    )
+
+    plan = summarize_architecture_operators(manifest)
+    output = ExecutableModelOperator(manifest).sequential_module()(torch.zeros(5, 1, 31))
+
+    assert [operator.output_shape for operator in plan.operators] == [
+        (4, 16),
+        (3, 16),
+        (3, 8),
+        (2, 8),
+    ]
+    assert output.shape == (5, 2, 8)
+
+
+def test_local_affine_periodic_padding_maps_to_circular_convolution() -> None:
+    torch = cast(Any, importlib.import_module("torch"))
+    manifest = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 4],
+            "output_shape": [1, 4],
+            "layers": [
+                {
+                    "kind": "convolution",
+                    "parameters": {
+                        "dimension": 1,
+                        "size": 3,
+                        "out_channels": 1,
+                        "stride": 1,
+                        "padding": 1,
+                        "padding_mode": "periodic",
+                    },
+                },
+            ],
+        }
+    )
+    module = ExecutableModelOperator(manifest).sequential_module()
+
+    with torch.no_grad():
+        module[0].weight.zero_()
+        module[0].bias.zero_()
+        module[0].weight[0, 0, 0] = 1
+    output = module(torch.tensor([[[1.0, 2.0, 3.0, 4.0]]]))
+
+    assert output.tolist() == [[[4.0, 1.0, 2.0, 3.0]]]
+
+
 def _local_affine_manifest(kind: str) -> ArchitectureManifest:
     return ArchitectureManifest.from_record(
         {

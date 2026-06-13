@@ -777,38 +777,35 @@ def build_architecture_modules(
         parameters = layer.parameters
         if kind == "local-aggregation":
             dimension = _require_int_parameter(parameters, "dimension")
-            if dimension != 2:
-                raise TensorRuntimeError("local aggregation currently supports dimension 2")
-            out_height, out_width = _require_fixed_support(parameters)
-            modules.append(torch.nn.AdaptiveAvgPool2d((out_height, out_width)))
-            shape = (*shape[: len(shape) - dimension], out_height, out_width)
+            pool_class = _adaptive_pool_class(torch, dimension=dimension)
+            output_axes = _require_fixed_support(parameters, dimension=dimension)
+            modules.append(pool_class(output_axes))
+            shape = (*shape[: len(shape) - dimension], *output_axes)
         elif kind == "fixed-support-affine":
             dimension = _require_int_parameter(parameters, "dimension")
-            if dimension != 2:
-                raise TensorRuntimeError("fixed support affine currently supports dimension 2")
+            pool_class = _adaptive_pool_class(torch, dimension=dimension)
+            conv_class = _conv_class(torch, dimension=dimension)
             if len(shape) <= dimension:
                 raise TensorRuntimeError(
                     "fixed support affine requires a channel axis before support axes"
                 )
             channel_axis_index = len(shape) - dimension - 1
             out_channels = _require_int_parameter(parameters, "out_channels")
-            out_height = _require_int_parameter(parameters, "out_height")
-            out_width = _require_int_parameter(parameters, "out_width")
+            output_axes = _require_fixed_support(parameters, dimension=dimension)
             modules.append(
                 torch.nn.Sequential(
-                    torch.nn.AdaptiveAvgPool2d((out_height, out_width)),
-                    torch.nn.Conv2d(
+                    pool_class(output_axes),
+                    conv_class(
                         in_channels=shape[channel_axis_index],
                         out_channels=out_channels,
                         kernel_size=1,
                     ),
                 )
             )
-            shape = (*shape[:channel_axis_index], out_channels, out_height, out_width)
+            shape = (*shape[:channel_axis_index], out_channels, *output_axes)
         elif kind == "local-affine":
             dimension = _require_int_parameter(parameters, "dimension")
-            if dimension != 2:
-                raise TensorRuntimeError("local affine currently supports dimension 2")
+            conv_class = _conv_class(torch, dimension=dimension)
             if len(shape) <= dimension:
                 raise TensorRuntimeError(
                     "local affine requires a channel axis before local support axes"
@@ -819,13 +816,15 @@ def build_architecture_modules(
             out_channels = _require_int_parameter(parameters, "out_channels")
             stride = _require_int_parameter(parameters, "stride")
             padding = _require_nonneg_int_parameter(parameters, "padding")
+            padding_mode = _require_padding_mode(parameters)
             modules.append(
-                torch.nn.Conv2d(
+                conv_class(
                     in_channels=shape[channel_axis_index],
                     out_channels=out_channels,
                     kernel_size=size,
                     stride=stride,
                     padding=padding,
+                    padding_mode=padding_mode,
                 )
             )
             output_spatial_axes = tuple(
@@ -2179,12 +2178,54 @@ def _require_nonneg_int_parameter(parameters: Mapping[str, object], key: str) ->
     return value
 
 
-def _require_fixed_support(parameters: Mapping[str, object]) -> tuple[int, int]:
-    out_height = parameters.get("out_height")
-    out_width = parameters.get("out_width")
-    if type(out_height) is int and out_height > 0 and type(out_width) is int and out_width > 0:
-        return out_height, out_width
-    return _require_int_parameter(parameters, "size"), _require_int_parameter(parameters, "size")
+def _require_fixed_support(
+    parameters: Mapping[str, object],
+    *,
+    dimension: int,
+) -> tuple[int, ...]:
+    axis_names = _spatial_axis_names(dimension)
+    values = tuple(parameters.get(name) for name in axis_names)
+    if any(value is not None for value in values):
+        if any(type(value) is not int or value < 1 for value in values):
+            raise TensorRuntimeError("fixed support axes must be positive integers")
+        return cast(tuple[int, ...], values)
+    size = _require_int_parameter(parameters, "size")
+    return tuple(size for _index in range(dimension))
+
+
+def _spatial_axis_names(dimension: int) -> tuple[str, ...]:
+    if dimension == 1:
+        return ("out_length",)
+    if dimension == 2:
+        return ("out_height", "out_width")
+    if dimension == 3:
+        return ("out_depth", "out_height", "out_width")
+    raise TensorRuntimeError("local support dimension currently supports dimensions 1 and 2")
+
+
+def _adaptive_pool_class(torch: Any, *, dimension: int) -> Any:
+    if dimension == 1:
+        return torch.nn.AdaptiveAvgPool1d
+    if dimension == 2:
+        return torch.nn.AdaptiveAvgPool2d
+    raise TensorRuntimeError("local aggregation currently supports dimensions 1 and 2")
+
+
+def _conv_class(torch: Any, *, dimension: int) -> Any:
+    if dimension == 1:
+        return torch.nn.Conv1d
+    if dimension == 2:
+        return torch.nn.Conv2d
+    raise TensorRuntimeError("local affine currently supports dimensions 1 and 2")
+
+
+def _require_padding_mode(parameters: Mapping[str, object]) -> str:
+    value = parameters.get("padding_mode", "zeros")
+    if value == "zeros":
+        return "zeros"
+    if value == "periodic":
+        return "circular"
+    raise TensorRuntimeError("padding_mode must be one of: zeros, periodic")
 
 
 def _local_window_output_size(axis: int, *, size: int, stride: int, padding: int) -> int:

@@ -52,6 +52,40 @@ def test_architecture_semantic_validation_reports_required_parameters() -> None:
     ) == "layer 2 (dense): parameter out must be a positive integer"
 
 
+def test_architecture_semantic_validation_reports_dimension_specific_axes() -> None:
+    record = _architecture_record()
+    layers = list(_layers())
+    layers[0] = {"kind": "local-aggregation", "parameters": {"dimension": 1}}
+    record["layers"] = layers
+    manifest = ArchitectureManifest.from_record(record)
+
+    assert str(
+        capture_semantic_error(lambda: validate_architecture_semantics(manifest))
+    ) == "layer 0 (local-aggregation): missing required parameter out_length"
+
+
+def test_architecture_semantic_validation_reports_padding_mode_values() -> None:
+    record = _architecture_record()
+    layers = list(_layers())
+    layers[0] = {
+        "kind": "convolution",
+        "parameters": {
+            "dimension": 2,
+            "size": 3,
+            "out_channels": 4,
+            "stride": 1,
+            "padding": 1,
+            "padding_mode": "reflect",
+        },
+    }
+    record["layers"] = layers
+    manifest = ArchitectureManifest.from_record(record)
+
+    assert str(
+        capture_semantic_error(lambda: validate_architecture_semantics(manifest))
+    ) == "layer 0 (convolution): parameter padding_mode must be one of: zeros, periodic"
+
+
 def test_architecture_semantic_validation_reports_unresolved_shape_law() -> None:
     record = _architecture_record()
     layers = list(_layers())

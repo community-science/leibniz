@@ -94,6 +94,38 @@ def test_operator_interpreter_preserves_current_public_shape_laws() -> None:
     )
 
 
+def test_operator_interpreter_uses_dimension_specific_fixed_support_axes() -> None:
+    registry = model_operator_semantic_registry()
+    local_aggregation = registry.semantic_for_alias("local-aggregation")
+    fixed_support_affine = registry.semantic_for_alias("fixed-support-affine")
+    assert local_aggregation is not None
+    assert fixed_support_affine is not None
+
+    local = interpret_operator_semantic(
+        local_aggregation,
+        parameters={
+            "dimension": 3,
+            "out_depth": 2,
+            "out_height": 3,
+            "out_width": 4,
+        },
+        input_shape=(1, 9, 10, 11),
+    )
+    learned = interpret_operator_semantic(
+        fixed_support_affine,
+        parameters={
+            "dimension": 1,
+            "out_channels": 5,
+            "out_length": 7,
+        },
+        input_shape=(2, 13),
+    )
+
+    assert local.output_shape == (1, 2, 3, 4)
+    assert learned.output_shape == (5, 7)
+    assert learned.parameter_count == 15
+
+
 def test_operator_interpreter_returns_unknown_values_for_unresolved_inputs() -> None:
     registry = model_operator_semantic_registry()
     local_aggregation = registry.semantic_for_alias("local-aggregation")
