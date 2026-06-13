@@ -118,6 +118,21 @@ class Benchmark:
     def target_contract(self) -> TargetContract:
         return self._target_contract
 
+    def build_training_loss(
+        self,
+        runtime: TensorRuntime,
+        target_contract: TargetContract,
+    ) -> Any:
+        del runtime
+        if (
+            target_contract.kind != "field-valued"
+            or target_contract.loss_id != "equation-residual"
+            or target_contract.competence.parameters.get("residual_operator_id")
+            != _residual_operator_id
+        ):
+            raise ValueError("KS benchmark only builds its declared residual loss")
+        return _ks_residual_loss
+
 
 @dataclass(frozen=True, slots=True)
 class Generator:
@@ -457,6 +472,33 @@ def _ks_step_kernel(
     filtered_nonlinear = nonlinear_spectrum * dealias_mask.reshape((1, 1, -1))
     next_spectrum = linear_factors.reshape((1, 1, -1)) * (spectrum + dt * filtered_nonlinear)
     return ops.real(ops.ifft(next_spectrum, axis=-1))
+
+
+def _ks_residual_loss(predictions: Any, targets: Any) -> Any:
+    if tuple(predictions.shape) != tuple(targets.shape):
+        raise ValueError("KS residual loss requires prediction and target shape match")
+    dx = _box_length / _space_count
+    dt = _horizon / (_time_count - 1)
+    u = predictions[:, :, :-1, :]
+    u_t = (predictions[:, :, 1:, :] - u) / dt
+    u_x = (u.roll(shifts=-1, dims=-1) - u.roll(shifts=1, dims=-1)) / (2.0 * dx)
+    u_xx = (
+        u.roll(shifts=-1, dims=-1)
+        - 2.0 * u
+        + u.roll(shifts=1, dims=-1)
+    ) / (dx * dx)
+    u_xxxx = (
+        u.roll(shifts=-2, dims=-1)
+        - 4.0 * u.roll(shifts=-1, dims=-1)
+        + 6.0 * u
+        - 4.0 * u.roll(shifts=1, dims=-1)
+        + u.roll(shifts=2, dims=-1)
+    ) / (dx**4)
+    residual = u_t + (u * u_x) + u_xx + u_xxxx
+    residual_loss = (residual * residual).mean()
+    initial_error = predictions[:, :, 0, :] - targets[:, :, 0, :]
+    initial_loss = (initial_error * initial_error).mean()
+    return residual_loss + initial_loss
 
 
 def _ks_samples(

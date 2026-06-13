@@ -167,22 +167,49 @@ def test_resolve_competence_functional_selects_finite_outcome_accepted_mass() ->
     assert functional.kind == "above-chance-accepted-mass"
 
 
-def test_resolve_competence_functional_rejects_unsupported_competence_kind() -> None:
-    field_contract = TargetContract(
+def test_resolve_competence_functional_selects_field_relative_accuracy() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    functional = cast(Any, benchmark_runner)._resolve_competence_functional(
+        _field_target_contract()
+    )
+    targets = runtime.torch.tensor(
+        [
+            [[[1.0, 0.0], [0.0, 1.0]]],
+            [[[1.0, 1.0], [1.0, 1.0]]],
+        ]
+    )
+    predictions = runtime.torch.tensor(
+        [
+            [[[1.0, 0.0], [0.0, 1.0]]],
+            [[[2.0, 1.0], [1.0, 1.0]]],
+        ]
+    )
+
+    masses = functional.training_logit_masses(runtime, predictions, targets)
+
+    assert functional.kind == "mass-within-resolution"
+    assert masses[0] == 1.0
+    assert 0.0 < masses[1] < 1.0
+
+
+def test_equation_residual_training_loss_requires_benchmark_factory() -> None:
+    contract = TargetContract(
         kind="field-valued",
         outcome_ids=None,
-        loss_id="mse",
+        loss_id="equation-residual",
         competence=CompetenceFunctional(
             kind="mass-within-resolution",
             parameters={"residual_operator_id": "op"},
         ),
-        baseline=BaselinePredictor(kind="zero-field"),
+        baseline=BaselinePredictor(kind="persistence"),
     )
 
-    with pytest.raises(
-        benchmark_runner.BenchmarkRunnerError, match="competence kind"
-    ):
-        cast(Any, benchmark_runner)._resolve_competence_functional(field_contract)
+    with pytest.raises(benchmark_runner.BenchmarkRunnerError, match="build_training_loss"):
+        cast(Any, benchmark_runner)._build_training_loss(
+            runtime=resolve_tensor_runtime("cpu"),
+            target_contract=contract,
+            loss_factory=None,
+        )
 
 
 def _observation_payload(

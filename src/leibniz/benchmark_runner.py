@@ -183,6 +183,16 @@ class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
     ) -> GeneratedSampleSet: ...
 
 
+class _BenchmarkTrainingLossFactory(Protocol):
+    """Benchmark-owned tensor loss factory for non-generic target losses."""
+
+    def build_training_loss(
+        self,
+        runtime: TensorRuntime,
+        target_contract: TargetContract,
+    ) -> Any: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _TrainingResult:
     evaluation_results: tuple[
@@ -886,12 +896,13 @@ def run_benchmark(
     benchmark = load_benchmark(plan.benchmark_root)
     generator = _require_tensor_generator(benchmark.generator)
     target_contract = benchmark.target_contract
+    loss_factory = _optional_training_loss_factory(benchmark)
     accessible_subspace = benchmark.accessible_subspace
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
     outcome_space = benchmark.manifest.resolve_outcome_space()
-    outcome_ids = _finite_outcome_ids(target_contract)
+    outcome_ids = _target_contract_outcome_ids(target_contract)
     summary = _run_summary(
         plan=plan,
         benchmark_id=generator.manifest.id,
@@ -1074,6 +1085,7 @@ def run_benchmark(
         batch_size=_default_training_batch_target,
         seed=plan.seed,
         progress_callback=publish_progress,
+        loss_factory=loss_factory,
     )
     selected_checkpoint = _selected_model_checkpoint(tuple(checkpoint_artifacts))
     if selected_checkpoint is None:
@@ -1882,6 +1894,7 @@ def _train_and_predict(
     storage_bytes: int | None,
     batch_size: int,
     seed: int,
+    loss_factory: _BenchmarkTrainingLossFactory | None = None,
     progress_callback: (
         Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object], Any], None]
         | None
@@ -1915,6 +1928,7 @@ def _train_and_predict(
                 storage_bytes=storage_bytes,
                 batch_size=batch_size,
                 seed=seed,
+                loss_factory=loss_factory,
                 progress_callback=progress_callback,
                 fallback_errors=tuple(fallback_errors),
             )
@@ -1947,6 +1961,7 @@ def _train_and_predict_on_device(
     storage_bytes: int | None,
     batch_size: int,
     seed: int,
+    loss_factory: _BenchmarkTrainingLossFactory | None = None,
     progress_callback: (
         Callable[[TrainingRunRecord, Mapping[str, object], Mapping[str, object], Any], None]
         | None
@@ -1963,9 +1978,13 @@ def _train_and_predict_on_device(
         runtime=runtime,
         operations=executable.operation_modules(),
     )
-    outcome_ids = _finite_outcome_ids(target_contract)
+    outcome_ids = _target_contract_outcome_ids(target_contract)
     chance_mass = _target_contract_chance_mass(target_contract)
-    loss_function = build_loss(runtime, target_contract)
+    loss_function = _build_training_loss(
+        runtime=runtime,
+        target_contract=target_contract,
+        loss_factory=loss_factory,
+    )
     optimizer = _make_optimizer(
         runtime=runtime,
         parameters=module.parameters(),
@@ -5107,11 +5126,45 @@ def _finite_outcome_ids(contract: TargetContract) -> tuple[str, ...]:
     return contract.outcome_ids
 
 
+def _target_contract_outcome_ids(contract: TargetContract) -> tuple[str, ...]:
+    if contract.kind == "field-valued":
+        return ()
+    return _finite_outcome_ids(contract)
+
+
 def _target_contract_chance_mass(contract: TargetContract) -> float:
     chance_mass = contract.chance_mass()
+    if chance_mass is None and contract.kind == "field-valued":
+        return 0.0
     if chance_mass is None:
         raise BenchmarkRunnerError("runner path requires finite-outcome chance mass")
     return chance_mass
+
+
+def _optional_training_loss_factory(
+    benchmark: object,
+) -> _BenchmarkTrainingLossFactory | None:
+    factory = getattr(benchmark, "build_training_loss", None)
+    if factory is None:
+        return None
+    if not callable(factory):
+        raise BenchmarkRunnerError("benchmark build_training_loss must be callable")
+    return cast(_BenchmarkTrainingLossFactory, benchmark)
+
+
+def _build_training_loss(
+    *,
+    runtime: TensorRuntime,
+    target_contract: TargetContract,
+    loss_factory: _BenchmarkTrainingLossFactory | None,
+) -> Any:
+    if target_contract.loss_id == "equation-residual":
+        if loss_factory is None:
+            raise BenchmarkRunnerError(
+                "equation-residual target contracts require benchmark build_training_loss"
+            )
+        return loss_factory.build_training_loss(runtime, target_contract)
+    return build_loss(runtime, target_contract)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5134,6 +5187,17 @@ class _CompetenceFunctional:
         logits: Any,
         labels: Any,
     ) -> tuple[float, ...]:
+        if self.kind == "mass-within-resolution":
+            return tuple(
+                float(value)
+                for value in self.training_logit_mass_tensor(
+                    runtime,
+                    logits,
+                    labels,
+                )
+                .detach()
+                .tolist()
+            )
         return tuple(softmax_target_masses(runtime, logits, labels))
 
     def training_logit_mass_tensor(
@@ -5142,6 +5206,8 @@ class _CompetenceFunctional:
         logits: Any,
         labels: Any,
     ) -> Any:
+        if self.kind == "mass-within-resolution":
+            return _field_relative_accuracy_tensor(runtime, logits, labels)
         return softmax_target_mass_tensor(runtime, logits, labels)
 
     def prediction_accepted_mass(
@@ -5159,12 +5225,32 @@ class _CompetenceFunctional:
 
 
 def _resolve_competence_functional(contract: TargetContract) -> _CompetenceFunctional:
-    if contract.competence.kind != "above-chance-accepted-mass":
+    if contract.competence.kind not in {
+        "above-chance-accepted-mass",
+        "mass-within-resolution",
+    }:
         raise BenchmarkRunnerError(
             "runner path does not support competence kind "
             f"{contract.competence.kind!r}"
         )
     return _CompetenceFunctional(kind=contract.competence.kind)
+
+
+def _field_relative_accuracy_tensor(
+    runtime: TensorRuntime,
+    predictions: Any,
+    targets: Any,
+) -> Any:
+    _ = runtime
+    if tuple(predictions.shape) != tuple(targets.shape):
+        raise BenchmarkRunnerError("field predictions must match target tensor shape")
+    sample_count = int(predictions.shape[0])
+    prediction_rows = predictions.detach().reshape((sample_count, -1))
+    target_rows = targets.detach().reshape((sample_count, -1))
+    error_norm = (prediction_rows - target_rows).pow(2).sum(dim=1).sqrt()
+    target_norm = target_rows.pow(2).sum(dim=1).sqrt().clamp_min(1e-12)
+    relative_error = error_norm / target_norm
+    return 1.0 / (1.0 + relative_error)
 
 
 def _write_document(path: Path, record: object) -> None:

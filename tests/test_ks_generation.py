@@ -1,5 +1,6 @@
+import math
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from leibniz.benchmark_implementations import load_benchmark
 from leibniz.observation_generation import StateSpaceVolumeRequest
@@ -53,3 +54,19 @@ def test_ks_generator_samples_cartesian_fourier_chart_metadata() -> None:
     )
     assert len(coordinates) == 2
     assert all(1.0 <= coordinate < 2.0 for coordinate in coordinates)
+
+
+def test_ks_benchmark_builds_residual_training_loss() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    loaded = load_benchmark(_ks_benchmark_root)
+    batch = loaded.generator(seed=17, shape=2, runtime=runtime)
+    fields, targets = batch.require_tensors()
+    loss = cast(Any, loaded).build_training_loss(runtime, loaded.target_contract)
+
+    exact_loss = float(loss(targets, targets))
+    perturbed = targets.clone()
+    perturbed[:, :, 0, :] = fields + 0.5
+    perturbed_loss = float(loss(perturbed, targets))
+
+    assert math.isfinite(exact_loss)
+    assert perturbed_loss > exact_loss
