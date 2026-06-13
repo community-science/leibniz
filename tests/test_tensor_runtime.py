@@ -1,6 +1,7 @@
 import importlib
 import math
 import sys
+from array import array
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -645,6 +646,58 @@ def test_tensor_element_compile_cache_is_not_extent_dependent(
     assert second.tolist() == [0, 1, 2]
 
 
+def test_tensor_element_constructs_float64_on_cpu_eager_path() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+
+    def element_function(coordinates: tuple[Any, ...]) -> Any:
+        return coordinates[0].to(dtype=runtime.torch.float64) + 0.25
+
+    program = TensorBatchProgram(
+        kernel=element_function,
+        parameters={},
+        compile=False,
+        cache_key=("float64-eager-test", id(element_function)),
+    )
+
+    values = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(3,), dtype="float64", program=program),
+    )
+
+    assert values.dtype == runtime.torch.float64
+    assert values.tolist() == [0.25, 1.25, 2.25]
+
+
+def test_tensor_element_constructs_float64_with_compiled_scalar_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, compile_calls = _compile_counting_runtime(monkeypatch, device_kind="cuda")
+
+    def element_function(coordinates: tuple[Any, ...], *, offset: Any) -> Any:
+        return coordinates[0].to(dtype=offset.dtype) + offset
+
+    program = TensorBatchProgram(
+        kernel=element_function,
+        parameters={
+            "offset": TensorElementParameter(
+                dtype="float64",
+                shape=(),
+                values=(0.5,),
+            ),
+        },
+        cache_key=("float64-compiled-parameter-test", id(element_function)),
+    )
+
+    values = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(3,), dtype="float64", program=program),
+    )
+
+    assert compile_calls == [None]
+    assert values.dtype == runtime.torch.float64
+    assert values.tolist() == [0.5, 1.5, 2.5]
+
+
 def test_tensor_element_parameter_cache_reuses_constant_parameters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1148,6 +1201,13 @@ def test_parameter_values_key_cache_skips_per_batch_scalars() -> None:
     assert large_key
     assert len(cache) == 1
     assert next(iter(cache.values()))[0] is large_values
+
+
+def test_float64_parameter_values_key_uses_double_array() -> None:
+    values_key = cast(Any, tensor_runtime_module)._tensor_element_parameter_values_key
+    parameter = TensorElementParameter(dtype="float64", shape=(2,), values=(0.25, 1.5))
+
+    assert values_key(parameter) == array("d", (0.25, 1.5)).tobytes()
 
 
 def test_parameter_tensor_cache_is_bounded(

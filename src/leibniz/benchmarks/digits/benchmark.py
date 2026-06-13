@@ -57,7 +57,7 @@ from leibniz.observation_showcases import (
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.state_space import (
-    AxisRegion,
+    DiscreteAxisRegion,
     Distinguishability,
     IntegerRangeDomain,
     ProductRegion,
@@ -1624,7 +1624,7 @@ def _digits_product_region(
 ) -> ProductRegion:
     lower, upper = ordinal_range
     count = upper - lower + 1
-    axis_region = AxisRegion(
+    axis_region = DiscreteAxisRegion(
         axis=StateSpaceAxis(
             id=_chart_ordinal_axis_id,
             domain=IntegerRangeDomain(lower=0, upper=_chart_ordinal_domain_extent),
