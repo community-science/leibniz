@@ -150,7 +150,8 @@ manifests, and then moves completed queue entries to the sibling
 benchmark, and omitting the benchmark name scans all local benchmarks. The
 command accepts repeated `--benchmark-root` arguments and otherwise resolves
 packaged benchmark roots by benchmark id. The default local training profile is
-an uncapped convergence run:
+an uncapped convergence run with the hyperparameter-free `loss-search`
+optimizer:
 competence gates are checked every 32 steps, every gate check updates the
 running progress record, model checkpoint artifacts are written every gate
 check, patience is 6 gate checks, and convergence min delta is `1e-3`.

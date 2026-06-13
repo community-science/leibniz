@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, TypeAlias, cast
 
 from leibniz.artifacts import ArtifactReference
-from leibniz.benchmark_implementations import Benchmark as BenchmarkProtocol
+from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.cost_metrology import (
     CostMeasurement,
@@ -57,7 +57,7 @@ from leibniz.observation_showcases import (
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.state_space import (
-    AxisRegion,
+    DiscreteAxisRegion,
     Distinguishability,
     IntegerRangeDomain,
     ProductRegion,
@@ -1624,7 +1624,7 @@ def _digits_product_region(
 ) -> ProductRegion:
     lower, upper = ordinal_range
     count = upper - lower + 1
-    axis_region = AxisRegion(
+    axis_region = DiscreteAxisRegion(
         axis=StateSpaceAxis(
             id=_chart_ordinal_axis_id,
             domain=IntegerRangeDomain(lower=0, upper=_chart_ordinal_domain_extent),
@@ -2042,6 +2042,7 @@ def _digits_tensor_program(
                 dtype="float32",
                 shape=(table_length, 3),
                 values=transform_table_values,
+                dynamic_axes=(0,),
             ),
             "component_mark_counts": TensorElementParameter(
                 dtype="int64",
@@ -2110,7 +2111,6 @@ def _digits_tensor_program(
             component_count,
             max_mark_count,
             _batch_render_curve_sample_count,
-            table_length,
         ),
     )
 

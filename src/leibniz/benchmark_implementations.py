@@ -5,12 +5,14 @@ from __future__ import annotations
 import importlib.util
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
+from leibniz.target_contracts import TargetContract
 from leibniz.timing import TimingCollector
 
 if TYPE_CHECKING:
@@ -25,6 +27,7 @@ __all__ = [
     "Benchmark",
     "BenchmarkError",
     "Generator",
+    "RawBenchmark",
     "discover_benchmark_roots",
     "load_benchmark",
 ]
@@ -68,8 +71,8 @@ class Generator(Protocol):
     def minimum_log2_volume(self) -> StateSpaceVolumeValue: ...
 
 
-class Benchmark(Protocol):
-    """Benchmark-owned executable behavior used by generic Leibniz evaluators."""
+class RawBenchmark(Protocol):
+    """Benchmark-owned executable behavior before loader-derived contracts."""
 
     @property
     def root(self) -> Path: ...
@@ -79,6 +82,13 @@ class Benchmark(Protocol):
 
     @property
     def generator(self) -> Generator: ...
+
+
+class Benchmark(RawBenchmark, Protocol):
+    """Benchmark-owned executable behavior used by generic Leibniz evaluators."""
+
+    @property
+    def target_contract(self) -> TargetContract: ...
 
 
 def load_benchmark(benchmark_root: Path) -> Benchmark:
@@ -95,7 +105,33 @@ def load_benchmark(benchmark_root: Path) -> Benchmark:
         )
     implementation = factory(benchmark_root)
     _validate_benchmark_implementation(implementation, entrypoint=entrypoint)
-    return cast(Benchmark, implementation)
+    return _BenchmarkWithTargetContract(
+        implementation=cast(RawBenchmark, implementation),
+        target_contract=_finite_outcome_target_contract(
+            cast(RawBenchmark, implementation).manifest
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _BenchmarkWithTargetContract:
+    implementation: RawBenchmark
+    target_contract: TargetContract
+
+    @property
+    def root(self) -> Path:
+        return self.implementation.root
+
+    @property
+    def manifest(self) -> BenchmarkManifest:
+        return self.implementation.manifest
+
+    @property
+    def generator(self) -> Generator:
+        return self.implementation.generator
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.implementation, name)
 
 
 def discover_benchmark_roots(benchmark_parent: Path) -> tuple[Path, ...]:
@@ -125,6 +161,12 @@ def _load_entrypoint_module(entrypoint: Path) -> ModuleType:
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _finite_outcome_target_contract(manifest: BenchmarkManifest) -> TargetContract:
+    return TargetContract.finite_outcome(
+        tuple(outcome.id for outcome in manifest.resolve_outcome_space().outcomes)
+    )
 
 
 def _validate_benchmark_implementation(

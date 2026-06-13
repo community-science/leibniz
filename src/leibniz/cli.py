@@ -306,7 +306,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     train = benchmark_subcommands.add_parser(
         "train",
-        description="train locally available architecture manifests",
+        description=(
+            "train locally available architecture manifests; default optimizer "
+            "is hyperparameter-free loss-search"
+        ),
         help="train architecture manifests",
     )
     train.add_argument(

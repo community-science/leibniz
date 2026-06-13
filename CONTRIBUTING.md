@@ -190,12 +190,25 @@ Do not call `.item()`, `.tolist()`, `.cpu()`, `.numpy()`, or equivalent host
 materialization inside the training step loop between gate checks. Keep
 accepted-mass and similar diagnostics as runtime tensors during steps, and
 materialize host values only when recording gate-check evidence.
+The default `loss-search` optimizer is a deterministic host-interactive
+reference path and is exempt from this hot-path rule by design. Device hot-path
+gates that forbid readback must opt into a non-host-interactive optimizer such
+as Adam.
 
 Instrumentation must not change synchronization behavior by default. Timing
 that needs device synchronization must be opt-in and documented, currently via
 `LEIBNIZ_SYNC_TIMING=1`. Required CI performance checks should use
 deterministic structural gates such as operation-count budgets; timing and
 roofline thresholds belong in explicit device or manual workflows.
+
+Environment knobs that affect hot-path validation:
+
+| Variable | Effect |
+| --- | --- |
+| `LEIBNIZ_REQUIRE_TENSOR_COMPILE` | Truthy values require tensor element programs to compile instead of recording an eager fallback. |
+| `LEIBNIZ_REQUIRE_DEVICE_RESIDENCY` | Truthy values make operation fallback raise instead of migrating an operation to CPU. |
+| `LEIBNIZ_SYNC_TIMING` | Truthy values synchronize the runtime around throughput timing spans. |
+| `LEIBNIZ_PERF_GATES` | `1` enables manually run performance and roofline gates. |
 
 Protocol-style records and validation stop at the tensor-kernel boundary.
 Inside a tensor kernel, write plain backend math with batched coordinates and
