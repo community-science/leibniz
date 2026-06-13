@@ -293,3 +293,21 @@ def test_measure_program_cost_is_device_independent_for_cuda() -> None:
     )
 
     assert cpu_measurement.abstract_flops == cuda_measurement.abstract_flops
+
+
+def test_without_operation_trace_drops_trace_and_keeps_totals() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    left = runtime.torch.ones((4, 8))
+    right = runtime.torch.ones((8, 2))
+
+    measurement = measure_program_cost(runtime, lambda: left @ right)
+    stripped = measurement.without_operation_trace()
+
+    assert measurement.operation_trace
+    assert stripped.operation_trace == ()
+    assert stripped.abstract_flops == measurement.abstract_flops
+    assert stripped.operation_count == measurement.operation_count
+    assert stripped.per_op == measurement.per_op
+    assert "operation_trace" in stripped.to_record()
+    assert stripped.to_record()["operation_trace"] == []
+    assert stripped.without_operation_trace() is stripped

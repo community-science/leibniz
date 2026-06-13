@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, Self, cast
 
 from leibniz.tensor_runtime import (
@@ -333,6 +333,20 @@ class CostMeasurement:
         if self.roofline is not None:
             record["roofline"] = dict(self.roofline)
         return record
+
+    def without_operation_trace(self) -> CostMeasurement:
+        """Return this measurement with the per-operation trace dropped.
+
+        Durable evidence records store trace-free measurements: third-party
+        verification is re-run-and-recount, so an embedded trace adds bulk
+        without adding verifiability, and solver-scale traces (step count
+        times ops per step) would dominate evidence size. The in-memory
+        measurement keeps its trace for direct inspection and tests.
+        """
+
+        if not self.operation_trace:
+            return self
+        return replace(self, operation_trace=())
 
     def abstract_flops_per_item(self, item_count: int) -> float:
         """Return this measurement's abstract-FLOP count normalized by item count."""

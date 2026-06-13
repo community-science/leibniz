@@ -1193,7 +1193,7 @@ def _architecture_inference_cost_measurement(
             inputs=(fields,),
             strict=True,
             roofline=runtime_roofline_record(runtime),
-        )
+        ).without_operation_trace()
     except (CostMetrologyError, TensorRuntimeError, ValueError):
         return None
 

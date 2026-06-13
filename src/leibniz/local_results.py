@@ -794,7 +794,9 @@ def _evaluation_summary_cost_summary(
     cost_summary = dict(inspection_cost)
     cost_summary.pop("parameter_count", None)
     inference_cost, inference_cost_sample_count = _evaluation_summary_inference_cost(summary)
-    cost_summary["inference_cost_measurement"] = inference_cost.to_record()
+    cost_summary["inference_cost_measurement"] = (
+        inference_cost.without_operation_trace().to_record()
+    )
     cost_summary["inference_cost_sample_count"] = inference_cost_sample_count
     return cost_summary
 
