@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import cmath
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -371,8 +372,8 @@ def _ks_tensors(
             step_kernel=_ks_step_kernel,
             step_count=_time_count - 1,
             parameters=_ks_solver_parameters(),
-            dtype="float32",
-            cache_key=("ks-reference-step", _space_count, _time_count),
+            dtype="float64",
+            cache_key=("ks-reference-etdrk4-step", _space_count, _time_count),
         ),
         shape=(sample_count, 1, _space_count),
     )
@@ -393,9 +394,9 @@ def _ks_initial_parameters(
             values=sample_indices,
             dynamic_axes=(0,),
         ),
-        "seed_value": TensorElementParameter(dtype="float32", shape=(), values=(float(seed),)),
+        "seed_value": TensorElementParameter(dtype="float64", shape=(), values=(float(seed),)),
         "amplitude": TensorElementParameter(
-            dtype="float32",
+            dtype="float64",
             shape=(),
             values=(0.15 + 0.01 * float(window),),
         ),
@@ -409,10 +410,22 @@ def _ks_solver_parameters() -> dict[str, TensorElementParameter]:
     )
     wave_numbers = tuple(2.0 * math.pi * frequency / _box_length for frequency in frequencies)
     dt = _horizon / (_time_count - 1)
-    linear_factors = tuple(
-        complex(math.exp(dt * ((wave_number * wave_number) - (wave_number**4))), 0.0)
+    linear_values = tuple(
+        (wave_number * wave_number) - (wave_number**4)
         for wave_number in wave_numbers
     )
+    linear_factors = tuple(complex(math.exp(dt * value), 0.0) for value in linear_values)
+    half_linear_factors = tuple(
+        complex(math.exp(0.5 * dt * value), 0.0) for value in linear_values
+    )
+    coefficient_rows = tuple(
+        _etdrk4_coefficients(value, dt=dt)
+        for value in linear_values
+    )
+    q_coefficients = tuple(row[0] for row in coefficient_rows)
+    f1_coefficients = tuple(row[1] for row in coefficient_rows)
+    f2_coefficients = tuple(row[2] for row in coefficient_rows)
+    f3_coefficients = tuple(row[3] for row in coefficient_rows)
     derivative_coefficients = tuple(complex(0.0, wave_number) for wave_number in wave_numbers)
     dealias_mask = tuple(
         1.0 if abs(frequency) <= _space_count // 3 else 0.0
@@ -420,22 +433,89 @@ def _ks_solver_parameters() -> dict[str, TensorElementParameter]:
     )
     return {
         "linear_factors": TensorElementParameter(
-            dtype="complex64",
+            dtype="complex128",
             shape=(_space_count,),
             values=linear_factors,
         ),
+        "half_linear_factors": TensorElementParameter(
+            dtype="complex128",
+            shape=(_space_count,),
+            values=half_linear_factors,
+        ),
+        "q_coefficients": TensorElementParameter(
+            dtype="complex128",
+            shape=(_space_count,),
+            values=q_coefficients,
+        ),
+        "f1_coefficients": TensorElementParameter(
+            dtype="complex128",
+            shape=(_space_count,),
+            values=f1_coefficients,
+        ),
+        "f2_coefficients": TensorElementParameter(
+            dtype="complex128",
+            shape=(_space_count,),
+            values=f2_coefficients,
+        ),
+        "f3_coefficients": TensorElementParameter(
+            dtype="complex128",
+            shape=(_space_count,),
+            values=f3_coefficients,
+        ),
         "derivative_coefficients": TensorElementParameter(
-            dtype="complex64",
+            dtype="complex128",
             shape=(_space_count,),
             values=derivative_coefficients,
         ),
         "dealias_mask": TensorElementParameter(
-            dtype="float32",
+            dtype="float64",
             shape=(_space_count,),
             values=dealias_mask,
         ),
-        "dt": TensorElementParameter(dtype="float32", shape=(), values=(dt,)),
     }
+
+
+def _etdrk4_coefficients(
+    linear_value: float,
+    *,
+    dt: float,
+) -> tuple[complex, complex, complex, complex]:
+    roots = tuple(
+        complex(
+            math.cos(math.pi * ((index + 0.5) / 16.0)),
+            math.sin(math.pi * ((index + 0.5) / 16.0)),
+        )
+        for index in range(16)
+    )
+    lr_values = tuple(dt * linear_value + root for root in roots)
+    q = dt * sum((cmath.exp(lr / 2.0) - 1.0) / lr for lr in lr_values) / len(lr_values)
+    f1 = (
+        dt
+        * sum(
+            (-4.0 - lr + cmath.exp(lr) * (4.0 - (3.0 * lr) + (lr * lr)))
+            / (lr * lr * lr)
+            for lr in lr_values
+        )
+        / len(lr_values)
+    )
+    f2 = (
+        dt
+        * sum(
+            (2.0 + lr + cmath.exp(lr) * (-2.0 + lr)) / (lr * lr * lr)
+            for lr in lr_values
+        )
+        / len(lr_values)
+    )
+    f3 = (
+        dt
+        * sum(
+            (-4.0 - (3.0 * lr) - (lr * lr) + cmath.exp(lr) * (4.0 - lr))
+            / (lr * lr * lr)
+            for lr in lr_values
+        )
+        / len(lr_values)
+    )
+    return q, f1, f2, f3
 
 
 def _ks_initial_condition_kernel(
@@ -460,18 +540,70 @@ def _ks_step_kernel(
     ops: Any,
     *,
     linear_factors: Any,
+    half_linear_factors: Any,
+    q_coefficients: Any,
+    f1_coefficients: Any,
+    f2_coefficients: Any,
+    f3_coefficients: Any,
     derivative_coefficients: Any,
     dealias_mask: Any,
-    dt: Any,
 ) -> Any:
     spectrum = ops.fft(state, axis=-1)
+    nonlinear_spectrum = _ks_nonlinear_spectrum(
+        spectrum,
+        ops,
+        derivative_coefficients=derivative_coefficients,
+        dealias_mask=dealias_mask,
+    )
+    half_linear = half_linear_factors.reshape((1, 1, -1))
+    q = q_coefficients.reshape((1, 1, -1))
+    a_spectrum = (half_linear * spectrum) + (q * nonlinear_spectrum)
+    a_nonlinear = _ks_nonlinear_spectrum(
+        a_spectrum,
+        ops,
+        derivative_coefficients=derivative_coefficients,
+        dealias_mask=dealias_mask,
+    )
+    b_spectrum = (half_linear * spectrum) + (q * a_nonlinear)
+    b_nonlinear = _ks_nonlinear_spectrum(
+        b_spectrum,
+        ops,
+        derivative_coefficients=derivative_coefficients,
+        dealias_mask=dealias_mask,
+    )
+    c_spectrum = (half_linear * a_spectrum) + (
+        q * ((2.0 * b_nonlinear) - nonlinear_spectrum)
+    )
+    c_nonlinear = _ks_nonlinear_spectrum(
+        c_spectrum,
+        ops,
+        derivative_coefficients=derivative_coefficients,
+        dealias_mask=dealias_mask,
+    )
+    next_spectrum = (
+        linear_factors.reshape((1, 1, -1)) * spectrum
+        + f1_coefficients.reshape((1, 1, -1)) * nonlinear_spectrum
+        + 2.0
+        * f2_coefficients.reshape((1, 1, -1))
+        * (a_nonlinear + b_nonlinear)
+        + f3_coefficients.reshape((1, 1, -1)) * c_nonlinear
+    )
+    return ops.real(ops.ifft(next_spectrum, axis=-1))
+
+
+def _ks_nonlinear_spectrum(
+    spectrum: Any,
+    ops: Any,
+    *,
+    derivative_coefficients: Any,
+    dealias_mask: Any,
+) -> Any:
+    state = ops.real(ops.ifft(spectrum, axis=-1))
     gradient = ops.real(
         ops.ifft(spectrum * derivative_coefficients.reshape((1, 1, -1)), axis=-1)
     )
     nonlinear_spectrum = ops.fft(-state * gradient, axis=-1)
-    filtered_nonlinear = nonlinear_spectrum * dealias_mask.reshape((1, 1, -1))
-    next_spectrum = linear_factors.reshape((1, 1, -1)) * (spectrum + dt * filtered_nonlinear)
-    return ops.real(ops.ifft(next_spectrum, axis=-1))
+    return nonlinear_spectrum * dealias_mask.reshape((1, 1, -1))
 
 
 def _ks_residual_loss(predictions: Any, targets: Any) -> Any:

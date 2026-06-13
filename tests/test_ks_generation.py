@@ -28,8 +28,8 @@ def test_ks_generator_emits_initial_fields_and_space_time_targets() -> None:
     assert batch.region.log2_volume == 2.0
     assert fields.shape == (3, 1, 32)
     assert targets.shape == (3, 1, 9, 32)
-    assert fields.dtype == runtime.torch.float32
-    assert targets.dtype == runtime.torch.float32
+    assert fields.dtype == runtime.torch.float64
+    assert targets.dtype == runtime.torch.float64
     assert targets[:, :, 0, :].allclose(fields)
 
 
