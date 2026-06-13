@@ -40,10 +40,10 @@ from leibniz.target_contracts import (
 from leibniz.tensor_runtime import (
     TensorBatchProgram,
     TensorElementParameter,
-    TensorElementRecipe,
     TensorRuntime,
+    TensorSolverProgram,
     resolve_host_tensor_runtime,
-    tensor_runtime_construct_tensor,
+    tensor_runtime_solve_tensor_trajectory,
 )
 from leibniz.timing import TimingCollector
 
@@ -340,45 +340,87 @@ def _ks_tensors(
     sample_indices: tuple[int, ...],
     window: int,
 ) -> tuple[Any, Any]:
-    parameters = {
+    initial_program = TensorBatchProgram(
+        kernel=_ks_initial_condition_kernel,
+        parameters=_ks_initial_parameters(
+            seed=seed,
+            sample_indices=sample_indices,
+            window=window,
+        ),
+        cache_key=("ks-initial-condition",),
+    )
+    targets = tensor_runtime_solve_tensor_trajectory(
+        runtime,
+        program=TensorSolverProgram(
+            initial_state=initial_program,
+            step_kernel=_ks_step_kernel,
+            step_count=_time_count - 1,
+            parameters=_ks_solver_parameters(),
+            dtype="float32",
+            cache_key=("ks-reference-step", _space_count, _time_count),
+        ),
+        shape=(sample_count, 1, _space_count),
+    )
+    fields = targets[:, :, 0, :]
+    return fields, targets
+
+
+def _ks_initial_parameters(
+    *,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    window: int,
+) -> dict[str, TensorElementParameter]:
+    return {
         "sample_indices": TensorElementParameter(
             dtype="int64",
             shape=(len(sample_indices),),
             values=sample_indices,
             dynamic_axes=(0,),
         ),
-        "seed_value": TensorElementParameter(dtype="float64", shape=(), values=(float(seed),)),
+        "seed_value": TensorElementParameter(dtype="float32", shape=(), values=(float(seed),)),
         "amplitude": TensorElementParameter(
-            dtype="float64",
+            dtype="float32",
             shape=(),
             values=(0.15 + 0.01 * float(window),),
         ),
     }
-    fields = tensor_runtime_construct_tensor(
-        runtime,
-        recipe=TensorElementRecipe(
-            shape=(sample_count, 1, _space_count),
-            dtype="float32",
-            program=TensorBatchProgram(
-                kernel=_ks_initial_condition_kernel,
-                parameters=parameters,
-                cache_key=("ks-initial-condition",),
-            ),
-        ),
+
+
+def _ks_solver_parameters() -> dict[str, TensorElementParameter]:
+    frequencies = tuple(
+        index if index <= _space_count // 2 else index - _space_count
+        for index in range(_space_count)
     )
-    targets = tensor_runtime_construct_tensor(
-        runtime,
-        recipe=TensorElementRecipe(
-            shape=(sample_count, 1, _time_count, _space_count),
-            dtype="float32",
-            program=TensorBatchProgram(
-                kernel=_ks_trajectory_kernel,
-                parameters=parameters,
-                cache_key=("ks-reference-trajectory",),
-            ),
-        ),
+    wave_numbers = tuple(2.0 * math.pi * frequency / _box_length for frequency in frequencies)
+    dt = _horizon / (_time_count - 1)
+    linear_factors = tuple(
+        complex(math.exp(dt * ((wave_number * wave_number) - (wave_number**4))), 0.0)
+        for wave_number in wave_numbers
     )
-    return fields, targets
+    derivative_coefficients = tuple(complex(0.0, wave_number) for wave_number in wave_numbers)
+    dealias_mask = tuple(
+        1.0 if abs(frequency) <= _space_count // 3 else 0.0
+        for frequency in frequencies
+    )
+    return {
+        "linear_factors": TensorElementParameter(
+            dtype="complex64",
+            shape=(_space_count,),
+            values=linear_factors,
+        ),
+        "derivative_coefficients": TensorElementParameter(
+            dtype="complex64",
+            shape=(_space_count,),
+            values=derivative_coefficients,
+        ),
+        "dealias_mask": TensorElementParameter(
+            dtype="float32",
+            shape=(_space_count,),
+            values=dealias_mask,
+        ),
+        "dt": TensorElementParameter(dtype="float32", shape=(), values=(dt,)),
+    }
 
 
 def _ks_initial_condition_kernel(
@@ -398,23 +440,23 @@ def _ks_initial_condition_kernel(
     )
 
 
-def _ks_trajectory_kernel(
-    coordinates: tuple[Any, ...],
+def _ks_step_kernel(
+    state: Any,
+    ops: Any,
     *,
-    sample_indices: Any,
-    seed_value: Any,
-    amplitude: Any,
+    linear_factors: Any,
+    derivative_coefficients: Any,
+    dealias_mask: Any,
+    dt: Any,
 ) -> Any:
-    sample, channel, t, x = coordinates
-    _ = channel
-    phase = (sample_indices[sample] + seed_value).reshape((-1, 1, 1, 1)) * 0.173
-    spatial = x.reshape((1, 1, 1, -1)) * (2.0 * math.pi / _space_count)
-    temporal = t.reshape((1, 1, -1, 1)) * (_horizon / (_time_count - 1))
-    initial = amplitude * (
-        (spatial + phase).sin()
-        + 0.5 * (2.0 * spatial - phase).cos()
+    spectrum = ops.fft(state, axis=-1)
+    gradient = ops.real(
+        ops.ifft(spectrum * derivative_coefficients.reshape((1, 1, -1)), axis=-1)
     )
-    return initial * (-0.15 * temporal).exp()
+    nonlinear_spectrum = ops.fft(-state * gradient, axis=-1)
+    filtered_nonlinear = nonlinear_spectrum * dealias_mask.reshape((1, 1, -1))
+    next_spectrum = linear_factors.reshape((1, 1, -1)) * (spectrum + dt * filtered_nonlinear)
+    return ops.real(ops.ifft(next_spectrum, axis=-1))
 
 
 def _ks_samples(
