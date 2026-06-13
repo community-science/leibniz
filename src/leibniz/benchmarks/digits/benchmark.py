@@ -991,33 +991,23 @@ class Generator:
             for component_index in range(digit_count)
         )
         component_mark_counts: list[int] = []
-        component_mark_values: list[list[float]] = []
-        component_mark_widths: list[list[float]] = []
-        component_control_x_points: list[list[list[float]]] = []
-        component_control_y_points: list[list[list[float]]] = []
+        component_mark_parameters: list[list[list[float]]] = []
+        component_control_points: list[list[list[list[float]]]] = []
         for component_index in range(digit_count):
-            component_values: list[float] = []
-            component_widths: list[float] = []
-            component_control_x: list[list[float]] = []
-            component_control_y: list[list[float]] = []
+            mark_parameters: list[list[float]] = []
+            control_points: list[list[list[float]]] = []
             for mark in self.formation.components[component_index].marks:
                 if mark.channel != 0:
                     raise TensorRuntimeError("Digits tensor renderer requires single-channel marks")
                 controls = _quadratic_control_points(mark)
-                component_values.append(float(mark.value))
-                component_widths.append(float(mark.width))
-                component_control_x.append([point[0] for point in controls])
-                component_control_y.append([point[1] for point in controls])
-            component_mark_counts.append(len(component_values))
-            while len(component_values) < max_mark_count:
-                component_values.append(0.0)
-                component_widths.append(0.0)
-                component_control_x.append([0.0, 0.0, 0.0])
-                component_control_y.append([0.0, 0.0, 0.0])
-            component_mark_values.append(component_values)
-            component_mark_widths.append(component_widths)
-            component_control_x_points.append(component_control_x)
-            component_control_y_points.append(component_control_y)
+                mark_parameters.append([float(mark.value), float(mark.width)])
+                control_points.append([[point[0], point[1]] for point in controls])
+            component_mark_counts.append(len(mark_parameters))
+            while len(mark_parameters) < max_mark_count:
+                mark_parameters.append([0.0, 0.0])
+                control_points.append([[0.0, 0.0] for _ in range(3)])
+            component_mark_parameters.append(mark_parameters)
+            component_control_points.append(control_points)
         if not max_mark_count:
             return tensor_runtime_construct_tensor(
                 runtime,
@@ -1049,19 +1039,13 @@ class Generator:
                         digit_count=digit_count,
                     ),
                     component_mark_counts=tuple(component_mark_counts),
-                    component_mark_values=tuple(
-                        tuple(row) for row in component_mark_values
+                    component_mark_parameters=tuple(
+                        tuple(tuple(parameters) for parameters in component)
+                        for component in component_mark_parameters
                     ),
-                    component_mark_widths=tuple(
-                        tuple(row) for row in component_mark_widths
-                    ),
-                    component_control_x_points=tuple(
-                        tuple(tuple(points) for points in component)
-                        for component in component_control_x_points
-                    ),
-                    component_control_y_points=tuple(
-                        tuple(tuple(points) for points in component)
-                        for component in component_control_y_points
+                    component_control_points=tuple(
+                        tuple(tuple(tuple(point) for point in mark) for mark in component)
+                        for component in component_control_points
                     ),
                     height=height,
                     width=width,
@@ -1916,13 +1900,14 @@ def _quadratic_tensor_point(
     controls: Any,
     component_index: Any,
     mark_slot: int,
+    coordinate_index: int,
     t: Any,
 ) -> Any:
     t_by_segment = t.reshape((1, -1))
     one_minus_t = 1.0 - t_by_segment
-    start = controls[component_index, mark_slot, 0].reshape((-1, 1))
-    control = controls[component_index, mark_slot, 1].reshape((-1, 1))
-    end = controls[component_index, mark_slot, 2].reshape((-1, 1))
+    start = controls[component_index, mark_slot, 0, coordinate_index].reshape((-1, 1))
+    control = controls[component_index, mark_slot, 1, coordinate_index].reshape((-1, 1))
+    end = controls[component_index, mark_slot, 2, coordinate_index].reshape((-1, 1))
     return (
         one_minus_t * one_minus_t * start
         + 2.0 * one_minus_t * t_by_segment * control
@@ -2007,16 +1992,16 @@ def _digits_tensor_program(
     digit_count: int,
     transform_values: tuple[float, ...],
     component_mark_counts: tuple[int, ...],
-    component_mark_values: tuple[tuple[float, ...], ...],
-    component_mark_widths: tuple[tuple[float, ...], ...],
-    component_control_x_points: tuple[tuple[tuple[float, ...], ...], ...],
-    component_control_y_points: tuple[tuple[tuple[float, ...], ...], ...],
+    component_mark_parameters: tuple[tuple[tuple[float, ...], ...], ...],
+    component_control_points: tuple[tuple[tuple[tuple[float, ...], ...], ...], ...],
     height: int,
     width: int,
 ) -> TensorBatchProgram:
     component_count = len(component_mark_counts)
-    max_mark_count = len(component_mark_values[0]) if component_count else 0
+    max_mark_count = len(component_mark_parameters[0]) if component_count else 0
+    mark_parameter_count = 2
     control_point_count = 3
+    control_coordinate_count = 2
     sample_addresses = _digits_sample_addresses(
         seed=seed,
         sample_indices=sample_indices,
@@ -2030,12 +2015,9 @@ def _digits_tensor_program(
         sample_address_values: Any,
         transform_values: Any,
         component_mark_counts: Any,
-        component_mark_values: Any,
-        component_mark_widths: Any,
-        component_control_x_points: Any,
-        component_control_y_points: Any,
+        component_mark_parameters: Any,
+        component_control_points: Any,
         segment_start_t: Any,
-        segment_end_t: Any,
         image_height: Any,
         image_width: Any,
     ) -> Any:
@@ -2069,28 +2051,35 @@ def _digits_tensor_program(
             active_mark = active_channel & (
                 mark_slot < mark_count.reshape((-1, 1, 1, 1))
             )
+            segment_end_t = segment_start_t + (
+                1.0 / float(_batch_render_curve_sample_count - 1)
+            )
             raw_sx = _quadratic_tensor_point(
-                component_control_x_points,
+                component_control_points,
                 component_index,
                 mark_slot,
+                0,
                 segment_start_t,
             )
             raw_sy = _quadratic_tensor_point(
-                component_control_y_points,
+                component_control_points,
                 component_index,
                 mark_slot,
+                1,
                 segment_start_t,
             )
             raw_ex = _quadratic_tensor_point(
-                component_control_x_points,
+                component_control_points,
                 component_index,
                 mark_slot,
+                0,
                 segment_end_t,
             )
             raw_ey = _quadratic_tensor_point(
-                component_control_y_points,
+                component_control_points,
                 component_index,
                 mark_slot,
+                1,
                 segment_end_t,
             )
             sx = (0.5 + m00 * (raw_sx - 0.5) + m02) * image_width
@@ -2127,7 +2116,7 @@ def _digits_tensor_program(
             distance_squared = segment_distance_squared.min(dim=1).values.reshape(
                 (-1, 1, y_index.shape[0], x_index.shape[0])
             )
-            mark_width = component_mark_widths[component_index, mark_slot].reshape(
+            mark_width = component_mark_parameters[component_index, mark_slot, 1].reshape(
                 (-1, 1, 1, 1)
             )
             width_scale_field = width_scale.reshape((-1, 1, 1, 1))
@@ -2136,7 +2125,9 @@ def _digits_tensor_program(
             )
             contribution = (
                 active_mark & (distance_squared <= threshold)
-            ) * component_mark_values[component_index, mark_slot].reshape((-1, 1, 1, 1))
+            ) * component_mark_parameters[component_index, mark_slot, 0].reshape(
+                (-1, 1, 1, 1)
+            )
             value = value.maximum(contribution)
         return value
 
@@ -2160,34 +2151,30 @@ def _digits_tensor_program(
                 shape=(component_count,),
                 values=component_mark_counts,
             ),
-            "component_mark_values": TensorElementParameter(
+            "component_mark_parameters": TensorElementParameter(
                 dtype="float32",
-                shape=(component_count, max_mark_count),
-                values=tuple(value for row in component_mark_values for value in row),
-            ),
-            "component_mark_widths": TensorElementParameter(
-                dtype="float32",
-                shape=(component_count, max_mark_count),
-                values=tuple(value for row in component_mark_widths for value in row),
-            ),
-            "component_control_x_points": TensorElementParameter(
-                dtype="float32",
-                shape=(component_count, max_mark_count, control_point_count),
+                shape=(component_count, max_mark_count, mark_parameter_count),
                 values=tuple(
                     value
-                    for component in component_control_x_points
+                    for component in component_mark_parameters
                     for mark in component
                     for value in mark
                 ),
             ),
-            "component_control_y_points": TensorElementParameter(
+            "component_control_points": TensorElementParameter(
                 dtype="float32",
-                shape=(component_count, max_mark_count, control_point_count),
+                shape=(
+                    component_count,
+                    max_mark_count,
+                    control_point_count,
+                    control_coordinate_count,
+                ),
                 values=tuple(
                     value
-                    for component in component_control_y_points
+                    for component in component_control_points
                     for mark in component
-                    for value in mark
+                    for point in mark
+                    for value in point
                 ),
             ),
             "segment_start_t": TensorElementParameter(
@@ -2195,14 +2182,6 @@ def _digits_tensor_program(
                 shape=(_batch_render_curve_sample_count - 1,),
                 values=tuple(
                     index / float(_batch_render_curve_sample_count - 1)
-                    for index in range(_batch_render_curve_sample_count - 1)
-                ),
-            ),
-            "segment_end_t": TensorElementParameter(
-                dtype="float32",
-                shape=(_batch_render_curve_sample_count - 1,),
-                values=tuple(
-                    (index + 1) / float(_batch_render_curve_sample_count - 1)
                     for index in range(_batch_render_curve_sample_count - 1)
                 ),
             ),
