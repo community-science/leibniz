@@ -27,7 +27,7 @@ sampling outcomes, and integral terms build on them in later layers.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -39,6 +39,7 @@ __all__ = [
     "Distinguishability",
     "EnumeratedCellsDomain",
     "IntegerRangeDomain",
+    "MeasureEstimate",
     "ProductRegion",
     "RealGridDomain",
     "RegionFiltration",
@@ -50,6 +51,7 @@ __all__ = [
     "axis_region_from_record",
     "axis_regions_are_disjoint",
     "distinguishability_from_record",
+    "measure_estimate_from_record",
     "product_region_from_record",
     "product_regions_are_disjoint",
     "region_filtration_from_record",
@@ -84,6 +86,12 @@ _measure_rules = frozenset({_product_of_counts_measure_rule, _benchmark_computed
 
 _disjoint_union_rule = "disjoint-union"
 _union_rules = frozenset({_disjoint_union_rule})
+
+_exact_measure_estimate_kind = "exact"
+_estimated_measure_estimate_kind = "estimated"
+_measure_estimate_kinds = frozenset(
+    {_exact_measure_estimate_kind, _estimated_measure_estimate_kind}
+)
 
 
 class StateSpaceError(ValueError):
@@ -160,6 +168,58 @@ class StateSpaceAmbient:
             "field_codomain_id": self.field_codomain_id,
             "distinguishability": self.distinguishability.to_record(),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class MeasureEstimate:
+    """Whether a declared region volume is exact or an estimated bracket."""
+
+    kind: str
+    method_id: str | None = None
+    log2_lower: float | None = None
+    log2_upper: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in _measure_estimate_kinds:
+            raise StateSpaceError("measure estimate kind is not a core kind")
+        if self.kind == _exact_measure_estimate_kind:
+            if (
+                self.method_id is not None
+                or self.log2_lower is not None
+                or self.log2_upper is not None
+            ):
+                raise StateSpaceError("exact measure estimates do not declare a method or bounds")
+            return
+        if not self.method_id:
+            raise StateSpaceError("estimated measure estimates require a method_id")
+        if self.log2_lower is None or self.log2_upper is None:
+            raise StateSpaceError("estimated measure estimates require log2 bounds")
+        for label, value in (
+            ("log2_lower", self.log2_lower),
+            ("log2_upper", self.log2_upper),
+        ):
+            if type(value) not in (int, float) or not math.isfinite(float(value)):
+                raise StateSpaceError(f"measure estimate {label} must be finite")
+        if float(self.log2_lower) > float(self.log2_upper):
+            raise StateSpaceError("measure estimate lower bound must not exceed upper bound")
+
+    @property
+    def estimated(self) -> bool:
+        """Return whether this estimate declares an interval bracket."""
+
+        return self.kind == _estimated_measure_estimate_kind
+
+    def to_record(self) -> dict[str, object]:
+        """Return a record for this measure estimate."""
+
+        record: dict[str, object] = {"kind": self.kind}
+        if self.method_id is not None:
+            record["method_id"] = self.method_id
+        if self.log2_lower is not None:
+            record["log2_lower"] = self.log2_lower
+        if self.log2_upper is not None:
+            record["log2_upper"] = self.log2_upper
+        return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,6 +425,7 @@ class ProductRegion:
     log2_volume: float
     stratum_id: str | None = None
     stratum_target: Mapping[str, object] | None = None
+    measure_estimate: MeasureEstimate | None = None
 
     def __post_init__(self) -> None:
         if not self.axis_regions:
@@ -377,11 +438,26 @@ class ProductRegion:
         if type(self.volume) is not int or self.volume < 1:
             raise StateSpaceError("product region volume must be a positive integer")
         box = math.prod(axis_region.count for axis_region in self.axis_regions)
-        if self.measure_rule == _product_of_counts_measure_rule and self.volume != box:
+        estimated = _measure_estimate_is_estimated(self.measure_estimate)
+        if (
+            self.measure_rule == _product_of_counts_measure_rule
+            and self.volume != box
+            and not estimated
+        ):
             raise StateSpaceError("product-of-counts volume must equal the product of axis counts")
         if self.volume > box:
             raise StateSpaceError("product region volume must not exceed its product box")
-        _validate_log2(self.log2_volume, self.volume, label="product region log2_volume")
+        if estimated:
+            estimate = cast(MeasureEstimate, self.measure_estimate)
+            _validate_estimated_log2_volume(
+                self.log2_volume,
+                estimate,
+                label="product region log2_volume",
+            )
+            if cast(float, estimate.log2_upper) > math.log2(box) + _log2_tolerance:
+                raise StateSpaceError("product region measure estimate exceeds its product box")
+        else:
+            _validate_log2(self.log2_volume, self.volume, label="product region log2_volume")
         if self.stratum_id is not None and not self.stratum_id:
             raise StateSpaceError("product region stratum_id must be nonempty")
         if self.stratum_target is not None:
@@ -412,6 +488,8 @@ class ProductRegion:
             record["stratum_id"] = self.stratum_id
         if self.stratum_target is not None:
             record["stratum_target"] = dict(self.stratum_target)
+        if self.measure_estimate is not None:
+            record["measure_estimate"] = self.measure_estimate.to_record()
         return record
 
 
@@ -425,6 +503,7 @@ class StateSpaceRegion:
     union_rule: str
     volume: int
     log2_volume: float
+    measure_estimate: MeasureEstimate | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -435,7 +514,8 @@ class StateSpaceRegion:
             raise StateSpaceError("state-space region union rule is not a core union rule")
         if type(self.volume) is not int:
             raise StateSpaceError("state-space region volume must be an integer")
-        if self.volume != sum(component.volume for component in self.components):
+        estimated = _measure_estimate_is_estimated(self.measure_estimate)
+        if self.volume != sum(component.volume for component in self.components) and not estimated:
             raise StateSpaceError("disjoint-union volume must equal the sum of component volumes")
         axes_by_id: dict[str, StateSpaceAxis] = {}
         for component in self.components:
@@ -445,7 +525,30 @@ class StateSpaceRegion:
                     raise StateSpaceError(
                         "shared axis ids must declare identical axes across components"
                     )
-        _validate_log2(self.log2_volume, self.volume, label="state-space region log2_volume")
+        if estimated:
+            estimate = cast(MeasureEstimate, self.measure_estimate)
+            _validate_estimated_log2_volume(
+                self.log2_volume,
+                estimate,
+                label="state-space region log2_volume",
+            )
+            component_lower, component_upper = _sum_linear_measure_intervals(
+                _product_region_measure_interval(component) for component in self.components
+            )
+            estimate_lower, estimate_upper = _measure_estimate_linear_interval(estimate)
+            if (
+                component_lower < estimate_lower - _log2_tolerance
+                or component_upper > estimate_upper + _log2_tolerance
+            ):
+                raise StateSpaceError(
+                    "state-space region measure estimate must contain component measures"
+                )
+        else:
+            _validate_log2(
+                self.log2_volume,
+                self.volume,
+                label="state-space region log2_volume",
+            )
 
     def contains(self, component_index: int, coordinates: Mapping[str, object]) -> bool:
         """Return whether axis coordinates lie in the indexed component."""
@@ -457,7 +560,7 @@ class StateSpaceRegion:
     def to_record(self) -> dict[str, object]:
         """Return a record for this state-space region."""
 
-        return {
+        record: dict[str, object] = {
             "id": self.id,
             "ambient": self.ambient.to_record(),
             "components": [component.to_record() for component in self.components],
@@ -465,6 +568,9 @@ class StateSpaceRegion:
             "volume": self.volume,
             "log2_volume": self.log2_volume,
         }
+        if self.measure_estimate is not None:
+            record["measure_estimate"] = self.measure_estimate.to_record()
+        return record
 
 
 def axis_regions_are_disjoint(left: AxisRegion, right: AxisRegion) -> bool:
@@ -577,11 +683,32 @@ class RegionFiltration:
                     )
         if type(self.volume) is not int:
             raise StateSpaceError("region filtration volume must be an integer")
-        if self.volume != sum(increment.volume for increment in self.increments):
+        estimated = any(
+            _measure_estimate_is_estimated(increment.measure_estimate)
+            for increment in self.increments
+        )
+        if self.volume != sum(increment.volume for increment in self.increments) and not estimated:
             raise StateSpaceError(
                 "region filtration volume must equal the sum of increment volumes"
             )
-        _validate_log2(self.log2_volume, self.volume, label="region filtration log2_volume")
+        if estimated:
+            if not math.isfinite(float(self.log2_volume)):
+                raise StateSpaceError("region filtration log2_volume must be finite")
+            lower, upper = _sum_linear_measure_intervals(
+                _state_space_region_measure_interval(increment)
+                for increment in self.increments
+            )
+            if not lower <= self.volume <= upper:
+                raise StateSpaceError(
+                    "region filtration volume must lie within increment measure bounds"
+                )
+            log2_converted_volume = 2.0 ** float(self.log2_volume)
+            if not lower <= log2_converted_volume <= upper:
+                raise StateSpaceError(
+                    "region filtration log2_volume must lie within increment measure bounds"
+                )
+        else:
+            _validate_log2(self.log2_volume, self.volume, label="region filtration log2_volume")
 
     @property
     def ambient(self) -> StateSpaceAmbient:
@@ -633,6 +760,26 @@ def distinguishability_from_record(value: object) -> Distinguishability:
         resolution=resolution,
         certificate_id=_record_optional_str(
             record, "certificate_id", label="distinguishability record"
+        ),
+    )
+
+
+def measure_estimate_from_record(value: object) -> MeasureEstimate:
+    """Parse a measure estimate from a record."""
+
+    record = _record_mapping(value, label="measure estimate record")
+    return MeasureEstimate(
+        kind=_record_str(record, "kind", label="measure estimate record"),
+        method_id=_record_optional_str(record, "method_id", label="measure estimate record"),
+        log2_lower=_record_optional_float(
+            record,
+            "log2_lower",
+            label="measure estimate record",
+        ),
+        log2_upper=_record_optional_float(
+            record,
+            "log2_upper",
+            label="measure estimate record",
         ),
     )
 
@@ -727,6 +874,12 @@ def product_region_from_record(value: object) -> ProductRegion:
         if stratum_target_value is None
         else dict(_record_mapping(stratum_target_value, label="product region stratum_target"))
     )
+    measure_estimate_value = record.get("measure_estimate")
+    measure_estimate = (
+        None
+        if measure_estimate_value is None
+        else measure_estimate_from_record(measure_estimate_value)
+    )
     return ProductRegion(
         axis_regions=axis_regions,
         measure_rule=_record_str(record, "measure_rule", label="product region record"),
@@ -734,6 +887,7 @@ def product_region_from_record(value: object) -> ProductRegion:
         log2_volume=_record_float(record, "log2_volume", label="product region record"),
         stratum_id=_record_optional_str(record, "stratum_id", label="product region record"),
         stratum_target=stratum_target,
+        measure_estimate=measure_estimate,
     )
 
 
@@ -752,6 +906,11 @@ def state_space_region_from_record(value: object) -> StateSpaceRegion:
         union_rule=_record_str(record, "union_rule", label="state-space region record"),
         volume=_record_int(record, "volume", label="state-space region record"),
         log2_volume=_record_float(record, "log2_volume", label="state-space region record"),
+        measure_estimate=(
+            None
+            if record.get("measure_estimate") is None
+            else measure_estimate_from_record(record.get("measure_estimate"))
+        ),
     )
 
 
@@ -852,6 +1011,54 @@ def _validate_log2(declared: float, count: int, *, label: str) -> None:
         raise StateSpaceError(f"{label} must equal log2 of the declared count")
 
 
+def _measure_estimate_is_estimated(estimate: MeasureEstimate | None) -> bool:
+    return estimate is not None and estimate.estimated
+
+
+def _validate_estimated_log2_volume(
+    declared: float,
+    estimate: MeasureEstimate,
+    *,
+    label: str,
+) -> None:
+    if type(declared) not in (int, float) or not math.isfinite(float(declared)):
+        raise StateSpaceError(f"{label} must be finite")
+    lower = cast(float, estimate.log2_lower)
+    upper = cast(float, estimate.log2_upper)
+    if not lower <= float(declared) <= upper:
+        raise StateSpaceError(f"{label} must lie within the measure estimate bounds")
+
+
+def _measure_estimate_linear_interval(estimate: MeasureEstimate) -> tuple[float, float]:
+    return (
+        2.0 ** cast(float, estimate.log2_lower),
+        2.0 ** cast(float, estimate.log2_upper),
+    )
+
+
+def _product_region_measure_interval(region: ProductRegion) -> tuple[float, float]:
+    if _measure_estimate_is_estimated(region.measure_estimate):
+        return _measure_estimate_linear_interval(cast(MeasureEstimate, region.measure_estimate))
+    return (float(region.volume), float(region.volume))
+
+
+def _state_space_region_measure_interval(region: StateSpaceRegion) -> tuple[float, float]:
+    if _measure_estimate_is_estimated(region.measure_estimate):
+        return _measure_estimate_linear_interval(cast(MeasureEstimate, region.measure_estimate))
+    return (float(region.volume), float(region.volume))
+
+
+def _sum_linear_measure_intervals(
+    intervals: Iterable[tuple[float, float]],
+) -> tuple[float, float]:
+    lower = 0.0
+    upper = 0.0
+    for interval_lower, interval_upper in intervals:
+        lower += interval_lower
+        upper += interval_upper
+    return lower, upper
+
+
 def _validate_scalar_mapping(mapping: Mapping[str, object], *, label: str) -> None:
     if not mapping:
         raise StateSpaceError(f"{label} must not be empty")
@@ -913,6 +1120,20 @@ def _record_optional_str(record: Mapping[str, object], key: str, *, label: str) 
     if type(value) is not str or not value:
         raise StateSpaceError(f"{label} {key} must be a nonempty string when present")
     return value
+
+
+def _record_optional_float(
+    record: Mapping[str, object],
+    key: str,
+    *,
+    label: str,
+) -> float | None:
+    value = record.get(key)
+    if value is None:
+        return None
+    if type(value) not in (int, float):
+        raise StateSpaceError(f"{label} {key} must be a number when present")
+    return float(cast(float, value))
 
 
 def _record_int(record: Mapping[str, object], key: str, *, label: str) -> int:

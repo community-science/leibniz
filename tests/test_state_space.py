@@ -11,6 +11,7 @@ from leibniz.state_space import (
     Distinguishability,
     EnumeratedCellsDomain,
     IntegerRangeDomain,
+    MeasureEstimate,
     ProductRegion,
     RealGridDomain,
     RegionFiltration,
@@ -19,6 +20,8 @@ from leibniz.state_space import (
     StateSpaceError,
     StateSpaceRegion,
     axis_regions_are_disjoint,
+    measure_estimate_from_record,
+    product_region_from_record,
     product_regions_are_disjoint,
     region_filtration_from_record,
     state_space_ambient_from_record,
@@ -571,6 +574,87 @@ def test_product_region_invariants() -> None:
         )
 
 
+def test_measure_estimate_invariants_and_round_trip() -> None:
+    estimate = MeasureEstimate(
+        kind="estimated",
+        method_id="covering-number-grid-bound",
+        log2_lower=1.0,
+        log2_upper=2.0,
+    )
+
+    record = load_object_document(
+        canonical_document_bytes(estimate.to_record()),
+        description="measure estimate",
+    )
+    parsed = measure_estimate_from_record(record)
+
+    assert parsed == estimate
+    assert MeasureEstimate(kind="exact").to_record() == {"kind": "exact"}
+    with pytest.raises(StateSpaceError):
+        MeasureEstimate(kind="exact", method_id="method")
+    with pytest.raises(StateSpaceError):
+        MeasureEstimate(kind="estimated", log2_lower=1.0, log2_upper=2.0)
+    with pytest.raises(StateSpaceError):
+        MeasureEstimate(kind="estimated", method_id="method", log2_lower=2.0, log2_upper=1.0)
+    with pytest.raises(StateSpaceError):
+        MeasureEstimate(
+            kind="estimated",
+            method_id="method",
+            log2_lower=1.0,
+            log2_upper=math.inf,
+        )
+
+
+def test_estimated_product_region_accepts_bracketed_volume() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
+    axis_region = AxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+    component = ProductRegion(
+        axis_regions=(axis_region,),
+        measure_rule="product-of-counts",
+        volume=3,
+        log2_volume=1.7,
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=1.0,
+            log2_upper=2.0,
+        ),
+    )
+
+    assert product_region_from_record(component.to_record()) == component
+
+
+def test_estimated_product_region_rejects_invalid_brackets() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
+    axis_region = AxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+    with pytest.raises(StateSpaceError):
+        ProductRegion(
+            axis_regions=(axis_region,),
+            measure_rule="product-of-counts",
+            volume=3,
+            log2_volume=2.1,
+            measure_estimate=MeasureEstimate(
+                kind="estimated",
+                method_id="covering-number-grid-bound",
+                log2_lower=1.0,
+                log2_upper=2.0,
+            ),
+        )
+    with pytest.raises(StateSpaceError):
+        ProductRegion(
+            axis_regions=(axis_region,),
+            measure_rule="product-of-counts",
+            volume=3,
+            log2_volume=1.7,
+            measure_estimate=MeasureEstimate(
+                kind="estimated",
+                method_id="covering-number-grid-bound",
+                log2_lower=1.0,
+                log2_upper=3.0,
+            ),
+        )
+
+
 def test_state_space_region_invariants() -> None:
     base = _truncated_window_region()
     with pytest.raises(StateSpaceError):
@@ -617,6 +701,78 @@ def test_state_space_region_invariants() -> None:
             union_rule="disjoint-union",
             volume=13,
             log2_volume=math.log2(14),
+        )
+
+
+def test_estimated_state_space_region_contains_component_brackets() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
+    exact_axis_region = AxisRegion(axis=axis, coordinate_region=(0, 1), count=2, log2_count=1.0)
+    estimated_axis_region = AxisRegion(
+        axis=axis,
+        coordinate_region=(0, 3),
+        count=4,
+        log2_count=2.0,
+    )
+    exact_component = ProductRegion(
+        axis_regions=(exact_axis_region,),
+        measure_rule="product-of-counts",
+        volume=2,
+        log2_volume=1.0,
+    )
+    estimated_component = ProductRegion(
+        axis_regions=(estimated_axis_region,),
+        measure_rule="benchmark-computed-finite-count",
+        volume=3,
+        log2_volume=1.6,
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=1.0,
+            log2_upper=2.0,
+        ),
+    )
+    region = StateSpaceRegion(
+        id="estimated-region",
+        ambient=_metric_ambient(),
+        components=(exact_component, estimated_component),
+        union_rule="disjoint-union",
+        volume=5,
+        log2_volume=math.log2(5),
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=2.0,
+            log2_upper=math.log2(6),
+        ),
+    )
+
+    assert state_space_region_from_record(region.to_record()) == region
+
+
+def test_estimated_state_space_region_rejects_component_interval_violation() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
+    axis_region = AxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+    component = ProductRegion(
+        axis_regions=(axis_region,),
+        measure_rule="product-of-counts",
+        volume=4,
+        log2_volume=2.0,
+    )
+
+    with pytest.raises(StateSpaceError):
+        StateSpaceRegion(
+            id="estimated-region",
+            ambient=_metric_ambient(),
+            components=(component,),
+            union_rule="disjoint-union",
+            volume=4,
+            log2_volume=2.0,
+            measure_estimate=MeasureEstimate(
+                kind="estimated",
+                method_id="covering-number-grid-bound",
+                log2_lower=1.0,
+                log2_upper=1.5,
+            ),
         )
 
 
@@ -838,6 +994,65 @@ def test_region_filtration_reports_cumulative_volumes() -> None:
         math.log2(40),
     )
     assert filtration.ambient == _metric_ambient()
+
+
+def test_region_filtration_accepts_mixed_estimated_increment_bounds() -> None:
+    exact = _digit_shell_region("digits-shell-0", lower=0, upper=0)
+    estimated = StateSpaceRegion(
+        id="digits-shell-estimated",
+        ambient=_metric_ambient(),
+        components=_digit_shell_region("digits-shell-1", lower=1, upper=1).components,
+        union_rule="disjoint-union",
+        volume=12,
+        log2_volume=math.log2(12),
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=math.log2(9),
+            log2_upper=math.log2(13),
+        ),
+    )
+    filtration = RegionFiltration(
+        id="digits-estimated-curriculum",
+        increments=(exact, estimated),
+        volume=20,
+        log2_volume=math.log2(20),
+    )
+
+    assert region_filtration_from_record(filtration.to_record()) == filtration
+
+
+def test_region_filtration_rejects_estimated_cumulative_interval_violations() -> None:
+    exact = _digit_shell_region("digits-shell-0", lower=0, upper=0)
+    estimated = StateSpaceRegion(
+        id="digits-shell-estimated",
+        ambient=_metric_ambient(),
+        components=_digit_shell_region("digits-shell-1", lower=1, upper=1).components,
+        union_rule="disjoint-union",
+        volume=12,
+        log2_volume=math.log2(12),
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=math.log2(9),
+            log2_upper=math.log2(13),
+        ),
+    )
+
+    with pytest.raises(StateSpaceError):
+        RegionFiltration(
+            id="digits-estimated-curriculum",
+            increments=(exact, estimated),
+            volume=24,
+            log2_volume=math.log2(20),
+        )
+    with pytest.raises(StateSpaceError):
+        RegionFiltration(
+            id="digits-estimated-curriculum",
+            increments=(exact, estimated),
+            volume=20,
+            log2_volume=math.log2(24),
+        )
 
 
 def test_region_filtration_rejects_overlapping_increments() -> None:
