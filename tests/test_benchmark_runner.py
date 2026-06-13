@@ -1,5 +1,6 @@
 import math
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -43,7 +44,7 @@ from leibniz.observation_generation import (
     StateSpaceVolumeRequest,
     load_generator,
 )
-from leibniz.state_space import state_space_region_from_record
+from leibniz.state_space import AccessibleSubspace, state_space_region_from_record
 from leibniz.target_contracts import (
     BaselinePredictor,
     CompetenceFunctional,
@@ -307,6 +308,128 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     )
     assert "-samples" not in summary.run_slug
     assert not (tmp_path / "results").exists()
+
+
+def test_claim_chain_accepts_canonical_digits_windows() -> None:
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    planner = cast(Any, benchmark_runner)._VolumeCurriculumPlanner()
+    first = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=0,
+        planner=planner,
+    )
+    second = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=1,
+        planner=planner,
+    )
+
+    cast(Any, benchmark_runner)._validate_claim_chain(
+        (first, second),
+        accessible_subspace=benchmark.accessible_subspace,
+    )
+
+
+def test_claim_chain_rejects_missing_base_region() -> None:
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    rung = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=0,
+    )
+    shifted = replace(rung, log2_volume_minimum=1.0, log2_volume_maximum=2.0)
+
+    with pytest.raises(BenchmarkRunnerError, match="base region first"):
+        cast(Any, benchmark_runner)._validate_claim_chain(
+            (shifted,),
+            accessible_subspace=benchmark.accessible_subspace,
+        )
+
+
+def test_claim_chain_rejects_overlapping_increments() -> None:
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    first = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=0,
+    )
+    duplicate = replace(first, index=1, log2_volume_minimum=1.0, log2_volume_maximum=2.0)
+
+    with pytest.raises(BenchmarkRunnerError, match="pairwise disjoint"):
+        cast(Any, benchmark_runner)._validate_claim_chain(
+            (first, duplicate),
+            accessible_subspace=benchmark.accessible_subspace,
+        )
+
+
+def test_claim_chain_rejects_accessible_subspace_exclusions() -> None:
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    rung = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=0,
+    )
+    assert rung.batch.region is not None
+    excluded_subspace = AccessibleSubspace(
+        ladder_id=benchmark.accessible_subspace.ladder_id,
+        per_configuration_capacity=benchmark.accessible_subspace.per_configuration_capacity,
+        exclusions=(rung.batch.region,),
+        frontier_rationale=benchmark.accessible_subspace.frontier_rationale,
+    )
+
+    with pytest.raises(BenchmarkRunnerError, match="accessible-subspace exclusion"):
+        cast(Any, benchmark_runner)._validate_claim_chain(
+            (rung,),
+            accessible_subspace=excluded_subspace,
+        )
+
+
+def test_claim_chain_rejects_cumulative_bracket_mismatch() -> None:
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    planner = cast(Any, benchmark_runner)._VolumeCurriculumPlanner()
+    first = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=0,
+        planner=planner,
+    )
+    second = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=1,
+        planner=planner,
+    )
+    bad_bracket = replace(second, log2_volume_minimum=5.0, log2_volume_maximum=6.0)
+
+    with pytest.raises(BenchmarkRunnerError, match="cumulative volume"):
+        cast(Any, benchmark_runner)._validate_claim_chain(
+            (first, bad_bracket),
+            accessible_subspace=benchmark.accessible_subspace,
+        )
 
 
 def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
@@ -705,6 +828,7 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
             architecture=architecture,
             generator=cast(Any, generator),
             target_contract=_target_contract_from_outcome_space(outcome_space),
+            accessible_subspace=load_digits_benchmark(_digits_benchmark_root).accessible_subspace,
             seed=101,
             tensor_device="cpu",
             checkpoint=cast(Any, object()),

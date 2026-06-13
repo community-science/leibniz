@@ -67,6 +67,11 @@ from leibniz.observation_generation import (
     StateSpaceVolumeValue,
 )
 from leibniz.records import RecordExtractor
+from leibniz.state_space import (
+    AccessibleSubspace,
+    StateSpaceRegion,
+    state_space_regions_are_disjoint,
+)
 from leibniz.target_contracts import TargetContract
 from leibniz.tensor_runtime import (
     OperationFallbackSequential,
@@ -805,6 +810,7 @@ def run_benchmark(
     benchmark = load_benchmark(plan.benchmark_root)
     generator = _require_tensor_generator(benchmark.generator)
     target_contract = benchmark.target_contract
+    accessible_subspace = benchmark.accessible_subspace
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
@@ -975,6 +981,7 @@ def run_benchmark(
         initial_evaluation_rung=initial_evaluation_rung,
         generator=generator,
         target_contract=target_contract,
+        accessible_subspace=accessible_subspace,
         sample_count=_default_training_batch_target,
         gate_sample_count=_default_gate_batch_target,
         train_steps=plan.train_steps,
@@ -1145,6 +1152,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             architecture=architecture,
             generator=generator,
             target_contract=target_contract,
+            accessible_subspace=benchmark.accessible_subspace,
             seed=evaluation_seed,
             tensor_device=plan.tensor_device,
             checkpoint=selected_checkpoint,
@@ -1583,10 +1591,20 @@ def _curriculum_record(
         "window_policy": {
             "kind": "integer-bit-shells",
         },
+        "claim_policy": {
+            "kind": "benchmark-windowed-increments",
+            "proposal_policy": "benchmark-canonical-integer-bit-windows",
+        },
         "gating_metric": "monotone-frontier-validation-competence",
         "rung_policy": "unbounded-competence-frontier",
         "frontier_index": frontier_index,
         "unlocked_rung_count": min(len(rungs), frontier_index + 1),
+        "claim_chain": [
+            region.to_record()
+            for region in _claim_chain_regions(
+                rungs[: min(len(rungs), frontier_index + 1)]
+            )
+        ],
         "rungs": [
             rung.to_record(
                 status=(
@@ -1609,6 +1627,65 @@ def _curriculum_record(
     if rung_competence_threshold is not None:
         record["rung_competence_threshold"] = rung_competence_threshold
     return record
+
+
+def _validate_claim_chain(
+    rungs: Sequence[_CurriculumRung],
+    *,
+    accessible_subspace: AccessibleSubspace,
+) -> None:
+    if not rungs:
+        raise BenchmarkRunnerError("claim chain must not be empty")
+    first_interval = _rung_log2_volume_interval(rungs[0])
+    if first_interval is None or first_interval[0] > 0.0:
+        raise BenchmarkRunnerError("claim chain must claim the base region first")
+    regions = _claim_chain_regions(rungs)
+    _validate_claim_chain_disjoint(regions)
+    for region in regions:
+        for exclusion in accessible_subspace.exclusions:
+            if not state_space_regions_are_disjoint(region, exclusion):
+                raise BenchmarkRunnerError(
+                    "claim chain increment intersects an accessible-subspace exclusion"
+                )
+    _validate_claim_chain_cumulative_brackets(rungs, regions)
+
+
+def _claim_chain_regions(rungs: Sequence[_CurriculumRung]) -> tuple[StateSpaceRegion, ...]:
+    regions: list[StateSpaceRegion] = []
+    for rung in rungs:
+        if rung.batch.region is None:
+            raise BenchmarkRunnerError("claim chain increments require realized regions")
+        regions.append(rung.batch.region)
+    return tuple(regions)
+
+
+def _validate_claim_chain_disjoint(regions: Sequence[StateSpaceRegion]) -> None:
+    for earlier in range(len(regions)):
+        for later in range(earlier + 1, len(regions)):
+            if not state_space_regions_are_disjoint(regions[earlier], regions[later]):
+                raise BenchmarkRunnerError("claim chain increments must be pairwise disjoint")
+
+
+def _validate_claim_chain_cumulative_brackets(
+    rungs: Sequence[_CurriculumRung],
+    regions: Sequence[StateSpaceRegion],
+) -> None:
+    running_volume = 0
+    for rung, region in zip(rungs, regions, strict=True):
+        running_volume += region.volume
+        interval = _rung_log2_volume_interval(rung)
+        if interval is None:
+            continue
+        lower, upper = interval
+        cumulative_log2_volume = math.log2(running_volume)
+        if (
+            cumulative_log2_volume < lower - 1e-9
+            or cumulative_log2_volume > upper + 1e-9
+        ):
+            raise BenchmarkRunnerError(
+                "claim chain cumulative volume is outside the proposed bracket"
+            )
+
 
 def _validate_architecture_for_batch(
     *,
@@ -1691,6 +1768,7 @@ def _train_and_predict(
     initial_evaluation_rung: _CurriculumRung,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
+    accessible_subspace: AccessibleSubspace,
     sample_count: int,
     gate_sample_count: int,
     train_steps: int | None,
@@ -1723,6 +1801,7 @@ def _train_and_predict(
                 initial_evaluation_rung=initial_evaluation_rung,
                 generator=generator,
                 target_contract=target_contract,
+                accessible_subspace=accessible_subspace,
                 sample_count=sample_count,
                 gate_sample_count=gate_sample_count,
                 train_steps=train_steps,
@@ -1754,6 +1833,7 @@ def _train_and_predict_on_device(
     initial_evaluation_rung: _CurriculumRung,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
+    accessible_subspace: AccessibleSubspace,
     sample_count: int,
     gate_sample_count: int,
     train_steps: int | None,
@@ -1912,6 +1992,10 @@ def _train_and_predict_on_device(
             phase_timings=phase_timings,
         )
     ]
+    _validate_claim_chain(
+        training_rungs,
+        accessible_subspace=accessible_subspace,
+    )
     training_frontier_index = 0
     frontier_plateau_points: list[ValidationCompetencePoint] = []
 
@@ -1963,6 +2047,10 @@ def _train_and_predict_on_device(
                 )
             except _CurriculumExhausted:
                 return False
+            _validate_claim_chain(
+                (*training_rungs, next_rung),
+                accessible_subspace=accessible_subspace,
+            )
             training_rungs.append(next_rung)
         with phase_timings.span("training_frontier.bookkeeping"):
             frontier_plateau_points.append(frontier_point)
@@ -2128,6 +2216,7 @@ def evaluate_model_checkpoint_artifact(
     architecture: ArchitectureManifest,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
+    accessible_subspace: AccessibleSubspace,
     seed: int,
     tensor_device: TensorRuntimeDevice,
     checkpoint: ModelCheckpointArtifact,
@@ -2201,6 +2290,10 @@ def evaluate_model_checkpoint_artifact(
             capacity_limited = True
             break
         results.append(rung_evidence)
+        _validate_claim_chain(
+            tuple(result.rung for result in results),
+            accessible_subspace=accessible_subspace,
+        )
         with phase_timings.span("checkpoint_evaluation.integration_check"):
             integration_evidence = _evaluation_integration_evidence(
                 evaluation_results=results,
