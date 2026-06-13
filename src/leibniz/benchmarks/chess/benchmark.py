@@ -24,12 +24,14 @@ from leibniz.observation_generation import (
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.state_space import (
+    AccessibleSubspace,
     BinaryVectorDomain,
     DiscreteAxisRegion,
     Distinguishability,
     EnumeratedCellsDomain,
     IntegerRangeDomain,
     ProductRegion,
+    SamplingProtocol,
     StateSpaceAmbient,
     StateSpaceAxis,
     StateSpaceRegion,
@@ -81,6 +83,21 @@ class Benchmark:
     @property
     def generator(self) -> Generator:
         return self._generator
+
+    @property
+    def sampling_protocol(self) -> SamplingProtocol:
+        return SamplingProtocol(kind="census", census_budget=_family_capacity())
+
+    @property
+    def accessible_subspace(self) -> AccessibleSubspace:
+        return AccessibleSubspace(
+            ladder_id="chess-mate-in-one-indexed-family",
+            per_configuration_capacity=_chess_capacity_region(),
+            frontier_rationale=(
+                "All indexed mate-in-one family positions are in scope; the capacity is "
+                "finite because the benchmark enumerates a bounded exact family."
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.content import ContentDigest
+from leibniz.state_space import AccessibleSubspace, SamplingProtocol
 from leibniz.target_contracts import TargetContract
 from leibniz.timing import TimingCollector
 
@@ -83,6 +84,12 @@ class RawBenchmark(Protocol):
     @property
     def generator(self) -> Generator: ...
 
+    @property
+    def sampling_protocol(self) -> SamplingProtocol: ...
+
+    @property
+    def accessible_subspace(self) -> AccessibleSubspace: ...
+
 
 class Benchmark(RawBenchmark, Protocol):
     """Benchmark-owned executable behavior used by generic Leibniz evaluators."""
@@ -105,7 +112,7 @@ def load_benchmark(benchmark_root: Path) -> Benchmark:
         )
     implementation = factory(benchmark_root)
     _validate_benchmark_implementation(implementation, entrypoint=entrypoint)
-    return _BenchmarkWithTargetContract(
+    return _BenchmarkWithContracts(
         implementation=cast(RawBenchmark, implementation),
         target_contract=_finite_outcome_target_contract(
             cast(RawBenchmark, implementation).manifest
@@ -114,7 +121,7 @@ def load_benchmark(benchmark_root: Path) -> Benchmark:
 
 
 @dataclass(frozen=True, slots=True)
-class _BenchmarkWithTargetContract:
+class _BenchmarkWithContracts:
     implementation: RawBenchmark
     target_contract: TargetContract
 
@@ -129,6 +136,14 @@ class _BenchmarkWithTargetContract:
     @property
     def generator(self) -> Generator:
         return self.implementation.generator
+
+    @property
+    def sampling_protocol(self) -> SamplingProtocol:
+        return self.implementation.sampling_protocol
+
+    @property
+    def accessible_subspace(self) -> AccessibleSubspace:
+        return self.implementation.accessible_subspace
 
     def __getattr__(self, name: str) -> object:
         return getattr(self.implementation, name)
@@ -174,7 +189,7 @@ def _validate_benchmark_implementation(
     *,
     entrypoint: Path,
 ) -> None:
-    for name in ("root", "manifest"):
+    for name in ("root", "manifest", "sampling_protocol", "accessible_subspace"):
         try:
             getattr(value, name)
         except Exception as error:
