@@ -20,14 +20,21 @@ from leibniz.benchmark_evaluation import (
     CompetencePoint,
     ValidationCompetencePoint,
     finite_measurements_for_predictions,
-    sampled_competence_compute_cost_integral,
     sampled_competence_curriculum_record,
     sampled_competence_frontier_integral,
+    sampled_competence_metrology_cost_integral,
     sampled_competence_record,
     validation_competence_frontier_advances,
 )
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
 from leibniz.content import ContentDigest
+from leibniz.cost_metrology import (
+    CostMeasurement,
+    CostMeter,
+    CostMetrologyError,
+    estimate_program_cost,
+    measure_program_cost,
+)
 from leibniz.documents import (
     canonical_document_bytes,
     document_filename_suffix,
@@ -46,11 +53,7 @@ from leibniz.model_manifests import (
     ModelArtifactManifestDocument,
     ModelExecutionFamily,
 )
-from leibniz.model_operators import (
-    ExecutableModelOperator,
-    architecture_with_input_shape,
-    summarize_architecture_operators,
-)
+from leibniz.model_operators import ExecutableModelOperator
 from leibniz.observation_generation import (
     GeneratedSample,
     GeneratedSampleSet,
@@ -72,6 +75,7 @@ from leibniz.tensor_runtime import (
     build_optimizer,
     build_plateau_lr_schedule,
     load_tensor_runtime_state,
+    make_empty_float_tensor,
     make_float_tensor,
     make_long_tensor,
     no_grad_context,
@@ -141,7 +145,6 @@ _legal_uncapped_training_stage_stop_reasons = frozenset(
 )
 _minimum_plateau_lr_reductions = 3
 _full_variation_extent = 1.0
-_training_compute_per_sample_cache: dict[tuple[str, tuple[int, ...]], int | None] = {}
 _sync_timing_environment_variable = "LEIBNIZ_SYNC_TIMING"
 
 
@@ -188,7 +191,6 @@ class _EvaluationInput:
     checkpoint: ModelCheckpointArtifact
     run_slug: str
     benchmark_id: ProtocolIdentifier
-    training_compute: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +255,7 @@ def _require_tensor_generator(generator: BenchmarkGenerator) -> _TensorBenchmark
 class _TrainingStageResult:
     validation_history: tuple[TrainingHistoryPoint, ...]
     stop_reason: str
+    validation_inference_cost: tuple[CostMeasurement, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,6 +377,8 @@ class _CheckpointEvaluationRungEvidence:
     sample_count: int
     confidence_half_width: float
     input_shape: tuple[int, ...]
+    inference_cost_measurement: CostMeasurement
+    inference_cost_sample_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,6 +428,10 @@ def _evaluation_sampled_competence_record(
             "sample_count": result.sample_count,
             "mean_accepted_mass": result.mean_accepted_mass,
             "input_shape": list(result.input_shape),
+            "inference_cost_measurement": (
+                result.inference_cost_measurement.without_operation_trace().to_record()
+            ),
+            "inference_cost_sample_count": result.inference_cost_sample_count,
             **_rung_log2_volume_interval_record(result.rung),
         }
         if result.rung.batch.region is not None:
@@ -534,20 +543,11 @@ def _evaluation_next_sample_count(
     return max(1, target - estimator.samples)
 
 
-@dataclass(slots=True)
-class _ComputeCounter:
-    compute: float = 0.0
-
-    def add(self, *, compute_per_sample: float | None, samples: int) -> None:
-        if compute_per_sample is None:
-            return
-        self.compute += float(compute_per_sample) * float(samples)
-
-
 @dataclass(frozen=True, slots=True)
 class _PhaseWorkEstimate:
     compute_per_sample: float
     bytes_per_sample: float
+    compute_source: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -871,15 +871,12 @@ def run_benchmark(
 
     def checkpoint_record(
         checkpoint: ModelCheckpointArtifact,
-        *,
-        training_compute: float | None,
     ) -> dict[str, object]:
         return _model_checkpoint_artifact_record(
             checkpoint=checkpoint,
             architecture=architecture,
             benchmark_id=summary.benchmark_id,
             run_slug=summary.run_slug,
-            training_compute=training_compute,
             results_root=plan.results_root,
         )
 
@@ -924,10 +921,7 @@ def run_benchmark(
             )
         with progress_timings.span("training_progress.checkpoint_records"):
             progress_full_checkpoint_records = tuple(
-                checkpoint_record(
-                    checkpoint,
-                    training_compute=training_run.training_compute,
-                )
+                checkpoint_record(checkpoint)
                 for checkpoint in checkpoint_artifacts
             )
             progress_checkpoint_records = tuple(
@@ -937,10 +931,7 @@ def run_benchmark(
             selected_checkpoint_record = (
                 None
                 if selected_checkpoint is None
-                else checkpoint_record(
-                    selected_checkpoint,
-                    training_compute=training_run.training_compute,
-                )
+                else checkpoint_record(selected_checkpoint)
             )
         with progress_timings.span("training_progress.record"):
             progress_record = _training_progress_record(
@@ -1007,10 +998,7 @@ def run_benchmark(
         architecture_manifest=architecture,
     )
     full_checkpoint_records = tuple(
-        checkpoint_record(
-            checkpoint,
-            training_compute=training_result.training_run.training_compute,
-        )
+        checkpoint_record(checkpoint)
         for checkpoint in checkpoint_artifacts
     )
     for checkpoint, record in zip(checkpoint_artifacts, full_checkpoint_records, strict=True):
@@ -1022,10 +1010,7 @@ def run_benchmark(
         _compact_model_checkpoint_summary_record(record)
         for record in full_checkpoint_records
     )
-    selected_checkpoint_record = checkpoint_record(
-        selected_checkpoint,
-        training_compute=training_result.training_run.training_compute,
-    )
+    selected_checkpoint_record = checkpoint_record(selected_checkpoint)
     completed_training_estimate = _training_estimate_record(
         architecture=architecture,
         summary=summary,
@@ -1190,6 +1175,13 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             volume_axis=None,
             input_shape=evaluation_results[evaluation_frontier_index].input_shape,
         )
+        final_cost_measurement, final_cost_sample_count = (
+            _checkpoint_evaluation_throughput_inference_cost_record(
+                checkpoint_evaluation_throughput
+            )
+        )
+        final_sampled_competence["inference_cost_measurement"] = final_cost_measurement
+        final_sampled_competence["inference_cost_sample_count"] = final_cost_sample_count
         sampled_competence = _evaluation_sampled_competence_record(
             benchmark_id=benchmark_id,
             evaluation_results=evaluation_results,
@@ -1280,14 +1272,11 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         "tensor_device": evaluation_tensor_device,
         "requested_tensor_device": plan.tensor_device,
     }
-    if evaluation_input.training_compute is not None:
-        evaluation_protocol["training_compute"] = evaluation_input.training_compute
     checkpoint_record = _model_checkpoint_artifact_record(
         checkpoint=selected_checkpoint,
         architecture=architecture,
         benchmark_id=benchmark_id,
         run_slug=run_slug,
-        training_compute=evaluation_input.training_compute,
         results_root=plan.results_root,
     )
     with workflow_timings.span("evaluation_workflow.bundle_construction"):
@@ -1331,6 +1320,21 @@ def _checkpoint_evaluation_capacity_limited(throughput: Mapping[str, object]) ->
     return throughput.get("capacity_limited") is True
 
 
+def _checkpoint_evaluation_throughput_inference_cost_record(
+    throughput: Mapping[str, object],
+) -> tuple[dict[str, object], int]:
+    measurement = CostMeasurement.from_record(throughput.get("inference_cost_measurement"))
+    sample_count = _required_int(
+        throughput.get("inference_cost_sample_count"),
+        "checkpoint_evaluation.inference_cost_sample_count",
+    )
+    if sample_count < 1:
+        raise BenchmarkRunnerError(
+            "checkpoint_evaluation.inference_cost_sample_count must be positive"
+        )
+    return measurement.without_operation_trace().to_record(), sample_count
+
+
 def _evaluation_input_from_plan(
     plan: BenchmarkEvaluationPlan,
     *,
@@ -1361,12 +1365,6 @@ def _evaluation_input_from_plan(
             "checkpoint_artifact.benchmark_id does not match benchmark root"
         )
     run_slug = _required_string(checkpoint_record.get("run_slug"), "checkpoint_artifact.run_slug")
-    training_compute = _extract.optional_float(
-        checkpoint_record.get("training_compute"),
-        "checkpoint_artifact.training_compute",
-    )
-    if training_compute is not None and training_compute < 0:
-        raise BenchmarkRunnerError("checkpoint_artifact.training_compute must be nonnegative")
     return _EvaluationInput(
         architecture=architecture,
         checkpoint=load_model_checkpoint_artifact(
@@ -1375,7 +1373,6 @@ def _evaluation_input_from_plan(
         ),
         run_slug=run_slug,
         benchmark_id=checkpoint_benchmark_id,
-        training_compute=training_compute,
     )
 
 
@@ -1796,7 +1793,6 @@ def _train_and_predict_on_device(
         patience=convergence_patience,
     )
     training_counter = _ThroughputCounter()
-    training_compute_counter = _ComputeCounter()
     validation_counter = _ThroughputCounter()
     evaluation_counter = _ThroughputCounter()
     phase_timings = _runtime_phase_timings(runtime)
@@ -1990,7 +1986,6 @@ def _train_and_predict_on_device(
         rung_competence_threshold=rung_competence_threshold,
         architecture=architecture,
         training_counter=training_counter,
-        training_compute_counter=training_compute_counter,
         validation_counter=validation_counter,
         phase_timings=phase_timings,
         on_plateau=advance_frontier,
@@ -2015,7 +2010,6 @@ def _train_and_predict_on_device(
                         else None
                     ),
                     validation_history=history,
-                    training_compute=training_compute_counter.compute,
                 ),
                 _throughput_record(
                     runtime_device=runtime.device_kind,
@@ -2025,9 +2019,14 @@ def _train_and_predict_on_device(
                     roofline=runtime_roofline_record(runtime),
                     work_estimates=_training_work_estimates(
                         architecture=architecture,
-                        inference_compute=_training_history_max_inference_compute(history),
-                        training_compute_per_sample=(
-                            _training_history_latest_training_compute_per_sample(history)
+                        inference_cost=_module_projected_inference_cost_measurement(
+                            runtime=runtime,
+                            module=checked_module,
+                            input_shape=architecture.input_shape,
+                            batch_size=batch_size,
+                        ),
+                        training_cost=_training_history_latest_training_cost_measurement(
+                            history
                         ),
                         storage_bytes=storage_bytes,
                         batch_size=batch_size,
@@ -2077,7 +2076,6 @@ def _train_and_predict_on_device(
         ),
         validation_history=tuple(validation_history),
         stop_reason=final_training_stop_reason,
-        training_compute=training_compute_counter.compute,
     )
     return _TrainingResult(
         evaluation_results=(),
@@ -2092,9 +2090,17 @@ def _train_and_predict_on_device(
             roofline=runtime_roofline_record(runtime),
             work_estimates=_training_work_estimates(
                 architecture=architecture,
-                inference_compute=_training_history_max_inference_compute(validation_history),
-                training_compute_per_sample=(
-                    _training_history_latest_training_compute_per_sample(validation_history)
+                inference_cost=(
+                    training_result.validation_inference_cost
+                    or _module_projected_inference_cost_measurement(
+                        runtime=runtime,
+                        module=module,
+                        input_shape=architecture.input_shape,
+                        batch_size=batch_size,
+                    )
+                ),
+                training_cost=_training_history_latest_training_cost_measurement(
+                    validation_history
                 ),
                 storage_bytes=storage_bytes,
                 batch_size=batch_size,
@@ -2135,14 +2141,13 @@ def evaluate_model_checkpoint_artifact(
     runtime_phase_timings = _runtime_phase_timings(predictor.runtime)
     runtime_phase_timings.counters.update(phase_timings.counters)
     phase_timings = runtime_phase_timings
-    max_inference_compute: int | None = None
     results: list[_CheckpointEvaluationRungEvidence] = []
     outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
     capacity_limited = False
     curriculum_exhausted = False
     planner = _VolumeCurriculumPlanner()
     while True:
-        with phase_timings.span("checkpoint_evaluation.rung_planning"):
+        with phase_timings.span("checkpoint_evaluation.rung_preparation"):
             try:
                 rung = _evaluation_curriculum_rung(
                     architecture=architecture,
@@ -2168,7 +2173,7 @@ def evaluate_model_checkpoint_artifact(
                 break
         try:
             with phase_timings.span("checkpoint_evaluation.rung_evaluation"):
-                rung_evidence, batch_max_inference_compute = _evaluate_checkpoint_rung(
+                rung_evidence = _evaluate_checkpoint_rung(
                     predictor=predictor,
                     architecture=architecture,
                     generator=generator,
@@ -2184,10 +2189,6 @@ def evaluate_model_checkpoint_artifact(
                 ) from None
             capacity_limited = True
             break
-        max_inference_compute = _max_optional_int(
-            max_inference_compute,
-            batch_max_inference_compute,
-        )
         results.append(rung_evidence)
         with phase_timings.span("checkpoint_evaluation.integration_check"):
             integration_evidence = _evaluation_integration_evidence(
@@ -2204,7 +2205,12 @@ def evaluate_model_checkpoint_artifact(
             outcome_ids=outcome_ids,
         )
     with phase_timings.span("checkpoint_evaluation.final_measurements"):
-        final_batch, final_probabilities, final_max_inference_compute = (
+        (
+            final_batch,
+            final_probabilities,
+            final_inference_cost_measurement,
+            final_inference_cost_sample_count,
+        ) = (
             _evaluate_checkpoint_rung_measurements(
                 predictor=predictor,
                 architecture=architecture,
@@ -2216,10 +2222,6 @@ def evaluate_model_checkpoint_artifact(
                 phase_timings=phase_timings,
             )
         )
-    max_inference_compute = _max_optional_int(
-        max_inference_compute,
-        final_max_inference_compute,
-    )
     throughput = evaluation_counter.to_record(kind="checkpoint-evaluation-throughput")
     throughput["tensor_runtime"] = "pytorch"
     throughput["tensor_device"] = predictor.runtime.device_kind
@@ -2231,12 +2233,101 @@ def evaluate_model_checkpoint_artifact(
         throughput["tensor_compile_fallbacks"] = [
             dict(fallback) for fallback in compile_fallbacks
         ]
-    if max_inference_compute is None:
-        raise BenchmarkRunnerError(
-            "checkpoint evaluation could not measure max_inference_compute"
-        )
-    throughput["max_inference_compute"] = max_inference_compute
+    throughput["inference_cost_measurement"] = (
+        final_inference_cost_measurement.without_operation_trace().to_record()
+    )
+    throughput["inference_cost_sample_count"] = final_inference_cost_sample_count
     return tuple(results), final_batch, final_probabilities, throughput
+
+
+def _checkpoint_inference_cost_measurement(
+    *,
+    predictor: CheckpointModelPredictor,
+    batch: GeneratedSampleSet,
+    outcome_ids: tuple[str, ...],
+) -> CostMeasurement:
+    fields, _labels = _batch_tensors(
+        runtime=predictor.runtime,
+        batch=batch,
+        outcome_ids=outcome_ids,
+        device=predictor.runtime.device,
+    )
+    predictor.module.eval()
+
+    def program(input_fields: Any) -> object:
+        with no_grad_context(predictor.runtime):
+            return predictor.module(input_fields)
+
+    return measure_program_cost(
+        predictor.runtime,
+        program,
+        fields,
+        strict=True,
+        roofline=runtime_roofline_record(predictor.runtime),
+    ).without_operation_trace()
+
+
+def _module_inference_cost_measurement(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    fields: Any,
+) -> CostMeasurement:
+    was_training = bool(module.training)
+    module.eval()
+
+    def program(input_fields: Any) -> object:
+        with no_grad_context(runtime):
+            return module(input_fields)
+
+    try:
+        return measure_program_cost(
+            runtime,
+            program,
+            fields,
+            strict=True,
+            roofline=runtime_roofline_record(runtime),
+        ).without_operation_trace()
+    finally:
+        if was_training:
+            module.train()
+
+
+def _module_projected_inference_cost_measurement(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    input_shape: tuple[int, ...],
+    batch_size: int,
+) -> tuple[CostMeasurement, int] | None:
+    sample_count = max(1, batch_size)
+    was_training = bool(module.training)
+    module.eval()
+
+    def program() -> object:
+        fields = make_empty_float_tensor(
+            runtime,
+            (sample_count, *input_shape),
+            device=runtime.device,
+        )
+        with no_grad_context(runtime):
+            return module(fields)
+
+    try:
+        return (
+            estimate_program_cost(
+                runtime,
+                program,
+                strict=True,
+                roofline=runtime_roofline_record(runtime),
+            ).without_operation_trace(),
+            sample_count,
+        )
+    except (CostMetrologyError, TensorRuntimeError):
+        return None
+    finally:
+        if was_training:
+            module.train()
 
 
 def _evaluate_checkpoint_rung(
@@ -2248,9 +2339,9 @@ def _evaluate_checkpoint_rung(
     outcome_ids: tuple[str, ...],
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
-) -> tuple[_CheckpointEvaluationRungEvidence, int]:
+) -> _CheckpointEvaluationRungEvidence:
     estimator = _RunningMeanEstimator()
-    max_inference_compute: int | None = None
+    max_cost_measurement: tuple[CostMeasurement, int] | None = None
     chance_mass = _chance_accepted_mass(outcome_ids)
     half_width_threshold = (
         _default_evaluation_convergence_half_width
@@ -2277,26 +2368,23 @@ def _evaluate_checkpoint_rung(
             purpose="score",
         ):
             estimator.extend(chunk.accepted_mass)
-            max_inference_compute = _max_optional_int(
-                max_inference_compute,
-                chunk.max_inference_compute,
+            max_cost_measurement = _max_cost_measurement(
+                max_cost_measurement,
+                _chunk_cost_measurement_pair(chunk),
             )
     observed_sample_count = estimator.samples
     if observed_sample_count < 1:
         raise BenchmarkRunnerError("checkpoint evaluation rung produced no samples")
-    if max_inference_compute is None:
-        raise BenchmarkRunnerError(
-            "checkpoint evaluation could not measure max_inference_compute"
-        )
-    return (
-        _CheckpointEvaluationRungEvidence(
-            rung=replace(rung, sample_count=observed_sample_count),
-            mean_accepted_mass=estimator.mean,
-            sample_count=observed_sample_count,
-            confidence_half_width=_evaluation_confidence_half_width(estimator),
-            input_shape=_batch_sample_input_shape(batch=rung.batch),
-        ),
-        max_inference_compute,
+    if max_cost_measurement is None:
+        raise BenchmarkRunnerError("checkpoint evaluation could not measure inference cost")
+    return _CheckpointEvaluationRungEvidence(
+        rung=replace(rung, sample_count=observed_sample_count),
+        mean_accepted_mass=estimator.mean,
+        sample_count=observed_sample_count,
+        confidence_half_width=_evaluation_confidence_half_width(estimator),
+        input_shape=_batch_sample_input_shape(batch=rung.batch),
+        inference_cost_measurement=max_cost_measurement[0],
+        inference_cost_sample_count=max_cost_measurement[1],
     )
 
 
@@ -2407,7 +2495,8 @@ class _CheckpointEvaluationChunk:
     accepted_mass: tuple[float, ...]
     accepted_mass_sum: float
     sample_count: int
-    max_inference_compute: int
+    inference_cost_measurement: CostMeasurement | None = None
+    inference_cost_sample_count: int | None = None
 
 
 def _evaluate_checkpoint_rung_measurements(
@@ -2420,10 +2509,10 @@ def _evaluate_checkpoint_rung_measurements(
     requested_sample_count: int,
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
-) -> tuple[GeneratedSampleSet, tuple[tuple[float, ...], ...], int]:
+) -> tuple[GeneratedSampleSet, tuple[tuple[float, ...], ...], CostMeasurement, int]:
     samples: list[GeneratedSample] = []
     probabilities: list[tuple[float, ...]] = []
-    max_inference_compute: int | None = None
+    max_cost_measurement: tuple[CostMeasurement, int] | None = None
     for chunk in _checkpoint_evaluation_chunks(
         predictor=predictor,
         architecture=architecture,
@@ -2441,16 +2530,14 @@ def _evaluate_checkpoint_rung_measurements(
             for index, sample in enumerate(chunk.batch.samples)
         )
         probabilities.extend(chunk.probabilities)
-        max_inference_compute = _max_optional_int(
-            max_inference_compute,
-            chunk.max_inference_compute,
+        max_cost_measurement = _max_cost_measurement(
+            max_cost_measurement,
+            _chunk_cost_measurement_pair(chunk),
         )
     if not samples:
         raise BenchmarkRunnerError("checkpoint evaluation final rung produced no samples")
-    if max_inference_compute is None:
-        raise BenchmarkRunnerError(
-            "checkpoint evaluation could not measure max_inference_compute"
-        )
+    if max_cost_measurement is None:
+        raise BenchmarkRunnerError("checkpoint evaluation could not measure inference cost")
     return (
         GeneratedSampleSet(
             benchmark_id=rung.batch.benchmark_id,
@@ -2465,7 +2552,8 @@ def _evaluate_checkpoint_rung_measurements(
             samples=tuple(samples),
         ),
         tuple(probabilities),
-        max_inference_compute,
+        max_cost_measurement[0],
+        max_cost_measurement[1],
     )
 
 
@@ -2532,15 +2620,6 @@ def _checkpoint_evaluation_chunks(
             seconds=time.perf_counter() - prediction_started,
             samples=batch.sample_count,
         )
-        with phase_timings.span(f"checkpoint_evaluation_{purpose}_compute_cost"):
-            batch_max_inference_compute = _batch_max_inference_compute(
-                architecture=architecture,
-                batch=batch,
-            )
-        if batch_max_inference_compute is None:
-            raise BenchmarkRunnerError(
-                "checkpoint evaluation could not measure max_inference_compute"
-            )
         with phase_timings.span(
             f"checkpoint_evaluation_{purpose}_accepted_mass",
             samples=batch.sample_count,
@@ -2550,38 +2629,67 @@ def _checkpoint_evaluation_chunks(
                 probabilities=predictions,
                 outcome_ids=outcome_ids,
             )
+        inference_cost_measurement: CostMeasurement | None = None
+        if purpose in {"score", "measurements"}:
+            with phase_timings.span(
+                f"checkpoint_evaluation_{purpose}_inference_cost_metrology",
+                samples=batch.sample_count,
+            ):
+                inference_cost_measurement = _checkpoint_inference_cost_measurement(
+                    predictor=predictor,
+                    batch=batch,
+                    outcome_ids=outcome_ids,
+                )
+        if inference_cost_measurement is None:
+            raise BenchmarkRunnerError("checkpoint evaluation could not measure inference cost")
         yield _CheckpointEvaluationChunk(
             batch=batch,
             probabilities=predictions,
             accepted_mass=accepted_mass,
             accepted_mass_sum=math.fsum(accepted_mass),
             sample_count=batch.sample_count,
-            max_inference_compute=batch_max_inference_compute,
+            inference_cost_measurement=inference_cost_measurement,
+            inference_cost_sample_count=batch.sample_count,
         )
         remaining -= batch.sample_count
         chunk_index += 1
 
 
-def _batch_max_inference_compute(
-    *,
-    architecture: ArchitectureManifest,
-    batch: GeneratedSampleSet,
-) -> int | None:
-    tensor_input_shape = _tensor_input_shape(batch.fields)
-    if tensor_input_shape is not None:
-        plan = summarize_architecture_operators(
-            architecture_with_input_shape(architecture, tensor_input_shape)
-        )
-        return plan.inference_compute
-    max_compute: int | None = None
-    for input_shape in sorted({sample.require_field().shape for sample in batch.samples}):
-        plan = summarize_architecture_operators(
-            architecture_with_input_shape(architecture, input_shape)
-        )
-        if plan.inference_compute is None:
-            return None
-        max_compute = _max_optional_int(max_compute, plan.inference_compute)
-    return max_compute
+def _max_cost_measurement(
+    left: tuple[CostMeasurement, int] | None,
+    right: tuple[CostMeasurement, int] | None,
+) -> tuple[CostMeasurement, int] | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    left_cost, left_sample_count = left
+    right_cost, right_sample_count = right
+    if (
+        right_cost.abstract_flops_per_item(right_sample_count)
+        > left_cost.abstract_flops_per_item(left_sample_count)
+    ):
+        return right
+    return left
+
+
+def _chunk_cost_measurement_pair(
+    chunk: _CheckpointEvaluationChunk,
+) -> tuple[CostMeasurement, int] | None:
+    if chunk.inference_cost_measurement is None or chunk.inference_cost_sample_count is None:
+        return None
+    return (chunk.inference_cost_measurement, chunk.inference_cost_sample_count)
+
+
+def _measurement_ops_per_item(measurement: tuple[CostMeasurement, int]) -> float:
+    cost, sample_count = measurement
+    return cost.abstract_flops_per_item(sample_count)
+
+
+def _cost_measurement_compute_source(measurement: CostMeasurement) -> str:
+    if measurement.operations_executed:
+        return "measured-forward-metrology"
+    return "dry-run-metrology"
 
 
 def _batch_sample_input_shape(
@@ -2599,24 +2707,6 @@ def _batch_sample_input_shape(
     raise BenchmarkRunnerError(
         "tensor benchmark generator must return tensors or inspectable field metadata"
     )
-
-
-def _batch_max_training_compute_per_sample(
-    *,
-    architecture: ArchitectureManifest,
-    fields: Any,
-) -> int | None:
-    input_shape = _tensor_input_shape(fields)
-    if input_shape is None:
-        return None
-    cache_key = (str(architecture.digest), input_shape)
-    if cache_key in _training_compute_per_sample_cache:
-        return _training_compute_per_sample_cache[cache_key]
-    plan = summarize_architecture_operators(
-        architecture_with_input_shape(architecture, input_shape)
-    )
-    _training_compute_per_sample_cache[cache_key] = plan.training_compute_per_sample
-    return plan.training_compute_per_sample
 
 
 def _tensor_input_shape(fields: Any) -> tuple[int, ...] | None:
@@ -2735,14 +2825,6 @@ def _is_runtime_capacity_error(error: RuntimeError) -> bool:
     return runtime_capacity_error(error)
 
 
-def _max_optional_int(left: int | None, right: int | None) -> int | None:
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return max(left, right)
-
-
 def load_model_checkpoint_predictor(
     *,
     architecture: ArchitectureManifest,
@@ -2833,7 +2915,6 @@ def _model_checkpoint_artifact_record(
     architecture: ArchitectureManifest,
     benchmark_id: ProtocolIdentifier,
     run_slug: str,
-    training_compute: float | None,
     results_root: Path | None = None,
 ) -> dict[str, object]:
     record = checkpoint.to_record()
@@ -2851,8 +2932,6 @@ def _model_checkpoint_artifact_record(
     record["run_slug"] = run_slug
     record["architecture_manifest"] = architecture.to_record()
     record["model_manifest"] = checkpoint.manifest.to_record()
-    if training_compute is not None:
-        record["training_compute"] = training_compute
     if checkpoint.score_estimate is not None:
         record["score"] = _checkpoint_score_estimate_selection_score(
             checkpoint.score_estimate
@@ -2875,7 +2954,6 @@ def _compact_model_checkpoint_summary_record(
         "validation_loss",
         "benchmark_id",
         "run_slug",
-        "training_compute",
     )
     compact = {key: record[key] for key in summary_keys if key in record}
     score = record.get("score")
@@ -2921,6 +2999,18 @@ def _required_string(value: object, field: str) -> str:
 def _required_int(value: object, field: str) -> int:
     if type(value) is not int:
         raise BenchmarkRunnerError(f"{field} must be an integer")
+    return value
+
+
+def _required_mapping(value: object, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise BenchmarkRunnerError(f"{field} must be an object")
+    return cast(Mapping[str, object], value)
+
+
+def _optional_positive_int(value: object) -> int | None:
+    if type(value) is not int or value < 1:
+        return None
     return value
 
 
@@ -2975,7 +3065,6 @@ def _train_until_convergence(
     rung_competence_threshold: float,
     architecture: ArchitectureManifest,
     training_counter: _ThroughputCounter,
-    training_compute_counter: _ComputeCounter,
     validation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
     training_batch_target: int = _default_training_batch_target,
@@ -2992,8 +3081,9 @@ def _train_until_convergence(
     stale_checks = 0
     stop_reason = "training-stopped"
     plateau_window_start_index = 0
-    max_validation_inference_compute: int | None = None
-    latest_training_compute_per_sample: int | None = None
+    max_validation_inference_cost: tuple[CostMeasurement, int] | None = None
+    latest_training_cost: tuple[CostMeasurement, int] | None = None
+    training_cost_by_shape: dict[object, tuple[CostMeasurement, int]] = {}
     replay_frontier_points: dict[
         tuple[float, float],
         _RollingValidationCompetencePoint,
@@ -3001,8 +3091,8 @@ def _train_until_convergence(
     pending_replay_scores: list[_PendingReplayScore] = []
 
     def append_validation(*, step: int, check: int) -> None:
-        nonlocal best_score, max_validation_inference_compute
-        nonlocal stale_checks
+        nonlocal best_score
+        nonlocal max_validation_inference_cost, stale_checks
         with phase_timings.span("validation_replay_score_flush"):
             _flush_pending_replay_scores(
                 pending_replay_scores=pending_replay_scores,
@@ -3010,23 +3100,6 @@ def _train_until_convergence(
             )
         validation_started = time.perf_counter()
         batch = validation_batch(check)
-        with phase_timings.span("validation_max_inference_compute"):
-            batch_max_inference_compute = _batch_max_inference_compute(
-                architecture=architecture,
-                batch=batch,
-            )
-        if batch_max_inference_compute is None:
-            raise BenchmarkRunnerError(
-                "training gate could not measure max_inference_compute"
-            )
-        max_validation_inference_compute = _max_optional_int(
-            max_validation_inference_compute,
-            batch_max_inference_compute,
-        )
-        if max_validation_inference_compute is None:
-            raise BenchmarkRunnerError(
-                "training gate could not measure running max_inference_compute"
-            )
         with phase_timings.span("validation_tensor_batch", samples=batch.sample_count):
             fields, labels = _batch_tensors(
                 runtime=runtime,
@@ -3035,6 +3108,21 @@ def _train_until_convergence(
                 device=runtime.device,
             )
         actual_gate_sample_count = _tensor_batch_size(fields, fallback=gate_batch_target)
+        with phase_timings.span(
+            "validation_inference_cost_metrology",
+            samples=actual_gate_sample_count,
+        ):
+            validation_cost_measurement = _module_inference_cost_measurement(
+                runtime=runtime,
+                module=module,
+                fields=fields,
+            )
+        max_validation_inference_cost = _max_cost_measurement(
+            max_validation_inference_cost,
+            (validation_cost_measurement, actual_gate_sample_count),
+        )
+        if max_validation_inference_cost is None:
+            raise BenchmarkRunnerError("training gate could not measure inference cost")
         with phase_timings.span("validation_forward_loss", samples=actual_gate_sample_count):
             was_training = bool(module.training)
             module.eval()
@@ -3055,9 +3143,8 @@ def _train_until_convergence(
                 ),
                 validation_check=check,
                 step=step,
-                max_inference_compute=batch_max_inference_compute,
-                running_max_inference_compute=max_validation_inference_compute,
-                training_compute_per_sample=latest_training_compute_per_sample,
+                inference_cost=max_validation_inference_cost,
+                training_cost=latest_training_cost,
             )
         plateau_signal = _training_score_estimate_frontier_competence(
             score_estimate,
@@ -3118,6 +3205,7 @@ def _train_until_convergence(
         return _TrainingStageResult(
             validation_history=tuple(validation_history),
             stop_reason="no-training-steps" if start_step == 0 else "max-steps",
+            validation_inference_cost=max_validation_inference_cost,
         )
     validation_check = start_check + 1
     steps = count(start_step + 1) if max_steps is None else range(start_step + 1, max_steps + 1)
@@ -3137,12 +3225,6 @@ def _train_until_convergence(
         fields = training_batch.fields
         labels = training_batch.labels
         actual_batch_size = _tensor_batch_size(fields, fallback=training_batch_target)
-        with phase_timings.span("training_max_training_compute"):
-            batch_training_compute_per_sample = _batch_max_training_compute_per_sample(
-                architecture=architecture,
-                fields=fields,
-            )
-        latest_training_compute_per_sample = batch_training_compute_per_sample
         module.train()
         try:
             first_logits: Any | None = None
@@ -3165,8 +3247,21 @@ def _train_until_convergence(
                     loss.backward()
                 return loss
 
-            with phase_timings.span("training_optimizer_step"):
-                optimizer_step(runtime, optimizer, loss_closure)
+            training_cost_shape_key = _training_cost_shape_key(fields)
+            cached_training_cost = training_cost_by_shape.get(training_cost_shape_key)
+            if cached_training_cost is None:
+                with phase_timings.span("training_optimizer_step"):
+                    with CostMeter(runtime, strict=False) as training_cost_meter:
+                        optimizer_step(runtime, optimizer, loss_closure)
+                    training_cost_measurement = (
+                        training_cost_meter.measurement().without_operation_trace()
+                    )
+                cached_training_cost = (training_cost_measurement, actual_batch_size)
+                training_cost_by_shape[training_cost_shape_key] = cached_training_cost
+            else:
+                with phase_timings.span("training_optimizer_step"):
+                    optimizer_step(runtime, optimizer, loss_closure)
+            latest_training_cost = cached_training_cost
             if training_batch.sample_set is not None:
                 if first_logits is None:
                     raise BenchmarkRunnerError("optimizer did not evaluate training loss")
@@ -3200,10 +3295,6 @@ def _train_until_convergence(
         phase_timings.add(
             "training_step_total",
             seconds=training_elapsed,
-            samples=actual_batch_size,
-        )
-        training_compute_counter.add(
-            compute_per_sample=batch_training_compute_per_sample,
             samples=actual_batch_size,
         )
         hit_step_cap = max_steps is not None and step == max_steps
@@ -3269,6 +3360,7 @@ def _train_until_convergence(
     return _TrainingStageResult(
         validation_history=tuple(validation_history),
         stop_reason=stop_reason,
+        validation_inference_cost=max_validation_inference_cost,
     )
 
 
@@ -3280,9 +3372,8 @@ def _training_gate_score_estimate(
     previous_frontier_points: tuple[ValidationCompetencePoint, ...] = (),
     validation_check: int,
     step: int,
-    max_inference_compute: int,
-    running_max_inference_compute: int,
-    training_compute_per_sample: int | None,
+    inference_cost: tuple[CostMeasurement, int],
+    training_cost: tuple[CostMeasurement, int] | None,
 ) -> dict[str, object]:
     current_point = _sampled_competence_record_from_accepted_mass(
         batch=batch,
@@ -3295,6 +3386,11 @@ def _training_gate_score_estimate(
         current_point=current_point,
     )
     compact_sampled_competence = _compact_training_sampled_competence(sampled_competence)
+    _assign_sampled_competence_inference_cost(
+        compact_sampled_competence,
+        measurement=inference_cost[0],
+        sample_count=inference_cost[1],
+    )
     point_records = _training_score_estimate_points(compact_sampled_competence)
     chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
     score_integral = sampled_competence_frontier_integral(
@@ -3318,14 +3414,17 @@ def _training_gate_score_estimate(
         "score": score,
         "validation_check": validation_check,
         "step": step,
-        "max_inference_compute": max_inference_compute,
-        "running_max_inference_compute": running_max_inference_compute,
+        "inference_cost_measurement": inference_cost[0].without_operation_trace().to_record(),
+        "inference_cost_sample_count": inference_cost[1],
         "chance_mass": chance_mass,
         "score_integral": score_integral.to_record(kind="sampled-competence-integral"),
         "sampled_competence": compact_sampled_competence,
     }
-    if training_compute_per_sample is not None:
-        record["training_compute_per_sample"] = training_compute_per_sample
+    if training_cost is not None:
+        record["training_cost_measurement"] = (
+            training_cost[0].without_operation_trace().to_record()
+        )
+        record["training_cost_sample_count"] = training_cost[1]
     return record
 
 
@@ -3418,6 +3517,23 @@ def _accumulate_replay_frontier_point(
         )
         return
     replay_frontier_points[key] = existing.add(point)
+
+
+def _training_cost_shape_key(fields: Any) -> object:
+    """Return the cache key for one-measurement-per-shape training cost metering.
+
+    Operation streams are deterministic per module and input shape, so one
+    metered step per distinct field shape carries the same evidence as metering
+    every step while keeping per-op dispatch interception off the hot path.
+    """
+
+    shape = getattr(fields, "shape", None)
+    if shape is None:
+        return "shapeless"
+    try:
+        return tuple(int(extent) for extent in shape)
+    except (TypeError, ValueError):
+        return "shapeless"
 
 
 def _flush_pending_replay_scores(
@@ -3548,6 +3664,27 @@ def _compact_training_sampled_competence(
     return compact
 
 
+def _assign_sampled_competence_inference_cost(
+    sampled_competence: dict[str, object],
+    *,
+    measurement: CostMeasurement,
+    sample_count: int,
+) -> None:
+    sampled_competence["inference_cost_measurement"] = (
+        measurement.without_operation_trace().to_record()
+    )
+    sampled_competence["inference_cost_sample_count"] = sample_count
+    points = sampled_competence.get("points")
+    if not isinstance(points, list):
+        return
+    for point in cast(list[object], points):
+        if isinstance(point, dict):
+            point["inference_cost_measurement"] = (
+                measurement.without_operation_trace().to_record()
+            )
+            point["inference_cost_sample_count"] = sample_count
+
+
 def _training_score_estimate_points(
     score_estimate_or_sampled_competence: Mapping[str, object],
 ) -> tuple[Mapping[str, object], ...]:
@@ -3609,32 +3746,45 @@ def _training_history_frontier_competence(
     )
 
 
-def _training_history_max_inference_compute(
+def _training_history_latest_cost_measurement(
     validation_history: Sequence[TrainingHistoryPoint],
-) -> int | None:
-    max_compute: int | None = None
+) -> tuple[CostMeasurement, int] | None:
     for point in validation_history:
         if point.score_estimate is None:
             continue
-        value = point.score_estimate.get("running_max_inference_compute")
-        if type(value) is int:
-            max_compute = _max_optional_int(max_compute, value)
+        measurement_record = point.score_estimate.get("inference_cost_measurement")
+        sample_count = point.score_estimate.get("inference_cost_sample_count")
+        if measurement_record is None:
             continue
-        current = point.score_estimate.get("max_inference_compute")
-        if type(current) is int:
-            max_compute = _max_optional_int(max_compute, current)
-    return max_compute
+        sample_count_value = _optional_positive_int(sample_count)
+        if sample_count_value is None:
+            continue
+        try:
+            measurement = CostMeasurement.from_record(measurement_record)
+        except ValueError:
+            continue
+        return (measurement, sample_count_value)
+    return None
 
 
-def _training_history_latest_training_compute_per_sample(
+def _training_history_latest_training_cost_measurement(
     validation_history: Sequence[TrainingHistoryPoint],
-) -> int | None:
+) -> tuple[CostMeasurement, int] | None:
     for point in reversed(validation_history):
         if point.score_estimate is None:
             continue
-        value = point.score_estimate.get("training_compute_per_sample")
-        if type(value) is int:
-            return value
+        measurement_record = point.score_estimate.get("training_cost_measurement")
+        sample_count = point.score_estimate.get("training_cost_sample_count")
+        if measurement_record is None:
+            continue
+        sample_count_value = _optional_positive_int(sample_count)
+        if sample_count_value is None:
+            continue
+        try:
+            measurement = CostMeasurement.from_record(measurement_record)
+        except ValueError:
+            continue
+        return (measurement, sample_count_value)
     return None
 
 
@@ -3762,7 +3912,6 @@ def _training_run_record(
     runtime_memory_budget_fraction: float | None = None,
     validation_history: tuple[TrainingHistoryPoint, ...],
     stop_reason: str,
-    training_compute: float | None,
 ) -> TrainingRunRecord:
     last_step = validation_history[-1].step
     if stop_reason == "no-training-steps":
@@ -3777,7 +3926,6 @@ def _training_run_record(
         status=status,
         stop_reason=stop_reason,
         steps_run=last_step,
-        training_compute=training_compute,
         validation_checks=len(validation_history),
         protocol=TrainingProtocol(
             kind="fixed-step-local-batch",
@@ -3816,13 +3964,11 @@ def _running_training_run_record(
     tensor_device: str,
     runtime_memory_budget_fraction: float | None = None,
     validation_history: tuple[TrainingHistoryPoint, ...],
-    training_compute: float | None,
 ) -> TrainingRunRecord:
     return TrainingRunRecord(
         status="running",
         stop_reason="validation-checkpoint",
         steps_run=validation_history[-1].step,
-        training_compute=training_compute,
         validation_checks=len(validation_history),
         protocol=TrainingProtocol(
             kind="fixed-step-local-batch",
@@ -3975,9 +4121,8 @@ def _training_estimate_record(
     if not isinstance(score_integral_value, Mapping):
         raise BenchmarkRunnerError("training gate score estimate is missing score integral")
     score_integral = cast(Mapping[str, object], score_integral_value)
-    cost_integral = sampled_competence_compute_cost_integral(
+    cost_integral = sampled_competence_metrology_cost_integral(
         points=points,
-        architecture=architecture,
         error_type=BenchmarkRunnerError,
         field_prefix="training_estimate.cost_point",
     )
@@ -4000,9 +4145,15 @@ def _training_estimate_record(
         "cost_integral": cost_integral.to_record(kind="compute-cost-integral"),
         "validation_check": latest.validation_check,
         "step": latest.step,
-        "max_inference_compute": _required_int(
-            score_estimate.get("running_max_inference_compute"),
-            "training_estimate.max_inference_compute",
+        "inference_cost_measurement": dict(
+            _required_mapping(
+                score_estimate.get("inference_cost_measurement"),
+                "training_estimate.inference_cost_measurement",
+            )
+        ),
+        "inference_cost_sample_count": _required_int(
+            score_estimate.get("inference_cost_sample_count"),
+            "training_estimate.inference_cost_sample_count",
         ),
         "sampled_competence": dict(sampled_competence),
     }
@@ -4015,21 +4166,28 @@ def _training_cost_summary(
     training_run: TrainingRunRecord,
 ) -> dict[str, object]:
     cost_summary = inspection.cost_summary.to_record()
-    cost_summary.pop("inference_compute", None)
-    cost_summary.pop("training_compute_per_sample", None)
     cost = _optional_nonnegative_float(
         training_estimate.get("cost"),
         "training_estimate.cost",
     )
     if cost is not None:
         cost_summary["cost"] = cost
-    max_inference_compute = _training_history_max_inference_compute(
+    inference_cost = _training_history_latest_cost_measurement(
         training_run.validation_history
     )
-    if max_inference_compute is not None:
-        cost_summary["inference_compute"] = max_inference_compute
-    if training_run.training_compute is not None:
-        cost_summary["training_compute"] = training_run.training_compute
+    if inference_cost is not None:
+        cost_summary["inference_cost_measurement"] = (
+            inference_cost[0].without_operation_trace().to_record()
+        )
+        cost_summary["inference_cost_sample_count"] = inference_cost[1]
+    training_cost = _training_history_latest_training_cost_measurement(
+        training_run.validation_history
+    )
+    if training_cost is not None:
+        cost_summary["training_cost_measurement"] = (
+            training_cost[0].without_operation_trace().to_record()
+        )
+        cost_summary["training_cost_sample_count"] = training_cost[1]
     return cost_summary
 
 
@@ -4328,7 +4486,10 @@ def _phase_roofline_record(
     peak_compute_per_second: float,
     peak_bytes_per_second: float,
 ) -> dict[str, object]:
-    arithmetic_intensity = work.compute_per_sample / work.bytes_per_sample
+    arithmetic_intensity = CostMeasurement.abstract_flops_per_byte_value(
+        work.compute_per_sample,
+        work.bytes_per_sample,
+    )
     expected_compute = min(
         peak_compute_per_second,
         peak_bytes_per_second * arithmetic_intensity,
@@ -4339,9 +4500,13 @@ def _phase_roofline_record(
         measured_samples = 0.0
     else:
         measured_samples = float(measured)
-        observed_compute = measured_samples * work.compute_per_sample
+        observed_compute = CostMeasurement.abstract_flops_rate_value(
+            work.compute_per_sample,
+            measured_samples,
+        )
     return {
         "compute_per_sample": work.compute_per_sample,
+        "compute_source": work.compute_source,
         "bytes_per_sample": work.bytes_per_sample,
         "arithmetic_intensity_compute_per_byte": arithmetic_intensity,
         "expected_roofline_compute_per_second": expected_compute,
@@ -4361,16 +4526,22 @@ def _phase_roofline_record(
 def _training_work_estimates(
     *,
     architecture: ArchitectureManifest,
-    inference_compute: int | None,
-    training_compute_per_sample: int | None,
+    inference_cost: tuple[CostMeasurement, int] | None,
+    training_cost: tuple[CostMeasurement, int] | None,
     storage_bytes: int | None,
     batch_size: int,
 ) -> _TrainingWorkEstimates | None:
+    if inference_cost is None:
+        return None
+    inference_measurement = inference_cost[0]
+    inference_ops_per_sample = _measurement_ops_per_item(inference_cost)
+    training_ops_per_sample = (
+        None if training_cost is None else _measurement_ops_per_item(training_cost)
+    )
     if (
-        inference_compute is None
-        or inference_compute <= 0
-        or training_compute_per_sample is None
-        or training_compute_per_sample <= 0
+        inference_ops_per_sample <= 0
+        or training_ops_per_sample is None
+        or training_ops_per_sample <= 0
     ):
         return None
     input_bytes = _shape_bytes(architecture.input_shape)
@@ -4378,27 +4549,39 @@ def _training_work_estimates(
     batch_size_value = max(1, batch_size)
     storage_bytes_per_sample = float(storage_bytes or 0) / batch_size_value
     inference_bytes = input_bytes + output_bytes + storage_bytes_per_sample
+    inference_cost_source = _cost_measurement_compute_source(inference_measurement)
     formation_bytes = 8.0 * input_bytes
-    training_compute = float(training_compute_per_sample)
+    training_cost_per_sample = float(training_ops_per_sample)
     training_bytes = formation_bytes + 3.0 * inference_bytes + 4.0 * storage_bytes_per_sample
     validation_bytes = formation_bytes + inference_bytes
     evaluation_bytes = input_bytes + inference_bytes
     return _TrainingWorkEstimates(
         training=_PhaseWorkEstimate(
-            compute_per_sample=training_compute,
+            compute_per_sample=training_cost_per_sample,
             bytes_per_sample=training_bytes,
+            compute_source="measured-training-metrology",
         ),
         validation=_PhaseWorkEstimate(
-            compute_per_sample=float(inference_compute),
+            compute_per_sample=inference_ops_per_sample,
             bytes_per_sample=validation_bytes,
+            compute_source=inference_cost_source,
         ),
         evaluation=_PhaseWorkEstimate(
-            compute_per_sample=float(inference_compute),
+            compute_per_sample=inference_ops_per_sample,
             bytes_per_sample=evaluation_bytes,
+            compute_source=inference_cost_source,
         ),
         assumptions=(
             "float32 tensor elements are four bytes",
-            "training compute follows the declared per-operator training trace",
+            "training compute uses measured runtime metrology from optimizer steps",
+            (
+                "validation and evaluation compute use measured forward-pass metrology"
+                if inference_measurement.operations_executed
+                else (
+                    "validation and evaluation compute use dry-run cost metrology "
+                    f"from {inference_measurement.operation_stream_source}"
+                )
+            ),
             "storage bytes are amortized across the local batch",
             "formation bytes are approximated as eight input fields per sample",
             "optimizer and gradient traffic are approximated from storage bytes",

@@ -45,11 +45,6 @@ def validate_architecture_semantics(
                 f"layer {summary.index} ({layer.kind}): "
                 "semantic interpretation could not resolve parameter_count"
             )
-        if summary.inference_compute is None:
-            raise ArchitectureSemanticValidationError(
-                f"layer {summary.index} ({layer.kind}): "
-                "semantic interpretation could not resolve inference_compute"
-            )
     return plan
 
 

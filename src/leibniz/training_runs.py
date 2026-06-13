@@ -69,7 +69,6 @@ _training_run_record = RecordSpec(
         "status": FieldSpec(kind="string"),
         "stop_reason": FieldSpec(kind="string"),
         "steps_run": FieldSpec(kind="integer"),
-        "training_compute": FieldSpec(kind="number", required=False),
         "validation_checks": FieldSpec(kind="integer"),
         "protocol": FieldSpec(kind="record"),
         "validation_history": FieldSpec(
@@ -314,7 +313,6 @@ class TrainingRunRecord:
     status: _training_status
     stop_reason: str
     steps_run: int
-    training_compute: float | None
     validation_checks: int
     protocol: TrainingProtocol
     validation_history: tuple[TrainingHistoryPoint, ...]
@@ -332,8 +330,6 @@ class TrainingRunRecord:
         if not self.stop_reason:
             raise TrainingRunValidationError("stop_reason must be nonempty")
         _require_nonnegative_int(self.steps_run, "steps_run")
-        if self.training_compute is not None:
-            _require_nonnegative_finite(self.training_compute, "training_compute")
         _require_positive_int(self.validation_checks, "validation_checks")
         if not self.validation_history:
             raise TrainingRunValidationError("validation_history must contain at least one point")
@@ -359,11 +355,6 @@ class TrainingRunRecord:
             status=cast(_training_status, _extract.non_empty_string(validated["status"], "status")),
             stop_reason=_extract.non_empty_string(validated["stop_reason"], "stop_reason"),
             steps_run=_extract.integer(validated["steps_run"], "steps_run"),
-            training_compute=(
-                None
-                if "training_compute" not in validated
-                else _extract.finite_float(validated["training_compute"], "training_compute")
-            ),
             validation_checks=_extract.integer(validated["validation_checks"], "validation_checks"),
             protocol=TrainingProtocol.from_record(
                 _extract.mapping(validated["protocol"], "protocol")
@@ -390,8 +381,6 @@ class TrainingRunRecord:
                 point.to_record() for point in self.validation_history
             ],
         }
-        if self.training_compute is not None:
-            record["training_compute"] = self.training_compute
         return record
 def _is_positive_finite(value: float) -> bool:
     return math.isfinite(float(value)) and value > 0

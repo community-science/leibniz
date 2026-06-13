@@ -17,6 +17,10 @@ from typing import Any, TypeAlias, cast
 from leibniz.artifacts import ArtifactReference
 from leibniz.benchmark_implementations import Benchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
+from leibniz.cost_metrology import (
+    CostMeasurement,
+    OperationCostRecord,
+)
 from leibniz.identifiers import ProtocolIdentifier, ProtocolName
 from leibniz.latent_factors import (
     DegreeMeasure,
@@ -69,6 +73,7 @@ from leibniz.tensor_runtime import (
     TensorRuntimeError,
     resolve_host_tensor_runtime,
     tensor_runtime_construct_tensor,
+    tensor_runtime_shape_element_count,
     tensor_value_to_host,
     tensor_value_to_host_values,
 )
@@ -114,6 +119,35 @@ _chart_translation_axis_ids = ("x_translation", "y_translation")
 _chart_scale_axis_id = "scale"
 _chart_axis_ids = (*_chart_translation_axis_ids, _chart_scale_axis_id)
 _CurvePoints: TypeAlias = tuple[tuple[float, float], ...]
+
+
+def _digits_oracle_cost_measurement(
+    *,
+    pixel_count: int,
+    operation_stream_source: str,
+) -> CostMeasurement:
+    return CostMeasurement(
+        cost_model_id=CostMeasurement.tensor_runtime_cost_model_id(),
+        abstract_flops=pixel_count,
+        per_op=(
+            OperationCostRecord(
+                name="digits.oracle.pixel-classification",
+                calls=1,
+                abstract_flops=pixel_count,
+                output_elements=pixel_count,
+            ),
+        ),
+        moved_elements=0,
+        movement=(),
+        unmodeled_operations=(),
+        operation_count=1,
+        operation_trace=(),
+        wall_seconds=0.0,
+        tensor_device="oracle",
+        execution_mode="dry-run",
+        operation_stream_source=operation_stream_source,
+        operations_executed=False,
+    )
 
 
 def _cell_radius(tx: int, ty: int, sl: int) -> int:
@@ -292,6 +326,9 @@ class _DigitsVolumeClass:
         return AxisAssignment(values={width_axis: self.canvas_side, height_axis: self.canvas_side})
 
     def metadata(self) -> dict[str, object]:
+        pixel_count = tensor_runtime_shape_element_count(
+            (self.canvas_side, self.canvas_side)
+        )
         return {
             "kind": "digits-realized-setup-window",
             "digit_count": self.digit_count,
@@ -304,15 +341,14 @@ class _DigitsVolumeClass:
             "canvas_side": self.canvas_side,
             "transform_axes": list(_chart_axis_ids),
             "construction": "digit-setups-over-shell-ordered-transform-lattice",
-            "oracle_inference_compute": {
-                "kind": "oracle-inference-compute-reference-v1",
-                "unit": "abstract-ops",
-                "value": self.canvas_side * self.canvas_side,
-                "components": {
-                    "height": self.canvas_side,
-                    "width": self.canvas_side,
-                    "pixel_count": self.canvas_side * self.canvas_side,
-                },
+            "oracle_cost_measurement": _digits_oracle_cost_measurement(
+                pixel_count=pixel_count,
+                operation_stream_source="digits-volume-class-oracle",
+            ).to_record(),
+            "oracle_cost_components": {
+                "height": self.canvas_side,
+                "width": self.canvas_side,
+                "pixel_count": pixel_count,
             },
         }
 
@@ -1066,7 +1102,7 @@ class Generator:
             return None
         return volume_class
 
-    def oracle_inference_reference_points(
+    def oracle_cost_reference_points(
         self,
         *,
         maximum_cost: float,
@@ -1079,18 +1115,19 @@ class Generator:
         max_ordinal = 0
         while True:
             canvas_side = _chart_canvas_side_for_max_ordinal(max_ordinal)
-            cost = canvas_side * canvas_side
+            cost = tensor_runtime_shape_element_count((canvas_side, canvas_side))
             cardinality = _volume_class_digit_count * (max_ordinal + 1)
             log2_volume = math.log2(cardinality)
             points.append(
                 {
                     "log2_volume": log2_volume,
                     "score": log2_volume,
-                    "cost": float(cost),
+                    "cost_measurement": _digits_oracle_cost_measurement(
+                        pixel_count=cost,
+                        operation_stream_source="digits-oracle-reference-curve",
+                    ).to_record(),
                     "metadata": {
-                        "kind": "oracle-inference-compute-reference-v1",
-                        "unit": "abstract-ops",
-                        "value": cost,
+                        "kind": "oracle-cost-measurement-reference-v1",
                         "components": {
                             "height": canvas_side,
                             "width": canvas_side,

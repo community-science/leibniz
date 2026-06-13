@@ -240,7 +240,12 @@ def test_field_extraction_helpers_are_not_duplicated_outside_records() -> None:
 def test_backend_terms_are_used_only_in_tensor_runtime() -> None:
     source_root = _repository_root / "src" / "leibniz"
     banned_terms = ("torch", "cuda", "cpu", "triton")
-    exempt_paths = frozenset({"tensor_runtime.py", "_repository_policy.py"})
+    exempt_paths = frozenset(
+        {
+            "tensor_runtime.py",
+            "_repository_policy.py",
+        }
+    )
 
     offenders = tuple(
         f"{path.relative_to(_repository_root)}:{line_number}:{term}"

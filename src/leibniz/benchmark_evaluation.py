@@ -7,13 +7,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Self, TypeVar, cast
 
-from leibniz.architectures import ArchitectureManifest
+from leibniz.cost_metrology import CostMeasurement, CostMetrologyError
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.measurements import MeasurementRecord
-from leibniz.model_operators import (
-    architecture_with_input_shape,
-    summarize_architecture_operators,
-)
 from leibniz.observation_generation import GeneratedSample, GeneratedSampleSet
 from leibniz.outcomes import AcceptedEvent, OutcomeSpace, RawScoringEvidence
 from leibniz.prediction_results import DirectFiniteProbabilityPrediction
@@ -25,7 +21,7 @@ __all__ = [
     "StateSpaceIntegral",
     "finite_measurements_for_predictions",
     "sampled_competence_curriculum_record",
-    "sampled_competence_compute_cost_integral",
+    "sampled_competence_metrology_cost_integral",
     "sampled_competence_record",
     "sampled_competence_frontier_integral",
     "StateSpaceIntegralTerm",
@@ -35,9 +31,6 @@ __all__ = [
 ]
 
 _ErrorT = TypeVar("_ErrorT", bound=ValueError)
-
-_default_bit_length_per_op = 32.0
-
 
 @dataclass(frozen=True, slots=True)
 class CompetencePoint:
@@ -393,14 +386,13 @@ def sampled_competence_frontier_integral(
     return StateSpaceIntegral(terms=tuple(terms))
 
 
-def sampled_competence_compute_cost_integral(
+def sampled_competence_metrology_cost_integral(
     *,
     points: Sequence[Mapping[str, object]],
-    architecture: ArchitectureManifest,
     error_type: type[_ErrorT] = ValueError,
     field_prefix: str = "compute_cost_point",
 ) -> StateSpaceIntegral:
-    """Return the compute-cost integral for sampled competence intervals."""
+    """Return a compute-cost integral from metrology-derived sampled points."""
 
     ordered = sorted(
         points,
@@ -440,16 +432,14 @@ def sampled_competence_compute_cost_integral(
                 StateSpaceIntegralTerm(
                     lower=minimum,
                     upper=maximum,
-                    competence_density=(
-                        _sampled_point_inference_compute(
+                    competence_density=CostMeasurement.abstract_flops_bit_density(
+                        _record_cost_measurement_ops_per_item(
                             point,
-                            architecture=architecture,
-                            error_type=error_type,
                             field_prefix=field_prefix,
+                            error_type=error_type,
                         )
-                        * _default_bit_length_per_op
                     ),
-                    kind="measured-compute-cost",
+                    kind="metrology-compute-cost",
                     representative_log2_volume=log2_volume,
                 )
             )
@@ -462,45 +452,24 @@ def _competence_point_interval_sort_key(point: CompetencePoint) -> tuple[float, 
     return (lower, upper)
 
 
-def _sampled_point_inference_compute(
+def _record_cost_measurement_ops_per_item(
     point: Mapping[str, object],
     *,
-    architecture: ArchitectureManifest,
-    error_type: type[_ErrorT],
     field_prefix: str,
-) -> float:
-    plan = summarize_architecture_operators(
-        architecture_with_input_shape(
-            architecture,
-            _sampled_point_input_shape(
-                point,
-                error_type=error_type,
-                field=f"{field_prefix}.input_shape",
-            ),
-        )
-    )
-    if plan.inference_compute is None:
-        raise error_type(f"{field_prefix} input_shape has unknown inference compute")
-    return float(plan.inference_compute)
-
-
-def _sampled_point_input_shape(
-    point: Mapping[str, object],
-    *,
     error_type: type[_ErrorT],
-    field: str,
-) -> tuple[int, ...]:
-    value = point.get("input_shape")
-    if not isinstance(value, list | tuple):
-        raise error_type(f"{field}: expected shape")
-    shape: list[int] = []
-    for axis in cast(Sequence[object], value):
-        if type(axis) is not int or axis < 1:
-            raise error_type(f"{field}: expected positive integer shape")
-        shape.append(axis)
-    if not shape:
-        raise error_type(f"{field}: expected nonempty shape")
-    return tuple(shape)
+) -> float:
+    try:
+        measurement = CostMeasurement.from_record(
+            point.get("inference_cost_measurement")
+        )
+    except CostMetrologyError as error:
+        raise error_type(f"{field_prefix}.inference_cost_measurement: {error}") from error
+    sample_count = _record_positive_int(
+        point.get("inference_cost_sample_count"),
+        field=f"{field_prefix}.inference_cost_sample_count",
+        error_type=error_type,
+    )
+    return measurement.abstract_flops_per_item(sample_count)
 
 
 def _record_optional_nonnegative_number(
@@ -547,7 +516,16 @@ def _record_optional_input_shape(
 ) -> tuple[int, ...] | None:
     if "input_shape" not in point:
         return None
-    return _sampled_point_input_shape(point, field=field, error_type=error_type)
+    value = point["input_shape"]
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        raise error_type(f"{field}: expected sequence of positive integers")
+    dimensions = cast(Sequence[object], value)
+    shape: list[int] = []
+    for index, dimension in enumerate(dimensions):
+        if type(dimension) is not int or dimension < 1:
+            raise error_type(f"{field}[{index}]: expected positive integer")
+        shape.append(dimension)
+    return tuple(shape)
 
 
 def _record_optional_state_space_region(

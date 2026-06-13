@@ -231,14 +231,16 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     )
     assert model_inspection["input_shape"] == [1, 24, 24]
     assert model_inspection["output_shape"] == [10]
-    assert model_inspection["cost_summary"] == {
-        "component_count": 3,
-        "parameter_count": 50,
-        "storage_bytes": 200,
-        "inference_compute": 656,
-        "training_compute_per_sample": 1392,
-        "unknown_parameter_components": [],
-    }
+    cost_summary = cast(dict[str, object], model_inspection["cost_summary"])
+    assert cost_summary["component_count"] == 3
+    assert cost_summary["parameter_count"] == 50
+    assert cost_summary["storage_bytes"] == 200
+    assert cost_summary["inference_cost_sample_count"] == 1
+    assert cost_summary["unknown_parameter_components"] == []
+    inference_cost = cast(dict[str, object], cost_summary["inference_cost_measurement"])
+    assert inference_cost["abstract_flops"] == 656
+    assert inference_cost["execution_mode"] == "dry-run"
+    assert inference_cost["operations_executed"] is False
     model_components = cast(list[dict[str, object]], model_inspection["components"])
     assert [
         (component["kind"], component.get("output_shape")) for component in model_components
@@ -265,7 +267,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         "output_node_ids": ["component-2"],
         "component_kinds": ["adaptive-pooling", "flatten", "dense"],
         "unsupported_parameter_components": [],
-        "unsupported_compute_components": [],
+        "unsupported_cost_components": [],
     }
     assert [
         evidence["node_path"]
@@ -541,8 +543,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
             "component_count": 1,
             "cost": 640,
             "storage_bytes": 40,
-            "inference_compute": 20,
-            "training_compute": 60,
+            "inference_cost_measurement": {"abstract_flops": 20},
+            "inference_cost_sample_count": 1,
             "unknown_parameter_components": []
           },
           "run_ids": ["run-1"],
@@ -570,8 +572,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
             "component_count": 1,
             "cost": 640,
             "storage_bytes": 40,
-            "inference_compute": 20,
-            "training_compute": 60,
+            "inference_cost_measurement": {"abstract_flops": 20},
+            "inference_cost_sample_count": 1,
             "unknown_parameter_components": []
           },
           "architecture": {"kind": "architecture-manifest"},
@@ -605,8 +607,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
                 "component_count": 1,
                 "cost": 640,
                 "storage_bytes": 40,
-                "inference_compute": 20,
-                "training_compute": 60,
+                "inference_cost_measurement": {"abstract_flops": 20},
+            "inference_cost_sample_count": 1,
                 "unknown_parameter_components": []
               },
               "run_ids": ["run-1"],
@@ -631,8 +633,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
                 "component_count": 1,
                 "cost": 640,
                 "storage_bytes": 40,
-                "inference_compute": 20,
-                "training_compute": 60,
+                "inference_cost_measurement": {"abstract_flops": 20},
+            "inference_cost_sample_count": 1,
                 "unknown_parameter_components": []
               },
               "architecture": {"kind": "architecture-manifest"},

@@ -109,7 +109,7 @@ class ModelOperatorDescriptor:
 
 @dataclass(frozen=True, slots=True)
 class ModelOperatorSummary:
-    """Shape and resource interpretation of one architecture layer."""
+    """Shape, parameter, and storage interpretation of one architecture layer."""
 
     index: int
     descriptor: ModelOperatorDescriptor
@@ -117,8 +117,6 @@ class ModelOperatorSummary:
     output_shape: tuple[int, ...] | None
     parameter_count: int | None
     storage_bytes: int | None
-    inference_compute: int | None
-    training_compute_per_sample: int | None
 
     def __post_init__(self) -> None:
         if type(self.index) is not int or self.index < 0:
@@ -127,11 +125,6 @@ class ModelOperatorSummary:
         _require_optional_shape(self.output_shape, field="output_shape")
         _require_optional_count(self.parameter_count, field="parameter_count")
         _require_optional_count(self.storage_bytes, field="storage_bytes")
-        _require_optional_count(self.inference_compute, field="inference_compute")
-        _require_optional_count(
-            self.training_compute_per_sample,
-            field="training_compute_per_sample",
-        )
 
     def to_record(self) -> dict[str, object]:
         record: dict[str, object] = {
@@ -146,10 +139,6 @@ class ModelOperatorSummary:
             record["parameter_count"] = self.parameter_count
         if self.storage_bytes is not None:
             record["storage_bytes"] = self.storage_bytes
-        if self.inference_compute is not None:
-            record["inference_compute"] = self.inference_compute
-        if self.training_compute_per_sample is not None:
-            record["training_compute_per_sample"] = self.training_compute_per_sample
         return record
 
 
@@ -162,7 +151,6 @@ class ModelProgramEffect:
     repetitions: int = 1
     parameter_group: str | None = None
     nested_parameter_count: int = 0
-    nested_inference_compute: int = 0
 
     def __post_init__(self) -> None:
         if self.kind not in _program_effect_kinds:
@@ -190,10 +178,7 @@ class ModelProgramEffect:
         if self.kind != "parameter-sharing" and self.parameter_group is not None:
             raise ModelOperatorExecutionError(f"{self.kind} must not declare parameter_group")
         _require_count(self.nested_parameter_count, field="nested_parameter_count")
-        _require_count(self.nested_inference_compute, field="nested_inference_compute")
-        if self.kind != "repeat" and (
-            self.nested_parameter_count != 0 or self.nested_inference_compute != 0
-        ):
+        if self.kind != "repeat" and self.nested_parameter_count != 0:
             raise ModelOperatorExecutionError(f"{self.kind} must not declare nested cost")
 
     def to_record(self) -> dict[str, object]:
@@ -207,14 +192,12 @@ class ModelProgramEffect:
             record["parameter_group"] = self.parameter_group
         if self.nested_parameter_count != 0:
             record["nested_parameter_count"] = self.nested_parameter_count
-        if self.nested_inference_compute != 0:
-            record["nested_inference_compute"] = self.nested_inference_compute
         return record
 
 
 @dataclass(frozen=True, slots=True)
 class ModelProgramEffectDescriptor:
-    """Shape, cost, and trace laws for one program effect kind."""
+    """Shape, cost-law label, and trace laws for one program effect kind."""
 
     kind: _ProgramEffectKind
     input_arity: int
@@ -250,7 +233,7 @@ class ModelProgramEffectDescriptor:
 
 @dataclass(frozen=True, slots=True)
 class ModelProgramEffectSummary:
-    """Resolved shape, cost, and trace contribution of one program effect."""
+    """Resolved shape, parameter, and trace contribution of one program effect."""
 
     index: int
     effect: ModelProgramEffect
@@ -258,7 +241,6 @@ class ModelProgramEffectSummary:
     input_shapes: tuple[tuple[int, ...], ...]
     output_shapes: tuple[tuple[int, ...], ...]
     parameter_count: int
-    inference_compute: int
     trace: tuple[str, ...]
 
     def __post_init__(self) -> None:
@@ -271,7 +253,6 @@ class ModelProgramEffectSummary:
         for shape in (*self.input_shapes, *self.output_shapes):
             _require_optional_shape(shape, field="program effect shape")
         _require_count(self.parameter_count, field="parameter_count")
-        _require_count(self.inference_compute, field="inference_compute")
         if not self.trace:
             raise ModelOperatorExecutionError("program effect trace must be nonempty")
 
@@ -283,7 +264,6 @@ class ModelProgramEffectSummary:
             "input_shapes": [list(shape) for shape in self.input_shapes],
             "output_shapes": [list(shape) for shape in self.output_shapes],
             "parameter_count": self.parameter_count,
-            "inference_compute": self.inference_compute,
             "trace": list(self.trace),
         }
 
@@ -306,16 +286,11 @@ class ModelProgramEffectPlan:
     def parameter_count(self) -> int:
         return sum(effect.parameter_count for effect in self.effects)
 
-    @property
-    def inference_compute(self) -> int:
-        return sum(effect.inference_compute for effect in self.effects)
-
     def to_record(self) -> dict[str, object]:
         return {
             "input_shape": list(self.input_shape),
             "output_shapes": [list(shape) for shape in self.output_shapes],
             "parameter_count": self.parameter_count,
-            "inference_compute": self.inference_compute,
             "effects": [effect.to_record() for effect in self.effects],
         }
 
@@ -337,32 +312,11 @@ class ModelOperatorPlan:
         return _sum_known(operator.storage_bytes for operator in self.operators)
 
     @property
-    def inference_compute(self) -> int | None:
-        return _sum_known(operator.inference_compute for operator in self.operators)
-
-    @property
-    def training_compute_per_sample(self) -> int | None:
-        return _sum_known(
-            operator.training_compute_per_sample for operator in self.operators
-        )
-
-    @property
     def unknown_parameter_layers(self) -> tuple[int, ...]:
         return tuple(
             operator.index
             for operator in self.operators
             if operator.parameter_count is None
-        )
-
-    @property
-    def unknown_compute_layers(self) -> tuple[int, ...]:
-        return tuple(
-            operator.index
-            for operator in self.operators
-            if (
-                operator.inference_compute is None
-                or operator.training_compute_per_sample is None
-            )
         )
 
 
@@ -414,7 +368,7 @@ def summarize_model_program_effects(
     input_shape: tuple[int, ...],
     effects: tuple[ModelProgramEffect, ...],
 ) -> ModelProgramEffectPlan:
-    """Resolve generic higher-order program effects into shape, cost, and trace summaries."""
+    """Resolve generic higher-order program effects into shape, parameter, and trace summaries."""
 
     _require_optional_shape(input_shape, field="input_shape")
     if not effects:
@@ -436,7 +390,6 @@ def summarize_model_program_effects(
             input_shapes=active_shapes,
             output_shapes=output_shapes,
             parameter_count=_program_effect_parameter_count(effect),
-            inference_compute=_program_effect_inference_compute(effect),
             trace=_program_effect_trace(effect),
         )
         summaries.append(summary)
@@ -453,7 +406,7 @@ def summarize_architecture_operators(
     *,
     scalar_bytes: int = 4,
 ) -> ModelOperatorPlan:
-    """Summarize shape, parameter, byte, and compute laws for an architecture."""
+    """Summarize shape, parameter, and byte laws for an architecture."""
 
     if type(scalar_bytes) is not int or scalar_bytes < 1:
         raise ModelOperatorExecutionError("scalar_bytes must be a positive integer")
@@ -480,8 +433,6 @@ def summarize_architecture_operators(
                     if interpretation.parameter_count is None
                     else interpretation.parameter_count * scalar_bytes
                 ),
-                inference_compute=interpretation.inference_compute,
-                training_compute_per_sample=interpretation.training_compute_per_sample,
             )
         )
         shape = interpretation.output_shape
@@ -574,12 +525,6 @@ def _program_effect_parameter_count(effect: ModelProgramEffect) -> int:
     return 0
 
 
-def _program_effect_inference_compute(effect: ModelProgramEffect) -> int:
-    if effect.kind == "repeat":
-        return effect.repetitions * effect.nested_inference_compute
-    return 0
-
-
 def _program_effect_trace(effect: ModelProgramEffect) -> tuple[str, ...]:
     if effect.kind == "branch":
         return (f"branch fan-out={effect.arity}",)
@@ -591,7 +536,6 @@ def _program_effect_trace(effect: ModelProgramEffect) -> tuple[str, ...]:
         return (
             f"repeat count={effect.repetitions}",
             f"nested_parameter_count={effect.nested_parameter_count}",
-            f"nested_inference_compute={effect.nested_inference_compute}",
         )
     if effect.kind == "identity-path":
         return ("identity-path",)
@@ -628,6 +572,10 @@ def _require_count(value: int, *, field: str) -> None:
 
 
 def _sum_known(values: Iterable[int | None]) -> int | None:
+    sequence = tuple(values)
+    if any(value is None for value in sequence):
+        return None
+    return sum(value for value in sequence if value is not None)
     sequence = tuple(values)
     if any(value is None for value in sequence):
         return None

@@ -24,6 +24,7 @@ from leibniz.tensor_runtime import (
     tensor_element_compile_fallback_records,
     tensor_runtime_construct_tensor,
     tensor_runtime_device_kinds,
+    tensor_runtime_shape_element_count,
     tensor_value_to_host_values,
     validate_tensor_runtime_device,
 )
@@ -65,6 +66,10 @@ def test_resolve_tensor_runtime_rejects_unavailable_explicit_device() -> None:
     else:
         with pytest.raises(TensorRuntimeError, match="cuda is not available"):
             resolve_tensor_runtime("cuda")
+
+
+def test_tensor_runtime_shape_element_count_declares_shape_convention() -> None:
+    assert tensor_runtime_shape_element_count((2, 3, 4)) == 24
 
 
 def test_softmax_target_masses_accepts_labels_and_distributions() -> None:
