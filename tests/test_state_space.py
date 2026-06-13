@@ -21,6 +21,7 @@ from leibniz.state_space import (
     axis_regions_are_disjoint,
     product_regions_are_disjoint,
     region_filtration_from_record,
+    state_space_ambient_from_record,
     state_space_region_from_record,
     state_space_regions_are_disjoint,
 )
@@ -370,6 +371,84 @@ def test_ambient_invariants() -> None:
             field_codomain_id="",
             distinguishability=distinguishability,
         )
+
+
+def test_box_ambient_domains_validate_extent_count_and_boundary() -> None:
+    distinguishability = Distinguishability(
+        kind="metric-resolution",
+        metric_id="periodic-l2",
+        resolution=0.01,
+    )
+    ambient = StateSpaceAmbient(
+        field_domain_kind="box-2d",
+        field_domain={
+            "length_x": math.tau,
+            "length_y": 2.0,
+            "boundary_id": "periodic",
+            "units": "radian",
+        },
+        field_codomain_id="scalar-field",
+        distinguishability=distinguishability,
+    )
+
+    record = load_object_document(
+        canonical_document_bytes(ambient.to_record()),
+        description="ambient",
+    )
+    parsed = state_space_ambient_from_record(record)
+
+    assert parsed == ambient
+
+
+@pytest.mark.parametrize(
+    "field_domain_kind,field_domain",
+    [
+        ("box-1d", {"length_y": 1.0, "boundary_id": "periodic"}),
+        ("box-2d", {"length_x": 1.0, "boundary_id": "periodic"}),
+        (
+            "box-3d",
+            {
+                "length_x": 1.0,
+                "length_y": 1.0,
+                "length_z": math.inf,
+                "boundary_id": "periodic",
+            },
+        ),
+        (
+            "box-3d",
+            {
+                "length_x": 1.0,
+                "length_y": 1.0,
+                "length_z": 0.0,
+                "boundary_id": "periodic",
+            },
+        ),
+        ("box-1d", {"length_x": 1.0}),
+        ("box-1d", {"length_x": 1.0, "boundary_id": ""}),
+    ],
+)
+def test_box_ambient_domains_reject_malformed_domains(
+    field_domain_kind: str,
+    field_domain: dict[str, object],
+) -> None:
+    with pytest.raises(StateSpaceError):
+        StateSpaceAmbient(
+            field_domain_kind=field_domain_kind,
+            field_domain=field_domain,
+            field_codomain_id="scalar-field",
+            distinguishability=Distinguishability(kind="exact"),
+        )
+
+
+def test_unknown_ambient_domain_kinds_remain_free_form() -> None:
+    ambient = StateSpaceAmbient(
+        field_domain_kind="benchmark-specific-domain",
+        field_domain={"opaque": "value"},
+        field_codomain_id="vector-field-3",
+        distinguishability=Distinguishability(kind="exact"),
+    )
+
+    assert ambient.to_record()["field_domain"] == {"opaque": "value"}
 
 
 def test_axis_domain_invariants() -> None:

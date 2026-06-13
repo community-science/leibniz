@@ -18,8 +18,10 @@ disjoint union of products of per-axis regions; its volume is the
 distinguishability-certified state count, defined in ambient field space and
 computed exactly through the chart, so it is invariant to reparameterization
 of the generator. Qualitative labels are strata -- typed annotations on union
-components -- never axes. These records carry geometry and measure only;
-requests, sampling outcomes, and integral terms build on them in later layers.
+components -- never axes. Field codomain identifiers are benchmark-declared
+nonempty strings; common conventions are ``scalar-field`` and
+``vector-field-<n>``. These records carry geometry and measure only; requests,
+sampling outcomes, and integral terms build on them in later layers.
 """
 
 from __future__ import annotations
@@ -69,6 +71,12 @@ _integer_range_kind = "integer-range"
 _real_grid_kind = "real-grid"
 _enumerated_cells_kind = "enumerated-cells"
 _binary_vector_kind = "binary-vector"
+
+_box_field_domain_extents = {
+    "box-1d": ("length_x",),
+    "box-2d": ("length_x", "length_y"),
+    "box-3d": ("length_x", "length_y", "length_z"),
+}
 
 _product_of_counts_measure_rule = "product-of-counts"
 _benchmark_computed_measure_rule = "benchmark-computed-finite-count"
@@ -137,6 +145,11 @@ class StateSpaceAmbient:
         if not self.field_codomain_id:
             raise StateSpaceError("ambient field_codomain_id must be nonempty")
         _validate_scalar_mapping(self.field_domain, label="ambient field_domain")
+        _validate_box_field_domain(
+            self.field_domain_kind,
+            self.field_domain,
+            label="ambient field_domain",
+        )
 
     def to_record(self) -> dict[str, object]:
         """Return a record for this ambient declaration."""
@@ -847,6 +860,27 @@ def _validate_scalar_mapping(mapping: Mapping[str, object], *, label: str) -> No
             raise StateSpaceError(f"{label} keys must be nonempty strings")
         if type(value) not in (int, float, str):
             raise StateSpaceError(f"{label} values must be integers, floats, or strings")
+
+
+def _validate_box_field_domain(
+    field_domain_kind: str,
+    field_domain: Mapping[str, object],
+    *,
+    label: str,
+) -> None:
+    extent_keys = _box_field_domain_extents.get(field_domain_kind)
+    if extent_keys is None:
+        return
+    for key in extent_keys:
+        value = field_domain.get(key)
+        if type(value) not in (int, float):
+            raise StateSpaceError(f"{label} {key} must be a finite positive number")
+        extent = float(cast(int | float, value))
+        if not math.isfinite(extent) or extent <= 0.0:
+            raise StateSpaceError(f"{label} {key} must be a finite positive number")
+    boundary_id = field_domain.get("boundary_id")
+    if type(boundary_id) is not str or not boundary_id:
+        raise StateSpaceError(f"{label} boundary_id must be a nonempty string")
 
 
 def _record_mapping(value: object, *, label: str) -> Mapping[str, object]:
