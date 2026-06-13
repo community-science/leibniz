@@ -11,7 +11,7 @@ from typing import Any
 
 import chess
 
-from leibniz.benchmark_implementations import Benchmark as BenchmarkProtocol
+from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.observation_generation import (

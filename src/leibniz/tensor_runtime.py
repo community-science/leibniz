@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Self, cast
 
 from leibniz.architectures import ArchitectureManifest
+from leibniz.target_contracts import TargetContract
 from leibniz.tensor_shapes import TensorShape
 
 __all__ = [
@@ -23,8 +24,11 @@ __all__ = [
     "build_architecture_sequential",
     "build_cosine_lr_schedule",
     "build_cross_entropy_loss",
+    "build_loss",
+    "build_mse_loss",
     "build_optimizer",
     "build_plateau_lr_schedule",
+    "build_relative_l2_loss",
     "make_float_tensor",
     "make_empty_float_tensor",
     "make_long_tensor",
@@ -837,6 +841,42 @@ def build_cross_entropy_loss(runtime: TensorRuntime) -> Any:
 
     _ = runtime
     return _torch().nn.CrossEntropyLoss()
+
+
+def build_mse_loss(runtime: TensorRuntime) -> Any:
+    """Build a mean-squared-error loss module."""
+
+    _ = runtime
+    return _torch().nn.MSELoss()
+
+
+def build_relative_l2_loss(runtime: TensorRuntime) -> Any:
+    """Build a relative L2 loss closure."""
+
+    _ = runtime
+    torch = _torch()
+
+    def relative_l2_loss(predictions: Any, targets: Any) -> Any:
+        residual_norm = torch.linalg.vector_norm(predictions - targets)
+        target_norm = torch.linalg.vector_norm(targets)
+        return residual_norm / torch.maximum(
+            target_norm,
+            torch.tensor(1e-12, dtype=target_norm.dtype, device=target_norm.device),
+        )
+
+    return relative_l2_loss
+
+
+def build_loss(runtime: TensorRuntime, contract: TargetContract) -> Any:
+    """Build the tensor loss declared by a target contract."""
+
+    if contract.loss_id == "cross-entropy":
+        return build_cross_entropy_loss(runtime)
+    if contract.loss_id == "mse":
+        return build_mse_loss(runtime)
+    if contract.loss_id == "relative-l2":
+        return build_relative_l2_loss(runtime)
+    raise TensorRuntimeError(f"unsupported tensor loss: {contract.loss_id}")
 
 
 def no_grad_context(runtime: TensorRuntime) -> Any:

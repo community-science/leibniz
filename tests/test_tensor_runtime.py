@@ -10,6 +10,11 @@ from benchmark_typing import load_digits_generator
 
 from leibniz import tensor_runtime as tensor_runtime_module
 from leibniz.architectures import ArchitectureManifest
+from leibniz.target_contracts import (
+    BaselinePredictor,
+    CompetenceFunctional,
+    TargetContract,
+)
 from leibniz.tensor_runtime import (
     OperationFallbackSequential,
     TensorBatchProgram,
@@ -19,7 +24,10 @@ from leibniz.tensor_runtime import (
     TensorRuntimeError,
     architecture_supported_by_tensor_runtime,
     architecture_tensor_runtime_issue,
+    build_loss,
+    build_mse_loss,
     build_optimizer,
+    build_relative_l2_loss,
     optimizer_step,
     resolve_tensor_runtime,
     runtime_roofline_record,
@@ -102,6 +110,44 @@ def test_softmax_target_masses_accepts_labels_and_distributions() -> None:
             strict=True,
         )
     )
+
+
+def test_build_loss_dispatches_target_contract_losses() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    finite = TargetContract.finite_outcome(("a", "b"))
+    field = TargetContract(
+        kind="field-valued",
+        outcome_ids=None,
+        loss_id="mse",
+        competence=CompetenceFunctional(
+            kind="mass-within-resolution",
+            parameters={"residual_operator_id": "op"},
+        ),
+        baseline=BaselinePredictor(kind="zero-field"),
+    )
+
+    assert build_loss(runtime, finite).__class__.__name__ == "CrossEntropyLoss"
+    assert build_loss(runtime, field).__class__.__name__ == "MSELoss"
+
+
+def test_mse_loss_matches_closed_form() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    loss = build_mse_loss(runtime)
+    predictions = runtime.torch.tensor([1.0, 3.0])
+    targets = runtime.torch.tensor([2.0, 1.0])
+
+    assert float(loss(predictions, targets)) == 2.5
+
+
+def test_relative_l2_loss_matches_closed_form_and_handles_zero_target() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    loss = build_relative_l2_loss(runtime)
+    predictions = runtime.torch.tensor([3.0, 4.0])
+    targets = runtime.torch.tensor([0.0, 0.0])
+    nonzero_targets = runtime.torch.tensor([0.0, 4.0])
+
+    assert math.isclose(float(loss(predictions, nonzero_targets)), 0.75)
+    assert math.isclose(float(loss(predictions, targets)), 5e12, rel_tol=1e-6)
 
 
 def test_loss_search_optimizer_decreases_loss_without_learning_rate() -> None:

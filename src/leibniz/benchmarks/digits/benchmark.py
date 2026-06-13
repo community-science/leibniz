@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, TypeAlias, cast
 
 from leibniz.artifacts import ArtifactReference
-from leibniz.benchmark_implementations import Benchmark as BenchmarkProtocol
+from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.cost_metrology import (
     CostMeasurement,
