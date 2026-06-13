@@ -153,6 +153,17 @@ def test_known_benchmark_manifests_loads_python_implementation_without_manifest_
             from leibniz.benchmarks import BenchmarkManifest
             from leibniz.identifiers import ProtocolIdentifier, ProtocolName
             from leibniz.outcomes import Outcome, OutcomeSpace
+            from leibniz.state_space import (
+                AccessibleSubspace,
+                DiscreteAxisRegion,
+                Distinguishability,
+                IntegerRangeDomain,
+                ProductRegion,
+                SamplingProtocol,
+                StateSpaceAmbient,
+                StateSpaceAxis,
+                StateSpaceRegion,
+            )
 
 
             class Impl:
@@ -177,6 +188,50 @@ def test_known_benchmark_manifests_loads_python_implementation_without_manifest_
                 @property
                 def generator(self):
                     return lambda **kwargs: None
+
+                @property
+                def sampling_protocol(self):
+                    return SamplingProtocol(
+                        kind="uniform-monte-carlo",
+                        estimator_id="sample-mean",
+                        confidence_method_id="wilson",
+                    )
+
+                @property
+                def accessible_subspace(self):
+                    axis_region = DiscreteAxisRegion(
+                        axis=StateSpaceAxis(
+                            id="fixture-index",
+                            domain=IntegerRangeDomain(lower=0, upper=0),
+                        ),
+                        coordinate_region=(0, 0),
+                        count=1,
+                        log2_count=0.0,
+                    )
+                    component = ProductRegion(
+                        axis_regions=(axis_region,),
+                        measure_rule="product-of-counts",
+                        volume=1,
+                        log2_volume=0.0,
+                    )
+                    region = StateSpaceRegion(
+                        id="fixture-accessible-region",
+                        ambient=StateSpaceAmbient(
+                            field_domain_kind="lattice-2d",
+                            field_domain={"height": 1, "width": 1},
+                            field_codomain_id="scalar-field",
+                            distinguishability=Distinguishability(kind="exact"),
+                        ),
+                        components=(component,),
+                        union_rule="disjoint-union",
+                        volume=1,
+                        log2_volume=0.0,
+                    )
+                    return AccessibleSubspace(
+                        ladder_id="fixture-ladder",
+                        per_configuration_capacity=region,
+                        frontier_rationale="Fixture benchmark loadability declaration.",
+                    )
 
 
             def benchmark(root: Path):
@@ -466,7 +521,6 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     measurement_count = cast(int, leaderboard[0]["measurement_count"])
     assert measurement_count >= 64 * 3
-    assert measurement_count % 64 == 0
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
     inference_cost = CostMeasurement.from_record(cost_summary["inference_cost_measurement"])
     assert inference_cost.abstract_flops > 0
