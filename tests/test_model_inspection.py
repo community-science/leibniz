@@ -41,8 +41,6 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
     assert inspection.components[0].operator["kind"] == "local-aggregation"
     assert inspection.components[0].operator["aliases"] == ["adaptive-pooling"]
     assert inspection.components[0].parameter_count == 0
-    assert inspection.components[0].inference_compute == 576
-    assert inspection.components[0].training_compute_per_sample == 1152
     assert inspection.components[1].input_shape == (1, 2, 2)
     assert inspection.components[1].output_shape == (4,)
     assert inspection.components[1].operator is not None
@@ -54,15 +52,16 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
     assert inspection.components[2].operator["kind"] == "affine-readout"
     assert inspection.components[2].parameter_count == 50
     assert inspection.components[2].storage_bytes == 200
-    assert inspection.components[2].inference_compute == 80
-    assert inspection.components[2].training_compute_per_sample == 240
     assert inspection.cost_summary.component_count == 3
     assert inspection.cost_summary.parameter_count == 50
     assert inspection.cost_summary.storage_bytes == 200
-    assert inspection.cost_summary.inference_compute == 656
-    assert inspection.cost_summary.training_compute_per_sample == 1392
+    assert inspection.cost_summary.inference_cost_measurement is not None
+    assert inspection.cost_summary.inference_cost_measurement.abstract_flops == 656
+    assert inspection.cost_summary.inference_cost_measurement.execution_mode == "dry-run"
+    assert not inspection.cost_summary.inference_cost_measurement.operations_executed
+    assert inspection.cost_summary.inference_cost_sample_count == 1
     assert inspection.cost_summary.unknown_parameter_components == ()
-    assert inspection.cost_summary.unknown_compute_components == ()
+    assert inspection.cost_summary.unknown_cost_components == ()
     assert inspection.architecture_summary.component_count == 3
     assert inspection.architecture_summary.edge_count == 2
     assert inspection.architecture_summary.input_node_ids == ("component-0",)
@@ -73,7 +72,7 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
         "dense",
     )
     assert inspection.architecture_summary.unsupported_parameter_components == ()
-    assert inspection.architecture_summary.unsupported_compute_components == ()
+    assert inspection.architecture_summary.unsupported_cost_components == ()
     assert inspection.architecture_trace.input_shape == (1, 24, 24)
     assert inspection.architecture_trace.output_shape == (10,)
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
@@ -93,7 +92,6 @@ def test_model_inspection_derives_architecture_components_and_costs() -> None:
         "preserve-prefix-replace-trailing-axes"
     )
     assert inspection.architecture_trace.stages[2].parameter_count == 50
-    assert inspection.architecture_trace.stages[2].training_compute_per_sample == 240
     assert [node.id for node in inspection.architecture_graph.nodes] == [
         "component-0",
         "component-1",
@@ -234,7 +232,7 @@ def test_model_inspection_rejects_malformed_records() -> None:
 
     record = inspection.to_record()
     components = list(record["components"])  # type: ignore[arg-type]
-    components[1] = {**components[1], "index": 7}  # type: ignore[index]
+    components[1] = {**components[1], "index": 7}
     record["components"] = components
     error = capture_model_inspection_error(lambda: ModelInspectionRecord.from_record(record))
     assert str(error) == "component indexes must be contiguous"

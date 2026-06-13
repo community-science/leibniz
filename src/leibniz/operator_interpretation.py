@@ -6,12 +6,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from leibniz.operator_semantics import ModelOperatorSemantic
-from leibniz.tensor_shapes import TensorShape
+from leibniz.tensor_runtime import (
+    spatial_axis_names_for_dimension,
+    tensor_runtime_shape_element_count,
+)
 
 __all__ = [
     "OperatorInterpretation",
     "OperatorInterpretationError",
     "interpret_operator_semantic",
+    "spatial_axis_names",
 ]
 
 
@@ -21,12 +25,10 @@ class OperatorInterpretationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class OperatorInterpretation:
-    """Resolved shape and resource laws for one declared operator."""
+    """Resolved shape and parameter laws for one declared operator."""
 
     output_shape: tuple[int, ...] | None
     parameter_count: int | None
-    inference_compute: int | None
-    training_compute_per_sample: int | None
 
 
 def interpret_operator_semantic(
@@ -41,8 +43,6 @@ def interpret_operator_semantic(
         return OperatorInterpretation(
             output_shape=None,
             parameter_count=None,
-            inference_compute=None,
-            training_compute_per_sample=None,
         )
     if semantic.shape_law == "product-of-input-axes":
         return _interpret_product_of_input_axes(semantic, input_shape)
@@ -71,16 +71,20 @@ def interpret_operator_semantic(
     raise OperatorInterpretationError(f"unsupported shape_law: {semantic.shape_law}")
 
 
+def spatial_axis_names(dimension: int) -> tuple[str, ...] | None:
+    """Return fixed-support output-axis parameter names for a spatial dimension."""
+
+    return spatial_axis_names_for_dimension(dimension)
+
+
 def _interpret_product_of_input_axes(
     semantic: ModelOperatorSemantic,
     input_shape: tuple[int, ...],
 ) -> OperatorInterpretation:
     _require_cost_law(semantic, "zero-arithmetic")
     return OperatorInterpretation(
-        output_shape=(TensorShape.from_axes(input_shape).element_count,),
+        output_shape=(tensor_runtime_shape_element_count(input_shape),),
         parameter_count=0,
-        inference_compute=0,
-        training_compute_per_sample=0,
     )
 
 
@@ -99,8 +103,6 @@ def _interpret_rank_1_output(
     return OperatorInterpretation(
         output_shape=(output_count,),
         parameter_count=(input_count + 1) * output_count,
-        inference_compute=(2 * input_count) * output_count,
-        training_compute_per_sample=(6 * input_count) * output_count,
     )
 
 
@@ -113,23 +115,18 @@ def _interpret_preserve_prefix_replace_trailing_axes(
     if len(input_shape) < 2:
         return _unknown_interpretation()
     size = _optional_positive_int_parameter(parameters, "size")
-    out_height, out_width = _fixed_support_axes(parameters)
     dimension = _optional_positive_int_parameter(parameters, "dimension")
     if dimension is None or dimension >= len(input_shape) + 1:
         return _unknown_interpretation()
+    output_axes = _fixed_support_axes(parameters, dimension=dimension)
     preserved = input_shape[: len(input_shape) - dimension]
-    if dimension == 2 and out_height is not None and out_width is not None:
-        output_axes = (out_height, out_width)
-    elif size is not None:
+    if output_axes is None and size is not None:
         output_axes = tuple(size for _index in range(dimension))
-    else:
+    if output_axes is None:
         return _unknown_interpretation()
-    input_elements = TensorShape.from_axes(input_shape).element_count
     return OperatorInterpretation(
         output_shape=(*preserved, *output_axes),
         parameter_count=0,
-        inference_compute=input_elements,
-        training_compute_per_sample=2 * input_elements,
     )
 
 
@@ -164,13 +161,9 @@ def _interpret_preserve_prefix_local_window(
         return _unknown_interpretation()
     output_spatial = tuple(axis for axis in output_spatial_axes if axis is not None)
     support_elements = size**dimension
-    output_positions = TensorShape.from_axes(output_spatial).element_count
-    pair_compute = 2 * input_channels * support_elements * out_channels * output_positions
     return OperatorInterpretation(
         output_shape=(*preserved, out_channels, *output_spatial),
         parameter_count=(input_channels * support_elements + 1) * out_channels,
-        inference_compute=pair_compute,
-        training_compute_per_sample=3 * pair_compute,
     )
 
 
@@ -182,27 +175,21 @@ def _interpret_fixed_support_affine(
     _require_cost_law(semantic, "adaptive-support-pointwise-affine")
     dimension = _optional_positive_int_parameter(parameters, "dimension")
     out_channels = _optional_positive_int_parameter(parameters, "out_channels")
-    out_height = _optional_positive_int_parameter(parameters, "out_height")
-    out_width = _optional_positive_int_parameter(parameters, "out_width")
+    output_axes = (
+        None if dimension is None else _fixed_support_axes(parameters, dimension=dimension)
+    )
     if (
-        dimension != 2
+        dimension is None
         or out_channels is None
-        or out_height is None
-        or out_width is None
+        or output_axes is None
         or len(input_shape) <= dimension
     ):
         return _unknown_interpretation()
     preserved = input_shape[: len(input_shape) - dimension - 1]
     input_channels = input_shape[len(input_shape) - dimension - 1]
-    input_elements = TensorShape.from_axes(input_shape).element_count
-    output_positions = out_height * out_width
-    affine_compute = 2 * input_channels * out_channels * output_positions
-    inference_compute = input_elements + affine_compute
     return OperatorInterpretation(
-        output_shape=(*preserved, out_channels, out_height, out_width),
+        output_shape=(*preserved, out_channels, *output_axes),
         parameter_count=(input_channels + 1) * out_channels,
-        inference_compute=inference_compute,
-        training_compute_per_sample=(2 * input_elements) + (3 * affine_compute),
     )
 
 
@@ -211,12 +198,9 @@ def _interpret_preserve_input_shape(
     input_shape: tuple[int, ...],
 ) -> OperatorInterpretation:
     _require_cost_law(semantic, "input-elements")
-    input_elements = TensorShape.from_axes(input_shape).element_count
     return OperatorInterpretation(
         output_shape=input_shape,
         parameter_count=0,
-        inference_compute=input_elements,
-        training_compute_per_sample=2 * input_elements,
     )
 
 
@@ -258,19 +242,27 @@ def _optional_nonnegative_int_parameter(
     return value
 
 
-def _fixed_support_axes(parameters: Mapping[str, object]) -> tuple[int | None, int | None]:
-    out_height = _optional_positive_int_parameter(parameters, "out_height")
-    out_width = _optional_positive_int_parameter(parameters, "out_width")
-    if out_height is not None or out_width is not None:
-        return out_height, out_width
+def _fixed_support_axes(
+    parameters: Mapping[str, object],
+    *,
+    dimension: int,
+) -> tuple[int, ...] | None:
+    axis_names = spatial_axis_names(dimension)
+    if axis_names is None:
+        return None
+    axes = tuple(_optional_positive_int_parameter(parameters, name) for name in axis_names)
+    if any(axis is not None for axis in axes):
+        if any(axis is None for axis in axes):
+            return None
+        return tuple(axis for axis in axes if axis is not None)
     size = _optional_positive_int_parameter(parameters, "size")
-    return size, size
+    if size is not None:
+        return tuple(size for _index in range(dimension))
+    return None
 
 
 def _unknown_interpretation() -> OperatorInterpretation:
     return OperatorInterpretation(
         output_shape=None,
         parameter_count=None,
-        inference_compute=None,
-        training_compute_per_sample=None,
     )

@@ -1,10 +1,13 @@
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
 from leibniz.architecture_semantics import (
     ArchitectureSemanticValidationError,
     validate_architecture_semantics,
 )
-from leibniz.architectures import ArchitectureManifest
+from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
+
+_fixtures_root = Path(__file__).parent / "fixtures"
 
 
 def test_architecture_semantic_validation_accepts_public_fixture() -> None:
@@ -18,7 +21,22 @@ def test_architecture_semantic_validation_accepts_public_fixture() -> None:
         (10,),
     ]
     assert plan.parameter_count == 50
-    assert plan.inference_compute == 1104
+
+
+def test_architecture_semantic_validation_accepts_field_output_fixture() -> None:
+    manifest = ArchitectureManifest.from_record(
+        _load_architecture_fixture("burgers_spectral_stub.json")
+    )
+
+    plan = validate_architecture_semantics(manifest)
+
+    assert plan.input_shape == (1, 16)
+    assert plan.output_shape == (1, 16)
+    assert [operator.output_shape for operator in plan.operators] == [
+        (4, 16),
+        (4, 16),
+        (1, 16),
+    ]
 
 
 def test_architecture_semantic_validation_rejects_unknown_operator_kind() -> None:
@@ -51,6 +69,40 @@ def test_architecture_semantic_validation_reports_required_parameters() -> None:
     assert str(
         capture_semantic_error(lambda: validate_architecture_semantics(manifest))
     ) == "layer 2 (dense): parameter out must be a positive integer"
+
+
+def test_architecture_semantic_validation_reports_dimension_specific_axes() -> None:
+    record = _architecture_record()
+    layers = list(_layers())
+    layers[0] = {"kind": "local-aggregation", "parameters": {"dimension": 1}}
+    record["layers"] = layers
+    manifest = ArchitectureManifest.from_record(record)
+
+    assert str(
+        capture_semantic_error(lambda: validate_architecture_semantics(manifest))
+    ) == "layer 0 (local-aggregation): missing required parameter out_length"
+
+
+def test_architecture_semantic_validation_reports_padding_mode_values() -> None:
+    record = _architecture_record()
+    layers = list(_layers())
+    layers[0] = {
+        "kind": "convolution",
+        "parameters": {
+            "dimension": 2,
+            "size": 3,
+            "out_channels": 4,
+            "stride": 1,
+            "padding": 1,
+            "padding_mode": "reflect",
+        },
+    }
+    record["layers"] = layers
+    manifest = ArchitectureManifest.from_record(record)
+
+    assert str(
+        capture_semantic_error(lambda: validate_architecture_semantics(manifest))
+    ) == "layer 0 (convolution): parameter padding_mode must be one of: zeros, periodic"
 
 
 def test_architecture_semantic_validation_reports_unresolved_shape_law() -> None:
@@ -119,6 +171,11 @@ def _layers() -> tuple[Mapping[str, object], ...]:
             },
         },
     )
+
+
+def _load_architecture_fixture(filename: str) -> dict[str, object]:
+    document = (_fixtures_root / "architecture" / filename).read_bytes()
+    return ArchitectureManifestDocument.from_bytes(document).manifest.to_record()
 
 
 def capture_semantic_error(

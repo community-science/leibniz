@@ -313,6 +313,11 @@ _operator_semantics = (
                 description="number of trailing axes aggregated",
             ),
             ModelOperatorParameterRole(
+                name="out_length",
+                display_name="Output length",
+                description="fixed extent of a one-dimensional output support axis",
+            ),
+            ModelOperatorParameterRole(
                 name="out_height",
                 display_name="Output height",
                 description="fixed extent of the first aggregated output support axis",
@@ -368,6 +373,12 @@ _operator_semantics = (
                 description="zero padding on each local support axis",
                 value_kind="nonnegative-integer",
             ),
+            ModelOperatorParameterRole(
+                name="padding_mode",
+                display_name="Padding mode",
+                description="boundary convention for padded local windows",
+                value_kind="padding-mode",
+            ),
         ),
     ),
     ModelOperatorSemantic(
@@ -387,6 +398,11 @@ _operator_semantics = (
                 name="dimension",
                 display_name="Support rank",
                 description="number of trailing support axes projected to fixed extent",
+            ),
+            ModelOperatorParameterRole(
+                name="out_length",
+                display_name="Output length",
+                description="fixed extent of a one-dimensional fixed support axis",
             ),
             ModelOperatorParameterRole(
                 name="out_height",
@@ -585,16 +601,6 @@ _coordinate_descriptors = (
     SemanticCoordinateDescriptor(
         name="resource.parameter_count",
         display_name="Parameter count",
-        value_kind="integer",
-    ),
-    SemanticCoordinateDescriptor(
-        name="resource.inference_compute",
-        display_name="Inference Compute",
-        value_kind="integer",
-    ),
-    SemanticCoordinateDescriptor(
-        name="resource.training_compute_per_sample",
-        display_name="Training Compute Per Sample",
         value_kind="integer",
     ),
 )

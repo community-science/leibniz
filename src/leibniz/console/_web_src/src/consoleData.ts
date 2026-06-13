@@ -11,7 +11,7 @@ import { parseBenchmarkTaskRecords, type BenchmarkTaskRecord } from './benchmark
 import {
   consoleProtocolFormats,
   consoleProtocolFormatVersions,
-} from './generated/protocolVocabulary.ts';
+} from './protocolVocabulary.ts';
 import { requireArray, requireLiteral, requireRecord } from './transport.ts';
 
 export type ArtifactIndexRecord = {

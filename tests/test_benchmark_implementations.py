@@ -23,6 +23,14 @@ def test_digits_benchmark_loads_python_implementation_entrypoint() -> None:
     assert str(implementation.manifest.id) == "benchmarks.digits@0.1.0"
     assert callable(implementation.generator)
     assert implementation.generator.__class__.__name__ == "Generator"
+    assert implementation.target_contract.kind == "finite-outcome"
+    assert implementation.target_contract.loss_id == "cross-entropy"
+    assert implementation.target_contract.expected_output_shape(None) == (10,)
+    assert implementation.target_contract.chance_mass() == 0.1
+    assert implementation.sampling_protocol.kind == "uniform-monte-carlo"
+    assert implementation.sampling_protocol.confidence_method_id == "wilson"
+    assert implementation.accessible_subspace.ladder_id == "digits-continuous-transform-covering"
+    assert not implementation.accessible_subspace.exclusions
 
 
 def test_digits_python_implementation_owns_declarations() -> None:
@@ -39,6 +47,13 @@ def test_digits_python_implementation_owns_declarations() -> None:
         == implementation.latent_factors.id
     )
     assert implementation.showcase.benchmark_id == implementation.manifest.id
+    assert implementation.sampling_protocol.to_record()["kind"] == "uniform-monte-carlo"
+    sample_set = implementation.generator(shape=1, seed=101)
+    assert sample_set.region is not None
+    assert (
+        implementation.accessible_subspace.per_configuration_capacity.ambient
+        == sample_set.region.ambient
+    )
 
 
 def test_generator_loads_through_benchmark_implementation() -> None:

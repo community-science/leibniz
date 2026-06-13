@@ -1,3 +1,21 @@
+<!--
+Body conventions, enforced by the Template CI check
+(scripts/check_pr_body.py):
+
+- Every section below must be present, in this order, and filled in.
+- "## Contribution Terms" must be the final section and match verbatim.
+- Extra "## " sections are allowed anywhere before Contribution Terms;
+  "### " subsections inside any section are always fine.
+- Mark unresolved design choices explicitly (for example a
+  "DECISION REQUIRED" subsection under Design Review).
+- The body is re-checked on every push; keep its claims current as
+  commits land.
+
+Validate locally before opening or editing:
+
+    python scripts/check_pr_body.py --body-file <your-body-file>
+-->
+
 ## Purpose
 
 What protocol or implementation capability does this add or change?
@@ -9,7 +27,8 @@ What contract does this pull request establish?
 ## Public Surface
 
 List affected modules, schemas, commands, identifiers, generated files, durable
-files, or output formats.
+files, or output formats. State whether each change is additive, breaking, or a
+pre-`1.0.0` redesign.
 
 ## Dependencies
 
@@ -18,7 +37,9 @@ relies on.
 
 ## Tests
 
-What was tested, and what contract do those tests prove?
+What was tested, and what contract do those tests prove? List the local checks
+run, or explain any skipped check; documentation-only changes may state that no
+tests are needed.
 
 ## Rationale
 

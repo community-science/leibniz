@@ -48,7 +48,6 @@ def test_training_run_record_round_trips_protocol_and_history() -> None:
             "learning_rates": [0.01],
         },
     ]
-    assert record["training_compute"] == 128.0
 
 
 def test_training_history_point_round_trips_score_estimate() -> None:
@@ -82,7 +81,6 @@ def test_training_run_record_rejects_inconsistent_validation_summary() -> None:
             status="completed",
             stop_reason="max-steps",
             steps_run=1,
-            training_compute=128.0,
             validation_checks=3,
             protocol=_protocol(),
             validation_history=_history(),
@@ -223,7 +221,6 @@ def _training_run() -> TrainingRunRecord:
         status="budget-exhausted",
         stop_reason="max-steps",
         steps_run=1,
-        training_compute=128.0,
         validation_checks=2,
         protocol=_protocol(),
         validation_history=_history(),

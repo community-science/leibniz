@@ -38,6 +38,7 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
             "results/measurements/digits/local-run.json",
             "results/evaluations/digits/local-run.json",
             "results/views/digits/benchmark_results.json",
+            ".local-cache/console/consoleDataPayload.json",
             ".venv/pyvenv.cfg",
             ".vite/deps/react.js",
             "build/lib/leibniz/__init__.py",
@@ -74,6 +75,10 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
         ),
         PolicyViolation(
             path=PurePosixPath("results/views/digits/benchmark_results.json"),
+            message="tracked local, cache, or generated directory",
+        ),
+        PolicyViolation(
+            path=PurePosixPath(".local-cache/console/consoleDataPayload.json"),
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(
@@ -235,7 +240,12 @@ def test_field_extraction_helpers_are_not_duplicated_outside_records() -> None:
 def test_backend_terms_are_used_only_in_tensor_runtime() -> None:
     source_root = _repository_root / "src" / "leibniz"
     banned_terms = ("torch", "cuda", "cpu", "triton")
-    exempt_paths = frozenset({"tensor_runtime.py", "_repository_policy.py"})
+    exempt_paths = frozenset(
+        {
+            "tensor_runtime.py",
+            "_repository_policy.py",
+        }
+    )
 
     offenders = tuple(
         f"{path.relative_to(_repository_root)}:{line_number}:{term}"
@@ -302,6 +312,60 @@ def test_repository_policy_rejects_benchmark_hot_path_host_transfer(
             message=(
                 "benchmark implementation hot-path host transfer "
                 "at line 2: .tolist("
+            ),
+        ),
+    )
+
+
+def test_repository_policy_allows_benchmark_solver_ops_namespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = PurePosixPath("src/leibniz/benchmarks/example/benchmark.py")
+    benchmark_file = tmp_path / path
+    benchmark_file.parent.mkdir(parents=True)
+    benchmark_file.write_text(
+        "def step(state, ops):\n"
+        "    return ops.real(ops.ifft(ops.fft(state, axis=-1), axis=-1))\n",
+        encoding="utf-8",
+    )
+
+    def tracked_paths(_root: Path) -> tuple[str, ...]:
+        return (path.as_posix(),)
+
+    monkeypatch.setattr(repository_policy_module, "_tracked_paths", tracked_paths)
+
+    assert RepositoryPolicy.validate_repository(tmp_path) == ()
+
+
+def test_repository_policy_rejects_benchmark_runtime_torch_escape_hatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = PurePosixPath("src/leibniz/benchmarks/example/benchmark.py")
+    benchmark_file = tmp_path / path
+    benchmark_file.parent.mkdir(parents=True)
+    benchmark_file.write_text(
+        "def render(runtime):\n"
+        "    return runtime.torch.zeros(1)\n",
+        encoding="utf-8",
+    )
+
+    def tracked_paths(_root: Path) -> tuple[str, ...]:
+        return (path.as_posix(),)
+
+    monkeypatch.setattr(repository_policy_module, "_tracked_paths", tracked_paths)
+
+    assert RepositoryPolicy.validate_repository(tmp_path) == (
+        PolicyViolation(
+            path=path,
+            message="backend implementation term outside tensor runtime at line 2: torch",
+        ),
+        PolicyViolation(
+            path=path,
+            message=(
+                "benchmark implementation runtime escape hatch "
+                "at line 2: runtime.torch"
             ),
         ),
     )

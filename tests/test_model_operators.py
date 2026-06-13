@@ -53,16 +53,8 @@ def test_model_operator_summary_classifies_formal_semantics() -> None:
     ]
     assert [operator.parameter_count for operator in plan.operators] == [0, 0, 50]
     assert [operator.storage_bytes for operator in plan.operators] == [0, 0, 200]
-    assert [operator.inference_compute for operator in plan.operators] == [576, 0, 80]
-    assert [operator.training_compute_per_sample for operator in plan.operators] == [
-        1152,
-        0,
-        240,
-    ]
     assert plan.parameter_count == 50
     assert plan.storage_bytes == 200
-    assert plan.inference_compute == 656
-    assert plan.training_compute_per_sample == 1392
 
 
 def test_model_operator_summary_rejects_unknown_operator_kind() -> None:
@@ -139,16 +131,6 @@ def test_convolution_alias_routes_through_local_affine_semantics() -> None:
         == local_affine_plan.operators[0].parameter_count
         == 80
     )
-    assert (
-        convolution_plan.operators[0].inference_compute
-        == local_affine_plan.operators[0].inference_compute
-        == 82944
-    )
-    assert (
-        convolution_plan.operators[0].training_compute_per_sample
-        == local_affine_plan.operators[0].training_compute_per_sample
-        == 248832
-    )
     assert output.shape == (2, 10)
 
 
@@ -189,8 +171,6 @@ def test_relu_alias_routes_through_rectified_linear_activation_semantics() -> No
     assert plan.operators[1].descriptor.aliases == ("relu",)
     assert plan.operators[1].output_shape == (4, 8, 8)
     assert plan.operators[1].parameter_count == 0
-    assert plan.operators[1].inference_compute == 256
-    assert plan.operators[1].training_compute_per_sample == 512
     assert output.shape == (2, 10)
 
 
@@ -242,8 +222,94 @@ def test_fixed_support_affine_projects_variable_canvas_to_fixed_convnet_shape() 
         (10,),
     ]
     assert plan.operators[0].parameter_count == 12
-    assert plan.operators[0].inference_compute == 3185
     assert output.shape == (2, 10)
+
+
+def test_dimension_one_local_operators_build_and_preserve_field_shape() -> None:
+    torch = cast(Any, importlib.import_module("torch"))
+    manifest = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 31],
+            "output_shape": [2, 8],
+            "layers": [
+                {
+                    "kind": "fixed-support-affine",
+                    "parameters": {
+                        "dimension": 1,
+                        "out_channels": 4,
+                        "out_length": 16,
+                    },
+                },
+                {
+                    "kind": "convolution",
+                    "parameters": {
+                        "dimension": 1,
+                        "size": 3,
+                        "out_channels": 3,
+                        "stride": 1,
+                        "padding": 1,
+                    },
+                },
+                {
+                    "kind": "local-aggregation",
+                    "parameters": {"dimension": 1, "out_length": 8},
+                },
+                {
+                    "kind": "convolution",
+                    "parameters": {
+                        "dimension": 1,
+                        "size": 1,
+                        "out_channels": 2,
+                        "stride": 1,
+                        "padding": 0,
+                    },
+                },
+            ],
+        }
+    )
+
+    plan = summarize_architecture_operators(manifest)
+    output = ExecutableModelOperator(manifest).sequential_module()(torch.zeros(5, 1, 31))
+
+    assert [operator.output_shape for operator in plan.operators] == [
+        (4, 16),
+        (3, 16),
+        (3, 8),
+        (2, 8),
+    ]
+    assert output.shape == (5, 2, 8)
+
+
+def test_local_affine_periodic_padding_maps_to_circular_convolution() -> None:
+    torch = cast(Any, importlib.import_module("torch"))
+    manifest = ArchitectureManifest.from_record(
+        {
+            "input_shape": [1, 4],
+            "output_shape": [1, 4],
+            "layers": [
+                {
+                    "kind": "convolution",
+                    "parameters": {
+                        "dimension": 1,
+                        "size": 3,
+                        "out_channels": 1,
+                        "stride": 1,
+                        "padding": 1,
+                        "padding_mode": "periodic",
+                    },
+                },
+            ],
+        }
+    )
+    module = ExecutableModelOperator(manifest).sequential_module()
+
+    with torch.no_grad():
+        module[0].weight.zero_()
+        module[0].bias.zero_()
+        module[0].weight[0, 0, 0] = 1
+    output = module(torch.tensor([[[1.0, 2.0, 3.0, 4.0]]]))
+
+    assert output.tolist() == [[[4.0, 1.0, 2.0, 3.0]]]
 
 
 def _local_affine_manifest(kind: str) -> ArchitectureManifest:
@@ -357,7 +423,6 @@ def test_program_effect_summary_resolves_branch_share_and_merge_trace() -> None:
 
     assert plan.output_shape == (1, 8, 8)
     assert plan.parameter_count == 0
-    assert plan.inference_compute == 0
     assert [summary.descriptor.kind for summary in plan.effects] == [
         "branch",
         "parameter-sharing",
@@ -377,7 +442,7 @@ def test_program_effect_summary_resolves_branch_share_and_merge_trace() -> None:
     assert plan.to_record()["output_shapes"] == [[1, 8, 8]]
 
 
-def test_program_effect_summary_scales_nested_repeat_cost() -> None:
+def test_program_effect_summary_scales_nested_repeat_parameters() -> None:
     plan = summarize_model_program_effects(
         input_shape=(4,),
         effects=(
@@ -385,19 +450,16 @@ def test_program_effect_summary_scales_nested_repeat_cost() -> None:
                 kind="repeat",
                 repetitions=3,
                 nested_parameter_count=5,
-                nested_inference_compute=11,
             ),
         ),
     )
 
     assert plan.output_shape == (4,)
     assert plan.parameter_count == 15
-    assert plan.inference_compute == 33
     assert plan.effects[0].descriptor.shape_law == "preserve-shape"
     assert plan.effects[0].trace == (
         "repeat count=3",
         "nested_parameter_count=5",
-        "nested_inference_compute=11",
     )
 
 

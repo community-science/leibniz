@@ -103,7 +103,7 @@ def test_console_artifact_index_records_available_dependency_references() -> Non
         },
         {
             "kind": "latent-factor-declaration",
-            "protocol_id": "benchmarks.digits.latent-factors@0.1.0",
+            "protocol_id": "benchmarks.digits.latent-factors@0.2.0",
         },
     ]
 
