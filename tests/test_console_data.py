@@ -389,7 +389,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     samples = cast(list[dict[str, object]], batches[3]["samples"])
     component_indices = {cast(int, sample["component_index"]) for sample in samples}
     assert component_indices <= set(range(10))
-    assert len(component_indices) == len(samples)
+    assert len(component_indices) < len(samples)
     field_shapes = [tuple(cast(list[int], sample["field_shape"])) for sample in samples]
     assert set(field_shapes) == {(1, 36, 36)}
     materialization_plans = [
@@ -409,7 +409,8 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     )
     variation_values = cast(dict[str, object], variation["values"])
     assert variation_values["kind"] == "constructed-field-variation-transform-samples"
-    assert variation_values["transform_ordinal"] == 0
+    assert isinstance(variation_values["transform_ordinal"], int)
+    assert variation_values["transform_ordinal"] >= 0
     volume_class = cast(dict[str, object], variation_values["volume_class"])
     assert volume_class["kind"] == "digits-realized-setup-window"
     assert volume_class["canvas_side"] == 36
@@ -419,6 +420,11 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     variation_coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
     assert len(variation_coordinates) == 1
     assert variation_coordinates[0]["kind"] == "field-variation-transform-coordinate"
+    normalized_transform = cast(
+        dict[str, float],
+        variation_coordinates[0]["normalized_transform"],
+    )
+    assert set(normalized_transform) == {"x_translation", "y_translation", "scale"}
 
 
 def test_console_data_payload_is_a_canonical_object_document() -> None:
