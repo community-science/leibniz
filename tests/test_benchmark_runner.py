@@ -203,29 +203,46 @@ def test_resolve_competence_functional_selects_finite_outcome_accepted_mass() ->
     assert functional.kind == "above-chance-accepted-mass"
 
 
-def test_resolve_competence_functional_selects_field_relative_accuracy() -> None:
+def test_resolve_competence_functional_requires_field_competence_factory() -> None:
     runtime = resolve_tensor_runtime("cpu")
+    contract = _field_target_contract()
+
+    with pytest.raises(benchmark_runner.BenchmarkRunnerError, match="training competence"):
+        cast(Any, benchmark_runner)._resolve_competence_functional(
+            contract,
+            runtime=runtime,
+            competence_factory=None,
+        )
+
+
+def test_resolve_competence_functional_uses_field_competence_factory() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    contract = _field_target_contract()
+
+    class Factory:
+        def build_training_competence(
+            self,
+            _runtime: TensorRuntime,
+            _contract: TargetContract,
+        ) -> Any:
+            def competence(predictions: Any, targets: Any) -> Any:
+                return (predictions == targets).all(dim=1).to(dtype=predictions.dtype)
+
+            return competence
+
     functional = cast(Any, benchmark_runner)._resolve_competence_functional(
-        _field_target_contract()
+        contract,
+        runtime=runtime,
+        competence_factory=Factory(),
     )
-    targets = runtime.torch.tensor(
-        [
-            [[[1.0, 0.0], [0.0, 1.0]]],
-            [[[1.0, 1.0], [1.0, 1.0]]],
-        ]
-    )
-    predictions = runtime.torch.tensor(
-        [
-            [[[1.0, 0.0], [0.0, 1.0]]],
-            [[[2.0, 1.0], [1.0, 1.0]]],
-        ]
-    )
+    targets = runtime.torch.tensor([[1.0, 0.0], [1.0, 1.0]])
+    predictions = runtime.torch.tensor([[1.0, 0.0], [2.0, 1.0]])
 
     masses = functional.training_logit_masses(runtime, predictions, targets)
 
     assert functional.kind == "mass-within-resolution"
     assert masses[0] == 1.0
-    assert 0.0 < masses[1] < 1.0
+    assert masses[1] == 0.0
 
 
 def test_equation_residual_training_loss_requires_benchmark_factory() -> None:

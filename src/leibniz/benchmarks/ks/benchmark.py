@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import cmath
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -41,9 +41,11 @@ from leibniz.target_contracts import (
 from leibniz.tensor_runtime import (
     TensorBatchProgram,
     TensorElementParameter,
+    TensorElementRecipe,
     TensorRuntime,
     TensorSolverProgram,
     resolve_host_tensor_runtime,
+    tensor_runtime_construct_tensor,
     tensor_runtime_solve_tensor_trajectory,
 )
 from leibniz.timing import TimingCollector
@@ -133,6 +135,38 @@ class Benchmark:
         ):
             raise ValueError("KS benchmark only builds its declared residual loss")
         return _ks_residual_loss
+
+    def build_training_competence(
+        self,
+        runtime: TensorRuntime,
+        target_contract: TargetContract,
+    ) -> Callable[[Any, Any], Any]:
+        del runtime
+        if (
+            target_contract.kind != "field-valued"
+            or target_contract.competence.kind != "mass-within-resolution"
+            or target_contract.competence.parameters.get("residual_operator_id")
+            != _residual_operator_id
+        ):
+            raise ValueError("KS benchmark only builds its declared residual competence")
+        return _ks_residual_certificate_mass
+
+    def reference_trajectory(
+        self,
+        *,
+        runtime: TensorRuntime,
+        sample_count: int,
+        seed: int,
+        sample_indices: tuple[int, ...],
+        window: int,
+    ) -> Any:
+        return _ks_reference_trajectory(
+            runtime=runtime,
+            sample_count=sample_count,
+            seed=seed,
+            sample_indices=sample_indices,
+            window=window,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,19 +400,34 @@ def _ks_tensors(
     sample_indices: tuple[int, ...],
     window: int,
 ) -> tuple[Any, Any]:
-    initial_program = TensorBatchProgram(
-        kernel=_ks_initial_condition_kernel,
-        parameters=_ks_initial_parameters(
-            seed=seed,
-            sample_indices=sample_indices,
-            window=window,
-        ),
-        cache_key=("ks-initial-condition",),
+    initial = _ks_initial_fields(
+        runtime=runtime,
+        sample_count=sample_count,
+        seed=seed,
+        sample_indices=sample_indices,
+        window=window,
     )
-    targets = tensor_runtime_solve_tensor_trajectory(
+    fields = initial.float()
+    targets = initial[:, 0:1, :].repeat(1, _time_count, 1).float()
+    return fields, targets
+
+
+def _ks_reference_trajectory(
+    *,
+    runtime: TensorRuntime,
+    sample_count: int,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    window: int,
+) -> Any:
+    return tensor_runtime_solve_tensor_trajectory(
         runtime,
         program=TensorSolverProgram(
-            initial_state=initial_program,
+            initial_state=_ks_initial_program(
+                seed=seed,
+                sample_indices=sample_indices,
+                window=window,
+            ),
             step_kernel=_ks_step_kernel,
             step_count=_time_count - 1,
             parameters=_ks_solver_parameters(),
@@ -387,8 +436,46 @@ def _ks_tensors(
         ),
         shape=(sample_count, 1, _space_count),
     )
-    fields = targets[:, :, 0, :].float()
-    return fields, targets[:, 0, :, :]
+
+
+def _ks_initial_fields(
+    *,
+    runtime: TensorRuntime,
+    sample_count: int,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    window: int,
+) -> Any:
+    initial_program = _ks_initial_program(
+        seed=seed,
+        sample_indices=sample_indices,
+        window=window,
+    )
+    return tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(
+            shape=(sample_count, 1, _space_count),
+            dtype="float64",
+            program=initial_program,
+        ),
+    )
+
+
+def _ks_initial_program(
+    *,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    window: int,
+) -> TensorBatchProgram:
+    return TensorBatchProgram(
+        kernel=_ks_initial_condition_kernel,
+        parameters=_ks_initial_parameters(
+            seed=seed,
+            sample_indices=sample_indices,
+            window=window,
+        ),
+        cache_key=("ks-initial-condition",),
+    )
 
 
 def _ks_initial_parameters(
@@ -619,6 +706,27 @@ def _ks_nonlinear_spectrum(
 def _ks_residual_loss(predictions: Any, targets: Any) -> Any:
     if tuple(predictions.shape) != tuple(targets.shape):
         raise ValueError("KS residual loss requires prediction and target shape match")
+    residual = _ks_discrete_residual(predictions)
+    residual_loss = (residual * residual).mean()
+    initial_error = predictions[:, 0, :] - targets[:, 0, :]
+    initial_loss = (initial_error * initial_error).mean()
+    return residual_loss + initial_loss
+
+
+def _ks_residual_certificate_mass(predictions: Any, targets: Any) -> Any:
+    if tuple(predictions.shape) != tuple(targets.shape):
+        raise ValueError("KS residual certificate requires prediction and target shape match")
+    residual = _ks_discrete_residual(predictions.detach())
+    residual_rms = residual.pow(2).mean(dim=(1, 2)).sqrt()
+    initial_error = predictions.detach()[:, 0, :] - targets.detach()[:, 0, :]
+    initial_rms = initial_error.pow(2).mean(dim=1).sqrt()
+    accepted = (initial_rms <= _epsilon) & (
+        residual_rms <= _ks_residual_acceptance_level()
+    )
+    return accepted.to(dtype=predictions.dtype)
+
+
+def _ks_discrete_residual(predictions: Any) -> Any:
     dx = _box_length / _space_count
     dt = _horizon / (_time_count - 1)
     u = predictions[:, :-1, :]
@@ -636,11 +744,19 @@ def _ks_residual_loss(predictions: Any, targets: Any) -> Any:
         - 4.0 * u.roll(shifts=1, dims=-1)
         + u.roll(shifts=2, dims=-1)
     ) / (dx**4)
-    residual = u_t + (u * u_x) + u_xx + u_xxxx
-    residual_loss = (residual * residual).mean()
-    initial_error = predictions[:, 0, :] - targets[:, 0, :]
-    initial_loss = (initial_error * initial_error).mean()
-    return residual_loss + initial_loss
+    return u_t + (u * u_x) + u_xx + u_xxxx
+
+
+def _ks_residual_acceptance_level() -> float:
+    return _ks_truncation_floor() + _ks_epsilon_residual_image_bound()
+
+
+def _ks_truncation_floor() -> float:
+    return 5e-4
+
+
+def _ks_epsilon_residual_image_bound() -> float:
+    return _epsilon / 50.0
 
 
 def _ks_samples(
