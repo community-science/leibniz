@@ -45,6 +45,8 @@ __all__ = [
     "TensorElementParameter",
     "TensorElementParameterDType",
     "TensorBatchProgram",
+    "TensorFieldOps",
+    "TensorSolverProgram",
     "TensorElementRecipe",
     "TensorElementDType",
     "TensorRuntimeError",
@@ -62,6 +64,7 @@ __all__ = [
     "tensor_runtime_operation_capture",
     "tensor_runtime_project_operations",
     "tensor_runtime_profile_operator_rows",
+    "tensor_runtime_solve_tensor",
     "tensor_runtime_shape_element_count",
     "tensor_runtime_total_memory_bytes",
     "tensor_runtime_used_memory_bytes",
@@ -79,7 +82,7 @@ __all__ = [
 TensorRuntimeDevice = Literal["auto", "cpu", "cuda", "mps"]
 TensorRuntimeDeviceKind = Literal["cpu", "cuda", "mps"]
 TensorElementDType = Literal["float32", "float64", "int64"]
-TensorElementParameterDType = Literal["float32", "float64", "int64"]
+TensorElementParameterDType = Literal["float32", "float64", "complex64", "complex128", "int64"]
 _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
 _roofline_cache: dict[str, dict[str, object]] = {}
 _tensor_element_kernel_cache: dict[tuple[object, ...], Any] = {}
@@ -89,7 +92,7 @@ _tensor_element_parameter_cache: dict[tuple[object, ...], Any] = {}
 _tensor_element_parameter_cache_capacity = 256
 _tensor_element_parameter_values_key_cache: dict[
     tuple[int, TensorElementParameterDType],
-    tuple[Sequence[int | float], bytes],
+    tuple[Sequence[int | float | complex], bytes],
 ] = {}
 _tensor_element_parameter_values_key_cache_minimum_size = 64
 _tensor_element_tile_size = 131_072
@@ -209,7 +212,7 @@ class TensorElementParameter:
 
     dtype: TensorElementParameterDType
     shape: tuple[int, ...]
-    values: Sequence[int | float]
+    values: Sequence[int | float | complex]
     dynamic_axes: tuple[int, ...] = ()
 
 
@@ -219,6 +222,35 @@ class TensorBatchProgram:
 
     kernel: Callable[..., object]
     parameters: Mapping[str, TensorElementParameter]
+    compile: bool = True
+    cache_key: object | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TensorFieldOps:
+    """Small backend-owned field-operator namespace for solver step kernels."""
+
+    torch: Any
+
+    def fft(self, value: Any, axis: int) -> Any:
+        return self.torch.fft.fft(value, dim=axis)
+
+    def ifft(self, value: Any, axis: int) -> Any:
+        return self.torch.fft.ifft(value, dim=axis)
+
+    def real(self, value: Any) -> Any:
+        return value.real
+
+
+@dataclass(frozen=True, slots=True)
+class TensorSolverProgram:
+    """Sequential tensor program that evolves a field state by repeated steps."""
+
+    initial_state: TensorBatchProgram
+    step_kernel: Callable[..., object]
+    step_count: int
+    parameters: Mapping[str, TensorElementParameter]
+    dtype: TensorElementDType = "float32"
     compile: bool = True
     cache_key: object | None = None
 
@@ -250,6 +282,46 @@ def tensor_runtime_construct_tensor(
     )
 
 
+def tensor_runtime_solve_tensor(
+    runtime: TensorRuntime,
+    *,
+    program: TensorSolverProgram,
+    shape: Sequence[int],
+) -> Any:
+    """Construct an initial field and evolve it through a solver step program."""
+
+    resolved_shape = tuple(_positive_tensor_extent(size) for size in shape)
+    if type(program.step_count) is not int or program.step_count < 0:
+        raise TensorRuntimeError("solver step_count must be a nonnegative integer")
+    dtype = _tensor_element_dtype(runtime=runtime, dtype=program.dtype)
+    state = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(
+            shape=resolved_shape,
+            dtype=program.dtype,
+            program=program.initial_state,
+        ),
+    )
+    if program.step_count == 0:
+        return state
+    parameter_tensors = {
+        name: _tensor_element_parameter(
+            runtime=runtime,
+            program=program,
+            name=name,
+            parameter=parameter,
+        )
+        for name, parameter in program.parameters.items()
+    }
+    return _solve_tensor_program(
+        runtime=runtime,
+        program=program,
+        state=state,
+        dtype=dtype,
+        parameter_tensors=parameter_tensors,
+    )
+
+
 def tensor_element_compile_fallback_records() -> tuple[dict[str, object], ...]:
     """Return process-wide records of element programs that fell back to eager construction.
 
@@ -268,7 +340,7 @@ def tensor_element_compile_fallback_records() -> tuple[dict[str, object], ...]:
 def _note_tensor_element_compile_fallback(
     *,
     runtime: TensorRuntime,
-    program: TensorBatchProgram,
+    program: TensorBatchProgram | TensorSolverProgram,
     cache_key: tuple[object, ...],
     reason: str,
 ) -> None:
@@ -295,10 +367,15 @@ def _tensor_element_compile_required() -> bool:
     return os.environ.get(_require_tensor_compile_environment_variable, "") not in {"", "0"}
 
 
-def _tensor_element_program_label(program: TensorBatchProgram) -> str:
+def _tensor_element_program_label(program: TensorBatchProgram | TensorSolverProgram) -> str:
     if program.cache_key is not None:
         return str(program.cache_key)
-    return getattr(program.kernel, "__qualname__", repr(program.kernel))
+    kernel = (
+        program.kernel
+        if isinstance(program, TensorBatchProgram)
+        else program.step_kernel
+    )
+    return getattr(kernel, "__qualname__", repr(kernel))
 
 
 def tensor_runtime_device_choices() -> tuple[str, ...]:
@@ -1466,6 +1543,123 @@ def _construct_tensor_element_program(
     )
 
 
+def _solve_tensor_program(
+    *,
+    runtime: TensorRuntime,
+    program: TensorSolverProgram,
+    state: Any,
+    dtype: Any,
+    parameter_tensors: Mapping[str, Any],
+) -> Any:
+    if runtime.device_kind in {"cuda", "mps"} and program.compile:
+        compile_cache_key = _tensor_solver_kernel_cache_key(
+            runtime=runtime,
+            program=program,
+            parameter_tensors=parameter_tensors,
+        )
+        if not _tensor_runtime_compile_available(runtime):
+            _note_tensor_element_compile_fallback(
+                runtime=runtime,
+                program=program,
+                cache_key=compile_cache_key,
+                reason="torch.compile is not available for this tensor runtime",
+            )
+        elif compile_cache_key in _tensor_element_compile_failure_cache:
+            _note_tensor_element_compile_fallback(
+                runtime=runtime,
+                program=program,
+                cache_key=compile_cache_key,
+                reason="tensor solver compile previously failed for this program",
+            )
+        else:
+            try:
+                step = _compiled_tensor_solver_step_kernel(
+                    runtime=runtime,
+                    program=program,
+                    parameter_tensors=parameter_tensors,
+                    cache_key=compile_cache_key,
+                )
+                return _run_tensor_solver_steps(
+                    program=program,
+                    state=state,
+                    dtype=dtype,
+                    step=step,
+                )
+            except Exception as error:
+                _tensor_element_compile_failure_cache.add(compile_cache_key)
+                _tensor_element_kernel_cache.pop(compile_cache_key, None)
+                _note_tensor_element_compile_fallback(
+                    runtime=runtime,
+                    program=program,
+                    cache_key=compile_cache_key,
+                    reason=f"tensor solver compile failed: {error}",
+                )
+    step = _eager_tensor_solver_step_kernel(
+        runtime=runtime,
+        program=program,
+        parameter_tensors=parameter_tensors,
+    )
+    return _run_tensor_solver_steps(
+        program=program,
+        state=state,
+        dtype=dtype,
+        step=step,
+    )
+
+
+def _run_tensor_solver_steps(
+    *,
+    program: TensorSolverProgram,
+    state: Any,
+    dtype: Any,
+    step: Callable[[Any], Any],
+) -> Any:
+    expected_shape = tuple(int(extent) for extent in state.shape)
+    for _step_index in range(program.step_count):
+        state = step(state).to(dtype=dtype)
+        if tuple(int(extent) for extent in state.shape) != expected_shape:
+            raise TensorRuntimeError("solver step kernel must preserve state shape")
+        if state.dtype != dtype:
+            raise TensorRuntimeError("solver step kernel must preserve state dtype")
+    return state
+
+
+def _eager_tensor_solver_step_kernel(
+    *,
+    runtime: TensorRuntime,
+    program: TensorSolverProgram,
+    parameter_tensors: Mapping[str, Any],
+) -> Callable[[Any], Any]:
+    ops = TensorFieldOps(runtime.torch)
+
+    def step(state: Any) -> Any:
+        return cast(Any, program.step_kernel(state, ops, **parameter_tensors))
+
+    return step
+
+
+def _compiled_tensor_solver_step_kernel(
+    *,
+    runtime: TensorRuntime,
+    program: TensorSolverProgram,
+    parameter_tensors: Mapping[str, Any],
+    cache_key: tuple[object, ...],
+) -> Callable[[Any], Any]:
+    cached = _tensor_element_kernel_cache.get(cache_key)
+    if cached is not None:
+        return cast(Callable[[Any], Any], cached)
+    with _tensor_runtime_profile_span(runtime, "leibniz.tensor_solve.compile_lookup"):
+        ops = TensorFieldOps(runtime.torch)
+
+        def step(state: Any) -> Any:
+            return cast(Any, program.step_kernel(state, ops, **parameter_tensors))
+
+        _clear_stale_compile_module_alias(program.step_kernel)
+        compiled = runtime.torch.compile(step)
+    _tensor_element_kernel_cache[cache_key] = compiled
+    return cast(Callable[[Any], Any], compiled)
+
+
 def _construct_eager_tensor_element_program(
     *,
     runtime: TensorRuntime,
@@ -1537,6 +1731,8 @@ def _compiled_tensor_element_parameters(
     scalar_groups: dict[TensorElementParameterDType, list[tuple[str, Any]]] = {
         "float32": [],
         "float64": [],
+        "complex64": [],
+        "complex128": [],
         "int64": [],
     }
     for name, declaration in declarations.items():
@@ -1563,7 +1759,7 @@ def _compiled_tensor_element_parameters(
 def _tensor_element_parameter(
     *,
     runtime: TensorRuntime,
-    program: TensorBatchProgram,
+    program: TensorBatchProgram | TensorSolverProgram,
     name: str,
     parameter: TensorElementParameter,
 ) -> Any:
@@ -1601,12 +1797,17 @@ def _tensor_element_parameter(
 def _tensor_element_parameter_cache_key(
     *,
     runtime: TensorRuntime,
-    program: TensorBatchProgram,
+    program: TensorBatchProgram | TensorSolverProgram,
     name: str,
     parameter: TensorElementParameter,
 ) -> tuple[object, ...] | None:
+    kernel = (
+        program.kernel
+        if isinstance(program, TensorBatchProgram)
+        else program.step_kernel
+    )
     return (
-        program.cache_key if program.cache_key is not None else id(program.kernel),
+        program.cache_key if program.cache_key is not None else id(kernel),
         runtime.device_kind,
         str(runtime.device),
         name,
@@ -1624,11 +1825,32 @@ def _tensor_element_parameter_values_key(parameter: TensorElementParameter) -> b
         if cached is not None and cached[0] is parameter.values:
             return cached[1]
     if parameter.dtype == "float32":
-        values_key = array("f", (float(value) for value in parameter.values)).tobytes()
+        real_values = cast(Sequence[int | float], parameter.values)
+        values_key = array("f", (float(value) for value in real_values)).tobytes()
     elif parameter.dtype == "float64":
-        values_key = array("d", (float(value) for value in parameter.values)).tobytes()
+        real_values = cast(Sequence[int | float], parameter.values)
+        values_key = array("d", (float(value) for value in real_values)).tobytes()
+    elif parameter.dtype == "complex64":
+        values_key = array(
+            "f",
+            (
+                component
+                for value in parameter.values
+                for component in (complex(value).real, complex(value).imag)
+            ),
+        ).tobytes()
+    elif parameter.dtype == "complex128":
+        values_key = array(
+            "d",
+            (
+                component
+                for value in parameter.values
+                for component in (complex(value).real, complex(value).imag)
+            ),
+        ).tobytes()
     elif parameter.dtype == "int64":
-        values_key = array("q", (int(value) for value in parameter.values)).tobytes()
+        integer_values = cast(Sequence[int], parameter.values)
+        values_key = array("q", (int(value) for value in integer_values)).tobytes()
     else:
         raise TensorRuntimeError(f"unsupported tensor element parameter dtype: {parameter.dtype}")
     if cacheable:
@@ -1648,6 +1870,10 @@ def _tensor_element_parameter_dtype(
         return runtime.torch.float32
     if dtype == "float64":
         return runtime.torch.float64
+    if dtype == "complex64":
+        return runtime.torch.complex64
+    if dtype == "complex128":
+        return runtime.torch.complex128
     if dtype == "int64":
         return runtime.torch.long
     raise TensorRuntimeError(f"unsupported tensor element parameter dtype: {dtype}")
@@ -1751,6 +1977,24 @@ def _tensor_element_kernel_cache_key(
         "tile",
         rank,
         _tensor_element_tile_size,
+        tuple(
+            (name, str(parameter_tensors[name].dtype))
+            for name in sorted(parameter_tensors)
+        ),
+    )
+
+
+def _tensor_solver_kernel_cache_key(
+    *,
+    runtime: TensorRuntime,
+    program: TensorSolverProgram,
+    parameter_tensors: Mapping[str, Any],
+) -> tuple[object, ...]:
+    return (
+        _tensor_element_program_scope_key(program.step_kernel),
+        program.cache_key if program.cache_key is not None else id(program.step_kernel),
+        runtime.device_kind,
+        "solver-step",
         tuple(
             (name, str(parameter_tensors[name].dtype))
             for name in sorted(parameter_tensors)

@@ -23,6 +23,7 @@ from leibniz.tensor_runtime import (
     TensorElementRecipe,
     TensorRuntime,
     TensorRuntimeError,
+    TensorSolverProgram,
     architecture_supported_by_tensor_runtime,
     architecture_tensor_runtime_issue,
     build_loss,
@@ -37,6 +38,7 @@ from leibniz.tensor_runtime import (
     tensor_runtime_construct_tensor,
     tensor_runtime_device_kinds,
     tensor_runtime_shape_element_count,
+    tensor_runtime_solve_tensor,
     tensor_value_to_host_values,
     validate_tensor_runtime_device,
 )
@@ -696,6 +698,198 @@ def test_tensor_element_constructs_float64_with_compiled_scalar_parameters(
     assert compile_calls == [None]
     assert values.dtype == runtime.torch.float64
     assert values.tolist() == [0.5, 1.5, 2.5]
+
+
+def test_tensor_solver_step_count_zero_returns_initial_state() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+
+    def initial_state(coordinates: tuple[Any, ...]) -> Any:
+        sample, channel, x = coordinates
+        return (
+            sample.reshape((-1, 1, 1)).to(dtype=runtime.torch.float32) * 10.0
+            + channel.reshape((1, -1, 1)).to(dtype=runtime.torch.float32)
+            + x.reshape((1, 1, -1)).to(dtype=runtime.torch.float32)
+        )
+
+    def step_kernel(state: Any, ops: Any) -> Any:
+        _ = ops
+        return state + 1.0
+
+    program = TensorSolverProgram(
+        initial_state=TensorBatchProgram(
+            kernel=initial_state,
+            parameters={},
+            compile=False,
+            cache_key=("solver-zero-initial",),
+        ),
+        step_kernel=step_kernel,
+        step_count=0,
+        parameters={},
+        cache_key=("solver-zero-step",),
+    )
+
+    solved = tensor_runtime_solve_tensor(runtime, program=program, shape=(2, 1, 4))
+
+    assert solved.tolist() == [[[0.0, 1.0, 2.0, 3.0]], [[10.0, 11.0, 12.0, 13.0]]]
+
+
+def test_tensor_solver_fft_diffusion_matches_analytic_decay() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    length = 16
+    steps = 4
+    decay = math.exp(-0.125)
+    coefficients = tuple(
+        complex(decay if frequency in {1, length - 1} else 1.0, 0.0)
+        for frequency in range(length)
+    )
+
+    def initial_state(coordinates: tuple[Any, ...]) -> Any:
+        sample, channel, x = coordinates
+        _ = sample
+        _ = channel
+        angle = x.to(dtype=torch.float64) * (2.0 * math.pi / length)
+        return torch.sin(angle).reshape((1, 1, -1))
+
+    def step_kernel(state: Any, ops: Any, *, decay_coefficients: Any) -> Any:
+        spectrum = ops.fft(state, axis=-1)
+        return ops.real(ops.ifft(spectrum * decay_coefficients.reshape((1, 1, -1)), axis=-1))
+
+    program = TensorSolverProgram(
+        initial_state=TensorBatchProgram(
+            kernel=initial_state,
+            parameters={},
+            compile=False,
+            cache_key=("solver-diffusion-initial",),
+        ),
+        step_kernel=step_kernel,
+        step_count=steps,
+        parameters={
+            "decay_coefficients": TensorElementParameter(
+                dtype="complex128",
+                shape=(length,),
+                values=coefficients,
+            ),
+        },
+        dtype="float64",
+        compile=False,
+        cache_key=("solver-diffusion-step",),
+    )
+
+    solved = tensor_runtime_solve_tensor(runtime, program=program, shape=(1, 1, length))
+    expected = torch.sin(torch.arange(length, dtype=torch.float64) * (2.0 * math.pi / length))
+    expected = expected * (decay**steps)
+
+    assert torch.allclose(solved.reshape((length,)), expected, rtol=0.0, atol=1e-12)
+
+
+def test_tensor_solver_compile_cache_ignores_step_count_and_batch_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, compile_calls = _compile_counting_runtime(monkeypatch, device_kind="cuda")
+
+    def initial_state(coordinates: tuple[Any, ...]) -> Any:
+        sample, x = coordinates
+        return sample.reshape((-1, 1)).to(dtype=runtime.torch.float32) + x.reshape((1, -1))
+
+    def step_kernel(state: Any, ops: Any, *, offset: Any) -> Any:
+        _ = ops
+        return state + offset
+
+    for step_count, batch_size in ((3, 2), (7, 5)):
+        program = TensorSolverProgram(
+            initial_state=TensorBatchProgram(
+                kernel=initial_state,
+                parameters={},
+                compile=False,
+                cache_key=("solver-compile-cache-initial",),
+            ),
+            step_kernel=step_kernel,
+            step_count=step_count,
+            parameters={
+                "offset": TensorElementParameter(
+                    dtype="float32",
+                    shape=(),
+                    values=(1.0,),
+                ),
+            },
+            cache_key=("solver-compile-cache-step", id(step_kernel)),
+        )
+        solved = tensor_runtime_solve_tensor(runtime, program=program, shape=(batch_size, 3))
+        assert solved.shape == (batch_size, 3)
+
+    assert compile_calls == [None]
+
+
+def test_tensor_solver_compile_failure_records_loud_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _compile_failing_runtime(monkeypatch, reason="solver inductor exploded")
+
+    def initial_state(coordinates: tuple[Any, ...]) -> Any:
+        return coordinates[0].to(dtype=runtime.torch.float32)
+
+    def step_kernel(state: Any, ops: Any) -> Any:
+        _ = ops
+        return state + 1.0
+
+    program = TensorSolverProgram(
+        initial_state=TensorBatchProgram(
+            kernel=initial_state,
+            parameters={},
+            compile=False,
+            cache_key=("solver-fallback-initial",),
+        ),
+        step_kernel=step_kernel,
+        step_count=2,
+        parameters={},
+        cache_key=("solver-loud-fallback-test", id(step_kernel)),
+    )
+
+    values = tensor_runtime_solve_tensor(runtime, program=program, shape=(2,))
+    tensor_runtime_solve_tensor(runtime, program=program, shape=(2,))
+
+    assert values.tolist() == [2.0, 3.0]
+    matching = [
+        record
+        for record in tensor_element_compile_fallback_records()
+        if record["program"] == str(program.cache_key)
+    ]
+    assert len(matching) == 1
+    assert matching[0]["kind"] == "tensor-element-compile-fallback"
+    assert matching[0]["tensor_device"] == "cuda"
+    assert "solver inductor exploded" in str(matching[0]["reason"])
+    assert matching[0]["constructions"] == 2
+
+
+def test_tensor_solver_compile_fallback_raises_in_strict_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _compile_failing_runtime(monkeypatch, reason="solver inductor exploded")
+    monkeypatch.setenv("LEIBNIZ_REQUIRE_TENSOR_COMPILE", "1")
+
+    def initial_state(coordinates: tuple[Any, ...]) -> Any:
+        return coordinates[0].to(dtype=runtime.torch.float32)
+
+    def step_kernel(state: Any, ops: Any) -> Any:
+        _ = ops
+        return state
+
+    program = TensorSolverProgram(
+        initial_state=TensorBatchProgram(
+            kernel=initial_state,
+            parameters={},
+            compile=False,
+            cache_key=("solver-strict-initial",),
+        ),
+        step_kernel=step_kernel,
+        step_count=1,
+        parameters={},
+        cache_key=("solver-strict-fallback-test", id(step_kernel)),
+    )
+
+    with pytest.raises(TensorRuntimeError, match="LEIBNIZ_REQUIRE_TENSOR_COMPILE"):
+        tensor_runtime_solve_tensor(runtime, program=program, shape=(2,))
 
 
 def test_tensor_element_parameter_cache_reuses_constant_parameters(
