@@ -58,10 +58,11 @@ from leibniz.observation_showcases import (
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.state_space import (
     AccessibleSubspace,
-    DiscreteAxisRegion,
+    ContinuousAxisRegion,
     Distinguishability,
-    IntegerRangeDomain,
+    MeasureEstimate,
     ProductRegion,
+    RealIntervalDomain,
     SamplingProtocol,
     StateSpaceAmbient,
     StateSpaceAxis,
@@ -490,11 +491,11 @@ class Benchmark:
     @property
     def accessible_subspace(self) -> AccessibleSubspace:
         return AccessibleSubspace(
-            ladder_id="digits-transform-ordinal-shells",
+            ladder_id="digits-continuous-transform-covering",
             per_configuration_capacity=_digits_capacity_region(),
             frontier_rationale=(
-                "All digit identities over the benchmark transform-ordinal chart are in scope; "
-                "the finite capacity is the practical shared chart-domain bound."
+                "All digit identities over the benchmark continuous transform chart are in scope; "
+                "the finite capacity is the practical shared per-configuration bound."
             ),
         )
 
@@ -664,6 +665,7 @@ class Generator:
                         component_index=component_index,
                         region_component_index=_digits_region_component_index(
                             component_index=component_index,
+                            transform_ordinal=transform_index,
                             volume_class=volume_class,
                         ),
                         axis_coordinates=_digits_region_axis_coordinates(
@@ -709,6 +711,7 @@ class Generator:
                 component_index=component_index,
                 region_component_index=_digits_region_component_index(
                     component_index=component_index,
+                    transform_ordinal=transform_indices[index],
                     volume_class=volume_class,
                 ),
                 axis_coordinates=_digits_region_axis_coordinates(
@@ -1552,12 +1555,12 @@ def _cumulative_setup_count(level: float) -> int:
     return round(2.0**level)
 
 
-_chart_ordinal_axis_id = "transform-ordinal"
 # Practical representable bound on transform ordinals; the global chart is
 # conceptually unbounded, but the region grammar needs a finite, window-stable
 # axis domain so increments share an identical axis declaration. Requests beyond
 # this resolve as exhausted capacity. ~10^12 setups is effectively unbounded.
 _chart_ordinal_domain_extent = 2**40
+_chart_continuous_measure_method_id = "digits-continuous-covering-bracket-v1"
 
 
 def _digits_state_coordinate(
@@ -1599,37 +1602,17 @@ def _digits_ambient(*, margin: float) -> StateSpaceAmbient:
     )
 
 
-def _digits_ordinal_ranges_by_digit(
-    volume_class: _DigitsVolumeClass,
-) -> dict[int, tuple[int, int]]:
-    """Return each realized digit's contiguous transform-ordinal interval.
-
-    Because addresses are ``10 * ordinal + digit``, a contiguous address
-    increment gives every digit a contiguous ordinal interval, so disjoint
-    windows yield disjoint per-digit intervals.
-    """
-
-    lower_address = volume_class.minimum_address
-    upper_address = volume_class.minimum_address + volume_class.cardinality
-    ranges: dict[int, tuple[int, int]] = {}
-    for digit_index in range(_volume_class_digit_count):
-        # ordinals o with lower_address <= 10 * o + digit < upper_address.
-        ordinal_lower = max(0, -(-(lower_address - digit_index) // _volume_class_digit_count))
-        ordinal_upper = -(-(upper_address - digit_index) // _volume_class_digit_count) - 1
-        if ordinal_upper >= ordinal_lower:
-            ranges[digit_index] = (ordinal_lower, ordinal_upper)
-    return dict(sorted(ranges.items()))
-
-
 def _digits_state_space_region(
     *,
     volume_class: _DigitsVolumeClass,
     margin: float,
 ) -> StateSpaceRegion:
     components = tuple(
-        _digits_product_region(digit_index=digit_index, ordinal_range=ordinal_range)
-        for digit_index, ordinal_range in _digits_ordinal_ranges_by_digit(volume_class).items()
+        _digits_product_region(digit_index=digit_index, transform_ordinal=transform_ordinal)
+        for address in range(volume_class.minimum_address, volume_class.maximum_address + 1)
+        for digit_index, transform_ordinal in (divmod(address, _volume_class_digit_count)[::-1],)
     )
+    measure_estimate = _digits_measure_estimate(volume_class.log2_volume)
     return StateSpaceRegion(
         id=(
             "benchmarks.digits.realized-region."
@@ -1640,76 +1623,172 @@ def _digits_state_space_region(
         union_rule="disjoint-union",
         volume=volume_class.cardinality,
         log2_volume=volume_class.log2_volume,
+        measure_estimate=measure_estimate,
     )
 
 
 def _digits_capacity_region() -> StateSpaceRegion:
     volume = _volume_class_digit_count * (_chart_ordinal_domain_extent + 1)
     components = tuple(
-        _digits_product_region(
-            digit_index=digit_index,
-            ordinal_range=(0, _chart_ordinal_domain_extent),
-        )
+        _digits_capacity_product_region(digit_index=digit_index)
         for digit_index in range(_volume_class_digit_count)
     )
+    log2_volume = math.log2(volume)
     return StateSpaceRegion(
         id="benchmarks.digits.accessible-capacity",
         ambient=_digits_ambient(margin=_component_discriminability_margin),
         components=components,
         union_rule="disjoint-union",
         volume=volume,
-        log2_volume=math.log2(volume),
+        log2_volume=log2_volume,
+        measure_estimate=_digits_measure_estimate(log2_volume),
     )
 
 
 def _digits_product_region(
     *,
     digit_index: int,
-    ordinal_range: tuple[int, int],
+    transform_ordinal: int,
 ) -> ProductRegion:
-    lower, upper = ordinal_range
-    count = upper - lower + 1
-    axis_region = DiscreteAxisRegion(
-        axis=StateSpaceAxis(
-            id=_chart_ordinal_axis_id,
-            domain=IntegerRangeDomain(lower=0, upper=_chart_ordinal_domain_extent),
-        ),
-        coordinate_region=(lower, upper),
-        count=count,
-        log2_count=math.log2(count),
-    )
+    axis_regions = _digits_transform_cell_axis_regions(transform_ordinal)
+    measure_estimate = _digits_measure_estimate(0.0)
     return ProductRegion(
-        axis_regions=(axis_region,),
-        measure_rule="product-of-counts",
-        volume=count,
-        log2_volume=math.log2(count),
+        axis_regions=axis_regions,
+        measure_rule="benchmark-computed-finite-count",
+        volume=1,
+        log2_volume=0.0,
         stratum_id=f"digit-{digit_index}",
         stratum_target={
             "digit_index": digit_index,
             "outcome_id": f"digit-{digit_index}",
         },
+        measure_estimate=measure_estimate,
+    )
+
+
+def _digits_capacity_product_region(*, digit_index: int) -> ProductRegion:
+    volume = _chart_ordinal_domain_extent + 1
+    log2_volume = math.log2(volume)
+    return ProductRegion(
+        axis_regions=tuple(
+            ContinuousAxisRegion(
+                axis=axis,
+                coordinate_region=(
+                    float(cast(RealIntervalDomain, axis.domain).lower),
+                    float(cast(RealIntervalDomain, axis.domain).upper),
+                ),
+                measure_estimate=_digits_measure_estimate(log2_volume),
+            )
+            for axis in _digits_transform_axes()
+        ),
+        measure_rule="benchmark-computed-finite-count",
+        volume=volume,
+        log2_volume=log2_volume,
+        stratum_id=f"digit-{digit_index}",
+        stratum_target={
+            "digit_index": digit_index,
+            "outcome_id": f"digit-{digit_index}",
+        },
+        measure_estimate=_digits_measure_estimate(log2_volume),
+    )
+
+
+def _digits_transform_cell_axis_regions(
+    transform_ordinal: int,
+) -> tuple[ContinuousAxisRegion, ...]:
+    tx_step, ty_step, scale_level = _transform_cell_for_ordinal(transform_ordinal)
+    scale_step = _render_unit_side * _scale_ratio_per_level
+    centers = {
+        "x_translation": tx_step * _translation_step_pixels,
+        "y_translation": ty_step * _translation_step_pixels,
+        "scale": _scale_footprint(scale_level),
+    }
+    widths = {
+        "x_translation": float(_translation_step_pixels),
+        "y_translation": float(_translation_step_pixels),
+        "scale": scale_step,
+    }
+    return tuple(
+        ContinuousAxisRegion(
+            axis=axis,
+            coordinate_region=_half_open_cell_interval(
+                center=centers[axis.id],
+                width=widths[axis.id],
+            ),
+            measure_estimate=_digits_measure_estimate(0.0),
+        )
+        for axis in _digits_transform_axes()
+    )
+
+
+def _digits_transform_axes() -> tuple[StateSpaceAxis, ...]:
+    translation_reach = float((_chart_ordinal_domain_extent + 1) * _translation_step_pixels)
+    scale_step = _render_unit_side * _scale_ratio_per_level
+    minimum_scale = _scale_footprint(-_max_scale_level) - 0.5 * scale_step
+    maximum_scale = _scale_footprint(_max_scale_level) + 0.5 * scale_step
+    return (
+        StateSpaceAxis(
+            id="x_translation",
+            domain=RealIntervalDomain(
+                lower=-translation_reach,
+                upper=translation_reach,
+            ),
+        ),
+        StateSpaceAxis(
+            id="y_translation",
+            domain=RealIntervalDomain(
+                lower=-translation_reach,
+                upper=translation_reach,
+            ),
+        ),
+        StateSpaceAxis(
+            id="scale",
+            domain=RealIntervalDomain(
+                lower=minimum_scale,
+                upper=maximum_scale,
+            ),
+        ),
+    )
+
+
+def _half_open_cell_interval(*, center: float, width: float) -> tuple[float, float]:
+    half_width = 0.5 * width
+    return (center - half_width, center + half_width)
+
+
+def _digits_measure_estimate(log2_volume: float) -> MeasureEstimate:
+    return MeasureEstimate(
+        kind="estimated",
+        method_id=_chart_continuous_measure_method_id,
+        log2_lower=log2_volume,
+        log2_upper=log2_volume,
     )
 
 
 def _digits_region_component_index(
     *,
     component_index: int,
+    transform_ordinal: int,
     volume_class: _DigitsVolumeClass,
 ) -> int:
-    digits = tuple(_digits_ordinal_ranges_by_digit(volume_class))
-    try:
-        return digits.index(component_index)
-    except ValueError as error:
+    address = transform_ordinal * _volume_class_digit_count + component_index
+    if not volume_class.minimum_address <= address <= volume_class.maximum_address:
         raise ObservationGenerationError(
             "digit component is outside the realized region"
-        ) from error
+        )
+    return address - volume_class.minimum_address
 
 
 def _digits_region_axis_coordinates(
     *,
     transform_ordinal: int,
 ) -> Mapping[str, object]:
-    return {_chart_ordinal_axis_id: transform_ordinal}
+    tx_step, ty_step, scale_level = _transform_cell_for_ordinal(transform_ordinal)
+    return {
+        "x_translation": tx_step * _translation_step_pixels,
+        "y_translation": ty_step * _translation_step_pixels,
+        "scale": _scale_footprint(scale_level),
+    }
 
 
 def _digits_unrealized_request_outcome(

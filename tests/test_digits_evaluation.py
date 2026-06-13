@@ -8,12 +8,14 @@ from leibniz.benchmarks import BenchmarkManifest
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.materialization import MaterializationPlanDocument
 from leibniz.measurements import MeasurementRecord
+from leibniz.observation_generation import StateSpaceVolumeRequest
 from leibniz.outcomes import (
     AcceptedEvent,
     FiniteProbabilityMeasure,
     ProbabilityMass,
     RawScoringEvidence,
 )
+from leibniz.state_space import ContinuousAxisRegion, RealIntervalDomain
 
 _repository_root = Path(__file__).parents[1]
 _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "digits"
@@ -65,6 +67,42 @@ def test_digits_manifest_declares_single_digit_outcomes() -> None:
     assert [outcome.id for outcome in manifest.outcome_space.outcomes] == [
         f"digit-{index}" for index in range(10)
     ]
+
+
+def test_digits_realized_regions_claim_continuous_transform_cells() -> None:
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+
+    batch = benchmark.generator(
+        seed=407,
+        shape=4,
+        volume_request=StateSpaceVolumeRequest(2.0, 3.0),
+    )
+
+    assert batch.region is not None
+    assert batch.region.measure_estimate is not None
+    assert batch.region.measure_estimate.kind == "estimated"
+    assert batch.region.components
+    for component in batch.region.components:
+        assert component.measure_estimate is not None
+        assert component.measure_estimate.kind == "estimated"
+        assert {axis_region.axis_id for axis_region in component.axis_regions} == {
+            "x_translation",
+            "y_translation",
+            "scale",
+        }
+        for axis_region in component.axis_regions:
+            assert isinstance(axis_region, ContinuousAxisRegion)
+            assert isinstance(axis_region.axis.domain, RealIntervalDomain)
+    for sample in batch.samples:
+        assert sample.axis_coordinates is not None
+        assert sample.region_component_index is not None
+        assert set(sample.axis_coordinates) == {
+            "x_translation",
+            "y_translation",
+            "scale",
+        }
+        assert "transform-ordinal" not in sample.axis_coordinates
+        assert batch.region.contains(sample.region_component_index, sample.axis_coordinates)
 
 
 def _measurement_for_sequence(
