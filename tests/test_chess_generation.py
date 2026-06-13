@@ -17,7 +17,7 @@ from leibniz.observation_generation import (
     load_generator,
     sample_indices_for_even_state_coverage,
 )
-from leibniz.state_space import state_space_region_from_record
+from leibniz.state_space import DiscreteAxisRegion, state_space_region_from_record
 from leibniz.tensor_runtime import resolve_tensor_runtime, tensor_value_to_host
 
 _repository_root = Path(__file__).parents[1]
@@ -242,6 +242,7 @@ def test_chess_realized_region_decomposes_exactly_per_stratum() -> None:
             for axis_region in component.axis_regions
             if axis_region.axis_id.endswith(".spectator-occupancy")
         ][0]
+        assert isinstance(spectator_region, DiscreteAxisRegion)
         assert spectator_region.axis.coordinate_kind == "enumerated-cells"
         assert spectator_region.count == component.volume
         assert spectator_region.coordinate_region == tuple(
