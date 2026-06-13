@@ -798,19 +798,33 @@ def test_digits_tensor_generation_compiles_two_extent_independent_programs(
         outcome.id
         for outcome in generator.manifest.resolve_outcome_space().outcomes
     )
-    table_length_offsets = iter((0, 1))
-    original_transform_table_values = digits_benchmark._transform_table_values
+    transform_value_lengths: list[int] = []
+    original_sample_transform_values = digits_benchmark._digits_sample_transform_values
 
-    def transform_table_values(*, canvas_side: int, table_length: int) -> tuple[float, ...]:
-        return original_transform_table_values(
+    def sample_transform_values(
+        *,
+        seed: int,
+        canvas_side: int,
+        sample_indices: tuple[int, ...],
+        sample_addresses: tuple[int, ...],
+        digit_count: int,
+        canonical_transform: bool = False,
+    ) -> tuple[float, ...]:
+        values = original_sample_transform_values(
+            seed=seed,
             canvas_side=canvas_side,
-            table_length=table_length + next(table_length_offsets),
+            sample_indices=sample_indices,
+            sample_addresses=sample_addresses,
+            digit_count=digit_count,
+            canonical_transform=canonical_transform,
         )
+        transform_value_lengths.append(len(values))
+        return values
 
     monkeypatch.setattr(
         digits_benchmark,
-        "_transform_table_values",
-        transform_table_values,
+        "_digits_sample_transform_values",
+        sample_transform_values,
     )
 
     for sample_count in (3, 5):
@@ -826,6 +840,7 @@ def test_digits_tensor_generation_compiles_two_extent_independent_programs(
         assert labels.shape == (sample_count, len(outcome_ids))
 
     assert compile_calls == [None, None]
+    assert transform_value_lengths == [9, 15]
 
 
 def test_digits_generator_call_tensors_match_metadata_batch() -> None:

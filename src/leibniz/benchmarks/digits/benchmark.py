@@ -58,10 +58,11 @@ from leibniz.observation_showcases import (
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.state_space import (
     AccessibleSubspace,
-    DiscreteAxisRegion,
+    ContinuousAxisRegion,
     Distinguishability,
-    IntegerRangeDomain,
+    MeasureEstimate,
     ProductRegion,
+    RealIntervalDomain,
     SamplingProtocol,
     StateSpaceAmbient,
     StateSpaceAxis,
@@ -209,7 +210,6 @@ def _transform_cell_for_ordinal(ordinal: int) -> tuple[int, int, int]:
 
 _shell_cells_cache: dict[int, tuple[tuple[int, int, int], ...]] = {}
 _chart_cell_prefix: list[tuple[int, int, int]] = []
-_transform_table_value_cache: dict[tuple[int, int], tuple[float, ...]] = {}
 _chart_prefix_radius: list[int] = [0]
 
 
@@ -490,11 +490,11 @@ class Benchmark:
     @property
     def accessible_subspace(self) -> AccessibleSubspace:
         return AccessibleSubspace(
-            ladder_id="digits-transform-ordinal-shells",
+            ladder_id="digits-continuous-transform-covering",
             per_configuration_capacity=_digits_capacity_region(),
             frontier_rationale=(
-                "All digit identities over the benchmark transform-ordinal chart are in scope; "
-                "the finite capacity is the practical shared chart-domain bound."
+                "All digit identities over the benchmark continuous transform chart are in scope; "
+                "the finite capacity is the practical shared per-configuration bound."
             ),
         )
 
@@ -584,6 +584,8 @@ class Generator:
             )
         variation_timing_phase = f"{timing_prefix}variation_coordinates"
         variation_samples = self._sample_variation_coordinates(
+            seed=seed,
+            sample_indices=sample_indices,
             plans=plans,
             transform=transform,
             transform_record=transform_record,
@@ -664,10 +666,17 @@ class Generator:
                         component_index=component_index,
                         region_component_index=_digits_region_component_index(
                             component_index=component_index,
+                            transform_ordinal=transform_index,
                             volume_class=volume_class,
                         ),
                         axis_coordinates=_digits_region_axis_coordinates(
+                            seed=seed,
+                            sample_index=index,
                             transform_ordinal=transform_index,
+                            canvas_side=volume_class.canvas_side,
+                            canonical_transform=_digits_volume_class_is_canonical(
+                                volume_class
+                            ),
                         ),
                         variation_coordinates=variation_coordinates,
                         variation_values=variation_values,
@@ -709,10 +718,15 @@ class Generator:
                 component_index=component_index,
                 region_component_index=_digits_region_component_index(
                     component_index=component_index,
+                    transform_ordinal=transform_indices[index],
                     volume_class=volume_class,
                 ),
                 axis_coordinates=_digits_region_axis_coordinates(
+                    seed=seed,
+                    sample_index=sample_indices[index],
                     transform_ordinal=transform_indices[index],
+                    canvas_side=volume_class.canvas_side,
+                    canonical_transform=_digits_volume_class_is_canonical(volume_class),
                 ),
             )
             for index, component_index in enumerate(component_indices)
@@ -750,6 +764,8 @@ class Generator:
     def _sample_variation_coordinates(
         self,
         *,
+        seed: int,
+        sample_indices: tuple[int, ...],
         plans: tuple[MaterializationPlan, ...],
         transform: VariationTransformDeclaration,
         transform_record: Mapping[str, object],
@@ -786,6 +802,15 @@ class Generator:
                     transform=transform,
                     component_index=component_index,
                     transform_ordinal=transform_ordinal,
+                    transform_coordinates=_digits_sample_transform_coordinates(
+                        seed=seed,
+                        sample_index=sample_indices[index],
+                        transform_ordinal=transform_ordinal,
+                        canvas_side=volume_class.canvas_side,
+                        canonical_transform=_digits_volume_class_is_canonical(
+                            volume_class
+                        ),
+                    ),
                     chart=chart,
                 )
                 coordinates = (coordinate,)
@@ -817,14 +842,14 @@ class Generator:
         transform_indices: list[int] = []
         with _timing_span(timing, f"{timing_prefix}sample_state", samples=sample_count):
             for index in range(sample_count):
-                state_index = _digits_local_state_index(
+                sample_address = _digits_sample_address(
                     seed=seed,
                     sample_index=sample_indices[index],
                     cardinality=volume_class.cardinality,
+                    minimum_address=volume_class.minimum_address,
                 )
                 component_index, transform_index = _digits_state_coordinate(
-                    state_index=state_index,
-                    volume_class=volume_class,
+                    sample_address=sample_address,
                 )
                 component_indices.append(component_index)
                 transform_indices.append(transform_index)
@@ -887,7 +912,6 @@ class Generator:
                         sample_indices=sample_indices,
                         cardinality=volume_class.cardinality,
                         minimum_address=volume_class.minimum_address,
-                        digit_count=volume_class.digit_count,
                         component_to_outcome=component_to_outcome,
                         outcome_count=len(outcome_ids),
                     ),
@@ -981,11 +1005,6 @@ class Generator:
         _require_positive_integer(width, "width")
         _require_positive_integer(height, "height")
         _require_positive_integer(digit_count, "digit_count")
-        maximum_ordinal = (minimum_address + cardinality - 1) // digit_count
-        transform_table_values = _transform_table_values(
-            canvas_side=width,
-            table_length=maximum_ordinal + 1,
-        )
         if digit_count > len(self.formation.components):
             raise TensorRuntimeError("digit_count exceeds component vocabulary")
         if self.formation.channel_count != 1:
@@ -995,33 +1014,23 @@ class Generator:
             for component_index in range(digit_count)
         )
         component_mark_counts: list[int] = []
-        component_mark_values: list[list[float]] = []
-        component_mark_widths: list[list[float]] = []
-        component_control_x_points: list[list[list[float]]] = []
-        component_control_y_points: list[list[list[float]]] = []
+        component_mark_parameters: list[list[list[float]]] = []
+        component_control_points: list[list[list[list[float]]]] = []
         for component_index in range(digit_count):
-            component_values: list[float] = []
-            component_widths: list[float] = []
-            component_control_x: list[list[float]] = []
-            component_control_y: list[list[float]] = []
+            mark_parameters: list[list[float]] = []
+            control_points: list[list[list[float]]] = []
             for mark in self.formation.components[component_index].marks:
                 if mark.channel != 0:
                     raise TensorRuntimeError("Digits tensor renderer requires single-channel marks")
                 controls = _quadratic_control_points(mark)
-                component_values.append(float(mark.value))
-                component_widths.append(float(mark.width))
-                component_control_x.append([point[0] for point in controls])
-                component_control_y.append([point[1] for point in controls])
-            component_mark_counts.append(len(component_values))
-            while len(component_values) < max_mark_count:
-                component_values.append(0.0)
-                component_widths.append(0.0)
-                component_control_x.append([0.0, 0.0, 0.0])
-                component_control_y.append([0.0, 0.0, 0.0])
-            component_mark_values.append(component_values)
-            component_mark_widths.append(component_widths)
-            component_control_x_points.append(component_control_x)
-            component_control_y_points.append(component_control_y)
+                mark_parameters.append([float(mark.value), float(mark.width)])
+                control_points.append([[point[0], point[1]] for point in controls])
+            component_mark_counts.append(len(mark_parameters))
+            while len(mark_parameters) < max_mark_count:
+                mark_parameters.append([0.0, 0.0])
+                control_points.append([[0.0, 0.0] for _ in range(3)])
+            component_mark_parameters.append(mark_parameters)
+            component_control_points.append(control_points)
         if not max_mark_count:
             return tensor_runtime_construct_tensor(
                 runtime,
@@ -1042,21 +1051,29 @@ class Generator:
                     cardinality=cardinality,
                     minimum_address=minimum_address,
                     digit_count=digit_count,
-                    transform_table_values=transform_table_values,
+                    transform_values=_digits_sample_transform_values(
+                        seed=seed,
+                        canvas_side=width,
+                        sample_indices=sample_indices,
+                        sample_addresses=_digits_sample_addresses(
+                            seed=seed,
+                            sample_indices=sample_indices,
+                            cardinality=cardinality,
+                            minimum_address=minimum_address,
+                        ),
+                        digit_count=digit_count,
+                        canonical_transform=(
+                            minimum_address == 0 and cardinality == digit_count
+                        ),
+                    ),
                     component_mark_counts=tuple(component_mark_counts),
-                    component_mark_values=tuple(
-                        tuple(row) for row in component_mark_values
+                    component_mark_parameters=tuple(
+                        tuple(tuple(parameters) for parameters in component)
+                        for component in component_mark_parameters
                     ),
-                    component_mark_widths=tuple(
-                        tuple(row) for row in component_mark_widths
-                    ),
-                    component_control_x_points=tuple(
-                        tuple(tuple(points) for points in component)
-                        for component in component_control_x_points
-                    ),
-                    component_control_y_points=tuple(
-                        tuple(tuple(points) for points in component)
-                        for component in component_control_y_points
+                    component_control_points=tuple(
+                        tuple(tuple(tuple(point) for point in mark) for mark in component)
+                        for component in component_control_points
                     ),
                     height=height,
                     width=width,
@@ -1552,24 +1569,17 @@ def _cumulative_setup_count(level: float) -> int:
     return round(2.0**level)
 
 
-_chart_ordinal_axis_id = "transform-ordinal"
 # Practical representable bound on transform ordinals; the global chart is
 # conceptually unbounded, but the region grammar needs a finite, window-stable
 # axis domain so increments share an identical axis declaration. Requests beyond
 # this resolve as exhausted capacity. ~10^12 setups is effectively unbounded.
 _chart_ordinal_domain_extent = 2**40
+_chart_continuous_measure_method_id = "digits-continuous-covering-bracket-v1"
 
 
-def _digits_state_coordinate(
-    *,
-    state_index: int,
-    volume_class: _DigitsVolumeClass,
-) -> tuple[int, int]:
-    if type(state_index) is not int or state_index < 0:
-        raise ObservationGenerationError("state_index must be a nonnegative integer")
-    if state_index >= volume_class.cardinality:
-        raise ObservationGenerationError("state_index must be below cardinality")
-    sample_address = volume_class.minimum_address + state_index
+def _digits_state_coordinate(*, sample_address: int) -> tuple[int, int]:
+    if type(sample_address) is not int or sample_address < 0:
+        raise ObservationGenerationError("sample_address must be a nonnegative integer")
     component_index = sample_address % _volume_class_digit_count
     transform_ordinal = sample_address // _volume_class_digit_count
     return (component_index, transform_ordinal)
@@ -1599,37 +1609,17 @@ def _digits_ambient(*, margin: float) -> StateSpaceAmbient:
     )
 
 
-def _digits_ordinal_ranges_by_digit(
-    volume_class: _DigitsVolumeClass,
-) -> dict[int, tuple[int, int]]:
-    """Return each realized digit's contiguous transform-ordinal interval.
-
-    Because addresses are ``10 * ordinal + digit``, a contiguous address
-    increment gives every digit a contiguous ordinal interval, so disjoint
-    windows yield disjoint per-digit intervals.
-    """
-
-    lower_address = volume_class.minimum_address
-    upper_address = volume_class.minimum_address + volume_class.cardinality
-    ranges: dict[int, tuple[int, int]] = {}
-    for digit_index in range(_volume_class_digit_count):
-        # ordinals o with lower_address <= 10 * o + digit < upper_address.
-        ordinal_lower = max(0, -(-(lower_address - digit_index) // _volume_class_digit_count))
-        ordinal_upper = -(-(upper_address - digit_index) // _volume_class_digit_count) - 1
-        if ordinal_upper >= ordinal_lower:
-            ranges[digit_index] = (ordinal_lower, ordinal_upper)
-    return dict(sorted(ranges.items()))
-
-
 def _digits_state_space_region(
     *,
     volume_class: _DigitsVolumeClass,
     margin: float,
 ) -> StateSpaceRegion:
     components = tuple(
-        _digits_product_region(digit_index=digit_index, ordinal_range=ordinal_range)
-        for digit_index, ordinal_range in _digits_ordinal_ranges_by_digit(volume_class).items()
+        _digits_product_region(digit_index=digit_index, transform_ordinal=transform_ordinal)
+        for address in range(volume_class.minimum_address, volume_class.maximum_address + 1)
+        for digit_index, transform_ordinal in (divmod(address, _volume_class_digit_count)[::-1],)
     )
+    measure_estimate = _digits_measure_estimate(volume_class.log2_volume)
     return StateSpaceRegion(
         id=(
             "benchmarks.digits.realized-region."
@@ -1640,76 +1630,185 @@ def _digits_state_space_region(
         union_rule="disjoint-union",
         volume=volume_class.cardinality,
         log2_volume=volume_class.log2_volume,
+        measure_estimate=measure_estimate,
     )
 
 
 def _digits_capacity_region() -> StateSpaceRegion:
     volume = _volume_class_digit_count * (_chart_ordinal_domain_extent + 1)
     components = tuple(
-        _digits_product_region(
-            digit_index=digit_index,
-            ordinal_range=(0, _chart_ordinal_domain_extent),
-        )
+        _digits_capacity_product_region(digit_index=digit_index)
         for digit_index in range(_volume_class_digit_count)
     )
+    log2_volume = math.log2(volume)
     return StateSpaceRegion(
         id="benchmarks.digits.accessible-capacity",
         ambient=_digits_ambient(margin=_component_discriminability_margin),
         components=components,
         union_rule="disjoint-union",
         volume=volume,
-        log2_volume=math.log2(volume),
+        log2_volume=log2_volume,
+        measure_estimate=_digits_measure_estimate(log2_volume),
     )
 
 
 def _digits_product_region(
     *,
     digit_index: int,
-    ordinal_range: tuple[int, int],
+    transform_ordinal: int,
 ) -> ProductRegion:
-    lower, upper = ordinal_range
-    count = upper - lower + 1
-    axis_region = DiscreteAxisRegion(
-        axis=StateSpaceAxis(
-            id=_chart_ordinal_axis_id,
-            domain=IntegerRangeDomain(lower=0, upper=_chart_ordinal_domain_extent),
-        ),
-        coordinate_region=(lower, upper),
-        count=count,
-        log2_count=math.log2(count),
-    )
+    axis_regions = _digits_transform_cell_axis_regions(transform_ordinal)
+    measure_estimate = _digits_measure_estimate(0.0)
     return ProductRegion(
-        axis_regions=(axis_region,),
-        measure_rule="product-of-counts",
-        volume=count,
-        log2_volume=math.log2(count),
+        axis_regions=axis_regions,
+        measure_rule="benchmark-computed-finite-count",
+        volume=1,
+        log2_volume=0.0,
         stratum_id=f"digit-{digit_index}",
         stratum_target={
             "digit_index": digit_index,
             "outcome_id": f"digit-{digit_index}",
         },
+        measure_estimate=measure_estimate,
+    )
+
+
+def _digits_capacity_product_region(*, digit_index: int) -> ProductRegion:
+    volume = _chart_ordinal_domain_extent + 1
+    log2_volume = math.log2(volume)
+    return ProductRegion(
+        axis_regions=tuple(
+            ContinuousAxisRegion(
+                axis=axis,
+                coordinate_region=(
+                    float(cast(RealIntervalDomain, axis.domain).lower),
+                    float(cast(RealIntervalDomain, axis.domain).upper),
+                ),
+                measure_estimate=_digits_measure_estimate(log2_volume),
+            )
+            for axis in _digits_transform_axes()
+        ),
+        measure_rule="benchmark-computed-finite-count",
+        volume=volume,
+        log2_volume=log2_volume,
+        stratum_id=f"digit-{digit_index}",
+        stratum_target={
+            "digit_index": digit_index,
+            "outcome_id": f"digit-{digit_index}",
+        },
+        measure_estimate=_digits_measure_estimate(log2_volume),
+    )
+
+
+def _digits_transform_cell_axis_regions(
+    transform_ordinal: int,
+) -> tuple[ContinuousAxisRegion, ...]:
+    intervals = _digits_transform_cell_intervals(transform_ordinal)
+    return tuple(
+        ContinuousAxisRegion(
+            axis=axis,
+            coordinate_region=intervals[axis.id],
+            measure_estimate=_digits_measure_estimate(0.0),
+        )
+        for axis in _digits_transform_axes()
+    )
+
+
+def _digits_transform_cell_intervals(
+    transform_ordinal: int,
+) -> dict[str, tuple[float, float]]:
+    tx_step, ty_step, scale_level = _transform_cell_for_ordinal(transform_ordinal)
+    scale_step = _render_unit_side * _scale_ratio_per_level
+    return {
+        "x_translation": _half_open_cell_interval(
+            center=tx_step * _translation_step_pixels,
+            width=float(_translation_step_pixels),
+        ),
+        "y_translation": _half_open_cell_interval(
+            center=ty_step * _translation_step_pixels,
+            width=float(_translation_step_pixels),
+        ),
+        "scale": _half_open_cell_interval(
+            center=_scale_footprint(scale_level),
+            width=scale_step,
+        ),
+    }
+
+
+def _digits_transform_axes() -> tuple[StateSpaceAxis, ...]:
+    translation_reach = float((_chart_ordinal_domain_extent + 1) * _translation_step_pixels)
+    scale_step = _render_unit_side * _scale_ratio_per_level
+    minimum_scale = _scale_footprint(-_max_scale_level) - 0.5 * scale_step
+    maximum_scale = _scale_footprint(_max_scale_level) + 0.5 * scale_step
+    return (
+        StateSpaceAxis(
+            id="x_translation",
+            domain=RealIntervalDomain(
+                lower=-translation_reach,
+                upper=translation_reach,
+            ),
+        ),
+        StateSpaceAxis(
+            id="y_translation",
+            domain=RealIntervalDomain(
+                lower=-translation_reach,
+                upper=translation_reach,
+            ),
+        ),
+        StateSpaceAxis(
+            id="scale",
+            domain=RealIntervalDomain(
+                lower=minimum_scale,
+                upper=maximum_scale,
+            ),
+        ),
+    )
+
+
+def _half_open_cell_interval(*, center: float, width: float) -> tuple[float, float]:
+    half_width = 0.5 * width
+    return (center - half_width, center + half_width)
+
+
+def _digits_measure_estimate(log2_volume: float) -> MeasureEstimate:
+    return MeasureEstimate(
+        kind="estimated",
+        method_id=_chart_continuous_measure_method_id,
+        log2_lower=log2_volume,
+        log2_upper=log2_volume,
     )
 
 
 def _digits_region_component_index(
     *,
     component_index: int,
+    transform_ordinal: int,
     volume_class: _DigitsVolumeClass,
 ) -> int:
-    digits = tuple(_digits_ordinal_ranges_by_digit(volume_class))
-    try:
-        return digits.index(component_index)
-    except ValueError as error:
+    address = transform_ordinal * _volume_class_digit_count + component_index
+    if not volume_class.minimum_address <= address <= volume_class.maximum_address:
         raise ObservationGenerationError(
             "digit component is outside the realized region"
-        ) from error
+        )
+    return address - volume_class.minimum_address
 
 
 def _digits_region_axis_coordinates(
     *,
+    seed: int,
+    sample_index: int,
     transform_ordinal: int,
+    canvas_side: int,
+    canonical_transform: bool,
 ) -> Mapping[str, object]:
-    return {_chart_ordinal_axis_id: transform_ordinal}
+    x_translation, y_translation, scale = _digits_sample_transform_coordinates(
+        seed=seed,
+        sample_index=sample_index,
+        transform_ordinal=transform_ordinal,
+        canvas_side=canvas_side,
+        canonical_transform=canonical_transform,
+    )
+    return {"x_translation": x_translation, "y_translation": y_translation, "scale": scale}
 
 
 def _digits_unrealized_request_outcome(
@@ -1721,17 +1820,112 @@ def _digits_unrealized_request_outcome(
     return GenerationRequestOutcome(kind="unrepresentable-below-minimum")
 
 
-def _digits_local_state_index(
+def _digits_sample_address(
     *,
     seed: int,
     sample_index: int,
     cardinality: int,
+    minimum_address: int,
 ) -> int:
     if type(sample_index) is not int or sample_index < 0:
         raise ObservationGenerationError("sample_index must be a nonnegative integer")
     if type(cardinality) is not int or cardinality < 1:
         raise ObservationGenerationError("cardinality must be positive")
-    return (seed + sample_index) % cardinality
+    if type(minimum_address) is not int or minimum_address < 0:
+        raise ObservationGenerationError("minimum_address must be a nonnegative integer")
+    generator = random.Random(f"digits-state-sample-v1:{seed}:{sample_index}:{cardinality}")
+    return minimum_address + generator.randrange(cardinality)
+
+
+def _digits_sample_addresses(
+    *,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    cardinality: int,
+    minimum_address: int,
+) -> tuple[int, ...]:
+    return tuple(
+        _digits_sample_address(
+            seed=seed,
+            sample_index=sample_index,
+            cardinality=cardinality,
+            minimum_address=minimum_address,
+        )
+        for sample_index in sample_indices
+    )
+
+
+def _digits_sample_transform_coordinates(
+    *,
+    seed: int,
+    sample_index: int,
+    transform_ordinal: int,
+    canvas_side: int,
+    canonical_transform: bool = False,
+) -> tuple[float, float, float]:
+    if canonical_transform:
+        tx_step, ty_step, scale_level = _transform_cell_for_ordinal(transform_ordinal)
+        return (
+            tx_step * _translation_step_pixels,
+            ty_step * _translation_step_pixels,
+            _scale_footprint(scale_level),
+        )
+    intervals = _digits_transform_cell_intervals(transform_ordinal)
+    bounded_intervals = _digits_identity_preserving_intervals(
+        intervals=intervals,
+        canvas_side=canvas_side,
+    )
+    generator = random.Random(
+        f"digits-transform-coordinate-v1:{seed}:{sample_index}:{transform_ordinal}"
+    )
+    # Each transform cell is one indistinguishable epsilon-cell, so the
+    # within-cell representative is sampled uniformly across the cell's linear
+    # geometry on every axis. Scale is linear in footprint (``_scale_footprint``
+    # is affine in the level), so it is drawn the same way as translation;
+    # cross-cell selection over equal-count cells (``_digits_sample_address``)
+    # is what carries the covering measure.
+    return (
+        _sample_linear_interval(generator, bounded_intervals["x_translation"]),
+        _sample_linear_interval(generator, bounded_intervals["y_translation"]),
+        _sample_linear_interval(generator, bounded_intervals["scale"]),
+    )
+
+
+def _digits_identity_preserving_intervals(
+    *,
+    intervals: Mapping[str, tuple[float, float]],
+    canvas_side: int,
+) -> dict[str, tuple[float, float]]:
+    bounds = {
+        "x_translation": (-0.15 * canvas_side, 0.15 * canvas_side),
+        "y_translation": (-0.15 * canvas_side, 0.15 * canvas_side),
+        "scale": (0.76 * canvas_side, 1.14 * canvas_side),
+    }
+    constrained: dict[str, tuple[float, float]] = {}
+    for axis_id, interval in intervals.items():
+        lower = max(interval[0], bounds[axis_id][0])
+        upper = min(interval[1], bounds[axis_id][1])
+        if upper <= lower:
+            center = (interval[0] + interval[1]) / 2.0
+            constrained[axis_id] = (center, math.nextafter(center, math.inf))
+        else:
+            constrained[axis_id] = (lower, upper)
+    return constrained
+
+
+def _digits_volume_class_is_canonical(volume_class: _DigitsVolumeClass) -> bool:
+    return (
+        volume_class.minimum_address == 0
+        and volume_class.cardinality == _volume_class_digit_count
+    )
+
+
+def _sample_linear_interval(
+    generator: random.Random,
+    interval: tuple[float, float],
+) -> float:
+    lower, upper = interval
+    return lower + generator.random() * (upper - lower)
 
 
 def _variation_extent_value(variation_extent: float) -> float:
@@ -1751,13 +1945,17 @@ def _constructed_variation_coordinate_record(
     transform: VariationTransformDeclaration,
     component_index: int,
     transform_ordinal: int,
+    transform_coordinates: tuple[float, float, float],
     chart: _DigitsChart,
 ) -> Mapping[str, object]:
     if type(transform_ordinal) is not int or transform_ordinal < 0:
         raise ObservationGenerationError("transform_ordinal must be a nonnegative integer")
     spatial = transform.spatial_affine
     tx_step, ty_step, scale_level = _transform_cell_for_ordinal(transform_ordinal)
-    x_translation, y_translation, scale = chart.normalized_transform(transform_ordinal)
+    x_coordinate, y_coordinate, scale_coordinate = transform_coordinates
+    x_translation = x_coordinate / chart.canvas_side
+    y_translation = y_coordinate / chart.canvas_side
+    scale = scale_coordinate / chart.canvas_side
     matrix = [
         [scale, 0.0, x_translation],
         [0.0, scale, y_translation],
@@ -1786,19 +1984,27 @@ def _constructed_variation_coordinate_record(
     }
 
 
-def _transform_table_values(*, canvas_side: int, table_length: int) -> tuple[float, ...]:
-    key = (canvas_side, table_length)
-    cached = _transform_table_value_cache.get(key)
-    if cached is not None:
-        return cached
-    chart = _DigitsChart(canvas_side=canvas_side)
-    values = tuple(
-        value
-        for ordinal in range(table_length)
-        for value in chart.normalized_transform(ordinal)
+def _digits_sample_transform_values(
+    *,
+    seed: int,
+    canvas_side: int,
+    sample_indices: tuple[int, ...],
+    sample_addresses: tuple[int, ...],
+    digit_count: int,
+    canonical_transform: bool = False,
+) -> tuple[float, ...]:
+    return tuple(
+        coordinate / canvas_side
+        for sample_index, sample_address in zip(sample_indices, sample_addresses, strict=True)
+        for ordinal in (sample_address // digit_count,)
+        for coordinate in _digits_sample_transform_coordinates(
+            seed=seed,
+            sample_index=sample_index,
+            transform_ordinal=ordinal,
+            canvas_side=canvas_side,
+            canonical_transform=canonical_transform,
+        )
     )
-    _transform_table_value_cache[key] = values
-    return values
 
 
 def _quadratic_control_points(
@@ -1820,13 +2026,14 @@ def _quadratic_tensor_point(
     controls: Any,
     component_index: Any,
     mark_slot: int,
+    coordinate_index: int,
     t: Any,
 ) -> Any:
     t_by_segment = t.reshape((1, -1))
     one_minus_t = 1.0 - t_by_segment
-    start = controls[component_index, mark_slot, 0].reshape((-1, 1))
-    control = controls[component_index, mark_slot, 1].reshape((-1, 1))
-    end = controls[component_index, mark_slot, 2].reshape((-1, 1))
+    start = controls[component_index, mark_slot, 0, coordinate_index].reshape((-1, 1))
+    control = controls[component_index, mark_slot, 1, coordinate_index].reshape((-1, 1))
+    end = controls[component_index, mark_slot, 2, coordinate_index].reshape((-1, 1))
     return (
         one_minus_t * one_minus_t * start
         + 2.0 * one_minus_t * t_by_segment * control
@@ -1855,17 +2062,20 @@ def _target_tensor_program(
     sample_indices: tuple[int, ...],
     cardinality: int,
     minimum_address: int,
-    digit_count: int,
     component_to_outcome: tuple[int, ...],
     outcome_count: int,
 ) -> TensorBatchProgram:
+    sample_addresses = _digits_sample_addresses(
+        seed=seed,
+        sample_indices=sample_indices,
+        cardinality=cardinality,
+        minimum_address=minimum_address,
+    )
+
     def element_function(
         coordinates: tuple[Any, ...],
         *,
-        seed_value: Any,
-        sample_indices_value: Any,
-        cardinality_value: Any,
-        minimum_address_value: Any,
+        sample_address_values: Any,
         component_to_outcome: Any,
     ) -> Any:
         if len(coordinates) == 1:
@@ -1873,10 +2083,8 @@ def _target_tensor_program(
             sample_axis_index = outcome_index[0] * 0
         else:
             sample_axis_index, outcome_index = coordinates
-        sample_index = sample_indices_value[sample_axis_index]
-        state_index = (sample_index + seed_value).remainder(cardinality_value)
-        sample_address = minimum_address_value + state_index
-        component_index = sample_address.remainder(digit_count)
+        sample_address = sample_address_values[sample_axis_index]
+        component_index = sample_address.remainder(len(component_to_outcome))
         target_index = component_to_outcome[component_index]
         return (target_index.reshape((-1, 1)) == outcome_index.reshape((1, -1))).to(
             dtype=target_index.dtype
@@ -1885,26 +2093,11 @@ def _target_tensor_program(
     return TensorBatchProgram(
         kernel=element_function,
         parameters={
-            "seed_value": TensorElementParameter(
+            "sample_address_values": TensorElementParameter(
                 dtype="int64",
-                shape=(),
-                values=(seed,),
-            ),
-            "sample_indices_value": TensorElementParameter(
-                dtype="int64",
-                shape=(len(sample_indices),),
-                values=sample_indices,
+                shape=(len(sample_addresses),),
+                values=sample_addresses,
                 dynamic_axes=(0,),
-            ),
-            "cardinality_value": TensorElementParameter(
-                dtype="int64",
-                shape=(),
-                values=(cardinality,),
-            ),
-            "minimum_address_value": TensorElementParameter(
-                dtype="int64",
-                shape=(),
-                values=(minimum_address,),
             ),
             "component_to_outcome": TensorElementParameter(
                 dtype="int64",
@@ -1923,51 +2116,47 @@ def _digits_tensor_program(
     cardinality: int,
     minimum_address: int,
     digit_count: int,
-    transform_table_values: tuple[float, ...],
+    transform_values: tuple[float, ...],
     component_mark_counts: tuple[int, ...],
-    component_mark_values: tuple[tuple[float, ...], ...],
-    component_mark_widths: tuple[tuple[float, ...], ...],
-    component_control_x_points: tuple[tuple[tuple[float, ...], ...], ...],
-    component_control_y_points: tuple[tuple[tuple[float, ...], ...], ...],
+    component_mark_parameters: tuple[tuple[tuple[float, ...], ...], ...],
+    component_control_points: tuple[tuple[tuple[tuple[float, ...], ...], ...], ...],
     height: int,
     width: int,
 ) -> TensorBatchProgram:
     component_count = len(component_mark_counts)
-    max_mark_count = len(component_mark_values[0]) if component_count else 0
+    max_mark_count = len(component_mark_parameters[0]) if component_count else 0
+    mark_parameter_count = 2
     control_point_count = 3
-    table_length = len(transform_table_values) // 3
+    control_coordinate_count = 2
+    sample_addresses = _digits_sample_addresses(
+        seed=seed,
+        sample_indices=sample_indices,
+        cardinality=cardinality,
+        minimum_address=minimum_address,
+    )
 
     def element_function(
         coordinates: tuple[Any, ...],
         *,
-        seed_value: Any,
-        sample_indices_value: Any,
-        cardinality_value: Any,
-        minimum_address_value: Any,
-        transform_table_tensor: Any,
+        sample_address_values: Any,
+        transform_values: Any,
         component_mark_counts: Any,
-        component_mark_values: Any,
-        component_mark_widths: Any,
-        component_control_x_points: Any,
-        component_control_y_points: Any,
+        component_mark_parameters: Any,
+        component_control_points: Any,
         segment_start_t: Any,
-        segment_end_t: Any,
         image_height: Any,
         image_width: Any,
     ) -> Any:
         sample_axis_index, channel_index, y_index, x_index = coordinates
-        sample_index = sample_indices_value[sample_axis_index]
-        state_index = (sample_index + seed_value).remainder(cardinality_value)
-        sample_address = minimum_address_value + state_index
+        sample_address = sample_address_values[sample_axis_index]
         component_index = sample_address.remainder(digit_count)
-        transform_index = sample_address.div(digit_count, rounding_mode="floor")
         x_center = x_index.reshape((1, 1, 1, -1)) + 0.5
         y_center = y_index.reshape((1, 1, -1, 1)) + 0.5
         # Diagonal affine: a digit placed at a centre-relative offset and scale.
         # Rotation and shear are removed, so the off-diagonal terms are zero.
-        scale = transform_table_tensor[transform_index, 2].reshape((-1, 1))
-        x_translation = transform_table_tensor[transform_index, 0].reshape((-1, 1))
-        y_translation = transform_table_tensor[transform_index, 1].reshape((-1, 1))
+        scale = transform_values[sample_axis_index, 2].reshape((-1, 1))
+        x_translation = transform_values[sample_axis_index, 0].reshape((-1, 1))
+        y_translation = transform_values[sample_axis_index, 1].reshape((-1, 1))
         m00 = scale
         m02 = x_translation
         m11 = scale
@@ -1988,28 +2177,35 @@ def _digits_tensor_program(
             active_mark = active_channel & (
                 mark_slot < mark_count.reshape((-1, 1, 1, 1))
             )
+            segment_end_t = segment_start_t + (
+                1.0 / float(_batch_render_curve_sample_count - 1)
+            )
             raw_sx = _quadratic_tensor_point(
-                component_control_x_points,
+                component_control_points,
                 component_index,
                 mark_slot,
+                0,
                 segment_start_t,
             )
             raw_sy = _quadratic_tensor_point(
-                component_control_y_points,
+                component_control_points,
                 component_index,
                 mark_slot,
+                1,
                 segment_start_t,
             )
             raw_ex = _quadratic_tensor_point(
-                component_control_x_points,
+                component_control_points,
                 component_index,
                 mark_slot,
+                0,
                 segment_end_t,
             )
             raw_ey = _quadratic_tensor_point(
-                component_control_y_points,
+                component_control_points,
                 component_index,
                 mark_slot,
+                1,
                 segment_end_t,
             )
             sx = (0.5 + m00 * (raw_sx - 0.5) + m02) * image_width
@@ -2046,7 +2242,7 @@ def _digits_tensor_program(
             distance_squared = segment_distance_squared.min(dim=1).values.reshape(
                 (-1, 1, y_index.shape[0], x_index.shape[0])
             )
-            mark_width = component_mark_widths[component_index, mark_slot].reshape(
+            mark_width = component_mark_parameters[component_index, mark_slot, 1].reshape(
                 (-1, 1, 1, 1)
             )
             width_scale_field = width_scale.reshape((-1, 1, 1, 1))
@@ -2055,38 +2251,25 @@ def _digits_tensor_program(
             )
             contribution = (
                 active_mark & (distance_squared <= threshold)
-            ) * component_mark_values[component_index, mark_slot].reshape((-1, 1, 1, 1))
+            ) * component_mark_parameters[component_index, mark_slot, 0].reshape(
+                (-1, 1, 1, 1)
+            )
             value = value.maximum(contribution)
         return value
 
     return TensorBatchProgram(
         kernel=element_function,
         parameters={
-            "seed_value": TensorElementParameter(
+            "sample_address_values": TensorElementParameter(
                 dtype="int64",
-                shape=(),
-                values=(seed,),
-            ),
-            "sample_indices_value": TensorElementParameter(
-                dtype="int64",
-                shape=(len(sample_indices),),
-                values=sample_indices,
+                shape=(len(sample_addresses),),
+                values=sample_addresses,
                 dynamic_axes=(0,),
             ),
-            "cardinality_value": TensorElementParameter(
-                dtype="int64",
-                shape=(),
-                values=(cardinality,),
-            ),
-            "minimum_address_value": TensorElementParameter(
-                dtype="int64",
-                shape=(),
-                values=(minimum_address,),
-            ),
-            "transform_table_tensor": TensorElementParameter(
+            "transform_values": TensorElementParameter(
                 dtype="float32",
-                shape=(table_length, 3),
-                values=transform_table_values,
+                shape=(len(sample_addresses), 3),
+                values=transform_values,
                 dynamic_axes=(0,),
             ),
             "component_mark_counts": TensorElementParameter(
@@ -2094,34 +2277,30 @@ def _digits_tensor_program(
                 shape=(component_count,),
                 values=component_mark_counts,
             ),
-            "component_mark_values": TensorElementParameter(
+            "component_mark_parameters": TensorElementParameter(
                 dtype="float32",
-                shape=(component_count, max_mark_count),
-                values=tuple(value for row in component_mark_values for value in row),
-            ),
-            "component_mark_widths": TensorElementParameter(
-                dtype="float32",
-                shape=(component_count, max_mark_count),
-                values=tuple(value for row in component_mark_widths for value in row),
-            ),
-            "component_control_x_points": TensorElementParameter(
-                dtype="float32",
-                shape=(component_count, max_mark_count, control_point_count),
+                shape=(component_count, max_mark_count, mark_parameter_count),
                 values=tuple(
                     value
-                    for component in component_control_x_points
+                    for component in component_mark_parameters
                     for mark in component
                     for value in mark
                 ),
             ),
-            "component_control_y_points": TensorElementParameter(
+            "component_control_points": TensorElementParameter(
                 dtype="float32",
-                shape=(component_count, max_mark_count, control_point_count),
+                shape=(
+                    component_count,
+                    max_mark_count,
+                    control_point_count,
+                    control_coordinate_count,
+                ),
                 values=tuple(
                     value
-                    for component in component_control_y_points
+                    for component in component_control_points
                     for mark in component
-                    for value in mark
+                    for point in mark
+                    for value in point
                 ),
             ),
             "segment_start_t": TensorElementParameter(
@@ -2129,14 +2308,6 @@ def _digits_tensor_program(
                 shape=(_batch_render_curve_sample_count - 1,),
                 values=tuple(
                     index / float(_batch_render_curve_sample_count - 1)
-                    for index in range(_batch_render_curve_sample_count - 1)
-                ),
-            ),
-            "segment_end_t": TensorElementParameter(
-                dtype="float32",
-                shape=(_batch_render_curve_sample_count - 1,),
-                values=tuple(
-                    (index + 1) / float(_batch_render_curve_sample_count - 1)
                     for index in range(_batch_render_curve_sample_count - 1)
                 ),
             ),

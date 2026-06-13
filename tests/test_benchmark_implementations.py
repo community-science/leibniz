@@ -29,7 +29,7 @@ def test_digits_benchmark_loads_python_implementation_entrypoint() -> None:
     assert implementation.target_contract.chance_mass() == 0.1
     assert implementation.sampling_protocol.kind == "uniform-monte-carlo"
     assert implementation.sampling_protocol.confidence_method_id == "wilson"
-    assert implementation.accessible_subspace.ladder_id == "digits-transform-ordinal-shells"
+    assert implementation.accessible_subspace.ladder_id == "digits-continuous-transform-covering"
     assert not implementation.accessible_subspace.exclusions
 
 
