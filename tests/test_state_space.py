@@ -6,6 +6,7 @@ import pytest
 
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.state_space import (
+    AccessibleSubspace,
     BinaryVectorDomain,
     ContinuousAxisRegion,
     DiscreteAxisRegion,
@@ -22,6 +23,7 @@ from leibniz.state_space import (
     StateSpaceAxis,
     StateSpaceError,
     StateSpaceRegion,
+    accessible_subspace_from_record,
     axis_region_from_record,
     axis_regions_are_disjoint,
     measure_estimate_from_record,
@@ -1320,6 +1322,68 @@ def test_region_filtration_rejects_conflicting_shared_axes() -> None:
             increments=(_digit_shell_region("digits-shell-0", lower=0, upper=0), conflicting),
             volume=11,
             log2_volume=math.log2(11),
+        )
+
+
+def test_accessible_subspace_records_round_trip() -> None:
+    subspace = AccessibleSubspace(
+        ladder_id="digits-canvas-ladder",
+        per_configuration_capacity=_digits_grid_region(),
+        exclusions=(
+            _digit_shell_region("digits-shell-0", lower=0, upper=0),
+            _digit_shell_region("digits-shell-1", lower=1, upper=1),
+        ),
+        frontier_rationale="The canvas ladder is unbounded in sampled configurations.",
+    )
+
+    record = load_object_document(
+        canonical_document_bytes(subspace.to_record()),
+        description="accessible subspace",
+    )
+
+    assert accessible_subspace_from_record(record) == subspace
+
+
+def test_accessible_subspace_defaults_to_empty_exclusions() -> None:
+    subspace = AccessibleSubspace(
+        ladder_id="digits-canvas-ladder",
+        per_configuration_capacity=_digits_grid_region(),
+        frontier_rationale="The canvas ladder is unbounded in sampled configurations.",
+    )
+
+    assert "exclusions" not in subspace.to_record()
+    assert accessible_subspace_from_record(subspace.to_record()) == subspace
+
+
+def test_accessible_subspace_invariants() -> None:
+    with pytest.raises(StateSpaceError):
+        AccessibleSubspace(
+            ladder_id="",
+            per_configuration_capacity=_digits_grid_region(),
+            frontier_rationale="rationale",
+        )
+    with pytest.raises(StateSpaceError):
+        AccessibleSubspace(
+            ladder_id="digits-canvas-ladder",
+            per_configuration_capacity=_digits_grid_region(),
+            frontier_rationale="",
+        )
+    with pytest.raises(StateSpaceError):
+        AccessibleSubspace(
+            ladder_id="digits-canvas-ladder",
+            per_configuration_capacity=_digits_grid_region(),
+            exclusions=(_chess_region(),),
+            frontier_rationale="rationale",
+        )
+    with pytest.raises(StateSpaceError):
+        AccessibleSubspace(
+            ladder_id="digits-canvas-ladder",
+            per_configuration_capacity=_digits_grid_region(),
+            exclusions=(
+                _digit_shell_region("digits-shell-0", lower=0, upper=1),
+                _digit_shell_region("digits-shell-1", lower=1, upper=2),
+            ),
+            frontier_rationale="rationale",
         )
 
 

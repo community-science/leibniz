@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import cast
 
 __all__ = [
+    "AccessibleSubspace",
     "AxisCoordinateRegion",
     "AxisDomain",
     "AxisRegion",
@@ -53,6 +54,7 @@ __all__ = [
     "StateSpaceAxis",
     "StateSpaceError",
     "StateSpaceRegion",
+    "accessible_subspace_from_record",
     "axis_domain_from_record",
     "axis_region_from_record",
     "axis_regions_are_disjoint",
@@ -904,6 +906,49 @@ class RegionFiltration:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class AccessibleSubspace:
+    """A benchmark-declared accessible region family over an unbounded ladder."""
+
+    ladder_id: str
+    per_configuration_capacity: StateSpaceRegion
+    exclusions: tuple[StateSpaceRegion, ...] = ()
+    frontier_rationale: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.ladder_id:
+            raise StateSpaceError("accessible subspace ladder_id must be nonempty")
+        if not self.frontier_rationale:
+            raise StateSpaceError("accessible subspace frontier_rationale must be nonempty")
+        capacity_ambient = self.per_configuration_capacity.ambient
+        for exclusion in self.exclusions:
+            if exclusion.ambient != capacity_ambient:
+                raise StateSpaceError(
+                    "accessible subspace exclusions must share the capacity ambient"
+                )
+        for earlier in range(len(self.exclusions)):
+            for later in range(earlier + 1, len(self.exclusions)):
+                if not state_space_regions_are_disjoint(
+                    self.exclusions[earlier],
+                    self.exclusions[later],
+                ):
+                    raise StateSpaceError(
+                        "accessible subspace exclusions must be pairwise disjoint"
+                    )
+
+    def to_record(self) -> dict[str, object]:
+        """Return a record for this accessible subspace declaration."""
+
+        record: dict[str, object] = {
+            "ladder_id": self.ladder_id,
+            "per_configuration_capacity": self.per_configuration_capacity.to_record(),
+            "frontier_rationale": self.frontier_rationale,
+        }
+        if self.exclusions:
+            record["exclusions"] = [exclusion.to_record() for exclusion in self.exclusions]
+        return record
+
+
 def distinguishability_from_record(value: object) -> Distinguishability:
     """Parse a distinguishability declaration from a record."""
 
@@ -1132,6 +1177,37 @@ def region_filtration_from_record(value: object) -> RegionFiltration:
         increments=increments,
         volume=_record_int(record, "volume", label="region filtration record"),
         log2_volume=_record_float(record, "log2_volume", label="region filtration record"),
+    )
+
+
+def accessible_subspace_from_record(value: object) -> AccessibleSubspace:
+    """Parse an accessible subspace declaration from a record."""
+
+    record = _record_mapping(value, label="accessible subspace record")
+    exclusions_value = record.get("exclusions")
+    exclusions = (
+        ()
+        if exclusions_value is None
+        else tuple(
+            state_space_region_from_record(item)
+            for item in _record_sequence(
+                record,
+                "exclusions",
+                label="accessible subspace record",
+            )
+        )
+    )
+    return AccessibleSubspace(
+        ladder_id=_record_str(record, "ladder_id", label="accessible subspace record"),
+        per_configuration_capacity=state_space_region_from_record(
+            record.get("per_configuration_capacity")
+        ),
+        exclusions=exclusions,
+        frontier_rationale=_record_str(
+            record,
+            "frontier_rationale",
+            label="accessible subspace record",
+        ),
     )
 
 
