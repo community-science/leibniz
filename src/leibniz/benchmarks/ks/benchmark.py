@@ -162,12 +162,22 @@ class Generator:
         include_artifacts: bool = False,
         volume_request: StateSpaceVolumeRequest | None = None,
         sample_indices: Sequence[int] | None = None,
+        memory_limit_bytes: int | None = None,
         runtime: TensorRuntime | None = None,
         outcome_ids: tuple[str, ...] | None = None,
+        variation_extent: float = 1.0,
         timing: TimingCollector | None = None,
         timing_prefix: str = "",
     ) -> GeneratedSampleSet:
-        del include_fields, include_artifacts, outcome_ids, timing, timing_prefix
+        del (
+            include_fields,
+            include_artifacts,
+            memory_limit_bytes,
+            outcome_ids,
+            variation_extent,
+            timing,
+            timing_prefix,
+        )
         sample_shape = _sample_shape(shape)
         sample_count = _sample_count(sample_shape)
         resolved_sample_indices = _sample_indices(
@@ -377,8 +387,8 @@ def _ks_tensors(
         ),
         shape=(sample_count, 1, _space_count),
     )
-    fields = targets[:, :, 0, :]
-    return fields, targets
+    fields = targets[:, :, 0, :].float()
+    return fields, targets[:, 0, :, :]
 
 
 def _ks_initial_parameters(
@@ -611,8 +621,8 @@ def _ks_residual_loss(predictions: Any, targets: Any) -> Any:
         raise ValueError("KS residual loss requires prediction and target shape match")
     dx = _box_length / _space_count
     dt = _horizon / (_time_count - 1)
-    u = predictions[:, :, :-1, :]
-    u_t = (predictions[:, :, 1:, :] - u) / dt
+    u = predictions[:, :-1, :]
+    u_t = (predictions[:, 1:, :] - u) / dt
     u_x = (u.roll(shifts=-1, dims=-1) - u.roll(shifts=1, dims=-1)) / (2.0 * dx)
     u_xx = (
         u.roll(shifts=-1, dims=-1)
@@ -628,7 +638,7 @@ def _ks_residual_loss(predictions: Any, targets: Any) -> Any:
     ) / (dx**4)
     residual = u_t + (u * u_x) + u_xx + u_xxxx
     residual_loss = (residual * residual).mean()
-    initial_error = predictions[:, :, 0, :] - targets[:, :, 0, :]
+    initial_error = predictions[:, 0, :] - targets[:, 0, :]
     initial_loss = (initial_error * initial_error).mean()
     return residual_loss + initial_loss
 

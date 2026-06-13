@@ -211,6 +211,25 @@ def test_measure_program_cost_records_movement_outside_abstract_flops() -> None:
     assert measurement.movement[0].name == "aten.gather.default"
 
 
+def test_measure_program_cost_treats_unsqueeze_as_shape_movement() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    values = runtime.torch.randn(2, 4, device=runtime.device)
+
+    def unsqueeze(tensor: Any) -> Any:
+        return tensor.unsqueeze(1)
+
+    measurement = measure_program_cost(
+        runtime,
+        unsqueeze,
+        (values,),
+        strict=True,
+    )
+
+    assert measurement.abstract_flops == 0
+    assert measurement.moved_elements == 8
+    assert measurement.movement[0].name == "aten.unsqueeze.default"
+
+
 def test_cost_measurement_round_trips_through_record() -> None:
     runtime = resolve_tensor_runtime("cpu")
     torch = runtime.torch

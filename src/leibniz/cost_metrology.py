@@ -921,11 +921,14 @@ _movement_ops = frozenset(
         "aten.gather.default",
         "aten.index_select.default",
         "aten.lift_fresh.default",
+        "aten.new_empty.default",
         "aten.reshape.default",
         "aten.scatter.default",
         "aten.scatter_.src",
+        "aten.squeeze.dim",
         "aten.t.default",
         "aten.to.device",
+        "aten.unsqueeze.default",
         "aten.view.default",
     }
 )
