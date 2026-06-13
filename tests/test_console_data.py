@@ -334,6 +334,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     } == {
         "benchmarks.chess@0.1.0",
         "benchmarks.digits@0.1.0",
+        "benchmarks.ks@0.1.0",
     }
     chess_task = next(
         task
@@ -713,6 +714,7 @@ def test_console_data_discovers_materialized_result_root_views(tmp_path: Path) -
     } == {
         (view_root / "chess" / "benchmark_results.json").as_posix(),
         (view_root / "digits" / "benchmark_results.json").as_posix(),
+        (view_root / "ks" / "benchmark_results.json").as_posix(),
     }
 
 
