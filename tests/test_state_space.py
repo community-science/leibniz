@@ -32,6 +32,7 @@ from leibniz.state_space import (
     region_filtration_from_record,
     sampling_protocol_from_record,
     state_space_ambient_from_record,
+    state_space_region_contains,
     state_space_region_from_record,
     state_space_regions_are_disjoint,
 )
@@ -332,6 +333,217 @@ def test_state_space_region_contains_delegates_to_component() -> None:
         region.contains(10, {"pose-transform-index": 0})
     with pytest.raises(StateSpaceError):
         region.contains(-1, {"pose-transform-index": 0})
+
+
+def test_state_space_region_contains_integer_range_subregions() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=9))
+    container_axis = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(2, 7),
+        count=6,
+        log2_count=math.log2(6),
+    )
+    contained_axis = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(3, 5),
+        count=3,
+        log2_count=math.log2(3),
+    )
+    outside_axis = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(5, 8),
+        count=4,
+        log2_count=2.0,
+    )
+
+    def region(id: str, axis_region: DiscreteAxisRegion) -> StateSpaceRegion:
+        component = ProductRegion(
+            axis_regions=(axis_region,),
+            measure_rule="product-of-counts",
+            volume=axis_region.count,
+            log2_volume=axis_region.log2_count,
+            stratum_id="digit-3",
+        )
+        return StateSpaceRegion(
+            id=id,
+            ambient=_metric_ambient(),
+            components=(component,),
+            union_rule="disjoint-union",
+            volume=component.volume,
+            log2_volume=component.log2_volume,
+        )
+
+    assert state_space_region_contains(
+        region("container", container_axis),
+        region("inside", contained_axis),
+    )
+    assert not state_space_region_contains(
+        region("container", container_axis),
+        region("outside", outside_axis),
+    )
+
+
+def test_state_space_region_contains_real_grid_enumerated_and_binary_axes() -> None:
+    real_axis = StateSpaceAxis(id="scale", domain=RealGridDomain(lower=0.0, upper=1.0, count=8))
+    preset_axis = StateSpaceAxis(
+        id="preset",
+        domain=EnumeratedCellsDomain(cells=("a", "b", "c", "d")),
+    )
+    mask_axis = StateSpaceAxis(id="mask", domain=BinaryVectorDomain(dimension=5))
+    container_axes = (
+        DiscreteAxisRegion(real_axis, (1, 6), 6, math.log2(6)),
+        DiscreteAxisRegion(preset_axis, ("a", "c", "d"), 3, math.log2(3)),
+        DiscreteAxisRegion(mask_axis, (0, 2, 4), 8, 3.0),
+    )
+    contained_axes = (
+        DiscreteAxisRegion(real_axis, (2, 5), 4, 2.0),
+        DiscreteAxisRegion(preset_axis, ("c", "d"), 2, 1.0),
+        DiscreteAxisRegion(mask_axis, (2, 4), 4, 2.0),
+    )
+    outside_axes = (
+        DiscreteAxisRegion(real_axis, (2, 5), 4, 2.0),
+        DiscreteAxisRegion(preset_axis, ("b", "c"), 2, 1.0),
+        DiscreteAxisRegion(mask_axis, (2, 4), 4, 2.0),
+    )
+
+    def region(id: str, axes: tuple[DiscreteAxisRegion, ...]) -> StateSpaceRegion:
+        component = ProductRegion(
+            axis_regions=axes,
+            measure_rule="product-of-counts",
+            volume=math.prod(axis.count for axis in axes),
+            log2_volume=sum(axis.log2_count for axis in axes),
+            stratum_id="digit-4",
+        )
+        return StateSpaceRegion(
+            id=id,
+            ambient=_metric_ambient(),
+            components=(component,),
+            union_rule="disjoint-union",
+            volume=component.volume,
+            log2_volume=component.log2_volume,
+        )
+
+    assert state_space_region_contains(
+        region("container", container_axes),
+        region("inside", contained_axes),
+    )
+    assert not state_space_region_contains(
+        region("container", container_axes),
+        region("outside", outside_axes),
+    )
+
+
+def test_state_space_region_contains_real_interval_subregions() -> None:
+    axis = StateSpaceAxis(id="phase", domain=RealIntervalDomain(lower=0.0, upper=10.0))
+    estimate = MeasureEstimate(
+        kind="estimated",
+        method_id="analytic-interval-length",
+        log2_lower=0.0,
+        log2_upper=4.0,
+    )
+    container_axis = ContinuousAxisRegion(
+        axis=axis,
+        coordinate_region=(1.0, 8.0),
+        measure_estimate=estimate,
+    )
+    contained_axis = ContinuousAxisRegion(
+        axis=axis,
+        coordinate_region=(2.0, 5.0),
+        measure_estimate=estimate,
+    )
+    outside_axis = ContinuousAxisRegion(
+        axis=axis,
+        coordinate_region=(0.5, 5.0),
+        measure_estimate=estimate,
+    )
+
+    def region(id: str, axis_region: ContinuousAxisRegion) -> StateSpaceRegion:
+        component = ProductRegion(
+            axis_regions=(axis_region,),
+            measure_rule="benchmark-computed-finite-count",
+            volume=2,
+            log2_volume=1.0,
+            stratum_id="phase-window",
+            measure_estimate=estimate,
+        )
+        return StateSpaceRegion(
+            id=id,
+            ambient=_metric_ambient(),
+            components=(component,),
+            union_rule="disjoint-union",
+            volume=2,
+            log2_volume=1.0,
+        )
+
+    assert state_space_region_contains(
+        region("container", container_axis),
+        region("inside", contained_axis),
+    )
+    assert not state_space_region_contains(
+        region("container", container_axis),
+        region("outside", outside_axis),
+    )
+
+
+def test_state_space_region_contains_requires_matching_strata_axes_and_ambient() -> None:
+    container = _truncated_window_region()
+    same_region = _truncated_window_region()
+    assert state_space_region_contains(container, same_region)
+
+    component = container.components[0]
+    mismatched_stratum_component = ProductRegion(
+        axis_regions=component.axis_regions,
+        measure_rule=component.measure_rule,
+        volume=component.volume,
+        log2_volume=component.log2_volume,
+        stratum_id="digit-9",
+        stratum_target={"outcome_id": "digit-9"},
+    )
+    mismatched_stratum = StateSpaceRegion(
+        id="wrong-stratum",
+        ambient=container.ambient,
+        components=(mismatched_stratum_component,),
+        union_rule="disjoint-union",
+        volume=mismatched_stratum_component.volume,
+        log2_volume=mismatched_stratum_component.log2_volume,
+    )
+    assert not state_space_region_contains(container, mismatched_stratum)
+
+    other_axis = StateSpaceAxis(id="other-pose", domain=IntegerRangeDomain(lower=0, upper=1))
+    other_axis_region = DiscreteAxisRegion(
+        axis=other_axis,
+        coordinate_region=(0, 1),
+        count=2,
+        log2_count=1.0,
+    )
+    mismatched_axis_component = ProductRegion(
+        axis_regions=(other_axis_region,),
+        measure_rule="product-of-counts",
+        volume=2,
+        log2_volume=1.0,
+        stratum_id="digit-0",
+        stratum_target={"outcome_id": "digit-0"},
+    )
+    mismatched_axis = StateSpaceRegion(
+        id="wrong-axis",
+        ambient=container.ambient,
+        components=(mismatched_axis_component,),
+        union_rule="disjoint-union",
+        volume=2,
+        log2_volume=1.0,
+    )
+    assert not state_space_region_contains(container, mismatched_axis)
+
+    different_ambient = StateSpaceRegion(
+        id="different-ambient",
+        ambient=_exact_ambient(),
+        components=(component,),
+        union_rule="disjoint-union",
+        volume=component.volume,
+        log2_volume=component.log2_volume,
+    )
+    with pytest.raises(StateSpaceError):
+        state_space_region_contains(container, different_ambient)
 
 
 @pytest.mark.parametrize(
