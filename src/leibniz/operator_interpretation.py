@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from leibniz.operator_semantics import ModelOperatorSemantic
 from leibniz.tensor_runtime import (
+    spatial_axis_names_for_dimension,
     tensor_runtime_shape_element_count,
 )
 
@@ -16,12 +17,6 @@ __all__ = [
     "interpret_operator_semantic",
     "spatial_axis_names",
 ]
-
-_spatial_axis_names_by_dimension = {
-    1: ("out_length",),
-    2: ("out_height", "out_width"),
-    3: ("out_depth", "out_height", "out_width"),
-}
 
 
 class OperatorInterpretationError(ValueError):
@@ -79,7 +74,7 @@ def interpret_operator_semantic(
 def spatial_axis_names(dimension: int) -> tuple[str, ...] | None:
     """Return fixed-support output-axis parameter names for a spatial dimension."""
 
-    return _spatial_axis_names_by_dimension.get(dimension)
+    return spatial_axis_names_for_dimension(dimension)
 
 
 def _interpret_product_of_input_axes(

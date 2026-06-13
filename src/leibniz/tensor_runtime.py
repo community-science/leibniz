@@ -40,6 +40,7 @@ __all__ = [
     "softmax_prediction_rows",
     "softmax_target_mass_tensor",
     "softmax_target_masses",
+    "spatial_axis_names_for_dimension",
     "synchronize_runtime",
     "TensorRuntime",
     "TensorRuntimeOperationRecord",
@@ -2269,14 +2270,32 @@ def _require_fixed_support(
     return tuple(size for _index in range(dimension))
 
 
+# Single source of truth for fixed-support output-axis parameter names per
+# spatial dimension; the semantics layer (operator_interpretation) reads it
+# through spatial_axis_names_for_dimension rather than keeping a second copy.
+# Names exist for every interpretable dimension (1-3); which dimensions can
+# actually be *built* is gated separately by the pool/conv class maps below
+# ({1, 2} today).
+_spatial_axis_names_by_dimension: dict[int, tuple[str, ...]] = {
+    1: ("out_length",),
+    2: ("out_height", "out_width"),
+    3: ("out_depth", "out_height", "out_width"),
+}
+
+
+def spatial_axis_names_for_dimension(dimension: int) -> tuple[str, ...] | None:
+    """Return fixed-support output-axis parameter names for a spatial dimension."""
+
+    return _spatial_axis_names_by_dimension.get(dimension)
+
+
 def _spatial_axis_names(dimension: int) -> tuple[str, ...]:
-    if dimension == 1:
-        return ("out_length",)
-    if dimension == 2:
-        return ("out_height", "out_width")
-    if dimension == 3:
-        return ("out_depth", "out_height", "out_width")
-    raise TensorRuntimeError("local support dimension currently supports dimensions 1 and 2")
+    names = _spatial_axis_names_by_dimension.get(dimension)
+    if names is None:
+        raise TensorRuntimeError(
+            f"local support has no spatial-axis names for dimension {dimension}"
+        )
+    return names
 
 
 def _adaptive_pool_class(torch: Any, *, dimension: int) -> Any:
