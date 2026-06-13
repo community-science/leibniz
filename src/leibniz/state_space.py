@@ -827,8 +827,6 @@ def state_space_region_contains(container: StateSpaceRegion, contained: StateSpa
 def _product_region_contains(container: ProductRegion, contained: ProductRegion) -> bool:
     if container.stratum_id != contained.stratum_id:
         return False
-    if container.stratum_target != contained.stratum_target:
-        return False
     container_by_axis = {
         axis_region.axis_id: axis_region for axis_region in container.axis_regions
     }

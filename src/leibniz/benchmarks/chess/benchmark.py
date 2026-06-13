@@ -28,7 +28,6 @@ from leibniz.state_space import (
     BinaryVectorDomain,
     DiscreteAxisRegion,
     Distinguishability,
-    EnumeratedCellsDomain,
     IntegerRangeDomain,
     ProductRegion,
     SamplingProtocol,
@@ -53,8 +52,6 @@ _outcome_space_id = ProtocolIdentifier.parse("benchmarks.chess.uci-moves@0.1.0")
 _tensor_shape = (18, 8, 8)
 _board_preview_size = 512
 _board_preview_square_size = _board_preview_size // 8
-_realized_spectator_enumeration_limit = 4096
-
 _mate_in_one_family_id = "corner-net-indexed-family"
 
 
@@ -626,32 +623,17 @@ def _chess_spectator_axis_region(
     upper_rank: int,
     capacity: bool,
 ) -> DiscreteAxisRegion:
-    if capacity or not _chess_should_enumerate_spectator_ranks(
-        lower_rank=lower_rank,
-        upper_rank=upper_rank,
-    ):
-        enabled_dimensions = upper_rank.bit_length()
-        return DiscreteAxisRegion(
-            axis=StateSpaceAxis(
-                id=_chess_spectator_axis_id(stratum_id),
-                domain=BinaryVectorDomain(dimension=len(_spectator_squares())),
-            ),
-            coordinate_region=tuple(range(enabled_dimensions)),
-            count=1 << enabled_dimensions,
-            log2_count=float(enabled_dimensions),
-        )
-    cells = tuple(
-        _chess_spectator_cell_id(rank)
-        for rank in range(lower_rank, upper_rank + 1)
-    )
+    _ = lower_rank
+    _ = capacity
+    enabled_dimensions = upper_rank.bit_length()
     return DiscreteAxisRegion(
         axis=StateSpaceAxis(
             id=_chess_spectator_axis_id(stratum_id),
-            domain=EnumeratedCellsDomain(cells=cells),
+            domain=BinaryVectorDomain(dimension=len(_spectator_squares())),
         ),
-        coordinate_region=cells,
-        count=len(cells),
-        log2_count=math.log2(len(cells)),
+        coordinate_region=tuple(range(enabled_dimensions)),
+        count=1 << enabled_dimensions,
+        log2_count=float(enabled_dimensions),
     )
 
 
@@ -727,19 +709,11 @@ def _chess_region_axis_coordinates(
     )
     if rank_range is None:
         raise ObservationGenerationError("Chess sample is outside the realized region")
-    lower_rank, upper_rank = rank_range
-    spectator_coordinate: object
-    if _chess_should_enumerate_spectator_ranks(
-        lower_rank=lower_rank,
-        upper_rank=upper_rank,
-    ):
-        spectator_coordinate = _chess_spectator_cell_id(spectator_rank)
-    else:
-        spectator_coordinate = tuple(
-            bit_index
-            for bit_index in range(len(_spectator_squares()))
-            if spectator_rank & (1 << bit_index)
-        )
+    spectator_coordinate = tuple(
+        bit_index
+        for bit_index in range(len(_spectator_squares()))
+        if spectator_rank & (1 << bit_index)
+    )
     coordinates: dict[str, object] = {
         _chess_spectator_axis_id(stratum_id): spectator_coordinate
     }
@@ -756,21 +730,6 @@ def _chess_region_axis_coordinates(
 
 def _chess_spectator_axis_id(stratum_id: str) -> str:
     return f"{stratum_id}.spectator-occupancy"
-
-
-def _chess_should_enumerate_spectator_ranks(
-    *,
-    lower_rank: int,
-    upper_rank: int,
-) -> bool:
-    if lower_rank < 0 or upper_rank < lower_rank:
-        raise ObservationGenerationError("Chess spectator rank range is invalid")
-    return upper_rank - lower_rank + 1 <= _realized_spectator_enumeration_limit
-
-
-def _chess_spectator_cell_id(rank: int) -> str:
-    _ = _spectator_mask_for_rank(rank)
-    return f"spectator-rank-{rank}"
 
 
 def _sample_local_indices(
