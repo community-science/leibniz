@@ -73,7 +73,7 @@ from leibniz.state_space import (
     StateSpaceRegion,
     state_space_regions_are_disjoint,
 )
-from leibniz.target_contracts import TargetContract
+from leibniz.target_contracts import TargetContract, TargetContractError
 from leibniz.tensor_runtime import (
     OperationFallbackSequential,
     TensorRuntime,
@@ -1799,7 +1799,15 @@ def _validate_architecture_for_batch(
     )
     if input_reason is not None:
         raise BenchmarkRunnerError(input_reason)
-    expected_output_shape = target_contract.expected_output_shape(None)
+    field_shape = (
+        _batch_target_field_shape(batch=batch)
+        if target_contract.kind == "field-valued"
+        else None
+    )
+    try:
+        expected_output_shape = target_contract.expected_output_shape(field_shape)
+    except TargetContractError as error:
+        raise BenchmarkRunnerError(str(error)) from error
     if architecture.output_shape != expected_output_shape:
         raise BenchmarkRunnerError(
             f"architecture output_shape {architecture.output_shape} does not match "
@@ -2965,6 +2973,16 @@ def _batch_sample_input_shape(
     raise BenchmarkRunnerError(
         "tensor benchmark generator must return tensors or inspectable field metadata"
     )
+
+
+def _batch_target_field_shape(
+    *,
+    batch: GeneratedSampleSet,
+) -> tuple[int, ...]:
+    tensor_target_shape = _tensor_input_shape(batch.targets)
+    if tensor_target_shape is not None:
+        return tensor_target_shape
+    return _batch_sample_input_shape(batch=batch)
 
 
 def _tensor_input_shape(fields: Any) -> tuple[int, ...] | None:

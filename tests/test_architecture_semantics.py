@@ -1,10 +1,13 @@
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
 from leibniz.architecture_semantics import (
     ArchitectureSemanticValidationError,
     validate_architecture_semantics,
 )
-from leibniz.architectures import ArchitectureManifest
+from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocument
+
+_fixtures_root = Path(__file__).parent / "fixtures"
 
 
 def test_architecture_semantic_validation_accepts_public_fixture() -> None:
@@ -18,6 +21,22 @@ def test_architecture_semantic_validation_accepts_public_fixture() -> None:
         (10,),
     ]
     assert plan.parameter_count == 50
+
+
+def test_architecture_semantic_validation_accepts_field_output_fixture() -> None:
+    manifest = ArchitectureManifest.from_record(
+        _load_architecture_fixture("burgers_spectral_stub.json")
+    )
+
+    plan = validate_architecture_semantics(manifest)
+
+    assert plan.input_shape == (1, 16)
+    assert plan.output_shape == (1, 16)
+    assert [operator.output_shape for operator in plan.operators] == [
+        (4, 16),
+        (4, 16),
+        (1, 16),
+    ]
 
 
 def test_architecture_semantic_validation_rejects_unknown_operator_kind() -> None:
@@ -152,6 +171,11 @@ def _layers() -> tuple[Mapping[str, object], ...]:
             },
         },
     )
+
+
+def _load_architecture_fixture(filename: str) -> dict[str, object]:
+    document = (_fixtures_root / "architecture" / filename).read_bytes()
+    return ArchitectureManifestDocument.from_bytes(document).manifest.to_record()
 
 
 def capture_semantic_error(
