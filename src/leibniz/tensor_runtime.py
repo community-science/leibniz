@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import math
 import os
 import sys
@@ -45,6 +46,7 @@ __all__ = [
     "TensorElementParameter",
     "TensorElementParameterDType",
     "TensorBatchProgram",
+    "TensorKernelOps",
     "TensorFieldOps",
     "TensorSolverProgram",
     "TensorElementRecipe",
@@ -56,6 +58,7 @@ __all__ = [
     "tensor_element_compile_fallback_records",
     "tensor_runtime_available_memory_bytes",
     "tensor_runtime_capture_operations",
+    "tensor_runtime_broadcast_zeros",
     "tensor_runtime_construct_tensor",
     "tensor_runtime_default_device",
     "tensor_runtime_device_choices",
@@ -94,6 +97,7 @@ _tensor_element_parameter_values_key_cache: dict[
     tuple[int, TensorElementParameterDType],
     tuple[Sequence[int | float | complex], bytes],
 ] = {}
+_tensor_batch_kernel_accepts_ops_cache: dict[Callable[..., object], bool] = {}
 _tensor_element_parameter_values_key_cache_minimum_size = 64
 _tensor_element_tile_size = 131_072
 _require_tensor_compile_environment_variable = "LEIBNIZ_REQUIRE_TENSOR_COMPILE"
@@ -224,6 +228,14 @@ class TensorBatchProgram:
     parameters: Mapping[str, TensorElementParameter]
     compile: bool = True
     cache_key: object | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TensorKernelOps:
+    """Backend-agnostic helpers passed to tensor batch kernels that accept ``ops``."""
+
+    def broadcast_zeros(self, axis_coordinates: tuple[Any, ...]) -> Any:
+        return tensor_runtime_broadcast_zeros(axis_coordinates)
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,6 +429,26 @@ def tensor_runtime_operation_capture(runtime: TensorRuntime) -> _TensorRuntimeOp
     """Create a context manager that captures tensor runtime operations."""
 
     return _TensorRuntimeOperationCapture(runtime)
+
+
+def tensor_runtime_broadcast_zeros(axis_coordinates: tuple[Any, ...]) -> Any:
+    """Return a broadcast-shaped zero tile from backend axis-coordinate tensors.
+
+    Tensor batch kernels should use this helper when they need a zero-valued
+    tile with the full coordinate broadcast shape. Prefer declaring a small
+    number of packed parameter tensors over many scalar parameters; compiled
+    backends cache and bind those consolidated buffers more predictably.
+    """
+
+    if not axis_coordinates:
+        raise TensorRuntimeError("broadcast_zeros requires at least one axis coordinate")
+    rank = len(axis_coordinates)
+    result = None
+    for axis, coordinate in enumerate(axis_coordinates):
+        shape = (1,) * axis + (-1,) + (1,) * (rank - axis - 1)
+        value = coordinate.reshape(shape) * 0
+        result = value if result is None else result + value
+    return result
 
 
 def tensor_runtime_project_operations(
@@ -1672,7 +1704,16 @@ def _construct_eager_tensor_element_program(
         runtime=runtime,
         shape=shape,
     ):
-        values = cast(Any, program.kernel(axis_coordinates, **parameter_tensors))
+        values = cast(
+            Any,
+            program.kernel(
+                axis_coordinates,
+                **_tensor_batch_kernel_arguments(
+                    program=program,
+                    parameter_tensors=parameter_tensors,
+                ),
+            ),
+        )
         output[start:stop] = values.to(dtype=dtype)
     return output
 
@@ -1946,12 +1987,16 @@ def _compiled_tensor_element_tile_kernel(
             }
             for name, (packed_name, index) in scalar_aliases.items():
                 kernel_parameters[name] = parameters[packed_name][index]
+            kernel_arguments = _tensor_batch_kernel_arguments(
+                program=program,
+                parameter_tensors=kernel_parameters,
+            )
             _ = rank
             values = cast(
                 Any,
                 program.kernel(
                     axis_coordinates,
-                    **kernel_parameters,
+                    **kernel_arguments,
                 ),
             )
             return values
@@ -1960,6 +2005,37 @@ def _compiled_tensor_element_tile_kernel(
         compiled = runtime.torch.compile(tile_kernel)
     _tensor_element_kernel_cache[cache_key] = compiled
     return cast(Callable[..., Any], compiled)
+
+
+def _tensor_batch_kernel_arguments(
+    *,
+    program: TensorBatchProgram,
+    parameter_tensors: Mapping[str, Any],
+) -> dict[str, Any]:
+    arguments = dict(parameter_tensors)
+    if not _tensor_batch_kernel_accepts_ops(program.kernel):
+        return arguments
+    if "ops" in arguments:
+        raise TensorRuntimeError("tensor batch parameter name 'ops' is reserved")
+    arguments["ops"] = TensorKernelOps()
+    return arguments
+
+
+def _tensor_batch_kernel_accepts_ops(kernel: Callable[..., object]) -> bool:
+    cached = _tensor_batch_kernel_accepts_ops_cache.get(kernel)
+    if cached is not None:
+        return cached
+    try:
+        signature = inspect.signature(kernel)
+    except (TypeError, ValueError):
+        accepts = False
+    else:
+        accepts = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD or name == "ops"
+            for name, parameter in signature.parameters.items()
+        )
+    _tensor_batch_kernel_accepts_ops_cache[kernel] = accepts
+    return accepts
 
 
 def _tensor_element_kernel_cache_key(

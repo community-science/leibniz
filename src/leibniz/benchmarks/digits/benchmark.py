@@ -2042,12 +2042,8 @@ def _quadratic_tensor_point(
 
 
 def _constant_tensor_program(value: float) -> TensorBatchProgram:
-    def element_function(coordinates: tuple[Any, ...]) -> Any:
-        result = coordinates[0].reshape((-1,) + (1,) * (len(coordinates) - 1)) * 0.0
-        for axis, coordinate in enumerate(coordinates[1:], start=1):
-            shape = (1,) * axis + (-1,) + (1,) * (len(coordinates) - axis - 1)
-            result = result + coordinate.reshape(shape) * 0.0
-        return result + value
+    def element_function(coordinates: tuple[Any, ...], *, ops: Any) -> Any:
+        return ops.broadcast_zeros(coordinates) + value
 
     return TensorBatchProgram(
         kernel=element_function,
@@ -2138,6 +2134,7 @@ def _digits_tensor_program(
     def element_function(
         coordinates: tuple[Any, ...],
         *,
+        ops: Any,
         sample_address_values: Any,
         transform_values: Any,
         component_mark_counts: Any,
@@ -2165,12 +2162,7 @@ def _digits_tensor_program(
         # not the canvas-normalized scale, so a digit renders with identical
         # strokes whatever size canvas frames it.
         width_scale = scale * image_width / _render_unit_side
-        value = (
-            sample_axis_index.reshape((-1, 1, 1, 1)) * 0.0
-            + channel_index.reshape((1, -1, 1, 1)) * 0.0
-            + y_index.reshape((1, 1, -1, 1)) * 0.0
-            + x_index.reshape((1, 1, 1, -1)) * 0.0
-        )
+        value = ops.broadcast_zeros(coordinates)
         active_channel = channel_index.reshape((1, -1, 1, 1)) == 0
         mark_count = component_mark_counts[component_index]
         for mark_slot in range(max_mark_count):

@@ -35,6 +35,7 @@ from leibniz.tensor_runtime import (
     runtime_roofline_record,
     softmax_target_masses,
     tensor_element_compile_fallback_records,
+    tensor_runtime_broadcast_zeros,
     tensor_runtime_construct_tensor,
     tensor_runtime_device_kinds,
     tensor_runtime_shape_element_count,
@@ -698,6 +699,71 @@ def test_tensor_element_constructs_float64_with_compiled_scalar_parameters(
     assert compile_calls == [None]
     assert values.dtype == runtime.torch.float64
     assert values.tolist() == [0.5, 1.5, 2.5]
+
+
+def test_tensor_runtime_broadcast_zeros_matches_coordinate_tile_shape() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    coordinates = (
+        runtime.torch.arange(2),
+        runtime.torch.arange(3),
+        runtime.torch.arange(4),
+    )
+
+    zeros = tensor_runtime_broadcast_zeros(coordinates)
+
+    assert zeros.shape == (2, 3, 4)
+    assert zeros.tolist() == [
+        [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+        [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+    ]
+
+
+def test_tensor_batch_program_can_opt_into_kernel_ops_on_eager_path() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+
+    def element_function(coordinates: tuple[Any, ...], *, ops: Any) -> Any:
+        _sample, x = coordinates
+        return ops.broadcast_zeros(coordinates).to(dtype=runtime.torch.float32) + x.reshape(
+            (1, -1)
+        )
+
+    program = TensorBatchProgram(
+        kernel=element_function,
+        parameters={},
+        compile=False,
+        cache_key=("broadcast-zeros-eager-test", id(element_function)),
+    )
+
+    values = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(2, 3), dtype="float32", program=program),
+    )
+
+    assert values.tolist() == [[0.0, 1.0, 2.0], [0.0, 1.0, 2.0]]
+
+
+def test_tensor_batch_program_can_opt_into_kernel_ops_on_compiled_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, compile_calls = _compile_counting_runtime(monkeypatch, device_kind="cuda")
+
+    def element_function(coordinates: tuple[Any, ...], *, ops: Any) -> Any:
+        sample, x = coordinates
+        return ops.broadcast_zeros(coordinates) + sample.reshape((-1, 1)) + x.reshape((1, -1))
+
+    program = TensorBatchProgram(
+        kernel=element_function,
+        parameters={},
+        cache_key=("broadcast-zeros-compiled-test", id(element_function)),
+    )
+
+    values = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(2, 3), dtype="int64", program=program),
+    )
+
+    assert compile_calls == [None]
+    assert values.tolist() == [[0, 1, 2], [1, 2, 3]]
 
 
 def test_tensor_solver_step_count_zero_returns_initial_state() -> None:
