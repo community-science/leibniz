@@ -7,7 +7,7 @@ import pytest
 from leibniz.benchmark_implementations import discover_benchmark_roots, load_benchmark
 from leibniz.observation_generation import GeneratedSampleSet, StateSpaceVolumeRequest
 from leibniz.state_space import (
-    AxisRegion,
+    DiscreteAxisRegion,
     Distinguishability,
     IntegerRangeDomain,
     MeasureEstimate,
@@ -222,10 +222,10 @@ def _fixture_ambient() -> StateSpaceAmbient:
     )
 
 
-def _fixture_axis_region(*, lower: int, upper: int) -> AxisRegion:
+def _fixture_axis_region(*, lower: int, upper: int) -> DiscreteAxisRegion:
     axis = StateSpaceAxis(id="fixture-index", domain=IntegerRangeDomain(lower=0, upper=8))
     count = upper - lower + 1
-    return AxisRegion(
+    return DiscreteAxisRegion(
         axis=axis,
         coordinate_region=(lower, upper),
         count=count,

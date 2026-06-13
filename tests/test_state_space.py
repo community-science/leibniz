@@ -6,19 +6,22 @@ import pytest
 
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.state_space import (
-    AxisRegion,
     BinaryVectorDomain,
+    ContinuousAxisRegion,
+    DiscreteAxisRegion,
     Distinguishability,
     EnumeratedCellsDomain,
     IntegerRangeDomain,
     MeasureEstimate,
     ProductRegion,
     RealGridDomain,
+    RealIntervalDomain,
     RegionFiltration,
     StateSpaceAmbient,
     StateSpaceAxis,
     StateSpaceError,
     StateSpaceRegion,
+    axis_region_from_record,
     axis_regions_are_disjoint,
     measure_estimate_from_record,
     product_region_from_record,
@@ -81,9 +84,15 @@ def _exact_ambient() -> StateSpaceAmbient:
     )
 
 
-def _full_grid_region(name: str, *, lower: float, upper: float, count: int) -> AxisRegion:
+def _full_grid_region(
+    name: str,
+    *,
+    lower: float,
+    upper: float,
+    count: int,
+) -> DiscreteAxisRegion:
     axis = StateSpaceAxis(id=name, domain=RealGridDomain(lower=lower, upper=upper, count=count))
-    return AxisRegion(
+    return DiscreteAxisRegion(
         axis=axis,
         coordinate_region=(0, count - 1),
         count=count,
@@ -121,7 +130,7 @@ def _truncated_window_region() -> StateSpaceRegion:
     components: list[ProductRegion] = []
     for digit in range(10):
         pose_count = 2 if digit < 3 else 1
-        pose_region = AxisRegion(
+        pose_region = DiscreteAxisRegion(
             axis=pose_axis,
             coordinate_region=(0, pose_count - 1),
             count=pose_count,
@@ -150,7 +159,7 @@ def _truncated_window_region() -> StateSpaceRegion:
 def _preset_region() -> StateSpaceRegion:
     cells = tuple(f"preset-{index}" for index in range(8))
     axis = StateSpaceAxis(id="pose-preset", domain=EnumeratedCellsDomain(cells=cells))
-    axis_region = AxisRegion(
+    axis_region = DiscreteAxisRegion(
         axis=axis,
         coordinate_region=("preset-0", "preset-2", "preset-5", "preset-7"),
         count=4,
@@ -173,9 +182,9 @@ def _preset_region() -> StateSpaceRegion:
     )
 
 
-def _singleton_axis_region(name: str, *, coordinate: int) -> AxisRegion:
+def _singleton_axis_region(name: str, *, coordinate: int) -> DiscreteAxisRegion:
     axis = StateSpaceAxis(id=name, domain=IntegerRangeDomain(lower=0, upper=7))
-    return AxisRegion(
+    return DiscreteAxisRegion(
         axis=axis,
         coordinate_region=(coordinate, coordinate),
         count=1,
@@ -187,7 +196,7 @@ def _chess_region() -> StateSpaceRegion:
     spectator_axis = StateSpaceAxis(
         id="spectator-occupancy", domain=BinaryVectorDomain(dimension=51)
     )
-    spectator_region = AxisRegion(
+    spectator_region = DiscreteAxisRegion(
         axis=spectator_axis,
         coordinate_region=(0, 1, 2),
         count=8,
@@ -226,7 +235,8 @@ def test_digits_grid_region_volume_is_product_of_axis_counts() -> None:
 
 def test_product_of_counts_log2_volume_adds_axis_bits() -> None:
     component = _digits_grid_region().components[0]
-    axis_bits = sum(axis_region.log2_count for axis_region in component.axis_regions)
+    axis_regions = cast(tuple[DiscreteAxisRegion, ...], component.axis_regions)
+    axis_bits = sum(axis_region.log2_count for axis_region in axis_regions)
     assert math.isclose(component.log2_volume, axis_bits, rel_tol=0.0, abs_tol=1e-9)
 
 
@@ -253,20 +263,21 @@ def test_chess_region_decomposes_over_mechanism_transform_strata() -> None:
     assert len(region.components) == 48
     assert region.volume == 240
     component = region.components[0]
-    box = math.prod(axis_region.count for axis_region in component.axis_regions)
+    axis_regions = cast(tuple[DiscreteAxisRegion, ...], component.axis_regions)
+    box = math.prod(axis_region.count for axis_region in axis_regions)
     assert component.volume < box
 
 
 def test_empty_binary_vector_region_is_singleton_zero_mask() -> None:
     axis = StateSpaceAxis(id="spectator-occupancy", domain=BinaryVectorDomain(dimension=51))
-    axis_region = AxisRegion(axis=axis, coordinate_region=(), count=1, log2_count=0.0)
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(), count=1, log2_count=0.0)
     assert axis_region.contains(())
     assert not axis_region.contains((0,))
 
 
 def test_integer_range_region_contains_only_in_range_integers() -> None:
     axis = StateSpaceAxis(id="pose-transform-index", domain=IntegerRangeDomain(lower=0, upper=9))
-    region = AxisRegion(axis=axis, coordinate_region=(2, 5), count=4, log2_count=2.0)
+    region = DiscreteAxisRegion(axis=axis, coordinate_region=(2, 5), count=4, log2_count=2.0)
     assert region.contains(2)
     assert region.contains(5)
     assert not region.contains(1)
@@ -277,7 +288,12 @@ def test_integer_range_region_contains_only_in_range_integers() -> None:
 
 def test_real_grid_region_contains_grid_indices() -> None:
     axis = StateSpaceAxis(id="scale", domain=RealGridDomain(lower=0.92, upper=1.08, count=5))
-    region = AxisRegion(axis=axis, coordinate_region=(1, 3), count=3, log2_count=math.log2(3))
+    region = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(1, 3),
+        count=3,
+        log2_count=math.log2(3),
+    )
     assert region.contains(1)
     assert region.contains(3)
     assert not region.contains(0)
@@ -287,7 +303,7 @@ def test_real_grid_region_contains_grid_indices() -> None:
 
 def test_binary_vector_region_contains_subsets_of_enabled_indices() -> None:
     axis = StateSpaceAxis(id="spectator-occupancy", domain=BinaryVectorDomain(dimension=8))
-    region = AxisRegion(axis=axis, coordinate_region=(1, 4, 6), count=8, log2_count=3.0)
+    region = DiscreteAxisRegion(axis=axis, coordinate_region=(1, 4, 6), count=8, log2_count=3.0)
     assert region.contains(())
     assert region.contains((4,))
     assert region.contains((1, 6))
@@ -466,6 +482,10 @@ def test_axis_domain_invariants() -> None:
     with pytest.raises(StateSpaceError):
         RealGridDomain(lower=math.inf, upper=1.0, count=1)
     with pytest.raises(StateSpaceError):
+        RealIntervalDomain(lower=1.0, upper=1.0)
+    with pytest.raises(StateSpaceError):
+        RealIntervalDomain(lower=-math.inf, upper=1.0)
+    with pytest.raises(StateSpaceError):
         EnumeratedCellsDomain(cells=())
     with pytest.raises(StateSpaceError):
         EnumeratedCellsDomain(cells=("preset-0", "preset-0"))
@@ -480,25 +500,30 @@ def test_axis_domain_invariants() -> None:
 def test_axis_region_invariants() -> None:
     axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=9))
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=axis, coordinate_region=(0, 3), count=3, log2_count=math.log2(3))
+        DiscreteAxisRegion(axis=axis, coordinate_region=(0, 3), count=3, log2_count=math.log2(3))
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=1.9)
+        DiscreteAxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=1.9)
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=axis, coordinate_region=(8, 10), count=3, log2_count=math.log2(3))
+        DiscreteAxisRegion(axis=axis, coordinate_region=(8, 10), count=3, log2_count=math.log2(3))
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=axis, coordinate_region=(5, 2), count=4, log2_count=2.0)
+        DiscreteAxisRegion(axis=axis, coordinate_region=(5, 2), count=4, log2_count=2.0)
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=axis, coordinate_region=(1, 2, 3), count=3, log2_count=math.log2(3))
+        DiscreteAxisRegion(axis=axis, coordinate_region=(1, 2, 3), count=3, log2_count=math.log2(3))
     grid_axis = StateSpaceAxis(id="scale", domain=RealGridDomain(lower=0.92, upper=1.08, count=3))
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=grid_axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+        DiscreteAxisRegion(axis=grid_axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
     cells_axis = StateSpaceAxis(
         id="preset", domain=EnumeratedCellsDomain(cells=("preset-0", "preset-1"))
     )
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=cells_axis, coordinate_region=("preset-2",), count=1, log2_count=0.0)
+        DiscreteAxisRegion(
+            axis=cells_axis,
+            coordinate_region=("preset-2",),
+            count=1,
+            log2_count=0.0,
+        )
     with pytest.raises(StateSpaceError):
-        AxisRegion(
+        DiscreteAxisRegion(
             axis=cells_axis,
             coordinate_region=("preset-0", "preset-0"),
             count=2,
@@ -506,14 +531,99 @@ def test_axis_region_invariants() -> None:
         )
     mask_axis = StateSpaceAxis(id="mask", domain=BinaryVectorDomain(dimension=4))
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=mask_axis, coordinate_region=(4,), count=2, log2_count=1.0)
+        DiscreteAxisRegion(axis=mask_axis, coordinate_region=(4,), count=2, log2_count=1.0)
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=mask_axis, coordinate_region=(1, 1), count=4, log2_count=2.0)
+        DiscreteAxisRegion(axis=mask_axis, coordinate_region=(1, 1), count=4, log2_count=2.0)
+    continuous_axis = StateSpaceAxis(
+        id="phase",
+        domain=RealIntervalDomain(lower=0.0, upper=math.tau),
+    )
+    with pytest.raises(StateSpaceError):
+        DiscreteAxisRegion(
+            axis=continuous_axis,
+            coordinate_region=(0, 1),
+            count=2,
+            log2_count=1.0,
+        )
+    with pytest.raises(StateSpaceError):
+        ContinuousAxisRegion(
+            axis=continuous_axis,
+            coordinate_region=(0.0, 1.0),
+            measure_estimate=MeasureEstimate(kind="exact"),
+        )
+    with pytest.raises(StateSpaceError):
+        ContinuousAxisRegion(
+            axis=continuous_axis,
+            coordinate_region=(0.0, math.tau + 1.0),
+            measure_estimate=MeasureEstimate(
+                kind="estimated",
+                method_id="covering-number-grid-bound",
+                log2_lower=0.0,
+                log2_upper=1.0,
+            ),
+        )
+
+
+def test_continuous_axis_region_is_half_open_and_round_trips() -> None:
+    axis = StateSpaceAxis(id="phase", domain=RealIntervalDomain(lower=0.0, upper=math.tau))
+    region = ContinuousAxisRegion(
+        axis=axis,
+        coordinate_region=(0.5, 2.5),
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=1.0,
+            log2_upper=2.0,
+        ),
+    )
+
+    assert region.contains(0.5)
+    assert region.contains(1.25)
+    assert not region.contains(2.5)
+    assert not region.contains(0.49)
+    assert axis_region_from_record(region.to_record()) == region
+
+
+def test_product_regions_with_continuous_axes_require_estimated_measure() -> None:
+    axis = StateSpaceAxis(id="phase", domain=RealIntervalDomain(lower=0.0, upper=math.tau))
+    axis_region = ContinuousAxisRegion(
+        axis=axis,
+        coordinate_region=(0.0, 1.0),
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=0.0,
+            log2_upper=1.0,
+        ),
+    )
+
+    with pytest.raises(StateSpaceError):
+        ProductRegion(
+            axis_regions=(axis_region,),
+            measure_rule="benchmark-computed-finite-count",
+            volume=1,
+            log2_volume=0.0,
+        )
+
+    component = ProductRegion(
+        axis_regions=(axis_region,),
+        measure_rule="benchmark-computed-finite-count",
+        volume=2,
+        log2_volume=1.0,
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=0.0,
+            log2_upper=2.0,
+        ),
+    )
+
+    assert product_region_from_record(component.to_record()) == component
 
 
 def test_product_region_invariants() -> None:
     axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
-    axis_region = AxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
     with pytest.raises(StateSpaceError):
         ProductRegion(
             axis_regions=(),
@@ -607,7 +717,7 @@ def test_measure_estimate_invariants_and_round_trip() -> None:
 
 def test_estimated_product_region_accepts_bracketed_volume() -> None:
     axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
-    axis_region = AxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
     component = ProductRegion(
         axis_regions=(axis_region,),
         measure_rule="product-of-counts",
@@ -626,7 +736,7 @@ def test_estimated_product_region_accepts_bracketed_volume() -> None:
 
 def test_estimated_product_region_rejects_invalid_brackets() -> None:
     axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
-    axis_region = AxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
     with pytest.raises(StateSpaceError):
         ProductRegion(
             axis_regions=(axis_region,),
@@ -706,8 +816,13 @@ def test_state_space_region_invariants() -> None:
 
 def test_estimated_state_space_region_contains_component_brackets() -> None:
     axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
-    exact_axis_region = AxisRegion(axis=axis, coordinate_region=(0, 1), count=2, log2_count=1.0)
-    estimated_axis_region = AxisRegion(
+    exact_axis_region = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(0, 1),
+        count=2,
+        log2_count=1.0,
+    )
+    estimated_axis_region = DiscreteAxisRegion(
         axis=axis,
         coordinate_region=(0, 3),
         count=4,
@@ -751,7 +866,7 @@ def test_estimated_state_space_region_contains_component_brackets() -> None:
 
 def test_estimated_state_space_region_rejects_component_interval_violation() -> None:
     axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
-    axis_region = AxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
     component = ProductRegion(
         axis_regions=(axis_region,),
         measure_rule="product-of-counts",
@@ -781,7 +896,7 @@ def test_shared_axis_ids_must_match_across_components() -> None:
     second_axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
     first = ProductRegion(
         axis_regions=(
-            AxisRegion(axis=first_axis, coordinate_region=(0, 1), count=2, log2_count=1.0),
+            DiscreteAxisRegion(axis=first_axis, coordinate_region=(0, 1), count=2, log2_count=1.0),
         ),
         measure_rule="product-of-counts",
         volume=2,
@@ -790,7 +905,7 @@ def test_shared_axis_ids_must_match_across_components() -> None:
     )
     second = ProductRegion(
         axis_regions=(
-            AxisRegion(axis=second_axis, coordinate_region=(0, 3), count=4, log2_count=2.0),
+            DiscreteAxisRegion(axis=second_axis, coordinate_region=(0, 3), count=4, log2_count=2.0),
         ),
         measure_rule="product-of-counts",
         volume=4,
@@ -831,9 +946,9 @@ _filtration_pose_axis = StateSpaceAxis(
 )
 
 
-def _pose_axis_region(*, lower: int, upper: int) -> AxisRegion:
+def _pose_axis_region(*, lower: int, upper: int) -> DiscreteAxisRegion:
     count = upper - lower + 1
-    return AxisRegion(
+    return DiscreteAxisRegion(
         axis=_filtration_pose_axis,
         coordinate_region=(lower, upper),
         count=count,
@@ -884,16 +999,31 @@ def _digits_filtration() -> RegionFiltration:
 
 def test_axis_regions_disjoint_for_interval_kinds() -> None:
     axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=9))
-    low = AxisRegion(axis=axis, coordinate_region=(0, 2), count=3, log2_count=math.log2(3))
-    high = AxisRegion(axis=axis, coordinate_region=(3, 5), count=3, log2_count=math.log2(3))
-    touching = AxisRegion(axis=axis, coordinate_region=(2, 4), count=3, log2_count=math.log2(3))
+    low = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 2), count=3, log2_count=math.log2(3))
+    high = DiscreteAxisRegion(axis=axis, coordinate_region=(3, 5), count=3, log2_count=math.log2(3))
+    touching = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(2, 4),
+        count=3,
+        log2_count=math.log2(3),
+    )
     assert axis_regions_are_disjoint(low, high)
     assert not axis_regions_are_disjoint(low, touching)
 
     grid_axis = StateSpaceAxis(id="scale", domain=RealGridDomain(lower=0.0, upper=1.0, count=6))
-    grid_low = AxisRegion(axis=grid_axis, coordinate_region=(0, 1), count=2, log2_count=1.0)
-    grid_high = AxisRegion(axis=grid_axis, coordinate_region=(2, 3), count=2, log2_count=1.0)
-    grid_overlap = AxisRegion(axis=grid_axis, coordinate_region=(1, 2), count=2, log2_count=1.0)
+    grid_low = DiscreteAxisRegion(axis=grid_axis, coordinate_region=(0, 1), count=2, log2_count=1.0)
+    grid_high = DiscreteAxisRegion(
+        axis=grid_axis,
+        coordinate_region=(2, 3),
+        count=2,
+        log2_count=1.0,
+    )
+    grid_overlap = DiscreteAxisRegion(
+        axis=grid_axis,
+        coordinate_region=(1, 2),
+        count=2,
+        log2_count=1.0,
+    )
     assert axis_regions_are_disjoint(grid_low, grid_high)
     assert not axis_regions_are_disjoint(grid_low, grid_overlap)
 
@@ -902,13 +1032,13 @@ def test_axis_regions_disjoint_for_enumerated_cells() -> None:
     axis = StateSpaceAxis(
         id="preset", domain=EnumeratedCellsDomain(cells=tuple(f"preset-{i}" for i in range(6)))
     )
-    left = AxisRegion(
+    left = DiscreteAxisRegion(
         axis=axis, coordinate_region=("preset-0", "preset-1"), count=2, log2_count=1.0
     )
-    right = AxisRegion(
+    right = DiscreteAxisRegion(
         axis=axis, coordinate_region=("preset-2", "preset-3"), count=2, log2_count=1.0
     )
-    overlap = AxisRegion(
+    overlap = DiscreteAxisRegion(
         axis=axis, coordinate_region=("preset-1", "preset-4"), count=2, log2_count=1.0
     )
     assert axis_regions_are_disjoint(left, right)
@@ -917,8 +1047,8 @@ def test_axis_regions_disjoint_for_enumerated_cells() -> None:
 
 def test_binary_vector_axis_regions_are_never_disjoint() -> None:
     axis = StateSpaceAxis(id="spectator-occupancy", domain=BinaryVectorDomain(dimension=8))
-    left = AxisRegion(axis=axis, coordinate_region=(0, 1), count=4, log2_count=2.0)
-    right = AxisRegion(axis=axis, coordinate_region=(2, 3, 4), count=8, log2_count=3.0)
+    left = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 1), count=4, log2_count=2.0)
+    right = DiscreteAxisRegion(axis=axis, coordinate_region=(2, 3, 4), count=8, log2_count=3.0)
     # The all-zeros vector is a subset of every enabled set, so it lies in both.
     assert not axis_regions_are_disjoint(left, right)
 
@@ -926,8 +1056,8 @@ def test_binary_vector_axis_regions_are_never_disjoint() -> None:
 def test_axis_regions_over_different_axes_are_not_comparable() -> None:
     left_axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
     right_axis = StateSpaceAxis(id="scale", domain=IntegerRangeDomain(lower=0, upper=3))
-    left = AxisRegion(axis=left_axis, coordinate_region=(0, 0), count=1, log2_count=0.0)
-    right = AxisRegion(axis=right_axis, coordinate_region=(0, 0), count=1, log2_count=0.0)
+    left = DiscreteAxisRegion(axis=left_axis, coordinate_region=(0, 0), count=1, log2_count=0.0)
+    right = DiscreteAxisRegion(axis=right_axis, coordinate_region=(0, 0), count=1, log2_count=0.0)
     with pytest.raises(StateSpaceError):
         axis_regions_are_disjoint(left, right)
 
@@ -955,7 +1085,7 @@ def test_product_regions_without_distinguishing_evidence_are_not_certified_disjo
     scale_axis = StateSpaceAxis(id="scale", domain=IntegerRangeDomain(lower=0, upper=3))
     pose_component = ProductRegion(
         axis_regions=(
-            AxisRegion(axis=pose_axis, coordinate_region=(0, 0), count=1, log2_count=0.0),
+            DiscreteAxisRegion(axis=pose_axis, coordinate_region=(0, 0), count=1, log2_count=0.0),
         ),
         measure_rule="product-of-counts",
         volume=1,
@@ -963,7 +1093,7 @@ def test_product_regions_without_distinguishing_evidence_are_not_certified_disjo
     )
     scale_component = ProductRegion(
         axis_regions=(
-            AxisRegion(axis=scale_axis, coordinate_region=(0, 0), count=1, log2_count=0.0),
+            DiscreteAxisRegion(axis=scale_axis, coordinate_region=(0, 0), count=1, log2_count=0.0),
         ),
         measure_rule="product-of-counts",
         volume=1,
@@ -1113,7 +1243,7 @@ def test_region_filtration_rejects_conflicting_shared_axes() -> None:
         components=(
             ProductRegion(
                 axis_regions=(
-                    AxisRegion(
+                    DiscreteAxisRegion(
                         axis=other_pose_axis,
                         coordinate_region=(4, 4),
                         count=1,

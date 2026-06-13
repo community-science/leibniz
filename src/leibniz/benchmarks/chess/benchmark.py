@@ -24,8 +24,8 @@ from leibniz.observation_generation import (
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.state_space import (
-    AxisRegion,
     BinaryVectorDomain,
+    DiscreteAxisRegion,
     Distinguishability,
     EnumeratedCellsDomain,
     IntegerRangeDomain,
@@ -608,13 +608,13 @@ def _chess_spectator_axis_region(
     lower_rank: int,
     upper_rank: int,
     capacity: bool,
-) -> AxisRegion:
+) -> DiscreteAxisRegion:
     if capacity or not _chess_should_enumerate_spectator_ranks(
         lower_rank=lower_rank,
         upper_rank=upper_rank,
     ):
         enabled_dimensions = upper_rank.bit_length()
-        return AxisRegion(
+        return DiscreteAxisRegion(
             axis=StateSpaceAxis(
                 id=_chess_spectator_axis_id(stratum_id),
                 domain=BinaryVectorDomain(dimension=len(_spectator_squares())),
@@ -627,7 +627,7 @@ def _chess_spectator_axis_region(
         _chess_spectator_cell_id(rank)
         for rank in range(lower_rank, upper_rank + 1)
     )
-    return AxisRegion(
+    return DiscreteAxisRegion(
         axis=StateSpaceAxis(
             id=_chess_spectator_axis_id(stratum_id),
             domain=EnumeratedCellsDomain(cells=cells),
@@ -643,8 +643,8 @@ def _chess_piece_axis_regions(
     mechanism: _MateMechanism,
     transform: _BoardTransform,
     stratum_id: str,
-) -> tuple[AxisRegion, ...]:
-    regions: list[AxisRegion] = []
+) -> tuple[DiscreteAxisRegion, ...]:
+    regions: list[DiscreteAxisRegion] = []
     for piece_index, (square, _piece) in enumerate(_base_mate_pieces(mechanism=mechanism)):
         transformed_square = _transformed_square(square, transform=transform)
         file_index = chess.square_file(transformed_square)
@@ -664,8 +664,12 @@ def _chess_piece_axis_regions(
     return tuple(regions)
 
 
-def _chess_singleton_integer_axis_region(*, axis_id: str, value: int) -> AxisRegion:
-    return AxisRegion(
+def _chess_singleton_integer_axis_region(
+    *,
+    axis_id: str,
+    value: int,
+) -> DiscreteAxisRegion:
+    return DiscreteAxisRegion(
         axis=StateSpaceAxis(
             id=axis_id,
             domain=IntegerRangeDomain(lower=value, upper=value),

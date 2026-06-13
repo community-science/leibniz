@@ -36,12 +36,17 @@ __all__ = [
     "AxisDomain",
     "AxisRegion",
     "BinaryVectorDomain",
+    "ContinuousAxisRegion",
+    "ContinuousAxisCoordinateRegion",
+    "DiscreteAxisRegion",
+    "DiscreteAxisCoordinateRegion",
     "Distinguishability",
     "EnumeratedCellsDomain",
     "IntegerRangeDomain",
     "MeasureEstimate",
     "ProductRegion",
     "RealGridDomain",
+    "RealIntervalDomain",
     "RegionFiltration",
     "StateSpaceAmbient",
     "StateSpaceAxis",
@@ -71,6 +76,7 @@ _distinguishability_kinds = frozenset(
 
 _integer_range_kind = "integer-range"
 _real_grid_kind = "real-grid"
+_real_interval_kind = "real-interval"
 _enumerated_cells_kind = "enumerated-cells"
 _binary_vector_kind = "binary-vector"
 
@@ -278,6 +284,30 @@ class RealGridDomain:
 
 
 @dataclass(frozen=True, slots=True)
+class RealIntervalDomain:
+    """A continuous real interval coordinate domain."""
+
+    lower: float
+    upper: float
+
+    def __post_init__(self) -> None:
+        for bound in (self.lower, self.upper):
+            if type(bound) not in (int, float) or not math.isfinite(float(bound)):
+                raise StateSpaceError("real-interval domain bounds must be finite numbers")
+        if self.upper <= self.lower:
+            raise StateSpaceError("real-interval domain upper bound must exceed the lower")
+
+    def to_record(self) -> dict[str, object]:
+        """Return a record for this domain."""
+
+        return {
+            "kind": _real_interval_kind,
+            "lower": self.lower,
+            "upper": self.upper,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class EnumeratedCellsDomain:
     """A finite coordinate domain of explicitly enumerated cells."""
 
@@ -326,8 +356,16 @@ class BinaryVectorDomain:
         return {"kind": _binary_vector_kind, "dimension": self.dimension}
 
 
-AxisDomain = IntegerRangeDomain | RealGridDomain | EnumeratedCellsDomain | BinaryVectorDomain
-AxisCoordinateRegion = tuple[int, ...] | tuple[str, ...]
+AxisDomain = (
+    IntegerRangeDomain
+    | RealGridDomain
+    | RealIntervalDomain
+    | EnumeratedCellsDomain
+    | BinaryVectorDomain
+)
+DiscreteAxisCoordinateRegion = tuple[int, ...] | tuple[str, ...]
+ContinuousAxisCoordinateRegion = tuple[float, float]
+AxisCoordinateRegion = DiscreteAxisCoordinateRegion | ContinuousAxisCoordinateRegion
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +381,7 @@ class StateSpaceAxis:
         domain_types = (
             IntegerRangeDomain,
             RealGridDomain,
+            RealIntervalDomain,
             EnumeratedCellsDomain,
             BinaryVectorDomain,
         )
@@ -362,11 +401,11 @@ class StateSpaceAxis:
 
 
 @dataclass(frozen=True, slots=True)
-class AxisRegion:
+class DiscreteAxisRegion:
     """A measurable subset of one axis with its certified state count."""
 
     axis: StateSpaceAxis
-    coordinate_region: AxisCoordinateRegion
+    coordinate_region: DiscreteAxisCoordinateRegion
     count: int
     log2_count: float
 
@@ -416,6 +455,54 @@ class AxisRegion:
 
 
 @dataclass(frozen=True, slots=True)
+class ContinuousAxisRegion:
+    """A continuous half-open interval over a real-interval axis."""
+
+    axis: StateSpaceAxis
+    coordinate_region: ContinuousAxisCoordinateRegion
+    measure_estimate: MeasureEstimate
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.axis.domain, RealIntervalDomain):
+            raise StateSpaceError("continuous axis regions require a real-interval domain")
+        lower, upper = _coordinate_real_interval(self.coordinate_region)
+        domain = self.axis.domain
+        if lower < float(domain.lower) or upper > float(domain.upper):
+            raise StateSpaceError("real-interval coordinate region must lie within its axis domain")
+        if not self.measure_estimate.estimated:
+            raise StateSpaceError("continuous axis regions require an estimated measure")
+
+    @property
+    def axis_id(self) -> str:
+        """Return the identifier of this region's axis."""
+
+        return self.axis.id
+
+    def contains(self, value: object) -> bool:
+        """Return whether a coordinate value lies in this half-open interval."""
+
+        if type(value) not in (int, float):
+            return False
+        coordinate = float(cast(int | float, value))
+        if not math.isfinite(coordinate):
+            return False
+        lower, upper = self.coordinate_region
+        return lower <= coordinate < upper
+
+    def to_record(self) -> dict[str, object]:
+        """Return a record for this axis region."""
+
+        return {
+            "axis": self.axis.to_record(),
+            "coordinate_region": list(self.coordinate_region),
+            "measure_estimate": self.measure_estimate.to_record(),
+        }
+
+
+AxisRegion = DiscreteAxisRegion | ContinuousAxisRegion
+
+
+@dataclass(frozen=True, slots=True)
 class ProductRegion:
     """A product of axis regions, optionally annotated with a label stratum."""
 
@@ -437,15 +524,26 @@ class ProductRegion:
             raise StateSpaceError("product region measure rule is not a core measure rule")
         if type(self.volume) is not int or self.volume < 1:
             raise StateSpaceError("product region volume must be a positive integer")
-        box = math.prod(axis_region.count for axis_region in self.axis_regions)
+        has_continuous_axis = any(
+            isinstance(axis_region, ContinuousAxisRegion)
+            for axis_region in self.axis_regions
+        )
+        box = math.prod(
+            axis_region.count
+            for axis_region in self.axis_regions
+            if isinstance(axis_region, DiscreteAxisRegion)
+        )
         estimated = _measure_estimate_is_estimated(self.measure_estimate)
+        if has_continuous_axis and not estimated:
+            raise StateSpaceError("product regions with continuous axes require a measure estimate")
         if (
             self.measure_rule == _product_of_counts_measure_rule
             and self.volume != box
             and not estimated
+            and not has_continuous_axis
         ):
             raise StateSpaceError("product-of-counts volume must equal the product of axis counts")
-        if self.volume > box:
+        if not has_continuous_axis and self.volume > box:
             raise StateSpaceError("product region volume must not exceed its product box")
         if estimated:
             estimate = cast(MeasureEstimate, self.measure_estimate)
@@ -454,7 +552,10 @@ class ProductRegion:
                 estimate,
                 label="product region log2_volume",
             )
-            if cast(float, estimate.log2_upper) > math.log2(box) + _log2_tolerance:
+            if (
+                not has_continuous_axis
+                and cast(float, estimate.log2_upper) > math.log2(box) + _log2_tolerance
+            ):
                 raise StateSpaceError("product region measure estimate exceeds its product box")
         else:
             _validate_log2(self.log2_volume, self.volume, label="product region log2_volume")
@@ -591,6 +692,10 @@ def axis_regions_are_disjoint(left: AxisRegion, right: AxisRegion) -> bool:
         left_lower, left_upper = cast(tuple[int, int], left.coordinate_region)
         right_lower, right_upper = cast(tuple[int, int], right.coordinate_region)
         return left_upper < right_lower or right_upper < left_lower
+    if isinstance(domain, RealIntervalDomain):
+        left_lower, left_upper = cast(tuple[float, float], left.coordinate_region)
+        right_lower, right_upper = cast(tuple[float, float], right.coordinate_region)
+        return left_upper <= right_lower or right_upper <= left_lower
     if isinstance(domain, EnumeratedCellsDomain):
         return set(cast(tuple[str, ...], left.coordinate_region)).isdisjoint(
             cast(tuple[str, ...], right.coordinate_region)
@@ -813,6 +918,11 @@ def axis_domain_from_record(value: object) -> AxisDomain:
             upper=_record_float(record, "upper", label="axis domain record"),
             count=_record_int(record, "count", label="axis domain record"),
         )
+    if kind == _real_interval_kind:
+        return RealIntervalDomain(
+            lower=_record_float(record, "lower", label="axis domain record"),
+            upper=_record_float(record, "upper", label="axis domain record"),
+        )
     if kind == _enumerated_cells_kind:
         cells = _record_sequence(record, "cells", label="axis domain record")
         if any(type(cell) is not str for cell in cells):
@@ -841,7 +951,23 @@ def axis_region_from_record(value: object) -> AxisRegion:
     record = _record_mapping(value, label="axis region record")
     axis = state_space_axis_from_record(record.get("axis"))
     items = _record_sequence(record, "coordinate_region", label="axis region record")
-    coordinate_region: AxisCoordinateRegion
+    if isinstance(axis.domain, RealIntervalDomain):
+        if len(items) != 2 or any(type(item) not in (int, float) for item in items):
+            raise StateSpaceError(
+                "real-interval axis region coordinate_region must be a numeric pair"
+            )
+        measure_estimate_value = record.get("measure_estimate")
+        if measure_estimate_value is None:
+            raise StateSpaceError("continuous axis region record requires measure_estimate")
+        return ContinuousAxisRegion(
+            axis=axis,
+            coordinate_region=(
+                float(cast(int | float, items[0])),
+                float(cast(int | float, items[1])),
+            ),
+            measure_estimate=measure_estimate_from_record(measure_estimate_value),
+        )
+    coordinate_region: DiscreteAxisCoordinateRegion
     if any(type(item) is str for item in items):
         if any(type(item) is not str for item in items):
             raise StateSpaceError("axis region record coordinate region must not mix value types")
@@ -852,7 +978,7 @@ def axis_region_from_record(value: object) -> AxisRegion:
                 "axis region record coordinate region values must be integers or strings"
             )
         coordinate_region = cast(tuple[int, ...], items)
-    return AxisRegion(
+    return DiscreteAxisRegion(
         axis=axis,
         coordinate_region=coordinate_region,
         count=_record_int(record, "count", label="axis region record"),
@@ -935,13 +1061,20 @@ def _domain_kind(domain: AxisDomain) -> str:
         return _integer_range_kind
     if isinstance(domain, RealGridDomain):
         return _real_grid_kind
+    if isinstance(domain, RealIntervalDomain):
+        return _real_interval_kind
     if isinstance(domain, EnumeratedCellsDomain):
         return _enumerated_cells_kind
     return _binary_vector_kind
 
 
-def _axis_region_count(axis: StateSpaceAxis, coordinate_region: AxisCoordinateRegion) -> int:
+def _axis_region_count(
+    axis: StateSpaceAxis,
+    coordinate_region: DiscreteAxisCoordinateRegion,
+) -> int:
     domain = axis.domain
+    if isinstance(domain, RealIntervalDomain):
+        raise StateSpaceError("discrete axis regions cannot use real-interval domains")
     if isinstance(domain, IntegerRangeDomain):
         lower, upper = _coordinate_index_pair(
             coordinate_region, label="integer-range coordinate region"
@@ -974,7 +1107,7 @@ def _axis_region_count(axis: StateSpaceAxis, coordinate_region: AxisCoordinateRe
 
 
 def _coordinate_index_pair(
-    coordinate_region: AxisCoordinateRegion, *, label: str
+    coordinate_region: DiscreteAxisCoordinateRegion, *, label: str
 ) -> tuple[int, int]:
     if len(coordinate_region) != 2 or any(type(value) is not int for value in coordinate_region):
         raise StateSpaceError(f"{label} must be a (lower, upper) integer pair")
@@ -984,7 +1117,21 @@ def _coordinate_index_pair(
     return lower, upper
 
 
-def _coordinate_cells(coordinate_region: AxisCoordinateRegion) -> tuple[str, ...]:
+def _coordinate_real_interval(
+    coordinate_region: ContinuousAxisCoordinateRegion,
+) -> tuple[float, float]:
+    if len(coordinate_region) != 2:
+        raise StateSpaceError("real-interval coordinate region must be a numeric pair")
+    lower, upper = coordinate_region
+    for value in (lower, upper):
+        if type(value) not in (int, float) or not math.isfinite(float(value)):
+            raise StateSpaceError("real-interval coordinate region bounds must be finite")
+    if upper <= lower:
+        raise StateSpaceError("real-interval coordinate region upper must exceed lower")
+    return float(lower), float(upper)
+
+
+def _coordinate_cells(coordinate_region: DiscreteAxisCoordinateRegion) -> tuple[str, ...]:
     if not coordinate_region or any(
         type(value) is not str or not value for value in coordinate_region
     ):
@@ -995,7 +1142,7 @@ def _coordinate_cells(coordinate_region: AxisCoordinateRegion) -> tuple[str, ...
     return cells
 
 
-def _coordinate_bit_indices(coordinate_region: AxisCoordinateRegion) -> tuple[int, ...]:
+def _coordinate_bit_indices(coordinate_region: DiscreteAxisCoordinateRegion) -> tuple[int, ...]:
     if any(type(value) is not int for value in coordinate_region):
         raise StateSpaceError("binary-vector coordinate region must enable integer indices")
     indices = cast(tuple[int, ...], coordinate_region)
