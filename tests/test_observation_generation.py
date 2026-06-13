@@ -1,6 +1,7 @@
 import importlib.util
 import math
 import sys
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -127,7 +128,8 @@ def test_digits_generator_is_deterministic() -> None:
     assert variation["degree_measure"] == {"kind": "vector-dimension", "count": 3.0}
     variation_values = cast(dict[str, object], variation["values"])
     assert variation_values["kind"] == "constructed-field-variation-transform-samples"
-    assert variation_values["transform_ordinal"] == 0
+    assert isinstance(variation_values["transform_ordinal"], int)
+    assert variation_values["transform_ordinal"] >= 0
     volume_class = cast(dict[str, object], variation_values["volume_class"])
     assert volume_class["kind"] == "digits-realized-setup-window"
     assert volume_class["transform_axes"] == [
@@ -144,11 +146,12 @@ def test_digits_generator_is_deterministic() -> None:
         first_sample.component_index
     ]
     assert len(coordinates) == 1
-    assert coordinates[0]["transform_ordinal"] == 0
-    assert cast(dict[str, int], coordinates[0]["transform_cell"]) == {
-        "x_translation_step": 0,
-        "y_translation_step": 0,
-        "scale_level": 0,
+    assert coordinates[0]["transform_ordinal"] == variation_values["transform_ordinal"]
+    transform_cell = cast(dict[str, int], coordinates[0]["transform_cell"])
+    assert set(transform_cell) == {
+        "x_translation_step",
+        "y_translation_step",
+        "scale_level",
     }
     assert set(cast(dict[str, float], coordinates[0]["normalized_transform"])) == {
         "x_translation",
@@ -438,12 +441,13 @@ def test_digits_truncated_address_window_region_has_unequal_strata() -> None:
 
     assert region.volume == 13
     assert math.isclose(region.log2_volume, math.log2(13))
-    volumes = {component.stratum_id: component.volume for component in region.components}
-    assert tuple(volumes[f"digit-{index}"] for index in range(3)) == (2, 2, 2)
-    assert tuple(volumes[f"digit-{index}"] for index in range(3, 10)) == (1,) * 7
+    assert all(component.volume == 1 for component in region.components)
+    strata = Counter(component.stratum_id for component in region.components)
+    assert tuple(strata[f"digit-{index}"] for index in range(3)) == (2, 2, 2)
+    assert tuple(strata[f"digit-{index}"] for index in range(3, 10)) == (1,) * 7
 
 
-def test_digits_regions_cover_ordinal_increment_coordinates() -> None:
+def test_digits_regions_cover_continuous_transform_increment_coordinates() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     preset = _formation_payload(
         generator,
@@ -463,7 +467,7 @@ def test_digits_regions_cover_ordinal_increment_coordinates() -> None:
     assert preset.region.volume == 8
     assert grid.region.volume == 256
     assert all(
-        axis_region.axis.coordinate_kind == "integer-range"
+        axis_region.axis.coordinate_kind == "real-interval"
         for component in grid.region.components
         for axis_region in component.axis_regions
     )
@@ -474,6 +478,40 @@ def test_digits_regions_cover_ordinal_increment_coordinates() -> None:
             assert sample.region_component_index is not None
             assert sample.axis_coordinates is not None
             assert batch.region.contains(sample.region_component_index, sample.axis_coordinates)
+
+
+def test_digits_samples_requested_window_by_seeded_monte_carlo() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    request = StateSpaceVolumeRequest(minimum=2.0, maximum=3.0)
+
+    first = _formation_payload(
+        generator,
+        sample_count=400,
+        seed=101,
+        volume_request=request,
+    )
+    repeated = _formation_payload(
+        generator,
+        sample_count=400,
+        seed=101,
+        volume_request=request,
+    )
+    fresh_seed = _formation_payload(
+        generator,
+        sample_count=400,
+        seed=202,
+        volume_request=request,
+    )
+
+    assert first == repeated
+    assert first.region is not None
+    assert first.region.volume == 4
+    first_signature = tuple(sample.region_component_index for sample in first.samples)
+    fresh_signature = tuple(sample.region_component_index for sample in fresh_seed.samples)
+    assert first_signature != fresh_signature
+    counts = Counter(first_signature)
+    assert set(counts) == set(range(first.region.volume))
+    assert all(60 <= count <= 140 for count in counts.values())
 
 
 def test_generated_sample_set_rejects_region_coordinates_outside_region() -> None:
@@ -739,18 +777,13 @@ def test_digits_tensor_fields_match_recorded_field_samples() -> None:
         assert fields[index].flatten().tolist() == list(sample.require_field().values)
 
 
-def test_digits_transform_table_is_reused_after_first_batch(
+def test_digits_tensor_renderer_uses_per_sample_transform_parameters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     generator_impl = cast(Any, generator)
     runtime = resolve_tensor_runtime("cpu")
     module_globals = generator_impl._build_batch_tensor.__globals__
-    cache = cast(
-        dict[tuple[int, int], tuple[float, ...]],
-        module_globals["_transform_table_value_cache"],
-    )
-    cache.clear()
     chart_type = module_globals["_DigitsChart"]
     original_normalized_transform = chart_type.normalized_transform
     calls = 0
@@ -787,20 +820,8 @@ def test_digits_transform_table_is_reused_after_first_batch(
     first_call_count = calls
     generator_impl._build_batch_tensor(**render_kwargs)
 
-    table_length = (
-        (volume_class.minimum_address + volume_class.cardinality - 1)
-        // volume_class.digit_count
-        + 1
-    )
-    assert first_call_count == table_length
-    assert calls == first_call_count
-    cached_values = cache[(width, table_length)]
-    expected_values = tuple(
-        value
-        for ordinal in range(table_length)
-        for value in original_normalized_transform(chart_type(canvas_side=width), ordinal)
-    )
-    assert cached_values == expected_values
+    assert first_call_count == render_kwargs["sample_count"]
+    assert calls == first_call_count + render_kwargs["sample_count"]
 
 
 def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:

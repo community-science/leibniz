@@ -210,7 +210,6 @@ def _transform_cell_for_ordinal(ordinal: int) -> tuple[int, int, int]:
 
 _shell_cells_cache: dict[int, tuple[tuple[int, int, int], ...]] = {}
 _chart_cell_prefix: list[tuple[int, int, int]] = []
-_transform_table_value_cache: dict[tuple[int, int], tuple[float, ...]] = {}
 _chart_prefix_radius: list[int] = [0]
 
 
@@ -820,14 +819,14 @@ class Generator:
         transform_indices: list[int] = []
         with _timing_span(timing, f"{timing_prefix}sample_state", samples=sample_count):
             for index in range(sample_count):
-                state_index = _digits_local_state_index(
+                sample_address = _digits_sample_address(
                     seed=seed,
                     sample_index=sample_indices[index],
                     cardinality=volume_class.cardinality,
+                    minimum_address=volume_class.minimum_address,
                 )
                 component_index, transform_index = _digits_state_coordinate(
-                    state_index=state_index,
-                    volume_class=volume_class,
+                    sample_address=sample_address,
                 )
                 component_indices.append(component_index)
                 transform_indices.append(transform_index)
@@ -890,7 +889,6 @@ class Generator:
                         sample_indices=sample_indices,
                         cardinality=volume_class.cardinality,
                         minimum_address=volume_class.minimum_address,
-                        digit_count=volume_class.digit_count,
                         component_to_outcome=component_to_outcome,
                         outcome_count=len(outcome_ids),
                     ),
@@ -984,11 +982,6 @@ class Generator:
         _require_positive_integer(width, "width")
         _require_positive_integer(height, "height")
         _require_positive_integer(digit_count, "digit_count")
-        maximum_ordinal = (minimum_address + cardinality - 1) // digit_count
-        transform_table_values = _transform_table_values(
-            canvas_side=width,
-            table_length=maximum_ordinal + 1,
-        )
         if digit_count > len(self.formation.components):
             raise TensorRuntimeError("digit_count exceeds component vocabulary")
         if self.formation.channel_count != 1:
@@ -1045,7 +1038,16 @@ class Generator:
                     cardinality=cardinality,
                     minimum_address=minimum_address,
                     digit_count=digit_count,
-                    transform_table_values=transform_table_values,
+                    transform_values=_digits_sample_transform_values(
+                        canvas_side=width,
+                        sample_addresses=_digits_sample_addresses(
+                            seed=seed,
+                            sample_indices=sample_indices,
+                            cardinality=cardinality,
+                            minimum_address=minimum_address,
+                        ),
+                        digit_count=digit_count,
+                    ),
                     component_mark_counts=tuple(component_mark_counts),
                     component_mark_values=tuple(
                         tuple(row) for row in component_mark_values
@@ -1563,16 +1565,9 @@ _chart_ordinal_domain_extent = 2**40
 _chart_continuous_measure_method_id = "digits-continuous-covering-bracket-v1"
 
 
-def _digits_state_coordinate(
-    *,
-    state_index: int,
-    volume_class: _DigitsVolumeClass,
-) -> tuple[int, int]:
-    if type(state_index) is not int or state_index < 0:
-        raise ObservationGenerationError("state_index must be a nonnegative integer")
-    if state_index >= volume_class.cardinality:
-        raise ObservationGenerationError("state_index must be below cardinality")
-    sample_address = volume_class.minimum_address + state_index
+def _digits_state_coordinate(*, sample_address: int) -> tuple[int, int]:
+    if type(sample_address) is not int or sample_address < 0:
+        raise ObservationGenerationError("sample_address must be a nonnegative integer")
     component_index = sample_address % _volume_class_digit_count
     transform_ordinal = sample_address // _volume_class_digit_count
     return (component_index, transform_ordinal)
@@ -1800,17 +1795,39 @@ def _digits_unrealized_request_outcome(
     return GenerationRequestOutcome(kind="unrepresentable-below-minimum")
 
 
-def _digits_local_state_index(
+def _digits_sample_address(
     *,
     seed: int,
     sample_index: int,
     cardinality: int,
+    minimum_address: int,
 ) -> int:
     if type(sample_index) is not int or sample_index < 0:
         raise ObservationGenerationError("sample_index must be a nonnegative integer")
     if type(cardinality) is not int or cardinality < 1:
         raise ObservationGenerationError("cardinality must be positive")
-    return (seed + sample_index) % cardinality
+    if type(minimum_address) is not int or minimum_address < 0:
+        raise ObservationGenerationError("minimum_address must be a nonnegative integer")
+    generator = random.Random(f"digits-state-sample-v1:{seed}:{sample_index}:{cardinality}")
+    return minimum_address + generator.randrange(cardinality)
+
+
+def _digits_sample_addresses(
+    *,
+    seed: int,
+    sample_indices: tuple[int, ...],
+    cardinality: int,
+    minimum_address: int,
+) -> tuple[int, ...]:
+    return tuple(
+        _digits_sample_address(
+            seed=seed,
+            sample_index=sample_index,
+            cardinality=cardinality,
+            minimum_address=minimum_address,
+        )
+        for sample_index in sample_indices
+    )
 
 
 def _variation_extent_value(variation_extent: float) -> float:
@@ -1865,19 +1882,19 @@ def _constructed_variation_coordinate_record(
     }
 
 
-def _transform_table_values(*, canvas_side: int, table_length: int) -> tuple[float, ...]:
-    key = (canvas_side, table_length)
-    cached = _transform_table_value_cache.get(key)
-    if cached is not None:
-        return cached
+def _digits_sample_transform_values(
+    *,
+    canvas_side: int,
+    sample_addresses: tuple[int, ...],
+    digit_count: int,
+) -> tuple[float, ...]:
     chart = _DigitsChart(canvas_side=canvas_side)
-    values = tuple(
+    return tuple(
         value
-        for ordinal in range(table_length)
+        for sample_address in sample_addresses
+        for ordinal in (sample_address // digit_count,)
         for value in chart.normalized_transform(ordinal)
     )
-    _transform_table_value_cache[key] = values
-    return values
 
 
 def _quadratic_control_points(
@@ -1934,17 +1951,20 @@ def _target_tensor_program(
     sample_indices: tuple[int, ...],
     cardinality: int,
     minimum_address: int,
-    digit_count: int,
     component_to_outcome: tuple[int, ...],
     outcome_count: int,
 ) -> TensorBatchProgram:
+    sample_addresses = _digits_sample_addresses(
+        seed=seed,
+        sample_indices=sample_indices,
+        cardinality=cardinality,
+        minimum_address=minimum_address,
+    )
+
     def element_function(
         coordinates: tuple[Any, ...],
         *,
-        seed_value: Any,
-        sample_indices_value: Any,
-        cardinality_value: Any,
-        minimum_address_value: Any,
+        sample_address_values: Any,
         component_to_outcome: Any,
     ) -> Any:
         if len(coordinates) == 1:
@@ -1952,10 +1972,8 @@ def _target_tensor_program(
             sample_axis_index = outcome_index[0] * 0
         else:
             sample_axis_index, outcome_index = coordinates
-        sample_index = sample_indices_value[sample_axis_index]
-        state_index = (sample_index + seed_value).remainder(cardinality_value)
-        sample_address = minimum_address_value + state_index
-        component_index = sample_address.remainder(digit_count)
+        sample_address = sample_address_values[sample_axis_index]
+        component_index = sample_address.remainder(len(component_to_outcome))
         target_index = component_to_outcome[component_index]
         return (target_index.reshape((-1, 1)) == outcome_index.reshape((1, -1))).to(
             dtype=target_index.dtype
@@ -1964,26 +1982,11 @@ def _target_tensor_program(
     return TensorBatchProgram(
         kernel=element_function,
         parameters={
-            "seed_value": TensorElementParameter(
+            "sample_address_values": TensorElementParameter(
                 dtype="int64",
-                shape=(),
-                values=(seed,),
-            ),
-            "sample_indices_value": TensorElementParameter(
-                dtype="int64",
-                shape=(len(sample_indices),),
-                values=sample_indices,
+                shape=(len(sample_addresses),),
+                values=sample_addresses,
                 dynamic_axes=(0,),
-            ),
-            "cardinality_value": TensorElementParameter(
-                dtype="int64",
-                shape=(),
-                values=(cardinality,),
-            ),
-            "minimum_address_value": TensorElementParameter(
-                dtype="int64",
-                shape=(),
-                values=(minimum_address,),
             ),
             "component_to_outcome": TensorElementParameter(
                 dtype="int64",
@@ -2002,7 +2005,7 @@ def _digits_tensor_program(
     cardinality: int,
     minimum_address: int,
     digit_count: int,
-    transform_table_values: tuple[float, ...],
+    transform_values: tuple[float, ...],
     component_mark_counts: tuple[int, ...],
     component_mark_values: tuple[tuple[float, ...], ...],
     component_mark_widths: tuple[tuple[float, ...], ...],
@@ -2014,16 +2017,18 @@ def _digits_tensor_program(
     component_count = len(component_mark_counts)
     max_mark_count = len(component_mark_values[0]) if component_count else 0
     control_point_count = 3
-    table_length = len(transform_table_values) // 3
+    sample_addresses = _digits_sample_addresses(
+        seed=seed,
+        sample_indices=sample_indices,
+        cardinality=cardinality,
+        minimum_address=minimum_address,
+    )
 
     def element_function(
         coordinates: tuple[Any, ...],
         *,
-        seed_value: Any,
-        sample_indices_value: Any,
-        cardinality_value: Any,
-        minimum_address_value: Any,
-        transform_table_tensor: Any,
+        sample_address_values: Any,
+        transform_values: Any,
         component_mark_counts: Any,
         component_mark_values: Any,
         component_mark_widths: Any,
@@ -2035,18 +2040,15 @@ def _digits_tensor_program(
         image_width: Any,
     ) -> Any:
         sample_axis_index, channel_index, y_index, x_index = coordinates
-        sample_index = sample_indices_value[sample_axis_index]
-        state_index = (sample_index + seed_value).remainder(cardinality_value)
-        sample_address = minimum_address_value + state_index
+        sample_address = sample_address_values[sample_axis_index]
         component_index = sample_address.remainder(digit_count)
-        transform_index = sample_address.div(digit_count, rounding_mode="floor")
         x_center = x_index.reshape((1, 1, 1, -1)) + 0.5
         y_center = y_index.reshape((1, 1, -1, 1)) + 0.5
         # Diagonal affine: a digit placed at a centre-relative offset and scale.
         # Rotation and shear are removed, so the off-diagonal terms are zero.
-        scale = transform_table_tensor[transform_index, 2].reshape((-1, 1))
-        x_translation = transform_table_tensor[transform_index, 0].reshape((-1, 1))
-        y_translation = transform_table_tensor[transform_index, 1].reshape((-1, 1))
+        scale = transform_values[sample_axis_index, 2].reshape((-1, 1))
+        x_translation = transform_values[sample_axis_index, 0].reshape((-1, 1))
+        y_translation = transform_values[sample_axis_index, 1].reshape((-1, 1))
         m00 = scale
         m02 = x_translation
         m11 = scale
@@ -2141,31 +2143,16 @@ def _digits_tensor_program(
     return TensorBatchProgram(
         kernel=element_function,
         parameters={
-            "seed_value": TensorElementParameter(
+            "sample_address_values": TensorElementParameter(
                 dtype="int64",
-                shape=(),
-                values=(seed,),
-            ),
-            "sample_indices_value": TensorElementParameter(
-                dtype="int64",
-                shape=(len(sample_indices),),
-                values=sample_indices,
+                shape=(len(sample_addresses),),
+                values=sample_addresses,
                 dynamic_axes=(0,),
             ),
-            "cardinality_value": TensorElementParameter(
-                dtype="int64",
-                shape=(),
-                values=(cardinality,),
-            ),
-            "minimum_address_value": TensorElementParameter(
-                dtype="int64",
-                shape=(),
-                values=(minimum_address,),
-            ),
-            "transform_table_tensor": TensorElementParameter(
+            "transform_values": TensorElementParameter(
                 dtype="float32",
-                shape=(table_length, 3),
-                values=transform_table_values,
+                shape=(len(sample_addresses), 3),
+                values=transform_values,
                 dynamic_axes=(0,),
             ),
             "component_mark_counts": TensorElementParameter(
