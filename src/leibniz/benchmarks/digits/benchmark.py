@@ -1878,10 +1878,16 @@ def _digits_sample_transform_coordinates(
     generator = random.Random(
         f"digits-transform-coordinate-v1:{seed}:{sample_index}:{transform_ordinal}"
     )
+    # Each transform cell is one indistinguishable epsilon-cell, so the
+    # within-cell representative is sampled uniformly across the cell's linear
+    # geometry on every axis. Scale is linear in footprint (``_scale_footprint``
+    # is affine in the level), so it is drawn the same way as translation;
+    # cross-cell selection over equal-count cells (``_digits_sample_address``)
+    # is what carries the covering measure.
     return (
         _sample_linear_interval(generator, bounded_intervals["x_translation"]),
         _sample_linear_interval(generator, bounded_intervals["y_translation"]),
-        _sample_log_interval(generator, bounded_intervals["scale"]),
+        _sample_linear_interval(generator, bounded_intervals["scale"]),
     )
 
 
@@ -1920,16 +1926,6 @@ def _sample_linear_interval(
 ) -> float:
     lower, upper = interval
     return lower + generator.random() * (upper - lower)
-
-
-def _sample_log_interval(
-    generator: random.Random,
-    interval: tuple[float, float],
-) -> float:
-    lower, upper = interval
-    log_lower = math.log(lower)
-    log_upper = math.log(upper)
-    return math.exp(log_lower + generator.random() * (log_upper - log_lower))
 
 
 def _variation_extent_value(variation_extent: float) -> float:
