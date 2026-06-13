@@ -1,5 +1,6 @@
 import importlib
 import math
+import sys
 from pathlib import Path
 from typing import Any, cast
 
@@ -9,6 +10,7 @@ from benchmark_typing import load_digits_generator
 from leibniz import tensor_runtime as tensor_runtime_module
 from leibniz.architectures import ArchitectureManifest
 from leibniz.tensor_runtime import (
+    OperationFallbackSequential,
     TensorBatchProgram,
     TensorElementParameter,
     TensorElementRecipe,
@@ -185,6 +187,17 @@ def test_runtime_roofline_record_calibrates_cpu_ceiling() -> None:
     assert cast(float, record["peak_compute_per_second"]) > 0
     assert cast(float, record["peak_bytes_per_second"]) > 0
     assert record["method"] == "dense-matmul-and-copy-calibration"
+    assert record["compute_calibration_chosen_matrix_size"] in {512, 1024, 2048, 4096}
+    points = cast(tuple[object, ...] | list[object], record["compute_calibration_points"])
+    assert len(points) >= 1
+    assert record["compute_calibration_matrix_size"] == record[
+        "compute_calibration_chosen_matrix_size"
+    ]
+    first_point = cast(dict[str, object], points[0])
+    assert cast(float, record["peak_compute_per_second"]) >= cast(
+        float,
+        first_point["peak_compute_per_second"],
+    )
 
 
 def test_digits_generator_call_tensors_are_deterministic_and_tensor_native() -> None:
@@ -362,7 +375,43 @@ def test_tensor_element_parameter_cache_reuses_constant_parameters(
 
     assert first.tolist() == [8, 10]
     assert second.tolist() == [8, 10]
-    assert tensor_calls == 3
+    assert tensor_calls == 2
+    cache = cast(Any, tensor_runtime_module)._tensor_element_parameter_cache
+    assert any(key[3] == "dynamic" for key in cache)
+
+
+def test_tensor_element_parameter_cache_reuses_dynamic_axis_parameters() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    cache = cast(Any, tensor_runtime_module)._tensor_element_parameter_cache
+    cache.clear()
+
+    def element_function(coordinates: tuple[Any, ...], *, dynamic: Any) -> Any:
+        return dynamic[coordinates[0]]
+
+    parameter = TensorElementParameter(
+        dtype="int64",
+        shape=(2,),
+        values=(1, 2),
+        dynamic_axes=(0,),
+    )
+    program = TensorBatchProgram(
+        kernel=element_function,
+        parameters={"dynamic": parameter},
+        cache_key=("dynamic-parameter-cache-test",),
+    )
+
+    first = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=program),
+    )
+    second = tensor_runtime_construct_tensor(
+        runtime,
+        recipe=TensorElementRecipe(shape=(2,), dtype="int64", program=program),
+    )
+
+    assert first.tolist() == [1, 2]
+    assert second.tolist() == [1, 2]
+    assert len(cache) == 1
 
 
 def test_digits_tensor_generation_compiles_two_extent_independent_programs(
@@ -370,9 +419,24 @@ def test_digits_tensor_generation_compiles_two_extent_independent_programs(
 ) -> None:
     runtime, compile_calls = _compile_counting_runtime(monkeypatch, device_kind="cuda")
     generator = load_digits_generator(_digits_benchmark_root)
+    digits_benchmark = cast(Any, sys.modules[generator.__class__.__module__])
     outcome_ids = tuple(
         outcome.id
         for outcome in generator.manifest.resolve_outcome_space().outcomes
+    )
+    table_length_offsets = iter((0, 1))
+    original_transform_table_values = digits_benchmark._transform_table_values
+
+    def transform_table_values(*, canvas_side: int, table_length: int) -> tuple[float, ...]:
+        return original_transform_table_values(
+            canvas_side=canvas_side,
+            table_length=table_length + next(table_length_offsets),
+        )
+
+    monkeypatch.setattr(
+        digits_benchmark,
+        "_transform_table_values",
+        transform_table_values,
     )
 
     for sample_count in (3, 5):
@@ -558,6 +622,36 @@ def test_tensor_element_compile_failure_records_loud_fallback(
     assert matching[0]["tensor_device"] == "cuda"
     assert "inductor exploded" in str(matching[0]["reason"])
     assert matching[0]["constructions"] == 2
+
+
+def test_operation_fallback_raises_when_device_residency_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host_runtime = resolve_tensor_runtime("cpu")
+    runtime = TensorRuntime(
+        torch=host_runtime.torch,
+        device=host_runtime.device,
+        device_kind="cuda",
+    )
+
+    class FailingOperation(host_runtime.torch.nn.Module):  # type: ignore[misc]
+        def forward(self, value: Any) -> Any:
+            _ = value
+            raise RuntimeError("backend op unavailable")
+
+    module = OperationFallbackSequential(
+        runtime=runtime,
+        operations=[FailingOperation()],
+    )
+    monkeypatch.setenv("LEIBNIZ_REQUIRE_DEVICE_RESIDENCY", "1")
+
+    with pytest.raises(
+        TensorRuntimeError,
+        match="LEIBNIZ_REQUIRE_DEVICE_RESIDENCY blocked CPU fallback for operation 0",
+    ):
+        module(host_runtime.torch.ones((1,), dtype=host_runtime.torch.float32))
+
+    assert module.operation_fallback_records() == ()
 
 
 def test_tensor_element_compile_fallback_raises_in_strict_mode(
