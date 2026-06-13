@@ -14,6 +14,8 @@ from leibniz.tensor_runtime import (
     TensorRuntime,
     TensorRuntimeError,
     build_cross_entropy_loss,
+    build_optimizer,
+    optimizer_step,
     resolve_tensor_runtime,
     seed_runtime,
     tensor_element_compile_fallback_records,
@@ -46,9 +48,11 @@ def test_tiny_digits_training_op_count_stays_within_budget() -> None:
 @pytest.mark.perf_gate
 @pytest.mark.parametrize("device_kind", ["cuda", "mps"])
 def test_device_training_steps_avoid_host_readback_and_bound_uploads(
+    monkeypatch: pytest.MonkeyPatch,
     device_kind: str,
 ) -> None:
     runtime = _available_runtime_or_skip(device_kind)
+    monkeypatch.setenv("LEIBNIZ_REQUIRE_DEVICE_RESIDENCY", "1")
     profiler = runtime.torch.profiler
     activities = [profiler.ProfilerActivity.CPU]
     if runtime.device_kind == "cuda":
@@ -71,6 +75,7 @@ def test_device_training_steps_avoid_host_readback_and_bound_uploads(
             host_to_device_count += int(event.count)
     assert device_to_host_count == 0
     assert host_to_device_count <= _training_step_htod_copy_budget * measured_steps
+    assert step.operation_fallback_records() == ()
 
 
 @pytest.mark.perf_gate
@@ -182,21 +187,43 @@ def _tiny_digits_training_step_callback(runtime: TensorRuntime) -> Any:
         operations=executable.operation_modules(),
     )
     loss_function = build_cross_entropy_loss(runtime)
+    plan = BenchmarkRunPlan(
+        architecture_path=_digits_architecture,
+        benchmark_root=_digits_benchmark_root,
+        results_root=Path("unused-results"),
+        train_steps=1,
+        tensor_device=cast(Any, runtime.device_kind),
+    )
+    optimizer = build_optimizer(
+        runtime,
+        name=plan.optimizer,
+        parameters=module.parameters(),
+        learning_rate=plan.learning_rate,
+    )
+    module.attach_optimizer(optimizer)
 
-    def training_step(offset: int) -> None:
-        batch = generator(
-            shape=2,
-            seed=101 + offset,
-            include_metadata=False,
-            runtime=runtime,
-            outcome_ids=outcome_ids,
-        )
-        fields, labels = batch.require_tensors()
-        module.zero_grad(set_to_none=True)
-        loss = loss_function(module(fields), labels)
-        loss.backward()
+    class TrainingStep:
+        def __call__(self, offset: int) -> None:
+            def closure() -> Any:
+                batch = generator(
+                    shape=2,
+                    seed=101 + offset,
+                    include_metadata=False,
+                    runtime=runtime,
+                    outcome_ids=outcome_ids,
+                )
+                fields, labels = batch.require_tensors()
+                optimizer.zero_grad(set_to_none=True)
+                loss = loss_function(module(fields), labels)
+                loss.backward()
+                return loss
 
-    return training_step
+            optimizer_step(runtime, optimizer, closure)
+
+        def operation_fallback_records(self) -> tuple[dict[str, object], ...]:
+            return cast(tuple[dict[str, object], ...], module.operation_fallback_records())
+
+    return TrainingStep()
 
 
 def _profile_tiny_digits_training_op_count(runtime: TensorRuntime) -> int:

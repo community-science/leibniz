@@ -90,6 +90,9 @@ _tensor_element_parameter_values_key_cache: dict[
 _tensor_element_parameter_values_key_cache_minimum_size = 64
 _tensor_element_tile_size = 131_072
 _require_tensor_compile_environment_variable = "LEIBNIZ_REQUIRE_TENSOR_COMPILE"
+_require_device_residency_environment_variable = "LEIBNIZ_REQUIRE_DEVICE_RESIDENCY"
+
+
 class TensorRuntimeError(ValueError):
     """Raised when a tensor runtime cannot be resolved."""
 
@@ -486,6 +489,13 @@ class OperationFallbackSequential:
                         if placement.device_kind == "cpu":
                             raise
                         reason = str(error)
+                        if _truthy_environment_flag(
+                            _require_device_residency_environment_variable
+                        ):
+                            raise TensorRuntimeError(
+                                "LEIBNIZ_REQUIRE_DEVICE_RESIDENCY blocked CPU "
+                                f"fallback for operation {index}: {reason}"
+                            ) from error
                         self._move_operation_to_fallback(index=index, reason=reason)
                         current = self._operations[index](current.to(self._fallback.device))
                 return current.to(self._preferred.device)
@@ -892,6 +902,13 @@ def build_optimizer(
 
 
 class _LossSearchOptimizer:
+    """Deterministic host-interactive reference optimizer.
+
+    This optimizer intentionally evaluates candidate losses on the host during
+    each step. It is retained for opt-in reference runs and is not the default
+    training hot path.
+    """
+
     requires_loss_closure = True
     _beta1 = 0.9
     _beta2 = 0.999
@@ -1093,33 +1110,58 @@ def _calibrated_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
     }
     try:
         torch = runtime.torch
-        matrix_size = 512
-        first = torch.randn(
-            (matrix_size, matrix_size),
-            dtype=torch.float32,
-            device=runtime.device,
-        )
-        second = torch.randn(
-            (matrix_size, matrix_size),
-            dtype=torch.float32,
-            device=runtime.device,
-        )
-        _synchronize_runtime(runtime)
-        with torch.no_grad():
-            for _ in range(1):
-                _ = first @ second
-        _synchronize_runtime(runtime)
-        matmul_repeats = 1
+        compute_points: list[dict[str, object]] = []
+        peak_compute_per_second = 0.0
+        chosen_matrix_size = 0
+        matmul_repeats = 0
         matmul_seconds = 0.0
-        while matmul_repeats <= 64 and matmul_seconds < 0.02:
-            started = _monotonic_seconds()
+        for matrix_size in (512, 1024, 2048, 4096):
+            first = torch.randn(
+                (matrix_size, matrix_size),
+                dtype=torch.float32,
+                device=runtime.device,
+            )
+            second = torch.randn(
+                (matrix_size, matrix_size),
+                dtype=torch.float32,
+                device=runtime.device,
+            )
+            _synchronize_runtime(runtime)
             with torch.no_grad():
-                for _ in range(matmul_repeats):
+                for _ in range(1):
                     _ = first @ second
             _synchronize_runtime(runtime)
-            matmul_seconds = _monotonic_seconds() - started
-            if matmul_seconds < 0.02:
-                matmul_repeats *= 2
+            repeats = 1
+            seconds = 0.0
+            while repeats <= 64 and seconds < 0.02:
+                started = _monotonic_seconds()
+                with torch.no_grad():
+                    for _ in range(repeats):
+                        _ = first @ second
+                _synchronize_runtime(runtime)
+                seconds = _monotonic_seconds() - started
+                if seconds < 0.02:
+                    repeats *= 2
+            if seconds <= 0:
+                continue
+            flops = 2.0 * matrix_size * matrix_size * matrix_size * repeats
+            compute_per_second = flops / seconds
+            compute_points.append(
+                {
+                    "matrix_size": matrix_size,
+                    "repeats": repeats,
+                    "seconds": seconds,
+                    "peak_compute_per_second": compute_per_second,
+                }
+            )
+            previous_peak = peak_compute_per_second
+            if compute_per_second > peak_compute_per_second:
+                peak_compute_per_second = compute_per_second
+                chosen_matrix_size = matrix_size
+                matmul_repeats = repeats
+                matmul_seconds = seconds
+            if previous_peak > 0 and compute_per_second < previous_peak * 1.10:
+                break
 
         element_count = 8 * 1024 * 1024
         source = torch.randn((element_count,), dtype=torch.float32, device=runtime.device)
@@ -1142,7 +1184,7 @@ def _calibrated_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
     except Exception as error:  # pragma: no cover - hardware/runtime dependent
         record["reason"] = f"roofline calibration failed: {error}"
         return record
-    if matmul_seconds <= 0 or copy_seconds <= 0:
+    if peak_compute_per_second <= 0 or matmul_seconds <= 0 or copy_seconds <= 0:
         record["reason"] = "roofline calibration completed too quickly to measure"
         return record
     copy_bytes = 2.0 * element_count * 4 * copy_repeats
@@ -1150,12 +1192,11 @@ def _calibrated_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
         {
             "status": "calibrated",
             "compute_calibration_seconds": matmul_seconds,
-            "compute_calibration_matrix_size": matrix_size,
+            "compute_calibration_matrix_size": chosen_matrix_size,
+            "compute_calibration_chosen_matrix_size": chosen_matrix_size,
+            "compute_calibration_points": compute_points,
             "compute_calibration_repeats": matmul_repeats,
-            "peak_compute_per_second": (
-                2.0 * matrix_size * matrix_size * matrix_size * matmul_repeats
-            )
-            / matmul_seconds,
+            "peak_compute_per_second": peak_compute_per_second,
             "bandwidth_calibration_seconds": copy_seconds,
             "bandwidth_calibration_bytes": copy_bytes,
             "bandwidth_calibration_repeats": copy_repeats,
@@ -1255,6 +1296,10 @@ def _mps_available(torch: Any) -> bool:
     mps = getattr(backends, "mps", None)
     is_available = getattr(mps, "is_available", None)
     return bool(callable(is_available) and is_available())
+
+
+def _truthy_environment_flag(name: str) -> bool:
+    return os.environ.get(name, "") not in {"", "0"}
 
 
 def _positive_tensor_extent(value: object) -> int:
@@ -1476,8 +1521,6 @@ def _tensor_element_parameter_cache_key(
     name: str,
     parameter: TensorElementParameter,
 ) -> tuple[object, ...] | None:
-    if parameter.dynamic_axes:
-        return None
     return (
         program.cache_key if program.cache_key is not None else id(program.kernel),
         runtime.device_kind,

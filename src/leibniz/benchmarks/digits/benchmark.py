@@ -2042,6 +2042,7 @@ def _digits_tensor_program(
                 dtype="float32",
                 shape=(table_length, 3),
                 values=transform_table_values,
+                dynamic_axes=(0,),
             ),
             "component_mark_counts": TensorElementParameter(
                 dtype="int64",
@@ -2110,7 +2111,6 @@ def _digits_tensor_program(
             component_count,
             max_mark_count,
             _batch_render_curve_sample_count,
-            table_length,
         ),
     )
 
