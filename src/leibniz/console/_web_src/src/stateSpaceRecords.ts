@@ -23,6 +23,7 @@ export type StateSpaceAmbientRecord = {
 export type AxisDomainRecord =
   | { kind: 'integer-range'; lower: number; upper: number }
   | { kind: 'real-grid'; lower: number; upper: number; count: number }
+  | { kind: 'real-interval'; lower: number; upper: number }
   | { kind: 'enumerated-cells'; cells: string[] }
   | { kind: 'binary-vector'; dimension: number };
 
@@ -34,8 +35,16 @@ export type StateSpaceAxisRecord = {
 export type AxisRegionRecord = {
   axis: StateSpaceAxisRecord;
   coordinate_region: (number | string)[];
-  count: number;
-  log2_count: number;
+  count?: number;
+  log2_count?: number;
+  measure_estimate?: MeasureEstimateRecord;
+};
+
+export type MeasureEstimateRecord = {
+  kind: string;
+  method_id?: string;
+  log2_lower?: number;
+  log2_upper?: number;
 };
 
 export type ProductRegionRecord = {
@@ -45,6 +54,7 @@ export type ProductRegionRecord = {
   log2_volume: number;
   stratum_id?: string;
   stratum_target?: Record<string, unknown>;
+  measure_estimate?: MeasureEstimateRecord;
 };
 
 export type StateSpaceRegionRecord = {
@@ -54,6 +64,7 @@ export type StateSpaceRegionRecord = {
   union_rule: string;
   volume: number;
   log2_volume: number;
+  measure_estimate?: MeasureEstimateRecord;
 };
 
 export type GenerationRequestOutcomeRecord = {
@@ -88,6 +99,10 @@ export function parseStateSpaceRegionRecord(
     union_rule: requireString(record.union_rule, `${path}.union_rule`, error),
     volume: requireNumber(record.volume, `${path}.volume`, error),
     log2_volume: requireNumber(record.log2_volume, `${path}.log2_volume`, error),
+    measure_estimate:
+      record.measure_estimate === undefined
+        ? undefined
+        : parseMeasureEstimateRecord(record.measure_estimate, `${path}.measure_estimate`, error),
   };
 }
 
@@ -171,6 +186,10 @@ function parseProductRegionRecord(
       record.stratum_target === undefined
         ? undefined
         : requireRecord(record.stratum_target, `${path}.stratum_target`, error),
+    measure_estimate:
+      record.measure_estimate === undefined
+        ? undefined
+        : parseMeasureEstimateRecord(record.measure_estimate, `${path}.measure_estimate`, error),
   };
 }
 
@@ -190,8 +209,16 @@ function parseAxisRegionRecord(
         return coordinate;
       },
     ),
-    count: requireNumber(record.count, `${path}.count`, error),
-    log2_count: requireNumber(record.log2_count, `${path}.log2_count`, error),
+    count:
+      record.count === undefined ? undefined : requireNumber(record.count, `${path}.count`, error),
+    log2_count:
+      record.log2_count === undefined
+        ? undefined
+        : requireNumber(record.log2_count, `${path}.log2_count`, error),
+    measure_estimate:
+      record.measure_estimate === undefined
+        ? undefined
+        : parseMeasureEstimateRecord(record.measure_estimate, `${path}.measure_estimate`, error),
   };
 }
 
@@ -229,6 +256,13 @@ function parseAxisDomainRecord(
       count: requireNumber(record.count, `${path}.count`, error),
     };
   }
+  if (kind === 'real-interval') {
+    return {
+      kind,
+      lower: requireNumber(record.lower, `${path}.lower`, error),
+      upper: requireNumber(record.upper, `${path}.upper`, error),
+    };
+  }
   if (kind === 'enumerated-cells') {
     return {
       kind,
@@ -244,6 +278,20 @@ function parseAxisDomainRecord(
     };
   }
   throw error(`${path}.kind is invalid`);
+}
+
+function parseMeasureEstimateRecord(
+  value: unknown,
+  path: string,
+  error = stateSpaceError,
+): MeasureEstimateRecord {
+  const record = requireRecord(value, path, error);
+  return {
+    kind: requireString(record.kind, `${path}.kind`, error),
+    method_id: optionalString(record.method_id, `${path}.method_id`, error),
+    log2_lower: optionalNumber(record.log2_lower, `${path}.log2_lower`, error),
+    log2_upper: optionalNumber(record.log2_upper, `${path}.log2_upper`, error),
+  };
 }
 
 function optionalString(

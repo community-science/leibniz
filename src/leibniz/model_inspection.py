@@ -13,12 +13,20 @@ from leibniz.artifacts import (
     reference_sort_key,
 )
 from leibniz.content import ContentDigest
+from leibniz.cost_metrology import CostMeasurement, CostMetrologyError, estimate_program_cost
 from leibniz.documents import ContentEncodingError, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.model_manifests import ModelArtifactManifest
-from leibniz.model_operators import summarize_architecture_operators
+from leibniz.model_operators import ExecutableModelOperator, summarize_architecture_operators
 from leibniz.records import FieldSpec, RecordExtractor, RecordSpec
 from leibniz.submissions import SubmissionPackageManifest
+from leibniz.tensor_runtime import (
+    TensorRuntimeError,
+    make_empty_float_tensor,
+    no_grad_context,
+    resolve_host_tensor_runtime,
+    runtime_roofline_record,
+)
 from leibniz.tensor_shapes import TensorShape, TensorShapeValidationError
 
 __all__ = [
@@ -47,8 +55,6 @@ _component_record = RecordSpec(
         "operator": FieldSpec(kind="record", required=False),
         "parameter_count": FieldSpec(kind="integer", required=False),
         "storage_bytes": FieldSpec(kind="integer", required=False),
-        "inference_compute": FieldSpec(kind="integer", required=False),
-        "training_compute_per_sample": FieldSpec(kind="integer", required=False),
     }
 )
 _cost_summary_record = RecordSpec(
@@ -56,13 +62,15 @@ _cost_summary_record = RecordSpec(
         "component_count": FieldSpec(kind="integer"),
         "parameter_count": FieldSpec(kind="integer", required=False),
         "storage_bytes": FieldSpec(kind="integer", required=False),
-        "inference_compute": FieldSpec(kind="integer", required=False),
-        "training_compute_per_sample": FieldSpec(kind="integer", required=False),
+        "inference_cost_measurement": FieldSpec(kind="record", required=False),
+        "inference_cost_sample_count": FieldSpec(kind="integer", required=False),
+        "training_cost_measurement": FieldSpec(kind="record", required=False),
+        "training_cost_sample_count": FieldSpec(kind="integer", required=False),
         "unknown_parameter_components": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="integer"),
         ),
-        "unknown_compute_components": FieldSpec(
+        "unknown_cost_components": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="integer"),
             required=False,
@@ -81,8 +89,6 @@ _trace_stage_record = RecordSpec(
         "shape_law": FieldSpec(kind="string"),
         "cost_law": FieldSpec(kind="string"),
         "parameter_count": FieldSpec(kind="integer", required=False),
-        "inference_compute": FieldSpec(kind="integer", required=False),
-        "training_compute_per_sample": FieldSpec(kind="integer", required=False),
     }
 )
 _trace_record = RecordSpec(
@@ -110,7 +116,7 @@ _graph_summary_record = RecordSpec(
             kind="sequence",
             item=FieldSpec(kind="integer"),
         ),
-        "unsupported_compute_components": FieldSpec(
+        "unsupported_cost_components": FieldSpec(
             kind="sequence",
             item=FieldSpec(kind="integer"),
         ),
@@ -238,8 +244,6 @@ class ModelInspectionComponent:
     operator: Mapping[str, object] | None = None
     parameter_count: int | None = None
     storage_bytes: int | None = None
-    inference_compute: int | None = None
-    training_compute_per_sample: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.index) is not int:
@@ -259,15 +263,6 @@ class ModelInspectionComponent:
             raise ModelInspectionValidationError("parameter_count must be nonnegative")
         if self.storage_bytes is not None and self.storage_bytes < 0:
             raise ModelInspectionValidationError("storage_bytes must be nonnegative")
-        if self.inference_compute is not None and self.inference_compute < 0:
-            raise ModelInspectionValidationError("inference_compute must be nonnegative")
-        if (
-            self.training_compute_per_sample is not None
-            and self.training_compute_per_sample < 0
-        ):
-            raise ModelInspectionValidationError(
-                "training_compute_per_sample must be nonnegative"
-            )
         try:
             ContentDigest.from_value(self.to_record())
         except ContentEncodingError as error:
@@ -294,14 +289,6 @@ class ModelInspectionComponent:
                 validated.get("storage_bytes"),
                 "storage_bytes",
             ),
-            inference_compute=_extract.optional_integer(
-                validated.get("inference_compute"),
-                "inference_compute",
-            ),
-            training_compute_per_sample=_extract.optional_integer(
-                validated.get("training_compute_per_sample"),
-                "training_compute_per_sample",
-            ),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -320,10 +307,6 @@ class ModelInspectionComponent:
             record["parameter_count"] = self.parameter_count
         if self.storage_bytes is not None:
             record["storage_bytes"] = self.storage_bytes
-        if self.inference_compute is not None:
-            record["inference_compute"] = self.inference_compute
-        if self.training_compute_per_sample is not None:
-            record["training_compute_per_sample"] = self.training_compute_per_sample
         return record
 
 @dataclass(frozen=True, slots=True)
@@ -333,10 +316,12 @@ class ModelInspectionCostSummary:
     component_count: int
     parameter_count: int | None
     storage_bytes: int | None = None
-    inference_compute: int | None = None
-    training_compute_per_sample: int | None = None
+    inference_cost_measurement: CostMeasurement | None = None
+    inference_cost_sample_count: int | None = None
+    training_cost_measurement: CostMeasurement | None = None
+    training_cost_sample_count: int | None = None
     unknown_parameter_components: tuple[int, ...] = ()
-    unknown_compute_components: tuple[int, ...] = ()
+    unknown_cost_components: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.component_count) is not int or self.component_count < 0:
@@ -345,14 +330,19 @@ class ModelInspectionCostSummary:
             raise ModelInspectionValidationError("parameter_count must be nonnegative")
         if self.storage_bytes is not None and self.storage_bytes < 0:
             raise ModelInspectionValidationError("storage_bytes must be nonnegative")
-        if self.inference_compute is not None and self.inference_compute < 0:
-            raise ModelInspectionValidationError("inference_compute must be nonnegative")
         if (
-            self.training_compute_per_sample is not None
-            and self.training_compute_per_sample < 0
+            self.inference_cost_sample_count is not None
+            and self.inference_cost_sample_count < 1
         ):
             raise ModelInspectionValidationError(
-                "training_compute_per_sample must be nonnegative"
+                "inference_cost_sample_count must be positive"
+            )
+        if (
+            self.training_cost_sample_count is not None
+            and self.training_cost_sample_count < 1
+        ):
+            raise ModelInspectionValidationError(
+                "training_cost_sample_count must be positive"
             )
         if any(
             type(index) is not int or index < 0 for index in self.unknown_parameter_components
@@ -366,12 +356,12 @@ class ModelInspectionCostSummary:
             raise ModelInspectionValidationError(
                 "unknown_parameter_components must be sorted unique"
             )
-        if any(type(index) is not int or index < 0 for index in self.unknown_compute_components):
+        if any(type(index) is not int or index < 0 for index in self.unknown_cost_components):
             raise ModelInspectionValidationError(
-                "unknown_compute_components must contain nonnegative integers"
+                "unknown_cost_components must contain nonnegative integers"
             )
-        if self.unknown_compute_components != tuple(sorted(set(self.unknown_compute_components))):
-            raise ModelInspectionValidationError("unknown_compute_components must be sorted unique")
+        if self.unknown_cost_components != tuple(sorted(set(self.unknown_cost_components))):
+            raise ModelInspectionValidationError("unknown_cost_components must be sorted unique")
         if self.parameter_count is None and not self.unknown_parameter_components:
             raise ModelInspectionValidationError(
                 "unknown parameter_count requires unknown_parameter_components"
@@ -393,13 +383,33 @@ class ModelInspectionCostSummary:
                 validated.get("storage_bytes"),
                 "storage_bytes",
             ),
-            inference_compute=_extract.optional_integer(
-                validated.get("inference_compute"),
-                "inference_compute",
+            inference_cost_measurement=(
+                None
+                if validated.get("inference_cost_measurement") is None
+                else CostMeasurement.from_record(
+                    _extract.mapping(
+                        validated.get("inference_cost_measurement"),
+                        "inference_cost_measurement",
+                    )
+                )
             ),
-            training_compute_per_sample=_extract.optional_integer(
-                validated.get("training_compute_per_sample"),
-                "training_compute_per_sample",
+            inference_cost_sample_count=_extract.optional_integer(
+                validated.get("inference_cost_sample_count"),
+                "inference_cost_sample_count",
+            ),
+            training_cost_measurement=(
+                None
+                if validated.get("training_cost_measurement") is None
+                else CostMeasurement.from_record(
+                    _extract.mapping(
+                        validated.get("training_cost_measurement"),
+                        "training_cost_measurement",
+                    )
+                )
+            ),
+            training_cost_sample_count=_extract.optional_integer(
+                validated.get("training_cost_sample_count"),
+                "training_cost_sample_count",
             ),
             unknown_parameter_components=tuple(
                 _extract.integer(index, "unknown_parameter_components")
@@ -408,11 +418,11 @@ class ModelInspectionCostSummary:
                     "unknown_parameter_components",
                 )
             ),
-            unknown_compute_components=tuple(
-                _extract.integer(index, "unknown_compute_components")
+            unknown_cost_components=tuple(
+                _extract.integer(index, "unknown_cost_components")
                 for index in _extract.sequence(
-                    validated.get("unknown_compute_components", ()),
-                    "unknown_compute_components",
+                    validated.get("unknown_cost_components", ()),
+                    "unknown_cost_components",
                 )
             ),
         )
@@ -426,12 +436,16 @@ class ModelInspectionCostSummary:
             record["parameter_count"] = self.parameter_count
         if self.storage_bytes is not None:
             record["storage_bytes"] = self.storage_bytes
-        if self.inference_compute is not None:
-            record["inference_compute"] = self.inference_compute
-        if self.training_compute_per_sample is not None:
-            record["training_compute_per_sample"] = self.training_compute_per_sample
-        if self.unknown_compute_components:
-            record["unknown_compute_components"] = list(self.unknown_compute_components)
+        if self.inference_cost_measurement is not None:
+            record["inference_cost_measurement"] = self.inference_cost_measurement.to_record()
+        if self.inference_cost_sample_count is not None:
+            record["inference_cost_sample_count"] = self.inference_cost_sample_count
+        if self.training_cost_measurement is not None:
+            record["training_cost_measurement"] = self.training_cost_measurement.to_record()
+        if self.training_cost_sample_count is not None:
+            record["training_cost_sample_count"] = self.training_cost_sample_count
+        if self.unknown_cost_components:
+            record["unknown_cost_components"] = list(self.unknown_cost_components)
         return record
 
 
@@ -449,8 +463,6 @@ class ModelInspectionTraceStage:
     shape_law: str
     cost_law: str
     parameter_count: int | None = None
-    inference_compute: int | None = None
-    training_compute_per_sample: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.index) is not int or self.index < 0:
@@ -476,17 +488,6 @@ class ModelInspectionTraceStage:
             raise ModelInspectionValidationError("trace stage cost_law must be nonempty")
         if self.parameter_count is not None and self.parameter_count < 0:
             raise ModelInspectionValidationError("trace stage parameter_count must be nonnegative")
-        if self.inference_compute is not None and self.inference_compute < 0:
-            raise ModelInspectionValidationError(
-                "trace stage inference_compute must be nonnegative"
-            )
-        if (
-            self.training_compute_per_sample is not None
-            and self.training_compute_per_sample < 0
-        ):
-            raise ModelInspectionValidationError(
-                "trace stage training_compute_per_sample must be nonnegative"
-            )
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> ModelInspectionTraceStage:
@@ -511,14 +512,6 @@ class ModelInspectionTraceStage:
                 validated.get("parameter_count"),
                 "parameter_count",
             ),
-            inference_compute=_extract.optional_integer(
-                validated.get("inference_compute"),
-                "inference_compute",
-            ),
-            training_compute_per_sample=_extract.optional_integer(
-                validated.get("training_compute_per_sample"),
-                "training_compute_per_sample",
-            ),
         )
 
     def to_record(self) -> dict[str, object]:
@@ -535,10 +528,6 @@ class ModelInspectionTraceStage:
         }
         if self.parameter_count is not None:
             record["parameter_count"] = self.parameter_count
-        if self.inference_compute is not None:
-            record["inference_compute"] = self.inference_compute
-        if self.training_compute_per_sample is not None:
-            record["training_compute_per_sample"] = self.training_compute_per_sample
         return record
 
 
@@ -618,7 +607,7 @@ class ModelInspectionGraphSummary:
     output_node_ids: tuple[str, ...]
     component_kinds: tuple[str, ...]
     unsupported_parameter_components: tuple[int, ...] = ()
-    unsupported_compute_components: tuple[int, ...] = ()
+    unsupported_cost_components: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.component_count) is not int or self.component_count <= 0:
@@ -645,9 +634,9 @@ class ModelInspectionGraphSummary:
             field="unsupported_parameter_components",
         )
         _require_index_set(
-            self.unsupported_compute_components,
+            self.unsupported_cost_components,
             component_count=self.component_count,
-            field="unsupported_compute_components",
+            field="unsupported_cost_components",
         )
 
     @classmethod
@@ -666,7 +655,7 @@ class ModelInspectionGraphSummary:
             output_node_ids=graph.output_node_ids,
             component_kinds=tuple(node.component.kind for node in graph.nodes),
             unsupported_parameter_components=cost_summary.unknown_parameter_components,
-            unsupported_compute_components=cost_summary.unknown_compute_components,
+            unsupported_cost_components=cost_summary.unknown_cost_components,
         )
 
     @classmethod
@@ -708,11 +697,11 @@ class ModelInspectionGraphSummary:
                     "unsupported_parameter_components",
                 )
             ),
-            unsupported_compute_components=tuple(
-                _extract.integer(index, "unsupported_compute_components")
+            unsupported_cost_components=tuple(
+                _extract.integer(index, "unsupported_cost_components")
                 for index in _extract.sequence(
-                    validated["unsupported_compute_components"],
-                    "unsupported_compute_components",
+                    validated["unsupported_cost_components"],
+                    "unsupported_cost_components",
                 )
             ),
         )
@@ -727,7 +716,7 @@ class ModelInspectionGraphSummary:
             "output_node_ids": list(self.output_node_ids),
             "component_kinds": list(self.component_kinds),
             "unsupported_parameter_components": list(self.unsupported_parameter_components),
-            "unsupported_compute_components": list(self.unsupported_compute_components),
+            "unsupported_cost_components": list(self.unsupported_cost_components),
         }
 
 
@@ -1123,6 +1112,7 @@ def _architecture_components(
     components: list[ModelInspectionComponent] = []
     stages: list[ModelInspectionTraceStage] = []
     plan = summarize_architecture_operators(architecture_manifest)
+    inference_cost = _architecture_inference_cost_measurement(architecture_manifest)
     for component, operator in zip(architecture_manifest.components, plan.operators, strict=True):
         descriptor = operator.descriptor
         components.append(
@@ -1135,8 +1125,6 @@ def _architecture_components(
                 operator=descriptor.to_record(),
                 parameter_count=operator.parameter_count,
                 storage_bytes=operator.storage_bytes,
-                inference_compute=operator.inference_compute,
-                training_compute_per_sample=operator.training_compute_per_sample,
             )
         )
         if operator.input_shape is not None and operator.output_shape is not None:
@@ -1159,8 +1147,6 @@ def _architecture_components(
                     shape_law=descriptor.shape_law,
                     cost_law=descriptor.cost_law,
                     parameter_count=operator.parameter_count,
-                    inference_compute=operator.inference_compute,
-                    training_compute_per_sample=operator.training_compute_per_sample,
                 )
             )
     return (
@@ -1169,10 +1155,12 @@ def _architecture_components(
             component_count=len(components),
             parameter_count=plan.parameter_count,
             storage_bytes=plan.storage_bytes,
-            inference_compute=plan.inference_compute,
-            training_compute_per_sample=plan.training_compute_per_sample,
+            inference_cost_measurement=inference_cost,
+            inference_cost_sample_count=1 if inference_cost is not None else None,
             unknown_parameter_components=plan.unknown_parameter_layers,
-            unknown_compute_components=plan.unknown_compute_layers,
+            unknown_cost_components=(
+                () if inference_cost is not None else tuple(range(len(components)))
+            ),
         ),
         ModelInspectionTrace(
             input_shape=architecture_manifest.input_shape,
@@ -1180,6 +1168,34 @@ def _architecture_components(
             stages=tuple(stages),
         ),
     )
+
+
+def _architecture_inference_cost_measurement(
+    architecture_manifest: ArchitectureManifest,
+) -> CostMeasurement | None:
+    try:
+        runtime = resolve_host_tensor_runtime()
+        module = ExecutableModelOperator(architecture_manifest).sequential_module()
+        module.eval()
+        fields = make_empty_float_tensor(
+            runtime,
+            (1, *architecture_manifest.input_shape),
+            device=runtime.device,
+        )
+
+        def program(input_fields: object) -> object:
+            with no_grad_context(runtime):
+                return module(input_fields)
+
+        return estimate_program_cost(
+            runtime,
+            program,
+            inputs=(fields,),
+            strict=True,
+            roofline=runtime_roofline_record(runtime),
+        ).without_operation_trace()
+    except (CostMetrologyError, TensorRuntimeError, ValueError):
+        return None
 
 
 def _node_evidence_records(

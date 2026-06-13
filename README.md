@@ -48,22 +48,23 @@ console extra and cache pip downloads in CI:
 python -m pip install -e '.[console]'
 ```
 
-Run the local checks:
+Run the full local check set before review:
 
 ```bash
-python -m pytest
-python -m ruff check .
-python -m pyright
-python -m leibniz._repository_policy .
-python -m build --no-isolation
+python scripts/validate.py
 ```
 
-Use narrower checks while iterating when they prove the contract you changed,
-such as a focused `python -m pytest tests/test_example.py`. Before opening or
-updating a non-documentation pull request, run the full local check set above
-unless the pull request explains why a check was skipped. Heavy benchmark
-training, GPU jobs, and network-dependent result repository workflows are
-manual validation paths, not routine pull-request checks.
+The script is the local command registry for routine pull-request gates; CI uses
+the same registry for its Python, package, and console check commands. Run
+`python scripts/validate.py --help` to list the named checks available for
+targeted iteration.
+
+Use narrower checks while iterating when they prove the contract you changed.
+Before opening or updating a non-documentation pull request, run
+`python scripts/validate.py` unless the pull request explains why a check was
+skipped. Heavy benchmark training, GPU jobs, and network-dependent result
+repository workflows are manual validation paths, not routine pull-request
+checks.
 
 ## Repository Layout
 
@@ -149,7 +150,8 @@ manifests, and then moves completed queue entries to the sibling
 benchmark, and omitting the benchmark name scans all local benchmarks. The
 command accepts repeated `--benchmark-root` arguments and otherwise resolves
 packaged benchmark roots by benchmark id. The default local training profile is
-an uncapped convergence run:
+an uncapped convergence run with the hyperparameter-free `loss-search`
+optimizer:
 competence gates are checked every 32 steps, every gate check updates the
 running progress record, model checkpoint artifacts are written every gate
 check, patience is 6 gate checks, and convergence min delta is `1e-3`.

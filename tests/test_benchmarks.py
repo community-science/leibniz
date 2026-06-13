@@ -254,7 +254,7 @@ def test_digits_benchmark_manifest_is_python_owned() -> None:
     assert manifest.latent_factor_declaration is not None
     assert manifest.latent_factor_declaration.kind == "latent-factor-declaration"
     assert str(manifest.latent_factor_declaration.protocol_id) == (
-        "benchmarks.digits.latent-factors@0.1.0"
+        "benchmarks.digits.latent-factors@0.2.0"
     )
     assert manifest.resolution_analysis == {
         "kind": "component-discriminability-margin",
@@ -299,7 +299,7 @@ def test_benchmark_manifest_rejects_wrong_latent_factor_reference_kind() -> None
     record = _two_field_benchmark_manifest_record()
     record["latent_factor_declaration"] = {
         "kind": "benchmark-manifest",
-        "protocol_id": "benchmarks.digits.latent-factors@0.1.0",
+        "protocol_id": "benchmarks.digits.latent-factors@0.2.0",
     }
 
     assert str(capture_manifest_error(lambda: BenchmarkManifest.from_record(record))) == (

@@ -71,6 +71,16 @@ Each nontrivial pull request should explain:
 - Design review: which design choices were considered, kept, changed, or
   rejected.
 
+Pull request bodies must follow `.github/pull_request_template.md`, enforced
+by the Template CI check: every template section present exactly once and in
+order, `## Contribution Terms` verbatim and last, and extra `##` sections
+allowed anywhere before it. Validate a body locally before opening or editing
+a pull request:
+
+```bash
+python scripts/check_pr_body.py --body-file <your-body-file>
+```
+
 ## Public Surface
 
 Treat these as public surface unless the pull request states otherwise:
@@ -154,7 +164,8 @@ Use validation tiers deliberately:
 
 - While iterating, run targeted tests or checks that exercise the changed
   contract.
-- Before review, run the full local check set from `README.md` for
+- Before review, run `python scripts/validate.py`, the full local check set
+  from `README.md`, for
   non-documentation changes unless the pull request explains a skipped check.
 - For expensive benchmark, GPU, or result repository workflows, document
   the manual validation path instead of making it a routine pull-request gate.
@@ -179,12 +190,25 @@ Do not call `.item()`, `.tolist()`, `.cpu()`, `.numpy()`, or equivalent host
 materialization inside the training step loop between gate checks. Keep
 accepted-mass and similar diagnostics as runtime tensors during steps, and
 materialize host values only when recording gate-check evidence.
+The default `loss-search` optimizer is a deterministic host-interactive
+reference path and is exempt from this hot-path rule by design. Device hot-path
+gates that forbid readback must opt into a non-host-interactive optimizer such
+as Adam.
 
 Instrumentation must not change synchronization behavior by default. Timing
 that needs device synchronization must be opt-in and documented, currently via
 `LEIBNIZ_SYNC_TIMING=1`. Required CI performance checks should use
 deterministic structural gates such as operation-count budgets; timing and
 roofline thresholds belong in explicit device or manual workflows.
+
+Environment knobs that affect hot-path validation:
+
+| Variable | Effect |
+| --- | --- |
+| `LEIBNIZ_REQUIRE_TENSOR_COMPILE` | Truthy values require tensor element programs to compile instead of recording an eager fallback. |
+| `LEIBNIZ_REQUIRE_DEVICE_RESIDENCY` | Truthy values make operation fallback raise instead of migrating an operation to CPU. |
+| `LEIBNIZ_SYNC_TIMING` | Truthy values synchronize the runtime around throughput timing spans. |
+| `LEIBNIZ_PERF_GATES` | `1` enables manually run performance and roofline gates. |
 
 Protocol-style records and validation stop at the tensor-kernel boundary.
 Inside a tensor kernel, write plain backend math with batched coordinates and

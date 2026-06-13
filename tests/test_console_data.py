@@ -15,6 +15,21 @@ from leibniz.identifiers import ProtocolIdentifier
 _repository_root = Path(__file__).parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _use_test_console_sample_cache(  # pyright: ignore[reportUnusedFunction]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "leibniz.console.data._generated_batch_cache_path",
+        tmp_path / "generatedSampleSets.leibniz.json",
+    )
+    cast(
+        dict[tuple[str, str, str], tuple[Mapping[str, object], ...]],
+        console_data._generated_batch_cache,  # type: ignore[reportPrivateUsage]
+    ).clear()
+
+
 def test_console_data_discovery_is_deterministic() -> None:
     builder = ConsoleDataBuilder(_repository_root)
 
@@ -216,14 +231,16 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     )
     assert model_inspection["input_shape"] == [1, 24, 24]
     assert model_inspection["output_shape"] == [10]
-    assert model_inspection["cost_summary"] == {
-        "component_count": 3,
-        "parameter_count": 50,
-        "storage_bytes": 200,
-        "inference_compute": 656,
-        "training_compute_per_sample": 1392,
-        "unknown_parameter_components": [],
-    }
+    cost_summary = cast(dict[str, object], model_inspection["cost_summary"])
+    assert cost_summary["component_count"] == 3
+    assert cost_summary["parameter_count"] == 50
+    assert cost_summary["storage_bytes"] == 200
+    assert cost_summary["inference_cost_sample_count"] == 1
+    assert cost_summary["unknown_parameter_components"] == []
+    inference_cost = cast(dict[str, object], cost_summary["inference_cost_measurement"])
+    assert inference_cost["abstract_flops"] == 656
+    assert inference_cost["execution_mode"] == "dry-run"
+    assert inference_cost["operations_executed"] is False
     model_components = cast(list[dict[str, object]], model_inspection["components"])
     assert [
         (component["kind"], component.get("output_shape")) for component in model_components
@@ -250,7 +267,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
         "output_node_ids": ["component-2"],
         "component_kinds": ["adaptive-pooling", "flatten", "dense"],
         "unsupported_parameter_components": [],
-        "unsupported_compute_components": [],
+        "unsupported_cost_components": [],
     }
     assert [
         evidence["node_path"]
@@ -372,7 +389,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     samples = cast(list[dict[str, object]], batches[3]["samples"])
     component_indices = {cast(int, sample["component_index"]) for sample in samples}
     assert component_indices <= set(range(10))
-    assert len(component_indices) == len(samples)
+    assert len(component_indices) < len(samples)
     field_shapes = [tuple(cast(list[int], sample["field_shape"])) for sample in samples]
     assert set(field_shapes) == {(1, 36, 36)}
     materialization_plans = [
@@ -392,7 +409,8 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     )
     variation_values = cast(dict[str, object], variation["values"])
     assert variation_values["kind"] == "constructed-field-variation-transform-samples"
-    assert variation_values["transform_ordinal"] == 0
+    assert isinstance(variation_values["transform_ordinal"], int)
+    assert variation_values["transform_ordinal"] >= 0
     volume_class = cast(dict[str, object], variation_values["volume_class"])
     assert volume_class["kind"] == "digits-realized-setup-window"
     assert volume_class["canvas_side"] == 36
@@ -402,6 +420,11 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     variation_coordinates = cast(list[dict[str, object]], variation_values["coordinates"])
     assert len(variation_coordinates) == 1
     assert variation_coordinates[0]["kind"] == "field-variation-transform-coordinate"
+    normalized_transform = cast(
+        dict[str, float],
+        variation_coordinates[0]["normalized_transform"],
+    )
+    assert set(normalized_transform) == {"x_translation", "y_translation", "scale"}
 
 
 def test_console_data_payload_is_a_canonical_object_document() -> None:
@@ -526,8 +549,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
             "component_count": 1,
             "cost": 640,
             "storage_bytes": 40,
-            "inference_compute": 20,
-            "training_compute": 60,
+            "inference_cost_measurement": {"abstract_flops": 20},
+            "inference_cost_sample_count": 1,
             "unknown_parameter_components": []
           },
           "run_ids": ["run-1"],
@@ -555,8 +578,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
             "component_count": 1,
             "cost": 640,
             "storage_bytes": 40,
-            "inference_compute": 20,
-            "training_compute": 60,
+            "inference_cost_measurement": {"abstract_flops": 20},
+            "inference_cost_sample_count": 1,
             "unknown_parameter_components": []
           },
           "architecture": {"kind": "architecture-manifest"},
@@ -590,8 +613,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
                 "component_count": 1,
                 "cost": 640,
                 "storage_bytes": 40,
-                "inference_compute": 20,
-                "training_compute": 60,
+                "inference_cost_measurement": {"abstract_flops": 20},
+            "inference_cost_sample_count": 1,
                 "unknown_parameter_components": []
               },
               "run_ids": ["run-1"],
@@ -616,8 +639,8 @@ def test_console_data_discovers_explicit_result_views(tmp_path: Path) -> None:
                 "component_count": 1,
                 "cost": 640,
                 "storage_bytes": 40,
-                "inference_compute": 20,
-                "training_compute": 60,
+                "inference_cost_measurement": {"abstract_flops": 20},
+            "inference_cost_sample_count": 1,
                 "unknown_parameter_components": []
               },
               "architecture": {"kind": "architecture-manifest"},

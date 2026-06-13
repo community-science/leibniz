@@ -1,7 +1,7 @@
 export {
   isBenchmarkResultView,
   parseResultViewRecords,
-} from './generated/resultViewRecords.ts';
+} from './resultViewRecords.ts';
 
 export type {
   BenchmarkResultRecord,
@@ -22,4 +22,4 @@ export type {
   TrainingDiagnosticsRecord,
   TrainingHistoryPointRecord,
   TrainingProtocolRecord,
-} from './generated/resultViewRecords.ts';
+} from './resultViewRecords.ts';

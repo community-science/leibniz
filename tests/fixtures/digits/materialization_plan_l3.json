@@ -7,7 +7,7 @@
   },
   "latent_factor_declaration": {
     "kind": "latent-factor-declaration",
-    "protocol_id": "benchmarks.digits.latent-factors@0.1.0"
+    "protocol_id": "benchmarks.digits.latent-factors@0.2.0"
   },
   "resolution_assignment": {
     "values": [

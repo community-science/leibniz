@@ -914,12 +914,13 @@ function ModelCostDetail({
           <dd>{optionalNumberLabel(summary.cost)}</dd>
         </div>
         <div>
-          <dt>Inference Compute</dt>
-          <dd>{optionalNumberLabel(summary.inference_compute)}</dd>
-        </div>
-        <div>
-          <dt>Training Compute</dt>
-          <dd>{optionalNumberLabel(summary.training_compute)}</dd>
+          <dt>Inference Cost</dt>
+          <dd>
+            {optionalNumberLabel(costMeasurementPerSample(summary.inference_cost_measurement, summary.inference_cost_sample_count))}
+            {summary.inference_cost_measurement?.operation_stream_source === undefined
+              ? ''
+              : ` (${summary.inference_cost_measurement.operation_stream_source})`}
+          </dd>
         </div>
         <div>
           <dt>Unknown Parameter Components</dt>
@@ -932,7 +933,7 @@ function ModelCostDetail({
         <div>
           <dt>Unknown compute Components</dt>
           <dd>
-            {unknownComponentLabel(inspection?.architecture_summary.unsupported_compute_components)}
+            {unknownComponentLabel(inspection?.architecture_summary.unsupported_cost_components)}
           </dd>
         </div>
       </dl>
@@ -979,14 +980,6 @@ function ModelGraphOperations({
                 <div>
                   <dt>Output</dt>
                   <dd>{shapeLabel(stage.output_shape)}</dd>
-                </div>
-                <div>
-                  <dt>Inference Compute</dt>
-                  <dd>{optionalNumberLabel(stage.inference_compute)}</dd>
-                </div>
-                <div>
-                  <dt>Training Compute / Sample</dt>
-                  <dd>{optionalNumberLabel(stage.training_compute_per_sample)}</dd>
                 </div>
               </dl>
               <p className="benchmark-model-operation-config">
@@ -1115,6 +1108,16 @@ function observedVolumeLabel(model: BenchmarkModelCandidate): string {
 
 function optionalNumberLabel(value: number | undefined): string {
   return value === undefined ? 'unknown' : value.toLocaleString();
+}
+
+function costMeasurementPerSample(
+  measurement: { abstract_flops?: number } | undefined,
+  sampleCount: number | undefined,
+): number | undefined {
+  if (measurement?.abstract_flops === undefined || sampleCount === undefined || sampleCount < 1) {
+    return undefined;
+  }
+  return measurement.abstract_flops / sampleCount;
 }
 
 function formatMetricNumber(value: number): string {

@@ -18,7 +18,6 @@ def test_architecture_semantic_validation_accepts_public_fixture() -> None:
         (10,),
     ]
     assert plan.parameter_count == 50
-    assert plan.inference_compute == 1104
 
 
 def test_architecture_semantic_validation_rejects_unknown_operator_kind() -> None:

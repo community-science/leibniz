@@ -8,8 +8,7 @@ from typing import Any, cast
 import pytest
 
 import leibniz.local_results as local_results
-from leibniz.architectures import ArchitectureManifestDocument
-from leibniz.benchmark_evaluation import sampled_competence_compute_cost_integral
+from leibniz.benchmark_evaluation import sampled_competence_metrology_cost_integral
 from leibniz.benchmark_runner import (
     BenchmarkEvaluationPlan,
     BenchmarkRunPlan,
@@ -17,6 +16,10 @@ from leibniz.benchmark_runner import (
     run_benchmark,
 )
 from leibniz.cli import main
+from leibniz.cost_metrology import (
+    CostMeasurement,
+    OperationCostRecord,
+)
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.identifiers import ProtocolIdentifier
 from leibniz.local_results import (
@@ -28,10 +31,6 @@ from leibniz.local_results import (
     push_result_checkout,
     summarize_local_benchmark_results,
 )
-from leibniz.model_operators import (
-    architecture_with_input_shape,
-    summarize_architecture_operators,
-)
 from leibniz.training_runs import TrainingHistoryPoint
 
 _repository_root = Path(__file__).parents[1]
@@ -39,6 +38,28 @@ _digits_benchmark_root = _repository_root / "src" / "leibniz" / "benchmarks" / "
 _digits_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_pool.json"
 )
+
+
+def _cost_measurement(abstract_flops: int) -> CostMeasurement:
+    return CostMeasurement(
+        cost_model_id=CostMeasurement.tensor_runtime_cost_model_id(),
+        abstract_flops=abstract_flops,
+        per_op=(
+            OperationCostRecord(
+                name="test.forward",
+                calls=1,
+                abstract_flops=abstract_flops,
+                output_elements=abstract_flops,
+            ),
+        ),
+        moved_elements=0,
+        movement=(),
+        unmodeled_operations=(),
+        operation_count=0,
+        operation_trace=(),
+        wall_seconds=0.0,
+        tensor_device="cpu",
+    )
 
 
 def _run_and_evaluate_digits_benchmark(results_root: Path, *, sample_count: int = 1) -> None:
@@ -132,6 +153,17 @@ def test_known_benchmark_manifests_loads_python_implementation_without_manifest_
             from leibniz.benchmarks import BenchmarkManifest
             from leibniz.identifiers import ProtocolIdentifier, ProtocolName
             from leibniz.outcomes import Outcome, OutcomeSpace
+            from leibniz.state_space import (
+                AccessibleSubspace,
+                DiscreteAxisRegion,
+                Distinguishability,
+                IntegerRangeDomain,
+                ProductRegion,
+                SamplingProtocol,
+                StateSpaceAmbient,
+                StateSpaceAxis,
+                StateSpaceRegion,
+            )
 
 
             class Impl:
@@ -156,6 +188,50 @@ def test_known_benchmark_manifests_loads_python_implementation_without_manifest_
                 @property
                 def generator(self):
                     return lambda **kwargs: None
+
+                @property
+                def sampling_protocol(self):
+                    return SamplingProtocol(
+                        kind="uniform-monte-carlo",
+                        estimator_id="sample-mean",
+                        confidence_method_id="wilson",
+                    )
+
+                @property
+                def accessible_subspace(self):
+                    axis_region = DiscreteAxisRegion(
+                        axis=StateSpaceAxis(
+                            id="fixture-index",
+                            domain=IntegerRangeDomain(lower=0, upper=0),
+                        ),
+                        coordinate_region=(0, 0),
+                        count=1,
+                        log2_count=0.0,
+                    )
+                    component = ProductRegion(
+                        axis_regions=(axis_region,),
+                        measure_rule="product-of-counts",
+                        volume=1,
+                        log2_volume=0.0,
+                    )
+                    region = StateSpaceRegion(
+                        id="fixture-accessible-region",
+                        ambient=StateSpaceAmbient(
+                            field_domain_kind="lattice-2d",
+                            field_domain={"height": 1, "width": 1},
+                            field_codomain_id="scalar-field",
+                            distinguishability=Distinguishability(kind="exact"),
+                        ),
+                        components=(component,),
+                        union_rule="disjoint-union",
+                        volume=1,
+                        log2_volume=0.0,
+                    )
+                    return AccessibleSubspace(
+                        ladder_id="fixture-ladder",
+                        per_configuration_capacity=region,
+                        frontier_rationale="Fixture benchmark loadability declaration.",
+                    )
 
 
             def benchmark(root: Path):
@@ -324,7 +400,7 @@ def test_console_result_view_validates_training_protocol_gate_cadence(tmp_path: 
         load_console_result_view(canonical_document_bytes(view))
 
 
-def test_materialize_benchmark_result_views_rejects_evaluation_bundle_without_inference_compute(
+def test_materialize_benchmark_result_views_rejects_evaluation_bundle_without_measured_cost(
     tmp_path: Path,
 ) -> None:
     results_root = tmp_path / "results"
@@ -336,12 +412,75 @@ def test_materialize_benchmark_result_views_rejects_evaluation_bundle_without_in
         throughput = cast(dict[str, object], record["throughput"])
         for key in ("checkpoint_evaluation", "evaluation"):
             phase = cast(dict[str, object], throughput[key])
-            phase.pop("max_inference_compute", None)
+            phase.pop("inference_cost_measurement", None)
+            phase.pop("inference_cost_sample_count", None)
         path.write_bytes(canonical_document_bytes(record) + b"\n")
 
     with pytest.raises(
         LocalResultImportError,
-        match="missing measured max_inference_compute",
+        match="missing measured inference_cost_measurement",
+    ):
+        materialize_benchmark_result_views(
+            repository_root=_repository_root,
+            results_root=results_root,
+        )
+
+
+def test_materialize_benchmark_result_views_rejects_unmodeled_measured_cost(
+    tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    _run_and_evaluate_digits_benchmark(results_root)
+    for path in results_root.rglob("*.json"):
+        record = dict(load_object_document(path.read_bytes(), description="result record"))
+        if record.get("format") != "leibniz.benchmark-evaluation":
+            continue
+        throughput = cast(dict[str, object], record["throughput"])
+        for key in ("checkpoint_evaluation", "evaluation"):
+            phase = cast(dict[str, object], throughput[key])
+            measurement = cast(dict[str, object], phase["inference_cost_measurement"])
+            measurement["unmodeled_operations"] = [
+                {
+                    "name": "aten.unpriced.default",
+                    "calls": 1,
+                    "output_elements": 1,
+                }
+            ]
+        path.write_bytes(canonical_document_bytes(record) + b"\n")
+
+    with pytest.raises(
+        LocalResultImportError,
+        match="unmodeled operations",
+    ):
+        materialize_benchmark_result_views(
+            repository_root=_repository_root,
+            results_root=results_root,
+        )
+
+
+def test_materialize_benchmark_result_views_rejects_accepted_point_without_measured_cost(
+    tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    _run_and_evaluate_digits_benchmark(results_root)
+    for path in results_root.rglob("*.json"):
+        record = dict(load_object_document(path.read_bytes(), description="result record"))
+        if record.get("format") != "leibniz.benchmark-evaluation":
+            continue
+        sampled_competence = cast(dict[str, object], record["sampled_competence"])
+        points = sampled_competence.get("points")
+        if isinstance(points, list) and points:
+            for point in cast(list[dict[str, object]], points):
+                point.pop("inference_cost_measurement", None)
+                point.pop("inference_cost_sample_count", None)
+        else:
+            sampled_competence.pop("inference_cost_measurement", None)
+            sampled_competence.pop("inference_cost_sample_count", None)
+        path.write_bytes(canonical_document_bytes(record) + b"\n")
+
+    with pytest.raises(
+        LocalResultImportError,
+        match="accepted points missing inference_cost_measurement",
     ):
         materialize_benchmark_result_views(
             repository_root=_repository_root,
@@ -382,22 +521,41 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     leaderboard = cast(list[dict[str, object]], result["leaderboard"])
     measurement_count = cast(int, leaderboard[0]["measurement_count"])
     assert measurement_count >= 64 * 3
-    assert measurement_count % 64 == 0
     cost_summary = cast(dict[str, object], leaderboard[0]["cost_summary"])
-    assert isinstance(cost_summary["inference_compute"], int | float)
+    inference_cost = CostMeasurement.from_record(cost_summary["inference_cost_measurement"])
+    assert inference_cost.abstract_flops > 0
+    assert isinstance(cost_summary["inference_cost_sample_count"], int)
+    assert not any(key.startswith("analytic_") for key in cost_summary)
     assert isinstance(cost_summary["cost"], int | float)
     assert cost_summary["cost"] >= 0
     cost_integral = cast(dict[str, object], leaderboard[0]["cost_integral"])
     assert cost_integral["kind"] == "compute-cost-integral"
     assert math.isclose(cast(float, cost_integral["value"]), cast(float, cost_summary["cost"]))
-    assert cast(list[dict[str, object]], cost_integral["terms"])
+    cost_terms = cast(list[dict[str, object]], cost_integral["terms"])
+    assert cost_terms
+    points = cast(list[dict[str, object]], leaderboard[0]["points"])
+    point_costs = [
+        CostMeasurement.from_record(point["inference_cost_measurement"]).abstract_flops
+        / cast(int, point["inference_cost_sample_count"])
+        for point in points
+    ]
+    assert len(points) == len(cost_terms)
+    assert math.isclose(
+        cast(float, cost_integral["value"]),
+        math.fsum(
+            point_cost
+            * 32.0
+            * cast(float, term["width_in_bits"])
+            for point_cost, term in zip(point_costs, cost_terms, strict=True)
+        ),
+    )
     frontiers = cast(dict[str, object], result["frontiers"])
     assert len(cast(list[object], frontiers["cost"])) == 1
     reference_curves = cast(list[dict[str, object]], result["reference_curves"])
     assert len(reference_curves) == 1
     oracle_curve = reference_curves[0]
-    assert oracle_curve["kind"] == "oracle-inference-compute-reference-v1"
-    assert oracle_curve["key"] == "oracle_inference_compute"
+    assert oracle_curve["kind"] == "oracle-cost-measurement-reference-v1"
+    assert oracle_curve["key"] == "oracle_cost_measurement"
     assert oracle_curve["x_axis"] == "cost"
     assert oracle_curve["y_axis"] == "score"
     oracle_points = cast(list[dict[str, object]], oracle_curve["points"])
@@ -476,41 +634,31 @@ def test_materialize_benchmark_result_views_projects_evaluation_bundles(
     }
 
 
-def test_integrated_model_cost_reconstructs_point_density_from_input_shape() -> None:
-    architecture = ArchitectureManifestDocument.from_bytes(
-        _digits_architecture.read_bytes()
-    ).manifest
-    first_input_shape = (1, 16, 16)
-    second_input_shape = (1, 32, 32)
-    first_compute = summarize_architecture_operators(
-        architecture_with_input_shape(architecture, first_input_shape)
-    ).inference_compute
-    second_compute = summarize_architecture_operators(
-        architecture_with_input_shape(architecture, second_input_shape)
-    ).inference_compute
+def test_metrology_model_cost_uses_point_cost_measurement() -> None:
+    first_compute = 128
+    second_compute = 512
 
-    assert first_compute is not None
-    assert second_compute is not None
-
-    cost_integral = sampled_competence_compute_cost_integral(
+    cost_integral = sampled_competence_metrology_cost_integral(
         points=(
             {
                 "log2_volume": 1.0,
-                "input_shape": list(first_input_shape),
+                "inference_cost_measurement": _cost_measurement(first_compute).to_record(),
+                "inference_cost_sample_count": 1,
             },
             {
                 "log2_volume": 2.0,
                 "log2_volume_minimum": 2.0,
                 "log2_volume_maximum": 2.0,
-                "input_shape": list(second_input_shape),
+                "inference_cost_measurement": _cost_measurement(second_compute).to_record(),
+                "inference_cost_sample_count": 1,
             },
         ),
-        architecture=architecture,
         error_type=local_results.LocalResultImportError,
         field_prefix="compute_cost_point",
     )
 
     assert math.isclose(cost_integral.value, 32.0 * (first_compute + second_compute))
+    assert {term.kind for term in cost_integral.terms} == {"metrology-compute-cost"}
 
 
 def test_training_estimate_comparison_uses_selected_checkpoint_estimate(

@@ -38,6 +38,7 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
             "results/measurements/digits/local-run.json",
             "results/evaluations/digits/local-run.json",
             "results/views/digits/benchmark_results.json",
+            ".local-cache/console/consoleDataPayload.json",
             ".venv/pyvenv.cfg",
             ".vite/deps/react.js",
             "build/lib/leibniz/__init__.py",
@@ -74,6 +75,10 @@ def test_repository_policy_rejects_local_state_and_generated_outputs() -> None:
         ),
         PolicyViolation(
             path=PurePosixPath("results/views/digits/benchmark_results.json"),
+            message="tracked local, cache, or generated directory",
+        ),
+        PolicyViolation(
+            path=PurePosixPath(".local-cache/console/consoleDataPayload.json"),
             message="tracked local, cache, or generated directory",
         ),
         PolicyViolation(
@@ -235,7 +240,12 @@ def test_field_extraction_helpers_are_not_duplicated_outside_records() -> None:
 def test_backend_terms_are_used_only_in_tensor_runtime() -> None:
     source_root = _repository_root / "src" / "leibniz"
     banned_terms = ("torch", "cuda", "cpu", "triton")
-    exempt_paths = frozenset({"tensor_runtime.py", "_repository_policy.py"})
+    exempt_paths = frozenset(
+        {
+            "tensor_runtime.py",
+            "_repository_policy.py",
+        }
+    )
 
     offenders = tuple(
         f"{path.relative_to(_repository_root)}:{line_number}:{term}"

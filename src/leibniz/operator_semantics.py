@@ -587,16 +587,6 @@ _coordinate_descriptors = (
         display_name="Parameter count",
         value_kind="integer",
     ),
-    SemanticCoordinateDescriptor(
-        name="resource.inference_compute",
-        display_name="Inference Compute",
-        value_kind="integer",
-    ),
-    SemanticCoordinateDescriptor(
-        name="resource.training_compute_per_sample",
-        display_name="Training Compute Per Sample",
-        value_kind="integer",
-    ),
 )
 
 _model_operator_semantic_registry = ModelOperatorSemanticRegistry(

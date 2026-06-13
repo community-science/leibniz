@@ -6,21 +6,33 @@ import pytest
 
 from leibniz.documents import canonical_document_bytes, load_object_document
 from leibniz.state_space import (
-    AxisRegion,
+    AccessibleSubspace,
     BinaryVectorDomain,
+    ContinuousAxisRegion,
+    DiscreteAxisRegion,
     Distinguishability,
     EnumeratedCellsDomain,
     IntegerRangeDomain,
+    MeasureEstimate,
     ProductRegion,
     RealGridDomain,
+    RealIntervalDomain,
     RegionFiltration,
+    SamplingProtocol,
     StateSpaceAmbient,
     StateSpaceAxis,
     StateSpaceError,
     StateSpaceRegion,
+    accessible_subspace_from_record,
+    axis_region_from_record,
     axis_regions_are_disjoint,
+    measure_estimate_from_record,
+    product_region_from_record,
     product_regions_are_disjoint,
     region_filtration_from_record,
+    sampling_protocol_from_record,
+    state_space_ambient_from_record,
+    state_space_region_contains,
     state_space_region_from_record,
     state_space_regions_are_disjoint,
 )
@@ -77,9 +89,15 @@ def _exact_ambient() -> StateSpaceAmbient:
     )
 
 
-def _full_grid_region(name: str, *, lower: float, upper: float, count: int) -> AxisRegion:
+def _full_grid_region(
+    name: str,
+    *,
+    lower: float,
+    upper: float,
+    count: int,
+) -> DiscreteAxisRegion:
     axis = StateSpaceAxis(id=name, domain=RealGridDomain(lower=lower, upper=upper, count=count))
-    return AxisRegion(
+    return DiscreteAxisRegion(
         axis=axis,
         coordinate_region=(0, count - 1),
         count=count,
@@ -117,7 +135,7 @@ def _truncated_window_region() -> StateSpaceRegion:
     components: list[ProductRegion] = []
     for digit in range(10):
         pose_count = 2 if digit < 3 else 1
-        pose_region = AxisRegion(
+        pose_region = DiscreteAxisRegion(
             axis=pose_axis,
             coordinate_region=(0, pose_count - 1),
             count=pose_count,
@@ -146,7 +164,7 @@ def _truncated_window_region() -> StateSpaceRegion:
 def _preset_region() -> StateSpaceRegion:
     cells = tuple(f"preset-{index}" for index in range(8))
     axis = StateSpaceAxis(id="pose-preset", domain=EnumeratedCellsDomain(cells=cells))
-    axis_region = AxisRegion(
+    axis_region = DiscreteAxisRegion(
         axis=axis,
         coordinate_region=("preset-0", "preset-2", "preset-5", "preset-7"),
         count=4,
@@ -169,9 +187,9 @@ def _preset_region() -> StateSpaceRegion:
     )
 
 
-def _singleton_axis_region(name: str, *, coordinate: int) -> AxisRegion:
+def _singleton_axis_region(name: str, *, coordinate: int) -> DiscreteAxisRegion:
     axis = StateSpaceAxis(id=name, domain=IntegerRangeDomain(lower=0, upper=7))
-    return AxisRegion(
+    return DiscreteAxisRegion(
         axis=axis,
         coordinate_region=(coordinate, coordinate),
         count=1,
@@ -183,7 +201,7 @@ def _chess_region() -> StateSpaceRegion:
     spectator_axis = StateSpaceAxis(
         id="spectator-occupancy", domain=BinaryVectorDomain(dimension=51)
     )
-    spectator_region = AxisRegion(
+    spectator_region = DiscreteAxisRegion(
         axis=spectator_axis,
         coordinate_region=(0, 1, 2),
         count=8,
@@ -222,7 +240,8 @@ def test_digits_grid_region_volume_is_product_of_axis_counts() -> None:
 
 def test_product_of_counts_log2_volume_adds_axis_bits() -> None:
     component = _digits_grid_region().components[0]
-    axis_bits = sum(axis_region.log2_count for axis_region in component.axis_regions)
+    axis_regions = cast(tuple[DiscreteAxisRegion, ...], component.axis_regions)
+    axis_bits = sum(axis_region.log2_count for axis_region in axis_regions)
     assert math.isclose(component.log2_volume, axis_bits, rel_tol=0.0, abs_tol=1e-9)
 
 
@@ -249,20 +268,21 @@ def test_chess_region_decomposes_over_mechanism_transform_strata() -> None:
     assert len(region.components) == 48
     assert region.volume == 240
     component = region.components[0]
-    box = math.prod(axis_region.count for axis_region in component.axis_regions)
+    axis_regions = cast(tuple[DiscreteAxisRegion, ...], component.axis_regions)
+    box = math.prod(axis_region.count for axis_region in axis_regions)
     assert component.volume < box
 
 
 def test_empty_binary_vector_region_is_singleton_zero_mask() -> None:
     axis = StateSpaceAxis(id="spectator-occupancy", domain=BinaryVectorDomain(dimension=51))
-    axis_region = AxisRegion(axis=axis, coordinate_region=(), count=1, log2_count=0.0)
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(), count=1, log2_count=0.0)
     assert axis_region.contains(())
     assert not axis_region.contains((0,))
 
 
 def test_integer_range_region_contains_only_in_range_integers() -> None:
     axis = StateSpaceAxis(id="pose-transform-index", domain=IntegerRangeDomain(lower=0, upper=9))
-    region = AxisRegion(axis=axis, coordinate_region=(2, 5), count=4, log2_count=2.0)
+    region = DiscreteAxisRegion(axis=axis, coordinate_region=(2, 5), count=4, log2_count=2.0)
     assert region.contains(2)
     assert region.contains(5)
     assert not region.contains(1)
@@ -273,7 +293,12 @@ def test_integer_range_region_contains_only_in_range_integers() -> None:
 
 def test_real_grid_region_contains_grid_indices() -> None:
     axis = StateSpaceAxis(id="scale", domain=RealGridDomain(lower=0.92, upper=1.08, count=5))
-    region = AxisRegion(axis=axis, coordinate_region=(1, 3), count=3, log2_count=math.log2(3))
+    region = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(1, 3),
+        count=3,
+        log2_count=math.log2(3),
+    )
     assert region.contains(1)
     assert region.contains(3)
     assert not region.contains(0)
@@ -283,7 +308,7 @@ def test_real_grid_region_contains_grid_indices() -> None:
 
 def test_binary_vector_region_contains_subsets_of_enabled_indices() -> None:
     axis = StateSpaceAxis(id="spectator-occupancy", domain=BinaryVectorDomain(dimension=8))
-    region = AxisRegion(axis=axis, coordinate_region=(1, 4, 6), count=8, log2_count=3.0)
+    region = DiscreteAxisRegion(axis=axis, coordinate_region=(1, 4, 6), count=8, log2_count=3.0)
     assert region.contains(())
     assert region.contains((4,))
     assert region.contains((1, 6))
@@ -308,6 +333,217 @@ def test_state_space_region_contains_delegates_to_component() -> None:
         region.contains(10, {"pose-transform-index": 0})
     with pytest.raises(StateSpaceError):
         region.contains(-1, {"pose-transform-index": 0})
+
+
+def test_state_space_region_contains_integer_range_subregions() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=9))
+    container_axis = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(2, 7),
+        count=6,
+        log2_count=math.log2(6),
+    )
+    contained_axis = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(3, 5),
+        count=3,
+        log2_count=math.log2(3),
+    )
+    outside_axis = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(5, 8),
+        count=4,
+        log2_count=2.0,
+    )
+
+    def region(id: str, axis_region: DiscreteAxisRegion) -> StateSpaceRegion:
+        component = ProductRegion(
+            axis_regions=(axis_region,),
+            measure_rule="product-of-counts",
+            volume=axis_region.count,
+            log2_volume=axis_region.log2_count,
+            stratum_id="digit-3",
+        )
+        return StateSpaceRegion(
+            id=id,
+            ambient=_metric_ambient(),
+            components=(component,),
+            union_rule="disjoint-union",
+            volume=component.volume,
+            log2_volume=component.log2_volume,
+        )
+
+    assert state_space_region_contains(
+        region("container", container_axis),
+        region("inside", contained_axis),
+    )
+    assert not state_space_region_contains(
+        region("container", container_axis),
+        region("outside", outside_axis),
+    )
+
+
+def test_state_space_region_contains_real_grid_enumerated_and_binary_axes() -> None:
+    real_axis = StateSpaceAxis(id="scale", domain=RealGridDomain(lower=0.0, upper=1.0, count=8))
+    preset_axis = StateSpaceAxis(
+        id="preset",
+        domain=EnumeratedCellsDomain(cells=("a", "b", "c", "d")),
+    )
+    mask_axis = StateSpaceAxis(id="mask", domain=BinaryVectorDomain(dimension=5))
+    container_axes = (
+        DiscreteAxisRegion(real_axis, (1, 6), 6, math.log2(6)),
+        DiscreteAxisRegion(preset_axis, ("a", "c", "d"), 3, math.log2(3)),
+        DiscreteAxisRegion(mask_axis, (0, 2, 4), 8, 3.0),
+    )
+    contained_axes = (
+        DiscreteAxisRegion(real_axis, (2, 5), 4, 2.0),
+        DiscreteAxisRegion(preset_axis, ("c", "d"), 2, 1.0),
+        DiscreteAxisRegion(mask_axis, (2, 4), 4, 2.0),
+    )
+    outside_axes = (
+        DiscreteAxisRegion(real_axis, (2, 5), 4, 2.0),
+        DiscreteAxisRegion(preset_axis, ("b", "c"), 2, 1.0),
+        DiscreteAxisRegion(mask_axis, (2, 4), 4, 2.0),
+    )
+
+    def region(id: str, axes: tuple[DiscreteAxisRegion, ...]) -> StateSpaceRegion:
+        component = ProductRegion(
+            axis_regions=axes,
+            measure_rule="product-of-counts",
+            volume=math.prod(axis.count for axis in axes),
+            log2_volume=sum(axis.log2_count for axis in axes),
+            stratum_id="digit-4",
+        )
+        return StateSpaceRegion(
+            id=id,
+            ambient=_metric_ambient(),
+            components=(component,),
+            union_rule="disjoint-union",
+            volume=component.volume,
+            log2_volume=component.log2_volume,
+        )
+
+    assert state_space_region_contains(
+        region("container", container_axes),
+        region("inside", contained_axes),
+    )
+    assert not state_space_region_contains(
+        region("container", container_axes),
+        region("outside", outside_axes),
+    )
+
+
+def test_state_space_region_contains_real_interval_subregions() -> None:
+    axis = StateSpaceAxis(id="phase", domain=RealIntervalDomain(lower=0.0, upper=10.0))
+    estimate = MeasureEstimate(
+        kind="estimated",
+        method_id="analytic-interval-length",
+        log2_lower=0.0,
+        log2_upper=4.0,
+    )
+    container_axis = ContinuousAxisRegion(
+        axis=axis,
+        coordinate_region=(1.0, 8.0),
+        measure_estimate=estimate,
+    )
+    contained_axis = ContinuousAxisRegion(
+        axis=axis,
+        coordinate_region=(2.0, 5.0),
+        measure_estimate=estimate,
+    )
+    outside_axis = ContinuousAxisRegion(
+        axis=axis,
+        coordinate_region=(0.5, 5.0),
+        measure_estimate=estimate,
+    )
+
+    def region(id: str, axis_region: ContinuousAxisRegion) -> StateSpaceRegion:
+        component = ProductRegion(
+            axis_regions=(axis_region,),
+            measure_rule="benchmark-computed-finite-count",
+            volume=2,
+            log2_volume=1.0,
+            stratum_id="phase-window",
+            measure_estimate=estimate,
+        )
+        return StateSpaceRegion(
+            id=id,
+            ambient=_metric_ambient(),
+            components=(component,),
+            union_rule="disjoint-union",
+            volume=2,
+            log2_volume=1.0,
+        )
+
+    assert state_space_region_contains(
+        region("container", container_axis),
+        region("inside", contained_axis),
+    )
+    assert not state_space_region_contains(
+        region("container", container_axis),
+        region("outside", outside_axis),
+    )
+
+
+def test_state_space_region_contains_requires_matching_strata_axes_and_ambient() -> None:
+    container = _truncated_window_region()
+    same_region = _truncated_window_region()
+    assert state_space_region_contains(container, same_region)
+
+    component = container.components[0]
+    mismatched_stratum_component = ProductRegion(
+        axis_regions=component.axis_regions,
+        measure_rule=component.measure_rule,
+        volume=component.volume,
+        log2_volume=component.log2_volume,
+        stratum_id="digit-9",
+        stratum_target={"outcome_id": "digit-9"},
+    )
+    mismatched_stratum = StateSpaceRegion(
+        id="wrong-stratum",
+        ambient=container.ambient,
+        components=(mismatched_stratum_component,),
+        union_rule="disjoint-union",
+        volume=mismatched_stratum_component.volume,
+        log2_volume=mismatched_stratum_component.log2_volume,
+    )
+    assert not state_space_region_contains(container, mismatched_stratum)
+
+    other_axis = StateSpaceAxis(id="other-pose", domain=IntegerRangeDomain(lower=0, upper=1))
+    other_axis_region = DiscreteAxisRegion(
+        axis=other_axis,
+        coordinate_region=(0, 1),
+        count=2,
+        log2_count=1.0,
+    )
+    mismatched_axis_component = ProductRegion(
+        axis_regions=(other_axis_region,),
+        measure_rule="product-of-counts",
+        volume=2,
+        log2_volume=1.0,
+        stratum_id="digit-0",
+        stratum_target={"outcome_id": "digit-0"},
+    )
+    mismatched_axis = StateSpaceRegion(
+        id="wrong-axis",
+        ambient=container.ambient,
+        components=(mismatched_axis_component,),
+        union_rule="disjoint-union",
+        volume=2,
+        log2_volume=1.0,
+    )
+    assert not state_space_region_contains(container, mismatched_axis)
+
+    different_ambient = StateSpaceRegion(
+        id="different-ambient",
+        ambient=_exact_ambient(),
+        components=(component,),
+        union_rule="disjoint-union",
+        volume=component.volume,
+        log2_volume=component.log2_volume,
+    )
+    with pytest.raises(StateSpaceError):
+        state_space_region_contains(container, different_ambient)
 
 
 @pytest.mark.parametrize(
@@ -372,6 +608,84 @@ def test_ambient_invariants() -> None:
         )
 
 
+def test_box_ambient_domains_validate_extent_count_and_boundary() -> None:
+    distinguishability = Distinguishability(
+        kind="metric-resolution",
+        metric_id="periodic-l2",
+        resolution=0.01,
+    )
+    ambient = StateSpaceAmbient(
+        field_domain_kind="box-2d",
+        field_domain={
+            "length_x": math.tau,
+            "length_y": 2.0,
+            "boundary_id": "periodic",
+            "units": "radian",
+        },
+        field_codomain_id="scalar-field",
+        distinguishability=distinguishability,
+    )
+
+    record = load_object_document(
+        canonical_document_bytes(ambient.to_record()),
+        description="ambient",
+    )
+    parsed = state_space_ambient_from_record(record)
+
+    assert parsed == ambient
+
+
+@pytest.mark.parametrize(
+    "field_domain_kind,field_domain",
+    [
+        ("box-1d", {"length_y": 1.0, "boundary_id": "periodic"}),
+        ("box-2d", {"length_x": 1.0, "boundary_id": "periodic"}),
+        (
+            "box-3d",
+            {
+                "length_x": 1.0,
+                "length_y": 1.0,
+                "length_z": math.inf,
+                "boundary_id": "periodic",
+            },
+        ),
+        (
+            "box-3d",
+            {
+                "length_x": 1.0,
+                "length_y": 1.0,
+                "length_z": 0.0,
+                "boundary_id": "periodic",
+            },
+        ),
+        ("box-1d", {"length_x": 1.0}),
+        ("box-1d", {"length_x": 1.0, "boundary_id": ""}),
+    ],
+)
+def test_box_ambient_domains_reject_malformed_domains(
+    field_domain_kind: str,
+    field_domain: dict[str, object],
+) -> None:
+    with pytest.raises(StateSpaceError):
+        StateSpaceAmbient(
+            field_domain_kind=field_domain_kind,
+            field_domain=field_domain,
+            field_codomain_id="scalar-field",
+            distinguishability=Distinguishability(kind="exact"),
+        )
+
+
+def test_unknown_ambient_domain_kinds_remain_free_form() -> None:
+    ambient = StateSpaceAmbient(
+        field_domain_kind="benchmark-specific-domain",
+        field_domain={"opaque": "value"},
+        field_codomain_id="vector-field-3",
+        distinguishability=Distinguishability(kind="exact"),
+    )
+
+    assert ambient.to_record()["field_domain"] == {"opaque": "value"}
+
+
 def test_axis_domain_invariants() -> None:
     with pytest.raises(StateSpaceError):
         IntegerRangeDomain(lower=3, upper=2)
@@ -383,6 +697,10 @@ def test_axis_domain_invariants() -> None:
         RealGridDomain(lower=1.0, upper=1.0, count=2)
     with pytest.raises(StateSpaceError):
         RealGridDomain(lower=math.inf, upper=1.0, count=1)
+    with pytest.raises(StateSpaceError):
+        RealIntervalDomain(lower=1.0, upper=1.0)
+    with pytest.raises(StateSpaceError):
+        RealIntervalDomain(lower=-math.inf, upper=1.0)
     with pytest.raises(StateSpaceError):
         EnumeratedCellsDomain(cells=())
     with pytest.raises(StateSpaceError):
@@ -398,25 +716,30 @@ def test_axis_domain_invariants() -> None:
 def test_axis_region_invariants() -> None:
     axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=9))
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=axis, coordinate_region=(0, 3), count=3, log2_count=math.log2(3))
+        DiscreteAxisRegion(axis=axis, coordinate_region=(0, 3), count=3, log2_count=math.log2(3))
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=1.9)
+        DiscreteAxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=1.9)
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=axis, coordinate_region=(8, 10), count=3, log2_count=math.log2(3))
+        DiscreteAxisRegion(axis=axis, coordinate_region=(8, 10), count=3, log2_count=math.log2(3))
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=axis, coordinate_region=(5, 2), count=4, log2_count=2.0)
+        DiscreteAxisRegion(axis=axis, coordinate_region=(5, 2), count=4, log2_count=2.0)
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=axis, coordinate_region=(1, 2, 3), count=3, log2_count=math.log2(3))
+        DiscreteAxisRegion(axis=axis, coordinate_region=(1, 2, 3), count=3, log2_count=math.log2(3))
     grid_axis = StateSpaceAxis(id="scale", domain=RealGridDomain(lower=0.92, upper=1.08, count=3))
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=grid_axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+        DiscreteAxisRegion(axis=grid_axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
     cells_axis = StateSpaceAxis(
         id="preset", domain=EnumeratedCellsDomain(cells=("preset-0", "preset-1"))
     )
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=cells_axis, coordinate_region=("preset-2",), count=1, log2_count=0.0)
+        DiscreteAxisRegion(
+            axis=cells_axis,
+            coordinate_region=("preset-2",),
+            count=1,
+            log2_count=0.0,
+        )
     with pytest.raises(StateSpaceError):
-        AxisRegion(
+        DiscreteAxisRegion(
             axis=cells_axis,
             coordinate_region=("preset-0", "preset-0"),
             count=2,
@@ -424,14 +747,99 @@ def test_axis_region_invariants() -> None:
         )
     mask_axis = StateSpaceAxis(id="mask", domain=BinaryVectorDomain(dimension=4))
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=mask_axis, coordinate_region=(4,), count=2, log2_count=1.0)
+        DiscreteAxisRegion(axis=mask_axis, coordinate_region=(4,), count=2, log2_count=1.0)
     with pytest.raises(StateSpaceError):
-        AxisRegion(axis=mask_axis, coordinate_region=(1, 1), count=4, log2_count=2.0)
+        DiscreteAxisRegion(axis=mask_axis, coordinate_region=(1, 1), count=4, log2_count=2.0)
+    continuous_axis = StateSpaceAxis(
+        id="phase",
+        domain=RealIntervalDomain(lower=0.0, upper=math.tau),
+    )
+    with pytest.raises(StateSpaceError):
+        DiscreteAxisRegion(
+            axis=continuous_axis,
+            coordinate_region=(0, 1),
+            count=2,
+            log2_count=1.0,
+        )
+    with pytest.raises(StateSpaceError):
+        ContinuousAxisRegion(
+            axis=continuous_axis,
+            coordinate_region=(0.0, 1.0),
+            measure_estimate=MeasureEstimate(kind="exact"),
+        )
+    with pytest.raises(StateSpaceError):
+        ContinuousAxisRegion(
+            axis=continuous_axis,
+            coordinate_region=(0.0, math.tau + 1.0),
+            measure_estimate=MeasureEstimate(
+                kind="estimated",
+                method_id="covering-number-grid-bound",
+                log2_lower=0.0,
+                log2_upper=1.0,
+            ),
+        )
+
+
+def test_continuous_axis_region_is_half_open_and_round_trips() -> None:
+    axis = StateSpaceAxis(id="phase", domain=RealIntervalDomain(lower=0.0, upper=math.tau))
+    region = ContinuousAxisRegion(
+        axis=axis,
+        coordinate_region=(0.5, 2.5),
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=1.0,
+            log2_upper=2.0,
+        ),
+    )
+
+    assert region.contains(0.5)
+    assert region.contains(1.25)
+    assert not region.contains(2.5)
+    assert not region.contains(0.49)
+    assert axis_region_from_record(region.to_record()) == region
+
+
+def test_product_regions_with_continuous_axes_require_estimated_measure() -> None:
+    axis = StateSpaceAxis(id="phase", domain=RealIntervalDomain(lower=0.0, upper=math.tau))
+    axis_region = ContinuousAxisRegion(
+        axis=axis,
+        coordinate_region=(0.0, 1.0),
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=0.0,
+            log2_upper=1.0,
+        ),
+    )
+
+    with pytest.raises(StateSpaceError):
+        ProductRegion(
+            axis_regions=(axis_region,),
+            measure_rule="benchmark-computed-finite-count",
+            volume=1,
+            log2_volume=0.0,
+        )
+
+    component = ProductRegion(
+        axis_regions=(axis_region,),
+        measure_rule="benchmark-computed-finite-count",
+        volume=2,
+        log2_volume=1.0,
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=0.0,
+            log2_upper=2.0,
+        ),
+    )
+
+    assert product_region_from_record(component.to_record()) == component
 
 
 def test_product_region_invariants() -> None:
     axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
-    axis_region = AxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
     with pytest.raises(StateSpaceError):
         ProductRegion(
             axis_regions=(),
@@ -492,6 +900,139 @@ def test_product_region_invariants() -> None:
         )
 
 
+def test_measure_estimate_invariants_and_round_trip() -> None:
+    estimate = MeasureEstimate(
+        kind="estimated",
+        method_id="covering-number-grid-bound",
+        log2_lower=1.0,
+        log2_upper=2.0,
+    )
+
+    record = load_object_document(
+        canonical_document_bytes(estimate.to_record()),
+        description="measure estimate",
+    )
+    parsed = measure_estimate_from_record(record)
+
+    assert parsed == estimate
+    assert MeasureEstimate(kind="exact").to_record() == {"kind": "exact"}
+    with pytest.raises(StateSpaceError):
+        MeasureEstimate(kind="exact", method_id="method")
+    with pytest.raises(StateSpaceError):
+        MeasureEstimate(kind="estimated", log2_lower=1.0, log2_upper=2.0)
+    with pytest.raises(StateSpaceError):
+        MeasureEstimate(kind="estimated", method_id="method", log2_lower=2.0, log2_upper=1.0)
+    with pytest.raises(StateSpaceError):
+        MeasureEstimate(
+            kind="estimated",
+            method_id="method",
+            log2_lower=1.0,
+            log2_upper=math.inf,
+        )
+
+
+def test_sampling_protocol_records_round_trip() -> None:
+    monte_carlo = SamplingProtocol(
+        kind="uniform-monte-carlo",
+        estimator_id="sample-mean",
+        confidence_method_id="hoeffding",
+        census_budget=128,
+    )
+    census = SamplingProtocol(kind="census", census_budget=32)
+
+    monte_carlo_record = load_object_document(
+        canonical_document_bytes(monte_carlo.to_record()),
+        description="sampling protocol",
+    )
+    census_record = load_object_document(
+        canonical_document_bytes(census.to_record()),
+        description="sampling protocol",
+    )
+
+    assert sampling_protocol_from_record(monte_carlo_record) == monte_carlo
+    assert sampling_protocol_from_record(census_record) == census
+
+
+def test_sampling_protocol_invariants() -> None:
+    with pytest.raises(StateSpaceError):
+        SamplingProtocol(kind="latin-hypercube")
+    with pytest.raises(StateSpaceError):
+        SamplingProtocol(
+            kind="uniform-monte-carlo",
+            confidence_method_id="hoeffding",
+        )
+    with pytest.raises(StateSpaceError):
+        SamplingProtocol(
+            kind="uniform-monte-carlo",
+            estimator_id="sample-mean",
+        )
+    with pytest.raises(StateSpaceError):
+        SamplingProtocol(kind="census")
+    with pytest.raises(StateSpaceError):
+        SamplingProtocol(
+            kind="census",
+            estimator_id="sample-mean",
+            census_budget=32,
+        )
+    with pytest.raises(StateSpaceError):
+        SamplingProtocol(
+            kind="uniform-monte-carlo",
+            estimator_id="sample-mean",
+            confidence_method_id="hoeffding",
+            census_budget=0,
+        )
+
+
+def test_estimated_product_region_accepts_bracketed_volume() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+    component = ProductRegion(
+        axis_regions=(axis_region,),
+        measure_rule="product-of-counts",
+        volume=3,
+        log2_volume=1.7,
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=1.0,
+            log2_upper=2.0,
+        ),
+    )
+
+    assert product_region_from_record(component.to_record()) == component
+
+
+def test_estimated_product_region_rejects_invalid_brackets() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+    with pytest.raises(StateSpaceError):
+        ProductRegion(
+            axis_regions=(axis_region,),
+            measure_rule="product-of-counts",
+            volume=3,
+            log2_volume=2.1,
+            measure_estimate=MeasureEstimate(
+                kind="estimated",
+                method_id="covering-number-grid-bound",
+                log2_lower=1.0,
+                log2_upper=2.0,
+            ),
+        )
+    with pytest.raises(StateSpaceError):
+        ProductRegion(
+            axis_regions=(axis_region,),
+            measure_rule="product-of-counts",
+            volume=3,
+            log2_volume=1.7,
+            measure_estimate=MeasureEstimate(
+                kind="estimated",
+                method_id="covering-number-grid-bound",
+                log2_lower=1.0,
+                log2_upper=3.0,
+            ),
+        )
+
+
 def test_state_space_region_invariants() -> None:
     base = _truncated_window_region()
     with pytest.raises(StateSpaceError):
@@ -541,12 +1082,190 @@ def test_state_space_region_invariants() -> None:
         )
 
 
+def test_estimated_state_space_region_contains_component_brackets() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
+    exact_axis_region = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(0, 1),
+        count=2,
+        log2_count=1.0,
+    )
+    estimated_axis_region = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(0, 3),
+        count=4,
+        log2_count=2.0,
+    )
+    exact_component = ProductRegion(
+        axis_regions=(exact_axis_region,),
+        measure_rule="product-of-counts",
+        volume=2,
+        log2_volume=1.0,
+    )
+    estimated_component = ProductRegion(
+        axis_regions=(estimated_axis_region,),
+        measure_rule="benchmark-computed-finite-count",
+        volume=3,
+        log2_volume=1.6,
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=1.0,
+            log2_upper=2.0,
+        ),
+    )
+    region = StateSpaceRegion(
+        id="estimated-region",
+        ambient=_metric_ambient(),
+        components=(exact_component, estimated_component),
+        union_rule="disjoint-union",
+        volume=5,
+        log2_volume=math.log2(5),
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=2.0,
+            log2_upper=math.log2(6),
+        ),
+    )
+
+    assert state_space_region_from_record(region.to_record()) == region
+
+
+def test_estimated_state_space_region_rejects_component_interval_violation() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 3), count=4, log2_count=2.0)
+    component = ProductRegion(
+        axis_regions=(axis_region,),
+        measure_rule="product-of-counts",
+        volume=4,
+        log2_volume=2.0,
+    )
+
+    with pytest.raises(StateSpaceError):
+        StateSpaceRegion(
+            id="estimated-region",
+            ambient=_metric_ambient(),
+            components=(component,),
+            union_rule="disjoint-union",
+            volume=4,
+            log2_volume=2.0,
+            measure_estimate=MeasureEstimate(
+                kind="estimated",
+                method_id="covering-number-grid-bound",
+                log2_lower=1.0,
+                log2_upper=1.5,
+            ),
+        )
+
+
+def test_estimated_product_region_rejects_volume_outside_bracket() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=15))
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 15), count=16, log2_count=4.0)
+    # log2_volume lies inside the bracket, but the integer volume (log2(12) ~ 3.58) does not:
+    # both representative points must lie within the bracket.
+    with pytest.raises(StateSpaceError):
+        ProductRegion(
+            axis_regions=(axis_region,),
+            measure_rule="benchmark-computed-finite-count",
+            volume=12,
+            log2_volume=1.5,
+            measure_estimate=MeasureEstimate(
+                kind="estimated",
+                method_id="covering-number-grid-bound",
+                log2_lower=1.0,
+                log2_upper=2.0,
+            ),
+        )
+
+
+def test_estimated_state_space_region_rejects_volume_outside_bracket() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=15))
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 15), count=16, log2_count=4.0)
+    component = ProductRegion(
+        axis_regions=(axis_region,),
+        measure_rule="benchmark-computed-finite-count",
+        volume=3,
+        log2_volume=1.6,
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=1.0,
+            log2_upper=2.0,
+        ),
+    )
+    # The region's log2_volume is inside its bracket, but volume=64 (log2 == 6) is not.
+    with pytest.raises(StateSpaceError):
+        StateSpaceRegion(
+            id="estimated-region",
+            ambient=_metric_ambient(),
+            components=(component,),
+            union_rule="disjoint-union",
+            volume=64,
+            log2_volume=1.6,
+            measure_estimate=MeasureEstimate(
+                kind="estimated",
+                method_id="covering-number-grid-bound",
+                log2_lower=1.0,
+                log2_upper=2.0,
+            ),
+        )
+
+
+def test_estimated_measure_bounds_handle_large_bit_counts_without_overflow() -> None:
+    # Brackets near 2**1024 overflow a float when materialized as ``2**log2``; the
+    # bracket arithmetic is done in log space, so these validate without raising.
+    estimate = MeasureEstimate(
+        kind="estimated",
+        method_id="covering-number-grid-bound",
+        log2_lower=1023.0,
+        log2_upper=1024.0,
+    )
+    axis = StateSpaceAxis(id="mode", domain=RealIntervalDomain(lower=0.0, upper=4.0))
+
+    def _increment(region_id: str, *, lower: float, upper: float) -> StateSpaceRegion:
+        continuous = ContinuousAxisRegion(
+            axis=axis,
+            coordinate_region=(lower, upper),
+            measure_estimate=estimate,
+        )
+        component = ProductRegion(
+            axis_regions=(continuous,),
+            measure_rule="benchmark-computed-finite-count",
+            volume=2**1023,
+            log2_volume=1023.0,
+            measure_estimate=estimate,
+        )
+        return StateSpaceRegion(
+            id=region_id,
+            ambient=_metric_ambient(),
+            components=(component,),
+            union_rule="disjoint-union",
+            volume=2**1023,
+            log2_volume=1023.0,
+            measure_estimate=estimate,
+        )
+
+    filtration = RegionFiltration(
+        id="large-bits",
+        increments=(
+            _increment("shell-0", lower=0.0, upper=1.0),
+            _increment("shell-1", lower=2.0, upper=3.0),
+        ),
+        volume=2**1024,
+        log2_volume=1024.0,
+    )
+
+    assert region_filtration_from_record(filtration.to_record()) == filtration
+    assert math.isclose(filtration.cumulative_log2_volumes[-1], math.log2(2**1024))
+
+
 def test_shared_axis_ids_must_match_across_components() -> None:
     first_axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=1))
     second_axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
     first = ProductRegion(
         axis_regions=(
-            AxisRegion(axis=first_axis, coordinate_region=(0, 1), count=2, log2_count=1.0),
+            DiscreteAxisRegion(axis=first_axis, coordinate_region=(0, 1), count=2, log2_count=1.0),
         ),
         measure_rule="product-of-counts",
         volume=2,
@@ -555,7 +1274,7 @@ def test_shared_axis_ids_must_match_across_components() -> None:
     )
     second = ProductRegion(
         axis_regions=(
-            AxisRegion(axis=second_axis, coordinate_region=(0, 3), count=4, log2_count=2.0),
+            DiscreteAxisRegion(axis=second_axis, coordinate_region=(0, 3), count=4, log2_count=2.0),
         ),
         measure_rule="product-of-counts",
         volume=4,
@@ -596,9 +1315,9 @@ _filtration_pose_axis = StateSpaceAxis(
 )
 
 
-def _pose_axis_region(*, lower: int, upper: int) -> AxisRegion:
+def _pose_axis_region(*, lower: int, upper: int) -> DiscreteAxisRegion:
     count = upper - lower + 1
-    return AxisRegion(
+    return DiscreteAxisRegion(
         axis=_filtration_pose_axis,
         coordinate_region=(lower, upper),
         count=count,
@@ -649,16 +1368,31 @@ def _digits_filtration() -> RegionFiltration:
 
 def test_axis_regions_disjoint_for_interval_kinds() -> None:
     axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=9))
-    low = AxisRegion(axis=axis, coordinate_region=(0, 2), count=3, log2_count=math.log2(3))
-    high = AxisRegion(axis=axis, coordinate_region=(3, 5), count=3, log2_count=math.log2(3))
-    touching = AxisRegion(axis=axis, coordinate_region=(2, 4), count=3, log2_count=math.log2(3))
+    low = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 2), count=3, log2_count=math.log2(3))
+    high = DiscreteAxisRegion(axis=axis, coordinate_region=(3, 5), count=3, log2_count=math.log2(3))
+    touching = DiscreteAxisRegion(
+        axis=axis,
+        coordinate_region=(2, 4),
+        count=3,
+        log2_count=math.log2(3),
+    )
     assert axis_regions_are_disjoint(low, high)
     assert not axis_regions_are_disjoint(low, touching)
 
     grid_axis = StateSpaceAxis(id="scale", domain=RealGridDomain(lower=0.0, upper=1.0, count=6))
-    grid_low = AxisRegion(axis=grid_axis, coordinate_region=(0, 1), count=2, log2_count=1.0)
-    grid_high = AxisRegion(axis=grid_axis, coordinate_region=(2, 3), count=2, log2_count=1.0)
-    grid_overlap = AxisRegion(axis=grid_axis, coordinate_region=(1, 2), count=2, log2_count=1.0)
+    grid_low = DiscreteAxisRegion(axis=grid_axis, coordinate_region=(0, 1), count=2, log2_count=1.0)
+    grid_high = DiscreteAxisRegion(
+        axis=grid_axis,
+        coordinate_region=(2, 3),
+        count=2,
+        log2_count=1.0,
+    )
+    grid_overlap = DiscreteAxisRegion(
+        axis=grid_axis,
+        coordinate_region=(1, 2),
+        count=2,
+        log2_count=1.0,
+    )
     assert axis_regions_are_disjoint(grid_low, grid_high)
     assert not axis_regions_are_disjoint(grid_low, grid_overlap)
 
@@ -667,13 +1401,13 @@ def test_axis_regions_disjoint_for_enumerated_cells() -> None:
     axis = StateSpaceAxis(
         id="preset", domain=EnumeratedCellsDomain(cells=tuple(f"preset-{i}" for i in range(6)))
     )
-    left = AxisRegion(
+    left = DiscreteAxisRegion(
         axis=axis, coordinate_region=("preset-0", "preset-1"), count=2, log2_count=1.0
     )
-    right = AxisRegion(
+    right = DiscreteAxisRegion(
         axis=axis, coordinate_region=("preset-2", "preset-3"), count=2, log2_count=1.0
     )
-    overlap = AxisRegion(
+    overlap = DiscreteAxisRegion(
         axis=axis, coordinate_region=("preset-1", "preset-4"), count=2, log2_count=1.0
     )
     assert axis_regions_are_disjoint(left, right)
@@ -682,8 +1416,8 @@ def test_axis_regions_disjoint_for_enumerated_cells() -> None:
 
 def test_binary_vector_axis_regions_are_never_disjoint() -> None:
     axis = StateSpaceAxis(id="spectator-occupancy", domain=BinaryVectorDomain(dimension=8))
-    left = AxisRegion(axis=axis, coordinate_region=(0, 1), count=4, log2_count=2.0)
-    right = AxisRegion(axis=axis, coordinate_region=(2, 3, 4), count=8, log2_count=3.0)
+    left = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 1), count=4, log2_count=2.0)
+    right = DiscreteAxisRegion(axis=axis, coordinate_region=(2, 3, 4), count=8, log2_count=3.0)
     # The all-zeros vector is a subset of every enabled set, so it lies in both.
     assert not axis_regions_are_disjoint(left, right)
 
@@ -691,8 +1425,8 @@ def test_binary_vector_axis_regions_are_never_disjoint() -> None:
 def test_axis_regions_over_different_axes_are_not_comparable() -> None:
     left_axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))
     right_axis = StateSpaceAxis(id="scale", domain=IntegerRangeDomain(lower=0, upper=3))
-    left = AxisRegion(axis=left_axis, coordinate_region=(0, 0), count=1, log2_count=0.0)
-    right = AxisRegion(axis=right_axis, coordinate_region=(0, 0), count=1, log2_count=0.0)
+    left = DiscreteAxisRegion(axis=left_axis, coordinate_region=(0, 0), count=1, log2_count=0.0)
+    right = DiscreteAxisRegion(axis=right_axis, coordinate_region=(0, 0), count=1, log2_count=0.0)
     with pytest.raises(StateSpaceError):
         axis_regions_are_disjoint(left, right)
 
@@ -720,7 +1454,7 @@ def test_product_regions_without_distinguishing_evidence_are_not_certified_disjo
     scale_axis = StateSpaceAxis(id="scale", domain=IntegerRangeDomain(lower=0, upper=3))
     pose_component = ProductRegion(
         axis_regions=(
-            AxisRegion(axis=pose_axis, coordinate_region=(0, 0), count=1, log2_count=0.0),
+            DiscreteAxisRegion(axis=pose_axis, coordinate_region=(0, 0), count=1, log2_count=0.0),
         ),
         measure_rule="product-of-counts",
         volume=1,
@@ -728,7 +1462,7 @@ def test_product_regions_without_distinguishing_evidence_are_not_certified_disjo
     )
     scale_component = ProductRegion(
         axis_regions=(
-            AxisRegion(axis=scale_axis, coordinate_region=(0, 0), count=1, log2_count=0.0),
+            DiscreteAxisRegion(axis=scale_axis, coordinate_region=(0, 0), count=1, log2_count=0.0),
         ),
         measure_rule="product-of-counts",
         volume=1,
@@ -759,6 +1493,65 @@ def test_region_filtration_reports_cumulative_volumes() -> None:
         math.log2(40),
     )
     assert filtration.ambient == _metric_ambient()
+
+
+def test_region_filtration_accepts_mixed_estimated_increment_bounds() -> None:
+    exact = _digit_shell_region("digits-shell-0", lower=0, upper=0)
+    estimated = StateSpaceRegion(
+        id="digits-shell-estimated",
+        ambient=_metric_ambient(),
+        components=_digit_shell_region("digits-shell-1", lower=1, upper=1).components,
+        union_rule="disjoint-union",
+        volume=12,
+        log2_volume=math.log2(12),
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=math.log2(9),
+            log2_upper=math.log2(13),
+        ),
+    )
+    filtration = RegionFiltration(
+        id="digits-estimated-curriculum",
+        increments=(exact, estimated),
+        volume=20,
+        log2_volume=math.log2(20),
+    )
+
+    assert region_filtration_from_record(filtration.to_record()) == filtration
+
+
+def test_region_filtration_rejects_estimated_cumulative_interval_violations() -> None:
+    exact = _digit_shell_region("digits-shell-0", lower=0, upper=0)
+    estimated = StateSpaceRegion(
+        id="digits-shell-estimated",
+        ambient=_metric_ambient(),
+        components=_digit_shell_region("digits-shell-1", lower=1, upper=1).components,
+        union_rule="disjoint-union",
+        volume=12,
+        log2_volume=math.log2(12),
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=math.log2(9),
+            log2_upper=math.log2(13),
+        ),
+    )
+
+    with pytest.raises(StateSpaceError):
+        RegionFiltration(
+            id="digits-estimated-curriculum",
+            increments=(exact, estimated),
+            volume=24,
+            log2_volume=math.log2(20),
+        )
+    with pytest.raises(StateSpaceError):
+        RegionFiltration(
+            id="digits-estimated-curriculum",
+            increments=(exact, estimated),
+            volume=20,
+            log2_volume=math.log2(24),
+        )
 
 
 def test_region_filtration_rejects_overlapping_increments() -> None:
@@ -819,7 +1612,7 @@ def test_region_filtration_rejects_conflicting_shared_axes() -> None:
         components=(
             ProductRegion(
                 axis_regions=(
-                    AxisRegion(
+                    DiscreteAxisRegion(
                         axis=other_pose_axis,
                         coordinate_region=(4, 4),
                         count=1,
@@ -842,6 +1635,68 @@ def test_region_filtration_rejects_conflicting_shared_axes() -> None:
             increments=(_digit_shell_region("digits-shell-0", lower=0, upper=0), conflicting),
             volume=11,
             log2_volume=math.log2(11),
+        )
+
+
+def test_accessible_subspace_records_round_trip() -> None:
+    subspace = AccessibleSubspace(
+        ladder_id="digits-canvas-ladder",
+        per_configuration_capacity=_digits_grid_region(),
+        exclusions=(
+            _digit_shell_region("digits-shell-0", lower=0, upper=0),
+            _digit_shell_region("digits-shell-1", lower=1, upper=1),
+        ),
+        frontier_rationale="The canvas ladder is unbounded in sampled configurations.",
+    )
+
+    record = load_object_document(
+        canonical_document_bytes(subspace.to_record()),
+        description="accessible subspace",
+    )
+
+    assert accessible_subspace_from_record(record) == subspace
+
+
+def test_accessible_subspace_defaults_to_empty_exclusions() -> None:
+    subspace = AccessibleSubspace(
+        ladder_id="digits-canvas-ladder",
+        per_configuration_capacity=_digits_grid_region(),
+        frontier_rationale="The canvas ladder is unbounded in sampled configurations.",
+    )
+
+    assert "exclusions" not in subspace.to_record()
+    assert accessible_subspace_from_record(subspace.to_record()) == subspace
+
+
+def test_accessible_subspace_invariants() -> None:
+    with pytest.raises(StateSpaceError):
+        AccessibleSubspace(
+            ladder_id="",
+            per_configuration_capacity=_digits_grid_region(),
+            frontier_rationale="rationale",
+        )
+    with pytest.raises(StateSpaceError):
+        AccessibleSubspace(
+            ladder_id="digits-canvas-ladder",
+            per_configuration_capacity=_digits_grid_region(),
+            frontier_rationale="",
+        )
+    with pytest.raises(StateSpaceError):
+        AccessibleSubspace(
+            ladder_id="digits-canvas-ladder",
+            per_configuration_capacity=_digits_grid_region(),
+            exclusions=(_chess_region(),),
+            frontier_rationale="rationale",
+        )
+    with pytest.raises(StateSpaceError):
+        AccessibleSubspace(
+            ladder_id="digits-canvas-ladder",
+            per_configuration_capacity=_digits_grid_region(),
+            exclusions=(
+                _digit_shell_region("digits-shell-0", lower=0, upper=1),
+                _digit_shell_region("digits-shell-1", lower=1, upper=2),
+            ),
+            frontier_rationale="rationale",
         )
 
 

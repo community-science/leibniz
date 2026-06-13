@@ -11,9 +11,10 @@ from array import array
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, Self, cast
 
 from leibniz.architectures import ArchitectureManifest
+from leibniz.target_contracts import TargetContract
 from leibniz.tensor_shapes import TensorShape
 
 __all__ = [
@@ -23,36 +24,45 @@ __all__ = [
     "build_architecture_sequential",
     "build_cosine_lr_schedule",
     "build_cross_entropy_loss",
+    "build_loss",
+    "build_mse_loss",
     "build_optimizer",
     "build_plateau_lr_schedule",
+    "build_relative_l2_loss",
     "make_float_tensor",
+    "make_empty_float_tensor",
     "make_long_tensor",
     "no_grad_context",
     "optimizer_step",
     "OperationFallbackSequential",
-    "preferred_tensor_runtime_device_kind",
     "seed_runtime",
     "softmax_prediction_rows",
     "softmax_target_mass_tensor",
     "softmax_target_masses",
     "synchronize_runtime",
     "TensorRuntime",
+    "TensorRuntimeOperationRecord",
     "TensorElementParameter",
     "TensorElementParameterDType",
     "TensorBatchProgram",
     "TensorElementRecipe",
     "TensorElementDType",
     "TensorRuntimeError",
+    "TensorRuntimeTensorSpec",
     "TensorRuntimeDevice",
     "TensorRuntimeDeviceKind",
     "tensor_element_compile_fallback_records",
     "tensor_runtime_available_memory_bytes",
+    "tensor_runtime_capture_operations",
     "tensor_runtime_construct_tensor",
     "tensor_runtime_default_device",
     "tensor_runtime_device_choices",
     "tensor_runtime_device_kinds",
     "tensor_runtime_has_fixed_device_memory",
+    "tensor_runtime_operation_capture",
+    "tensor_runtime_project_operations",
     "tensor_runtime_profile_operator_rows",
+    "tensor_runtime_shape_element_count",
     "tensor_runtime_total_memory_bytes",
     "tensor_runtime_used_memory_bytes",
     "tensor_value_to_host",
@@ -68,8 +78,8 @@ __all__ = [
 
 TensorRuntimeDevice = Literal["auto", "cpu", "cuda", "mps"]
 TensorRuntimeDeviceKind = Literal["cpu", "cuda", "mps"]
-TensorElementDType = Literal["float32", "int64"]
-TensorElementParameterDType = Literal["float32", "int64"]
+TensorElementDType = Literal["float32", "float64", "int64"]
+TensorElementParameterDType = Literal["float32", "float64", "int64"]
 _available_devices = frozenset({"auto", "cpu", "cuda", "mps"})
 _roofline_cache: dict[str, dict[str, object]] = {}
 _tensor_element_kernel_cache: dict[tuple[object, ...], Any] = {}
@@ -84,6 +94,7 @@ _tensor_element_parameter_values_key_cache: dict[
 _tensor_element_parameter_values_key_cache_minimum_size = 64
 _tensor_element_tile_size = 131_072
 _require_tensor_compile_environment_variable = "LEIBNIZ_REQUIRE_TENSOR_COMPILE"
+_require_device_residency_environment_variable = "LEIBNIZ_REQUIRE_DEVICE_RESIDENCY"
 
 
 class TensorRuntimeError(ValueError):
@@ -97,6 +108,90 @@ class TensorRuntime:
     torch: Any
     device: Any
     device_kind: Literal["cpu", "cuda", "mps"]
+
+
+@dataclass(frozen=True, slots=True)
+class TensorRuntimeTensorSpec:
+    """Backend tensor shape and dtype observed during runtime operation capture."""
+
+    shape: tuple[int, ...]
+    dtype: str
+
+
+@dataclass(frozen=True, slots=True)
+class TensorRuntimeOperationRecord:
+    """One captured tensor runtime operation with tensor inputs and outputs."""
+
+    name: str
+    arguments: tuple[object, ...]
+    keyword_arguments: tuple[tuple[str, object], ...]
+    input_tensors: tuple[TensorRuntimeTensorSpec, ...]
+    output_tensors: tuple[TensorRuntimeTensorSpec, ...]
+
+
+class _TensorRuntimeOperationCapture:
+    """Context manager that captures a tensor runtime operation stream."""
+
+    def __init__(self, runtime: TensorRuntime) -> None:
+        self._runtime = runtime
+        self._mode: object | None = None
+        self._operations: list[TensorRuntimeOperationRecord] = []
+
+    def __enter__(self) -> Self:
+        if self._mode is not None:
+            raise TensorRuntimeError("tensor runtime operation capture is already active")
+        del self._runtime
+        from torch.utils._python_dispatch import TorchDispatchMode
+
+        parent = self
+
+        class _OperationCaptureMode(TorchDispatchMode):
+            def __torch_dispatch__(
+                self,
+                func: object,
+                types: object,
+                args: tuple[object, ...] = (),
+                kwargs: Mapping[str, object] | None = None,
+            ) -> object:
+                del types
+                keyword_arguments = dict(kwargs or {})
+                input_specs = _tensor_runtime_tensor_specs_from_value(args)
+                output = cast(Callable[..., object], func)(*args, **keyword_arguments)
+                output_specs = _tensor_runtime_tensor_specs_from_value(output)
+                if not output_specs:
+                    return output
+                parent._operations.append(
+                    TensorRuntimeOperationRecord(
+                        name=_tensor_runtime_operation_name(func),
+                        arguments=tuple(
+                            _tensor_runtime_operation_argument(arg) for arg in args
+                        ),
+                        keyword_arguments=tuple(
+                            (key, _tensor_runtime_operation_argument(value))
+                            for key, value in sorted(
+                                keyword_arguments.items(),
+                                key=lambda item: item[0],
+                            )
+                        ),
+                        input_tensors=input_specs,
+                        output_tensors=output_specs,
+                    )
+                )
+                return output
+
+        self._mode = _OperationCaptureMode()
+        self._mode.__enter__()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        if self._mode is None:
+            return
+        mode = self._mode
+        self._mode = None
+        mode.__exit__(exc_type, exc, traceback)  # type: ignore[attr-defined]
+
+    def records(self) -> tuple[TensorRuntimeOperationRecord, ...]:
+        return tuple(self._operations)
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +319,48 @@ def resolve_host_tensor_runtime() -> TensorRuntime:
     return resolve_tensor_runtime("cpu")
 
 
+def tensor_runtime_shape_element_count(shape: tuple[int, ...]) -> int:
+    """Return the tensor element count for a positive shape."""
+
+    return TensorShape.from_axes(shape).element_count
+
+
+def tensor_runtime_capture_operations(
+    runtime: TensorRuntime,
+    callback: Callable[[], object],
+) -> tuple[TensorRuntimeOperationRecord, ...]:
+    """Capture the tensor runtime operation stream produced by a callback."""
+
+    with tensor_runtime_operation_capture(runtime) as capture:
+        callback()
+    return capture.records()
+
+
+def tensor_runtime_operation_capture(runtime: TensorRuntime) -> _TensorRuntimeOperationCapture:
+    """Create a context manager that captures tensor runtime operations."""
+
+    return _TensorRuntimeOperationCapture(runtime)
+
+
+def tensor_runtime_project_operations(
+    runtime: TensorRuntime,
+    callback: Callable[[], object],
+) -> tuple[TensorRuntimeOperationRecord, ...]:
+    """Project a tensor operation stream without executing tensor kernels."""
+
+    try:
+        from torch._subclasses.fake_tensor import FakeTensorMode
+    except ImportError as error:
+        raise TensorRuntimeError(
+            "PyTorch FakeTensorMode is required for dry-run projection"
+        ) from error
+
+    fake_mode = FakeTensorMode(allow_non_fake_inputs=True)
+    with tensor_runtime_operation_capture(runtime) as capture, fake_mode:
+        callback()
+    return capture.records()
+
+
 def tensor_value_to_host(value: Any) -> Any:
     """Detach a backend tensor-like value and move it to host memory when possible."""
 
@@ -315,7 +452,7 @@ class OperationFallbackSequential:
     ) -> Any:
         torch = runtime.torch
 
-        class Module(torch.nn.Module):  # type: ignore[misc]
+        class Module(torch.nn.Module):
             def __init__(self) -> None:
                 torch.nn.Module.__init__(self)
                 self._preferred = _OperationPlacement(
@@ -356,6 +493,13 @@ class OperationFallbackSequential:
                         if placement.device_kind == "cpu":
                             raise
                         reason = str(error)
+                        if _truthy_environment_flag(
+                            _require_device_residency_environment_variable
+                        ):
+                            raise TensorRuntimeError(
+                                "LEIBNIZ_REQUIRE_DEVICE_RESIDENCY blocked CPU "
+                                f"fallback for operation {index}: {reason}"
+                            ) from error
                         self._move_operation_to_fallback(index=index, reason=reason)
                         current = self._operations[index](current.to(self._fallback.device))
                 return current.to(self._preferred.device)
@@ -498,14 +642,6 @@ def tensor_runtime_device_kinds(
     """Return available runtime device kinds in fallback order."""
 
     return _resolve_device_kinds(torch=_torch(), requested_device=requested_device)
-
-
-def preferred_tensor_runtime_device_kind(
-    requested_device: TensorRuntimeDevice = "auto",
-) -> TensorRuntimeDeviceKind:
-    """Return the first device kind that would be used for a request."""
-
-    return tensor_runtime_device_kinds(requested_device)[0]
 
 
 def architecture_supported_by_tensor_runtime(
@@ -707,6 +843,42 @@ def build_cross_entropy_loss(runtime: TensorRuntime) -> Any:
     return _torch().nn.CrossEntropyLoss()
 
 
+def build_mse_loss(runtime: TensorRuntime) -> Any:
+    """Build a mean-squared-error loss module."""
+
+    _ = runtime
+    return _torch().nn.MSELoss()
+
+
+def build_relative_l2_loss(runtime: TensorRuntime) -> Any:
+    """Build a relative L2 loss closure."""
+
+    _ = runtime
+    torch = _torch()
+
+    def relative_l2_loss(predictions: Any, targets: Any) -> Any:
+        residual_norm = torch.linalg.vector_norm(predictions - targets)
+        target_norm = torch.linalg.vector_norm(targets)
+        return residual_norm / torch.maximum(
+            target_norm,
+            torch.tensor(1e-12, dtype=target_norm.dtype, device=target_norm.device),
+        )
+
+    return relative_l2_loss
+
+
+def build_loss(runtime: TensorRuntime, contract: TargetContract) -> Any:
+    """Build the tensor loss declared by a target contract."""
+
+    if contract.loss_id == "cross-entropy":
+        return build_cross_entropy_loss(runtime)
+    if contract.loss_id == "mse":
+        return build_mse_loss(runtime)
+    if contract.loss_id == "relative-l2":
+        return build_relative_l2_loss(runtime)
+    raise TensorRuntimeError(f"unsupported tensor loss: {contract.loss_id}")
+
+
 def no_grad_context(runtime: TensorRuntime) -> Any:
     """Return a torch.no_grad() context manager for inference."""
 
@@ -770,16 +942,27 @@ def build_optimizer(
 
 
 class _LossSearchOptimizer:
+    """Deterministic host-interactive reference optimizer.
+
+    This optimizer intentionally evaluates candidate losses on the host during
+    each step. Its line search is the default local reference path because it
+    does not introduce a learning-rate knob; device hot-path gates must opt into
+    a non-host-interactive optimizer such as Adam.
+    """
+
     requires_loss_closure = True
     _beta1 = 0.9
     _beta2 = 0.999
     _epsilon = 1e-8
+    _armijo_sufficient_decrease = 0.1
+    _maximum_step_size = 1.0
+    _minimum_step_size = 1e-8
 
     def __init__(self, parameters: Any) -> None:
         self._parameters = tuple(parameters)
         self.param_groups: list[dict[str, object]] = [{"params": list(self._parameters)}]
         self.state: dict[object, dict[str, object]] = {}
-        self._step_size = 1.0
+        self._accepted_step_size = 1e-3
 
     def zero_grad(self, *, set_to_none: bool = False) -> None:
         for parameter in self._parameters:
@@ -816,15 +999,40 @@ class _LossSearchOptimizer:
             )
             for parameter, gradient in zip(self._parameters, gradients, strict=True)
         )
+        self._commit_direction_records(
+            records=direction_records,
+            step=next_step,
+        )
         directional_derivative = sum(
             float((gradient * record["direction"]).sum().detach())
             for gradient, record in zip(gradients, direction_records, strict=True)
             if gradient is not None and record is not None
         )
         if directional_derivative <= 0.0 or not math.isfinite(directional_derivative):
+            direction_records = tuple(
+                None
+                if gradient is None
+                else {
+                    "direction": gradient,
+                    "exp_avg": record["exp_avg"] if record is not None else gradient,
+                    "exp_avg_sq": (
+                        record["exp_avg_sq"] if record is not None else gradient * gradient
+                    ),
+                }
+                for gradient, record in zip(gradients, direction_records, strict=True)
+            )
+            directional_derivative = sum(
+                float((gradient * record["direction"]).sum().detach())
+                for gradient, record in zip(gradients, direction_records, strict=True)
+                if gradient is not None and record is not None
+            )
+        if directional_derivative <= 0.0 or not math.isfinite(directional_derivative):
             return baseline_loss
         originals = tuple(parameter.detach().clone() for parameter in self._parameters)
-        step_size = min(self._step_size, max(1e-12, baseline_value / directional_derivative))
+        step_size = min(
+            self._maximum_step_size,
+            max(self._minimum_step_size, self._accepted_step_size * 2.0),
+        )
         for _attempt in range(12):
             with torch.no_grad():
                 for parameter, original, record in zip(
@@ -840,26 +1048,38 @@ class _LossSearchOptimizer:
             with torch.enable_grad():
                 trial_loss = closure()
             trial_value = float(trial_loss.detach())
-            if math.isfinite(trial_value) and trial_value <= baseline_value:
-                for parameter, record in zip(
-                    self._parameters,
-                    direction_records,
-                    strict=True,
-                ):
-                    if record is not None:
-                        self.state[parameter] = {
-                            "step": next_step,
-                            "exp_avg": record["exp_avg"],
-                            "exp_avg_sq": record["exp_avg_sq"],
-                        }
-                self._step_size = min(step_size * 2.0, 1.0)
+            sufficient_decrease = (
+                baseline_value
+                - self._armijo_sufficient_decrease * step_size * directional_derivative
+            )
+            if math.isfinite(trial_value) and trial_value <= sufficient_decrease:
+                self._accepted_step_size = min(step_size, self._maximum_step_size)
                 return trial_loss
             step_size *= 0.5
+            if step_size < self._minimum_step_size:
+                break
         with torch.no_grad():
             for parameter, original in zip(self._parameters, originals, strict=True):
                 parameter.copy_(original)
-        self._step_size = max(step_size, 1e-12)
+        self._accepted_step_size = max(
+            min(self._accepted_step_size, step_size),
+            self._minimum_step_size,
+        )
         return baseline_loss
+
+    def _commit_direction_records(
+        self,
+        *,
+        records: Sequence[dict[str, Any] | None],
+        step: int,
+    ) -> None:
+        for parameter, record in zip(self._parameters, records, strict=True):
+            if record is not None:
+                self.state[parameter] = {
+                    "step": step,
+                    "exp_avg": record["exp_avg"],
+                    "exp_avg_sq": record["exp_avg_sq"],
+                }
 
     def _next_step_index(self) -> int:
         steps = (
@@ -944,6 +1164,15 @@ def make_float_tensor(runtime: TensorRuntime, values: Any, *, device: Any) -> An
     return torch.tensor(values, dtype=torch.float32, device=device)
 
 
+def make_empty_float_tensor(runtime: TensorRuntime, shape: Sequence[int], *, device: Any) -> Any:
+    """Create an uninitialized float32 tensor on the given device."""
+
+    _ = runtime
+    torch = _torch()
+    resolved_shape = tuple(_positive_tensor_extent(extent) for extent in shape)
+    return torch.empty(resolved_shape, dtype=torch.float32, device=device)
+
+
 def make_long_tensor(runtime: TensorRuntime, values: Any, *, device: Any) -> Any:
     """Create a long (int64) tensor on the given device."""
 
@@ -962,33 +1191,58 @@ def _calibrated_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
     }
     try:
         torch = runtime.torch
-        matrix_size = 512
-        first = torch.randn(
-            (matrix_size, matrix_size),
-            dtype=torch.float32,
-            device=runtime.device,
-        )
-        second = torch.randn(
-            (matrix_size, matrix_size),
-            dtype=torch.float32,
-            device=runtime.device,
-        )
-        _synchronize_runtime(runtime)
-        with torch.no_grad():
-            for _ in range(1):
-                _ = first @ second
-        _synchronize_runtime(runtime)
-        matmul_repeats = 1
+        compute_points: list[dict[str, object]] = []
+        peak_compute_per_second = 0.0
+        chosen_matrix_size = 0
+        matmul_repeats = 0
         matmul_seconds = 0.0
-        while matmul_repeats <= 64 and matmul_seconds < 0.02:
-            started = _monotonic_seconds()
+        for matrix_size in (512, 1024, 2048, 4096):
+            first = torch.randn(
+                (matrix_size, matrix_size),
+                dtype=torch.float32,
+                device=runtime.device,
+            )
+            second = torch.randn(
+                (matrix_size, matrix_size),
+                dtype=torch.float32,
+                device=runtime.device,
+            )
+            _synchronize_runtime(runtime)
             with torch.no_grad():
-                for _ in range(matmul_repeats):
+                for _ in range(1):
                     _ = first @ second
             _synchronize_runtime(runtime)
-            matmul_seconds = _monotonic_seconds() - started
-            if matmul_seconds < 0.02:
-                matmul_repeats *= 2
+            repeats = 1
+            seconds = 0.0
+            while repeats <= 64 and seconds < 0.02:
+                started = _monotonic_seconds()
+                with torch.no_grad():
+                    for _ in range(repeats):
+                        _ = first @ second
+                _synchronize_runtime(runtime)
+                seconds = _monotonic_seconds() - started
+                if seconds < 0.02:
+                    repeats *= 2
+            if seconds <= 0:
+                continue
+            flops = 2.0 * matrix_size * matrix_size * matrix_size * repeats
+            compute_per_second = flops / seconds
+            compute_points.append(
+                {
+                    "matrix_size": matrix_size,
+                    "repeats": repeats,
+                    "seconds": seconds,
+                    "peak_compute_per_second": compute_per_second,
+                }
+            )
+            previous_peak = peak_compute_per_second
+            if compute_per_second > peak_compute_per_second:
+                peak_compute_per_second = compute_per_second
+                chosen_matrix_size = matrix_size
+                matmul_repeats = repeats
+                matmul_seconds = seconds
+            if previous_peak > 0 and compute_per_second < previous_peak * 1.10:
+                break
 
         element_count = 8 * 1024 * 1024
         source = torch.randn((element_count,), dtype=torch.float32, device=runtime.device)
@@ -1011,7 +1265,7 @@ def _calibrated_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
     except Exception as error:  # pragma: no cover - hardware/runtime dependent
         record["reason"] = f"roofline calibration failed: {error}"
         return record
-    if matmul_seconds <= 0 or copy_seconds <= 0:
+    if peak_compute_per_second <= 0 or matmul_seconds <= 0 or copy_seconds <= 0:
         record["reason"] = "roofline calibration completed too quickly to measure"
         return record
     copy_bytes = 2.0 * element_count * 4 * copy_repeats
@@ -1019,12 +1273,11 @@ def _calibrated_roofline_record(runtime: TensorRuntime) -> dict[str, object]:
         {
             "status": "calibrated",
             "compute_calibration_seconds": matmul_seconds,
-            "compute_calibration_matrix_size": matrix_size,
+            "compute_calibration_matrix_size": chosen_matrix_size,
+            "compute_calibration_chosen_matrix_size": chosen_matrix_size,
+            "compute_calibration_points": compute_points,
             "compute_calibration_repeats": matmul_repeats,
-            "peak_compute_per_second": (
-                2.0 * matrix_size * matrix_size * matrix_size * matmul_repeats
-            )
-            / matmul_seconds,
+            "peak_compute_per_second": peak_compute_per_second,
             "bandwidth_calibration_seconds": copy_seconds,
             "bandwidth_calibration_bytes": copy_bytes,
             "bandwidth_calibration_repeats": copy_repeats,
@@ -1126,6 +1379,10 @@ def _mps_available(torch: Any) -> bool:
     return bool(callable(is_available) and is_available())
 
 
+def _truthy_environment_flag(name: str) -> bool:
+    return os.environ.get(name, "") not in {"", "0"}
+
+
 def _positive_tensor_extent(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TensorRuntimeError("tensor shape extents must be integers")
@@ -1137,6 +1394,8 @@ def _positive_tensor_extent(value: object) -> int:
 def _tensor_element_dtype(*, runtime: TensorRuntime, dtype: TensorElementDType) -> Any:
     if dtype == "float32":
         return runtime.torch.float32
+    if dtype == "float64":
+        return runtime.torch.float64
     if dtype == "int64":
         return runtime.torch.long
     raise TensorRuntimeError(f"unsupported tensor element dtype: {dtype}")
@@ -1277,6 +1536,7 @@ def _compiled_tensor_element_parameters(
     scalar_aliases: dict[str, tuple[str, int]] = {}
     scalar_groups: dict[TensorElementParameterDType, list[tuple[str, Any]]] = {
         "float32": [],
+        "float64": [],
         "int64": [],
     }
     for name, declaration in declarations.items():
@@ -1345,8 +1605,6 @@ def _tensor_element_parameter_cache_key(
     name: str,
     parameter: TensorElementParameter,
 ) -> tuple[object, ...] | None:
-    if parameter.dynamic_axes:
-        return None
     return (
         program.cache_key if program.cache_key is not None else id(program.kernel),
         runtime.device_kind,
@@ -1367,6 +1625,8 @@ def _tensor_element_parameter_values_key(parameter: TensorElementParameter) -> b
             return cached[1]
     if parameter.dtype == "float32":
         values_key = array("f", (float(value) for value in parameter.values)).tobytes()
+    elif parameter.dtype == "float64":
+        values_key = array("d", (float(value) for value in parameter.values)).tobytes()
     elif parameter.dtype == "int64":
         values_key = array("q", (int(value) for value in parameter.values)).tobytes()
     else:
@@ -1386,6 +1646,8 @@ def _tensor_element_parameter_dtype(
 ) -> Any:
     if dtype == "float32":
         return runtime.torch.float32
+    if dtype == "float64":
+        return runtime.torch.float64
     if dtype == "int64":
         return runtime.torch.long
     raise TensorRuntimeError(f"unsupported tensor element parameter dtype: {dtype}")
@@ -1565,6 +1827,78 @@ def _torch() -> Any:
         return cast(Any, importlib.import_module("torch"))
     except ImportError as error:
         raise TensorRuntimeError("PyTorch is required to run benchmark training") from error
+
+
+def _tensor_runtime_operation_name(func: object) -> str:
+    raw = str(func)
+    if raw.startswith("aten."):
+        return raw
+    name = getattr(func, "__name__", None)
+    if isinstance(name, str) and name:
+        return f"aten.{name}"
+    return raw
+
+
+def _tensor_runtime_tensor_specs_from_value(
+    value: object,
+) -> tuple[TensorRuntimeTensorSpec, ...]:
+    specs: list[TensorRuntimeTensorSpec] = []
+    _append_tensor_runtime_tensor_specs(specs, value)
+    return tuple(specs)
+
+
+def _append_tensor_runtime_tensor_specs(
+    specs: list[TensorRuntimeTensorSpec],
+    value: object,
+) -> None:
+    shape = getattr(value, "shape", None)
+    dtype = getattr(value, "dtype", None)
+    if shape is not None and dtype is not None:
+        try:
+            specs.append(
+                TensorRuntimeTensorSpec(
+                    shape=tuple(int(extent) for extent in shape),
+                    dtype=str(dtype).removeprefix("torch."),
+                )
+            )
+            return
+        except TypeError:
+            pass
+    if isinstance(value, Mapping):
+        for item in cast(Mapping[object, object], value).values():
+            _append_tensor_runtime_tensor_specs(specs, item)
+        return
+    if isinstance(value, (tuple, list)):
+        for item in cast(Sequence[object], value):
+            _append_tensor_runtime_tensor_specs(specs, item)
+
+
+def _tensor_runtime_operation_argument(value: object) -> object:
+    shape = getattr(value, "shape", None)
+    dtype = getattr(value, "dtype", None)
+    if shape is not None and dtype is not None:
+        try:
+            return TensorRuntimeTensorSpec(
+                shape=tuple(int(extent) for extent in shape),
+                dtype=str(dtype).removeprefix("torch."),
+            )
+        except TypeError:
+            pass
+    if isinstance(value, (bool, int, float, str)) or value is None:
+        return value
+    if isinstance(value, Mapping):
+        return tuple(
+            (str(key), _tensor_runtime_operation_argument(item))
+            for key, item in sorted(
+                cast(Mapping[object, object], value).items(),
+                key=lambda item: str(item[0]),
+            )
+        )
+    if isinstance(value, (tuple, list)):
+        return tuple(
+            _tensor_runtime_operation_argument(item) for item in cast(Sequence[object], value)
+        )
+    return repr(value)
 
 
 def _positive_memory_bytes(value: object, *, field: str) -> int:

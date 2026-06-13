@@ -53,16 +53,8 @@ def test_model_operator_summary_classifies_formal_semantics() -> None:
     ]
     assert [operator.parameter_count for operator in plan.operators] == [0, 0, 50]
     assert [operator.storage_bytes for operator in plan.operators] == [0, 0, 200]
-    assert [operator.inference_compute for operator in plan.operators] == [576, 0, 80]
-    assert [operator.training_compute_per_sample for operator in plan.operators] == [
-        1152,
-        0,
-        240,
-    ]
     assert plan.parameter_count == 50
     assert plan.storage_bytes == 200
-    assert plan.inference_compute == 656
-    assert plan.training_compute_per_sample == 1392
 
 
 def test_model_operator_summary_rejects_unknown_operator_kind() -> None:
@@ -139,16 +131,6 @@ def test_convolution_alias_routes_through_local_affine_semantics() -> None:
         == local_affine_plan.operators[0].parameter_count
         == 80
     )
-    assert (
-        convolution_plan.operators[0].inference_compute
-        == local_affine_plan.operators[0].inference_compute
-        == 82944
-    )
-    assert (
-        convolution_plan.operators[0].training_compute_per_sample
-        == local_affine_plan.operators[0].training_compute_per_sample
-        == 248832
-    )
     assert output.shape == (2, 10)
 
 
@@ -189,8 +171,6 @@ def test_relu_alias_routes_through_rectified_linear_activation_semantics() -> No
     assert plan.operators[1].descriptor.aliases == ("relu",)
     assert plan.operators[1].output_shape == (4, 8, 8)
     assert plan.operators[1].parameter_count == 0
-    assert plan.operators[1].inference_compute == 256
-    assert plan.operators[1].training_compute_per_sample == 512
     assert output.shape == (2, 10)
 
 
@@ -242,7 +222,6 @@ def test_fixed_support_affine_projects_variable_canvas_to_fixed_convnet_shape() 
         (10,),
     ]
     assert plan.operators[0].parameter_count == 12
-    assert plan.operators[0].inference_compute == 3185
     assert output.shape == (2, 10)
 
 
@@ -357,7 +336,6 @@ def test_program_effect_summary_resolves_branch_share_and_merge_trace() -> None:
 
     assert plan.output_shape == (1, 8, 8)
     assert plan.parameter_count == 0
-    assert plan.inference_compute == 0
     assert [summary.descriptor.kind for summary in plan.effects] == [
         "branch",
         "parameter-sharing",
@@ -377,7 +355,7 @@ def test_program_effect_summary_resolves_branch_share_and_merge_trace() -> None:
     assert plan.to_record()["output_shapes"] == [[1, 8, 8]]
 
 
-def test_program_effect_summary_scales_nested_repeat_cost() -> None:
+def test_program_effect_summary_scales_nested_repeat_parameters() -> None:
     plan = summarize_model_program_effects(
         input_shape=(4,),
         effects=(
@@ -385,19 +363,16 @@ def test_program_effect_summary_scales_nested_repeat_cost() -> None:
                 kind="repeat",
                 repetitions=3,
                 nested_parameter_count=5,
-                nested_inference_compute=11,
             ),
         ),
     )
 
     assert plan.output_shape == (4,)
     assert plan.parameter_count == 15
-    assert plan.inference_compute == 33
     assert plan.effects[0].descriptor.shape_law == "preserve-shape"
     assert plan.effects[0].trace == (
         "repeat count=3",
         "nested_parameter_count=5",
-        "nested_inference_compute=11",
     )
 
 

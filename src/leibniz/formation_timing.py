@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from leibniz.cost_metrology import measure_program_cost
 from leibniz.observation_generation import load_generator
 from leibniz.tensor_runtime import (
     TensorRuntimeDevice,
     TensorRuntimeError,
     resolve_tensor_runtime,
+    runtime_roofline_record,
     tensor_runtime_available_memory_bytes,
     tensor_runtime_profile_operator_rows,
     validate_tensor_runtime_device,
@@ -99,6 +101,11 @@ def profile_formation_operators(plan: FormationOperatorProfilePlan) -> dict[str,
         )
     except TensorRuntimeError as error:
         raise FormationTimingError(str(error)) from error
+    measured_cost = measure_program_cost(
+        runtime,
+        lambda: tensor_once(plan.seed + 2_000_006),
+        roofline=runtime_roofline_record(runtime),
+    )
     return {
         "format": "leibniz.formation-operator-profile",
         "format_version": 1,
@@ -110,4 +117,5 @@ def profile_formation_operators(plan: FormationOperatorProfilePlan) -> dict[str,
         "tensor_device": runtime.device_kind,
         "row_limit": plan.row_limit,
         "rows": [dict(row) for row in rows],
+        "measured_cost": measured_cost.to_record(),
     }

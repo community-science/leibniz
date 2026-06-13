@@ -36,8 +36,6 @@ export type ModelInspectionComponentRecord = {
   operator?: Record<string, unknown>;
   parameter_count?: number;
   storage_bytes?: number;
-  inference_compute?: number;
-  training_compute_per_sample?: number;
 };
 
 export type ModelInspectionArchitectureGraphRecord = {
@@ -65,10 +63,22 @@ export type ModelInspectionCostSummaryRecord = {
   component_count: number;
   parameter_count?: number;
   storage_bytes?: number;
-  inference_compute?: number;
-  training_compute_per_sample?: number;
+  inference_cost_measurement?: {
+    execution_mode?: string;
+    operation_stream_source?: string;
+    operations_executed?: boolean;
+    abstract_flops?: number;
+  };
+  inference_cost_sample_count?: number;
+  training_cost_measurement?: {
+    execution_mode?: string;
+    operation_stream_source?: string;
+    operations_executed?: boolean;
+    abstract_flops?: number;
+  };
+  training_cost_sample_count?: number;
   unknown_parameter_components: number[];
-  unknown_compute_components: number[];
+  unknown_cost_components: number[];
 };
 
 export type ModelInspectionGraphSummaryRecord = {
@@ -80,7 +90,7 @@ export type ModelInspectionGraphSummaryRecord = {
   output_node_ids: string[];
   component_kinds: string[];
   unsupported_parameter_components: number[];
-  unsupported_compute_components: number[];
+  unsupported_cost_components: number[];
 };
 
 export type ModelInspectionTraceRecord = {
@@ -101,8 +111,6 @@ export type ModelInspectionTraceStageRecord = {
   shape_law: string;
   cost_law: string;
   parameter_count?: number;
-  inference_compute?: number;
-  training_compute_per_sample?: number;
 };
 
 export class ModelInspectionError extends Error {

@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 _forbidden_names = frozenset(
     {
         ".mypy_cache",
+        ".local-cache",
         ".pytest_cache",
         ".ruff_cache",
         "results",
@@ -30,7 +31,12 @@ _forbidden_env_files = frozenset({".env"})
 _benchmark_artifact_root = PurePosixPath("src/leibniz/benchmarks")
 _benchmark_implementation_filename = "benchmark.py"
 _source_root = PurePosixPath("src/leibniz")
-_backend_term_exemptions = frozenset({"tensor_runtime.py", "_repository_policy.py"})
+_backend_term_exemptions = frozenset(
+    {
+        "tensor_runtime.py",
+        "_repository_policy.py",
+    }
+)
 _backend_terms = ("torch", "cuda", "cpu", "triton")
 _benchmark_runtime_escape_hatches = (
     "tensor_runtime_backend",
