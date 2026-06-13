@@ -67,6 +67,74 @@ def test_generator_loads_through_benchmark_implementation() -> None:
     assert not sample_set.includes_fields
 
 
+def test_benchmark_loader_uses_implementation_target_contract(tmp_path: Path) -> None:
+    benchmark_root = tmp_path / "field"
+    benchmark_root.mkdir()
+    (benchmark_root / "benchmark.py").write_text(
+        "from pathlib import Path\n"
+        "from leibniz.benchmark_implementations import RawBenchmark\n"
+        "from leibniz.benchmarks import BenchmarkManifest\n"
+        "from leibniz.identifiers import ProtocolIdentifier, ProtocolName\n"
+        "from leibniz.outcomes import Outcome, OutcomeSpace\n"
+        "from leibniz.state_space import AccessibleSubspace, Distinguishability, "
+        "DiscreteAxisRegion, IntegerRangeDomain, ProductRegion, SamplingProtocol, "
+        "StateSpaceAmbient, StateSpaceAxis, StateSpaceRegion\n"
+        "from leibniz.target_contracts import BaselinePredictor, "
+        "CompetenceFunctional, TargetContract\n"
+        "\n"
+        "class Generator:\n"
+        "    id = ProtocolIdentifier.parse('benchmarks.field.generator@0.1.0')\n"
+        "    version = '0.1.0'\n"
+        "    manifest = BenchmarkManifest(\n"
+        "        id=ProtocolIdentifier.parse('benchmarks.field@0.1.0'),\n"
+        "        name=ProtocolName.parse('benchmarks.field'),\n"
+        "        outcome_space=OutcomeSpace(\n"
+        "            id=ProtocolIdentifier.parse('benchmarks.field.placeholder@0.1.0'),\n"
+        "            outcomes=(Outcome(id='placeholder'),),\n"
+        "        ),\n"
+        "    )\n"
+        "    def __call__(self, **kwargs): raise NotImplementedError\n"
+        "    def minimum_log2_volume(self): raise NotImplementedError\n"
+        "\n"
+        "def _region():\n"
+        "    axis = StateSpaceAxis('index', IntegerRangeDomain(0, 0))\n"
+        "    axis_region = DiscreteAxisRegion(axis, (0, 0), 1, 0.0)\n"
+        "    component = ProductRegion((axis_region,), 'product-of-counts', 1, 0.0)\n"
+        "    return StateSpaceRegion(\n"
+        "        'region',\n"
+        "        StateSpaceAmbient(\n"
+        "            'box-1d', {'length_x': 1.0, 'boundary_id': 'periodic'},\n"
+        "            'scalar-field', Distinguishability('exact'),\n"
+        "        ),\n"
+        "        (component,), 'disjoint-union', 1, 0.0,\n"
+        "    )\n"
+        "\n"
+        "class Benchmark:\n"
+        "    root = Path('.')\n"
+        "    manifest = Generator.manifest\n"
+        "    generator = Generator()\n"
+        "    sampling_protocol = SamplingProtocol('census', census_budget=1)\n"
+        "    accessible_subspace = AccessibleSubspace('field', _region(), (), 'open')\n"
+        "    target_contract = TargetContract(\n"
+        "        kind='field-valued', outcome_ids=None, loss_id='mse',\n"
+        "        competence=CompetenceFunctional(\n"
+        "            'mass-within-resolution',\n"
+        "            {'residual_operator_id': 'operators.field@0.1.0'},\n"
+        "        ),\n"
+        "        baseline=BaselinePredictor('zero-field'),\n"
+        "    )\n"
+        "\n"
+        "def benchmark(root: Path) -> RawBenchmark:\n"
+        "    return Benchmark()\n",
+        encoding="utf-8",
+    )
+
+    implementation = load_benchmark(benchmark_root)
+
+    assert implementation.target_contract.kind == "field-valued"
+    assert implementation.target_contract.loss_id == "mse"
+
+
 def test_benchmark_loader_requires_python_entrypoint(tmp_path: Path) -> None:
     benchmark_root = tmp_path / "digits"
     benchmark_root.mkdir()

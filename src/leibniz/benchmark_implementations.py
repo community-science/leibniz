@@ -112,10 +112,13 @@ def load_benchmark(benchmark_root: Path) -> Benchmark:
         )
     implementation = factory(benchmark_root)
     _validate_benchmark_implementation(implementation, entrypoint=entrypoint)
+    target_contract = getattr(implementation, "target_contract", None)
     return _BenchmarkWithContracts(
         implementation=cast(RawBenchmark, implementation),
-        target_contract=_finite_outcome_target_contract(
-            cast(RawBenchmark, implementation).manifest
+        target_contract=(
+            target_contract
+            if isinstance(target_contract, TargetContract)
+            else _finite_outcome_target_contract(cast(RawBenchmark, implementation).manifest)
         ),
     )
 
