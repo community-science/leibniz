@@ -17,6 +17,7 @@ from leibniz.state_space import (
     RealGridDomain,
     RealIntervalDomain,
     RegionFiltration,
+    SamplingProtocol,
     StateSpaceAmbient,
     StateSpaceAxis,
     StateSpaceError,
@@ -27,6 +28,7 @@ from leibniz.state_space import (
     product_region_from_record,
     product_regions_are_disjoint,
     region_filtration_from_record,
+    sampling_protocol_from_record,
     state_space_ambient_from_record,
     state_space_region_from_record,
     state_space_regions_are_disjoint,
@@ -712,6 +714,58 @@ def test_measure_estimate_invariants_and_round_trip() -> None:
             method_id="method",
             log2_lower=1.0,
             log2_upper=math.inf,
+        )
+
+
+def test_sampling_protocol_records_round_trip() -> None:
+    monte_carlo = SamplingProtocol(
+        kind="uniform-monte-carlo",
+        estimator_id="sample-mean",
+        confidence_method_id="hoeffding",
+        census_budget=128,
+    )
+    census = SamplingProtocol(kind="census", census_budget=32)
+
+    monte_carlo_record = load_object_document(
+        canonical_document_bytes(monte_carlo.to_record()),
+        description="sampling protocol",
+    )
+    census_record = load_object_document(
+        canonical_document_bytes(census.to_record()),
+        description="sampling protocol",
+    )
+
+    assert sampling_protocol_from_record(monte_carlo_record) == monte_carlo
+    assert sampling_protocol_from_record(census_record) == census
+
+
+def test_sampling_protocol_invariants() -> None:
+    with pytest.raises(StateSpaceError):
+        SamplingProtocol(kind="latin-hypercube")
+    with pytest.raises(StateSpaceError):
+        SamplingProtocol(
+            kind="uniform-monte-carlo",
+            confidence_method_id="hoeffding",
+        )
+    with pytest.raises(StateSpaceError):
+        SamplingProtocol(
+            kind="uniform-monte-carlo",
+            estimator_id="sample-mean",
+        )
+    with pytest.raises(StateSpaceError):
+        SamplingProtocol(kind="census")
+    with pytest.raises(StateSpaceError):
+        SamplingProtocol(
+            kind="census",
+            estimator_id="sample-mean",
+            census_budget=32,
+        )
+    with pytest.raises(StateSpaceError):
+        SamplingProtocol(
+            kind="uniform-monte-carlo",
+            estimator_id="sample-mean",
+            confidence_method_id="hoeffding",
+            census_budget=0,
         )
 
 

@@ -48,6 +48,7 @@ __all__ = [
     "RealGridDomain",
     "RealIntervalDomain",
     "RegionFiltration",
+    "SamplingProtocol",
     "StateSpaceAmbient",
     "StateSpaceAxis",
     "StateSpaceError",
@@ -60,6 +61,7 @@ __all__ = [
     "product_region_from_record",
     "product_regions_are_disjoint",
     "region_filtration_from_record",
+    "sampling_protocol_from_record",
     "state_space_ambient_from_record",
     "state_space_axis_from_record",
     "state_space_region_from_record",
@@ -97,6 +99,12 @@ _exact_measure_estimate_kind = "exact"
 _estimated_measure_estimate_kind = "estimated"
 _measure_estimate_kinds = frozenset(
     {_exact_measure_estimate_kind, _estimated_measure_estimate_kind}
+)
+
+_uniform_monte_carlo_sampling_protocol_kind = "uniform-monte-carlo"
+_census_sampling_protocol_kind = "census"
+_sampling_protocol_kinds = frozenset(
+    {_uniform_monte_carlo_sampling_protocol_kind, _census_sampling_protocol_kind}
 )
 
 
@@ -225,6 +233,53 @@ class MeasureEstimate:
             record["log2_lower"] = self.log2_lower
         if self.log2_upper is not None:
             record["log2_upper"] = self.log2_upper
+        return record
+
+
+@dataclass(frozen=True, slots=True)
+class SamplingProtocol:
+    """Sampling protocol declared for density estimates over a region.
+
+    Consumers must treat a protocol as a census whenever a sample budget reaches
+    the region's upper volume bracket; this record owns only the declared
+    estimator shape and saturation threshold.
+    """
+
+    kind: str
+    estimator_id: str | None = None
+    confidence_method_id: str | None = None
+    census_budget: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in _sampling_protocol_kinds:
+            raise StateSpaceError("sampling protocol kind is not a core kind")
+        if self.census_budget is not None and (
+            type(self.census_budget) is not int or self.census_budget < 1
+        ):
+            raise StateSpaceError("sampling protocol census_budget must be a positive integer")
+        if self.kind == _census_sampling_protocol_kind:
+            if self.estimator_id is not None or self.confidence_method_id is not None:
+                raise StateSpaceError("census sampling does not declare estimator ids")
+            if self.census_budget is None:
+                raise StateSpaceError("census sampling requires a census_budget")
+            return
+        if not self.estimator_id:
+            raise StateSpaceError("uniform-monte-carlo sampling requires estimator_id")
+        if not self.confidence_method_id:
+            raise StateSpaceError(
+                "uniform-monte-carlo sampling requires confidence_method_id"
+            )
+
+    def to_record(self) -> dict[str, object]:
+        """Return a record for this sampling protocol."""
+
+        record: dict[str, object] = {"kind": self.kind}
+        if self.estimator_id is not None:
+            record["estimator_id"] = self.estimator_id
+        if self.confidence_method_id is not None:
+            record["confidence_method_id"] = self.confidence_method_id
+        if self.census_budget is not None:
+            record["census_budget"] = self.census_budget
         return record
 
 
@@ -889,6 +944,30 @@ def measure_estimate_from_record(value: object) -> MeasureEstimate:
     )
 
 
+def sampling_protocol_from_record(value: object) -> SamplingProtocol:
+    """Parse a sampling protocol from a record."""
+
+    record = _record_mapping(value, label="sampling protocol record")
+    return SamplingProtocol(
+        kind=_record_str(record, "kind", label="sampling protocol record"),
+        estimator_id=_record_optional_str(
+            record,
+            "estimator_id",
+            label="sampling protocol record",
+        ),
+        confidence_method_id=_record_optional_str(
+            record,
+            "confidence_method_id",
+            label="sampling protocol record",
+        ),
+        census_budget=_record_optional_int(
+            record,
+            "census_budget",
+            label="sampling protocol record",
+        ),
+    )
+
+
 def state_space_ambient_from_record(value: object) -> StateSpaceAmbient:
     """Parse an ambient declaration from a record."""
 
@@ -1266,6 +1345,20 @@ def _record_optional_str(record: Mapping[str, object], key: str, *, label: str) 
         return None
     if type(value) is not str or not value:
         raise StateSpaceError(f"{label} {key} must be a nonempty string when present")
+    return value
+
+
+def _record_optional_int(
+    record: Mapping[str, object],
+    key: str,
+    *,
+    label: str,
+) -> int | None:
+    value = record.get(key)
+    if value is None:
+        return None
+    if type(value) is not int:
+        raise StateSpaceError(f"{label} {key} must be an integer when present")
     return value
 
 
