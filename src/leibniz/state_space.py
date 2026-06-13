@@ -67,6 +67,7 @@ __all__ = [
     "state_space_ambient_from_record",
     "state_space_axis_from_record",
     "state_space_region_from_record",
+    "state_space_region_contains",
     "state_space_regions_are_disjoint",
 ]
 
@@ -799,6 +800,77 @@ def state_space_regions_are_disjoint(left: StateSpaceRegion, right: StateSpaceRe
         product_regions_are_disjoint(left_component, right_component)
         for left_component in left.components
         for right_component in right.components
+    )
+
+
+def state_space_region_contains(container: StateSpaceRegion, contained: StateSpaceRegion) -> bool:
+    """Return whether every state in ``contained`` lies in ``container``.
+
+    The predicate is conservative over the explicit region grammar: compared
+    regions must share one ambient, contained components must be covered by a
+    target component with the same stratum, and compared product components
+    must chart the same axes with each contained axis region a subset of the
+    target axis region.
+    """
+
+    if container.ambient != contained.ambient:
+        raise StateSpaceError("regions in different ambients are not comparable")
+    return all(
+        any(
+            _product_region_contains(container_component, contained_component)
+            for container_component in container.components
+        )
+        for contained_component in contained.components
+    )
+
+
+def _product_region_contains(container: ProductRegion, contained: ProductRegion) -> bool:
+    if container.stratum_id != contained.stratum_id:
+        return False
+    container_by_axis = {
+        axis_region.axis_id: axis_region for axis_region in container.axis_regions
+    }
+    contained_by_axis = {
+        axis_region.axis_id: axis_region for axis_region in contained.axis_regions
+    }
+    if set(container_by_axis) != set(contained_by_axis):
+        return False
+    return all(
+        _axis_region_contains(container_by_axis[axis_id], contained_axis_region)
+        for axis_id, contained_axis_region in contained_by_axis.items()
+    )
+
+
+def _axis_region_contains(container: AxisRegion, contained: AxisRegion) -> bool:
+    if container.axis != contained.axis:
+        raise StateSpaceError("axis regions over different axes are not comparable")
+    domain = container.axis.domain
+    if isinstance(domain, IntegerRangeDomain | RealGridDomain):
+        container_lower, container_upper = cast(
+            tuple[int, int],
+            container.coordinate_region,
+        )
+        contained_lower, contained_upper = cast(
+            tuple[int, int],
+            contained.coordinate_region,
+        )
+        return container_lower <= contained_lower and contained_upper <= container_upper
+    if isinstance(domain, RealIntervalDomain):
+        container_lower, container_upper = cast(
+            tuple[float, float],
+            container.coordinate_region,
+        )
+        contained_lower, contained_upper = cast(
+            tuple[float, float],
+            contained.coordinate_region,
+        )
+        return container_lower <= contained_lower and contained_upper <= container_upper
+    if isinstance(domain, EnumeratedCellsDomain):
+        return set(cast(tuple[str, ...], contained.coordinate_region)).issubset(
+            cast(tuple[str, ...], container.coordinate_region)
+        )
+    return set(cast(tuple[int, ...], contained.coordinate_region)).issubset(
+        cast(tuple[int, ...], container.coordinate_region)
     )
 
 

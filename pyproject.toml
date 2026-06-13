@@ -77,5 +77,8 @@ select = [
 include = ["src", "tests"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
+# Beyond strict: flag stale `# type: ignore` directives so type suppression
+# cannot rot silently as annotations and stubs improve.
+reportUnnecessaryTypeIgnoreComment = true
 venv = "leibniz-dev"
 venvPath = ".miniforge/envs"

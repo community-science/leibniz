@@ -107,6 +107,7 @@ export type StateSpaceIntegralTermRecord = {
   representative_log2_volume?: number;
   sample_count?: number;
   confidence_half_width?: number;
+  confidence_method_id?: string;
   region?: StateSpaceRegionRecord;
 };
 
@@ -382,6 +383,7 @@ function parseStateSpaceIntegralTerm(value: unknown, path: string): StateSpaceIn
     representative_log2_volume: optionalNumber(record.representative_log2_volume, `${path}.representative_log2_volume`, transportError),
     sample_count: optionalNumber(record.sample_count, `${path}.sample_count`, transportError),
     confidence_half_width: optionalNumber(record.confidence_half_width, `${path}.confidence_half_width`, transportError),
+    confidence_method_id: optional(record.confidence_method_id, `${path}.confidence_method_id`, parseString),
     region: optional(record.region, `${path}.region`, parseStateSpaceRegionRecord),
   };
 }
@@ -556,6 +558,10 @@ function optional<T>(value: unknown, path: string, parse: (item: unknown, path: 
 
 function parseNumber(value: unknown, path: string): number {
   return requireNumber(value, path, transportError);
+}
+
+function parseString(value: unknown, path: string): string {
+  return requireString(value, path, transportError);
 }
 
 function requireStrings(record: Record<string, unknown>, path: string, fields: string[]): void {

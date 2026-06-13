@@ -15,6 +15,7 @@ from leibniz.state_space import (
     StateSpaceAmbient,
     StateSpaceAxis,
     StateSpaceRegion,
+    state_space_region_contains,
     state_space_region_from_record,
     state_space_regions_are_disjoint,
 )
@@ -99,6 +100,50 @@ def test_packaged_benchmarks_realize_disjoint_integer_window_increments(
     assert all(region is not None for region in regions)
     realized_regions = tuple(region for region in regions if region is not None)
     _assert_integer_window_law(realized_regions)
+
+
+@pytest.mark.parametrize("benchmark_root", _benchmark_roots(), ids=lambda path: path.name)
+def test_packaged_benchmarks_realized_windows_lie_in_accessible_subspace(
+    benchmark_root: Path,
+) -> None:
+    benchmark = load_benchmark(benchmark_root)
+    batches = tuple(
+        benchmark.generator(
+            seed=407 + index,
+            shape=4,
+            volume_request=StateSpaceVolumeRequest(float(index), float(index + 1)),
+        )
+        for index in range(4)
+    )
+    realized_regions = tuple(batch.region for batch in batches if batch.region is not None)
+
+    assert realized_regions
+    for region in realized_regions:
+        assert state_space_region_contains(
+            benchmark.accessible_subspace.per_configuration_capacity,
+            region,
+        )
+        for exclusion in benchmark.accessible_subspace.exclusions:
+            assert state_space_regions_are_disjoint(region, exclusion)
+
+
+@pytest.mark.parametrize("benchmark_root", _benchmark_roots(), ids=lambda path: path.name)
+def test_exact_packaged_benchmark_windows_have_census_saturation(
+    benchmark_root: Path,
+) -> None:
+    benchmark = load_benchmark(benchmark_root)
+    batch = benchmark.generator(
+        seed=407,
+        shape=4,
+        volume_request=StateSpaceVolumeRequest(0.0, 1.0),
+    )
+
+    assert batch.region is not None
+    if batch.region.ambient.distinguishability.kind != "exact":
+        return
+    protocol = benchmark.sampling_protocol
+    assert protocol.census_budget is not None
+    assert protocol.census_budget >= batch.region.volume
 
 
 def test_integer_window_law_accepts_estimated_fixture_branch() -> None:

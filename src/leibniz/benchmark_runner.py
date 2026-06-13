@@ -67,6 +67,12 @@ from leibniz.observation_generation import (
     StateSpaceVolumeValue,
 )
 from leibniz.records import RecordExtractor
+from leibniz.state_space import (
+    AccessibleSubspace,
+    SamplingProtocol,
+    StateSpaceRegion,
+    state_space_regions_are_disjoint,
+)
 from leibniz.target_contracts import TargetContract
 from leibniz.tensor_runtime import (
     OperationFallbackSequential,
@@ -380,6 +386,8 @@ class _CheckpointEvaluationRungEvidence:
     mean_accepted_mass: float
     sample_count: int
     confidence_half_width: float
+    confidence_method_id: str | None
+    sampling_protocol: SamplingProtocol
     input_shape: tuple[int, ...]
     inference_cost_measurement: CostMeasurement
     inference_cost_sample_count: int
@@ -431,6 +439,10 @@ def _evaluation_sampled_competence_record(
             "seed": result.rung.seed,
             "sample_count": result.sample_count,
             "mean_accepted_mass": result.mean_accepted_mass,
+            "confidence_half_width": result.confidence_half_width,
+            "confidence_method_id": result.confidence_method_id,
+            "sampling_protocol": result.sampling_protocol.to_record(),
+            "sampling_seed": result.rung.seed,
             "input_shape": list(result.input_shape),
             "inference_cost_measurement": (
                 result.inference_cost_measurement.without_operation_trace().to_record()
@@ -509,22 +521,69 @@ class _RunningMeanEstimator:
         return min(0.25, max(0.0, self._sum_squared_delta / (self.samples - 1)))
 
 
-def _evaluation_confidence_half_width(estimator: _RunningMeanEstimator) -> float:
+def _evaluation_confidence_half_width(
+    estimator: _RunningMeanEstimator,
+    *,
+    sampling_protocol: SamplingProtocol,
+) -> float:
     if estimator.samples < 1:
         return math.inf
-    return _default_evaluation_convergence_confidence_z * math.sqrt(
-        estimator.sample_variance / estimator.samples
+    method_id = _evaluation_confidence_method_id(sampling_protocol)
+    if method_id is None:
+        return 0.0
+    if method_id != "wilson":
+        raise BenchmarkRunnerError(f"unsupported confidence_method_id: {method_id}")
+    return _wilson_confidence_half_width(
+        estimator.mean,
+        sample_count=estimator.samples,
+        z=_default_evaluation_convergence_confidence_z,
     )
+
+
+def _evaluation_confidence_method_id(protocol: SamplingProtocol) -> str | None:
+    if protocol.kind == "census":
+        return None
+    if protocol.confidence_method_id is None:
+        raise BenchmarkRunnerError("sampling protocol is missing confidence_method_id")
+    return protocol.confidence_method_id
+
+
+def _wilson_confidence_half_width(
+    mean: float,
+    *,
+    sample_count: int,
+    z: float,
+) -> float:
+    if sample_count < 1:
+        return math.inf
+    p = min(1.0, max(0.0, float(mean)))
+    n = float(sample_count)
+    denominator = 1.0 + z * z / n
+    center = (p + z * z / (2.0 * n)) / denominator
+    radius = (
+        z
+        * math.sqrt(max(0.0, p * (1.0 - p) / n + z * z / (4.0 * n * n)))
+        / denominator
+    )
+    lower = max(0.0, center - radius)
+    upper = min(1.0, center + radius)
+    return max(0.0, min(1.0, max(p - lower, upper - p)))
 
 
 def _evaluation_estimate_converged(
     estimator: _RunningMeanEstimator,
     *,
+    sampling_protocol: SamplingProtocol,
     half_width_threshold: float = _default_evaluation_convergence_half_width,
 ) -> bool:
+    if _evaluation_confidence_method_id(sampling_protocol) is None:
+        return estimator.samples >= 1
     return (
         estimator.samples >= _default_evaluation_convergence_min_samples
-        and _evaluation_confidence_half_width(estimator)
+        and _evaluation_confidence_half_width(
+            estimator,
+            sampling_protocol=sampling_protocol,
+        )
         <= half_width_threshold
     )
 
@@ -545,6 +604,28 @@ def _evaluation_next_sample_count(
         ** 2
     )
     return max(1, target - estimator.samples)
+
+
+def _sampling_protocol_saturates_to_census(
+    *,
+    protocol: SamplingProtocol,
+    region: StateSpaceRegion | None,
+) -> bool:
+    if region is None:
+        return False
+    if region.ambient.distinguishability.kind != "exact":
+        return False
+    if region.measure_estimate is not None and region.measure_estimate.estimated:
+        return False
+    if protocol.census_budget is None:
+        return protocol.kind == "census"
+    return protocol.census_budget >= region.volume
+
+
+def _census_sample_indices(region: StateSpaceRegion | None) -> tuple[int, ...] | None:
+    if region is None:
+        return None
+    return tuple(range(region.volume))
 
 
 @dataclass(frozen=True, slots=True)
@@ -805,6 +886,7 @@ def run_benchmark(
     benchmark = load_benchmark(plan.benchmark_root)
     generator = _require_tensor_generator(benchmark.generator)
     target_contract = benchmark.target_contract
+    accessible_subspace = benchmark.accessible_subspace
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
@@ -975,6 +1057,7 @@ def run_benchmark(
         initial_evaluation_rung=initial_evaluation_rung,
         generator=generator,
         target_contract=target_contract,
+        accessible_subspace=accessible_subspace,
         sample_count=_default_training_batch_target,
         gate_sample_count=_default_gate_batch_target,
         train_steps=plan.train_steps,
@@ -1145,6 +1228,8 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             architecture=architecture,
             generator=generator,
             target_contract=target_contract,
+            accessible_subspace=benchmark.accessible_subspace,
+            sampling_protocol=benchmark.sampling_protocol,
             seed=evaluation_seed,
             tensor_device=plan.tensor_device,
             checkpoint=selected_checkpoint,
@@ -1192,6 +1277,16 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         )
         final_sampled_competence["inference_cost_measurement"] = final_cost_measurement
         final_sampled_competence["inference_cost_sample_count"] = final_cost_sample_count
+        final_sampled_competence["confidence_half_width"] = (
+            evaluation_results[evaluation_frontier_index].confidence_half_width
+        )
+        final_sampled_competence["confidence_method_id"] = (
+            evaluation_results[evaluation_frontier_index].confidence_method_id
+        )
+        final_sampled_competence["sampling_protocol"] = (
+            evaluation_results[evaluation_frontier_index].sampling_protocol.to_record()
+        )
+        final_sampled_competence["sampling_seed"] = frontier_rung.seed
         sampled_competence = _evaluation_sampled_competence_record(
             benchmark_id=benchmark_id,
             evaluation_results=evaluation_results,
@@ -1231,6 +1326,9 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         ):
             rung_record["mean_accepted_mass"] = result.mean_accepted_mass
             rung_record["confidence_half_width"] = result.confidence_half_width
+            rung_record["confidence_method_id"] = result.confidence_method_id
+            rung_record["sampling_protocol"] = result.sampling_protocol.to_record()
+            rung_record["sampling_seed"] = result.rung.seed
     throughput = {
         "kind": "benchmark-evaluation-throughput",
         "evaluation": dict(checkpoint_evaluation_throughput),
@@ -1583,10 +1681,20 @@ def _curriculum_record(
         "window_policy": {
             "kind": "integer-bit-shells",
         },
+        "claim_policy": {
+            "kind": "benchmark-windowed-increments",
+            "proposal_policy": "benchmark-canonical-integer-bit-windows",
+        },
         "gating_metric": "monotone-frontier-validation-competence",
         "rung_policy": "unbounded-competence-frontier",
         "frontier_index": frontier_index,
         "unlocked_rung_count": min(len(rungs), frontier_index + 1),
+        "claim_chain": [
+            region.to_record()
+            for region in _claim_chain_regions(
+                rungs[: min(len(rungs), frontier_index + 1)]
+            )
+        ],
         "rungs": [
             rung.to_record(
                 status=(
@@ -1609,6 +1717,65 @@ def _curriculum_record(
     if rung_competence_threshold is not None:
         record["rung_competence_threshold"] = rung_competence_threshold
     return record
+
+
+def _validate_claim_chain(
+    rungs: Sequence[_CurriculumRung],
+    *,
+    accessible_subspace: AccessibleSubspace,
+) -> None:
+    if not rungs:
+        raise BenchmarkRunnerError("claim chain must not be empty")
+    first_interval = _rung_log2_volume_interval(rungs[0])
+    if first_interval is None or first_interval[0] > 0.0:
+        raise BenchmarkRunnerError("claim chain must claim the base region first")
+    regions = _claim_chain_regions(rungs)
+    _validate_claim_chain_disjoint(regions)
+    for region in regions:
+        for exclusion in accessible_subspace.exclusions:
+            if not state_space_regions_are_disjoint(region, exclusion):
+                raise BenchmarkRunnerError(
+                    "claim chain increment intersects an accessible-subspace exclusion"
+                )
+    _validate_claim_chain_cumulative_brackets(rungs, regions)
+
+
+def _claim_chain_regions(rungs: Sequence[_CurriculumRung]) -> tuple[StateSpaceRegion, ...]:
+    regions: list[StateSpaceRegion] = []
+    for rung in rungs:
+        if rung.batch.region is None:
+            raise BenchmarkRunnerError("claim chain increments require realized regions")
+        regions.append(rung.batch.region)
+    return tuple(regions)
+
+
+def _validate_claim_chain_disjoint(regions: Sequence[StateSpaceRegion]) -> None:
+    for earlier in range(len(regions)):
+        for later in range(earlier + 1, len(regions)):
+            if not state_space_regions_are_disjoint(regions[earlier], regions[later]):
+                raise BenchmarkRunnerError("claim chain increments must be pairwise disjoint")
+
+
+def _validate_claim_chain_cumulative_brackets(
+    rungs: Sequence[_CurriculumRung],
+    regions: Sequence[StateSpaceRegion],
+) -> None:
+    running_volume = 0
+    for rung, region in zip(rungs, regions, strict=True):
+        running_volume += region.volume
+        interval = _rung_log2_volume_interval(rung)
+        if interval is None:
+            continue
+        lower, upper = interval
+        cumulative_log2_volume = math.log2(running_volume)
+        if (
+            cumulative_log2_volume < lower - 1e-9
+            or cumulative_log2_volume > upper + 1e-9
+        ):
+            raise BenchmarkRunnerError(
+                "claim chain cumulative volume is outside the proposed bracket"
+            )
+
 
 def _validate_architecture_for_batch(
     *,
@@ -1691,6 +1858,7 @@ def _train_and_predict(
     initial_evaluation_rung: _CurriculumRung,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
+    accessible_subspace: AccessibleSubspace,
     sample_count: int,
     gate_sample_count: int,
     train_steps: int | None,
@@ -1723,6 +1891,7 @@ def _train_and_predict(
                 initial_evaluation_rung=initial_evaluation_rung,
                 generator=generator,
                 target_contract=target_contract,
+                accessible_subspace=accessible_subspace,
                 sample_count=sample_count,
                 gate_sample_count=gate_sample_count,
                 train_steps=train_steps,
@@ -1754,6 +1923,7 @@ def _train_and_predict_on_device(
     initial_evaluation_rung: _CurriculumRung,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
+    accessible_subspace: AccessibleSubspace,
     sample_count: int,
     gate_sample_count: int,
     train_steps: int | None,
@@ -1912,6 +2082,10 @@ def _train_and_predict_on_device(
             phase_timings=phase_timings,
         )
     ]
+    _validate_claim_chain(
+        training_rungs,
+        accessible_subspace=accessible_subspace,
+    )
     training_frontier_index = 0
     frontier_plateau_points: list[ValidationCompetencePoint] = []
 
@@ -1963,6 +2137,10 @@ def _train_and_predict_on_device(
                 )
             except _CurriculumExhausted:
                 return False
+            _validate_claim_chain(
+                (*training_rungs, next_rung),
+                accessible_subspace=accessible_subspace,
+            )
             training_rungs.append(next_rung)
         with phase_timings.span("training_frontier.bookkeeping"):
             frontier_plateau_points.append(frontier_point)
@@ -2128,6 +2306,8 @@ def evaluate_model_checkpoint_artifact(
     architecture: ArchitectureManifest,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
+    accessible_subspace: AccessibleSubspace,
+    sampling_protocol: SamplingProtocol,
     seed: int,
     tensor_device: TensorRuntimeDevice,
     checkpoint: ModelCheckpointArtifact,
@@ -2190,6 +2370,7 @@ def evaluate_model_checkpoint_artifact(
                     rung=rung,
                     outcome_ids=outcome_ids,
                     target_contract=target_contract,
+                    sampling_protocol=sampling_protocol,
                     evaluation_counter=evaluation_counter,
                     phase_timings=phase_timings,
                 )
@@ -2201,6 +2382,10 @@ def evaluate_model_checkpoint_artifact(
             capacity_limited = True
             break
         results.append(rung_evidence)
+        _validate_claim_chain(
+            tuple(result.rung for result in results),
+            accessible_subspace=accessible_subspace,
+        )
         with phase_timings.span("checkpoint_evaluation.integration_check"):
             integration_evidence = _evaluation_integration_evidence(
                 evaluation_results=results,
@@ -2231,6 +2416,7 @@ def evaluate_model_checkpoint_artifact(
                 rung=results[evaluation_frontier_index].rung,
                 outcome_ids=outcome_ids,
                 target_contract=target_contract,
+                sampling_protocol=sampling_protocol,
                 requested_sample_count=results[evaluation_frontier_index].sample_count,
                 evaluation_counter=evaluation_counter,
                 phase_timings=phase_timings,
@@ -2352,6 +2538,7 @@ def _evaluate_checkpoint_rung(
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
     target_contract: TargetContract,
+    sampling_protocol: SamplingProtocol,
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
 ) -> _CheckpointEvaluationRungEvidence:
@@ -2363,13 +2550,31 @@ def _evaluate_checkpoint_rung(
         if chance_mass >= 1.0
         else _default_evaluation_convergence_half_width * (1.0 - chance_mass)
     )
+    census_indices = (
+        _census_sample_indices(rung.batch.region)
+        if _sampling_protocol_saturates_to_census(
+            protocol=sampling_protocol,
+            region=rung.batch.region,
+        )
+        else None
+    )
+    effective_sampling_protocol = (
+        SamplingProtocol(kind="census", census_budget=len(census_indices))
+        if census_indices is not None
+        else sampling_protocol
+    )
     while not _evaluation_estimate_converged(
         estimator,
+        sampling_protocol=effective_sampling_protocol,
         half_width_threshold=half_width_threshold,
     ):
-        next_sample_count = _evaluation_next_sample_count(
-            estimator,
-            half_width_threshold=half_width_threshold,
+        next_sample_count = (
+            len(census_indices)
+            if census_indices is not None
+            else _evaluation_next_sample_count(
+                estimator,
+                half_width_threshold=half_width_threshold,
+            )
         )
         for chunk in _checkpoint_evaluation_chunks(
             predictor=predictor,
@@ -2379,6 +2584,7 @@ def _evaluate_checkpoint_rung(
             outcome_ids=outcome_ids,
             target_contract=target_contract,
             requested_sample_count=next_sample_count,
+            sample_indices=census_indices,
             evaluation_counter=evaluation_counter,
             phase_timings=phase_timings,
             purpose="score",
@@ -2397,7 +2603,16 @@ def _evaluate_checkpoint_rung(
         rung=replace(rung, sample_count=observed_sample_count),
         mean_accepted_mass=estimator.mean,
         sample_count=observed_sample_count,
-        confidence_half_width=_evaluation_confidence_half_width(estimator),
+        confidence_half_width=_evaluation_confidence_half_width(
+            estimator,
+            sampling_protocol=effective_sampling_protocol,
+        ),
+        confidence_method_id=(
+            None
+            if census_indices is not None
+            else _evaluation_confidence_method_id(sampling_protocol)
+        ),
+        sampling_protocol=effective_sampling_protocol,
         input_shape=_batch_sample_input_shape(batch=rung.batch),
         inference_cost_measurement=max_cost_measurement[0],
         inference_cost_sample_count=max_cost_measurement[1],
@@ -2458,6 +2673,8 @@ def _evaluation_competence_points(
             log2_volume_maximum=result.rung.log2_volume_maximum,
             input_shape=result.input_shape,
             region=getattr(getattr(result.rung, "batch", None), "region", None),
+            confidence_half_width=result.confidence_half_width,
+            confidence_method_id=result.confidence_method_id,
         )
         for result in evaluation_results
     )
@@ -2525,6 +2742,7 @@ def _evaluate_checkpoint_rung_measurements(
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
     target_contract: TargetContract,
+    sampling_protocol: SamplingProtocol,
     requested_sample_count: int,
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
@@ -2532,6 +2750,14 @@ def _evaluate_checkpoint_rung_measurements(
     samples: list[GeneratedSample] = []
     probabilities: list[tuple[float, ...]] = []
     max_cost_measurement: tuple[CostMeasurement, int] | None = None
+    census_indices = (
+        _census_sample_indices(rung.batch.region)
+        if _sampling_protocol_saturates_to_census(
+            protocol=sampling_protocol,
+            region=rung.batch.region,
+        )
+        else None
+    )
     for chunk in _checkpoint_evaluation_chunks(
         predictor=predictor,
         architecture=architecture,
@@ -2540,6 +2766,7 @@ def _evaluate_checkpoint_rung_measurements(
         outcome_ids=outcome_ids,
         target_contract=target_contract,
         requested_sample_count=requested_sample_count,
+        sample_indices=census_indices,
         evaluation_counter=evaluation_counter,
         phase_timings=phase_timings,
         purpose="measurements",
@@ -2586,6 +2813,7 @@ def _checkpoint_evaluation_chunks(
     outcome_ids: tuple[str, ...],
     target_contract: TargetContract,
     requested_sample_count: int,
+    sample_indices: Sequence[int] | None,
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
     purpose: str,
@@ -2593,6 +2821,7 @@ def _checkpoint_evaluation_chunks(
     competence = _resolve_competence_functional(target_contract)
     remaining = requested_sample_count
     chunk_index = 0
+    sample_offset = 0
     while remaining > 0:
         physical_sample_count = _physical_execution_sample_count(
             runtime=predictor.runtime,
@@ -2605,6 +2834,11 @@ def _checkpoint_evaluation_chunks(
             phase=f"checkpoint_evaluation_{purpose}",
         )
         chunk_seed = rung.seed + 1_000_003 * chunk_index
+        chunk_sample_indices = (
+            None
+            if sample_indices is None
+            else sample_indices[sample_offset : sample_offset + physical_sample_count]
+        )
         generation_started = time.perf_counter()
         with phase_timings.span(
             f"checkpoint_evaluation_{purpose}_generation",
@@ -2616,6 +2850,7 @@ def _checkpoint_evaluation_chunks(
                 include_fields=False,
                 include_metadata=purpose == "measurements",
                 volume_request=_rung_volume_request(rung),
+                sample_indices=chunk_sample_indices,
                 memory_limit_bytes=_runtime_memory_budget_bytes(predictor.runtime),
                 variation_extent=_full_variation_extent,
                 runtime=predictor.runtime,
@@ -2674,6 +2909,7 @@ def _checkpoint_evaluation_chunks(
             inference_cost_sample_count=batch.sample_count,
         )
         remaining -= batch.sample_count
+        sample_offset += batch.sample_count
         chunk_index += 1
 
 

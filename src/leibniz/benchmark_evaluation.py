@@ -44,6 +44,8 @@ class CompetencePoint:
     log2_volume_maximum: float | None = None
     input_shape: tuple[int, ...] | None = None
     region: StateSpaceRegion | None = None
+    confidence_half_width: float | None = None
+    confidence_method_id: str | None = None
 
     @classmethod
     def from_sampled_record(
@@ -91,6 +93,16 @@ class CompetencePoint:
                 field=f"{field_prefix}.region",
                 error_type=error_type,
             ),
+            confidence_half_width=_record_optional_nonnegative_number(
+                record.get("confidence_half_width"),
+                field=f"{field_prefix}.confidence_half_width",
+                error_type=error_type,
+            ),
+            confidence_method_id=_record_optional_string(
+                record.get("confidence_method_id"),
+                field=f"{field_prefix}.confidence_method_id",
+                error_type=error_type,
+            ),
         )
 
 
@@ -105,6 +117,7 @@ class StateSpaceIntegralTerm:
     representative_log2_volume: float | None = None
     sample_count: int | None = None
     confidence_half_width: float | None = None
+    confidence_method_id: str | None = None
     region: StateSpaceRegion | None = None
 
     @property
@@ -130,6 +143,8 @@ class StateSpaceIntegralTerm:
             record["sample_count"] = self.sample_count
         if self.confidence_half_width is not None:
             record["confidence_half_width"] = self.confidence_half_width
+        if self.confidence_method_id is not None:
+            record["confidence_method_id"] = self.confidence_method_id
         if self.region is not None:
             record["region"] = self.region.to_record()
         return record
@@ -379,6 +394,8 @@ def sampled_competence_frontier_integral(
                     kind="measured-state-space-competence",
                     representative_log2_volume=point.log2_volume,
                     sample_count=point.sample_count,
+                    confidence_half_width=point.confidence_half_width,
+                    confidence_method_id=point.confidence_method_id,
                     region=point.region,
                 )
             )
@@ -481,6 +498,19 @@ def _record_optional_nonnegative_number(
     if value is None:
         return None
     return _record_nonnegative_number(value, field=field, error_type=error_type)
+
+
+def _record_optional_string(
+    value: object,
+    *,
+    field: str,
+    error_type: type[_ErrorT],
+) -> str | None:
+    if value is None:
+        return None
+    if type(value) is not str or not value:
+        raise error_type(f"{field}: expected nonempty string")
+    return value
 
 
 def _record_positive_int(

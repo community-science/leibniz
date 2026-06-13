@@ -232,7 +232,7 @@ def test_model_inspection_rejects_malformed_records() -> None:
 
     record = inspection.to_record()
     components = list(record["components"])  # type: ignore[arg-type]
-    components[1] = {**components[1], "index": 7}  # type: ignore[index]
+    components[1] = {**components[1], "index": 7}
     record["components"] = components
     error = capture_model_inspection_error(lambda: ModelInspectionRecord.from_record(record))
     assert str(error) == "component indexes must be contiguous"
