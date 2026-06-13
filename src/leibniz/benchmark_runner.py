@@ -428,7 +428,9 @@ def _evaluation_sampled_competence_record(
             "sample_count": result.sample_count,
             "mean_accepted_mass": result.mean_accepted_mass,
             "input_shape": list(result.input_shape),
-            "inference_cost_measurement": result.inference_cost_measurement.to_record(),
+            "inference_cost_measurement": (
+                result.inference_cost_measurement.without_operation_trace().to_record()
+            ),
             "inference_cost_sample_count": result.inference_cost_sample_count,
             **_rung_log2_volume_interval_record(result.rung),
         }
@@ -1330,7 +1332,7 @@ def _checkpoint_evaluation_throughput_inference_cost_record(
         raise BenchmarkRunnerError(
             "checkpoint_evaluation.inference_cost_sample_count must be positive"
         )
-    return measurement.to_record(), sample_count
+    return measurement.without_operation_trace().to_record(), sample_count
 
 
 def _evaluation_input_from_plan(
@@ -2231,7 +2233,9 @@ def evaluate_model_checkpoint_artifact(
         throughput["tensor_compile_fallbacks"] = [
             dict(fallback) for fallback in compile_fallbacks
         ]
-    throughput["inference_cost_measurement"] = final_inference_cost_measurement.to_record()
+    throughput["inference_cost_measurement"] = (
+        final_inference_cost_measurement.without_operation_trace().to_record()
+    )
     throughput["inference_cost_sample_count"] = final_inference_cost_sample_count
     return tuple(results), final_batch, final_probabilities, throughput
 
@@ -2260,7 +2264,7 @@ def _checkpoint_inference_cost_measurement(
         fields,
         strict=True,
         roofline=runtime_roofline_record(predictor.runtime),
-    )
+    ).without_operation_trace()
 
 
 def _module_inference_cost_measurement(
@@ -2283,7 +2287,7 @@ def _module_inference_cost_measurement(
             fields,
             strict=True,
             roofline=runtime_roofline_record(runtime),
-        )
+        ).without_operation_trace()
     finally:
         if was_training:
             module.train()
@@ -2316,7 +2320,7 @@ def _module_projected_inference_cost_measurement(
                 program,
                 strict=True,
                 roofline=runtime_roofline_record(runtime),
-            ),
+            ).without_operation_trace(),
             sample_count,
         )
     except (CostMetrologyError, TensorRuntimeError):
@@ -3079,6 +3083,7 @@ def _train_until_convergence(
     plateau_window_start_index = 0
     max_validation_inference_cost: tuple[CostMeasurement, int] | None = None
     latest_training_cost: tuple[CostMeasurement, int] | None = None
+    training_cost_by_shape: dict[object, tuple[CostMeasurement, int]] = {}
     replay_frontier_points: dict[
         tuple[float, float],
         _RollingValidationCompetencePoint,
@@ -3242,11 +3247,21 @@ def _train_until_convergence(
                     loss.backward()
                 return loss
 
-            with phase_timings.span("training_optimizer_step"):
-                with CostMeter(runtime, strict=False) as training_cost_meter:
+            training_cost_shape_key = _training_cost_shape_key(fields)
+            cached_training_cost = training_cost_by_shape.get(training_cost_shape_key)
+            if cached_training_cost is None:
+                with phase_timings.span("training_optimizer_step"):
+                    with CostMeter(runtime, strict=False) as training_cost_meter:
+                        optimizer_step(runtime, optimizer, loss_closure)
+                    training_cost_measurement = (
+                        training_cost_meter.measurement().without_operation_trace()
+                    )
+                cached_training_cost = (training_cost_measurement, actual_batch_size)
+                training_cost_by_shape[training_cost_shape_key] = cached_training_cost
+            else:
+                with phase_timings.span("training_optimizer_step"):
                     optimizer_step(runtime, optimizer, loss_closure)
-                training_cost_measurement = training_cost_meter.measurement()
-            latest_training_cost = (training_cost_measurement, actual_batch_size)
+            latest_training_cost = cached_training_cost
             if training_batch.sample_set is not None:
                 if first_logits is None:
                     raise BenchmarkRunnerError("optimizer did not evaluate training loss")
@@ -3399,14 +3414,16 @@ def _training_gate_score_estimate(
         "score": score,
         "validation_check": validation_check,
         "step": step,
-        "inference_cost_measurement": inference_cost[0].to_record(),
+        "inference_cost_measurement": inference_cost[0].without_operation_trace().to_record(),
         "inference_cost_sample_count": inference_cost[1],
         "chance_mass": chance_mass,
         "score_integral": score_integral.to_record(kind="sampled-competence-integral"),
         "sampled_competence": compact_sampled_competence,
     }
     if training_cost is not None:
-        record["training_cost_measurement"] = training_cost[0].to_record()
+        record["training_cost_measurement"] = (
+            training_cost[0].without_operation_trace().to_record()
+        )
         record["training_cost_sample_count"] = training_cost[1]
     return record
 
@@ -3500,6 +3517,23 @@ def _accumulate_replay_frontier_point(
         )
         return
     replay_frontier_points[key] = existing.add(point)
+
+
+def _training_cost_shape_key(fields: Any) -> object:
+    """Return the cache key for one-measurement-per-shape training cost metering.
+
+    Operation streams are deterministic per module and input shape, so one
+    metered step per distinct field shape carries the same evidence as metering
+    every step while keeping per-op dispatch interception off the hot path.
+    """
+
+    shape = getattr(fields, "shape", None)
+    if shape is None:
+        return "shapeless"
+    try:
+        return tuple(int(extent) for extent in shape)
+    except (TypeError, ValueError):
+        return "shapeless"
 
 
 def _flush_pending_replay_scores(
@@ -3636,14 +3670,18 @@ def _assign_sampled_competence_inference_cost(
     measurement: CostMeasurement,
     sample_count: int,
 ) -> None:
-    sampled_competence["inference_cost_measurement"] = measurement.to_record()
+    sampled_competence["inference_cost_measurement"] = (
+        measurement.without_operation_trace().to_record()
+    )
     sampled_competence["inference_cost_sample_count"] = sample_count
     points = sampled_competence.get("points")
     if not isinstance(points, list):
         return
     for point in cast(list[object], points):
         if isinstance(point, dict):
-            point["inference_cost_measurement"] = measurement.to_record()
+            point["inference_cost_measurement"] = (
+                measurement.without_operation_trace().to_record()
+            )
             point["inference_cost_sample_count"] = sample_count
 
 
@@ -4138,13 +4176,17 @@ def _training_cost_summary(
         training_run.validation_history
     )
     if inference_cost is not None:
-        cost_summary["inference_cost_measurement"] = inference_cost[0].to_record()
+        cost_summary["inference_cost_measurement"] = (
+            inference_cost[0].without_operation_trace().to_record()
+        )
         cost_summary["inference_cost_sample_count"] = inference_cost[1]
     training_cost = _training_history_latest_training_cost_measurement(
         training_run.validation_history
     )
     if training_cost is not None:
-        cost_summary["training_cost_measurement"] = training_cost[0].to_record()
+        cost_summary["training_cost_measurement"] = (
+            training_cost[0].without_operation_trace().to_record()
+        )
         cost_summary["training_cost_sample_count"] = training_cost[1]
     return cost_summary
 

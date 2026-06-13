@@ -776,7 +776,7 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     assert inference_cost.tensor_device == "cpu"
     assert inference_cost.operation_count > 0
     assert inference_cost.unmodeled_operations == ()
-    assert len(inference_cost.operation_trace) == inference_cost.operation_count
+    assert inference_cost.operation_trace == ()
     assert inference_cost.roofline is not None
     assert (
         evaluation_bundle.model_checkpoint["manifest_digest"]
@@ -1031,6 +1031,35 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         )
         for point, rung in zip(points, curriculum_rungs, strict=True)
     )
+
+    training_summary_record = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="training summary",
+    )
+    evaluation_bundle_record = load_object_document(
+        evaluation_summary.evaluation_bundle_path.read_bytes(),
+        description="evaluation bundle",
+    )
+    embedded_traces = [
+        *_embedded_operation_traces(training_summary_record),
+        *_embedded_operation_traces(evaluation_bundle_record),
+    ]
+    assert embedded_traces
+    assert all(trace == [] for trace in embedded_traces)
+
+
+def _embedded_operation_traces(record: object) -> list[object]:
+    traces: list[object] = []
+    if isinstance(record, dict):
+        for key, value in cast(dict[str, object], record).items():
+            if key == "operation_trace":
+                traces.append(value)
+            else:
+                traces.extend(_embedded_operation_traces(value))
+    elif isinstance(record, list):
+        for item in cast(list[object], record):
+            traces.extend(_embedded_operation_traces(item))
+    return traces
 
 
 def test_benchmark_evaluation_rejects_checkpoint_artifact_for_wrong_benchmark(
@@ -2317,6 +2346,125 @@ def test_training_steps_materialize_replay_masses_only_at_gate_checks(
         "tolist",
         "gate",
     ]
+
+
+def test_training_cost_is_metered_once_per_field_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    meter_entries: list[str] = []
+
+    class CountingCostMeter(benchmark_runner.CostMeter):
+        def __enter__(self) -> Any:
+            meter_entries.append("meter")
+            return super().__enter__()
+
+    class FakeFields:
+        def __init__(self, shape: tuple[int, ...]) -> None:
+            self.shape = shape
+
+    shapes = [(2, 1, 4, 4), (2, 1, 4, 4), (2, 1, 8, 8), (2, 1, 4, 4)]
+
+    def fake_batch(index: int) -> object:
+        return cast(Any, benchmark_runner)._TrainingStepBatch(
+            fields=cast(Any, FakeFields(shapes[(index - 1) % len(shapes)])),
+            labels=object(),
+            sample_set=None,
+        )
+
+    class FakeLossValue:
+        def item(self) -> float:
+            return 2.0
+
+        def backward(self) -> None:
+            pass
+
+    class FakeLossFunction:
+        def __call__(self, _logits: object, _labels: object) -> FakeLossValue:
+            return FakeLossValue()
+
+    class FakeModule:
+        training = True
+
+        def __call__(self, _fields: object) -> object:
+            return object()
+
+        def eval(self) -> None:
+            self.training = False
+
+        def train(self) -> None:
+            self.training = True
+
+    class FakeValidationBatch:
+        sample_count = 2
+
+    class FakeOptimizer:
+        param_groups: list[dict[str, object]] = [{}]
+
+        def zero_grad(self, *, set_to_none: bool) -> None:
+            _ = set_to_none
+
+        def step(self) -> None:
+            pass
+
+    def fake_validation_batch(_index: int) -> FakeValidationBatch:
+        return FakeValidationBatch()
+
+    def fake_batch_tensors(**_kwargs: object) -> tuple[object, object]:
+        return object(), object()
+
+    def fake_target_masses(
+        _runtime: object,
+        _logits: object,
+        _labels: object,
+    ) -> list[float]:
+        return [1.0]
+
+    def fake_training_gate_score_estimate(**kwargs: object) -> dict[str, object]:
+        return _score_estimate(
+            check=cast(int, kwargs["validation_check"]),
+            step=cast(int, kwargs["step"]),
+            score=1.0,
+            log2_volume=math.log2(10),
+            accepted_mass=0.5,
+        )
+
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    outcome_ids = tuple(
+        outcome.id for outcome in benchmark.manifest.resolve_outcome_space().outcomes
+    )
+    monkeypatch.setattr(benchmark_runner, "CostMeter", CountingCostMeter)
+    monkeypatch.setattr(benchmark_runner, "_batch_tensors", fake_batch_tensors)
+    monkeypatch.setattr(benchmark_runner, "softmax_target_masses", fake_target_masses)
+    monkeypatch.setattr(
+        benchmark_runner,
+        "_training_gate_score_estimate",
+        fake_training_gate_score_estimate,
+    )
+
+    cast(Any, benchmark_runner)._train_until_convergence(
+        runtime=resolve_tensor_runtime("cpu"),
+        module=FakeModule(),
+        optimizer=FakeOptimizer(),
+        scheduler=None,
+        loss_function=FakeLossFunction(),
+        train_batch=fake_batch,
+        validation_batch=cast(Any, fake_validation_batch),
+        outcome_space=benchmark.manifest.resolve_outcome_space(),
+        outcome_ids=outcome_ids,
+        max_steps=4,
+        gate_check_interval=2,
+        patience=5,
+        min_delta=0.001,
+        rung_competence_threshold=0.9,
+        architecture=ArchitectureManifestDocument.from_bytes(
+            _digits_architecture.read_bytes()
+        ).manifest,
+        training_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        validation_counter=cast(Any, benchmark_runner)._ThroughputCounter(),
+        phase_timings=benchmark_runner.TimingCollector(),
+    )
+
+    assert meter_entries == ["meter", "meter"]
 
 
 def test_training_rung_schedule_alternates_frontier_and_replay() -> None:
