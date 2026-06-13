@@ -26,7 +26,12 @@ from leibniz.benchmark_evaluation import (
     sampled_competence_record,
     validation_competence_frontier_advances,
 )
-from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
+from leibniz.benchmark_implementations import (
+    Generator as BenchmarkGenerator,
+)
+from leibniz.benchmark_implementations import (
+    load_benchmark,
+)
 from leibniz.content import ContentDigest
 from leibniz.cost_metrology import (
     CostMeasurement,
@@ -60,10 +65,9 @@ from leibniz.observation_generation import (
     ObservationGenerationError,
     StateSpaceVolumeRequest,
     StateSpaceVolumeValue,
-    load_generator,
 )
-from leibniz.outcomes import OutcomeSpace
 from leibniz.records import RecordExtractor
+from leibniz.target_contracts import TargetContract
 from leibniz.tensor_runtime import (
     OperationFallbackSequential,
     TensorRuntime,
@@ -71,7 +75,7 @@ from leibniz.tensor_runtime import (
     TensorRuntimeDeviceKind,
     TensorRuntimeError,
     build_cosine_lr_schedule,
-    build_cross_entropy_loss,
+    build_loss,
     build_optimizer,
     build_plateau_lr_schedule,
     load_tensor_runtime_state,
@@ -798,12 +802,14 @@ def run_benchmark(
 ) -> BenchmarkRunSummary:
     """Run or dry-run a tiny local benchmark workflow."""
 
-    generator = _require_tensor_generator(load_generator(plan.benchmark_root))
+    benchmark = load_benchmark(plan.benchmark_root)
+    generator = _require_tensor_generator(benchmark.generator)
+    target_contract = benchmark.target_contract
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
-    outcome_space = generator.manifest.resolve_outcome_space()
-    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    outcome_space = benchmark.manifest.resolve_outcome_space()
+    outcome_ids = _finite_outcome_ids(target_contract)
     summary = _run_summary(
         plan=plan,
         benchmark_id=generator.manifest.id,
@@ -834,7 +840,7 @@ def run_benchmark(
         _validate_architecture_for_batch(
             architecture=architecture,
             batch=evaluation_batch,
-            outcome_space=outcome_space,
+            target_contract=target_contract,
         )
 
     if plan.dry_run:
@@ -855,7 +861,7 @@ def run_benchmark(
         _validate_architecture_for_batch(
             architecture=architecture,
             batch=evaluation_batch,
-            outcome_space=outcome_space,
+            target_contract=target_contract,
         )
 
     progress_path = _training_progress_path(summary)
@@ -968,7 +974,7 @@ def run_benchmark(
         architecture=architecture,
         initial_evaluation_rung=initial_evaluation_rung,
         generator=generator,
-        outcome_space=outcome_space,
+        target_contract=target_contract,
         sample_count=_default_training_batch_target,
         gate_sample_count=_default_gate_batch_target,
         train_steps=plan.train_steps,
@@ -1114,7 +1120,9 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
 
     workflow_timings = TimingCollector()
     with workflow_timings.span("evaluation_workflow.load_generator"):
-        generator = _require_tensor_generator(load_generator(plan.benchmark_root))
+        benchmark = load_benchmark(plan.benchmark_root)
+        generator = _require_tensor_generator(benchmark.generator)
+        target_contract = benchmark.target_contract
     with workflow_timings.span("evaluation_workflow.load_checkpoint_input"):
         evaluation_input = _evaluation_input_from_plan(plan, generator=generator)
         outcome_space = generator.manifest.resolve_outcome_space()
@@ -1136,20 +1144,22 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
         ) = evaluate_model_checkpoint_artifact(
             architecture=architecture,
             generator=generator,
-            outcome_space=outcome_space,
+            target_contract=target_contract,
             seed=evaluation_seed,
             tensor_device=plan.tensor_device,
             checkpoint=selected_checkpoint,
         )
     with workflow_timings.span("evaluation_workflow.integration_evidence"):
-        outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+        outcome_ids = _finite_outcome_ids(target_contract)
         evaluation_frontier_index = _evaluation_result_frontier_index(
             evaluation_results=evaluation_results,
             outcome_ids=outcome_ids,
+            target_contract=target_contract,
         )
         evaluation_integration = _evaluation_integration_evidence(
             evaluation_results=evaluation_results,
             outcome_ids=outcome_ids,
+            target_contract=target_contract,
         )
     with workflow_timings.span(
         "evaluation_workflow.final_measurement_records",
@@ -1604,7 +1614,7 @@ def _validate_architecture_for_batch(
     *,
     architecture: ArchitectureManifest,
     batch: GeneratedSampleSet,
-    outcome_space: OutcomeSpace,
+    target_contract: TargetContract,
 ) -> None:
     sample_shape = _batch_sample_input_shape(batch=batch)
     if (
@@ -1622,11 +1632,11 @@ def _validate_architecture_for_batch(
     )
     if input_reason is not None:
         raise BenchmarkRunnerError(input_reason)
-    outcome_count = len(outcome_space.outcomes)
-    if architecture.output_shape != (outcome_count,):
+    expected_output_shape = target_contract.expected_output_shape(None)
+    if architecture.output_shape != expected_output_shape:
         raise BenchmarkRunnerError(
             f"architecture output_shape {architecture.output_shape} does not match "
-            f"{outcome_count} resolved benchmark outcomes"
+            f"target contract output shape {expected_output_shape}"
         )
 
 
@@ -1680,7 +1690,7 @@ def _train_and_predict(
     architecture: ArchitectureManifest,
     initial_evaluation_rung: _CurriculumRung,
     generator: _TensorBenchmarkGenerator,
-    outcome_space: OutcomeSpace,
+    target_contract: TargetContract,
     sample_count: int,
     gate_sample_count: int,
     train_steps: int | None,
@@ -1712,7 +1722,7 @@ def _train_and_predict(
                 architecture=architecture,
                 initial_evaluation_rung=initial_evaluation_rung,
                 generator=generator,
-                outcome_space=outcome_space,
+                target_contract=target_contract,
                 sample_count=sample_count,
                 gate_sample_count=gate_sample_count,
                 train_steps=train_steps,
@@ -1743,7 +1753,7 @@ def _train_and_predict_on_device(
     architecture: ArchitectureManifest,
     initial_evaluation_rung: _CurriculumRung,
     generator: _TensorBenchmarkGenerator,
-    outcome_space: OutcomeSpace,
+    target_contract: TargetContract,
     sample_count: int,
     gate_sample_count: int,
     train_steps: int | None,
@@ -1775,8 +1785,9 @@ def _train_and_predict_on_device(
         runtime=runtime,
         operations=executable.operation_modules(),
     )
-    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
-    loss_function = build_cross_entropy_loss(runtime)
+    outcome_ids = _finite_outcome_ids(target_contract)
+    chance_mass = _target_contract_chance_mass(target_contract)
+    loss_function = build_loss(runtime, target_contract)
     optimizer = _make_optimizer(
         runtime=runtime,
         parameters=module.parameters(),
@@ -1929,7 +1940,6 @@ def _train_and_predict_on_device(
     def advance_frontier(history: Sequence[TrainingHistoryPoint]) -> bool:
         nonlocal training_frontier_index
         latest = history[-1]
-        chance_mass = _chance_accepted_mass(outcome_ids)
         frontier_point = _training_history_frontier_point(latest)
         with phase_timings.span("training_frontier.advance_decision"):
             should_advance = validation_competence_frontier_advances(
@@ -1975,7 +1985,7 @@ def _train_and_predict_on_device(
             generation_phase="validation_formation_generation",
             rung=current_frontier(),
         ),
-        outcome_space=outcome_space,
+        target_contract=target_contract,
         outcome_ids=outcome_ids,
         max_steps=train_steps,
         training_batch_target=sample_count,
@@ -2117,7 +2127,7 @@ def evaluate_model_checkpoint_artifact(
     *,
     architecture: ArchitectureManifest,
     generator: _TensorBenchmarkGenerator,
-    outcome_space: OutcomeSpace,
+    target_contract: TargetContract,
     seed: int,
     tensor_device: TensorRuntimeDevice,
     checkpoint: ModelCheckpointArtifact,
@@ -2134,7 +2144,7 @@ def evaluate_model_checkpoint_artifact(
     with phase_timings.span("checkpoint_evaluation.predictor_load"):
         predictor = load_model_checkpoint_predictor(
             architecture=architecture,
-            outcome_space=outcome_space,
+            target_contract=target_contract,
             checkpoint=checkpoint,
             tensor_device=tensor_device,
         )
@@ -2142,7 +2152,7 @@ def evaluate_model_checkpoint_artifact(
     runtime_phase_timings.counters.update(phase_timings.counters)
     phase_timings = runtime_phase_timings
     results: list[_CheckpointEvaluationRungEvidence] = []
-    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    outcome_ids = _finite_outcome_ids(target_contract)
     capacity_limited = False
     curriculum_exhausted = False
     planner = _VolumeCurriculumPlanner()
@@ -2179,6 +2189,7 @@ def evaluate_model_checkpoint_artifact(
                     generator=generator,
                     rung=rung,
                     outcome_ids=outcome_ids,
+                    target_contract=target_contract,
                     evaluation_counter=evaluation_counter,
                     phase_timings=phase_timings,
                 )
@@ -2194,6 +2205,7 @@ def evaluate_model_checkpoint_artifact(
             integration_evidence = _evaluation_integration_evidence(
                 evaluation_results=results,
                 outcome_ids=outcome_ids,
+                target_contract=target_contract,
             )
         if integration_evidence.converged:
             break
@@ -2203,6 +2215,7 @@ def evaluate_model_checkpoint_artifact(
         evaluation_frontier_index = _evaluation_result_frontier_index(
             evaluation_results=results,
             outcome_ids=outcome_ids,
+            target_contract=target_contract,
         )
     with phase_timings.span("checkpoint_evaluation.final_measurements"):
         (
@@ -2217,6 +2230,7 @@ def evaluate_model_checkpoint_artifact(
                 generator=generator,
                 rung=results[evaluation_frontier_index].rung,
                 outcome_ids=outcome_ids,
+                target_contract=target_contract,
                 requested_sample_count=results[evaluation_frontier_index].sample_count,
                 evaluation_counter=evaluation_counter,
                 phase_timings=phase_timings,
@@ -2337,12 +2351,13 @@ def _evaluate_checkpoint_rung(
     generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
+    target_contract: TargetContract,
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
 ) -> _CheckpointEvaluationRungEvidence:
     estimator = _RunningMeanEstimator()
     max_cost_measurement: tuple[CostMeasurement, int] | None = None
-    chance_mass = _chance_accepted_mass(outcome_ids)
+    chance_mass = _target_contract_chance_mass(target_contract)
     half_width_threshold = (
         _default_evaluation_convergence_half_width
         if chance_mass >= 1.0
@@ -2362,6 +2377,7 @@ def _evaluate_checkpoint_rung(
             generator=generator,
             rung=rung,
             outcome_ids=outcome_ids,
+            target_contract=target_contract,
             requested_sample_count=next_sample_count,
             evaluation_counter=evaluation_counter,
             phase_timings=phase_timings,
@@ -2392,6 +2408,7 @@ def _evaluation_integration_evidence(
     *,
     evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
     outcome_ids: tuple[str, ...],
+    target_contract: TargetContract,
 ) -> _EvaluationIntegrationEvidence:
     """Return the explicit score-integral state that controls evaluation."""
 
@@ -2402,10 +2419,11 @@ def _evaluation_integration_evidence(
             score_integral_half_width=math.inf,
             terminal_failure_count=0,
         )
-    chance_mass = _chance_accepted_mass(outcome_ids)
+    chance_mass = _target_contract_chance_mass(target_contract)
     frontier_index = _evaluation_result_frontier_index(
         evaluation_results=evaluation_results,
         outcome_ids=outcome_ids,
+        target_contract=target_contract,
     )
     score_integral = sampled_competence_frontier_integral(
         _evaluation_competence_points(evaluation_results),
@@ -2506,6 +2524,7 @@ def _evaluate_checkpoint_rung_measurements(
     generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
+    target_contract: TargetContract,
     requested_sample_count: int,
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
@@ -2519,6 +2538,7 @@ def _evaluate_checkpoint_rung_measurements(
         generator=generator,
         rung=rung,
         outcome_ids=outcome_ids,
+        target_contract=target_contract,
         requested_sample_count=requested_sample_count,
         evaluation_counter=evaluation_counter,
         phase_timings=phase_timings,
@@ -2564,11 +2584,13 @@ def _checkpoint_evaluation_chunks(
     generator: _TensorBenchmarkGenerator,
     rung: _CurriculumRung,
     outcome_ids: tuple[str, ...],
+    target_contract: TargetContract,
     requested_sample_count: int,
     evaluation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
     purpose: str,
 ) -> Iterable[_CheckpointEvaluationChunk]:
+    competence = _resolve_competence_functional(target_contract)
     remaining = requested_sample_count
     chunk_index = 0
     while remaining > 0:
@@ -2624,7 +2646,7 @@ def _checkpoint_evaluation_chunks(
             f"checkpoint_evaluation_{purpose}_accepted_mass",
             samples=batch.sample_count,
         ):
-            accepted_mass = _batch_prediction_accepted_mass(
+            accepted_mass = competence.prediction_accepted_mass(
                 batch=batch,
                 probabilities=predictions,
                 outcome_ids=outcome_ids,
@@ -2828,7 +2850,7 @@ def _is_runtime_capacity_error(error: RuntimeError) -> bool:
 def load_model_checkpoint_predictor(
     *,
     architecture: ArchitectureManifest,
-    outcome_space: OutcomeSpace,
+    target_contract: TargetContract,
     checkpoint: ModelCheckpointArtifact,
     tensor_device: TensorRuntimeDevice,
 ) -> CheckpointModelPredictor:
@@ -2845,7 +2867,7 @@ def load_model_checkpoint_predictor(
     )
     _load_torch_checkpoint(module=module, runtime=runtime, checkpoint=checkpoint)
     module.eval()
-    outcome_ids = tuple(outcome.id for outcome in outcome_space.outcomes)
+    outcome_ids = _finite_outcome_ids(target_contract)
     return CheckpointModelPredictor(
         runtime=runtime,
         module=module,
@@ -3056,7 +3078,7 @@ def _train_until_convergence(
     loss_function: Any,
     train_batch: Callable[[int], _TrainingStepBatch | tuple[Any, Any]],
     validation_batch: Callable[[int], GeneratedSampleSet],
-    outcome_space: OutcomeSpace,
+    target_contract: TargetContract,
     outcome_ids: tuple[str, ...],
     max_steps: int | None,
     gate_check_interval: int,
@@ -3089,6 +3111,8 @@ def _train_until_convergence(
         _RollingValidationCompetencePoint,
     ] = {}
     pending_replay_scores: list[_PendingReplayScore] = []
+    chance_mass = _target_contract_chance_mass(target_contract)
+    competence = _resolve_competence_functional(target_contract)
 
     def append_validation(*, step: int, check: int) -> None:
         nonlocal best_score
@@ -3129,13 +3153,13 @@ def _train_until_convergence(
             with no_grad_context(runtime):
                 logits = module(fields)
                 validation_loss = float(loss_function(logits, labels).item())
-                accepted_mass = tuple(softmax_target_masses(runtime, logits, labels))
+                accepted_mass = competence.training_logit_masses(runtime, logits, labels)
             if was_training:
                 module.train()
         with phase_timings.span("validation_score_estimate", samples=batch.sample_count):
             score_estimate = _training_gate_score_estimate(
                 batch=batch,
-                outcome_space=outcome_space,
+                target_contract=target_contract,
                 accepted_mass=accepted_mass,
                 previous_frontier_points=_refreshed_frontier_points(
                     frontier_points(),
@@ -3148,7 +3172,7 @@ def _train_until_convergence(
             )
         plateau_signal = _training_score_estimate_frontier_competence(
             score_estimate,
-            chance_mass=_chance_accepted_mass(outcome_ids),
+            chance_mass=chance_mass,
         )
         if plateau_signal > best_score + min_delta:
             best_score = plateau_signal
@@ -3272,7 +3296,7 @@ def _train_until_convergence(
                     pending_replay_scores.append(
                         _PendingReplayScore(
                             sample_set=training_batch.sample_set,
-                            accepted_mass=softmax_target_mass_tensor(
+                            accepted_mass=competence.training_logit_mass_tensor(
                                 runtime,
                                 first_logits,
                                 labels,
@@ -3318,11 +3342,10 @@ def _train_until_convergence(
                     validation_history[plateau_window_start_index:],
                     window_checks=patience,
                     min_delta=min_delta,
-                    chance_mass=_chance_accepted_mass(outcome_ids),
+                    chance_mass=chance_mass,
                 )
             )
         if rung_has_plateaued:
-            chance_mass = _chance_accepted_mass(outcome_ids)
             with phase_timings.span("validation_rung_competence_threshold"):
                 best_rung_competence = _training_history_best_competence_fraction(
                     validation_history[plateau_window_start_index:],
@@ -3344,7 +3367,7 @@ def _train_until_convergence(
                 plateau_window_start_index = len(validation_history) - 1
                 best_score = _training_history_frontier_competence(
                     validation_history[-1],
-                    chance_mass=_chance_accepted_mass(outcome_ids),
+                    chance_mass=chance_mass,
                 )
                 stale_checks = 0
                 continue
@@ -3367,7 +3390,7 @@ def _train_until_convergence(
 def _training_gate_score_estimate(
     *,
     batch: GeneratedSampleSet,
-    outcome_space: OutcomeSpace,
+    target_contract: TargetContract,
     accepted_mass: tuple[float, ...],
     previous_frontier_points: tuple[ValidationCompetencePoint, ...] = (),
     validation_check: int,
@@ -3392,7 +3415,7 @@ def _training_gate_score_estimate(
         sample_count=inference_cost[1],
     )
     point_records = _training_score_estimate_points(compact_sampled_competence)
-    chance_mass = _chance_accepted_mass(tuple(outcome.id for outcome in outcome_space.outcomes))
+    chance_mass = _target_contract_chance_mass(target_contract)
     score_integral = sampled_competence_frontier_integral(
         tuple(
             CompetencePoint.from_sampled_record(
@@ -3850,10 +3873,12 @@ def _evaluation_result_frontier_index(
     *,
     evaluation_results: Sequence[_CheckpointEvaluationRungEvidence],
     outcome_ids: tuple[str, ...],
+    target_contract: TargetContract,
 ) -> int:
     if not evaluation_results:
         raise BenchmarkRunnerError("evaluation did not produce any rungs")
-    chance_mass = _chance_accepted_mass(outcome_ids)
+    _ = outcome_ids
+    chance_mass = _target_contract_chance_mass(target_contract)
     frontier_index = 0
     for index, result in enumerate(evaluation_results):
         if _evaluation_rung_confidently_above_chance(
@@ -4822,10 +4847,70 @@ def _target_probability_value(value: object) -> float:
     return probability
 
 
-def _chance_accepted_mass(outcome_ids: tuple[str, ...]) -> float:
-    if not outcome_ids:
-        raise BenchmarkRunnerError("outcome space must contain at least one outcome")
-    return 1.0 / len(outcome_ids)
+def _finite_outcome_ids(contract: TargetContract) -> tuple[str, ...]:
+    if contract.kind != "finite-outcome" or contract.outcome_ids is None:
+        raise BenchmarkRunnerError("runner path requires a finite-outcome target contract")
+    return contract.outcome_ids
+
+
+def _target_contract_chance_mass(contract: TargetContract) -> float:
+    chance_mass = contract.chance_mass()
+    if chance_mass is None:
+        raise BenchmarkRunnerError("runner path requires finite-outcome chance mass")
+    return chance_mass
+
+
+@dataclass(frozen=True, slots=True)
+class _CompetenceFunctional:
+    """Per-sample competence selected by a benchmark target contract.
+
+    The runner turns model outputs and targets into per-sample accepted mass
+    through this functional, chosen by ``contract.competence.kind``. Only the
+    finite-outcome ``above-chance-accepted-mass`` functional is implemented in
+    the runner today; field-valued competence kinds resolve here once a
+    benchmark declares them, so the per-sample competence step is a contract
+    dispatch rather than a hardcoded softmax call.
+    """
+
+    kind: str
+
+    def training_logit_masses(
+        self,
+        runtime: TensorRuntime,
+        logits: Any,
+        labels: Any,
+    ) -> tuple[float, ...]:
+        return tuple(softmax_target_masses(runtime, logits, labels))
+
+    def training_logit_mass_tensor(
+        self,
+        runtime: TensorRuntime,
+        logits: Any,
+        labels: Any,
+    ) -> Any:
+        return softmax_target_mass_tensor(runtime, logits, labels)
+
+    def prediction_accepted_mass(
+        self,
+        *,
+        batch: GeneratedSampleSet,
+        probabilities: tuple[tuple[float, ...], ...],
+        outcome_ids: tuple[str, ...],
+    ) -> tuple[float, ...]:
+        return _batch_prediction_accepted_mass(
+            batch=batch,
+            probabilities=probabilities,
+            outcome_ids=outcome_ids,
+        )
+
+
+def _resolve_competence_functional(contract: TargetContract) -> _CompetenceFunctional:
+    if contract.competence.kind != "above-chance-accepted-mass":
+        raise BenchmarkRunnerError(
+            "runner path does not support competence kind "
+            f"{contract.competence.kind!r}"
+        )
+    return _CompetenceFunctional(kind=contract.competence.kind)
 
 
 def _write_document(path: Path, record: object) -> None:

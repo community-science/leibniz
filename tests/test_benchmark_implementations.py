@@ -23,6 +23,10 @@ def test_digits_benchmark_loads_python_implementation_entrypoint() -> None:
     assert str(implementation.manifest.id) == "benchmarks.digits@0.1.0"
     assert callable(implementation.generator)
     assert implementation.generator.__class__.__name__ == "Generator"
+    assert implementation.target_contract.kind == "finite-outcome"
+    assert implementation.target_contract.loss_id == "cross-entropy"
+    assert implementation.target_contract.expected_output_shape(None) == (10,)
+    assert implementation.target_contract.chance_mass() == 0.1
 
 
 def test_digits_python_implementation_owns_declarations() -> None:
