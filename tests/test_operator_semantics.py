@@ -67,6 +67,12 @@ def test_model_operator_semantic_registry_exports_console_metadata() -> None:
             "value_kind": "positive-integer",
         },
         {
+            "name": "out_length",
+            "display_name": "Output length",
+            "description": "fixed extent of a one-dimensional output support axis",
+            "value_kind": "positive-integer",
+        },
+        {
             "name": "out_height",
             "display_name": "Output height",
             "description": "fixed extent of the first aggregated output support axis",
@@ -127,6 +133,12 @@ def test_model_operator_semantic_registry_exports_console_metadata() -> None:
             "display_name": "Padding",
             "description": "zero padding on each local support axis",
             "value_kind": "nonnegative-integer",
+        },
+        {
+            "name": "padding_mode",
+            "display_name": "Padding mode",
+            "description": "boundary convention for padded local windows",
+            "value_kind": "padding-mode",
         },
     ]
     assert registry.syntax_alias_records()[1]["specialization"] == {
