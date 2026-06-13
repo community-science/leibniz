@@ -477,11 +477,14 @@ class Benchmark:
 
     @property
     def sampling_protocol(self) -> SamplingProtocol:
+        # Digits is a metric-resolution space, so its protocol never saturates to
+        # a census (that path is gated to exact-distinguishability regions); the
+        # saturation threshold is left unset rather than carrying a count.
         return SamplingProtocol(
             kind="uniform-monte-carlo",
             estimator_id="sample-mean",
             confidence_method_id="wilson",
-            census_budget=_default_generation_memory_limit_bytes,
+            census_budget=None,
         )
 
     @property

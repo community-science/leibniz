@@ -1008,7 +1008,7 @@ def test_operation_fallback_raises_when_device_residency_required(
         device_kind="cuda",
     )
 
-    class FailingOperation(host_runtime.torch.nn.Module):  # type: ignore[misc]
+    class FailingOperation(host_runtime.torch.nn.Module):
         def forward(self, value: Any) -> Any:
             _ = value
             raise RuntimeError("backend op unavailable")

@@ -473,6 +473,63 @@ def test_runner_rejects_unimplemented_confidence_methods() -> None:
         )
 
 
+def test_chess_census_scoring_is_exact_and_seed_independent() -> None:
+    """C6 anchor: Chess scores through the census path with no estimator noise.
+
+    Chess is an exact-distinguishability benchmark, so its declared protocol
+    saturates to a census: the confidence interval is exactly zero regardless of
+    spread, the census enumerates the whole region, and the enumerated states are
+    identical across evaluation seeds -- so a fixed model's scored density is
+    deterministic (byte-identical), not a sampled estimate.
+    """
+
+    benchmark = load_benchmark(_chess_benchmark_root)
+    generator = benchmark.generator
+    minimum_log2_volume = generator.minimum_log2_volume().value
+    request = StateSpaceVolumeRequest(
+        minimum=minimum_log2_volume,
+        maximum=minimum_log2_volume,
+    )
+    region = generator(seed=101, shape=4, volume_request=request).region
+    assert region is not None
+
+    # Exact region + declared protocol -> census saturation enumerating every state.
+    assert cast(Any, benchmark_runner)._sampling_protocol_saturates_to_census(
+        protocol=benchmark.sampling_protocol,
+        region=region,
+    )
+    census_indices = cast(Any, benchmark_runner)._census_sample_indices(region)
+    assert census_indices == tuple(range(region.volume))
+
+    # Census reports a zero interval even when the per-sample masses vary: exact, not sampled.
+    estimator = cast(Any, benchmark_runner)._RunningMeanEstimator()
+    estimator.extend((0.0, 1.0))
+    census_protocol = SamplingProtocol(kind="census", census_budget=region.volume)
+    assert (
+        cast(Any, benchmark_runner)._evaluation_confidence_half_width(
+            estimator,
+            sampling_protocol=census_protocol,
+        )
+        == 0.0
+    )
+
+    # Enumeration is seed-independent: the same states are drawn under any seed,
+    # so a fixed model's accepted mass -- and thus the density -- cannot drift.
+    def _signature(seed: int) -> tuple[object, ...]:
+        batch = generator(
+            seed=seed,
+            shape=len(census_indices),
+            volume_request=request,
+            sample_indices=census_indices,
+        )
+        return tuple(
+            (sample.outcome_id, sample.region_component_index, sample.axis_coordinates)
+            for sample in batch.samples
+        )
+
+    assert _signature(101) == _signature(202)
+
+
 def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
     class _FakeCuda:
         @staticmethod
@@ -3276,7 +3333,7 @@ def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_dev
     calls: list[str] = []
     forward_calls = 0
 
-    class FlakyOperation(torch.nn.Module):  # type: ignore[misc]
+    class FlakyOperation(torch.nn.Module):
         def forward(self, value: object) -> object:
             nonlocal forward_calls
             forward_calls += 1

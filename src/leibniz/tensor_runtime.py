@@ -145,7 +145,7 @@ class _TensorRuntimeOperationCapture:
 
         parent = self
 
-        class _OperationCaptureMode(TorchDispatchMode):  # type: ignore[misc]
+        class _OperationCaptureMode(TorchDispatchMode):
             def __torch_dispatch__(
                 self,
                 func: object,
@@ -180,7 +180,7 @@ class _TensorRuntimeOperationCapture:
                 return output
 
         self._mode = _OperationCaptureMode()
-        self._mode.__enter__()  # type: ignore[attr-defined]
+        self._mode.__enter__()
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
@@ -452,7 +452,7 @@ class OperationFallbackSequential:
     ) -> Any:
         torch = runtime.torch
 
-        class Module(torch.nn.Module):  # type: ignore[misc]
+        class Module(torch.nn.Module):
             def __init__(self) -> None:
                 torch.nn.Module.__init__(self)
                 self._preferred = _OperationPlacement(
