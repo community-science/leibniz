@@ -905,20 +905,24 @@ class _LossSearchOptimizer:
     """Deterministic host-interactive reference optimizer.
 
     This optimizer intentionally evaluates candidate losses on the host during
-    each step. It is retained for opt-in reference runs and is not the default
-    training hot path.
+    each step. Its line search is the default local reference path because it
+    does not introduce a learning-rate knob; device hot-path gates must opt into
+    a non-host-interactive optimizer such as Adam.
     """
 
     requires_loss_closure = True
     _beta1 = 0.9
     _beta2 = 0.999
     _epsilon = 1e-8
+    _armijo_sufficient_decrease = 0.1
+    _maximum_step_size = 1.0
+    _minimum_step_size = 1e-8
 
     def __init__(self, parameters: Any) -> None:
         self._parameters = tuple(parameters)
         self.param_groups: list[dict[str, object]] = [{"params": list(self._parameters)}]
         self.state: dict[object, dict[str, object]] = {}
-        self._step_size = 1.0
+        self._accepted_step_size = 1e-3
 
     def zero_grad(self, *, set_to_none: bool = False) -> None:
         for parameter in self._parameters:
@@ -955,15 +959,40 @@ class _LossSearchOptimizer:
             )
             for parameter, gradient in zip(self._parameters, gradients, strict=True)
         )
+        self._commit_direction_records(
+            records=direction_records,
+            step=next_step,
+        )
         directional_derivative = sum(
             float((gradient * record["direction"]).sum().detach())
             for gradient, record in zip(gradients, direction_records, strict=True)
             if gradient is not None and record is not None
         )
         if directional_derivative <= 0.0 or not math.isfinite(directional_derivative):
+            direction_records = tuple(
+                None
+                if gradient is None
+                else {
+                    "direction": gradient,
+                    "exp_avg": record["exp_avg"] if record is not None else gradient,
+                    "exp_avg_sq": (
+                        record["exp_avg_sq"] if record is not None else gradient * gradient
+                    ),
+                }
+                for gradient, record in zip(gradients, direction_records, strict=True)
+            )
+            directional_derivative = sum(
+                float((gradient * record["direction"]).sum().detach())
+                for gradient, record in zip(gradients, direction_records, strict=True)
+                if gradient is not None and record is not None
+            )
+        if directional_derivative <= 0.0 or not math.isfinite(directional_derivative):
             return baseline_loss
         originals = tuple(parameter.detach().clone() for parameter in self._parameters)
-        step_size = min(self._step_size, max(1e-12, baseline_value / directional_derivative))
+        step_size = min(
+            self._maximum_step_size,
+            max(self._minimum_step_size, self._accepted_step_size * 2.0),
+        )
         for _attempt in range(12):
             with torch.no_grad():
                 for parameter, original, record in zip(
@@ -979,26 +1008,38 @@ class _LossSearchOptimizer:
             with torch.enable_grad():
                 trial_loss = closure()
             trial_value = float(trial_loss.detach())
-            if math.isfinite(trial_value) and trial_value <= baseline_value:
-                for parameter, record in zip(
-                    self._parameters,
-                    direction_records,
-                    strict=True,
-                ):
-                    if record is not None:
-                        self.state[parameter] = {
-                            "step": next_step,
-                            "exp_avg": record["exp_avg"],
-                            "exp_avg_sq": record["exp_avg_sq"],
-                        }
-                self._step_size = min(step_size * 2.0, 1.0)
+            sufficient_decrease = (
+                baseline_value
+                - self._armijo_sufficient_decrease * step_size * directional_derivative
+            )
+            if math.isfinite(trial_value) and trial_value <= sufficient_decrease:
+                self._accepted_step_size = min(step_size, self._maximum_step_size)
                 return trial_loss
             step_size *= 0.5
+            if step_size < self._minimum_step_size:
+                break
         with torch.no_grad():
             for parameter, original in zip(self._parameters, originals, strict=True):
                 parameter.copy_(original)
-        self._step_size = max(step_size, 1e-12)
+        self._accepted_step_size = max(
+            min(self._accepted_step_size, step_size),
+            self._minimum_step_size,
+        )
         return baseline_loss
+
+    def _commit_direction_records(
+        self,
+        *,
+        records: Sequence[dict[str, Any] | None],
+        step: int,
+    ) -> None:
+        for parameter, record in zip(self._parameters, records, strict=True):
+            if record is not None:
+                self.state[parameter] = {
+                    "step": step,
+                    "exp_avg": record["exp_avg"],
+                    "exp_avg_sq": record["exp_avg_sq"],
+                }
 
     def _next_step_index(self) -> int:
         steps = (

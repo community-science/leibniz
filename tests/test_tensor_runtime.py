@@ -1,6 +1,7 @@
 import importlib
 import math
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -129,6 +130,280 @@ def test_loss_search_optimizer_decreases_loss_without_learning_rate() -> None:
     assert "exp_avg" in optimizer.state[parameter]
     assert "exp_avg_sq" in optimizer.state[parameter]
     assert stepped_loss < baseline_loss
+
+
+@pytest.mark.parametrize(
+    ("initial", "steps", "loss_kind", "target", "maximum_loss"),
+    [
+        ((2.0,), 48, "shifted-quadratic", (0.25,), 1e-6),
+        ((-3.0, 2.0), 96, "ill-conditioned-quadratic", (1.0, -0.5), 1e-4),
+        ((-1.5,), 96, "quartic-bowl", (0.75,), 1e-5),
+    ],
+)
+def test_loss_search_optimizer_reaches_known_simple_optima_and_matches_adam(
+    initial: tuple[float, ...],
+    steps: int,
+    loss_kind: str,
+    target: tuple[float, ...],
+    maximum_loss: float,
+) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    loss_search = _optimize_simple_objective(
+        runtime=runtime,
+        optimizer_name="loss-search",
+        learning_rate=None,
+        initial=initial,
+        steps=steps,
+        loss_kind=loss_kind,
+    )
+    adam = _optimize_simple_objective(
+        runtime=runtime,
+        optimizer_name="adam",
+        learning_rate=1e-3,
+        initial=initial,
+        steps=steps,
+        loss_kind=loss_kind,
+    )
+
+    assert loss_search.loss <= maximum_loss
+    assert all(
+        math.isclose(actual, expected, rel_tol=0.0, abs_tol=1e-2)
+        for actual, expected in zip(loss_search.parameters, target, strict=True)
+    )
+    assert loss_search.loss <= adam.loss + 1e-8
+
+
+def test_loss_search_optimizer_matches_adam_on_known_logistic_fixture() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    loss_search = _optimize_logistic_fixture(
+        runtime=runtime,
+        optimizer_name="loss-search",
+        learning_rate=None,
+        steps=128,
+    )
+    adam = _optimize_logistic_fixture(
+        runtime=runtime,
+        optimizer_name="adam",
+        learning_rate=1e-3,
+        steps=128,
+    )
+
+    assert loss_search.loss <= 0.05
+    assert loss_search.accuracy == 1.0
+    assert loss_search.loss <= adam.loss + 1e-8
+
+
+def test_loss_search_optimizer_matches_adam_on_alternating_batch_fixture() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    loss_search = _optimize_alternating_batch_fixture(
+        runtime=runtime,
+        optimizer_name="loss-search",
+        learning_rate=None,
+        steps=96,
+    )
+    adam = _optimize_alternating_batch_fixture(
+        runtime=runtime,
+        optimizer_name="adam",
+        learning_rate=1e-3,
+        steps=96,
+    )
+
+    assert loss_search.loss <= 0.05
+    assert loss_search.loss <= adam.loss + 1e-8
+
+
+def test_loss_search_optimizer_updates_moments_on_rejected_steps() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    parameter = torch.nn.Parameter(torch.tensor([1.0], device=runtime.device))
+    optimizer = build_optimizer(
+        runtime,
+        name="loss-search",
+        parameters=[parameter],
+        learning_rate=None,
+    )
+    optimizer._armijo_sufficient_decrease = 1e12
+
+    def closure() -> Any:
+        optimizer.zero_grad(set_to_none=True)
+        loss = parameter.pow(2).sum()
+        loss.backward()
+        return loss
+
+    baseline_parameter = float(parameter.detach()[0])
+    baseline_loss = float(closure().detach())
+    optimizer_step(runtime, optimizer, closure)
+
+    assert float(parameter.detach()[0]) == baseline_parameter
+    assert float(closure().detach()) == baseline_loss
+    assert optimizer.state[parameter]["step"] == 1
+    assert optimizer._accepted_step_size >= optimizer._minimum_step_size
+
+
+def test_loss_search_optimizer_uses_raw_gradient_when_momentum_is_not_descent() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    parameter = torch.nn.Parameter(torch.tensor([1.0], device=runtime.device))
+    optimizer = build_optimizer(
+        runtime,
+        name="loss-search",
+        parameters=[parameter],
+        learning_rate=None,
+    )
+    optimizer.state[parameter] = {
+        "step": 1,
+        "exp_avg": torch.tensor([-10.0], device=runtime.device),
+        "exp_avg_sq": torch.tensor([1.0], device=runtime.device),
+    }
+
+    def closure() -> Any:
+        optimizer.zero_grad(set_to_none=True)
+        loss = parameter.pow(2).sum()
+        loss.backward()
+        return loss
+
+    baseline_loss = float(closure().detach())
+    optimizer_step(runtime, optimizer, closure)
+
+    assert float(closure().detach()) < baseline_loss
+
+
+@dataclass(frozen=True, slots=True)
+class _OptimizationResult:
+    loss: float
+    parameters: tuple[float, ...]
+    accuracy: float | None = None
+
+
+def _optimize_simple_objective(
+    *,
+    runtime: TensorRuntime,
+    optimizer_name: str,
+    learning_rate: float | None,
+    initial: tuple[float, ...],
+    steps: int,
+    loss_kind: str,
+) -> _OptimizationResult:
+    torch = runtime.torch
+    parameter = torch.nn.Parameter(
+        torch.tensor(initial, dtype=torch.float32, device=runtime.device)
+    )
+    optimizer = build_optimizer(
+        runtime,
+        name=optimizer_name,
+        parameters=[parameter],
+        learning_rate=learning_rate,
+    )
+
+    def closure() -> Any:
+        optimizer.zero_grad(set_to_none=True)
+        if loss_kind == "shifted-quadratic":
+            loss = (parameter[0] - 0.25).pow(2)
+        elif loss_kind == "ill-conditioned-quadratic":
+            loss = (parameter[0] - 1.0).pow(2) + 25.0 * (parameter[1] + 0.5).pow(2)
+        elif loss_kind == "quartic-bowl":
+            loss = (parameter[0] - 0.75).pow(4) + 0.1 * (parameter[0] - 0.75).pow(2)
+        else:  # pragma: no cover - parametrization guard
+            raise AssertionError(f"unknown loss fixture: {loss_kind}")
+        loss.backward()
+        return loss
+
+    for _step in range(steps):
+        optimizer_step(runtime, optimizer, closure)
+    return _OptimizationResult(
+        loss=float(closure().detach()),
+        parameters=tuple(float(value) for value in parameter.detach().tolist()),
+    )
+
+
+def _optimize_logistic_fixture(
+    *,
+    runtime: TensorRuntime,
+    optimizer_name: str,
+    learning_rate: float | None,
+    steps: int,
+) -> _OptimizationResult:
+    torch = runtime.torch
+    features = torch.tensor(
+        [
+            [-2.0, -1.0],
+            [-1.5, -1.0],
+            [-1.0, -2.0],
+            [1.0, 2.0],
+            [1.5, 1.0],
+            [2.0, 1.0],
+        ],
+        dtype=torch.float32,
+        device=runtime.device,
+    )
+    labels = torch.tensor([0.0, 0.0, 0.0, 1.0, 1.0, 1.0], device=runtime.device)
+    parameter = torch.nn.Parameter(torch.zeros(3, dtype=torch.float32, device=runtime.device))
+    optimizer = build_optimizer(
+        runtime,
+        name=optimizer_name,
+        parameters=[parameter],
+        learning_rate=learning_rate,
+    )
+
+    def closure() -> Any:
+        optimizer.zero_grad(set_to_none=True)
+        logits = features @ parameter[:2] + parameter[2]
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+        loss.backward()
+        return loss
+
+    for _step in range(steps):
+        optimizer_step(runtime, optimizer, closure)
+    with torch.no_grad():
+        logits = features @ parameter[:2] + parameter[2]
+        predictions = (logits >= 0).to(labels.dtype)
+        accuracy = float((predictions == labels).to(torch.float32).mean())
+    return _OptimizationResult(
+        loss=float(closure().detach()),
+        parameters=tuple(float(value) for value in parameter.detach().tolist()),
+        accuracy=accuracy,
+    )
+
+
+def _optimize_alternating_batch_fixture(
+    *,
+    runtime: TensorRuntime,
+    optimizer_name: str,
+    learning_rate: float | None,
+    steps: int,
+) -> _OptimizationResult:
+    torch = runtime.torch
+    parameter = torch.nn.Parameter(
+        torch.tensor([-2.0, 2.0], dtype=torch.float32, device=runtime.device)
+    )
+    centers = (
+        torch.tensor([1.0, -1.0], dtype=torch.float32, device=runtime.device),
+        torch.tensor([1.2, -0.8], dtype=torch.float32, device=runtime.device),
+    )
+    optimizer = build_optimizer(
+        runtime,
+        name=optimizer_name,
+        parameters=[parameter],
+        learning_rate=learning_rate,
+    )
+    current_center = centers[0]
+
+    def closure() -> Any:
+        optimizer.zero_grad(set_to_none=True)
+        loss = (parameter - current_center).pow(2).mean()
+        loss.backward()
+        return loss
+
+    for step in range(steps):
+        current_center = centers[step % len(centers)]
+        optimizer_step(runtime, optimizer, closure)
+    with torch.no_grad():
+        average_center = sum(centers) / len(centers)
+        evaluation_loss = (parameter - average_center).pow(2).mean()
+    return _OptimizationResult(
+        loss=float(evaluation_loss.detach()),
+        parameters=tuple(float(value) for value in parameter.detach().tolist()),
+    )
 
 
 def test_loss_search_optimizer_rejects_missing_closure() -> None:
