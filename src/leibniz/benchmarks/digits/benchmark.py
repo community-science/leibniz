@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, TypeAlias, cast
 
 from leibniz.artifacts import ArtifactReference
-from leibniz.benchmark_implementations import Benchmark as BenchmarkProtocol
+from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
 from leibniz.cost_metrology import (
     CostMeasurement,
@@ -57,10 +57,12 @@ from leibniz.observation_showcases import (
 )
 from leibniz.outcomes import Outcome, OutcomeSpace
 from leibniz.state_space import (
-    AxisRegion,
+    AccessibleSubspace,
+    DiscreteAxisRegion,
     Distinguishability,
     IntegerRangeDomain,
     ProductRegion,
+    SamplingProtocol,
     StateSpaceAmbient,
     StateSpaceAxis,
     StateSpaceRegion,
@@ -115,6 +117,7 @@ _translation_step_pixels = 4  # distinguishable centre-relative shift between ce
 _scale_shell_weight = 2  # one scale level costs this many shells of radius
 _max_scale_level = 3  # scale levels clamp to +/- this
 _scale_ratio_per_level = 0.12  # fractional digit-footprint change per scale level
+_component_discriminability_margin = 20.0
 _chart_translation_axis_ids = ("x_translation", "y_translation")
 _chart_scale_axis_id = "scale"
 _chart_axis_ids = (*_chart_translation_axis_ids, _chart_scale_axis_id)
@@ -471,6 +474,29 @@ class Benchmark:
     @property
     def generator(self) -> Generator:
         return self._generator
+
+    @property
+    def sampling_protocol(self) -> SamplingProtocol:
+        # Digits is a metric-resolution space, so its protocol never saturates to
+        # a census (that path is gated to exact-distinguishability regions); the
+        # saturation threshold is left unset rather than carrying a count.
+        return SamplingProtocol(
+            kind="uniform-monte-carlo",
+            estimator_id="sample-mean",
+            confidence_method_id="wilson",
+            census_budget=None,
+        )
+
+    @property
+    def accessible_subspace(self) -> AccessibleSubspace:
+        return AccessibleSubspace(
+            ladder_id="digits-transform-ordinal-shells",
+            per_configuration_capacity=_digits_capacity_region(),
+            frontier_rationale=(
+                "All digit identities over the benchmark transform-ordinal chart are in scope; "
+                "the finite capacity is the practical shared chart-domain bound."
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1617,6 +1643,25 @@ def _digits_state_space_region(
     )
 
 
+def _digits_capacity_region() -> StateSpaceRegion:
+    volume = _volume_class_digit_count * (_chart_ordinal_domain_extent + 1)
+    components = tuple(
+        _digits_product_region(
+            digit_index=digit_index,
+            ordinal_range=(0, _chart_ordinal_domain_extent),
+        )
+        for digit_index in range(_volume_class_digit_count)
+    )
+    return StateSpaceRegion(
+        id="benchmarks.digits.accessible-capacity",
+        ambient=_digits_ambient(margin=_component_discriminability_margin),
+        components=components,
+        union_rule="disjoint-union",
+        volume=volume,
+        log2_volume=math.log2(volume),
+    )
+
+
 def _digits_product_region(
     *,
     digit_index: int,
@@ -1624,7 +1669,7 @@ def _digits_product_region(
 ) -> ProductRegion:
     lower, upper = ordinal_range
     count = upper - lower + 1
-    axis_region = AxisRegion(
+    axis_region = DiscreteAxisRegion(
         axis=StateSpaceAxis(
             id=_chart_ordinal_axis_id,
             domain=IntegerRangeDomain(lower=0, upper=_chart_ordinal_domain_extent),
@@ -2042,6 +2087,7 @@ def _digits_tensor_program(
                 dtype="float32",
                 shape=(table_length, 3),
                 values=transform_table_values,
+                dynamic_axes=(0,),
             ),
             "component_mark_counts": TensorElementParameter(
                 dtype="int64",
@@ -2110,7 +2156,6 @@ def _digits_tensor_program(
             component_count,
             max_mark_count,
             _batch_render_curve_sample_count,
-            table_length,
         ),
     )
 
@@ -2251,7 +2296,7 @@ def _manifest() -> BenchmarkManifest:
         latent_factor_declaration=_latent_factor_reference(),
         resolution_analysis={
             "kind": "component-discriminability-margin",
-            "discriminability_margin": 20.0,
+            "discriminability_margin": _component_discriminability_margin,
             "render_unit_side": _render_unit_side,
             "translation_step_pixels": _translation_step_pixels,
             "scale_ratio_per_level": _scale_ratio_per_level,

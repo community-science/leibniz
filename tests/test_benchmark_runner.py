@@ -1,5 +1,6 @@
 import math
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -18,6 +19,7 @@ from leibniz.benchmark_evaluation import (
     validation_competence_frontier_advances,
 )
 from leibniz.benchmark_implementations import Generator as BenchmarkGenerator
+from leibniz.benchmark_implementations import load_benchmark
 from leibniz.benchmark_runner import (
     BenchmarkEvaluationPlan,
     BenchmarkRunnerError,
@@ -43,7 +45,16 @@ from leibniz.observation_generation import (
     StateSpaceVolumeRequest,
     load_generator,
 )
-from leibniz.state_space import state_space_region_from_record
+from leibniz.state_space import (
+    AccessibleSubspace,
+    SamplingProtocol,
+    state_space_region_from_record,
+)
+from leibniz.target_contracts import (
+    BaselinePredictor,
+    CompetenceFunctional,
+    TargetContract,
+)
 from leibniz.tensor_runtime import (
     TensorRuntime,
     TensorRuntimeDeviceKind,
@@ -94,6 +105,48 @@ def _cost_measurement(abstract_flops: int = 0) -> CostMeasurement:
         wall_seconds=0.0,
         tensor_device="cpu",
     )
+
+
+def _target_contract(outcome_ids: tuple[str, ...]) -> TargetContract:
+    return TargetContract.finite_outcome(outcome_ids)
+
+
+def _target_contract_from_outcome_space(outcome_space: Any) -> TargetContract:
+    return _target_contract(tuple(outcome.id for outcome in outcome_space.outcomes))
+
+
+def _wilson_sampling_protocol() -> SamplingProtocol:
+    return SamplingProtocol(
+        kind="uniform-monte-carlo",
+        estimator_id="sample-mean",
+        confidence_method_id="wilson",
+    )
+
+
+def test_resolve_competence_functional_selects_finite_outcome_accepted_mass() -> None:
+    functional = cast(Any, benchmark_runner)._resolve_competence_functional(
+        _target_contract(("a", "b"))
+    )
+
+    assert functional.kind == "above-chance-accepted-mass"
+
+
+def test_resolve_competence_functional_rejects_unsupported_competence_kind() -> None:
+    field_contract = TargetContract(
+        kind="field-valued",
+        outcome_ids=None,
+        loss_id="mse",
+        competence=CompetenceFunctional(
+            kind="mass-within-resolution",
+            parameters={"residual_operator_id": "op"},
+        ),
+        baseline=BaselinePredictor(kind="zero-field"),
+    )
+
+    with pytest.raises(
+        benchmark_runner.BenchmarkRunnerError, match="competence kind"
+    ):
+        cast(Any, benchmark_runner)._resolve_competence_functional(field_contract)
 
 
 def _observation_payload(
@@ -268,6 +321,213 @@ def test_digits_benchmark_runner_dry_run_does_not_write_state(tmp_path: Path) ->
     )
     assert "-samples" not in summary.run_slug
     assert not (tmp_path / "results").exists()
+
+
+def test_claim_chain_accepts_canonical_digits_windows() -> None:
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    planner = cast(Any, benchmark_runner)._VolumeCurriculumPlanner()
+    first = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=0,
+        planner=planner,
+    )
+    second = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=1,
+        planner=planner,
+    )
+
+    cast(Any, benchmark_runner)._validate_claim_chain(
+        (first, second),
+        accessible_subspace=benchmark.accessible_subspace,
+    )
+
+
+def test_claim_chain_rejects_missing_base_region() -> None:
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    rung = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=0,
+    )
+    shifted = replace(rung, log2_volume_minimum=1.0, log2_volume_maximum=2.0)
+
+    with pytest.raises(BenchmarkRunnerError, match="base region first"):
+        cast(Any, benchmark_runner)._validate_claim_chain(
+            (shifted,),
+            accessible_subspace=benchmark.accessible_subspace,
+        )
+
+
+def test_claim_chain_rejects_overlapping_increments() -> None:
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    first = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=0,
+    )
+    duplicate = replace(first, index=1, log2_volume_minimum=1.0, log2_volume_maximum=2.0)
+
+    with pytest.raises(BenchmarkRunnerError, match="pairwise disjoint"):
+        cast(Any, benchmark_runner)._validate_claim_chain(
+            (first, duplicate),
+            accessible_subspace=benchmark.accessible_subspace,
+        )
+
+
+def test_claim_chain_rejects_accessible_subspace_exclusions() -> None:
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    rung = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=0,
+    )
+    assert rung.batch.region is not None
+    excluded_subspace = AccessibleSubspace(
+        ladder_id=benchmark.accessible_subspace.ladder_id,
+        per_configuration_capacity=benchmark.accessible_subspace.per_configuration_capacity,
+        exclusions=(rung.batch.region,),
+        frontier_rationale=benchmark.accessible_subspace.frontier_rationale,
+    )
+
+    with pytest.raises(BenchmarkRunnerError, match="accessible-subspace exclusion"):
+        cast(Any, benchmark_runner)._validate_claim_chain(
+            (rung,),
+            accessible_subspace=excluded_subspace,
+        )
+
+
+def test_claim_chain_rejects_cumulative_bracket_mismatch() -> None:
+    benchmark = load_digits_benchmark(_digits_benchmark_root)
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _digits_architecture.read_bytes()
+    ).manifest
+    planner = cast(Any, benchmark_runner)._VolumeCurriculumPlanner()
+    first = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=0,
+        planner=planner,
+    )
+    second = cast(Any, benchmark_runner)._evaluation_curriculum_rung(
+        architecture=architecture,
+        generator=benchmark.generator,
+        seed=101,
+        index=1,
+        planner=planner,
+    )
+    bad_bracket = replace(second, log2_volume_minimum=5.0, log2_volume_maximum=6.0)
+
+    with pytest.raises(BenchmarkRunnerError, match="cumulative volume"):
+        cast(Any, benchmark_runner)._validate_claim_chain(
+            (first, bad_bracket),
+            accessible_subspace=benchmark.accessible_subspace,
+        )
+
+
+def test_wilson_confidence_half_width_is_bounded_near_extremes() -> None:
+    estimator = cast(Any, benchmark_runner)._RunningMeanEstimator()
+    estimator.extend((1.0, 1.0, 1.0, 1.0))
+
+    half_width = cast(Any, benchmark_runner)._evaluation_confidence_half_width(
+        estimator,
+        sampling_protocol=_wilson_sampling_protocol(),
+    )
+
+    assert 0.0 < half_width <= 1.0
+
+
+def test_runner_rejects_unimplemented_confidence_methods() -> None:
+    estimator = cast(Any, benchmark_runner)._RunningMeanEstimator()
+    estimator.extend((0.5, 0.75))
+    unsupported = SamplingProtocol(
+        kind="uniform-monte-carlo",
+        estimator_id="sample-mean",
+        confidence_method_id="hoeffding",
+    )
+
+    with pytest.raises(BenchmarkRunnerError, match="unsupported confidence_method_id"):
+        cast(Any, benchmark_runner)._evaluation_confidence_half_width(
+            estimator,
+            sampling_protocol=unsupported,
+        )
+
+
+def test_chess_census_scoring_is_exact_and_seed_independent() -> None:
+    """C6 anchor: Chess scores through the census path with no estimator noise.
+
+    Chess is an exact-distinguishability benchmark, so its declared protocol
+    saturates to a census: the confidence interval is exactly zero regardless of
+    spread, the census enumerates the whole region, and the enumerated states are
+    identical across evaluation seeds -- so a fixed model's scored density is
+    deterministic (byte-identical), not a sampled estimate.
+    """
+
+    benchmark = load_benchmark(_chess_benchmark_root)
+    generator = benchmark.generator
+    minimum_log2_volume = generator.minimum_log2_volume().value
+    request = StateSpaceVolumeRequest(
+        minimum=minimum_log2_volume,
+        maximum=minimum_log2_volume,
+    )
+    region = generator(seed=101, shape=4, volume_request=request).region
+    assert region is not None
+
+    # Exact region + declared protocol -> census saturation enumerating every state.
+    assert cast(Any, benchmark_runner)._sampling_protocol_saturates_to_census(
+        protocol=benchmark.sampling_protocol,
+        region=region,
+    )
+    census_indices = cast(Any, benchmark_runner)._census_sample_indices(region)
+    assert census_indices == tuple(range(region.volume))
+
+    # Census reports a zero interval even when the per-sample masses vary: exact, not sampled.
+    estimator = cast(Any, benchmark_runner)._RunningMeanEstimator()
+    estimator.extend((0.0, 1.0))
+    census_protocol = SamplingProtocol(kind="census", census_budget=region.volume)
+    assert (
+        cast(Any, benchmark_runner)._evaluation_confidence_half_width(
+            estimator,
+            sampling_protocol=census_protocol,
+        )
+        == 0.0
+    )
+
+    # Enumeration is seed-independent: the same states are drawn under any seed,
+    # so a fixed model's accepted mass -- and thus the density -- cannot drift.
+    def _signature(seed: int) -> tuple[object, ...]:
+        batch = generator(
+            seed=seed,
+            shape=len(census_indices),
+            volume_request=request,
+            sample_indices=census_indices,
+        )
+        return tuple(
+            (sample.outcome_id, sample.region_component_index, sample.axis_coordinates)
+            for sample in batch.samples
+        )
+
+    assert _signature(101) == _signature(202)
 
 
 def test_dynamic_cuda_batch_sizing_uses_canvas_area_and_memory_budget() -> None:
@@ -621,9 +881,11 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
         mean_accepted_mass=1.0,
         sample_count=1,
         confidence_half_width=0.0,
+        confidence_method_id=None,
+        sampling_protocol=load_benchmark(_chess_benchmark_root).sampling_protocol,
         input_shape=(18, 8, 8),
         inference_cost_measurement=_cost_measurement(),
-            inference_cost_sample_count=1,
+        inference_cost_sample_count=1,
     )
 
     def fake_load_predictor(**_kwargs: object) -> object:
@@ -665,7 +927,9 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
         benchmark_runner.evaluate_model_checkpoint_artifact(
             architecture=architecture,
             generator=cast(Any, generator),
-            outcome_space=outcome_space,
+            target_contract=_target_contract_from_outcome_space(outcome_space),
+            accessible_subspace=load_benchmark(_chess_benchmark_root).accessible_subspace,
+            sampling_protocol=load_benchmark(_chess_benchmark_root).sampling_protocol,
             seed=101,
             tensor_device="cpu",
             checkpoint=cast(Any, object()),
@@ -921,10 +1185,13 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
         "seed",
         "volume_value",
         "volume_request",
-            "score_interval",
-            "status",
-            "request_outcome",
-        }
+        "score_interval",
+        "status",
+        "request_outcome",
+        "confidence_method_id",
+        "sampling_protocol",
+        "sampling_seed",
+    }
     assert all(set(rung) == expected_evaluation_rung_keys for rung in curriculum_rungs)
     assert all(
         isinstance(rung["mean_accepted_mass"], float)
@@ -972,7 +1239,14 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     expected_training_rung_keys = {
         key
         for key in expected_evaluation_rung_keys
-        if key not in {"confidence_half_width", "mean_accepted_mass"}
+        if key
+        not in {
+            "confidence_half_width",
+            "confidence_method_id",
+            "mean_accepted_mass",
+            "sampling_protocol",
+            "sampling_seed",
+        }
     }
     expected_training_rung_keys_with_resolution = (
         expected_training_rung_keys | {"resolution_assignment"}
@@ -1124,7 +1398,7 @@ def test_digits_benchmark_runner_accepts_convnet_architecture(
         evaluation_summary.evaluation_bundle_path.read_bytes()
     ).bundle.model_inspection
 
-    assert evaluation_summary.measurement_count == 64
+    assert evaluation_summary.measurement_count >= 64
     assert [stage.operator_kind for stage in inspection.architecture_trace.stages] == [
         "fixed-support-affine",
         "local-affine",
@@ -1222,6 +1496,8 @@ def test_evaluation_frontier_requires_contiguous_confidence_above_chance() -> No
             mean_accepted_mass=0.20,
             sample_count=100,
             confidence_half_width=0.01,
+            confidence_method_id="wilson",
+            sampling_protocol=_wilson_sampling_protocol(),
             input_shape=(1, 16, 16),
             inference_cost_measurement=_cost_measurement(),
             inference_cost_sample_count=1,
@@ -1231,6 +1507,8 @@ def test_evaluation_frontier_requires_contiguous_confidence_above_chance() -> No
             mean_accepted_mass=0.16,
             sample_count=100,
             confidence_half_width=0.08,
+            confidence_method_id="wilson",
+            sampling_protocol=_wilson_sampling_protocol(),
             input_shape=(1, 16, 16),
             inference_cost_measurement=_cost_measurement(),
             inference_cost_sample_count=1,
@@ -1240,19 +1518,20 @@ def test_evaluation_frontier_requires_contiguous_confidence_above_chance() -> No
             mean_accepted_mass=0.18,
             sample_count=100,
             confidence_half_width=0.03,
+            confidence_method_id="wilson",
+            sampling_protocol=_wilson_sampling_protocol(),
             input_shape=(1, 16, 16),
             inference_cost_measurement=_cost_measurement(),
             inference_cost_sample_count=1,
         ),
     )
 
-    assert (
-        cast(Any, benchmark_runner)._evaluation_result_frontier_index(
-            evaluation_results=results,
-            outcome_ids=tuple(f"digit-{index}" for index in range(10)),
-        )
-        == 0
-    )
+    outcome_ids = tuple(f"digit-{index}" for index in range(10))
+    assert cast(Any, benchmark_runner)._evaluation_result_frontier_index(
+        evaluation_results=results,
+        target_contract=_target_contract(outcome_ids),
+        outcome_ids=outcome_ids,
+    ) == 0
 
 
 def test_evaluation_integration_converges_after_confident_terminal_failures() -> None:
@@ -1275,13 +1554,19 @@ def test_evaluation_integration_converges_after_confident_terminal_failures() ->
             mean_accepted_mass=0.20,
             sample_count=100,
             confidence_half_width=0.01,
+            confidence_method_id="wilson",
+            sampling_protocol=_wilson_sampling_protocol(),
             input_shape=(1, 16, 16),
             inference_cost_measurement=_cost_measurement(),
             inference_cost_sample_count=1,
         ),
     )
 
-    evidence = integration_evidence(evaluation_results=results, outcome_ids=outcome_ids)
+    evidence = integration_evidence(
+        evaluation_results=results,
+        target_contract=_target_contract(outcome_ids),
+        outcome_ids=outcome_ids,
+    )
     assert evidence.frontier_index == 0
     assert not evidence.converged
 
@@ -1291,6 +1576,8 @@ def test_evaluation_integration_converges_after_confident_terminal_failures() ->
             mean_accepted_mass=0.20 if index == 0 else 0.10,
             sample_count=100,
             confidence_half_width=0.01,
+            confidence_method_id="wilson",
+            sampling_protocol=_wilson_sampling_protocol(),
             input_shape=(1, 16, 16),
             inference_cost_measurement=_cost_measurement(),
             inference_cost_sample_count=1,
@@ -1298,7 +1585,11 @@ def test_evaluation_integration_converges_after_confident_terminal_failures() ->
         for index in range(4)
     )
 
-    evidence = integration_evidence(evaluation_results=results, outcome_ids=outcome_ids)
+    evidence = integration_evidence(
+        evaluation_results=results,
+        target_contract=_target_contract(outcome_ids),
+        outcome_ids=outcome_ids,
+    )
     assert evidence.frontier_index == 0
     assert evidence.terminal_failure_count == 3
     assert math.isclose(evidence.score_integral_half_width, 0.01 / 0.9)
@@ -1325,6 +1616,8 @@ def test_evaluation_integration_does_not_reset_after_failed_ladder_gap() -> None
             mean_accepted_mass=mean,
             sample_count=100,
             confidence_half_width=0.01,
+            confidence_method_id="wilson",
+            sampling_protocol=_wilson_sampling_protocol(),
             input_shape=(1, 16, 16),
             inference_cost_measurement=_cost_measurement(),
             inference_cost_sample_count=1,
@@ -1332,7 +1625,11 @@ def test_evaluation_integration_does_not_reset_after_failed_ladder_gap() -> None
         for index, mean in enumerate((0.90, 0.80, 0.05, 0.04, 0.70))
     )
 
-    evidence = integration_evidence(evaluation_results=results, outcome_ids=outcome_ids)
+    evidence = integration_evidence(
+        evaluation_results=results,
+        target_contract=_target_contract(outcome_ids),
+        outcome_ids=outcome_ids,
+    )
 
     assert evidence.frontier_index == 1
     assert evidence.terminal_failure_count == 3
@@ -1721,10 +2018,7 @@ def test_training_stage_records_current_validation_loss_without_global_best(
         loss_function=FakeLossFunction(),
         train_batch=fake_batch,
         validation_batch=cast(Any, fake_validation_batch),
-        outcome_space=(
-            load_digits_benchmark(_digits_benchmark_root)
-            .manifest.resolve_outcome_space()
-        ),
+        target_contract=_target_contract(("digit-0",)),
         outcome_ids=("digit-0",),
         max_steps=100,
         gate_check_interval=1,
@@ -1882,7 +2176,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
 
     estimate = cast(Any, benchmark_runner)._training_gate_score_estimate(
         batch=batch,
-        outcome_space=outcome_space,
+        target_contract=_target_contract_from_outcome_space(outcome_space),
         accepted_mass=accepted_mass,
         previous_frontier_points=(
             ValidationCompetencePoint(
@@ -1905,7 +2199,7 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
         math.log2(10),
         batch.log2_volume,
     ]
-    assert points[0]["sample_count"] == 64
+    assert cast(int, points[0]["sample_count"]) >= 64
     assert points[0]["seed"] == 202
     assert points[0]["mean_accepted_mass"] == 1.0
     assert points[0]["input_shape"] == [1, 16, 16]
@@ -2087,7 +2381,7 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
         loss_function=FakeLossFunction(),
         train_batch=cast(Any, fake_training_batch),
         validation_batch=fake_validation_batch,
-        outcome_space=outcome_space,
+        target_contract=_target_contract(outcome_ids),
         outcome_ids=outcome_ids,
         max_steps=1,
         gate_check_interval=1,
@@ -2318,7 +2612,7 @@ def test_training_steps_materialize_replay_masses_only_at_gate_checks(
         loss_function=FakeLossFunction(),
         train_batch=fake_batch,
         validation_batch=cast(Any, fake_validation_batch),
-        outcome_space=benchmark.manifest.resolve_outcome_space(),
+        target_contract=_target_contract(outcome_ids),
         outcome_ids=outcome_ids,
         max_steps=4,
         gate_check_interval=2,
@@ -2449,7 +2743,7 @@ def test_training_cost_is_metered_once_per_field_shape(
         loss_function=FakeLossFunction(),
         train_batch=fake_batch,
         validation_batch=cast(Any, fake_validation_batch),
-        outcome_space=benchmark.manifest.resolve_outcome_space(),
+        target_contract=_target_contract(outcome_ids),
         outcome_ids=outcome_ids,
         max_steps=4,
         gate_check_interval=2,
@@ -2741,7 +3035,7 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
         loss_function=FakeLossFunction(),
         train_batch=fake_batch,
         validation_batch=cast(Any, fake_validation_batch),
-        outcome_space=benchmark.manifest.resolve_outcome_space(),
+        target_contract=_target_contract(outcome_ids),
         outcome_ids=outcome_ids,
         max_steps=10,
         gate_check_interval=1,
@@ -2850,7 +3144,7 @@ def test_training_plateau_above_rung_competence_threshold_advances_frontier(
         loss_function=FakeLossFunction(),
         train_batch=fake_batch,
         validation_batch=cast(Any, fake_validation_batch),
-        outcome_space=benchmark.manifest.resolve_outcome_space(),
+        target_contract=_target_contract(outcome_ids),
         outcome_ids=outcome_ids,
         max_steps=2,
         gate_check_interval=1,
@@ -3039,7 +3333,7 @@ def test_digits_benchmark_runner_falls_back_per_operation_without_restarting_dev
     calls: list[str] = []
     forward_calls = 0
 
-    class FlakyOperation(torch.nn.Module):  # type: ignore[misc]
+    class FlakyOperation(torch.nn.Module):
         def forward(self, value: object) -> object:
             nonlocal forward_calls
             forward_calls += 1
@@ -3226,7 +3520,7 @@ def test_digits_benchmark_runner_outputs_feed_benchmark_result_views(tmp_path: P
     log2_volumes = [cast(float, point["log2_volume"]) for point in points]
     assert math.isclose(log2_volumes[0], 0.0)
     assert log2_volumes == sorted(log2_volumes)
-    assert points[0]["sample_count"] == 64
+    assert cast(int, points[0]["sample_count"]) >= 64
     assert len(inspections) == 1
     assert inspections[0]["source_path"] == history[0]["model_inspection_path"]
     assert "measurement_dataset" in inspections[0]
