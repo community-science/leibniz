@@ -190,9 +190,10 @@ Do not call `.item()`, `.tolist()`, `.cpu()`, `.numpy()`, or equivalent host
 materialization inside the training step loop between gate checks. Keep
 accepted-mass and similar diagnostics as runtime tensors during steps, and
 materialize host values only when recording gate-check evidence.
-The opt-in `loss-search` optimizer is a deterministic host-interactive
-reference path and is exempt from this hot-path rule by design; default training
-runs must remain on a device-resident optimizer path.
+The default `loss-search` optimizer is a deterministic host-interactive
+reference path and is exempt from this hot-path rule by design. Device hot-path
+gates that forbid readback must opt into a non-host-interactive optimizer such
+as Adam.
 
 Instrumentation must not change synchronization behavior by default. Timing
 that needs device synchronization must be opt-in and documented, currently via

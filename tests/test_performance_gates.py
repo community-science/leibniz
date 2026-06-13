@@ -192,6 +192,8 @@ def _tiny_digits_training_step_callback(runtime: TensorRuntime) -> Any:
         benchmark_root=_digits_benchmark_root,
         results_root=Path("unused-results"),
         train_steps=1,
+        learning_rate=1e-3,
+        optimizer="adam",
         tensor_device=cast(Any, runtime.device_kind),
     )
     optimizer = build_optimizer(

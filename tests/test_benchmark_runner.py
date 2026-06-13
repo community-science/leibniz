@@ -797,10 +797,10 @@ def test_digits_benchmark_runner_writes_valid_tiny_cpu_outputs(
     training_run = TrainingRunRecord.from_record(
         cast(Mapping[str, object], training_summary["training_run"])
     )
-    assert training_run.protocol.optimizer == "adam"
-    assert training_run.protocol.learning_rate == 1e-3
-    assert training_run.protocol.to_record()["learning_rate"] == 1e-3
-    assert training_summary["learning_rate"] == 1e-3
+    assert training_run.protocol.optimizer == "loss-search"
+    assert training_run.protocol.learning_rate is None
+    assert "learning_rate" not in training_run.protocol.to_record()
+    assert "learning_rate" not in training_summary
     assert training_run.protocol.objective == "cross-entropy"
     assert training_run.protocol.tensor_runtime == "pytorch"
     assert training_run.protocol.tensor_device == "cpu"

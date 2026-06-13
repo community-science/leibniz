@@ -661,8 +661,8 @@ class BenchmarkRunPlan:
     results_root: Path = Path("results")
     seed: int = 101
     train_steps: int | None = _default_train_steps
-    learning_rate: float | None = 1e-3
-    optimizer: str = "adam"
+    learning_rate: float | None = None
+    optimizer: str = "loss-search"
     schedule: str = "none"
     gate_check_interval: int = _default_gate_check_interval
     model_checkpoint_gate_interval: int = _default_model_checkpoint_gate_interval

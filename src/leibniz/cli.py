@@ -308,7 +308,7 @@ def _parser() -> argparse.ArgumentParser:
         "train",
         description=(
             "train locally available architecture manifests; default optimizer "
-            "is Adam with learning rate 1e-3"
+            "is hyperparameter-free loss-search"
         ),
         help="train architecture manifests",
     )
