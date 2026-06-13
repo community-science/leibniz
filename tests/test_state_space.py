@@ -947,6 +947,107 @@ def test_estimated_state_space_region_rejects_component_interval_violation() -> 
         )
 
 
+def test_estimated_product_region_rejects_volume_outside_bracket() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=15))
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 15), count=16, log2_count=4.0)
+    # log2_volume lies inside the bracket, but the integer volume (log2(12) ~ 3.58) does not:
+    # both representative points must lie within the bracket.
+    with pytest.raises(StateSpaceError):
+        ProductRegion(
+            axis_regions=(axis_region,),
+            measure_rule="benchmark-computed-finite-count",
+            volume=12,
+            log2_volume=1.5,
+            measure_estimate=MeasureEstimate(
+                kind="estimated",
+                method_id="covering-number-grid-bound",
+                log2_lower=1.0,
+                log2_upper=2.0,
+            ),
+        )
+
+
+def test_estimated_state_space_region_rejects_volume_outside_bracket() -> None:
+    axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=15))
+    axis_region = DiscreteAxisRegion(axis=axis, coordinate_region=(0, 15), count=16, log2_count=4.0)
+    component = ProductRegion(
+        axis_regions=(axis_region,),
+        measure_rule="benchmark-computed-finite-count",
+        volume=3,
+        log2_volume=1.6,
+        measure_estimate=MeasureEstimate(
+            kind="estimated",
+            method_id="covering-number-grid-bound",
+            log2_lower=1.0,
+            log2_upper=2.0,
+        ),
+    )
+    # The region's log2_volume is inside its bracket, but volume=64 (log2 == 6) is not.
+    with pytest.raises(StateSpaceError):
+        StateSpaceRegion(
+            id="estimated-region",
+            ambient=_metric_ambient(),
+            components=(component,),
+            union_rule="disjoint-union",
+            volume=64,
+            log2_volume=1.6,
+            measure_estimate=MeasureEstimate(
+                kind="estimated",
+                method_id="covering-number-grid-bound",
+                log2_lower=1.0,
+                log2_upper=2.0,
+            ),
+        )
+
+
+def test_estimated_measure_bounds_handle_large_bit_counts_without_overflow() -> None:
+    # Brackets near 2**1024 overflow a float when materialized as ``2**log2``; the
+    # bracket arithmetic is done in log space, so these validate without raising.
+    estimate = MeasureEstimate(
+        kind="estimated",
+        method_id="covering-number-grid-bound",
+        log2_lower=1023.0,
+        log2_upper=1024.0,
+    )
+    axis = StateSpaceAxis(id="mode", domain=RealIntervalDomain(lower=0.0, upper=4.0))
+
+    def _increment(region_id: str, *, lower: float, upper: float) -> StateSpaceRegion:
+        continuous = ContinuousAxisRegion(
+            axis=axis,
+            coordinate_region=(lower, upper),
+            measure_estimate=estimate,
+        )
+        component = ProductRegion(
+            axis_regions=(continuous,),
+            measure_rule="benchmark-computed-finite-count",
+            volume=2**1023,
+            log2_volume=1023.0,
+            measure_estimate=estimate,
+        )
+        return StateSpaceRegion(
+            id=region_id,
+            ambient=_metric_ambient(),
+            components=(component,),
+            union_rule="disjoint-union",
+            volume=2**1023,
+            log2_volume=1023.0,
+            measure_estimate=estimate,
+        )
+
+    filtration = RegionFiltration(
+        id="large-bits",
+        increments=(
+            _increment("shell-0", lower=0.0, upper=1.0),
+            _increment("shell-1", lower=2.0, upper=3.0),
+        ),
+        volume=2**1024,
+        log2_volume=1024.0,
+    )
+
+    assert region_filtration_from_record(filtration.to_record()) == filtration
+    assert math.isclose(filtration.cumulative_log2_volumes[-1], math.log2(2**1024))
+
+
 def test_shared_axis_ids_must_match_across_components() -> None:
     first_axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=1))
     second_axis = StateSpaceAxis(id="pose", domain=IntegerRangeDomain(lower=0, upper=3))

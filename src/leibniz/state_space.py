@@ -609,6 +609,7 @@ class ProductRegion:
                 estimate,
                 label="product region log2_volume",
             )
+            _validate_estimated_volume(self.volume, estimate, label="product region")
             if (
                 not has_continuous_axis
                 and cast(float, estimate.log2_upper) > math.log2(box) + _log2_tolerance
@@ -670,8 +671,8 @@ class StateSpaceRegion:
             raise StateSpaceError("state-space region must declare at least one component")
         if self.union_rule not in _union_rules:
             raise StateSpaceError("state-space region union rule is not a core union rule")
-        if type(self.volume) is not int:
-            raise StateSpaceError("state-space region volume must be an integer")
+        if type(self.volume) is not int or self.volume < 1:
+            raise StateSpaceError("state-space region volume must be a positive integer")
         estimated = _measure_estimate_is_estimated(self.measure_estimate)
         if self.volume != sum(component.volume for component in self.components) and not estimated:
             raise StateSpaceError("disjoint-union volume must equal the sum of component volumes")
@@ -690,10 +691,11 @@ class StateSpaceRegion:
                 estimate,
                 label="state-space region log2_volume",
             )
-            component_lower, component_upper = _sum_linear_measure_intervals(
-                _product_region_measure_interval(component) for component in self.components
+            _validate_estimated_volume(self.volume, estimate, label="state-space region")
+            component_lower, component_upper = _sum_log2_measure_intervals(
+                _product_region_log2_interval(component) for component in self.components
             )
-            estimate_lower, estimate_upper = _measure_estimate_linear_interval(estimate)
+            estimate_lower, estimate_upper = _measure_estimate_log2_interval(estimate)
             if (
                 component_lower < estimate_lower - _log2_tolerance
                 or component_upper > estimate_upper + _log2_tolerance
@@ -843,8 +845,8 @@ class RegionFiltration:
                     raise StateSpaceError(
                         "region filtration increments must be pairwise disjoint"
                     )
-        if type(self.volume) is not int:
-            raise StateSpaceError("region filtration volume must be an integer")
+        if type(self.volume) is not int or self.volume < 1:
+            raise StateSpaceError("region filtration volume must be a positive integer")
         estimated = any(
             _measure_estimate_is_estimated(increment.measure_estimate)
             for increment in self.increments
@@ -856,16 +858,15 @@ class RegionFiltration:
         if estimated:
             if not math.isfinite(float(self.log2_volume)):
                 raise StateSpaceError("region filtration log2_volume must be finite")
-            lower, upper = _sum_linear_measure_intervals(
-                _state_space_region_measure_interval(increment)
+            lower, upper = _sum_log2_measure_intervals(
+                _state_space_region_log2_interval(increment)
                 for increment in self.increments
             )
-            if not lower <= self.volume <= upper:
+            if not lower - _log2_tolerance <= math.log2(self.volume) <= upper + _log2_tolerance:
                 raise StateSpaceError(
                     "region filtration volume must lie within increment measure bounds"
                 )
-            log2_converted_volume = 2.0 ** float(self.log2_volume)
-            if not lower <= log2_converted_volume <= upper:
+            if not lower - _log2_tolerance <= float(self.log2_volume) <= upper + _log2_tolerance:
                 raise StateSpaceError(
                     "region filtration log2_volume must lie within increment measure bounds"
                 )
@@ -1327,37 +1328,64 @@ def _validate_estimated_log2_volume(
         raise StateSpaceError(f"{label} must be finite")
     lower = cast(float, estimate.log2_lower)
     upper = cast(float, estimate.log2_upper)
-    if not lower <= float(declared) <= upper:
+    if not lower - _log2_tolerance <= float(declared) <= upper + _log2_tolerance:
         raise StateSpaceError(f"{label} must lie within the measure estimate bounds")
 
 
-def _measure_estimate_linear_interval(estimate: MeasureEstimate) -> tuple[float, float]:
-    return (
-        2.0 ** cast(float, estimate.log2_lower),
-        2.0 ** cast(float, estimate.log2_upper),
-    )
+def _validate_estimated_volume(volume: int, estimate: MeasureEstimate, *, label: str) -> None:
+    """Require an estimated region's integer volume to lie within its bracket.
+
+    ``volume`` and ``log2_volume`` are independent representative points of an
+    estimated region; both must lie inside the declared bracket. The check is
+    in bits (``log2(volume)``), so it never materializes ``2**bits``.
+    """
+
+    lower = cast(float, estimate.log2_lower)
+    upper = cast(float, estimate.log2_upper)
+    log2_volume = math.log2(volume)
+    if not lower - _log2_tolerance <= log2_volume <= upper + _log2_tolerance:
+        raise StateSpaceError(f"{label} volume must lie within the measure estimate bounds")
 
 
-def _product_region_measure_interval(region: ProductRegion) -> tuple[float, float]:
+def _log2_sum_exp(log2_values: Sequence[float]) -> float:
+    """Return ``log2(sum(2**v for v in log2_values))`` without overflow.
+
+    Summing covering-measure brackets is addition of state counts -- a sum in
+    linear space -- but evaluating it as ``2**log2`` overflows and loses
+    precision once bit counts are large. Shifting by the maximum exponent keeps
+    every term in ``(0, 1]`` and recovers the sum in bits, so the bounds stay in
+    the same unit the rest of the module measures in.
+    """
+
+    highest = max(log2_values)
+    if not math.isfinite(highest):
+        return highest
+    shifted = math.fsum(2.0 ** (value - highest) for value in log2_values)
+    return highest + math.log2(shifted)
+
+
+def _measure_estimate_log2_interval(estimate: MeasureEstimate) -> tuple[float, float]:
+    return (cast(float, estimate.log2_lower), cast(float, estimate.log2_upper))
+
+
+def _product_region_log2_interval(region: ProductRegion) -> tuple[float, float]:
     if _measure_estimate_is_estimated(region.measure_estimate):
-        return _measure_estimate_linear_interval(cast(MeasureEstimate, region.measure_estimate))
-    return (float(region.volume), float(region.volume))
+        return _measure_estimate_log2_interval(cast(MeasureEstimate, region.measure_estimate))
+    return (math.log2(region.volume), math.log2(region.volume))
 
 
-def _state_space_region_measure_interval(region: StateSpaceRegion) -> tuple[float, float]:
+def _state_space_region_log2_interval(region: StateSpaceRegion) -> tuple[float, float]:
     if _measure_estimate_is_estimated(region.measure_estimate):
-        return _measure_estimate_linear_interval(cast(MeasureEstimate, region.measure_estimate))
-    return (float(region.volume), float(region.volume))
+        return _measure_estimate_log2_interval(cast(MeasureEstimate, region.measure_estimate))
+    return (math.log2(region.volume), math.log2(region.volume))
 
 
-def _sum_linear_measure_intervals(
+def _sum_log2_measure_intervals(
     intervals: Iterable[tuple[float, float]],
 ) -> tuple[float, float]:
-    lower = 0.0
-    upper = 0.0
-    for interval_lower, interval_upper in intervals:
-        lower += interval_lower
-        upper += interval_upper
+    materialized = tuple(intervals)
+    lower = _log2_sum_exp([interval[0] for interval in materialized])
+    upper = _log2_sum_exp([interval[1] for interval in materialized])
     return lower, upper
 
 
