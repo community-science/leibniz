@@ -44,7 +44,11 @@ from leibniz.observation_generation import (
     load_generator,
 )
 from leibniz.state_space import state_space_region_from_record
-from leibniz.target_contracts import TargetContract
+from leibniz.target_contracts import (
+    BaselinePredictor,
+    CompetenceFunctional,
+    TargetContract,
+)
 from leibniz.tensor_runtime import (
     TensorRuntime,
     TensorRuntimeDeviceKind,
@@ -103,6 +107,32 @@ def _target_contract(outcome_ids: tuple[str, ...]) -> TargetContract:
 
 def _target_contract_from_outcome_space(outcome_space: Any) -> TargetContract:
     return _target_contract(tuple(outcome.id for outcome in outcome_space.outcomes))
+
+
+def test_resolve_competence_functional_selects_finite_outcome_accepted_mass() -> None:
+    functional = cast(Any, benchmark_runner)._resolve_competence_functional(
+        _target_contract(("a", "b"))
+    )
+
+    assert functional.kind == "above-chance-accepted-mass"
+
+
+def test_resolve_competence_functional_rejects_unsupported_competence_kind() -> None:
+    field_contract = TargetContract(
+        kind="field-valued",
+        outcome_ids=None,
+        loss_id="mse",
+        competence=CompetenceFunctional(
+            kind="mass-within-resolution",
+            parameters={"residual_operator_id": "op"},
+        ),
+        baseline=BaselinePredictor(kind="zero-field"),
+    )
+
+    with pytest.raises(
+        benchmark_runner.BenchmarkRunnerError, match="competence kind"
+    ):
+        cast(Any, benchmark_runner)._resolve_competence_functional(field_contract)
 
 
 def _observation_payload(
@@ -674,7 +704,6 @@ def test_checkpoint_evaluation_treats_empty_later_rung_as_curriculum_exhaustion(
         benchmark_runner.evaluate_model_checkpoint_artifact(
             architecture=architecture,
             generator=cast(Any, generator),
-            outcome_space=outcome_space,
             target_contract=_target_contract_from_outcome_space(outcome_space),
             seed=101,
             tensor_device="cpu",
@@ -1742,10 +1771,6 @@ def test_training_stage_records_current_validation_loss_without_global_best(
         loss_function=FakeLossFunction(),
         train_batch=fake_batch,
         validation_batch=cast(Any, fake_validation_batch),
-        outcome_space=(
-            load_digits_benchmark(_digits_benchmark_root)
-            .manifest.resolve_outcome_space()
-        ),
         target_contract=_target_contract(("digit-0",)),
         outcome_ids=("digit-0",),
         max_steps=100,
@@ -1904,7 +1929,6 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
 
     estimate = cast(Any, benchmark_runner)._training_gate_score_estimate(
         batch=batch,
-        outcome_space=outcome_space,
         target_contract=_target_contract_from_outcome_space(outcome_space),
         accepted_mass=accepted_mass,
         previous_frontier_points=(
@@ -2110,7 +2134,6 @@ def test_training_replay_batches_refresh_prior_frontier_score_evidence(
         loss_function=FakeLossFunction(),
         train_batch=cast(Any, fake_training_batch),
         validation_batch=fake_validation_batch,
-        outcome_space=outcome_space,
         target_contract=_target_contract(outcome_ids),
         outcome_ids=outcome_ids,
         max_steps=1,
@@ -2342,7 +2365,6 @@ def test_training_steps_materialize_replay_masses_only_at_gate_checks(
         loss_function=FakeLossFunction(),
         train_batch=fake_batch,
         validation_batch=cast(Any, fake_validation_batch),
-        outcome_space=benchmark.manifest.resolve_outcome_space(),
         target_contract=_target_contract(outcome_ids),
         outcome_ids=outcome_ids,
         max_steps=4,
@@ -2474,7 +2496,6 @@ def test_training_cost_is_metered_once_per_field_shape(
         loss_function=FakeLossFunction(),
         train_batch=fake_batch,
         validation_batch=cast(Any, fake_validation_batch),
-        outcome_space=benchmark.manifest.resolve_outcome_space(),
         target_contract=_target_contract(outcome_ids),
         outcome_ids=outcome_ids,
         max_steps=4,
@@ -2767,7 +2788,6 @@ def test_training_plateau_below_rung_competence_threshold_converges_without_adva
         loss_function=FakeLossFunction(),
         train_batch=fake_batch,
         validation_batch=cast(Any, fake_validation_batch),
-        outcome_space=benchmark.manifest.resolve_outcome_space(),
         target_contract=_target_contract(outcome_ids),
         outcome_ids=outcome_ids,
         max_steps=10,
@@ -2877,7 +2897,6 @@ def test_training_plateau_above_rung_competence_threshold_advances_frontier(
         loss_function=FakeLossFunction(),
         train_batch=fake_batch,
         validation_batch=cast(Any, fake_validation_batch),
-        outcome_space=benchmark.manifest.resolve_outcome_space(),
         target_contract=_target_contract(outcome_ids),
         outcome_ids=outcome_ids,
         max_steps=2,
