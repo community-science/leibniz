@@ -584,6 +584,8 @@ class Generator:
             )
         variation_timing_phase = f"{timing_prefix}variation_coordinates"
         variation_samples = self._sample_variation_coordinates(
+            seed=seed,
+            sample_indices=sample_indices,
             plans=plans,
             transform=transform,
             transform_record=transform_record,
@@ -668,7 +670,13 @@ class Generator:
                             volume_class=volume_class,
                         ),
                         axis_coordinates=_digits_region_axis_coordinates(
+                            seed=seed,
+                            sample_index=index,
                             transform_ordinal=transform_index,
+                            canvas_side=volume_class.canvas_side,
+                            canonical_transform=_digits_volume_class_is_canonical(
+                                volume_class
+                            ),
                         ),
                         variation_coordinates=variation_coordinates,
                         variation_values=variation_values,
@@ -714,7 +722,11 @@ class Generator:
                     volume_class=volume_class,
                 ),
                 axis_coordinates=_digits_region_axis_coordinates(
+                    seed=seed,
+                    sample_index=sample_indices[index],
                     transform_ordinal=transform_indices[index],
+                    canvas_side=volume_class.canvas_side,
+                    canonical_transform=_digits_volume_class_is_canonical(volume_class),
                 ),
             )
             for index, component_index in enumerate(component_indices)
@@ -752,6 +764,8 @@ class Generator:
     def _sample_variation_coordinates(
         self,
         *,
+        seed: int,
+        sample_indices: tuple[int, ...],
         plans: tuple[MaterializationPlan, ...],
         transform: VariationTransformDeclaration,
         transform_record: Mapping[str, object],
@@ -788,6 +802,15 @@ class Generator:
                     transform=transform,
                     component_index=component_index,
                     transform_ordinal=transform_ordinal,
+                    transform_coordinates=_digits_sample_transform_coordinates(
+                        seed=seed,
+                        sample_index=sample_indices[index],
+                        transform_ordinal=transform_ordinal,
+                        canvas_side=volume_class.canvas_side,
+                        canonical_transform=_digits_volume_class_is_canonical(
+                            volume_class
+                        ),
+                    ),
                     chart=chart,
                 )
                 coordinates = (coordinate,)
@@ -1029,7 +1052,9 @@ class Generator:
                     minimum_address=minimum_address,
                     digit_count=digit_count,
                     transform_values=_digits_sample_transform_values(
+                        seed=seed,
                         canvas_side=width,
+                        sample_indices=sample_indices,
                         sample_addresses=_digits_sample_addresses(
                             seed=seed,
                             sample_indices=sample_indices,
@@ -1037,6 +1062,9 @@ class Generator:
                             minimum_address=minimum_address,
                         ),
                         digit_count=digit_count,
+                        canonical_transform=(
+                            minimum_address == 0 and cardinality == digit_count
+                        ),
                     ),
                     component_mark_counts=tuple(component_mark_counts),
                     component_mark_parameters=tuple(
@@ -1675,29 +1703,36 @@ def _digits_capacity_product_region(*, digit_index: int) -> ProductRegion:
 def _digits_transform_cell_axis_regions(
     transform_ordinal: int,
 ) -> tuple[ContinuousAxisRegion, ...]:
-    tx_step, ty_step, scale_level = _transform_cell_for_ordinal(transform_ordinal)
-    scale_step = _render_unit_side * _scale_ratio_per_level
-    centers = {
-        "x_translation": tx_step * _translation_step_pixels,
-        "y_translation": ty_step * _translation_step_pixels,
-        "scale": _scale_footprint(scale_level),
-    }
-    widths = {
-        "x_translation": float(_translation_step_pixels),
-        "y_translation": float(_translation_step_pixels),
-        "scale": scale_step,
-    }
+    intervals = _digits_transform_cell_intervals(transform_ordinal)
     return tuple(
         ContinuousAxisRegion(
             axis=axis,
-            coordinate_region=_half_open_cell_interval(
-                center=centers[axis.id],
-                width=widths[axis.id],
-            ),
+            coordinate_region=intervals[axis.id],
             measure_estimate=_digits_measure_estimate(0.0),
         )
         for axis in _digits_transform_axes()
     )
+
+
+def _digits_transform_cell_intervals(
+    transform_ordinal: int,
+) -> dict[str, tuple[float, float]]:
+    tx_step, ty_step, scale_level = _transform_cell_for_ordinal(transform_ordinal)
+    scale_step = _render_unit_side * _scale_ratio_per_level
+    return {
+        "x_translation": _half_open_cell_interval(
+            center=tx_step * _translation_step_pixels,
+            width=float(_translation_step_pixels),
+        ),
+        "y_translation": _half_open_cell_interval(
+            center=ty_step * _translation_step_pixels,
+            width=float(_translation_step_pixels),
+        ),
+        "scale": _half_open_cell_interval(
+            center=_scale_footprint(scale_level),
+            width=scale_step,
+        ),
+    }
 
 
 def _digits_transform_axes() -> tuple[StateSpaceAxis, ...]:
@@ -1760,14 +1795,20 @@ def _digits_region_component_index(
 
 def _digits_region_axis_coordinates(
     *,
+    seed: int,
+    sample_index: int,
     transform_ordinal: int,
+    canvas_side: int,
+    canonical_transform: bool,
 ) -> Mapping[str, object]:
-    tx_step, ty_step, scale_level = _transform_cell_for_ordinal(transform_ordinal)
-    return {
-        "x_translation": tx_step * _translation_step_pixels,
-        "y_translation": ty_step * _translation_step_pixels,
-        "scale": _scale_footprint(scale_level),
-    }
+    x_translation, y_translation, scale = _digits_sample_transform_coordinates(
+        seed=seed,
+        sample_index=sample_index,
+        transform_ordinal=transform_ordinal,
+        canvas_side=canvas_side,
+        canonical_transform=canonical_transform,
+    )
+    return {"x_translation": x_translation, "y_translation": y_translation, "scale": scale}
 
 
 def _digits_unrealized_request_outcome(
@@ -1814,6 +1855,83 @@ def _digits_sample_addresses(
     )
 
 
+def _digits_sample_transform_coordinates(
+    *,
+    seed: int,
+    sample_index: int,
+    transform_ordinal: int,
+    canvas_side: int,
+    canonical_transform: bool = False,
+) -> tuple[float, float, float]:
+    if canonical_transform:
+        tx_step, ty_step, scale_level = _transform_cell_for_ordinal(transform_ordinal)
+        return (
+            tx_step * _translation_step_pixels,
+            ty_step * _translation_step_pixels,
+            _scale_footprint(scale_level),
+        )
+    intervals = _digits_transform_cell_intervals(transform_ordinal)
+    bounded_intervals = _digits_identity_preserving_intervals(
+        intervals=intervals,
+        canvas_side=canvas_side,
+    )
+    generator = random.Random(
+        f"digits-transform-coordinate-v1:{seed}:{sample_index}:{transform_ordinal}"
+    )
+    return (
+        _sample_linear_interval(generator, bounded_intervals["x_translation"]),
+        _sample_linear_interval(generator, bounded_intervals["y_translation"]),
+        _sample_log_interval(generator, bounded_intervals["scale"]),
+    )
+
+
+def _digits_identity_preserving_intervals(
+    *,
+    intervals: Mapping[str, tuple[float, float]],
+    canvas_side: int,
+) -> dict[str, tuple[float, float]]:
+    bounds = {
+        "x_translation": (-0.15 * canvas_side, 0.15 * canvas_side),
+        "y_translation": (-0.15 * canvas_side, 0.15 * canvas_side),
+        "scale": (0.76 * canvas_side, 1.14 * canvas_side),
+    }
+    constrained: dict[str, tuple[float, float]] = {}
+    for axis_id, interval in intervals.items():
+        lower = max(interval[0], bounds[axis_id][0])
+        upper = min(interval[1], bounds[axis_id][1])
+        if upper <= lower:
+            center = (interval[0] + interval[1]) / 2.0
+            constrained[axis_id] = (center, math.nextafter(center, math.inf))
+        else:
+            constrained[axis_id] = (lower, upper)
+    return constrained
+
+
+def _digits_volume_class_is_canonical(volume_class: _DigitsVolumeClass) -> bool:
+    return (
+        volume_class.minimum_address == 0
+        and volume_class.cardinality == _volume_class_digit_count
+    )
+
+
+def _sample_linear_interval(
+    generator: random.Random,
+    interval: tuple[float, float],
+) -> float:
+    lower, upper = interval
+    return lower + generator.random() * (upper - lower)
+
+
+def _sample_log_interval(
+    generator: random.Random,
+    interval: tuple[float, float],
+) -> float:
+    lower, upper = interval
+    log_lower = math.log(lower)
+    log_upper = math.log(upper)
+    return math.exp(log_lower + generator.random() * (log_upper - log_lower))
+
+
 def _variation_extent_value(variation_extent: float) -> float:
     try:
         value = float(variation_extent)
@@ -1831,13 +1949,17 @@ def _constructed_variation_coordinate_record(
     transform: VariationTransformDeclaration,
     component_index: int,
     transform_ordinal: int,
+    transform_coordinates: tuple[float, float, float],
     chart: _DigitsChart,
 ) -> Mapping[str, object]:
     if type(transform_ordinal) is not int or transform_ordinal < 0:
         raise ObservationGenerationError("transform_ordinal must be a nonnegative integer")
     spatial = transform.spatial_affine
     tx_step, ty_step, scale_level = _transform_cell_for_ordinal(transform_ordinal)
-    x_translation, y_translation, scale = chart.normalized_transform(transform_ordinal)
+    x_coordinate, y_coordinate, scale_coordinate = transform_coordinates
+    x_translation = x_coordinate / chart.canvas_side
+    y_translation = y_coordinate / chart.canvas_side
+    scale = scale_coordinate / chart.canvas_side
     matrix = [
         [scale, 0.0, x_translation],
         [0.0, scale, y_translation],
@@ -1868,16 +1990,24 @@ def _constructed_variation_coordinate_record(
 
 def _digits_sample_transform_values(
     *,
+    seed: int,
     canvas_side: int,
+    sample_indices: tuple[int, ...],
     sample_addresses: tuple[int, ...],
     digit_count: int,
+    canonical_transform: bool = False,
 ) -> tuple[float, ...]:
-    chart = _DigitsChart(canvas_side=canvas_side)
     return tuple(
-        value
-        for sample_address in sample_addresses
+        coordinate / canvas_side
+        for sample_index, sample_address in zip(sample_indices, sample_addresses, strict=True)
         for ordinal in (sample_address // digit_count,)
-        for value in chart.normalized_transform(ordinal)
+        for coordinate in _digits_sample_transform_coordinates(
+            seed=seed,
+            sample_index=sample_index,
+            transform_ordinal=ordinal,
+            canvas_side=canvas_side,
+            canonical_transform=canonical_transform,
+        )
     )
 
 

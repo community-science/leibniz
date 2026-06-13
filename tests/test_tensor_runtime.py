@@ -803,14 +803,20 @@ def test_digits_tensor_generation_compiles_two_extent_independent_programs(
 
     def sample_transform_values(
         *,
+        seed: int,
         canvas_side: int,
+        sample_indices: tuple[int, ...],
         sample_addresses: tuple[int, ...],
         digit_count: int,
+        canonical_transform: bool = False,
     ) -> tuple[float, ...]:
         values = original_sample_transform_values(
+            seed=seed,
             canvas_side=canvas_side,
+            sample_indices=sample_indices,
             sample_addresses=sample_addresses,
             digit_count=digit_count,
+            canonical_transform=canonical_transform,
         )
         transform_value_lengths.append(len(values))
         return values

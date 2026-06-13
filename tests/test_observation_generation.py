@@ -514,6 +514,32 @@ def test_digits_samples_requested_window_by_seeded_monte_carlo() -> None:
     assert all(60 <= count <= 140 for count in counts.values())
 
 
+def test_digits_fresh_seed_samples_have_no_exact_continuous_coordinate_collision() -> None:
+    generator = load_digits_generator(_digits_benchmark_root)
+    request = StateSpaceVolumeRequest(minimum=8.0, maximum=9.0)
+
+    first = _formation_payload(
+        generator,
+        sample_count=32,
+        seed=101,
+        volume_request=request,
+    )
+    fresh_seed = _formation_payload(
+        generator,
+        sample_count=32,
+        seed=202,
+        volume_request=request,
+    )
+
+    def coordinate_tuples(batch: GeneratedSampleSet) -> set[tuple[tuple[str, object], ...]]:
+        return {
+            tuple(sorted(cast(Mapping[str, object], sample.axis_coordinates).items()))
+            for sample in batch.samples
+        }
+
+    assert coordinate_tuples(first).isdisjoint(coordinate_tuples(fresh_seed))
+
+
 def test_generated_sample_set_rejects_region_coordinates_outside_region() -> None:
     generator = load_digits_generator(_digits_benchmark_root)
     batch = _formation_payload(generator, sample_count=1, seed=101)
@@ -784,16 +810,21 @@ def test_digits_tensor_renderer_uses_per_sample_transform_parameters(
     generator_impl = cast(Any, generator)
     runtime = resolve_tensor_runtime("cpu")
     module_globals = generator_impl._build_batch_tensor.__globals__
-    chart_type = module_globals["_DigitsChart"]
-    original_normalized_transform = chart_type.normalized_transform
-    calls = 0
+    original_sample_transform_values = module_globals["_digits_sample_transform_values"]
+    transform_value_lengths: list[int] = []
 
-    def count_normalized_transform(self: object, ordinal: int) -> tuple[float, float, float]:
-        nonlocal calls
-        calls += 1
-        return cast(tuple[float, float, float], original_normalized_transform(self, ordinal))
+    def sample_transform_values(**kwargs: object) -> tuple[float, ...]:
+        values = cast(Callable[..., tuple[float, ...]], original_sample_transform_values)(
+            **kwargs
+        )
+        transform_value_lengths.append(len(values))
+        return values
 
-    monkeypatch.setattr(chart_type, "normalized_transform", count_normalized_transform)
+    monkeypatch.setitem(
+        module_globals,
+        "_digits_sample_transform_values",
+        sample_transform_values,
+    )
 
     volume_class = generator_impl._default_volume_class()
     resolution_assignment = volume_class.resolution_assignment(
@@ -817,11 +848,12 @@ def test_digits_tensor_renderer_uses_per_sample_transform_parameters(
     }
 
     generator_impl._build_batch_tensor(**render_kwargs)
-    first_call_count = calls
     generator_impl._build_batch_tensor(**render_kwargs)
 
-    assert first_call_count == render_kwargs["sample_count"]
-    assert calls == first_call_count + render_kwargs["sample_count"]
+    assert transform_value_lengths == [
+        render_kwargs["sample_count"] * 3,
+        render_kwargs["sample_count"] * 3,
+    ]
 
 
 def test_digits_cuda_tensor_fields_match_cpu_reference() -> None:
