@@ -146,6 +146,10 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert [(artifact["kind"], artifact["source_path"]) for artifact in artifacts] == [
         (
             "architecture-manifest",
+            "tests/fixtures/architecture/burgers_spectral_stub.json",
+        ),
+        (
+            "architecture-manifest",
             "tests/fixtures/architecture/chess_board_linear.json",
         ),
         (
@@ -216,6 +220,7 @@ def test_console_data_discovers_supported_public_fixture_documents() -> None:
     assert [
         inspection["source_path"] for inspection in model_inspections
     ] == [
+        "tests/fixtures/architecture/burgers_spectral_stub.json",
         "tests/fixtures/architecture/chess_board_linear.json",
         "tests/fixtures/architecture/digits_convnet.json",
         "tests/fixtures/architecture/digits_perf_conv.json",

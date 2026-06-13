@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from leibniz.architectures import ArchitectureManifest
 from leibniz.model_operators import (
     ModelOperatorExecutionError,
     ModelOperatorPlan,
     summarize_architecture_operators,
 )
+from leibniz.operator_interpretation import spatial_axis_names
 from leibniz.operator_semantics import (
     ModelOperatorParameterRole,
     ModelOperatorSemantic,
@@ -56,40 +59,82 @@ def _validate_layer_parameters(architecture: ArchitectureManifest) -> None:
             raise ArchitectureSemanticValidationError(
                 f"layer {index} ({layer.kind}): unsupported operator kind"
             )
-        for role in _required_parameter_roles(layer.kind, semantic):
+        roles_by_name = {role.name: role for role in semantic.parameter_roles}
+        required_roles = _required_parameter_roles(layer.kind, semantic, layer.parameters)
+        for role in required_roles:
             if role.name not in layer.parameters:
                 raise ArchitectureSemanticValidationError(
                     f"layer {index} ({layer.kind}): missing required parameter {role.name}"
                 )
-            value = layer.parameters[role.name]
-            minimum = 0 if role.value_kind == "nonnegative-integer" else 1
-            if role.value_kind not in {"positive-integer", "nonnegative-integer"}:
-                raise ArchitectureSemanticValidationError(
-                    f"layer {index} ({layer.kind}): "
-                    f"unsupported parameter value kind {role.value_kind}"
-                )
-            if type(value) is not int or value < minimum:
-                requirement = (
-                    "a nonnegative integer"
-                    if role.value_kind == "nonnegative-integer"
-                    else "a positive integer"
-                )
-                raise ArchitectureSemanticValidationError(
-                    f"layer {index} ({layer.kind}): parameter {role.name} must be "
-                    f"{requirement}"
-                )
+        for name, value in layer.parameters.items():
+            role = roles_by_name.get(name)
+            if role is None:
+                continue
+            _validate_parameter_value(
+                value=value,
+                role=role,
+                layer_index=index,
+                layer_kind=layer.kind,
+            )
+
+
+def _validate_parameter_value(
+    *,
+    value: object,
+    role: ModelOperatorParameterRole,
+    layer_index: int,
+    layer_kind: str,
+) -> None:
+    if role.value_kind == "padding-mode":
+        if value not in {"zeros", "periodic"}:
+            raise ArchitectureSemanticValidationError(
+                f"layer {layer_index} ({layer_kind}): parameter {role.name} must be "
+                "one of: zeros, periodic"
+            )
+        return
+    minimum = 0 if role.value_kind == "nonnegative-integer" else 1
+    if role.value_kind not in {"positive-integer", "nonnegative-integer"}:
+        raise ArchitectureSemanticValidationError(
+            f"layer {layer_index} ({layer_kind}): "
+            f"unsupported parameter value kind {role.value_kind}"
+        )
+    if type(value) is not int or value < minimum:
+        requirement = (
+            "a nonnegative integer"
+            if role.value_kind == "nonnegative-integer"
+            else "a positive integer"
+        )
+        raise ArchitectureSemanticValidationError(
+            f"layer {layer_index} ({layer_kind}): parameter {role.name} must be "
+            f"{requirement}"
+        )
 
 
 def _required_parameter_roles(
     layer_kind: str,
     semantic: ModelOperatorSemantic,
+    parameters: Mapping[str, object],
 ) -> tuple[ModelOperatorParameterRole, ...]:
     roles = semantic.parameter_roles
     if semantic.kind == "local-aggregation" and layer_kind in semantic.syntax_aliases:
         required_names = {"dimension", "size"}
     elif layer_kind == "local-aggregation":
-        required_names = {"dimension", "out_height", "out_width"}
+        required_names = _dimension_fixed_support_required_names(parameters)
     else:
-        required_names = {role.name for role in roles}
+        required_names = {role.name for role in roles if role.name != "padding_mode"}
+        if semantic.kind == "fixed-support-affine":
+            required_names -= {"out_length", "out_height", "out_width", "out_depth"}
+            required_names |= _dimension_fixed_support_required_names(parameters)
     return tuple(role for role in roles if role.name in required_names)
-    return roles
+
+
+def _dimension_fixed_support_required_names(
+    parameters: Mapping[str, object],
+) -> set[str]:
+    dimension = parameters.get("dimension")
+    if type(dimension) is not int:
+        return {"dimension"}
+    names = spatial_axis_names(dimension)
+    if names is None:
+        return {"dimension"}
+    return {"dimension", *names}

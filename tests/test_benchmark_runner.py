@@ -71,6 +71,13 @@ _digits_architecture = (
 _digits_convnet_architecture = (
     _repository_root / "tests" / "fixtures" / "architecture" / "digits_convnet.json"
 )
+_burgers_spectral_stub_architecture = (
+    _repository_root
+    / "tests"
+    / "fixtures"
+    / "architecture"
+    / "burgers_spectral_stub.json"
+)
 _chess_linear_architecture = (
     _repository_root
     / "tests"
@@ -113,6 +120,35 @@ def _target_contract(outcome_ids: tuple[str, ...]) -> TargetContract:
 
 def _target_contract_from_outcome_space(outcome_space: Any) -> TargetContract:
     return _target_contract(tuple(outcome.id for outcome in outcome_space.outcomes))
+
+
+def _field_target_contract() -> TargetContract:
+    return TargetContract(
+        kind="field-valued",
+        outcome_ids=None,
+        loss_id="mse",
+        competence=CompetenceFunctional(
+            kind="mass-within-resolution",
+            parameters={"residual_operator_id": "operators.burgers@0.1.0"},
+        ),
+        baseline=BaselinePredictor(kind="zero-field"),
+    )
+
+
+def _field_sample_set(
+    *,
+    fields_shape: tuple[int, ...],
+    targets_shape: tuple[int, ...],
+) -> GeneratedSampleSet:
+    return GeneratedSampleSet(
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.burgers@0.1.0"),
+        generator_id=ProtocolIdentifier.parse("generators.burgers@0.1.0"),
+        generator_version="0.1.0",
+        seed=101,
+        shape=(fields_shape[0],),
+        fields=SimpleNamespace(shape=fields_shape),
+        targets=SimpleNamespace(shape=targets_shape),
+    )
 
 
 def _wilson_sampling_protocol() -> SamplingProtocol:
@@ -756,6 +792,39 @@ def test_digits_scale_contract_accepts_rectangular_generated_shapes() -> None:
         architecture=architecture,
         sample_shape=(1, 27, 24),
     ) is None
+
+
+def test_field_output_architecture_validates_against_field_target_contract() -> None:
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _burgers_spectral_stub_architecture.read_bytes()
+    ).manifest
+    batch = _field_sample_set(
+        fields_shape=(3, 1, 16),
+        targets_shape=(3, 1, 16),
+    )
+
+    cast(Any, benchmark_runner)._validate_architecture_for_batch(
+        architecture=architecture,
+        batch=batch,
+        target_contract=_field_target_contract(),
+    )
+
+
+def test_field_output_architecture_rejects_finite_outcome_target_contract() -> None:
+    architecture = ArchitectureManifestDocument.from_bytes(
+        _burgers_spectral_stub_architecture.read_bytes()
+    ).manifest
+    batch = _field_sample_set(
+        fields_shape=(3, 1, 16),
+        targets_shape=(3, 1, 16),
+    )
+
+    with pytest.raises(BenchmarkRunnerError, match=r"target contract output shape \(2,\)"):
+        cast(Any, benchmark_runner)._validate_architecture_for_batch(
+            architecture=architecture,
+            batch=batch,
+            target_contract=_target_contract(("left", "right")),
+        )
 
 
 def test_runner_accepts_exact_fixed_input_shape() -> None:

@@ -66,6 +66,17 @@ skipped. Heavy benchmark training, GPU jobs, and network-dependent result
 repository workflows are manual validation paths, not routine pull-request
 checks.
 
+### Tensor Kernel Conventions
+
+Benchmark tensor programs should stay behind the `leibniz.tensor_runtime`
+adapter rather than importing backend tensor libraries directly. A
+`TensorBatchProgram` kernel may opt into runtime helpers by declaring an `ops`
+keyword-only parameter; `ops.broadcast_zeros(axis_coordinates)` returns a
+zero-valued tile with the full coordinate broadcast shape without hand-written
+zero-sum expressions. For compiled kernels, prefer a small number of packed
+parameter tensors over many scalar parameters so backend compilers bind and
+cache fewer buffers.
+
 ## Repository Layout
 
 - `src/leibniz/`: Python package containing protocol artifact definitions,

@@ -317,6 +317,60 @@ def test_repository_policy_rejects_benchmark_hot_path_host_transfer(
     )
 
 
+def test_repository_policy_allows_benchmark_solver_ops_namespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = PurePosixPath("src/leibniz/benchmarks/example/benchmark.py")
+    benchmark_file = tmp_path / path
+    benchmark_file.parent.mkdir(parents=True)
+    benchmark_file.write_text(
+        "def step(state, ops):\n"
+        "    return ops.real(ops.ifft(ops.fft(state, axis=-1), axis=-1))\n",
+        encoding="utf-8",
+    )
+
+    def tracked_paths(_root: Path) -> tuple[str, ...]:
+        return (path.as_posix(),)
+
+    monkeypatch.setattr(repository_policy_module, "_tracked_paths", tracked_paths)
+
+    assert RepositoryPolicy.validate_repository(tmp_path) == ()
+
+
+def test_repository_policy_rejects_benchmark_runtime_torch_escape_hatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = PurePosixPath("src/leibniz/benchmarks/example/benchmark.py")
+    benchmark_file = tmp_path / path
+    benchmark_file.parent.mkdir(parents=True)
+    benchmark_file.write_text(
+        "def render(runtime):\n"
+        "    return runtime.torch.zeros(1)\n",
+        encoding="utf-8",
+    )
+
+    def tracked_paths(_root: Path) -> tuple[str, ...]:
+        return (path.as_posix(),)
+
+    monkeypatch.setattr(repository_policy_module, "_tracked_paths", tracked_paths)
+
+    assert RepositoryPolicy.validate_repository(tmp_path) == (
+        PolicyViolation(
+            path=path,
+            message="backend implementation term outside tensor runtime at line 2: torch",
+        ),
+        PolicyViolation(
+            path=path,
+            message=(
+                "benchmark implementation runtime escape hatch "
+                "at line 2: runtime.torch"
+            ),
+        ),
+    )
+
+
 def test_repository_policy_cli_scans_backend_terms() -> None:
     result = subprocess.run(
         ["python", "-m", "leibniz._repository_policy", str(_repository_root)],
