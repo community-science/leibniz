@@ -18,6 +18,8 @@ from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocu
 from leibniz.artifacts import ArtifactReference, reference_for_record
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
+    StateSpaceIntegral,
+    StateSpaceIntegralTerm,
     ValidationCompetencePoint,
     finite_measurements_for_predictions,
     sampled_competence_curriculum_record,
@@ -157,6 +159,12 @@ _legal_uncapped_training_stage_stop_reasons = frozenset(
 _minimum_plateau_lr_reductions = 3
 _full_variation_extent = 1.0
 _sync_timing_environment_variable = "LEIBNIZ_SYNC_TIMING"
+_field_valued_competence_kinds = frozenset(
+    {
+        "convergence-resolved-bits",
+        "mass-within-resolution",
+    }
+)
 
 
 class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
@@ -3932,15 +3940,17 @@ def _training_gate_score_estimate(
     )
     point_records = _training_score_estimate_points(compact_sampled_competence)
     chance_mass = _target_contract_chance_mass(target_contract)
-    score_integral = sampled_competence_frontier_integral(
-        tuple(
-            CompetencePoint.from_sampled_record(
-                point,
-                field_prefix="score_estimate",
-                error_type=BenchmarkRunnerError,
-            )
-            for point in point_records
-        ),
+    competence_points = tuple(
+        CompetencePoint.from_sampled_record(
+            point,
+            field_prefix="score_estimate",
+            error_type=BenchmarkRunnerError,
+        )
+        for point in point_records
+    )
+    score_integral = _training_score_integral(
+        target_contract=target_contract,
+        points=competence_points,
         chance_mass=chance_mass,
     )
     score = score_integral.value
@@ -3965,6 +3975,59 @@ def _training_gate_score_estimate(
         )
         record["training_cost_sample_count"] = training_cost[1]
     return record
+
+
+def _training_score_integral(
+    *,
+    target_contract: TargetContract,
+    points: tuple[CompetencePoint, ...],
+    chance_mass: float,
+) -> StateSpaceIntegral:
+    if target_contract.kind != "field-valued":
+        return sampled_competence_frontier_integral(points, chance_mass=chance_mass)
+    terms: list[StateSpaceIntegralTerm] = []
+    cursor = 0.0
+    for point in sorted(points, key=_competence_point_interval_sort_key):
+        lower, upper = _competence_point_interval(point)
+        measured_lower = max(lower, cursor)
+        if upper > measured_lower:
+            terms.append(
+                StateSpaceIntegralTerm(
+                    lower=measured_lower,
+                    upper=upper,
+                    competence_density=point.accepted_mass,
+                    kind="measured-state-space-validated-bits",
+                    representative_log2_volume=point.log2_volume,
+                    sample_count=point.sample_count,
+                    confidence_half_width=point.confidence_half_width,
+                    confidence_method_id=point.confidence_method_id,
+                    region=point.region,
+                )
+            )
+        cursor = max(cursor, lower, upper)
+    return StateSpaceIntegral(terms=tuple(terms))
+
+
+def _competence_point_interval_sort_key(point: CompetencePoint) -> tuple[float, float]:
+    lower, upper = _competence_point_interval(point)
+    return (lower, upper)
+
+
+def _competence_point_interval(point: CompetencePoint) -> tuple[float, float]:
+    lower = (
+        point.log2_volume_minimum
+        if point.log2_volume_minimum is not None
+        else point.log2_volume
+    )
+    upper = (
+        point.log2_volume_maximum
+        if point.log2_volume_maximum is not None
+        else point.log2_volume
+    )
+    if upper <= lower:
+        upper = point.log2_volume
+        lower = 0.0
+    return (lower, upper)
 
 
 def _sampled_competence_record_from_accepted_mass(
@@ -5456,10 +5519,10 @@ class _CompetenceFunctional:
         batch: GeneratedSampleSet | None = None,
         generator: _TensorBenchmarkGenerator | None = None,
     ) -> tuple[float, ...]:
-        if self.kind == "mass-within-resolution":
+        if self.kind in _field_valued_competence_kinds:
             if self.field_mass_tensor is None:
                 raise BenchmarkRunnerError(
-                    "mass-within-resolution requires benchmark training competence"
+                    f"{self.kind} requires benchmark training competence"
                 )
             return tuple(
                 float(value)
@@ -5490,10 +5553,10 @@ class _CompetenceFunctional:
         batch: GeneratedSampleSet | None = None,
         generator: _TensorBenchmarkGenerator | None = None,
     ) -> Any:
-        if self.kind == "mass-within-resolution":
+        if self.kind in _field_valued_competence_kinds:
             if self.field_mass_tensor is None:
                 raise BenchmarkRunnerError(
-                    "mass-within-resolution requires benchmark training competence"
+                    f"{self.kind} requires benchmark training competence"
                 )
             return self.field_mass_tensor(
                 _FieldTrainingCompetenceRequest(
@@ -5532,16 +5595,16 @@ def _resolve_competence_functional(
 ) -> _CompetenceFunctional:
     if contract.competence.kind not in {
         "above-chance-accepted-mass",
-        "mass-within-resolution",
+        *_field_valued_competence_kinds,
     }:
         raise BenchmarkRunnerError(
             "runner path does not support competence kind "
             f"{contract.competence.kind!r}"
         )
-    if contract.competence.kind == "mass-within-resolution":
+    if contract.competence.kind in _field_valued_competence_kinds:
         if runtime is None or competence_factory is None:
             raise BenchmarkRunnerError(
-                "mass-within-resolution requires benchmark training competence"
+                f"{contract.competence.kind} requires benchmark training competence"
             )
         return _CompetenceFunctional(
             kind=contract.competence.kind,

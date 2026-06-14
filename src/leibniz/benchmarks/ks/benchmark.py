@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import cmath
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from leibniz.benchmark_implementations import RawBenchmark as BenchmarkProtocol
 from leibniz.benchmarks import BenchmarkManifest
@@ -45,6 +45,7 @@ from leibniz.tensor_runtime import (
     TensorRuntime,
     TensorSolverProgram,
     resolve_host_tensor_runtime,
+    tensor_runtime_concat,
     tensor_runtime_construct_tensor,
     tensor_runtime_solve_tensor_trajectory,
 )
@@ -62,7 +63,10 @@ _default_space_count = 32
 _time_count = 9
 _box_length = 22.0
 _horizon = 1.0
-_epsilon = 0.05
+_state_discriminability_resolution = 0.05
+_convergence_refinement_factor = 2
+_convergence_rung_count = 3
+_convergence_gate_uncertainty_scale = 1.0
 _maximum_window = 8
 _window_axis = StateSpaceAxis(
     id="ks-space-time-log2-window",
@@ -162,14 +166,14 @@ class Benchmark:
         del runtime
         if (
             target_contract.kind != "field-valued"
-            or target_contract.competence.kind != "mass-within-resolution"
+            or target_contract.competence.kind != "convergence-resolved-bits"
             or target_contract.competence.parameters.get("residual_operator_id")
             != _residual_operator_id
         ):
-            raise ValueError("KS benchmark only builds its declared residual competence")
+            raise ValueError("KS benchmark only builds its declared convergence competence")
 
         def competence(request: Any) -> Any:
-            return _ks_residual_certificate_mass(request.predictions, request.targets)
+            return _ks_convergence_resolved_bits(request)
 
         return competence
 
@@ -307,7 +311,7 @@ def _manifest() -> BenchmarkManifest:
         resolution_analysis={
             "kind": "component-discriminability-margin",
             "display_name": "Kuramoto-Sivashinsky",
-            "discriminability_margin": _epsilon,
+            "discriminability_margin": _state_discriminability_resolution,
             "equation": "u_t = -u*u_x - u_xx - u_xxxx",
             "field_domain_kind": "box-2d",
             "space_boundary": "periodic",
@@ -327,7 +331,7 @@ def _target_contract() -> TargetContract:
         outcome_ids=None,
         loss_id="equation-residual",
         competence=CompetenceFunctional(
-            kind="mass-within-resolution",
+            kind="convergence-resolved-bits",
             parameters={"residual_operator_id": _residual_operator_id},
         ),
         baseline=BaselinePredictor(kind="persistence"),
@@ -350,7 +354,7 @@ def _ks_ambient(*, spatial_points: int = _default_space_count) -> StateSpaceAmbi
         distinguishability=Distinguishability(
             kind="metric-resolution",
             metric_id="anisotropic-space-time-l2",
-            resolution=_epsilon,
+            resolution=_state_discriminability_resolution,
             certificate_id=_residual_operator_id,
         ),
     )
@@ -768,17 +772,212 @@ def _ks_residual_loss(predictions: Any, targets: Any) -> Any:
     return residual_loss + initial_loss
 
 
-def _ks_residual_certificate_mass(predictions: Any, targets: Any) -> Any:
+def _ks_convergence_resolved_bits(request: Any) -> Any:
+    predictions = request.predictions
+    targets = request.targets
     if tuple(predictions.shape) != tuple(targets.shape):
-        raise ValueError("KS residual certificate requires prediction and target shape match")
-    residual = _ks_discrete_residual(predictions.detach())
-    residual_rms = residual.pow(2).mean(dim=(1, 2)).sqrt()
-    initial_error = predictions.detach()[:, 0, :] - targets.detach()[:, 0, :]
-    initial_rms = initial_error.pow(2).mean(dim=1).sqrt()
-    accepted = (initial_rms <= _epsilon) & (
-        residual_rms <= _ks_residual_acceptance_level()
+        raise ValueError("KS convergence competence requires prediction and target shape match")
+    try:
+        ladder = _ks_prediction_ladder(request)
+    except ValueError:
+        return _zero_bits(runtime=request.runtime, predictions=predictions)
+    return _ks_ladder_convergence_bits(
+        runtime=request.runtime,
+        ladder=ladder,
+        horizon=_request_horizon(request),
     )
-    return accepted.to(dtype=predictions.dtype)
+
+
+def _ks_prediction_ladder(request: Any) -> tuple[Any, ...]:
+    if request.module is None or request.generator is None or request.batch is None:
+        return (request.predictions,)
+    sample_indices, volume_request = _request_sample_identity(request)
+    base_space_count = int(request.predictions.shape[-1])
+    base_time_count = int(request.predictions.shape[1])
+    ladder: list[Any] = []
+    for rung in range(_convergence_rung_count):
+        factor = _convergence_refinement_factor**rung
+        spatial_points = base_space_count * factor
+        time_count = 1 + ((base_time_count - 1) * factor)
+        generated = request.generator(
+            seed=request.batch.seed,
+            shape=len(sample_indices),
+            sample_indices=sample_indices,
+            spatial_points=spatial_points,
+            volume_request=volume_request,
+            runtime=request.runtime,
+            include_metadata=False,
+        )
+        fields, _targets = generated.require_tensors()
+        ladder.append(
+            _query_operator_trajectory(
+                runtime=request.runtime,
+                module=request.module,
+                fields=fields,
+                horizon=_request_horizon(request),
+                time_count=time_count,
+            )
+        )
+    return tuple(ladder)
+
+
+def _request_sample_identity(request: Any) -> tuple[tuple[int, ...], StateSpaceVolumeRequest]:
+    if request.batch is None:
+        raise ValueError("KS convergence competence requires a generated sample batch")
+    sample_indices: list[int] = []
+    windows: set[int] = set()
+    for sample_key in request.sample_keys:
+        latent_coordinates = sample_key.get("latent_coordinates")
+        if not isinstance(latent_coordinates, Sequence) or not latent_coordinates:
+            raise ValueError("KS convergence competence requires sample latent coordinates")
+        coordinate_value = cast(Sequence[object], latent_coordinates)[0]
+        if not isinstance(coordinate_value, Mapping):
+            raise ValueError("KS convergence competence requires sample coordinate records")
+        coordinate = cast(Mapping[str, object], coordinate_value)
+        sample_index = coordinate.get("sample_index")
+        window = coordinate.get("window")
+        if not isinstance(sample_index, int) or not isinstance(window, int):
+            raise ValueError("KS convergence competence requires sample index and window")
+        sample_indices.append(sample_index)
+        windows.add(window)
+    if len(windows) != 1:
+        raise ValueError("KS convergence competence requires one volume window per batch")
+    window = next(iter(windows))
+    return (
+        tuple(sample_indices),
+        StateSpaceVolumeRequest(minimum=float(window), maximum=float(window + 1)),
+    )
+
+
+def _query_operator_trajectory(
+    *,
+    runtime: TensorRuntime,
+    module: Any,
+    fields: Any,
+    horizon: float,
+    time_count: int,
+) -> Any:
+    if time_count < 2:
+        raise ValueError("KS convergence trajectory requires at least two time samples")
+    states = [fields]
+    step = horizon / float(time_count - 1)
+    for index in range(1, time_count):
+        state = module(fields, step * index)
+        if tuple(state.shape) != tuple(fields.shape):
+            raise ValueError("KS convergence operator changed state shape")
+        states.append(state)
+    return tensor_runtime_concat(runtime, states, dim=1)
+
+
+def _request_horizon(request: Any) -> float:
+    horizon = float(request.horizons[-1]) if request.horizons else _horizon
+    if not math.isfinite(horizon) or horizon <= 0.0:
+        raise ValueError("KS convergence horizon must be positive and finite")
+    return horizon
+
+
+def _ks_ladder_convergence_bits(
+    *,
+    runtime: TensorRuntime,
+    ladder: tuple[Any, ...],
+    horizon: float,
+) -> Any:
+    if len(ladder) < _convergence_rung_count:
+        return _zero_bits(runtime=runtime, predictions=ladder[-1])
+    factor = _convergence_refinement_factor
+    residual_norms = tuple(
+        _per_sample_residual_norm(trajectory, horizon=horizon) for trajectory in ladder
+    )
+    restricted = tuple(
+        restrict_to_common_grid(trajectory, rung_index=index, factor=factor)
+        for index, trajectory in enumerate(ladder)
+    )
+    field_estimate = _per_sample_richardson_field(
+        runtime=runtime,
+        restricted=restricted,
+        factor=factor,
+    )
+    finest = ladder[-1]
+    signal = finest.std(dim=(1, 2), unbiased=False)
+    finest_nodes = int(finest.shape[1]) * int(finest.shape[2])
+    values: list[float] = []
+    for sample_index in range(int(finest.shape[0])):
+        try:
+            residual_estimate = richardson(
+                tuple(float(norm[sample_index]) for norm in residual_norms),
+                factor=float(factor),
+            )
+        except ValueError:
+            values.append(0.0)
+            continue
+        converged = (
+            residual_estimate.observed_order > 0.0
+            and abs(residual_estimate.limit)
+            <= _convergence_gate_uncertainty_scale * residual_estimate.uncertainty
+        )
+        if not converged:
+            values.append(0.0)
+            continue
+        sigma = float(signal[sample_index])
+        error = float(field_estimate.error[sample_index])
+        values.append(_resolved_bits(signal=sigma, error=error, node_count=finest_nodes))
+    return finest.new_tensor(values)
+
+
+def _zero_bits(*, runtime: TensorRuntime, predictions: Any) -> Any:
+    _ = runtime
+    return predictions.new_zeros((int(predictions.shape[0]),))
+
+
+def _per_sample_residual_norm(trajectory: Any, *, horizon: float) -> Any:
+    spatial_points = int(trajectory.shape[-1])
+    time_count = int(trajectory.shape[1])
+    residual = ks_space_time_residual(
+        trajectory,
+        dx=_box_length / float(spatial_points),
+        dt=horizon / float(time_count - 1),
+    )
+    return residual.pow(2).mean(dim=(1, 2)).sqrt()
+
+
+@dataclass(frozen=True, slots=True)
+class _PerSampleFieldEstimate:
+    observed_order: Any
+    error: Any
+
+
+def _per_sample_richardson_field(
+    *,
+    runtime: TensorRuntime,
+    restricted: tuple[Any, ...],
+    factor: int,
+) -> _PerSampleFieldEstimate:
+    previous, current, finest = restricted[-3:]
+    first_gap = (current - previous).pow(2).mean(dim=(1, 2)).sqrt()
+    second_gap = (finest - current).pow(2).mean(dim=(1, 2)).sqrt()
+    _ = runtime
+    numeric_floor = math.ulp(1.0)
+    safe_first = first_gap.clamp_min(numeric_floor)
+    safe_second = second_gap.clamp_min(numeric_floor)
+    observed_order = (safe_first / safe_second).log() / math.log(float(factor))
+    denominator = observed_order.mul(math.log(float(factor))).exp().sub(1.0).clamp_min(
+        numeric_floor
+    )
+    correction = (finest - current) / denominator.reshape((-1, 1, 1))
+    error = correction.pow(2).mean(dim=(1, 2)).sqrt()
+    return _PerSampleFieldEstimate(observed_order=observed_order, error=error)
+
+
+def _resolved_bits(*, signal: float, error: float, node_count: int) -> float:
+    if not math.isfinite(signal) or signal <= 0.0:
+        return 0.0
+    if not math.isfinite(error):
+        return 0.0
+    floor = math.ulp(signal) if signal > 0.0 else math.ulp(1.0)
+    effective_error = max(error, floor)
+    if effective_error >= signal:
+        return 0.0
+    return float(node_count) * math.log2(signal / effective_error)
 
 
 def _ks_discrete_residual(predictions: Any) -> Any:
@@ -934,19 +1133,6 @@ def _validate_positive_spacing(value: float, *, field: str) -> None:
 def _validate_refinement_factor(value: float) -> None:
     if not math.isfinite(value) or value <= 1.0:
         raise ValueError("Richardson refinement factor must be greater than one")
-
-
-def _ks_residual_acceptance_level() -> float:
-    return _ks_truncation_floor() + _ks_epsilon_residual_image_bound()
-
-
-def _ks_truncation_floor() -> float:
-    return 5e-4
-
-
-def _ks_epsilon_residual_image_bound() -> float:
-    return _epsilon / 50.0
-
 
 def _ks_samples(
     *,
