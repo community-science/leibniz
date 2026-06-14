@@ -70,6 +70,24 @@ _window_axis = StateSpaceAxis(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class RichardsonEstimate:
+    """Scalar Richardson extrapolation estimate from a refinement sequence."""
+
+    observed_order: float
+    limit: float
+    uncertainty: float
+
+
+@dataclass(frozen=True, slots=True)
+class RichardsonFieldEstimate:
+    """Field Richardson extrapolation estimate on the common restricted grid."""
+
+    observed_order: float
+    extrapolated_field: Any
+    error: float
+
+
 def benchmark(root: Path) -> BenchmarkProtocol:
     """Return the Kuramoto-Sivashinsky benchmark implementation."""
 
@@ -779,6 +797,139 @@ def _ks_discrete_residual(predictions: Any) -> Any:
         + u.roll(shifts=2, dims=-1)
     ) / (dx**4)
     return u_t + (u * u_x) + u_xx + u_xxxx
+
+
+def ks_space_time_residual(
+    trajectory: Any,
+    *,
+    dx: float,
+    dt: float,
+) -> Any:
+    """Return the central space-time KS residual field for a trajectory."""
+
+    _validate_positive_spacing(dx, field="dx")
+    _validate_positive_spacing(dt, field="dt")
+    shape = tuple(trajectory.shape)
+    if len(shape) != 3:
+        raise ValueError("KS residual trajectory must have shape (batch, time, space)")
+    if shape[1] < 2:
+        raise ValueError("KS residual trajectory must contain at least two time samples")
+    if shape[2] < 5:
+        raise ValueError("KS residual trajectory must contain at least five space samples")
+    u_t = central_time_derivative(trajectory, dt=dt)
+    u_x = (trajectory.roll(shifts=-1, dims=-1) - trajectory.roll(shifts=1, dims=-1)) / (
+        2.0 * dx
+    )
+    u_xx = (
+        trajectory.roll(shifts=-1, dims=-1)
+        - 2.0 * trajectory
+        + trajectory.roll(shifts=1, dims=-1)
+    ) / (dx * dx)
+    u_xxxx = (
+        trajectory.roll(shifts=-2, dims=-1)
+        - 4.0 * trajectory.roll(shifts=-1, dims=-1)
+        + 6.0 * trajectory
+        - 4.0 * trajectory.roll(shifts=1, dims=-1)
+        + trajectory.roll(shifts=2, dims=-1)
+    ) / (dx**4)
+    return u_t + (trajectory * u_x) + u_xx + u_xxxx
+
+
+def grid_l2_norm(field: Any) -> float:
+    """Return the root-mean-square grid L2 norm as a host float."""
+
+    return float((field * field).mean().sqrt())
+
+
+def richardson(sequence: tuple[float, ...], *, factor: float) -> RichardsonEstimate:
+    """Extrapolate the final three entries of a scalar refinement sequence."""
+
+    _validate_refinement_factor(factor)
+    if len(sequence) < 3:
+        raise ValueError("Richardson extrapolation requires at least three values")
+    previous, current, finest = (
+        float(sequence[-3]),
+        float(sequence[-2]),
+        float(sequence[-1]),
+    )
+    first_gap = abs(current - previous)
+    second_gap = abs(finest - current)
+    if not math.isfinite(first_gap) or not math.isfinite(second_gap):
+        raise ValueError("Richardson sequence values must be finite")
+    if first_gap <= 0.0 or second_gap <= 0.0:
+        raise ValueError("Richardson extrapolation requires two nonzero final gaps")
+    observed_order = math.log(first_gap / second_gap, factor)
+    denominator = (factor**observed_order) - 1.0
+    if denominator <= 0.0 or not math.isfinite(denominator):
+        raise ValueError("Richardson extrapolation observed order must be positive")
+    correction = (finest - current) / denominator
+    return RichardsonEstimate(
+        observed_order=observed_order,
+        limit=finest + correction,
+        uncertainty=abs(correction),
+    )
+
+
+def richardson_field(
+    ladder: tuple[Any, ...],
+    *,
+    factor: int,
+) -> RichardsonFieldEstimate:
+    """Extrapolate a nested space-time field ladder onto its common coarse grid."""
+
+    _validate_refinement_factor(float(factor))
+    if factor < 2:
+        raise ValueError("field Richardson factor must be at least 2")
+    if len(ladder) < 3:
+        raise ValueError("field Richardson extrapolation requires at least three rungs")
+    restricted = tuple(
+        restrict_to_common_grid(field, rung_index=index, factor=factor)
+        for index, field in enumerate(ladder)
+    )
+    common_shape = tuple(restricted[0].shape)
+    if any(tuple(field.shape) != common_shape for field in restricted):
+        raise ValueError("field Richardson ladder rungs do not share a nested grid")
+    previous, current, finest = restricted[-3:]
+    first_gap = grid_l2_norm(current - previous)
+    second_gap = grid_l2_norm(finest - current)
+    if first_gap <= 0.0 or second_gap <= 0.0:
+        raise ValueError("field Richardson extrapolation requires nonzero final gaps")
+    observed_order = math.log(first_gap / second_gap, float(factor))
+    denominator = (float(factor) ** observed_order) - 1.0
+    if denominator <= 0.0 or not math.isfinite(denominator):
+        raise ValueError("field Richardson observed order must be positive")
+    correction = (finest - current) / denominator
+    return RichardsonFieldEstimate(
+        observed_order=observed_order,
+        extrapolated_field=finest + correction,
+        error=grid_l2_norm(correction),
+    )
+
+
+def central_time_derivative(trajectory: Any, *, dt: float) -> Any:
+    derivative = trajectory.clone()
+    derivative[:, 0, :] = (trajectory[:, 1, :] - trajectory[:, 0, :]) / dt
+    derivative[:, -1, :] = (trajectory[:, -1, :] - trajectory[:, -2, :]) / dt
+    if int(trajectory.shape[1]) > 2:
+        derivative[:, 1:-1, :] = (trajectory[:, 2:, :] - trajectory[:, :-2, :]) / (
+            2.0 * dt
+        )
+    return derivative
+
+
+def restrict_to_common_grid(field: Any, *, rung_index: int, factor: int) -> Any:
+    stride = factor**rung_index
+    return field[..., ::stride, ::stride]
+
+
+def _validate_positive_spacing(value: float, *, field: str) -> None:
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{field} must be positive and finite")
+
+
+def _validate_refinement_factor(value: float) -> None:
+    if not math.isfinite(value) or value <= 1.0:
+        raise ValueError("Richardson refinement factor must be greater than one")
 
 
 def _ks_residual_acceptance_level() -> float:
