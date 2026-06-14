@@ -18,6 +18,7 @@ from leibniz.benchmark_implementations import (
 from leibniz.benchmark_implementations import (
     discover_benchmark_roots,
 )
+from leibniz.benchmarks import BenchmarkManifest
 from leibniz.console.artifact_index import (
     ConsoleArtifactIndex,
     ConsoleArtifactIndexBuilder,
