@@ -171,11 +171,12 @@ def test_ks_generator_samples_cartesian_fourier_chart_metadata() -> None:
 def test_ks_benchmark_builds_residual_training_loss() -> None:
     runtime = resolve_tensor_runtime("cpu")
     loaded = load_benchmark(_ks_benchmark_root)
+    ks_module = sys.modules[type(cast(Any, loaded).implementation).__module__]
     batch = loaded.generator(seed=17, shape=2, runtime=runtime)
     fields, targets = batch.require_tensors()
     loss = cast(Any, loaded).build_training_loss(runtime, loaded.target_contract)
 
-    trajectory = cast(Any, loaded).reference_trajectory(
+    trajectory = ks_module._ks_reference_trajectory(
         runtime=runtime,
         sample_count=2,
         seed=17,
@@ -194,6 +195,7 @@ def test_ks_benchmark_builds_residual_training_loss() -> None:
 def test_ks_reference_residual_uses_resolution_dependent_dx() -> None:
     runtime = resolve_tensor_runtime("cpu")
     loaded = load_benchmark(_ks_benchmark_root)
+    ks_module = sys.modules[type(cast(Any, loaded).implementation).__module__]
     loss = cast(Any, loaded).build_training_loss(runtime, loaded.target_contract)
     losses: list[float] = []
     for spatial_points in (32, 64, 128):
@@ -205,7 +207,7 @@ def test_ks_reference_residual_uses_resolution_dependent_dx() -> None:
             spatial_points=spatial_points,
         )
         _fields, targets = batch.require_tensors()
-        reference = cast(Any, loaded).reference_trajectory(
+        reference = ks_module._ks_reference_trajectory(
             runtime=runtime,
             sample_count=1,
             seed=17,

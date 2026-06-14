@@ -68,6 +68,7 @@ from leibniz.observation_generation import (
     StateSpaceVolumeRequest,
     StateSpaceVolumeValue,
 )
+from leibniz.program_graphs import ProgramGraphError, load_program_graph
 from leibniz.records import RecordExtractor
 from leibniz.state_space import (
     AccessibleSubspace,
@@ -93,6 +94,7 @@ from leibniz.tensor_runtime import (
     make_long_tensor,
     no_grad_context,
     optimizer_step,
+    resolve_host_tensor_runtime,
     resolve_tensor_runtime,
     runtime_capacity_error,
     runtime_roofline_record,
@@ -247,6 +249,7 @@ class _TrainingResult:
 @dataclass(frozen=True, slots=True)
 class _EvaluationInput:
     architecture: ArchitectureManifest
+    program_path: Path | None
     checkpoint: ModelCheckpointArtifact
     run_slug: str
     benchmark_id: ProtocolIdentifier
@@ -838,6 +841,7 @@ class BenchmarkRunPlan:
 
     architecture_path: Path
     benchmark_root: Path
+    program_path: Path | None = None
     results_root: Path = Path("results")
     seed: int = 101
     train_steps: int | None = _default_train_steps
@@ -940,6 +944,7 @@ class BenchmarkRunSummary:
     run_slug: str
     benchmark_id: ProtocolIdentifier
     architecture_path: Path
+    program_path: Path | None
     measurement_count: int
     training_summary_path: Path
     model_artifact_root: Path
@@ -957,6 +962,16 @@ class BenchmarkRunSummary:
             "architecture_path": _portable_record_path(
                 self.architecture_path,
                 results_root=self.results_root,
+            ),
+            **(
+                {}
+                if self.program_path is None
+                else {
+                    "program_path": _portable_record_path(
+                        self.program_path,
+                        results_root=self.results_root,
+                    )
+                }
             ),
             "measurement_count": self.measurement_count,
             "training_summary_path": _portable_record_path(
@@ -987,12 +1002,23 @@ def run_benchmark(
     architecture = ArchitectureManifestDocument.from_bytes(
         plan.architecture_path.read_bytes()
     ).manifest
+    program_identity = _load_program_graph_identity(plan.program_path)
+    model_source = (
+        reference_for_record(kind="architecture-manifest", record=architecture.to_record())
+        if program_identity is None
+        else ArtifactReference(kind="program-graph", record_digest=program_identity.graph.digest)
+    )
+    program_graph_record = None if program_identity is None else program_identity.graph.to_record()
     outcome_space = benchmark.manifest.resolve_outcome_space()
     outcome_ids = _target_contract_outcome_ids(target_contract)
     summary = _run_summary(
         plan=plan,
         benchmark_id=generator.manifest.id,
-        architecture_digest=architecture.digest,
+        model_source_atom=(
+            f"arch-{architecture.digest.hex[:12]}"
+            if program_identity is None
+            else f"program-{program_identity.graph.digest.hex[:12]}"
+        ),
     )
     model_inspection = ModelInspectionRecord.from_architecture(
         id=ProtocolIdentifier.parse(
@@ -1000,6 +1026,11 @@ def run_benchmark(
             f"{summary.run_slug}@0.1.0"
         ),
         architecture_manifest=architecture,
+    )
+    model_inspection = _inspection_with_model_source(
+        model_inspection,
+        model_source=model_source,
+        program_graph=program_graph_record,
     )
     try:
         initial_evaluation_rung = _evaluation_curriculum_rung(
@@ -1060,6 +1091,7 @@ def run_benchmark(
         return _model_checkpoint_artifact_record(
             checkpoint=checkpoint,
             architecture=architecture,
+            program_path=plan.program_path,
             benchmark_id=summary.benchmark_id,
             run_slug=summary.run_slug,
             results_root=plan.results_root,
@@ -1087,6 +1119,7 @@ def run_benchmark(
                         training_run=training_run,
                         module=module,
                         runtime="pytorch",
+                        model_source=model_source,
                     )
                 )
         with progress_timings.span("training_progress.checkpoint_selection"):
@@ -1103,6 +1136,11 @@ def run_benchmark(
                 )
                 if selected_checkpoint is not None
                 else model_inspection
+            )
+            progress_inspection = _inspection_with_model_source(
+                progress_inspection,
+                model_source=model_source,
+                program_graph=program_graph_record,
             )
         with progress_timings.span("training_progress.checkpoint_records"):
             progress_full_checkpoint_records = tuple(
@@ -1151,6 +1189,7 @@ def run_benchmark(
 
     training_result = _train_and_predict(
         architecture=architecture,
+        program_path=plan.program_path,
         initial_evaluation_rung=initial_evaluation_rung,
         generator=generator,
         target_contract=target_contract,
@@ -1184,6 +1223,11 @@ def run_benchmark(
         ),
         model_manifest=selected_checkpoint.manifest,
         architecture_manifest=architecture,
+    )
+    model_inspection = _inspection_with_model_source(
+        model_inspection,
+        model_source=model_source,
+        program_graph=program_graph_record,
     )
     full_checkpoint_records = tuple(
         checkpoint_record(checkpoint)
@@ -1264,15 +1308,15 @@ def _run_summary(
     *,
     plan: BenchmarkRunPlan,
     benchmark_id: ProtocolIdentifier,
-    architecture_digest: ContentDigest,
+    model_source_atom: str,
 ) -> BenchmarkRunSummary:
     benchmark_atom = _identifier_atom(benchmark_id)
-    architecture_atom = f"arch-{architecture_digest.hex[:12]}"
-    run_slug = f"{benchmark_atom}-{architecture_atom}-{plan.run_slug}"
+    run_slug = f"{benchmark_atom}-{model_source_atom}-{plan.run_slug}"
     return BenchmarkRunSummary(
         run_slug=run_slug,
         benchmark_id=benchmark_id,
         architecture_path=plan.architecture_path,
+        program_path=plan.program_path,
         measurement_count=0,
         training_summary_path=(
             plan.results_root / "training" / benchmark_atom / f"{run_slug}{_document_suffix}"
@@ -1280,6 +1324,43 @@ def _run_summary(
         model_artifact_root=(plan.results_root / "models" / benchmark_atom / run_slug),
         dry_run=plan.dry_run,
         results_root=plan.results_root,
+    )
+
+
+def _load_program_graph_identity(program_path: Path | None) -> Any | None:
+    if program_path is None:
+        return None
+    try:
+        return load_program_graph(program_path, resolve_host_tensor_runtime())
+    except (ProgramGraphError, TensorRuntimeError) as error:
+        raise BenchmarkRunnerError(str(error)) from error
+
+
+def _inspection_with_model_source(
+    inspection: ModelInspectionRecord,
+    *,
+    model_source: ArtifactReference,
+    program_graph: Mapping[str, object] | None,
+) -> ModelInspectionRecord:
+    return ModelInspectionRecord(
+        id=inspection.id,
+        architecture=inspection.architecture,
+        input_shape=inspection.input_shape,
+        output_shape=inspection.output_shape,
+        components=inspection.components,
+        cost_summary=inspection.cost_summary,
+        architecture_trace=inspection.architecture_trace,
+        architecture_graph=inspection.architecture_graph,
+        architecture_summary=inspection.architecture_summary,
+        node_evidence=inspection.node_evidence,
+        model_manifest=inspection.model_manifest,
+        model_source=model_source,
+        program_graph=program_graph,
+        submission_package=inspection.submission_package,
+        benchmark_manifest=inspection.benchmark_manifest,
+        measurement_dataset=inspection.measurement_dataset,
+        model_artifacts=inspection.model_artifacts,
+        training_provenance=inspection.training_provenance,
     )
 
 
@@ -1332,6 +1413,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
             checkpoint_evaluation_throughput,
         ) = evaluate_model_checkpoint_artifact(
             architecture=architecture,
+            program_path=evaluation_input.program_path,
             generator=generator,
             target_contract=target_contract,
             competence_factory=_optional_training_competence_factory(benchmark),
@@ -1501,6 +1583,7 @@ def evaluate_benchmark_checkpoint(plan: BenchmarkEvaluationPlan) -> BenchmarkEva
     checkpoint_record = _model_checkpoint_artifact_record(
         checkpoint=selected_checkpoint,
         architecture=architecture,
+        program_path=evaluation_input.program_path,
         benchmark_id=benchmark_id,
         run_slug=run_slug,
         results_root=plan.results_root,
@@ -1593,6 +1676,10 @@ def _evaluation_input_from_plan(
     run_slug = _required_string(checkpoint_record.get("run_slug"), "checkpoint_artifact.run_slug")
     return _EvaluationInput(
         architecture=architecture,
+        program_path=_optional_checkpoint_program_path(
+            checkpoint_record.get("program_path"),
+            results_root=plan.results_root,
+        ),
         checkpoint=load_model_checkpoint_artifact(
             checkpoint_record,
             results_root=plan.results_root,
@@ -2004,6 +2091,7 @@ def _shape_matches_scale_contract(
 def _train_and_predict(
     *,
     architecture: ArchitectureManifest,
+    program_path: Path | None = None,
     initial_evaluation_rung: _CurriculumRung,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
@@ -2039,6 +2127,7 @@ def _train_and_predict(
         try:
             return _train_and_predict_on_device(
                 architecture=architecture,
+                program_path=program_path,
                 initial_evaluation_rung=initial_evaluation_rung,
                 generator=generator,
                 target_contract=target_contract,
@@ -2073,6 +2162,7 @@ def _train_and_predict(
 def _train_and_predict_on_device(
     *,
     architecture: ArchitectureManifest,
+    program_path: Path | None = None,
     initial_evaluation_rung: _CurriculumRung,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
@@ -2105,11 +2195,10 @@ def _train_and_predict_on_device(
     except TensorRuntimeError as error:
         raise BenchmarkRunnerError(str(error)) from error
     seed_runtime(runtime, seed=seed)
-    executable = ExecutableModelOperator(architecture)
-    module = OperationFallbackSequential(
+    module = _build_training_module(
         runtime=runtime,
-        operations=executable.operation_modules(),
-        input_conditioning=architecture.input_conditioning,
+        architecture=architecture,
+        program_path=program_path,
     )
     outcome_ids = _target_contract_outcome_ids(target_contract)
     chance_mass = _target_contract_chance_mass(target_contract)
@@ -2476,6 +2565,7 @@ def _train_and_predict_on_device(
 def evaluate_model_checkpoint_artifact(
     *,
     architecture: ArchitectureManifest,
+    program_path: Path | None = None,
     generator: _TensorBenchmarkGenerator,
     target_contract: TargetContract,
     competence_factory: _BenchmarkTrainingCompetenceFactory | None = None,
@@ -2499,6 +2589,7 @@ def evaluate_model_checkpoint_artifact(
     with phase_timings.span("checkpoint_evaluation.predictor_load"):
         predictor = load_model_checkpoint_predictor(
             architecture=architecture,
+            program_path=program_path,
             target_contract=target_contract,
             checkpoint=checkpoint,
             tensor_device=tensor_device,
@@ -3518,6 +3609,25 @@ def _physical_execution_sample_count(
     return int(physical_sample_count)
 
 
+def _build_training_module(
+    *,
+    runtime: TensorRuntime,
+    architecture: ArchitectureManifest,
+    program_path: Path | None,
+) -> Any:
+    if program_path is not None:
+        try:
+            return load_program_graph(program_path, runtime).graph.build_module(runtime)
+        except ProgramGraphError as error:
+            raise BenchmarkRunnerError(str(error)) from error
+    executable = ExecutableModelOperator(architecture)
+    return OperationFallbackSequential(
+        runtime=runtime,
+        operations=executable.operation_modules(),
+        input_conditioning=architecture.input_conditioning,
+    )
+
+
 def _is_runtime_capacity_error(error: RuntimeError) -> bool:
     return runtime_capacity_error(error)
 
@@ -3525,6 +3635,7 @@ def _is_runtime_capacity_error(error: RuntimeError) -> bool:
 def load_model_checkpoint_predictor(
     *,
     architecture: ArchitectureManifest,
+    program_path: Path | None = None,
     target_contract: TargetContract,
     checkpoint: ModelCheckpointArtifact,
     tensor_device: TensorRuntimeDevice,
@@ -3535,11 +3646,10 @@ def load_model_checkpoint_predictor(
         runtime = resolve_tensor_runtime(tensor_device)
     except TensorRuntimeError as error:
         raise BenchmarkRunnerError(str(error)) from error
-    executable = ExecutableModelOperator(architecture)
-    module = OperationFallbackSequential(
+    module = _build_training_module(
         runtime=runtime,
-        operations=executable.operation_modules(),
-        input_conditioning=architecture.input_conditioning,
+        architecture=architecture,
+        program_path=program_path,
     )
     _load_torch_checkpoint(module=module, runtime=runtime, checkpoint=checkpoint)
     module.eval()
@@ -3611,6 +3721,7 @@ def _model_checkpoint_artifact_record(
     *,
     checkpoint: ModelCheckpointArtifact,
     architecture: ArchitectureManifest,
+    program_path: Path | None = None,
     benchmark_id: ProtocolIdentifier,
     run_slug: str,
     results_root: Path | None = None,
@@ -3630,6 +3741,11 @@ def _model_checkpoint_artifact_record(
     record["run_slug"] = run_slug
     record["architecture_manifest"] = architecture.to_record()
     record["model_manifest"] = checkpoint.manifest.to_record()
+    if program_path is not None:
+        record["program_path"] = _portable_record_path(
+            program_path,
+            results_root=results_root or Path("results"),
+        )
     if checkpoint.score_estimate is not None:
         record["score"] = _checkpoint_score_estimate_selection_score(
             checkpoint.score_estimate
@@ -3676,6 +3792,19 @@ def _resolve_artifact_record_path(value: str, *, results_root: Path) -> Path:
     if not resolved.is_relative_to(results_root.resolve()):
         raise BenchmarkRunnerError(f"artifact path must stay inside results root: {value}")
     return resolved
+
+
+def _optional_checkpoint_program_path(value: object, *, results_root: Path) -> Path | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise BenchmarkRunnerError("checkpoint_artifact.program_path must be a nonempty string")
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    if path.parts[:1] == (results_root.name,):
+        return (results_root.parent / path).resolve()
+    return path
 
 
 def _load_object_record(path: Path, *, description: str) -> Mapping[str, object]:
@@ -5085,6 +5214,7 @@ def _write_model_checkpoint_artifact(
     *,
     summary: BenchmarkRunSummary,
     architecture: ArchitectureManifest,
+    model_source: ArtifactReference,
     model_interface: ModelInterface,
     training_run: TrainingRunRecord,
     module: Any,
@@ -5109,7 +5239,7 @@ def _write_model_checkpoint_artifact(
             f"{summary.run_slug}.{stem}@0.1.0"
         ),
         architecture=architecture_reference,
-        model_source=architecture_reference,
+        model_source=model_source,
         interface=reference_for_record(
             kind="model-interface",
             record=model_interface.to_record(),

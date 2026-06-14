@@ -87,6 +87,13 @@ _ks_variable_conv_architecture = (
     / "architecture"
     / "ks_variable_conv.json"
 )
+_ks_variable_conv_program = (
+    _repository_root
+    / "tests"
+    / "fixtures"
+    / "programs"
+    / "ks_variable_conv.py"
+)
 _chess_linear_architecture = (
     _repository_root
     / "tests"
@@ -1712,6 +1719,7 @@ def test_ks_benchmark_runner_trains_field_model_with_residual_loss(
     summary = run_benchmark(
         BenchmarkRunPlan(
             architecture_path=architecture_path,
+            program_path=_ks_variable_conv_program,
             benchmark_root=_ks_benchmark_root,
             results_root=results_root,
             seed=101,
@@ -1737,6 +1745,16 @@ def test_ks_benchmark_runner_trains_field_model_with_residual_loss(
     assert cast(Mapping[str, object], record["architecture"])["kind"] == (
         "architecture-manifest"
     )
+    assert str(record["program_path"]).endswith("tests/fixtures/programs/ks_variable_conv.py")
+    assert cast(Mapping[str, object], record["model_source"])["kind"] == "program-graph"
+    selected_checkpoint = cast(Mapping[str, object], record["selected_model_checkpoint"])
+    assert str(selected_checkpoint["program_path"]).endswith(
+        "tests/fixtures/programs/ks_variable_conv.py"
+    )
+    model_manifest = cast(Mapping[str, object], selected_checkpoint["model_manifest"])
+    assert cast(Mapping[str, object], model_manifest["model_source"])["kind"] == (
+        "program-graph"
+    )
 
 
 def test_ks_benchmark_runner_outputs_feed_benchmark_result_views(
@@ -1746,6 +1764,7 @@ def test_ks_benchmark_runner_outputs_feed_benchmark_result_views(
     training_summary = run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_ks_variable_conv_architecture,
+            program_path=_ks_variable_conv_program,
             benchmark_root=_ks_benchmark_root,
             results_root=results_root,
             seed=101,
@@ -1931,7 +1950,7 @@ def test_ks_convergence_competence_accepts_reference_solver_through_real_residua
             spatial_points = int(fields.shape[-1])
             refinement = spatial_points // 32
             step_count = max(1, round(float(horizon) * base_step_count * refinement))
-            trajectory = loaded.implementation.reference_trajectory(
+            trajectory = ks_module._ks_reference_trajectory(
                 runtime=runtime,
                 sample_count=len(sample_indices),
                 seed=batch.seed,

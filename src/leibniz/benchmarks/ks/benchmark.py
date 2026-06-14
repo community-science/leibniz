@@ -180,31 +180,6 @@ class Benchmark:
 
         return competence
 
-    def reference_trajectory(
-        self,
-        *,
-        runtime: TensorRuntime,
-        sample_count: int,
-        seed: int,
-        sample_indices: tuple[int, ...],
-        window: int,
-        spatial_points: int | None = None,
-        horizon: float = _horizon,
-        time_count: int = _time_count,
-    ) -> Any:
-        resolved_spatial_points = _spatial_points(spatial_points)
-        return _ks_reference_trajectory(
-            runtime=runtime,
-            sample_count=sample_count,
-            seed=seed,
-            sample_indices=sample_indices,
-            window=window,
-            spatial_points=resolved_spatial_points,
-            horizon=horizon,
-            time_count=time_count,
-        )
-
-
 @dataclass(frozen=True, slots=True)
 class Generator:
     """Generate KS initial-condition fields and reference trajectory targets."""
@@ -465,7 +440,7 @@ def _ks_tensors(
     return fields, targets
 
 
-def _ks_reference_trajectory(
+def _ks_reference_trajectory(  # pyright: ignore[reportUnusedFunction]
     *,
     runtime: TensorRuntime,
     sample_count: int,

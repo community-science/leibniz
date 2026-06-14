@@ -655,20 +655,35 @@ class _ProgramGraphModule:
                 self._incoming = _incoming_edges(graph.edges)
                 self._node_modules = backend.nn.ModuleDict()
                 self._module_keys: dict[str, str] = {}
+                self._optimizer: Any | None = None
                 for index, node in enumerate(graph.nodes):
                     if isinstance(node.operation, backend.nn.Module):
                         key = f"node_{index}"
                         self._node_modules[key] = node.operation.to(runtime.device)
                         self._module_keys[node.id] = key
 
+            def attach_optimizer(self, optimizer: Any) -> None:
+                self._optimizer = optimizer
+
+            def operation_fallback_records(self) -> tuple[dict[str, object], ...]:
+                return ()
+
             def forward(self, *inputs: Any) -> Any:
-                if len(inputs) != len(self._graph.inputs):
+                graph_inputs = inputs
+                if len(inputs) == len(self._graph.inputs) + 1 and _is_horizon(inputs[-1]):
+                    graph_inputs = inputs[:-1]
+                if len(graph_inputs) != len(self._graph.inputs):
                     raise ProgramGraphError(
-                        f"expected {len(self._graph.inputs)} graph inputs, got {len(inputs)}"
+                        f"expected {len(self._graph.inputs)} graph inputs, got "
+                        f"{len(graph_inputs)}"
                     )
                 values = {
                     contract.name: value.to(runtime.device)
-                    for contract, value in zip(self._graph.inputs, inputs, strict=True)
+                    for contract, value in zip(
+                        self._graph.inputs,
+                        graph_inputs,
+                        strict=True,
+                    )
                 }
                 for node_id in self._order:
                     node = self._nodes[node_id]
@@ -797,6 +812,10 @@ def _as_tuple(value: Any) -> tuple[Any, ...]:
     if isinstance(value, tuple):
         return cast(tuple[Any, ...], value)
     return (value,)
+
+
+def _is_horizon(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 def _as_program_axis(value: object, *, field: str) -> ProgramAxis:
