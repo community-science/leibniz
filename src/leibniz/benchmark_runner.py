@@ -18,6 +18,8 @@ from leibniz.architectures import ArchitectureManifest, ArchitectureManifestDocu
 from leibniz.artifacts import ArtifactReference, reference_for_record
 from leibniz.benchmark_evaluation import (
     CompetencePoint,
+    StateSpaceIntegral,
+    StateSpaceIntegralTerm,
     ValidationCompetencePoint,
     finite_measurements_for_predictions,
     sampled_competence_curriculum_record,
@@ -157,6 +159,12 @@ _legal_uncapped_training_stage_stop_reasons = frozenset(
 _minimum_plateau_lr_reductions = 3
 _full_variation_extent = 1.0
 _sync_timing_environment_variable = "LEIBNIZ_SYNC_TIMING"
+_field_valued_competence_kinds = frozenset(
+    {
+        "convergence-resolved-bits",
+        "mass-within-resolution",
+    }
+)
 
 
 class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
@@ -184,6 +192,25 @@ class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
     ) -> GeneratedSampleSet: ...
 
 
+@dataclass(frozen=True, slots=True)
+class _FieldTrainingCompetenceRequest:
+    runtime: TensorRuntime
+    module: Any | None
+    fields: Any | None
+    predictions: Any
+    targets: Any
+    horizons: tuple[float, ...] | None
+    batch: GeneratedSampleSet | None
+    generator: _TensorBenchmarkGenerator | None
+    sample_keys: tuple[Mapping[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _CompetenceEvaluation:
+    values: tuple[float, ...]
+    diagnostics: tuple[Mapping[str, object], ...] = ()
+
+
 class _BenchmarkTrainingLossFactory(Protocol):
     """Benchmark-owned tensor loss factory for non-generic target losses."""
 
@@ -201,7 +228,7 @@ class _BenchmarkTrainingCompetenceFactory(Protocol):
         self,
         runtime: TensorRuntime,
         target_contract: TargetContract,
-    ) -> Callable[[Any, Any], Any]: ...
+    ) -> Callable[[_FieldTrainingCompetenceRequest], Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -2214,6 +2241,7 @@ def _train_and_predict_on_device(
             generation_phase="validation_formation_generation",
             rung=current_frontier(),
         ),
+        generator=generator,
         target_contract=target_contract,
         competence=competence_functional,
         outcome_ids=outcome_ids,
@@ -2584,9 +2612,9 @@ def _field_valued_target_horizons(
     time_count = int(labels.shape[1])
     if time_count < 1:
         raise BenchmarkRunnerError("field-valued trajectory target must contain at least one time")
-    if time_count == 1:
-        return ()
     if batch.region is None:
+        if time_count == 1:
+            return ()
         raise BenchmarkRunnerError("field-valued trajectory horizons require a sample region")
     horizon = batch.region.ambient.field_domain.get("length_y")
     if horizon is None:
@@ -2600,8 +2628,35 @@ def _field_valued_target_horizons(
         raise BenchmarkRunnerError(
             "field-valued ambient field_domain.length_y must be positive and finite"
         )
+    if time_count == 1:
+        return _field_valued_ambient_horizons(batch=batch, horizon=result_horizon)
     step = result_horizon / float(time_count - 1)
     return tuple(step * index for index in range(1, time_count))
+
+
+def _field_valued_ambient_horizons(
+    *,
+    batch: GeneratedSampleSet,
+    horizon: float,
+) -> tuple[float, ...]:
+    if batch.region is None:
+        return ()
+    time_resolution = batch.region.ambient.field_domain.get("time_resolution")
+    if time_resolution is None:
+        return ()
+    if isinstance(time_resolution, bool) or not isinstance(time_resolution, int | float):
+        raise BenchmarkRunnerError(
+            "field-valued ambient field_domain.time_resolution must be numeric"
+        )
+    step = float(time_resolution)
+    if not math.isfinite(step) or step <= 0.0:
+        raise BenchmarkRunnerError(
+            "field-valued ambient field_domain.time_resolution must be positive and finite"
+        )
+    step_count = round(horizon / step)
+    if step_count < 1:
+        return ()
+    return tuple((horizon * index) / float(step_count) for index in range(1, step_count + 1))
 
 
 def _field_valued_cost_horizon(horizons: tuple[float, ...] | None) -> float:
@@ -2632,15 +2687,16 @@ def _field_valued_model_trajectory(
         raise BenchmarkRunnerError("field-valued target batch size must match input batch size")
     if int(labels.shape[-1]) != int(fields.shape[-1]):
         raise BenchmarkRunnerError("field-valued target spatial length must match input length")
-    time_count = int(labels.shape[1])
-    if time_count < 1:
+    label_time_count = int(labels.shape[1])
+    if label_time_count < 1:
         raise BenchmarkRunnerError("field-valued trajectory target must contain at least one time")
+    time_count = 1 + len(horizons) if horizons else label_time_count
     states = [fields]
     if time_count == 1:
         return fields
     if horizons is None:
         raise BenchmarkRunnerError("field-valued trajectory requires target horizons")
-    if len(horizons) != time_count - 1:
+    if label_time_count > 1 and len(horizons) != label_time_count - 1:
         raise BenchmarkRunnerError(
             "field-valued target horizon count must match target time steps after "
             "the initial state"
@@ -3550,6 +3606,7 @@ def _train_until_convergence(
     training_counter: _ThroughputCounter,
     validation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
+    generator: _TensorBenchmarkGenerator | None = None,
     training_batch_target: int = _default_training_batch_target,
     gate_batch_target: int = _default_gate_batch_target,
     start_step: int = 0,
@@ -3631,7 +3688,17 @@ def _train_until_convergence(
                     target_contract=target_contract,
                 )
                 validation_loss = float(loss_function(logits, labels).item())
-                accepted_mass = competence.training_logit_masses(runtime, logits, labels)
+                competence_evaluation = competence.training_logit_masses_with_diagnostics(
+                    runtime,
+                    logits,
+                    labels,
+                    module=module,
+                    fields=fields,
+                    horizons=horizons,
+                    batch=batch,
+                    generator=generator,
+                )
+                accepted_mass = competence_evaluation.values
             if was_training:
                 module.train()
         with phase_timings.span("validation_score_estimate", samples=batch.sample_count):
@@ -3647,6 +3714,7 @@ def _train_until_convergence(
                 step=step,
                 inference_cost=max_validation_inference_cost,
                 training_cost=latest_training_cost,
+                competence_diagnostics=competence_evaluation.diagnostics,
             )
         plateau_signal = _training_score_estimate_frontier_competence(
             score_estimate,
@@ -3787,6 +3855,11 @@ def _train_until_convergence(
                                 runtime,
                                 first_logits,
                                 labels,
+                                module=module,
+                                fields=fields,
+                                horizons=horizons,
+                                batch=training_batch.sample_set,
+                                generator=generator,
                             ),
                         )
                     )
@@ -3884,16 +3957,19 @@ def _training_gate_score_estimate(
     step: int,
     inference_cost: tuple[CostMeasurement, int],
     training_cost: tuple[CostMeasurement, int] | None,
+    competence_diagnostics: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
     current_point = _sampled_competence_record_from_accepted_mass(
         batch=batch,
         accepted_mass=accepted_mass,
         volume_axis=None,
+        bounded_mass=target_contract.kind != "field-valued",
     )
     sampled_competence = _training_sampled_competence_record(
         benchmark_id=batch.benchmark_id,
         previous_frontier_points=previous_frontier_points,
         current_point=current_point,
+        bounded_mass=target_contract.kind != "field-valued",
     )
     compact_sampled_competence = _compact_training_sampled_competence(sampled_competence)
     _assign_sampled_competence_inference_cost(
@@ -3903,15 +3979,17 @@ def _training_gate_score_estimate(
     )
     point_records = _training_score_estimate_points(compact_sampled_competence)
     chance_mass = _target_contract_chance_mass(target_contract)
-    score_integral = sampled_competence_frontier_integral(
-        tuple(
-            CompetencePoint.from_sampled_record(
-                point,
-                field_prefix="score_estimate",
-                error_type=BenchmarkRunnerError,
-            )
-            for point in point_records
-        ),
+    competence_points = tuple(
+        CompetencePoint.from_sampled_record(
+            point,
+            field_prefix="score_estimate",
+            error_type=BenchmarkRunnerError,
+        )
+        for point in point_records
+    )
+    score_integral = _training_score_integral(
+        target_contract=target_contract,
+        points=competence_points,
         chance_mass=chance_mass,
     )
     score = score_integral.value
@@ -3935,7 +4013,62 @@ def _training_gate_score_estimate(
             training_cost[0].without_operation_trace().to_record()
         )
         record["training_cost_sample_count"] = training_cost[1]
+    if competence_diagnostics:
+        record["competence_diagnostics"] = [dict(item) for item in competence_diagnostics]
     return record
+
+
+def _training_score_integral(
+    *,
+    target_contract: TargetContract,
+    points: tuple[CompetencePoint, ...],
+    chance_mass: float,
+) -> StateSpaceIntegral:
+    if target_contract.kind != "field-valued":
+        return sampled_competence_frontier_integral(points, chance_mass=chance_mass)
+    terms: list[StateSpaceIntegralTerm] = []
+    cursor = 0.0
+    for point in sorted(points, key=_competence_point_interval_sort_key):
+        lower, upper = _competence_point_interval(point)
+        measured_lower = max(lower, cursor)
+        if upper > measured_lower:
+            terms.append(
+                StateSpaceIntegralTerm(
+                    lower=measured_lower,
+                    upper=upper,
+                    competence_density=point.accepted_mass,
+                    kind="measured-state-space-validated-bits",
+                    representative_log2_volume=point.log2_volume,
+                    sample_count=point.sample_count,
+                    confidence_half_width=point.confidence_half_width,
+                    confidence_method_id=point.confidence_method_id,
+                    region=point.region,
+                )
+            )
+        cursor = max(cursor, lower, upper)
+    return StateSpaceIntegral(terms=tuple(terms))
+
+
+def _competence_point_interval_sort_key(point: CompetencePoint) -> tuple[float, float]:
+    lower, upper = _competence_point_interval(point)
+    return (lower, upper)
+
+
+def _competence_point_interval(point: CompetencePoint) -> tuple[float, float]:
+    lower = (
+        point.log2_volume_minimum
+        if point.log2_volume_minimum is not None
+        else point.log2_volume
+    )
+    upper = (
+        point.log2_volume_maximum
+        if point.log2_volume_maximum is not None
+        else point.log2_volume
+    )
+    if upper <= lower:
+        upper = point.log2_volume
+        lower = 0.0
+    return (lower, upper)
 
 
 def _sampled_competence_record_from_accepted_mass(
@@ -3943,17 +4076,12 @@ def _sampled_competence_record_from_accepted_mass(
     batch: GeneratedSampleSet,
     accepted_mass: tuple[float, ...],
     volume_axis: str | None,
+    bounded_mass: bool = True,
 ) -> dict[str, object]:
     """Return sampled competence from target probability mass."""
 
     if len(batch.samples) != len(accepted_mass):
         raise BenchmarkRunnerError("sampled competence requires one mass per sample")
-    finite_losses = tuple(-math.log(mass) for mass in accepted_mass if mass > 0.0)
-    mean_negative_log_score: float | str
-    if len(finite_losses) != len(accepted_mass):
-        mean_negative_log_score = "infinity"
-    else:
-        mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
     record: dict[str, object] = {
         "kind": "sampled-state-space-volume-window",
         "sampling_rule": "generator-uniform-component-index-v1",
@@ -3964,8 +4092,17 @@ def _sampled_competence_record_from_accepted_mass(
         "seed": batch.seed,
         "sample_count": len(batch.samples),
         "mean_accepted_mass": math.fsum(accepted_mass) / len(accepted_mass),
-        "mean_negative_log_score": mean_negative_log_score,
     }
+    if bounded_mass:
+        finite_losses = tuple(-math.log(mass) for mass in accepted_mass if mass > 0.0)
+        mean_negative_log_score: float | str
+        if len(finite_losses) != len(accepted_mass):
+            mean_negative_log_score = "infinity"
+        else:
+            mean_negative_log_score = math.fsum(finite_losses) / len(finite_losses)
+        record["mean_negative_log_score"] = mean_negative_log_score
+    else:
+        record["competence_value_kind"] = "validated-bits"
     input_shape = _optional_batch_sample_input_shape(batch=batch)
     if input_shape is not None:
         record["input_shape"] = list(input_shape)
@@ -3994,6 +4131,14 @@ def _coerce_training_step_batch(
         return value
     fields, labels = value
     return _TrainingStepBatch(fields=fields, labels=labels)
+
+
+def _field_training_sample_keys(
+    batch: GeneratedSampleSet | None,
+) -> tuple[Mapping[str, object], ...]:
+    if batch is None:
+        return ()
+    return tuple(sample.to_record(include_field=False) for sample in batch.samples)
 
 
 def _refreshed_frontier_points(
@@ -4088,6 +4233,7 @@ def _training_sampled_competence_record(
     benchmark_id: ProtocolIdentifier,
     previous_frontier_points: tuple[ValidationCompetencePoint, ...],
     current_point: Mapping[str, object],
+    bounded_mass: bool = True,
 ) -> dict[str, object]:
     points: list[Mapping[str, object]] = [
         {
@@ -4106,7 +4252,59 @@ def _training_sampled_competence_record(
         for point in previous_frontier_points
     ]
     points.append(current_point)
-    return sampled_competence_curriculum_record(points)
+    if bounded_mass:
+        return sampled_competence_curriculum_record(points)
+    return _sampled_unbounded_competence_curriculum_record(points)
+
+
+def _sampled_unbounded_competence_curriculum_record(
+    points: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    if not points:
+        raise BenchmarkRunnerError("sampled competence curriculum requires at least one point")
+    sorted_points = tuple(
+        sorted(
+            points,
+            key=lambda point: _required_float(
+                point.get("log2_volume"),
+                "sampled_competence.log2_volume",
+            ),
+        )
+    )
+    first = sorted_points[0]
+    sample_counts = tuple(
+        _required_int(point.get("sample_count"), "sampled_competence.sample_count")
+        for point in sorted_points
+    )
+    values = tuple(
+        _required_float(
+            point.get("mean_accepted_mass"),
+            "sampled_competence.mean_accepted_mass",
+        )
+        for point in sorted_points
+    )
+    total_samples = sum(sample_counts)
+    if total_samples < 1:
+        raise BenchmarkRunnerError("sampled competence sample count must be positive")
+    weighted_value = (
+        math.fsum(
+            value * sample_count
+            for value, sample_count in zip(values, sample_counts, strict=True)
+        )
+        / total_samples
+    )
+    return {
+        "kind": "sampled-competence-curriculum",
+        "sampling_rule": first.get("sampling_rule"),
+        "difficulty_assumption": first.get("difficulty_assumption"),
+        "benchmark_id": first.get("benchmark_id"),
+        "volume_axis": first.get("volume_axis"),
+        "log2_volume": first.get("log2_volume"),
+        "sample_count": total_samples,
+        "mean_accepted_mass": weighted_value,
+        "competence_value_kind": "validated-bits",
+        "points": [dict(point) for point in sorted_points],
+    }
 
 
 def _rung_log2_volume_interval(rung: _CurriculumRung) -> tuple[float, float] | None:
@@ -5405,44 +5603,96 @@ class _CompetenceFunctional:
     """
 
     kind: str
-    field_mass_tensor: Callable[[Any, Any], Any] | None = None
+    field_mass_tensor: Callable[[_FieldTrainingCompetenceRequest], Any] | None = None
 
     def training_logit_masses(
         self,
         runtime: TensorRuntime,
         logits: Any,
         labels: Any,
+        *,
+        module: Any | None = None,
+        fields: Any | None = None,
+        horizons: tuple[float, ...] | None = None,
+        batch: GeneratedSampleSet | None = None,
+        generator: _TensorBenchmarkGenerator | None = None,
     ) -> tuple[float, ...]:
-        if self.kind == "mass-within-resolution":
+        return self.training_logit_masses_with_diagnostics(
+            runtime,
+            logits,
+            labels,
+            module=module,
+            fields=fields,
+            horizons=horizons,
+            batch=batch,
+            generator=generator,
+        ).values
+
+    def training_logit_masses_with_diagnostics(
+        self,
+        runtime: TensorRuntime,
+        logits: Any,
+        labels: Any,
+        *,
+        module: Any | None = None,
+        fields: Any | None = None,
+        horizons: tuple[float, ...] | None = None,
+        batch: GeneratedSampleSet | None = None,
+        generator: _TensorBenchmarkGenerator | None = None,
+    ) -> _CompetenceEvaluation:
+        if self.kind in _field_valued_competence_kinds:
             if self.field_mass_tensor is None:
                 raise BenchmarkRunnerError(
-                    "mass-within-resolution requires benchmark training competence"
+                    f"{self.kind} requires benchmark training competence"
                 )
-            return tuple(
-                float(value)
-                for value in self.training_logit_mass_tensor(
-                    runtime,
-                    logits,
-                    labels,
-                )
-                .detach()
-                .tolist()
+            mass_tensor = self.training_logit_mass_tensor(
+                runtime,
+                logits,
+                labels,
+                module=module,
+                fields=fields,
+                horizons=horizons,
+                batch=batch,
+                generator=generator,
             )
-        return tuple(softmax_target_masses(runtime, logits, labels))
+            return _CompetenceEvaluation(
+                values=tuple(float(value) for value in mass_tensor.detach().tolist()),
+                diagnostics=_competence_tensor_diagnostics(mass_tensor),
+            )
+        return _CompetenceEvaluation(
+            values=tuple(softmax_target_masses(runtime, logits, labels))
+        )
 
     def training_logit_mass_tensor(
         self,
         runtime: TensorRuntime,
         logits: Any,
         labels: Any,
+        *,
+        module: Any | None = None,
+        fields: Any | None = None,
+        horizons: tuple[float, ...] | None = None,
+        batch: GeneratedSampleSet | None = None,
+        generator: _TensorBenchmarkGenerator | None = None,
     ) -> Any:
-        if self.kind == "mass-within-resolution":
-            _ = runtime
+        if self.kind in _field_valued_competence_kinds:
             if self.field_mass_tensor is None:
                 raise BenchmarkRunnerError(
-                    "mass-within-resolution requires benchmark training competence"
+                    f"{self.kind} requires benchmark training competence"
                 )
-            return self.field_mass_tensor(logits, labels)
+            return self.field_mass_tensor(
+                _FieldTrainingCompetenceRequest(
+                    runtime=runtime,
+                    module=module,
+                    fields=fields,
+                    predictions=logits,
+                    targets=labels,
+                    horizons=horizons,
+                    batch=batch,
+                    generator=generator,
+                    sample_keys=_field_training_sample_keys(batch),
+                )
+            )
         return softmax_target_mass_tensor(runtime, logits, labels)
 
     def prediction_accepted_mass(
@@ -5467,16 +5717,16 @@ def _resolve_competence_functional(
 ) -> _CompetenceFunctional:
     if contract.competence.kind not in {
         "above-chance-accepted-mass",
-        "mass-within-resolution",
+        *_field_valued_competence_kinds,
     }:
         raise BenchmarkRunnerError(
             "runner path does not support competence kind "
             f"{contract.competence.kind!r}"
         )
-    if contract.competence.kind == "mass-within-resolution":
+    if contract.competence.kind in _field_valued_competence_kinds:
         if runtime is None or competence_factory is None:
             raise BenchmarkRunnerError(
-                "mass-within-resolution requires benchmark training competence"
+                f"{contract.competence.kind} requires benchmark training competence"
             )
         return _CompetenceFunctional(
             kind=contract.competence.kind,
@@ -5486,6 +5736,18 @@ def _resolve_competence_functional(
             ),
         )
     return _CompetenceFunctional(kind=contract.competence.kind)
+
+
+def _competence_tensor_diagnostics(tensor: Any) -> tuple[Mapping[str, object], ...]:
+    diagnostics = getattr(tensor, "leibniz_competence_diagnostics", ())
+    if not isinstance(diagnostics, tuple):
+        return ()
+    diagnostic_items = cast(tuple[object, ...], diagnostics)
+    return tuple(
+        cast(Mapping[str, object], item)
+        for item in diagnostic_items
+        if isinstance(item, Mapping)
+    )
 
 
 def _write_document(path: Path, record: object) -> None:

@@ -1,6 +1,7 @@
 import math
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest
@@ -34,13 +35,10 @@ def test_ks_generator_emits_initial_fields_and_space_time_targets() -> None:
     assert batch.region.measure_estimate.kind == "estimated"
     assert batch.region.log2_volume == 2.0
     assert fields.shape == (3, 1, 32)
-    assert targets.shape == (3, 9, 32)
+    assert targets.shape == (3, 1, 32)
     assert fields.dtype == runtime.torch.float32
     assert targets.dtype == runtime.torch.float32
-    assert targets[:, 0:1, :].allclose(fields.to(dtype=targets.dtype))
-    assert targets[:, 1:, :].allclose(
-        fields.to(dtype=targets.dtype).repeat(1, targets.shape[1] - 1, 1)
-    )
+    assert targets.allclose(fields.to(dtype=targets.dtype))
 
 
 def test_ks_generator_threads_spatial_resolution() -> None:
@@ -131,8 +129,15 @@ def test_ks_benchmark_builds_residual_training_loss() -> None:
     fields, targets = batch.require_tensors()
     loss = cast(Any, loaded).build_training_loss(runtime, loaded.target_contract)
 
-    exact_loss = float(loss(targets, targets))
-    perturbed = targets.clone()
+    trajectory = cast(Any, loaded).reference_trajectory(
+        runtime=runtime,
+        sample_count=2,
+        seed=17,
+        sample_indices=(0, 1),
+        window=0,
+    )[:, 0, :, :].float()
+    exact_loss = float(loss(trajectory, targets))
+    perturbed = trajectory.clone()
     perturbed[:, 0:1, :] = fields + 0.5
     perturbed_loss = float(loss(perturbed, targets))
 
@@ -306,69 +311,131 @@ def test_field_valued_runner_rejects_real_operator_without_horizon_conditioning(
         raise AssertionError("expected field operator without horizon conditioning to fail")
 
 
-def test_ks_residual_certificate_scores_reference_and_rejects_bad_solutions() -> None:
+def test_ks_convergence_bits_rejects_persistence() -> None:
     runtime = resolve_tensor_runtime("cpu")
     loaded = load_benchmark(_ks_benchmark_root)
-    batch = loaded.generator(seed=17, shape=1, runtime=runtime)
+    batch = cast(Any, loaded.generator)(seed=17, shape=1, runtime=runtime)
     fields, targets = batch.require_tensors()
     competence = cast(Any, loaded).build_training_competence(
         runtime,
         loaded.target_contract,
     )
-    reference = cast(Any, loaded).reference_trajectory(
-        runtime=runtime,
-        sample_count=1,
-        seed=17,
-        sample_indices=(0,),
-        window=0,
-    )[:, 0, :, :].float()
-    zero = reference * 0.0
 
-    assert float(competence(reference, targets)[0]) == 1.0
-    assert float(competence(reference + (_epsilon() / 2.0), targets)[0]) == 1.0
-    assert float(competence(reference + (2.0 * _epsilon()), targets)[0]) == 0.0
-    assert float(competence(zero, targets)[0]) == 0.0
-    assert float(competence(targets, targets)[0]) == 0.0
-    assert fields.shape == (1, 1, 32)
+    bits = competence(
+        SimpleNamespace(
+            runtime=runtime,
+            module=None,
+            generator=None,
+            batch=batch,
+            sample_keys=tuple(sample.to_record() for sample in batch.samples),
+            predictions=fields.repeat(1, targets.shape[1], 1),
+            targets=targets,
+            horizons=(1.0,),
+        )
+    )
+
+    assert float(bits[0]) == 0.0
 
 
-def test_ks_residual_certificate_does_not_compare_against_reference_target() -> None:
+def test_ks_convergence_bits_reward_planted_convergent_ladder(monkeypatch: Any) -> None:
     runtime = resolve_tensor_runtime("cpu")
-    loaded = load_benchmark(_ks_benchmark_root)
-    first = loaded.generator(seed=17, shape=1, sample_indices=(0,), runtime=runtime)
-    second = loaded.generator(seed=18, shape=1, sample_indices=(0,), runtime=runtime)
-    first_reference = cast(Any, loaded).reference_trajectory(
+    module = _loaded_ks_module()
+    ladder = _planted_field_ladder(runtime, coefficient=0.25)
+    residual_by_space = {
+        int(trajectory.shape[-1]): value
+        for trajectory, value in zip(ladder, (4.0, 1.0, 0.25), strict=True)
+    }
+
+    def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dx
+        _ = dt
+        return trajectory * 0.0 + residual_by_space[int(trajectory.shape[-1])]
+
+    monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
+
+    bits = module._ks_ladder_convergence_bits(
         runtime=runtime,
-        sample_count=1,
-        seed=17,
-        sample_indices=(0,),
-        window=0,
-    )[:, 0, :, :].float()
-    second_reference = cast(Any, loaded).reference_trajectory(
+        ladder=ladder,
+        horizon=1.0,
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+
+    assert float(bits[0]) > 0.0
+    assert diagnostics[0]["kind"] == "ks-convergence-diagnostics"
+    assert diagnostics[0]["gate_decision"] == "passed"
+    assert len(diagnostics[0]["k_sensitivity"]) >= 2
+
+
+def test_ks_convergence_bits_reward_finer_field_resolution(monkeypatch: Any) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _loaded_ks_module()
+
+    def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dx
+        _ = dt
+        return trajectory * 0.0 + {4: 4.0, 8: 1.0, 16: 0.25}[int(trajectory.shape[-1])]
+
+    monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
+
+    coarse_bits = module._ks_ladder_convergence_bits(
         runtime=runtime,
-        sample_count=1,
-        seed=18,
-        sample_indices=(0,),
-        window=0,
-    )[:, 0, :, :].float()
-    predictions = runtime.torch.cat((first_reference, second_reference), dim=0)
-    _first_fields, first_targets = first.require_tensors()
-    _second_fields, second_targets = second.require_tensors()
-    targets = runtime.torch.cat((first_targets, second_targets), dim=0)
-    competence = cast(Any, loaded).build_training_competence(
-        runtime,
-        loaded.target_contract,
+        ladder=_planted_field_ladder(runtime, coefficient=1.0),
+        horizon=1.0,
     )
-    reference_relative_error = (
-        (first_reference - second_reference).pow(2).sum().sqrt()
-        / second_reference.pow(2).sum().sqrt().clamp_min(1e-12)
+    fine_bits = module._ks_ladder_convergence_bits(
+        runtime=runtime,
+        ladder=_planted_field_ladder(runtime, coefficient=0.125),
+        horizon=1.0,
     )
 
-    masses = competence(predictions, targets)
-
-    assert float(reference_relative_error) > 0.0
-    assert [float(value) for value in masses] == [1.0, 1.0]
+    assert float(fine_bits[0]) > float(coarse_bits[0])
 
 
-def _epsilon() -> float:
-    return 0.05
+def test_ks_convergence_bits_rejects_wrong_observed_order(monkeypatch: Any) -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    module = _loaded_ks_module()
+
+    def planted_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dx
+        _ = dt
+        return trajectory * 0.0 + {4: 4.0, 8: 2.0, 16: 1.0}[int(trajectory.shape[-1])]
+
+    monkeypatch.setattr(module, "ks_space_time_residual", planted_residual)
+
+    bits = module._ks_ladder_convergence_bits(
+        runtime=runtime,
+        ladder=_planted_field_ladder(runtime, coefficient=0.25),
+        horizon=1.0,
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+
+    assert float(bits[0]) == 0.0
+    assert diagnostics[0]["gate_decision"] == "failed"
+    assert diagnostics[0]["expected_observed_order"] == 2.0
+    assert diagnostics[0]["rung_count"] == 3
+
+
+def test_ks_scoring_path_has_no_residual_certificate_constants() -> None:
+    source = (_ks_benchmark_root / "benchmark.py").read_text()
+
+    assert "_ks_truncation_floor" not in source
+    assert "_ks_epsilon_residual_image_bound" not in source
+    assert "_ks_residual_acceptance_level" not in source
+    assert "_ks_residual_certificate_mass" not in source
+
+
+def _loaded_ks_module() -> Any:
+    loaded = cast(Any, load_benchmark(_ks_benchmark_root))
+    return sys.modules[type(loaded.implementation).__module__]
+
+
+def _planted_field_ladder(runtime: Any, *, coefficient: float) -> tuple[Any, ...]:
+    torch = runtime.torch
+    base = torch.arange(12, dtype=torch.float32, device=runtime.device).reshape(1, 3, 4)
+    ladder: list[Any] = []
+    for rung in range(3):
+        scale = 2**rung
+        field = base.repeat_interleave(scale, dim=1).repeat_interleave(scale, dim=2)
+        field = field + coefficient / (4.0**rung)
+        ladder.append(field)
+    return tuple(ladder)

@@ -1,4 +1,5 @@
 import math
+import sys
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -226,7 +227,9 @@ def test_resolve_competence_functional_uses_field_competence_factory() -> None:
             _runtime: TensorRuntime,
             _contract: TargetContract,
         ) -> Any:
-            def competence(predictions: Any, targets: Any) -> Any:
+            def competence(request: Any) -> Any:
+                predictions = request.predictions
+                targets = request.targets
                 return (predictions == targets).all(dim=1).to(dtype=predictions.dtype)
 
             return competence
@@ -244,6 +247,71 @@ def test_resolve_competence_functional_uses_field_competence_factory() -> None:
     assert functional.kind == "mass-within-resolution"
     assert masses[0] == 1.0
     assert masses[1] == 0.0
+
+
+def test_field_competence_receives_operator_context() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    contract = _field_target_contract()
+    captured: list[Any] = []
+
+    class Factory:
+        def build_training_competence(
+            self,
+            _runtime: TensorRuntime,
+            _contract: TargetContract,
+        ) -> Any:
+            def competence(request: Any) -> Any:
+                captured.append(request)
+                return runtime.torch.ones((1,), dtype=runtime.torch.float32)
+
+            return competence
+
+    functional = cast(Any, benchmark_runner)._resolve_competence_functional(
+        contract,
+        runtime=runtime,
+        competence_factory=Factory(),
+    )
+    module = object()
+    fields = runtime.torch.zeros((1, 1, 4), dtype=runtime.torch.float32)
+    predictions = runtime.torch.zeros((1, 2, 4), dtype=runtime.torch.float32)
+    targets = runtime.torch.zeros((1, 2, 4), dtype=runtime.torch.float32)
+    sample = GeneratedSample(
+        index=7,
+        outcome_id="field",
+        latent_coordinates=({"sample_index": 11},),
+    )
+    batch = GeneratedSampleSet(
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.test@0.1.0"),
+        generator_id=ProtocolIdentifier.parse("benchmarks.test.generator@0.1.0"),
+        generator_version="0.1.0",
+        seed=5,
+        shape=(1,),
+        samples=(sample,),
+        fields=fields,
+        targets=targets,
+    )
+    generator = cast(Any, object())
+
+    masses = functional.training_logit_masses(
+        runtime,
+        predictions,
+        targets,
+        module=module,
+        fields=fields,
+        horizons=(0.5, 1.0),
+        batch=batch,
+        generator=generator,
+    )
+
+    assert masses == (1.0,)
+    assert captured[0].module is module
+    assert captured[0].fields is fields
+    assert captured[0].predictions is predictions
+    assert captured[0].targets is targets
+    assert captured[0].horizons == (0.5, 1.0)
+    assert captured[0].batch is batch
+    assert captured[0].generator is generator
+    assert captured[0].sample_keys[0]["index"] == 7
 
 
 def test_equation_residual_training_loss_requires_benchmark_factory() -> None:
@@ -1601,6 +1669,205 @@ def test_ks_benchmark_runner_trains_field_model_with_residual_loss(
     )
 
 
+def test_ks_benchmark_runner_scores_real_requery_ladder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    results_root = tmp_path / "results"
+    architecture_path = _write_ks_architecture(
+        results_root / "inputs" / "ks_fixed_support.json"
+    )
+    runtime = resolve_tensor_runtime("cpu")
+    torch = runtime.torch
+    loaded = cast(Any, load_benchmark(_ks_benchmark_root))
+    ks_module = sys.modules[type(loaded.implementation).__module__]
+
+    class ConvergentOperator(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()  # pyright: ignore[reportUnknownMemberType]
+            self._anchor = torch.nn.Parameter(torch.zeros((), device=runtime.device))
+
+        def forward(self, fields: Any, horizon: float = 1.0) -> Any:
+            scale = torch.exp(
+                fields.new_tensor(-float(horizon)) + (self._anchor * 0.0)
+            )
+            return fields * scale
+
+        def attach_optimizer(self, optimizer: Any) -> None:
+            self._optimizer = optimizer
+
+        def operation_fallback_records(self) -> tuple[object, ...]:
+            return ()
+
+    def deterministic_sequential(*args: Any, **kwargs: Any) -> ConvergentOperator:
+        _ = args
+        _ = kwargs
+        return ConvergentOperator()
+
+    def planted_second_order_residual(trajectory: Any, *, dx: float, dt: float) -> Any:
+        _ = dt
+        spatial_points = int(round(22.0 / dx))
+        return trajectory * 0.0 + {32: 4.0, 64: 1.0, 128: 0.25}[spatial_points]
+
+    monkeypatch.setattr(
+        benchmark_runner,
+        "OperationFallbackSequential",
+        deterministic_sequential,
+    )
+    def load_patched_benchmark(_root: Path) -> Any:
+        return loaded
+
+    monkeypatch.setattr(benchmark_runner, "load_benchmark", load_patched_benchmark)
+    monkeypatch.setattr(ks_module, "ks_space_time_residual", planted_second_order_residual)
+
+    summary = run_benchmark(
+        BenchmarkRunPlan(
+            architecture_path=architecture_path,
+            benchmark_root=_ks_benchmark_root,
+            results_root=results_root,
+            seed=101,
+            train_steps=0,
+            gate_check_interval=1,
+            model_checkpoint_gate_interval=1,
+            tensor_device="cpu",
+            optimizer="adam",
+            learning_rate=1e-3,
+        )
+    )
+    record = load_object_document(
+        summary.training_summary_path.read_bytes(),
+        description="KS training summary",
+    )
+    score_estimate = cast(
+        Mapping[str, object],
+        record["selected_model_checkpoint_score_estimate"],
+    )
+    diagnostics = cast(list[Mapping[str, object]], score_estimate["competence_diagnostics"])
+
+    assert cast(float, score_estimate["score"]) > 0.0
+    assert diagnostics
+    assert all(item["gate_decision"] == "passed" for item in diagnostics)
+    assert all(cast(float, item["bits"]) > 0.0 for item in diagnostics)
+
+
+def test_ks_convergence_competence_rejects_persistence_through_requery_path() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    loaded = cast(Any, load_benchmark(_ks_benchmark_root))
+    ks_module = sys.modules[type(loaded.implementation).__module__]
+    batch = loaded.generator(seed=101, shape=2, runtime=runtime)
+    fields, targets = batch.require_tensors()
+
+    class PersistenceOperator:
+        def __call__(self, fields: Any, _horizon: float) -> Any:
+            return fields
+
+    predictions = ks_module._query_operator_trajectory(
+        runtime=runtime,
+        module=PersistenceOperator(),
+        fields=fields,
+        horizon=1.0,
+        time_count=9,
+    )
+    competence = loaded.implementation.build_training_competence(
+        runtime,
+        loaded.target_contract,
+    )
+    bits = competence(
+        SimpleNamespace(
+            runtime=runtime,
+            module=PersistenceOperator(),
+            generator=loaded.generator,
+            batch=batch,
+            sample_keys=tuple(sample.to_record() for sample in batch.samples),
+            predictions=predictions,
+            targets=targets,
+            horizons=tuple(index / 8 for index in range(1, 9)),
+        )
+    )
+
+    assert tuple(float(value) for value in bits) == (0.0, 0.0)
+
+
+def test_ks_convergence_competence_accepts_reference_solver_through_real_residual() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    loaded = cast(Any, load_benchmark(_ks_benchmark_root))
+    ks_module = sys.modules[type(loaded.implementation).__module__]
+    raw_batch = loaded.generator(seed=101, shape=2, runtime=runtime)
+    fields, targets = raw_batch.require_tensors()
+    batch = replace(raw_batch, fields=fields.double(), targets=targets.double())
+    fields, targets = batch.require_tensors()
+    sample_indices = tuple(
+        cast(int, sample.latent_coordinates[0]["sample_index"])
+        for sample in batch.samples
+    )
+    window = cast(int, batch.samples[0].latent_coordinates[0]["window"])
+    full_horizon = 1.0
+    base_step_count = 8
+
+    class ReferenceOperator:
+        def __call__(self, fields: Any, horizon: float) -> Any:
+            spatial_points = int(fields.shape[-1])
+            refinement = spatial_points // 32
+            step_count = max(1, round(float(horizon) * base_step_count * refinement))
+            trajectory = loaded.implementation.reference_trajectory(
+                runtime=runtime,
+                sample_count=len(sample_indices),
+                seed=batch.seed,
+                sample_indices=sample_indices,
+                window=window,
+                spatial_points=spatial_points,
+                horizon=float(horizon),
+                time_count=step_count + 1,
+            )
+            return trajectory[:, :, -1, :]
+
+    class ReferenceGenerator:
+        def __call__(self, **kwargs: Any) -> Any:
+            generated = loaded.generator(**kwargs)
+            generated_fields, generated_targets = generated.require_tensors()
+            return replace(
+                generated,
+                fields=generated_fields.double(),
+                targets=generated_targets.double(),
+            )
+
+    predictions = ks_module._query_operator_trajectory(
+        runtime=runtime,
+        module=ReferenceOperator(),
+        fields=fields,
+        horizon=full_horizon,
+        time_count=base_step_count + 1,
+    )
+    competence = loaded.implementation.build_training_competence(
+        runtime,
+        loaded.target_contract,
+    )
+    bits = competence(
+        SimpleNamespace(
+            runtime=runtime,
+            module=ReferenceOperator(),
+            generator=ReferenceGenerator(),
+            batch=batch,
+            sample_keys=tuple(sample.to_record() for sample in batch.samples),
+            predictions=predictions,
+            targets=targets,
+            horizons=tuple(index / base_step_count for index in range(1, 9)),
+        )
+    )
+    diagnostics = bits.leibniz_competence_diagnostics
+
+    assert all(float(value) > 0.0 for value in bits)
+    assert all(item["gate_decision"] == "passed" for item in diagnostics)
+    assert all(
+        math.isclose(
+            cast(float, item["residual_observed_order"]),
+            cast(float, item["expected_observed_order"]),
+            abs_tol=cast(float, item["observed_order_tolerance"]),
+        )
+        for item in diagnostics
+    )
+
+
 def test_checkpoint_evaluation_stops_at_runtime_capacity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2378,6 +2645,12 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
         step=32,
         inference_cost=(_cost_measurement(20), 2),
         training_cost=(_cost_measurement(40), 2),
+        competence_diagnostics=(
+            {
+                "kind": "ks-convergence-diagnostics",
+                "k_sensitivity": [{"k": 1.0, "gated": True, "bits": 3.0}],
+            },
+        ),
     )
 
     sampled_competence = cast(dict[str, object], estimate["sampled_competence"])
@@ -2399,6 +2672,12 @@ def test_training_gate_score_estimate_records_prior_frontier_points() -> None:
         points[1]["inference_cost_measurement"]
     ).abstract_flops == 20
     assert points[1]["inference_cost_sample_count"] == 2
+    assert estimate["competence_diagnostics"] == [
+        {
+            "kind": "ks-convergence-diagnostics",
+            "k_sensitivity": [{"k": 1.0, "gated": True, "bits": 3.0}],
+        }
+    ]
     assert batch.region is not None
     assert state_space_region_from_record(points[1]["region"]) == batch.region
     score_terms = cast(

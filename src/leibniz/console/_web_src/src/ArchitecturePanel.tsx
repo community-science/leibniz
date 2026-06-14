@@ -227,44 +227,44 @@ const ROOTS: RootTree[] = [
     nodes: [
       {
         id: 'R-correctness',
-        gist: 'Correctness is convergence, not an oracle.',
-        meta: 'There is no answer key, so refinement stands in for one.',
-        status: 'direction',
-        anchor: 'refinement-ladder records + runner scoring',
-        step: 'ladder',
+        gist: 'Correctness is convergence to a law, not an oracle.',
+        meta: 'Refine space and time, test the residual, and score the resolved bits.',
+        status: 'implemented',
+        anchor: 'benchmark_runner.py: operator-aware field competence and raw bit scoring',
+        verify: { module: 'leibniz.benchmark_runner', symbols: ['_FieldTrainingCompetenceRequest', '_training_score_integral'] },
         rungs: [
           {
             level: 1,
             kind: 'add',
             tag: 'the move',
-            text: 'You cannot look up the exact answer, so here is the move: an answer is correct if it stops moving as you compute it more carefully. You trust it exactly as far as it stays put.',
+            text: 'You cannot look up the exact answer, so here is the move: a field answer is correct where refinement makes it converge to a solution of the law. A hand-selected scoring parameter is a bug; the scored quantities must be measured from the ladder or derived from the law.',
           },
           {
             level: 2,
             kind: 'add',
-            tag: 'ladder and ruler',
-            text: 'Compute it coarse, then finer, then finer still, comparing on what those resolutions share. If the sequence settles (Cauchy), the value it lands on is the answer, and the gap it leaves behind is the ruler $\\varepsilon$. If it never settles, there is nothing to score against and nobody scores there.',
+            tag: 'space-time ladder',
+            text: 'Compute the operator on nested space-time grids and compare on the common grid. For a field law, the residual is evaluated consistently in space and time. If its Richardson extrapolated limit is indistinguishable from zero within its own extrapolation uncertainty, the law gate holds.',
           },
           {
             level: 3,
             kind: 'add',
-            tag: 'what falls out',
-            text: 'You do not declare the prediction horizon, the arrow of time, or whether a system is chaotic. They all fall out of whether the sequence settles. A verifier is just the special case where the gap is zero: a discrete law is already fully resolved.',
+            tag: 'measured ruler',
+            text: '$\\varepsilon$ is not declared. It is the Richardson field error $\\varepsilon_{field}$ on the finest gated rung. The current implementation scores the declared query horizon on a fixed nested ladder; sweeping the horizon and finding the predictability boundary remains open.',
           },
           {
             level: 3,
             kind: 'add',
             tag: 'formal objects',
-            text: 'Formally: $r_k = R_\\ell\\,\\hat\\Phi(\\mathrm{refine}_k(\\mathrm{in}))$, gaps $g_k = \\lVert r_{k+1} - r_k \\rVert$, Cauchy when $g_k \\to 0$ within tolerance, answer $= r_\\infty$, ruler $\\varepsilon = g_\\infty$.',
+            text: 'Formally: query $\\hat\\Phi(x_h, T)$ across refined grids, restrict each rung to the common grid, estimate observed order and limit by Richardson, and use the residual limit plus field error to decide what is validated.',
           },
           {
             level: 4,
             kind: 'horizon',
             tag: 'open',
-            text: 'Still to nail down: what “within tolerance” means in practice (which norm, which threshold, how many rungs), and the exact test for when a sequence counts as settled.',
+            text: 'The remaining open rung is the statistical convergence decision: the current gate uses $|R_\\infty| \\le 1\\cdot u_\\infty$ and emits a k-sensitivity report so the effect of that provisional choice is visible.',
           },
         ],
-        verdict: { tone: 'open', text: 'The formal objects are written down; the operational details are not yet.' },
+        verdict: { tone: 'partial', text: 'Implemented for convergence-grounded field scoring; the parameter-free convergence decision is still an open statistical refinement.' },
       },
       {
         id: 'R-territory',
@@ -384,13 +384,13 @@ const ROOTS: RootTree[] = [
             level: 1,
             kind: 'add',
             tag: 'the two entries',
-            text: 'Credit is the bits of prediction you got right. Debit is the bits it took to describe and run the operator. The score is the difference: how much of the world you explained, minus what you spent explaining it. That is compression.',
+            text: 'Credit is validated bits: $N_{dof}\\log_2(\\sigma/\\varepsilon_{field})$ where $\\sigma$ is the measured signal scale and $\\varepsilon_{field}$ is the Richardson field error. Debit is the bits it took to describe and run the operator.',
           },
           {
             level: 2,
             kind: 'add',
             tag: 'one quantity to minimize',
-            text: 'There is one number to minimize, the total codelength of the reality you have pinned down: $\\text{description length} + \\log_2(\\text{operations}) + \\text{residual}$. The frontier is how many validated bits of prediction you buy per unit of that cost.',
+            text: 'The value side now has a concrete validated-bit quantity for field prediction. The cost side still needs the description-length term; today the runner can attach operation cost and integrate validated bits over the measured frontier.',
           },
           {
             level: 2,
@@ -452,7 +452,7 @@ const EDGES: CouplingEdge[] = [
     id: 'edge-score',
     roots: ['U', 'R', 'D'],
     title: 'The score (triple point)',
-    body: 'Competence is how much of a model’s prediction lands within $\\varepsilon$ (Refinement) of the converged answer, measured in bits (Description length), summed over the query space (Universe). That sum is one of the same adaptive trees. So the score is not a fourth root; it is where the other three meet, and it needs nothing else.',
+    body: 'Competence is the validated information a model resolves where the refinement gate holds: measured convergence error from Refinement, bits from Description length, integrated over the query space from Universe. That sum is one of the same adaptive trees. So the score is not a fourth root; it is where the other three meet, and it needs nothing else.',
   },
 ];
 
@@ -467,7 +467,7 @@ const STEPS: RoadmapStep[] = [
     id: 'ladder',
     title: 'Refinement-ladder records and convergence-grounded scoring',
     outcome:
-      'Add a record for the ladder and its convergence gap, and have the runner score predictive mass within $\\varepsilon$ of the settled value instead of comparing whole trajectories. The test that proves it: two queries past the horizon both score where the ladder settles, and neither where it does not.',
+      'Emit convergence diagnostics for the ladder, score validated bits from Richardson field error where the law residual extrapolates to zero, and report k-sensitivity for the remaining convergence-decision knob.',
   },
   {
     id: 'cost',
