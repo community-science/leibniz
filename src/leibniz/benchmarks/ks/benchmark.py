@@ -158,7 +158,7 @@ class Benchmark:
         self,
         runtime: TensorRuntime,
         target_contract: TargetContract,
-    ) -> Callable[[Any, Any], Any]:
+    ) -> Callable[[Any], Any]:
         del runtime
         if (
             target_contract.kind != "field-valued"
@@ -167,7 +167,11 @@ class Benchmark:
             != _residual_operator_id
         ):
             raise ValueError("KS benchmark only builds its declared residual competence")
-        return _ks_residual_certificate_mass
+
+        def competence(request: Any) -> Any:
+            return _ks_residual_certificate_mass(request.predictions, request.targets)
+
+        return competence
 
     def reference_trajectory(
         self,

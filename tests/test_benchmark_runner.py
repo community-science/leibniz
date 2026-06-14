@@ -226,7 +226,9 @@ def test_resolve_competence_functional_uses_field_competence_factory() -> None:
             _runtime: TensorRuntime,
             _contract: TargetContract,
         ) -> Any:
-            def competence(predictions: Any, targets: Any) -> Any:
+            def competence(request: Any) -> Any:
+                predictions = request.predictions
+                targets = request.targets
                 return (predictions == targets).all(dim=1).to(dtype=predictions.dtype)
 
             return competence
@@ -244,6 +246,71 @@ def test_resolve_competence_functional_uses_field_competence_factory() -> None:
     assert functional.kind == "mass-within-resolution"
     assert masses[0] == 1.0
     assert masses[1] == 0.0
+
+
+def test_field_competence_receives_operator_context() -> None:
+    runtime = resolve_tensor_runtime("cpu")
+    contract = _field_target_contract()
+    captured: list[Any] = []
+
+    class Factory:
+        def build_training_competence(
+            self,
+            _runtime: TensorRuntime,
+            _contract: TargetContract,
+        ) -> Any:
+            def competence(request: Any) -> Any:
+                captured.append(request)
+                return runtime.torch.ones((1,), dtype=runtime.torch.float32)
+
+            return competence
+
+    functional = cast(Any, benchmark_runner)._resolve_competence_functional(
+        contract,
+        runtime=runtime,
+        competence_factory=Factory(),
+    )
+    module = object()
+    fields = runtime.torch.zeros((1, 1, 4), dtype=runtime.torch.float32)
+    predictions = runtime.torch.zeros((1, 2, 4), dtype=runtime.torch.float32)
+    targets = runtime.torch.zeros((1, 2, 4), dtype=runtime.torch.float32)
+    sample = GeneratedSample(
+        index=7,
+        outcome_id="field",
+        latent_coordinates=({"sample_index": 11},),
+    )
+    batch = GeneratedSampleSet(
+        benchmark_id=ProtocolIdentifier.parse("benchmarks.test@0.1.0"),
+        generator_id=ProtocolIdentifier.parse("benchmarks.test.generator@0.1.0"),
+        generator_version="0.1.0",
+        seed=5,
+        shape=(1,),
+        samples=(sample,),
+        fields=fields,
+        targets=targets,
+    )
+    generator = cast(Any, object())
+
+    masses = functional.training_logit_masses(
+        runtime,
+        predictions,
+        targets,
+        module=module,
+        fields=fields,
+        horizons=(0.5, 1.0),
+        batch=batch,
+        generator=generator,
+    )
+
+    assert masses == (1.0,)
+    assert captured[0].module is module
+    assert captured[0].fields is fields
+    assert captured[0].predictions is predictions
+    assert captured[0].targets is targets
+    assert captured[0].horizons == (0.5, 1.0)
+    assert captured[0].batch is batch
+    assert captured[0].generator is generator
+    assert captured[0].sample_keys[0]["index"] == 7
 
 
 def test_equation_residual_training_loss_requires_benchmark_factory() -> None:

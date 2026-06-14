@@ -184,6 +184,19 @@ class _TensorBenchmarkGenerator(BenchmarkGenerator, Protocol):
     ) -> GeneratedSampleSet: ...
 
 
+@dataclass(frozen=True, slots=True)
+class _FieldTrainingCompetenceRequest:
+    runtime: TensorRuntime
+    module: Any | None
+    fields: Any | None
+    predictions: Any
+    targets: Any
+    horizons: tuple[float, ...] | None
+    batch: GeneratedSampleSet | None
+    generator: _TensorBenchmarkGenerator | None
+    sample_keys: tuple[Mapping[str, object], ...]
+
+
 class _BenchmarkTrainingLossFactory(Protocol):
     """Benchmark-owned tensor loss factory for non-generic target losses."""
 
@@ -201,7 +214,7 @@ class _BenchmarkTrainingCompetenceFactory(Protocol):
         self,
         runtime: TensorRuntime,
         target_contract: TargetContract,
-    ) -> Callable[[Any, Any], Any]: ...
+    ) -> Callable[[_FieldTrainingCompetenceRequest], Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -2214,6 +2227,7 @@ def _train_and_predict_on_device(
             generation_phase="validation_formation_generation",
             rung=current_frontier(),
         ),
+        generator=generator,
         target_contract=target_contract,
         competence=competence_functional,
         outcome_ids=outcome_ids,
@@ -3550,6 +3564,7 @@ def _train_until_convergence(
     training_counter: _ThroughputCounter,
     validation_counter: _ThroughputCounter,
     phase_timings: TimingCollector,
+    generator: _TensorBenchmarkGenerator | None = None,
     training_batch_target: int = _default_training_batch_target,
     gate_batch_target: int = _default_gate_batch_target,
     start_step: int = 0,
@@ -3631,7 +3646,16 @@ def _train_until_convergence(
                     target_contract=target_contract,
                 )
                 validation_loss = float(loss_function(logits, labels).item())
-                accepted_mass = competence.training_logit_masses(runtime, logits, labels)
+                accepted_mass = competence.training_logit_masses(
+                    runtime,
+                    logits,
+                    labels,
+                    module=module,
+                    fields=fields,
+                    horizons=horizons,
+                    batch=batch,
+                    generator=generator,
+                )
             if was_training:
                 module.train()
         with phase_timings.span("validation_score_estimate", samples=batch.sample_count):
@@ -3787,6 +3811,11 @@ def _train_until_convergence(
                                 runtime,
                                 first_logits,
                                 labels,
+                                module=module,
+                                fields=fields,
+                                horizons=horizons,
+                                batch=training_batch.sample_set,
+                                generator=generator,
                             ),
                         )
                     )
@@ -3994,6 +4023,14 @@ def _coerce_training_step_batch(
         return value
     fields, labels = value
     return _TrainingStepBatch(fields=fields, labels=labels)
+
+
+def _field_training_sample_keys(
+    batch: GeneratedSampleSet | None,
+) -> tuple[Mapping[str, object], ...]:
+    if batch is None:
+        return ()
+    return tuple(sample.to_record(include_field=False) for sample in batch.samples)
 
 
 def _refreshed_frontier_points(
@@ -5405,13 +5442,19 @@ class _CompetenceFunctional:
     """
 
     kind: str
-    field_mass_tensor: Callable[[Any, Any], Any] | None = None
+    field_mass_tensor: Callable[[_FieldTrainingCompetenceRequest], Any] | None = None
 
     def training_logit_masses(
         self,
         runtime: TensorRuntime,
         logits: Any,
         labels: Any,
+        *,
+        module: Any | None = None,
+        fields: Any | None = None,
+        horizons: tuple[float, ...] | None = None,
+        batch: GeneratedSampleSet | None = None,
+        generator: _TensorBenchmarkGenerator | None = None,
     ) -> tuple[float, ...]:
         if self.kind == "mass-within-resolution":
             if self.field_mass_tensor is None:
@@ -5424,6 +5467,11 @@ class _CompetenceFunctional:
                     runtime,
                     logits,
                     labels,
+                    module=module,
+                    fields=fields,
+                    horizons=horizons,
+                    batch=batch,
+                    generator=generator,
                 )
                 .detach()
                 .tolist()
@@ -5435,14 +5483,31 @@ class _CompetenceFunctional:
         runtime: TensorRuntime,
         logits: Any,
         labels: Any,
+        *,
+        module: Any | None = None,
+        fields: Any | None = None,
+        horizons: tuple[float, ...] | None = None,
+        batch: GeneratedSampleSet | None = None,
+        generator: _TensorBenchmarkGenerator | None = None,
     ) -> Any:
         if self.kind == "mass-within-resolution":
-            _ = runtime
             if self.field_mass_tensor is None:
                 raise BenchmarkRunnerError(
                     "mass-within-resolution requires benchmark training competence"
                 )
-            return self.field_mass_tensor(logits, labels)
+            return self.field_mass_tensor(
+                _FieldTrainingCompetenceRequest(
+                    runtime=runtime,
+                    module=module,
+                    fields=fields,
+                    predictions=logits,
+                    targets=labels,
+                    horizons=horizons,
+                    batch=batch,
+                    generator=generator,
+                    sample_keys=_field_training_sample_keys(batch),
+                )
+            )
         return softmax_target_mass_tensor(runtime, logits, labels)
 
     def prediction_accepted_mass(

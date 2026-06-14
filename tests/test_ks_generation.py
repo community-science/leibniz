@@ -1,6 +1,7 @@
 import math
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 from leibniz.architectures import ArchitectureManifest
@@ -324,11 +325,17 @@ def test_ks_residual_certificate_scores_reference_and_rejects_bad_solutions() ->
     )[:, 0, :, :].float()
     zero = reference * 0.0
 
-    assert float(competence(reference, targets)[0]) == 1.0
-    assert float(competence(reference + (_epsilon() / 2.0), targets)[0]) == 1.0
-    assert float(competence(reference + (2.0 * _epsilon()), targets)[0]) == 0.0
-    assert float(competence(zero, targets)[0]) == 0.0
-    assert float(competence(targets, targets)[0]) == 0.0
+    assert float(competence(_competence_request(reference, targets))[0]) == 1.0
+    assert (
+        float(competence(_competence_request(reference + (_epsilon() / 2.0), targets))[0])
+        == 1.0
+    )
+    assert (
+        float(competence(_competence_request(reference + (2.0 * _epsilon()), targets))[0])
+        == 0.0
+    )
+    assert float(competence(_competence_request(zero, targets))[0]) == 0.0
+    assert float(competence(_competence_request(targets, targets))[0]) == 0.0
     assert fields.shape == (1, 1, 32)
 
 
@@ -364,7 +371,7 @@ def test_ks_residual_certificate_does_not_compare_against_reference_target() -> 
         / second_reference.pow(2).sum().sqrt().clamp_min(1e-12)
     )
 
-    masses = competence(predictions, targets)
+    masses = competence(_competence_request(predictions, targets))
 
     assert float(reference_relative_error) > 0.0
     assert [float(value) for value in masses] == [1.0, 1.0]
@@ -372,3 +379,7 @@ def test_ks_residual_certificate_does_not_compare_against_reference_target() -> 
 
 def _epsilon() -> float:
     return 0.05
+
+
+def _competence_request(predictions: Any, targets: Any) -> Any:
+    return SimpleNamespace(predictions=predictions, targets=targets)
