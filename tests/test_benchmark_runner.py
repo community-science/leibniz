@@ -102,6 +102,13 @@ _chess_linear_architecture = (
     / "architecture"
     / "chess_board_linear.json"
 )
+_chess_linear_program = (
+    _repository_root
+    / "tests"
+    / "fixtures"
+    / "programs"
+    / "chess_board_linear.py"
+)
 
 
 def _write_ks_architecture(path: Path) -> Path:
@@ -1084,6 +1091,7 @@ def test_chess_benchmark_runner_accepts_fixed_board_tensor(tmp_path: Path) -> No
     summary = run_benchmark(
         BenchmarkRunPlan(
             architecture_path=_chess_linear_architecture,
+            program_path=_chess_linear_program,
             benchmark_root=_chess_benchmark_root,
             results_root=results_root,
             seed=101,
@@ -1094,6 +1102,7 @@ def test_chess_benchmark_runner_accepts_fixed_board_tensor(tmp_path: Path) -> No
 
     assert summary.benchmark_id == generator.manifest.id
     assert summary.dry_run is False
+    assert summary.run_slug.startswith("chess-program-")
     assert summary.training_summary_path.exists()
     training_summary = load_object_document(
         summary.training_summary_path.read_bytes(),
@@ -1119,6 +1128,11 @@ def test_chess_benchmark_runner_accepts_fixed_board_tensor(tmp_path: Path) -> No
     evaluation_curriculum = cast(dict[str, object], bundle.evaluation_curriculum)
 
     assert evaluation_protocol["score_status"] in {"accepted", "provisional"}
+    assert bundle.model_manifest.model_source is not None
+    assert bundle.model_manifest.model_source.kind == "program-graph"
+    assert str(bundle.model_checkpoint["program_path"]).endswith(
+        "tests/fixtures/programs/chess_board_linear.py"
+    )
     assert cast(int, evaluation_protocol["evaluation_curriculum_rung_count"]) >= 1
     assert cast(int, evaluation_curriculum["unlocked_rung_count"]) >= 1
 
